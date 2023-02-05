@@ -1,0 +1,15 @@
+syntax = "proto3";
+package common;
+
+message UserOperation {
+  bytes sender = 1;
+  bytes nonce = 2;
+  bytes init_code = 3;
+  bytes call_data = 4;
+  bytes call_gas_limit = 5;
+  bytes verification_gas_limit = 6;
+  bytes max_fee_per_gas = 7;
+  bytes max_priority_fee_per_gas = 8;
+  bytes paymaster_and_data = 9;
+  bytes signature = 10;
+}

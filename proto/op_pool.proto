@@ -1,0 +1,14 @@
+syntax = "proto3";
+package op_pool;
+
+import "common.proto";
+
+service OpPool {
+  rpc AddOp (AddOpRequest) returns (AddOpResponse);
+}
+
+message AddOpRequest {
+  common.UserOperation op = 1;
+}
+
+message AddOpResponse {}
