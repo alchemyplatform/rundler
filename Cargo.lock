@@ -39,7 +39,6 @@ dependencies = [
  "anyhow",
  "ethers",
  "jsonrpsee",
- "logging",
  "primitive-types",
  "prost",
  "serde",
@@ -48,13 +47,8 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tonic-reflection",
+ "tracing",
 ]
-
-[[package]]
-name = "ansi_term"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b3568b48b7cefa6b8ce125f9bb4989e52fbcc29ebea88df04cc7c5f12f70455"
 
 [[package]]
 name = "anyhow"
@@ -1601,15 +1595,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
 dependencies = [
  "cfg-if",
-]
-
-[[package]]
-name = "logging"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "461a8beca676e8ab1bd468c92e9b4436d6368e11e96ae038209e520cfe665e46"
-dependencies = [
- "ansi_term",
 ]
 
 [[package]]
