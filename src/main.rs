@@ -1,8 +1,5 @@
-use crate::common::protos::core::core_server::CoreServer;
-use crate::common::protos::core::CORE_FILE_DESCRIPTOR_SET;
 use crate::common::protos::op_pool::op_pool_server::OpPoolServer;
 use crate::common::protos::op_pool::OP_POOL_FILE_DESCRIPTOR_SET;
-use crate::core::CoreImpl;
 use crate::op_pool::OpPoolImpl;
 use crate::rpc::{RpcImpl, RpcServer};
 use jsonrpsee::server::ServerBuilder;
@@ -43,15 +40,12 @@ async fn start_grpc() -> anyhow::Result<()> {
         .unwrap_or("50051")
         .parse()?;
     let addr: SocketAddr = format!("[::]:{port}").parse()?;
-    let core_server = CoreServer::new(CoreImpl);
     let op_pool_server = OpPoolServer::new(OpPoolImpl);
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(CORE_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
     println!("Starting gRPC on port {port}");
     Server::builder()
-        .add_service(core_server)
         .add_service(op_pool_server)
         .add_service(reflection_service)
         .serve(addr)

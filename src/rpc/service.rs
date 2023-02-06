@@ -1,5 +1,5 @@
-use crate::common::protos::common::UserOperation as GrpcUserOperation;
-use crate::common::protos::core::SendOpRequest;
+use crate::common::protos::op_pool::AddOpRequest;
+use crate::common::protos::op_pool::UserOperation as GrpcUserOperation;
 use crate::common::types::UserOperation;
 use ethers::types::Address;
 use jsonrpsee::core::Error as RpcError;
@@ -28,7 +28,7 @@ impl RpcServer for RpcImpl {
         op: UserOperation,
         entry_point: Address,
     ) -> Result<String, RpcError> {
-        let _ = SendOpRequest {
+        let _ = AddOpRequest {
             op: Some(GrpcUserOperation::from(&op)),
             entry_point: entry_point.as_bytes().to_vec(),
         };

@@ -1,14 +1,91 @@
 syntax = "proto3";
 package op_pool;
 
-import "common.proto";
+message UserOperation {
+  bytes sender = 1;
+  bytes nonce = 2;
+  bytes init_code = 3;
+  bytes call_data = 4;
+  bytes call_gas_limit = 5;
+  bytes verification_gas_limit = 6;
+  bytes pre_verification_gas = 7;
+  bytes max_fee_per_gas = 8;
+  bytes max_priority_fee_per_gas = 9;
+  bytes paymaster_and_data = 10;
+  bytes signature = 11;
+}
 
 service OpPool {
+  rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
+  rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
+  rpc GetReputation (GetReputationRequest) returns (GetReputationResponse);
+
+  rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
+  rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
+  rpc DebugSetReputation (DebugSetReputationRequest) returns (DebugSetReputationResponse);
+  rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
+}
+
+message GetSupportedEntryPointsRequest {}
+message GetSupportedEntryPointsResponse {
+  bytes chain_id = 1;
+  repeated bytes entry_points = 2;
 }
 
 message AddOpRequest {
-  common.UserOperation op = 1;
+  UserOperation op = 1;
+  bytes entry_point = 2;
+}
+message AddOpResponse {}
+
+message GetOpsRequest {
+  uint64 max_ops = 1;
+  bytes entry_point = 2;
+}
+message GetOpsResponse {
+  repeated UserOperation ops = 1;
 }
 
-message AddOpResponse {}
+enum ReputationStatus {
+  OK = 0;
+  THROTTLED = 1;
+  BANNED = 2;
+}
+
+message Reputation {
+  ReputationStatus status = 1;
+  uint64 ops_seen = 2;
+  uint64 ops_included = 3;
+}
+
+message GetReputationRequest {
+  bytes address = 1;
+}
+message GetReputationResponse {
+  Reputation reputation = 1;
+}
+
+message DebugClearStateRequest {}
+message DebugClearStateResponse {}
+
+message DebugDumpMempoolRequest {
+  bytes entry_point = 1;
+}
+message DebugDumpMempoolResponse {
+  repeated UserOperation ops = 1;
+}
+
+message DebugSetReputationRequest {
+  bytes entry_point = 1;
+  bytes address = 2;
+  Reputation reputation = 3;
+}
+message DebugSetReputationResponse {}
+
+message DebugDumpReputationRequest {
+  bytes entry_point = 1;
+}
+message DebugDumpReputationResponse {
+  map<string, Reputation> reputation = 1;
+}

@@ -3,24 +3,13 @@ use ethers::types::{Address, Bytes};
 use primitive_types::U256;
 use std::mem;
 
-pub mod core {
-    tonic::include_proto!("core");
-
-    pub const CORE_FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("core_descriptor");
-}
-
 pub mod op_pool {
+    use super::*;
+
     tonic::include_proto!("op_pool");
 
     pub const OP_POOL_FILE_DESCRIPTOR_SET: &[u8] =
         tonic::include_file_descriptor_set!("op_pool_descriptor");
-}
-
-pub mod common {
-    use super::*;
-
-    tonic::include_proto!("common");
 
     impl From<&RpcUserOperation> for UserOperation {
         fn from(op: &RpcUserOperation) -> Self {
@@ -31,6 +20,7 @@ pub mod common {
                 call_data: op.call_data.to_vec(),
                 call_gas_limit: to_le_bytes(op.call_gas_limit),
                 verification_gas_limit: to_le_bytes(op.verification_gas_limit),
+                pre_verification_gas: to_le_bytes(op.pre_verification_gas),
                 max_fee_per_gas: to_le_bytes(op.max_fee_per_gas),
                 max_priority_fee_per_gas: to_le_bytes(op.max_priority_fee_per_gas),
                 paymaster_and_data: op.paymaster_and_data.to_vec(),
@@ -49,6 +39,7 @@ pub mod common {
                 call_data: Bytes::from(mem::take(&mut op.call_data)),
                 call_gas_limit: U256::from_little_endian(&op.call_gas_limit),
                 verification_gas_limit: U256::from_little_endian(&op.verification_gas_limit),
+                pre_verification_gas: U256::from_little_endian(&op.pre_verification_gas),
                 max_fee_per_gas: U256::from_little_endian(&op.max_fee_per_gas),
                 max_priority_fee_per_gas: U256::from_little_endian(&op.max_priority_fee_per_gas),
                 paymaster_and_data: Bytes::from(mem::take(&mut op.paymaster_and_data)),
