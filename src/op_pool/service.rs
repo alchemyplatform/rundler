@@ -4,7 +4,7 @@ use crate::common::protos::op_pool::{
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
     GetOpsRequest, GetOpsResponse, GetReputationRequest, GetReputationResponse,
-    GetSupportedEntrypointsRequest, GetSupportedEntrypointsResponse,
+    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
 };
 use tonic::{async_trait, Request, Response};
 
@@ -12,11 +12,11 @@ pub struct OpPoolImpl;
 
 #[async_trait]
 impl OpPool for OpPoolImpl {
-    async fn get_supported_entrypoints(
+    async fn get_supported_entry_points(
         &self,
-        _request: Request<GetSupportedEntrypointsRequest>,
-    ) -> tonic::Result<Response<GetSupportedEntrypointsResponse>> {
-        unimplemented!("get_supported_entrypoints not implemented");
+        _request: Request<GetSupportedEntryPointsRequest>,
+    ) -> tonic::Result<Response<GetSupportedEntryPointsResponse>> {
+        unimplemented!("get_supported_entry_points not implemented");
     }
 
     async fn add_op(

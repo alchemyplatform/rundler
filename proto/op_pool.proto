@@ -16,7 +16,7 @@ message UserOperation {
 }
 
 service OpPool {
-  rpc GetSupportedEntrypoints (GetSupportedEntrypointsRequest) returns (GetSupportedEntrypointsResponse);
+  rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
   rpc GetReputation (GetReputationRequest) returns (GetReputationResponse);
@@ -27,21 +27,21 @@ service OpPool {
   rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
 }
 
-message GetSupportedEntrypointsRequest {}
-message GetSupportedEntrypointsResponse {
+message GetSupportedEntryPointsRequest {}
+message GetSupportedEntryPointsResponse {
   bytes chain_id = 1;
-  repeated bytes entrypoints = 2;
+  repeated bytes entry_points = 2;
 }
 
 message AddOpRequest {
   UserOperation op = 1;
-  bytes entrypoint = 2;
+  bytes entry_point = 2;
 }
 message AddOpResponse {}
 
 message GetOpsRequest {
   uint64 max_ops = 1;
-  bytes entrypoint = 2;
+  bytes entry_point = 2;
 }
 message GetOpsResponse {
   repeated UserOperation ops = 1;
@@ -70,21 +70,21 @@ message DebugClearStateRequest {}
 message DebugClearStateResponse {}
 
 message DebugDumpMempoolRequest {
-  bytes entrypoint = 1;
+  bytes entry_point = 1;
 }
 message DebugDumpMempoolResponse {
   repeated UserOperation ops = 1;
 }
 
 message DebugSetReputationRequest {
-  bytes entrypoint = 1;
+  bytes entry_point = 1;
   bytes address = 2;
   Reputation reputation = 3;
 }
 message DebugSetReputationResponse {}
 
 message DebugDumpReputationRequest {
-  bytes entrypoint = 1;
+  bytes entry_point = 1;
 }
 message DebugDumpReputationResponse {
   map<string, Reputation> reputation = 1;

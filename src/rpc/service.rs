@@ -30,7 +30,7 @@ impl RpcServer for RpcImpl {
     ) -> Result<String, RpcError> {
         let _ = AddOpRequest {
             op: Some(GrpcUserOperation::from(&op)),
-            entrypoint: entry_point.as_bytes().to_vec(),
+            entry_point: entry_point.as_bytes().to_vec(),
         };
         todo!()
     }
