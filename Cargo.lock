@@ -40,7 +40,6 @@ dependencies = [
  "clap",
  "ethers",
  "jsonrpsee",
- "primitive-types",
  "prost",
  "serde",
  "serde_json",
