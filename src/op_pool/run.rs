@@ -15,7 +15,7 @@ pub async fn run(
     args: Args,
     mut shutdown_rx: broadcast::Receiver<()>,
     _shutdown_scope: mpsc::Sender<()>,
-) -> Result<(), anyhow::Error> {
+) -> anyhow::Result<()> {
     let addr = format!("{}:{}", args.host, args.port).parse()?;
     let op_pool_server = OpPoolServer::new(OpPoolImpl);
     let reflection_service = tonic_reflection::server::Builder::configure()
