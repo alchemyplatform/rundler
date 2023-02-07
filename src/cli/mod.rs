@@ -1,3 +1,6 @@
+use std::io;
+use std::time::Duration;
+
 use super::bundler;
 use super::op_pool;
 use super::rpc;
@@ -5,14 +8,30 @@ use clap::{Args, Parser, Subcommand};
 use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
+use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
+mod prometheus_exporter;
+
 pub async fn run() -> anyhow::Result<()> {
-    let subscriber = FmtSubscriber::new();
+    let opt = Cli::parse();
+
+    let (appender, _guard) = if let Some(log_file) = &opt.logs.file {
+        tracing_appender::non_blocking(tracing_appender::rolling::never(".", log_file))
+    } else {
+        tracing_appender::non_blocking(io::stdout())
+    };
+
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(opt.logs.level.parse::<Level>()?)
+        .with_writer(appender)
+        .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    let opt = Cli::parse();
     tracing::info!("Parsed CLI options: {:#?}", opt);
+
+    let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
+    prometheus_exporter::initialize(metrics_addr)?;
 
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
@@ -30,14 +49,14 @@ pub async fn run() -> anyhow::Result<()> {
                 shutdown_tx.subscribe(),
                 shutdown_scope.clone(),
             ));
-            // TODO wait for op pool to be ready
+            tokio::time::sleep(Duration::from_millis(100)).await;
 
             tokio::spawn(bundler::run(
                 bundler_args.into(),
                 shutdown_tx.subscribe(),
                 shutdown_scope.clone(),
             ));
-            // TODO wait for bundler to be ready
+            tokio::time::sleep(Duration::from_millis(100)).await;
 
             tokio::spawn(rpc::run(rpc_args.into(), shutdown_rx, shutdown_scope));
         }
@@ -158,8 +177,58 @@ enum Command {
     Run(RunArgs),
 }
 
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Metrics")]
+struct Metrics {
+    #[arg(
+        long = "metrics.port",
+        name = "metrics.port",
+        env = "METRICS_PORT",
+        default_value = "8080",
+        global = true
+    )]
+    port: u16,
+
+    #[arg(
+        long = "metrics.host",
+        name = "metrics.host",
+        env = "METRICS_HOST",
+        default_value = "0.0.0.0",
+        global = true
+    )]
+    host: String,
+}
+
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Logging")]
+struct Logs {
+    #[arg(
+        long = "log.level",
+        name = "log.level",
+        env = "LOG_LEVEL",
+        default_value = "info",
+        global = true
+    )]
+    level: String,
+
+    #[arg(
+        long = "log.file",
+        name = "log.file",
+        env = "LOG_FILE",
+        default_value = None,
+        global = true
+    )]
+    file: Option<String>,
+}
+
 #[derive(Debug, Parser)]
 struct Cli {
     #[clap(subcommand)]
     command: Command,
+
+    #[clap(flatten)]
+    metrics: Metrics,
+
+    #[clap(flatten)]
+    logs: Logs,
 }

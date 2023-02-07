@@ -1,3 +1,4 @@
+mod metrics;
 mod run;
 mod server;
 
