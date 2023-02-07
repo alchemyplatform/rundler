@@ -1,6 +1,5 @@
 use crate::common::types::UserOperation as RpcUserOperation;
-use ethers::types::{Address, Bytes};
-use primitive_types::U256;
+use ethers::types::{Address, Bytes, U256};
 use std::mem;
 
 pub mod op_pool {
