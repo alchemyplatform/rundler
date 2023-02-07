@@ -1,11 +1,14 @@
-use crate::common::protos::op_pool::op_pool_server::OpPool;
+use std::net::SocketAddr;
+
+use crate::common::protos::op_pool::op_pool_server::{OpPool, OpPoolServer};
 use crate::common::protos::op_pool::{
     AddOpRequest, AddOpResponse, DebugClearStateRequest, DebugClearStateResponse,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
     GetOpsRequest, GetOpsResponse, GetReputationRequest, GetReputationResponse,
-    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, OP_POOL_FILE_DESCRIPTOR_SET,
 };
+use tonic::transport::Server;
 use tonic::{async_trait, Request, Response};
 
 pub struct OpPoolImpl;
@@ -67,4 +70,17 @@ impl OpPool for OpPoolImpl {
     ) -> tonic::Result<Response<DebugDumpReputationResponse>> {
         unimplemented!("debug_dump_reputation not implemented");
     }
+}
+
+pub async fn start_grpc(addr: SocketAddr) -> anyhow::Result<()> {
+    let op_pool_server = OpPoolServer::new(OpPoolImpl);
+    let reflection_service = tonic_reflection::server::Builder::configure()
+        .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
+        .build()?;
+    Server::builder()
+        .add_service(op_pool_server)
+        .add_service(reflection_service)
+        .serve(addr)
+        .await?;
+    Ok(())
 }
