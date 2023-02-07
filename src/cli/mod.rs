@@ -5,10 +5,10 @@ use clap::{Args, Parser, Subcommand};
 use tokio::signal;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tracing;
+use tracing_subscriber::FmtSubscriber;
 
-pub async fn run() -> Result<(), anyhow::Error> {
-    let subscriber = tracing_subscriber::FmtSubscriber::new();
+pub async fn run() -> anyhow::Result<()> {
+    let subscriber = FmtSubscriber::new();
     tracing::subscriber::set_global_default(subscriber)?;
 
     let opt = Cli::parse();
@@ -19,25 +19,27 @@ pub async fn run() -> Result<(), anyhow::Error> {
 
     match opt.command {
         Command::Run(args) => {
-            let op_pool_args = args.op_pool.parse()?;
-            let bundler_args = args.bundler.parse()?;
-            let rpc_args = args.rpc.parse()?;
+            let RunArgs {
+                op_pool: op_pool_args,
+                bundler: bundler_args,
+                rpc: rpc_args,
+            } = args;
 
             tokio::spawn(op_pool::run(
-                op_pool_args,
+                op_pool_args.into(),
                 shutdown_tx.subscribe(),
                 shutdown_scope.clone(),
             ));
             // TODO wait for op pool to be ready
 
             tokio::spawn(bundler::run(
-                bundler_args,
+                bundler_args.into(),
                 shutdown_tx.subscribe(),
                 shutdown_scope.clone(),
             ));
             // TODO wait for bundler to be ready
 
-            tokio::spawn(rpc::run(rpc_args, shutdown_rx, shutdown_scope));
+            tokio::spawn(rpc::run(rpc_args.into(), shutdown_rx, shutdown_scope));
         }
     }
 
@@ -77,12 +79,10 @@ struct OpPoolArgs {
     host: String,
 }
 
-impl OpPoolArgs {
-    pub fn parse(&self) -> anyhow::Result<op_pool::Args> {
-        Ok(op_pool::Args {
-            port: self.port,
-            host: self.host.clone(),
-        })
+impl From<OpPoolArgs> for op_pool::Args {
+    fn from(value: OpPoolArgs) -> Self {
+        let OpPoolArgs { port, host } = value;
+        op_pool::Args { port, host }
     }
 }
 
@@ -106,12 +106,10 @@ struct BundlerArgs {
     host: String,
 }
 
-impl BundlerArgs {
-    pub fn parse(&self) -> Result<bundler::Args, anyhow::Error> {
-        Ok(bundler::Args {
-            port: self.port,
-            host: self.host.clone(),
-        })
+impl From<BundlerArgs> for bundler::Args {
+    fn from(args: BundlerArgs) -> Self {
+        let BundlerArgs { port, host } = args;
+        bundler::Args { port, host }
     }
 }
 
@@ -135,12 +133,10 @@ struct RpcArgs {
     host: String,
 }
 
-impl RpcArgs {
-    pub fn parse(&self) -> Result<rpc::Args, anyhow::Error> {
-        Ok(rpc::Args {
-            port: self.port,
-            host: self.host.clone(),
-        })
+impl From<RpcArgs> for rpc::Args {
+    fn from(args: RpcArgs) -> Self {
+        let RpcArgs { port, host } = args;
+        rpc::Args { port, host }
     }
 }
 
