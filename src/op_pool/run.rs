@@ -17,7 +17,7 @@ pub async fn run(
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
     let addr = format!("{}:{}", args.host, args.port).parse()?;
-    let op_pool_server = OpPoolServer::new(OpPoolImpl);
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::default());
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
