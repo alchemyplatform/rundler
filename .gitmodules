@@ -1,0 +1,3 @@
+[submodule "submodules/account-abstraction"]
+	path = submodules/account-abstraction
+	url = https://github.com/eth-infinitism/account-abstraction.git
