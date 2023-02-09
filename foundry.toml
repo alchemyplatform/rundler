@@ -1,6 +1,7 @@
 [profile.default]
 src = 'contracts/src'
-out = 'out'
+out = 'contracts/out'
 libs = ['contracts/lib']
+cache_path = 'contracts/cache'
 
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config

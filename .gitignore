@@ -9,3 +9,7 @@ target/
 .idea
 *.iml
 .vscode
+
+# Foundry, configured in foundry.toml
+contracts/cache/
+contracts/out/
