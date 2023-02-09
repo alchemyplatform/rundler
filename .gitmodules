@@ -2,3 +2,7 @@
 	path = contracts/lib/account-abstraction
 	url = https://github.com/eth-infinitism/account-abstraction
 	branch = v0.4.0
+[submodule "contracts/lib/forge-std"]
+	path = contracts/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+	branch = v1.3.0
