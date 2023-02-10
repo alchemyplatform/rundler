@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer};
 
 abigen!(EntryPoint, "foundry/out/EntryPoint.sol/EntryPoint.json");
 
-// Foundry has generated a UserOperation struct, but we need to make this struct
+// abigen has generated a UserOperation struct, but we need to make this struct
 // JSON-deserializable so we can receive it through JSON-RPC requests. Do so
 // by defining a UserOperationDef helper struct, which is how one adds
 // deserialization to structs from a remote crate in serde_json, even though
