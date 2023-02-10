@@ -4,6 +4,7 @@ use std::process::Command;
 use std::{env, error};
 
 fn main() -> Result<(), Box<dyn error::Error>> {
+    println!("cargo:rerun-if-changed=foundry/lib");
     println!("cargo:rerun-if-changed=foundry/src");
     println!("cargo:rerun-if-changed=proto");
     generate_abis()?;
