@@ -11,5 +11,5 @@ target/
 .vscode
 
 # Foundry, configured in foundry.toml
-contracts/cache/
-contracts/out/
+foundry/cache/
+foundry/out/

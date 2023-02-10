@@ -2,9 +2,9 @@ use ethers::contract::abigen;
 use ethers::types::{Address, Bytes, U256};
 use serde::{Deserialize, Deserializer};
 
-abigen!(EntryPoint, "contracts/out/EntryPoint.sol/EntryPoint.json");
+abigen!(EntryPoint, "foundry/out/EntryPoint.sol/EntryPoint.json");
 
-// abigen has generated a UserOperation struct, but we need to make this struct
+// Foundry has generated a UserOperation struct, but we need to make this struct
 // JSON-deserializable so we can receive it through JSON-RPC requests. Do so
 // by defining a UserOperationDef helper struct, which is how one adds
 // deserialization to structs from a remote crate in serde_json, even though
