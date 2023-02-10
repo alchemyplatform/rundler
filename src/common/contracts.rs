@@ -2,7 +2,7 @@ use ethers::contract::abigen;
 use ethers::types::{Address, Bytes, U256};
 use serde::{Deserialize, Deserializer};
 
-abigen!(EntryPoint, "abis/EntryPoint.json");
+abigen!(EntryPoint, "contracts/out/EntryPoint.sol/EntryPoint.json");
 
 // abigen has generated a UserOperation struct, but we need to make this struct
 // JSON-deserializable so we can receive it through JSON-RPC requests. Do so
