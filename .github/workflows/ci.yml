@@ -18,6 +18,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
 
       - name: Run tests
         run: cargo test
@@ -36,6 +38,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
 
       - name: cargo fmt
         uses: actions-rs/cargo@v1
