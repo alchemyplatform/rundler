@@ -1,1 +1,1 @@
-pub use crate::common::contracts::UserOperation;
+pub use crate::common::contracts::shared_types::UserOperation;
