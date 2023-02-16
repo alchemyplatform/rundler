@@ -40,7 +40,11 @@ jobs:
           cache-on-failure: true
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-
+        # Build to generate the ABI bindings.
+      - name: cargo build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
       - name: cargo fmt
         uses: actions-rs/cargo@v1
         with:

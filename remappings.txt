@@ -1,2 +1,2 @@
-account-abstraction/=foundry/lib/account-abstraction/contracts/
-@openzeppelin/=foundry/lib/openzeppelin-contracts/
+account-abstraction/=contracts/lib/account-abstraction/contracts/
+@openzeppelin/=contracts/lib/openzeppelin-contracts/

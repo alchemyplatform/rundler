@@ -5,8 +5,8 @@ use std::process::Command;
 use std::{env, error};
 
 fn main() -> Result<(), Box<dyn error::Error>> {
-    println!("cargo:rerun-if-changed=foundry/lib");
-    println!("cargo:rerun-if-changed=foundry/src");
+    println!("cargo:rerun-if-changed=contracts/lib");
+    println!("cargo:rerun-if-changed=contracts/src");
     println!("cargo:rerun-if-changed=proto");
     generate_contract_bindings()?;
     generate_protos()?;
@@ -28,7 +28,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
 fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
     Ok(Abigen::new(
         contract,
-        format!("foundry/out/{contract}.sol/{contract}.json"),
+        format!("contracts/out/{contract}.sol/{contract}.json"),
     )?
     .add_event_derive("serde::Deserialize")
     .add_event_derive("serde::Serialize"))
