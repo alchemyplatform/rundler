@@ -2,14 +2,33 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Command;
 use std::{env, error};
+use ethers::contract::{Abigen, MultiAbigen};
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=foundry/lib");
     println!("cargo:rerun-if-changed=foundry/src");
     println!("cargo:rerun-if-changed=proto");
-    generate_abis()?;
+    generate_contract_bindings()?;
     generate_protos()?;
     Ok(())
+}
+
+fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
+    generate_abis()?;
+    MultiAbigen::from_abigens([
+        abigen_of("EntryPoint")?,
+        abigen_of("SimpleAccount")?,
+        abigen_of("SimpleAccountFactory")?,
+    ])
+        .build()?
+        .write_to_module("src/common/contracts2", false)?;
+    Ok(())
+}
+
+fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
+    Ok(Abigen::new(contract, format!("foundry/out/{contract}.sol/{contract}.json"))?
+        .add_event_derive("serde::Deserialize")
+        .add_event_derive("serde::Serialize"))
 }
 
 fn generate_abis() -> Result<(), Box<dyn error::Error>> {

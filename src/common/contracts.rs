@@ -1,4 +1,4 @@
-use ethers::contract::abigen;
+use ethers::contract::{abigen, MultiAbigen};
 use ethers::types::{Address, Bytes, U256};
 use serde::{Deserialize, Deserializer};
 
