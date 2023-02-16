@@ -2,6 +2,6 @@
 src = 'contracts/src'
 out = 'contracts/out'
 libs = ['contracts/lib']
-cache_path = 'foundrys/cache'
+cache_path = 'contracts/cache'
 
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
