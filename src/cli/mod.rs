@@ -4,6 +4,7 @@ use std::time::Duration;
 use super::bundler;
 use super::op_pool;
 use super::rpc;
+use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use tokio::signal;
 use tokio::sync::broadcast;
@@ -13,6 +14,10 @@ use tracing_subscriber::FmtSubscriber;
 
 mod prometheus_exporter;
 
+/// Main entry point for the CLI
+///
+/// Parses the CLI arguments and runs the appropriate subcommand.
+/// Listens for a ctrl-c signal and shuts down all components when received.
 pub async fn run() -> anyhow::Result<()> {
     let opt = Cli::parse();
 
@@ -45,20 +50,24 @@ pub async fn run() -> anyhow::Result<()> {
             } = args;
 
             tokio::spawn(op_pool::run(
-                op_pool_args.into(),
+                op_pool_args.to_args(&opt.common)?,
                 shutdown_tx.subscribe(),
                 shutdown_scope.clone(),
             ));
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             tokio::spawn(bundler::run(
-                bundler_args.into(),
+                bundler_args.to_args(&opt.common)?,
                 shutdown_tx.subscribe(),
                 shutdown_scope.clone(),
             ));
             tokio::time::sleep(Duration::from_millis(100)).await;
 
-            tokio::spawn(rpc::run(rpc_args.into(), shutdown_rx, shutdown_scope));
+            tokio::spawn(rpc::run(
+                rpc_args.to_args(&opt.common)?,
+                shutdown_rx,
+                shutdown_scope,
+            ));
         }
     }
 
@@ -78,9 +87,11 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// CLI options for the OP Pool
 #[derive(Args, Debug)]
 #[command(next_help_heading = "OP POOL")]
 struct OpPoolArgs {
+    /// Port to listen on for gRPC requests
     #[arg(
         long = "oppool.port",
         name = "oppool.port",
@@ -89,6 +100,7 @@ struct OpPoolArgs {
     )]
     port: u16,
 
+    /// Host to listen on for gRPC requests
     #[arg(
         long = "oppool.host",
         name = "oppool.host",
@@ -98,16 +110,27 @@ struct OpPoolArgs {
     host: String,
 }
 
-impl From<OpPoolArgs> for op_pool::Args {
-    fn from(value: OpPoolArgs) -> Self {
-        let OpPoolArgs { port, host } = value;
-        op_pool::Args { port, host }
+impl OpPoolArgs {
+    /// Convert the CLI arguments into the arguments for the OP Pool combining
+    /// common and op pool specific arguments.
+    pub fn to_args(&self, common: &Common) -> anyhow::Result<op_pool::Args> {
+        Ok(op_pool::Args {
+            port: self.port,
+            host: self.host.clone(),
+            entry_point: common
+                .entry_point
+                .parse()
+                .context("Invalid entry_point argument")?,
+            chain_id: common.chain_id.into(),
+        })
     }
 }
 
+/// CLI options for the bundler
 #[derive(Args, Debug)]
 #[command(next_help_heading = "BUNDLER")]
 struct BundlerArgs {
+    /// Port to listen on for gRPC requests
     #[arg(
         long = "bundler.port",
         name = "bundler.port",
@@ -116,6 +139,7 @@ struct BundlerArgs {
     )]
     port: u16,
 
+    /// Host to listen on for gRPC requests
     #[arg(
         long = "bundler.host",
         name = "bundler.host",
@@ -125,16 +149,27 @@ struct BundlerArgs {
     host: String,
 }
 
-impl From<BundlerArgs> for bundler::Args {
-    fn from(args: BundlerArgs) -> Self {
-        let BundlerArgs { port, host } = args;
-        bundler::Args { port, host }
+impl BundlerArgs {
+    /// Convert the CLI arguments into the arguments for the Bundler combining
+    /// common and bundler specific arguments.
+    pub fn to_args(&self, common: &Common) -> anyhow::Result<bundler::Args> {
+        Ok(bundler::Args {
+            port: self.port,
+            host: self.host.clone(),
+            entry_point: common
+                .entry_point
+                .parse()
+                .context("Invalid entry_point argument")?,
+            chain_id: common.chain_id.into(),
+        })
     }
 }
 
+/// CLI options for the RPC server
 #[derive(Args, Debug)]
 #[command(next_help_heading = "RPC")]
 struct RpcArgs {
+    /// Port to listen on for JSON-RPC requests
     #[arg(
         long = "rpc.port",
         name = "rpc.port",
@@ -143,6 +178,7 @@ struct RpcArgs {
     )]
     port: u16,
 
+    /// Host to listen on for JSON-RPC requests
     #[arg(
         long = "rpc.host",
         name = "rpc.host",
@@ -152,13 +188,25 @@ struct RpcArgs {
     host: String,
 }
 
-impl From<RpcArgs> for rpc::Args {
-    fn from(args: RpcArgs) -> Self {
-        let RpcArgs { port, host } = args;
-        rpc::Args { port, host }
+impl RpcArgs {
+    /// Convert the CLI arguments into the arguments for the RPC server combining
+    /// common and rpc specific arguments.
+    pub fn to_args(&self, common: &Common) -> anyhow::Result<rpc::Args> {
+        Ok(rpc::Args {
+            port: self.port,
+            host: self.host.clone(),
+            entry_point: common
+                .entry_point
+                .parse()
+                .context("Invalid entry_point argument")?,
+            chain_id: common.chain_id.into(),
+        })
     }
 }
 
+/// CLI options for the run command
+///
+/// Combines the options for each component into a single struct
 #[derive(Debug, Parser)]
 struct RunArgs {
     #[command(flatten)]
@@ -171,15 +219,47 @@ struct RunArgs {
     rpc: RpcArgs,
 }
 
+/// CLI commands
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run command
+    ///
+    /// Runs the OP Pool, Bundler, and RPC server
+    /// in a single process.
     #[command(name = "run")]
     Run(RunArgs),
 }
 
+/// CLI common options
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Common")]
+struct Common {
+    /// Entry point address to target
+    #[arg(
+        long = "entry_point",
+        name = "entry_point",
+        env = "ENTRY_POINT",
+        default_value = "0x0", // required or will error
+        global = true
+    )]
+    entry_point: String,
+
+    /// Chain ID to target
+    #[arg(
+        long = "chain_id",
+        name = "chain_id",
+        env = "CHAIN_ID",
+        default_value = "1337",
+        global = true
+    )]
+    chain_id: u128,
+}
+
+/// CLI options for the metrics server
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Metrics")]
 struct Metrics {
+    /// Port to listen on for metrics requests
     #[arg(
         long = "metrics.port",
         name = "metrics.port",
@@ -189,6 +269,7 @@ struct Metrics {
     )]
     port: u16,
 
+    /// Host to listen on for metrics requests
     #[arg(
         long = "metrics.host",
         name = "metrics.host",
@@ -199,9 +280,13 @@ struct Metrics {
     host: String,
 }
 
+/// CLI options for logging
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Logging")]
 struct Logs {
+    /// Log level
+    ///
+    /// Valid values are: trace, debug, info, warn, error
     #[arg(
         long = "log.level",
         name = "log.level",
@@ -211,6 +296,9 @@ struct Logs {
     )]
     level: String,
 
+    /// Log file
+    ///
+    /// If not provided, logs will be written to stdout
     #[arg(
         long = "log.file",
         name = "log.file",
@@ -221,10 +309,14 @@ struct Logs {
     file: Option<String>,
 }
 
+/// CLI options
 #[derive(Debug, Parser)]
 struct Cli {
     #[clap(subcommand)]
     command: Command,
+
+    #[clap(flatten)]
+    common: Common,
 
     #[clap(flatten)]
     metrics: Metrics,
