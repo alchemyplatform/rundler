@@ -1,0 +1,15 @@
+{
+  "name": "tracer",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^18.14.0",
+    "esbuild": "^0.17.10",
+    "prettier": "^2.8.4",
+    "typescript": "^4.9.5"
+  },
+  "dependencies": {}
+}
