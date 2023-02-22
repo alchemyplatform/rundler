@@ -54,6 +54,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
+ "parking_lot 0.12.1",
  "prost",
  "serde",
  "serde_json",

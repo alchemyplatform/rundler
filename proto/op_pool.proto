@@ -37,7 +37,9 @@ message AddOpRequest {
   UserOperation op = 1;
   bytes entry_point = 2;
 }
-message AddOpResponse {}
+message AddOpResponse {
+  bytes hash = 1;
+}
 
 message GetOpsRequest {
   uint64 max_ops = 1;

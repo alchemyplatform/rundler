@@ -22,6 +22,7 @@ tracing-appender = "0.2.2"
 metrics = "0.20.1"
 metrics-exporter-prometheus = "0.11.0"
 metrics-util = "0.14.0"
+parking_lot = "0.12.1"
 
 [build-dependencies]
 ethers = "1.0.2"

@@ -5,6 +5,7 @@ use tonic::transport::Server;
 
 use crate::common::protos::op_pool::op_pool_server::OpPoolServer;
 use crate::common::protos::op_pool::OP_POOL_FILE_DESCRIPTOR_SET;
+use crate::op_pool::mempool::uo_pool::UoPool;
 use crate::op_pool::server::OpPoolImpl;
 
 pub struct Args {
@@ -20,7 +21,12 @@ pub async fn run(
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
     let addr = format!("{}:{}", args.host, args.port).parse()?;
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::default());
+    tracing::info!("Starting server on {}", addr);
+    tracing::info!("Entry point: {}", args.entry_point);
+    tracing::info!("Chain id: {}", args.chain_id);
+
+    let mp = UoPool::new(args.entry_point, args.chain_id);
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(args.chain_id, mp));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;

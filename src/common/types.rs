@@ -17,7 +17,7 @@ impl UserOperation {
     ///
     /// The hash is used to uniquely identify a user operation in the entry point
     /// it does not include the signature field.
-    pub fn op_hash(&self, entry_point: &Address, chain_id: &U256) -> H256 {
+    pub fn op_hash(&self, entry_point: Address, chain_id: U256) -> H256 {
         keccak256(
             [
                 keccak256(self.pack()).to_vec(),
@@ -103,7 +103,7 @@ mod tests {
             .parse()
             .unwrap();
         let chain_id: U256 = 1337.into();
-        let hash = operation.op_hash(&entry_point, &chain_id);
+        let hash = operation.op_hash(entry_point, chain_id);
         assert_eq!(
             hash,
             "0x184db936a8bddc422ee3dd1545d41758f20dab071c44668d1b3379ea61c4da92"
@@ -163,7 +163,7 @@ mod tests {
             .parse()
             .unwrap();
         let chain_id: U256 = 1337.into();
-        let hash = operation.op_hash(&entry_point, &chain_id);
+        let hash = operation.op_hash(entry_point, chain_id);
         assert_eq!(
             hash,
             "0xf1f17c5eb34cf7f0584569a9d9831f17af470f8942a6ccdbca9b1597bef2e370"
