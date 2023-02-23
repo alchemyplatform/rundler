@@ -7,8 +7,6 @@ export interface BigInt {
   Sub(x: BigInt): BigInt;
 }
 
-declare const big: { NewInt(x: number): BigInt };
-
 export interface LogContext {
   type: string; // one of the two values CALL and CREATE
   from: string; // Address, sender of the transaction
@@ -29,11 +27,11 @@ export interface LogContext {
   txHash?: Buffer; // - Buffer, hash of the transaction being executed
 }
 
-export interface LogTracer {
+export interface LogTracer<T> {
   // mandatory: result, fault
   // result is a function that takes two arguments ctx and db, and is expected to return
   // a JSON-serializable value to return to the RPC caller.
-  result: (ctx: LogContext, db: LogDb) => any;
+  result: (ctx: LogContext, db: LogDb) => T;
 
   // fault is a function that takes two arguments, log and db, just like step and is
   // invoked when an error happens during the execution of an opcode which wasn’t reported in step. The method log.getError() has information about the error.
@@ -85,7 +83,7 @@ export interface LogMemory {
 }
 
 export interface LogStack {
-  peek: (idx: number) => any; // returns the idx-th element from the top of the stack (0 is the topmost element) as a big.Int
+  peek: (idx: number) => BigInt; // returns the idx-th element from the top of the stack (0 is the topmost element) as a big.Int
   length: () => number; // returns the number of elements in the stack
 }
 

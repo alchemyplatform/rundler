@@ -6,9 +6,10 @@
     "moduleResolution": "node",
     "noEmit": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true /* Ensure that casing is correct in imports. */,
+    "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "alwaysStrict": false
   },
   "include": ["./src/**/*"]
 }

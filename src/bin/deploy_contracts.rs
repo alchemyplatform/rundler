@@ -1,3 +1,4 @@
+use alchemy_bundler::bundler::tracer;
 use alchemy_bundler::common::contracts::entry_point::{
     EntryPoint, EntryPointErrors, EntryPointEvents,
 };
@@ -6,6 +7,7 @@ use alchemy_bundler::common::contracts::simple_account_factory::SimpleAccountFac
 use alchemy_bundler::common::types::UserOperation;
 use anyhow::Context;
 use ethers::abi::{AbiDecode, RawLog};
+use ethers::contract::builders::ContractCall;
 use ethers::contract::{ContractError, EthLogDecode};
 use ethers::middleware::signer::SignerMiddlewareError;
 use ethers::middleware::SignerMiddleware;
@@ -18,7 +20,6 @@ use std::mem;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use ethers::contract::builders::ContractCall;
 
 const DEPLOYER_PRIVATE_KEY: &str =
     "0000000000000000000000000000000000000000000000000000000000000001";
@@ -68,7 +69,10 @@ async fn main() -> anyhow::Result<()> {
         .context("factory's get_address should return the counterfactual address")?;
     println!("Wallet will be deployed at {wallet_address:?}");
     grant_eth(&provider, wallet_address).await?;
-    let init_code = get_compacted_call_data(factory.address(), factory.create_account(user_eoa.address(), salt));
+    let init_code = get_compacted_call_data(
+        factory.address(),
+        factory.create_account(user_eoa.address(), salt),
+    );
     let mut op = UserOperation {
         sender: wallet_address,
         init_code,
@@ -90,11 +94,17 @@ async fn main() -> anyhow::Result<()> {
         .context("user eoa should sign op hash")?;
     op.signature = signature.to_vec().into();
     let simulation_error = entry_point
-        .simulate_handle_op(op.clone(), Address::default(), Bytes::default())
+        .simulate_validation(op.clone())
         .call()
         .await
         .err()
         .context("simulate call should revert")?;
+    let tx = entry_point.simulate_validation(op.clone()).tx;
+    let json = serde_json::to_string_pretty(&tx)?;
+    println!("\nThe tx\n");
+    println!("{tx:#?}");
+    println!("\nThe tx as JSON (in case you wanted to paste it into Postman):\n");
+    println!("{json}");
     let revert_data =
         get_revert_data(simulation_error).context("error from simulation should be a revert")?;
     let simulation_result =
@@ -103,27 +113,34 @@ async fn main() -> anyhow::Result<()> {
     println!("Simulation result:");
     println!();
     println!("{simulation_result:#?}");
-    let receipt = entry_point
-        .handle_ops(vec![op], bundler_client.address())
-        .send()
-        .await
-        .context("should call entry point to deploy wallet")?
-        .await
-        .context("entry point should deploy wallet")?
-        .context("transaction where entry point deploys wallet should not be dropped")?;
+
+    let trace_result = tracer::trace_op_validation(&entry_point, op.clone()).await?;
     println!();
-    println!("Logs from wallet creation:");
+    println!("Trace result:");
     println!();
-    for log in receipt.logs {
-        let raw_log = log_to_raw_log(log);
-        if let Ok(event) = EntryPointEvents::decode_log(&raw_log) {
-            println!("{event:?}");
-        } else if let Ok(event) = SimpleAccountEvents::decode_log(&raw_log) {
-            println!("{event:?}");
-        } else {
-            println!("Unrecognized log: {raw_log:?}");
-        }
-    }
+    println!("{trace_result:#?}");
+
+    // let receipt = entry_point
+    //     .handle_ops(vec![op], bundler_client.address())
+    //     .send()
+    //     .await
+    //     .context("should call entry point to deploy wallet")?
+    //     .await
+    //     .context("entry point should deploy wallet")?
+    //     .context("transaction where entry point deploys wallet should not be dropped")?;
+    // println!();
+    // println!("Logs from wallet creation:");
+    // println!();
+    // for log in receipt.logs {
+    //     let raw_log = log_to_raw_log(log);
+    //     if let Ok(event) = EntryPointEvents::decode_log(&raw_log) {
+    //         println!("{event:?}");
+    //     } else if let Ok(event) = SimpleAccountEvents::decode_log(&raw_log) {
+    //         println!("{event:?}");
+    //     } else {
+    //         println!("Unrecognized log: {raw_log:?}");
+    //     }
+    // }
     Ok(())
 }
 
