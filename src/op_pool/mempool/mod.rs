@@ -37,6 +37,9 @@ pub trait Mempool {
         operations: impl IntoIterator<Item = UserOperation>,
     ) -> Vec<anyhow::Result<H256>>;
 
+    /// Removes a set of operations from the pool.
+    fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>);
+
     /// Returns the best operations from the pool.
     ///
     /// Returns the best operations from the pool based on their gas bids up to
