@@ -6,9 +6,10 @@ use crate::common::protos::op_pool::{
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
     GetOpsRequest, GetOpsResponse, GetReputationRequest, GetReputationResponse,
-    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, UserOperation,
+    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, RemoveOpsRequest,
+    RemoveOpsResponse, UserOperation,
 };
-use ethers::types::{Address, U256};
+use ethers::types::{Address, H256, U256};
 use tonic::{async_trait, Request, Response};
 
 #[derive(Default)]
@@ -98,6 +99,33 @@ where
         Err(tonic::Status::unimplemented(
             "get_reputation not implemented",
         ))
+    }
+
+    async fn remove_ops(
+        &self,
+        request: Request<RemoveOpsRequest>,
+    ) -> tonic::Result<Response<RemoveOpsResponse>> {
+        self.metrics.request_counter.increment(1);
+
+        let req = request.into_inner();
+        self.check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+
+        let hashes: Vec<H256> = req
+            .hashes
+            .into_iter()
+            .map(|h| {
+                if h.len() != 32 {
+                    return Err(tonic::Status::invalid_argument(
+                        "Hash must be 32 bytes long",
+                    ));
+                }
+                Ok(H256::from_slice(&h))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        self.mempool.remove_operations(&hashes);
+
+        Ok(Response::new(RemoveOpsResponse {}))
     }
 
     async fn debug_clear_state(

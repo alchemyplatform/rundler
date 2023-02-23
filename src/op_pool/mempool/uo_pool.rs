@@ -29,11 +29,7 @@ impl Mempool for UoPool {
     }
 
     fn on_new_block(&self, event: OnNewBlockEvent) {
-        // hold the lock for the duration of the operation
-        let mut lg = self.pool.write();
-        for hash in event.mined_operations {
-            lg.remove_operation_by_hash(hash);
-        }
+        self.remove_operations(&event.mined_operations);
     }
 
     fn add_operation(
@@ -50,6 +46,14 @@ impl Mempool for UoPool {
         operations: impl IntoIterator<Item = UserOperation>,
     ) -> Vec<anyhow::Result<H256>> {
         self.pool.write().add_operations(operations)
+    }
+
+    fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>) {
+        // hold the lock for the duration of the operation
+        let mut lg = self.pool.write();
+        for hash in hashes {
+            lg.remove_operation_by_hash(*hash);
+        }
     }
 
     fn best_operations(&self, max: usize) -> Vec<Arc<UserOperation>> {
@@ -73,9 +77,7 @@ mod tests {
             .add_operation(OperationOrigin::Local, op.clone())
             .unwrap();
         check_ops(pool.best_operations(1), vec![op]);
-        pool.on_new_block(OnNewBlockEvent {
-            mined_operations: vec![hash],
-        });
+        pool.remove_operations(&vec![hash]);
         assert_eq!(pool.best_operations(1), vec![]);
     }
 
@@ -88,8 +90,22 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ];
         let res = pool.add_operations(OperationOrigin::Local, ops.clone());
-        let hashes = res.into_iter().map(|r| r.unwrap()).collect();
+        let hashes: Vec<H256> = res.into_iter().map(|r| r.unwrap()).collect();
         check_ops(pool.best_operations(3), ops);
+        pool.remove_operations(&hashes);
+        assert_eq!(pool.best_operations(3), vec![]);
+    }
+
+    #[test]
+    fn test_new_block() {
+        let pool = UoPool::new(Address::zero(), 1.into());
+        let ops = vec![
+            create_op(Address::random(), 0, 3),
+            create_op(Address::random(), 0, 2),
+            create_op(Address::random(), 0, 1),
+        ];
+        let res = pool.add_operations(OperationOrigin::Local, ops.clone());
+        let hashes = res.into_iter().map(|r| r.unwrap()).collect();
         pool.on_new_block(OnNewBlockEvent {
             mined_operations: hashes,
         });
