@@ -1,3 +1,4 @@
+mod events;
 mod mempool;
 mod metrics;
 mod run;

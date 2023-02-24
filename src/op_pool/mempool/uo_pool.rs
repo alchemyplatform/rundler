@@ -104,7 +104,7 @@ mod tests {
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),
         ];
-        let res = pool.add_operations(OperationOrigin::Local, ops.clone());
+        let res = pool.add_operations(OperationOrigin::Local, ops);
         let hashes = res.into_iter().map(|r| r.unwrap()).collect();
         pool.on_new_block(OnNewBlockEvent {
             mined_operations: hashes,
