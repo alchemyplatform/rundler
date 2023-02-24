@@ -1,0 +1,16 @@
+{
+  "name": "tracer",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "esbuild src/index.ts --minify --outdir=dist",
+    "typecheck": "tsc --noEmit",
+    "watch": "yarn build --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^18.14.0",
+    "esbuild": "^0.17.10",
+    "prettier": "^2.8.4",
+    "typescript": "^4.9.5"
+  }
+}

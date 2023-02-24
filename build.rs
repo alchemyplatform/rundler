@@ -8,8 +8,11 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/lib");
     println!("cargo:rerun-if-changed=contracts/src");
     println!("cargo:rerun-if-changed=proto");
+    println!("cargo:rerun-if-changed=tracer/src/index.ts");
+    println!("cargo:rerun-if-changed=tracer/src/package.json");
     generate_contract_bindings()?;
     generate_protos()?;
+    compile_tracer()?;
     Ok(())
 }
 
@@ -35,12 +38,49 @@ fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
 }
 
 fn generate_abis() -> Result<(), Box<dyn error::Error>> {
-    let output = Command::new("forge").arg("build").output();
-    let output = match output {
+    run_command(
+        Command::new("forge").arg("build"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )
+}
+
+fn generate_protos() -> Result<(), Box<dyn error::Error>> {
+    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+    tonic_build::configure()
+        .file_descriptor_set_path(out_dir.join("op_pool_descriptor.bin"))
+        .compile(&["proto/op_pool.proto"], &["proto"])?;
+    Ok(())
+}
+
+fn compile_tracer() -> Result<(), Box<dyn error::Error>> {
+    let install_url = "https://classic.yarnpkg.com/en/docs/install";
+    let action = "compile tracer";
+    run_command(
+        Command::new("yarn").current_dir("tracer"),
+        install_url,
+        action,
+    )?;
+    run_command(
+        Command::new("yarn").arg("build").current_dir("tracer"),
+        install_url,
+        action,
+    )
+}
+
+fn run_command(
+    command: &mut Command,
+    install_page_url: &str,
+    action: &str,
+) -> Result<(), Box<dyn error::Error>> {
+    let output = match command.output() {
         Ok(o) => o,
         Err(e) => {
             if let ErrorKind::NotFound = e.kind() {
-                Err("Foundry not installed. See instructions at https://getfoundry.sh/")?;
+                let program = command.get_program().to_str().unwrap();
+                Err(format!(
+                    "{program} not installed. See instructions at {install_page_url}"
+                ))?;
             }
             Err(e)?
         }
@@ -49,15 +89,7 @@ fn generate_abis() -> Result<(), Box<dyn error::Error>> {
         if let Ok(error_output) = String::from_utf8(output.stderr) {
             eprintln!("{error_output}");
         }
-        Err("Failed to generate EntryPoint ABI.")?;
+        Err(format!("Failed to {action}."))?;
     }
-    Ok(())
-}
-
-fn generate_protos() -> Result<(), Box<dyn error::Error>> {
-    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
-    tonic_build::configure()
-        .file_descriptor_set_path(out_dir.join("op_pool_descriptor.bin"))
-        .compile(&["proto/op_pool.proto"], &["proto"])?;
     Ok(())
 }
