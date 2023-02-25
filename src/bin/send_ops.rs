@@ -3,33 +3,31 @@ use alchemy_bundler::common::contracts::simple_account::SimpleAccount;
 use alchemy_bundler::common::eth;
 use alchemy_bundler::common::types::UserOperation;
 use anyhow::Context;
+use dotenv::dotenv;
 use ethers::signers::Signer;
 use ethers::types::Address;
+use std::env;
 use std::str::FromStr;
-
-// NOTE: run dev_deploy_contracts first to deploy the contracts
-// set these to the addresses of the deployed contracts
-const ENTRYPOINT_ADDRESS: &str = "";
-const WALLET_ADDRESS: &str = "";
 
 const BUNDLER_ACCOUNT_ID: u8 = 2;
 const WALLET_OWNER_ACCOUNT_ID: u8 = 3;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenv()?;
+    let entry_point_env =
+        env::var("DEV_ENTRY_POINT_ADDRESS").context("should have entry point address")?;
+    let wallet_env = env::var("DEV_WALLET_ADDRESS").context("should have wallet address")?;
+    let entry_point_address =
+        Address::from_str(&entry_point_env).context("should parse entry point address")?;
+    let scw_address = Address::from_str(&wallet_env).context("should parse wallet address")?;
+
     let provider = eth::new_local_provider();
     let chain_id = eth::get_chain_id(&provider).await?;
     let bundler_client = eth::new_test_client(&provider, BUNDLER_ACCOUNT_ID, chain_id);
     let wallet_owner_eoa = eth::new_test_wallet(WALLET_OWNER_ACCOUNT_ID, chain_id);
 
-    let entry_point = EntryPoint::new(
-        Address::from_str(ENTRYPOINT_ADDRESS).context("should parse entry point address")?,
-        bundler_client.clone(),
-    );
-
-    let scw_address = WALLET_ADDRESS
-        .parse()
-        .context("should parse wallet address")?;
+    let entry_point = EntryPoint::new(entry_point_address, bundler_client.clone());
     let scw = SimpleAccount::new(scw_address, bundler_client.clone());
 
     // simply call the nonce method multiple times
