@@ -1,7 +1,7 @@
 mod pool;
 pub mod uo_pool;
 
-use ethers::types::{Address, H256};
+use ethers::types::{Address, H256, U256, U64};
 use std::sync::Arc;
 
 use crate::common::types::UserOperation;
@@ -14,8 +14,12 @@ pub trait Mempool {
     /// Event listener for when a new block is mined.
     ///
     /// Pool is updated according to the new blocks events.
-    /// User operations that were included in the block are removed.
     fn on_new_block(&self, event: OnNewBlockEvent);
+
+    /// Event listener for when a user operation event is received.
+    ///
+    /// Pool is updated according to the new operation event.
+    fn on_user_operation_event(&self, event: OnUserOperationEvent);
 
     /// Adds a validated user operation to the pool.
     ///
@@ -53,8 +57,23 @@ pub trait Mempool {
 /// Event when a new block is mined.
 #[derive(Debug)]
 pub struct OnNewBlockEvent {
-    /// List of operations that were included in the block by their hashes.
-    pub mined_operations: Vec<H256>,
+    /// The block hash
+    pub block_hash: H256,
+    /// The block number
+    pub block_number: U64,
+    /// The next base fee
+    pub next_base_fee: U256,
+}
+
+/// Event when a user operation event is received.
+#[derive(Debug)]
+pub struct OnUserOperationEvent {
+    /// The operation hash
+    pub op_hash: H256,
+    /// The operation sender
+    pub sender: Address,
+    /// The operation nonce
+    pub nonce: U256,
 }
 
 /// Origin of an operation.

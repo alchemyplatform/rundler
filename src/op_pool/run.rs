@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ethers::types::{Address, U256};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -30,19 +32,20 @@ pub async fn run(
     tracing::info!("Websocket url: {}", args.ws_url);
 
     // Mempool
-    let mp = UoPool::new(args.entry_point, args.chain_id);
+    let mp = Arc::new(UoPool::new(args.entry_point, args.chain_id));
 
     // Events listener
-    let event_listener = match EventListener::connect(args.ws_url, args.entry_point).await {
-        Ok(listener) => listener,
-        Err(e) => {
-            tracing::error!("Failed to connect to events listener: {:?}", e);
-            return Err(anyhow::anyhow!(
-                "Failed to connect to events listener: {:?}",
-                e
-            ));
-        }
-    };
+    let event_listener =
+        match EventListener::connect(args.ws_url, args.entry_point, mp.clone()).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                tracing::error!("Failed to connect to events listener: {:?}", e);
+                return Err(anyhow::anyhow!(
+                    "Failed to connect to events listener: {:?}",
+                    e
+                ));
+            }
+        };
     tracing::info!("Connected to events listener");
     let event_listener_shutdown = shutdown_rx.resubscribe();
     let events_listener_handle = tokio::spawn(async move {
