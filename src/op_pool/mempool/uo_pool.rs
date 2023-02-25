@@ -1,5 +1,5 @@
-use super::{pool::PoolInner, Mempool, OnNewBlockEvent, OperationOrigin};
-use crate::common::types::UserOperation;
+use super::{pool::PoolInner, Mempool, NewBlockEvent, OperationOrigin};
+use crate::common::{contracts::entry_point::EntryPointEvents, types::UserOperation};
 use ethers::types::{Address, H256, U256};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -28,8 +28,19 @@ impl Mempool for UoPool {
         self.entry_point
     }
 
-    fn on_new_block(&self, event: OnNewBlockEvent) {
-        self.remove_operations(&event.mined_operations);
+    fn on_new_block(&self, new_block: &NewBlockEvent) {
+        let mut pool = self.pool.write();
+        tracing::debug!("New block: {:?}", new_block.number);
+        for event in &new_block.events {
+            match &event.contract_event {
+                EntryPointEvents::UserOperationEventFilter(event) => {
+                    pool.remove_operation_by_hash(event.user_op_hash.into());
+                }
+                EntryPointEvents::AccountDeployedFilter(_) => todo!(),
+                EntryPointEvents::SignatureAggregatorChangedFilter(_) => todo!(),
+                _ => {}
+            }
+        }
     }
 
     fn add_operation(
@@ -93,22 +104,6 @@ mod tests {
         let hashes: Vec<H256> = res.into_iter().map(|r| r.unwrap()).collect();
         check_ops(pool.best_operations(3), ops);
         pool.remove_operations(&hashes);
-        assert_eq!(pool.best_operations(3), vec![]);
-    }
-
-    #[test]
-    fn test_new_block() {
-        let pool = UoPool::new(Address::zero(), 1.into());
-        let ops = vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
-        ];
-        let res = pool.add_operations(OperationOrigin::Local, ops);
-        let hashes = res.into_iter().map(|r| r.unwrap()).collect();
-        pool.on_new_block(OnNewBlockEvent {
-            mined_operations: hashes,
-        });
         assert_eq!(pool.best_operations(3), vec![]);
     }
 
