@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use crate::common::types::UserOperation;
 
+use super::events::NewBlockEvent;
+
 /// In-memory operation pool
 pub trait Mempool {
     /// Returns the entry point address this pool targets.
@@ -14,8 +16,7 @@ pub trait Mempool {
     /// Event listener for when a new block is mined.
     ///
     /// Pool is updated according to the new blocks events.
-    /// User operations that were included in the block are removed.
-    fn on_new_block(&self, event: OnNewBlockEvent);
+    fn on_new_block(&self, event: &NewBlockEvent);
 
     /// Adds a validated user operation to the pool.
     ///
@@ -48,13 +49,6 @@ pub trait Mempool {
 
     /// Clears the mempool
     fn clear(&self);
-}
-
-/// Event when a new block is mined.
-#[derive(Debug)]
-pub struct OnNewBlockEvent {
-    /// List of operations that were included in the block by their hashes.
-    pub mined_operations: Vec<H256>,
 }
 
 /// Origin of an operation.
