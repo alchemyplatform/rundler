@@ -1,15 +1,16 @@
 use anyhow::Context;
 use ethers::abi::RawLog;
 use ethers::contract::builders::ContractCall;
+use ethers::contract::{Contract, ContractDeployer, ContractError};
 use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::SignerMiddleware;
-use ethers::providers::{
-    Http, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError,
-};
+use ethers::providers::{Http, JsonRpcClient, Middleware, PendingTransaction, Provider};
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{Address, Bytes, Log, TransactionReceipt, TransactionRequest};
 use ethers::utils;
+use std::error;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,15 +48,47 @@ pub async fn grant_dev_eth(provider: &Provider<Http>, to: Address) -> anyhow::Re
 
 /// Waits for a pending transaction to be mined, providing appropriate error
 /// messages for each point of failure.
-pub async fn await_mined_tx<'a>(
-    tx: impl Future<Output = Result<PendingTransaction<'a, impl JsonRpcClient + 'a>, ProviderError>>,
+pub async fn await_mined_tx<'a, Fut, C, Err>(
+    tx: Fut,
     action: &str,
-) -> anyhow::Result<TransactionReceipt> {
+) -> anyhow::Result<TransactionReceipt>
+where
+    Fut: Future<Output = Result<PendingTransaction<'a, C>, Err>>,
+    C: JsonRpcClient + 'a,
+    Err: error::Error + Send + Sync + 'static,
+{
     tx.await
         .with_context(|| format!("should send transaction to {action}"))?
         .await
         .with_context(|| format!("should wait for transaction to {action}"))?
         .with_context(|| format!("transaction to {action} should not be dropped"))
+}
+
+/// Waits for a contract deployment, providing appropriate error messages.
+pub async fn await_contract_deployment<M, C>(
+    deployer: Result<ContractDeployer<M, C>, ContractError<M>>,
+    contract_name: &str,
+) -> anyhow::Result<C>
+where
+    M: Middleware + 'static,
+    C: From<Contract<M>>,
+{
+    deployer
+        .with_context(|| format!("should create deployer for {contract_name}"))?
+        .send()
+        .await
+        .with_context(|| format!("should deploy {contract_name}"))
+}
+
+/// Changes out a contract object's signer and returns a new contract of the
+/// same type. Needed because although the general-purpose `Contract` has a
+/// `.connect()` method to do this, specialized contract objects do not.
+pub fn connect_contract<M, C>(contract: &C, provider: Arc<M>) -> C
+where
+    M: Clone + Middleware,
+    C: Deref<Target = Contract<M>> + From<Contract<M>>,
+{
+    contract.connect(provider).into()
 }
 
 /// Packs an address followed by call data into a single `Bytes`. This is used
@@ -101,8 +134,13 @@ pub fn new_test_client(
 /// `new_test_client` in that a wallet on its own can only sign messages but
 /// not send transactions.
 pub fn new_test_wallet(test_account_id: u8, chain_id: u32) -> LocalWallet {
-    let mut bytes = [0_u8; 32];
-    bytes[31] = test_account_id;
+    let bytes = test_signing_key_bytes(test_account_id);
     let key = SigningKey::from_bytes(&bytes).expect("should create signing key for test wallet");
     LocalWallet::from(key).with_chain_id(chain_id)
+}
+
+pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
+    let mut bytes = [0_u8; 32];
+    bytes[31] = test_account_id;
+    bytes
 }
