@@ -56,17 +56,13 @@ enum ReputationStatus {
   BANNED = 2;
 }
 
-message Reputation {
-  ReputationStatus status = 1;
-  uint64 ops_seen = 2;
-  uint64 ops_included = 3;
-}
-
 message GetReputationRequest {
   bytes address = 1;
 }
 message GetReputationResponse {
-  Reputation reputation = 1;
+  ReputationStatus status = 1;
+  uint64 ops_seen = 2;
+  uint64 ops_included = 3;
 }
 
 message RemoveOpsRequest {
@@ -88,8 +84,7 @@ message DebugDumpMempoolResponse {
 
 message DebugSetReputationRequest {
   bytes entry_point = 1;
-  bytes address = 2;
-  Reputation reputation = 3;
+  Reputation reputation = 2;
 }
 message DebugSetReputationResponse {}
 
@@ -97,5 +92,12 @@ message DebugDumpReputationRequest {
   bytes entry_point = 1;
 }
 message DebugDumpReputationResponse {
-  map<string, Reputation> reputation = 1;
+  repeated Reputation reputations = 1;
+}
+
+message Reputation {
+  bytes address = 1;
+  ReputationStatus status = 2;
+  uint64 ops_seen = 3;
+  uint64 ops_included = 4;
 }

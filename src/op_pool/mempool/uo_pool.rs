@@ -1,4 +1,4 @@
-use super::{pool::PoolInner, Mempool, OnNewBlockEvent, OnUserOperationEvent, OperationOrigin};
+use super::{pool::PoolInner, Mempool, NewBlockEvent, OperationOrigin, UserOperationEvent};
 use crate::common::types::UserOperation;
 use ethers::types::{Address, H256, U256};
 use parking_lot::RwLock;
@@ -28,12 +28,12 @@ impl Mempool for UoPool {
         self.entry_point
     }
 
-    fn on_new_block(&self, _event: OnNewBlockEvent) {
+    fn on_new_block(&self, _event: NewBlockEvent) {
         // TODO(danc): handle new blocks
         // or remove this method
     }
 
-    fn on_user_operation_event(&self, event: OnUserOperationEvent) {
+    fn on_user_operation_event(&self, event: UserOperationEvent) {
         self.pool.write().remove_operation_by_hash(event.op_hash);
     }
 
