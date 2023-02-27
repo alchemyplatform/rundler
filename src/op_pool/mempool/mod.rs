@@ -6,10 +6,12 @@ use std::sync::Arc;
 
 use crate::common::types::UserOperation;
 
-use super::events::NewBlockEvent;
+use super::{events::NewBlockEvent, reputation::ReputationManager};
 
 /// In-memory operation pool
-pub trait Mempool {
+pub trait Mempool: Send + Sync {
+    type ReputationManagerType: ReputationManager;
+
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
 
