@@ -1,5 +1,8 @@
 use super::{pool::PoolInner, Mempool, NewBlockEvent, OperationOrigin};
-use crate::common::{contracts::entry_point::EntryPointEvents, types::UserOperation};
+use crate::{
+    common::{contracts::entry_point::EntryPointEvents, types::UserOperation},
+    op_pool::reputation::ReputationManager,
+};
 use ethers::types::{Address, H256, U256};
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -9,21 +12,32 @@ use std::sync::Arc;
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub struct UoPool {
+pub struct UoPool<R: ReputationManager> {
     pool: RwLock<PoolInner>,
     entry_point: Address,
+    #[allow(dead_code)] // TODO(danc): remove once implemented
+    reputation: Arc<R>,
 }
 
-impl UoPool {
-    pub fn new(entry_point: Address, chain_id: U256) -> Self {
+impl<R> UoPool<R>
+where
+    R: ReputationManager,
+{
+    pub fn new(entry_point: Address, chain_id: U256, reputation: Arc<R>) -> Self {
         Self {
             pool: RwLock::new(PoolInner::new(entry_point, chain_id)),
             entry_point,
+            reputation,
         }
     }
 }
 
-impl Mempool for UoPool {
+impl<R> Mempool for UoPool<R>
+where
+    R: ReputationManager,
+{
+    type ReputationManagerType = R;
+
     fn entry_point(&self) -> Address {
         self.entry_point
     }
@@ -48,6 +62,7 @@ impl Mempool for UoPool {
         _origin: OperationOrigin,
         operation: UserOperation,
     ) -> anyhow::Result<H256> {
+        // TODO(danc): update reputation
         self.pool.write().add_operation(operation)
     }
 
@@ -56,6 +71,7 @@ impl Mempool for UoPool {
         _origin: OperationOrigin,
         operations: impl IntoIterator<Item = UserOperation>,
     ) -> Vec<anyhow::Result<H256>> {
+        // TODO(danc): update reputation
         self.pool.write().add_operations(operations)
     }
 
@@ -68,6 +84,7 @@ impl Mempool for UoPool {
     }
 
     fn best_operations(&self, max: usize) -> Vec<Arc<UserOperation>> {
+        // TODO(danc): use reputation to filter out ops
         self.pool.read().best_operations(max)
     }
 
@@ -78,11 +95,13 @@ impl Mempool for UoPool {
 
 #[cfg(test)]
 mod tests {
+    use crate::common::protos::op_pool::{Reputation, ReputationStatus};
+
     use super::*;
 
     #[test]
     fn test_add_single_op() {
-        let pool = UoPool::new(Address::zero(), 1.into());
+        let pool = UoPool::new(Address::zero(), 1.into(), mock_reputation());
         let op = create_op(Address::random(), 0, 0);
         let hash = pool
             .add_operation(OperationOrigin::Local, op.clone())
@@ -94,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_add_multiple_ops() {
-        let pool = UoPool::new(Address::zero(), 1.into());
+        let pool = UoPool::new(Address::zero(), 1.into(), mock_reputation());
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
@@ -109,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let pool = UoPool::new(Address::zero(), 1.into());
+        let pool = UoPool::new(Address::zero(), 1.into(), mock_reputation());
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
@@ -135,5 +154,28 @@ mod tests {
         for (actual, expected) in ops.into_iter().zip(expected) {
             assert_eq!(*actual, expected);
         }
+    }
+
+    fn mock_reputation() -> Arc<MockReputationManager> {
+        Arc::new(MockReputationManager::default())
+    }
+
+    #[derive(Default, Clone)]
+    struct MockReputationManager;
+
+    impl ReputationManager for MockReputationManager {
+        fn on_new_block(&self, _new_block: &NewBlockEvent) {}
+
+        fn status(&self, _address: Address) -> ReputationStatus {
+            ReputationStatus::Ok
+        }
+
+        fn add_seen<'a>(&self, _addresses: impl IntoIterator<Item = &'a Address>) {}
+
+        fn dump_reputation(&self) -> Vec<Reputation> {
+            vec![]
+        }
+
+        fn set_reputation(&self, _address: Address, _ops_seen: u64, _ops_included: u64) {}
     }
 }
