@@ -122,6 +122,7 @@ impl OpPoolArgs {
                 .parse()
                 .context("Invalid entry_point argument")?,
             chain_id: common.chain_id.into(),
+            ws_url: common.ws_url.clone(),
         })
     }
 }
@@ -253,6 +254,16 @@ struct Common {
         global = true
     )]
     chain_id: u128,
+
+    /// Websocket URL to connect to
+    #[arg(
+        long = "ws_url",
+        name = "ws_url",
+        env = "WS_URL",
+        default_value = "ws://localhost:8546",
+        global = true
+    )]
+    ws_url: String,
 }
 
 /// CLI options for the metrics server

@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.68"
 clap = { version = "4.1.4", features = ["derive", "env"] }
-ethers = "1.0.2"
+ethers = { version = "1.0.2", features = ["ws"] }
 jsonrpsee = { version = "0.16.2", features = ["macros", "server"] }
 prost = "0.11.6"
 serde = { version = "1.0.152", features = ["derive"] }
@@ -23,6 +23,7 @@ metrics = "0.20.1"
 metrics-exporter-prometheus = "0.11.0"
 metrics-util = "0.14.0"
 parking_lot = "0.12.1"
+dotenv = "0.15.0"
 
 [build-dependencies]
 ethers = "1.0.2"

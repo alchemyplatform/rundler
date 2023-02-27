@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::mempool::{Mempool, OperationOrigin};
 use super::metrics::OpPoolMetrics;
 use crate::common::protos::op_pool::op_pool_server::OpPool;
@@ -15,7 +17,7 @@ use tonic::{async_trait, Request, Response};
 #[derive(Default)]
 pub struct OpPoolImpl<T: Mempool> {
     chain_id: U256,
-    mempool: T,
+    mempool: Arc<T>,
     metrics: OpPoolMetrics,
 }
 
@@ -23,7 +25,7 @@ impl<T> OpPoolImpl<T>
 where
     T: Mempool,
 {
-    pub fn new(chain_id: U256, mempool: T) -> Self {
+    pub fn new(chain_id: U256, mempool: Arc<T>) -> Self {
         Self {
             chain_id,
             metrics: OpPoolMetrics::default(),

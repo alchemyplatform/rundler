@@ -7,6 +7,7 @@ use anyhow::Context;
 use ethers::signers::Signer;
 use ethers::types::U256;
 use ethers::utils::hex;
+use std::io::prelude::*;
 use std::sync::Arc;
 
 const DEPLOYER_ACCOUNT_ID: u8 = 1;
@@ -75,5 +76,14 @@ async fn main() -> anyhow::Result<()> {
         "Wallet owner private key: {}",
         hex::encode(test_signing_key_bytes(WALLET_OWNER_ACCOUNT_ID))
     );
+
+    // write the addresses to a .env file
+    let mut env_file = std::fs::File::create(".env")?;
+    env_file
+        .write_all(format!("DEV_ENTRY_POINT_ADDRESS={:?}\n", entry_point.address()).as_bytes())?;
+    env_file
+        .write_all(format!("DEV_WALLET_FACTORY_ADDRESS={:?}\n", factory.address()).as_bytes())?;
+    env_file.write_all(format!("DEV_WALLET_ADDRESS={wallet_address:?}\n").as_bytes())?;
+
     Ok(())
 }

@@ -16,3 +16,5 @@
 
 # Generated contract bindings, created in build.rs
 /src/common/contracts
+
+.env
