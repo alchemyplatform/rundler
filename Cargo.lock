@@ -51,14 +51,17 @@ dependencies = [
  "clap",
  "dotenv",
  "ethers",
+ "indexmap",
  "jsonrpsee",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
  "parking_lot 0.12.1",
+ "parse-display",
  "prost",
  "serde",
  "serde_json",
+ "thiserror",
  "tokio",
  "tonic",
  "tonic-build",
@@ -2068,6 +2071,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "parse-display"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f96cc033d72896bb9a2c239a14e1141c3e2eae6d649e7c10ef4e598d66bc86c"
+dependencies = [
+ "once_cell",
+ "parse-display-derive",
+ "regex",
+]
+
+[[package]]
+name = "parse-display-derive"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5587062be441f3d868f7c4c9d13c67f286b03aa679d7f8176ef80bf2ee79e5d"
+dependencies = [
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "regex-syntax",
+ "structmeta",
+ "syn",
+]
+
+[[package]]
 name = "password-hash"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2887,6 +2916,29 @@ name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
+
+[[package]]
+name = "structmeta"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1bd9c2155aa89fb2c2cb87d99a610c689e7c47099b3e9f1c8a8f53faf4e3d2e3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "structmeta-derive",
+ "syn",
+]
+
+[[package]]
+name = "structmeta-derive"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bafede0d0a2f21910f36d47b1558caae3076ed80f6f3ad0fc85a91e6ba7e5938"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "strum"

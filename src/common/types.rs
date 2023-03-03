@@ -1,4 +1,6 @@
+use crate::common::contracts::entry_point::ValidationResult;
 pub use crate::common::contracts::shared_types::UserOperation;
+use crate::common::eth;
 use ethers::{
     abi::{encode, AbiEncode, Token},
     types::{Address, Bytes, H256, U256},
@@ -37,6 +39,14 @@ impl UserOperation {
         }
     }
 
+    pub fn factory(&self) -> Option<Address> {
+        eth::address_from_compacted_data(&self.init_code)
+    }
+
+    pub fn paymaster(&self) -> Option<Address> {
+        eth::address_from_compacted_data(&self.paymaster_and_data)
+    }
+
     fn pack(&self) -> Bytes {
         let mut packed = encode(&[
             Token::Address(self.sender),
@@ -56,6 +66,72 @@ impl UserOperation {
         // Remove the signature size entry at the end
         packed.truncate(packed.len() - 32);
         packed.into()
+    }
+}
+
+/// Equivalent to the generated `ValidationResult` from `EntryPoint`, but with
+/// named structs instead of tuples.
+#[derive(Debug)]
+pub struct EntryPointOutput {
+    pub return_info: EntryPointReturnInfo,
+    pub sender_info: StakeInfo,
+    pub factory_info: StakeInfo,
+    pub paymaster_info: StakeInfo,
+}
+
+impl From<ValidationResult> for EntryPointOutput {
+    fn from(value: ValidationResult) -> Self {
+        let ValidationResult {
+            return_info,
+            sender_info,
+            factory_info,
+            paymaster_info,
+        } = value;
+        Self {
+            return_info: return_info.into(),
+            sender_info: sender_info.into(),
+            factory_info: factory_info.into(),
+            paymaster_info: paymaster_info.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct EntryPointReturnInfo {
+    pub pre_op_gas: U256,
+    pub prefund: U256,
+    pub sig_failed: bool,
+    pub valid_after: u64,
+    pub valid_until: u64,
+    pub paymaster_context: Bytes,
+}
+
+impl From<(U256, U256, bool, u64, u64, Bytes)> for EntryPointReturnInfo {
+    fn from(value: (U256, U256, bool, u64, u64, Bytes)) -> Self {
+        let (pre_op_gas, prefund, sig_failed, valid_after, valid_until, paymaster_context) = value;
+        Self {
+            pre_op_gas,
+            prefund,
+            sig_failed,
+            valid_after,
+            valid_until,
+            paymaster_context,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StakeInfo {
+    pub stake: U256,
+    pub unstake_delay_sec: U256,
+}
+
+impl From<(U256, U256)> for StakeInfo {
+    fn from((stake, unstake_delay_sec): (U256, U256)) -> Self {
+        Self {
+            stake,
+            unstake_delay_sec,
+        }
     }
 }
 

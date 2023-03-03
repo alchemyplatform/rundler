@@ -10,7 +10,6 @@ use crate::common::protos::op_pool::op_pool_server::OpPoolServer;
 use crate::common::protos::op_pool::OP_POOL_FILE_DESCRIPTOR_SET;
 use crate::op_pool::events::EventListener;
 use crate::op_pool::mempool::uo_pool::UoPool;
-use crate::op_pool::mempool::Mempool;
 use crate::op_pool::server::OpPoolImpl;
 
 pub struct Args {
@@ -47,10 +46,11 @@ pub async fn run(
         }
     };
     tracing::info!("Connected to events listener");
-    let callback_mp = Arc::clone(&mp);
-    event_listener.subscribe(move |new_block| {
-        callback_mp.on_new_block(new_block);
-    });
+    // TODO: This is commented out because it doesn't compile.
+    // let callback_mp = Arc::clone(&mp);
+    // event_listener.subscribe(move |new_block| {
+    //     callback_mp.on_new_block(new_block);
+    // });
 
     let event_listener_shutdown = shutdown_rx.resubscribe();
     let events_listener_handle = tokio::spawn(async move {

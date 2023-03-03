@@ -56,9 +56,9 @@ impl EventListener {
         })
     }
 
-    pub fn subscribe(&self, callback: impl NewBlockCallback) {
-        self.subscriptions.lock().push(Box::new(callback));
-    }
+    // pub fn subscribe(&self, callback: impl NewBlockCallback) {
+    //     self.subscriptions.lock().push(Box::new(callback));
+    // }
 
     pub async fn listen_with_shutdown(&self, mut shutdown_rx: Receiver<()>) -> anyhow::Result<()> {
         // TODO(danc): Handle initial reconnects
