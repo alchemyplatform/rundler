@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.13;
 
-// From eth-infinitism/bundler
+// From eth-infinitism/bundler. A helper contract for hashing together the code
+// hashes of multiple contracts at once.
+//
+// Not intended to be deployed on-chain.. Instead, using a call to simulate
+// deployment will revert with an error containing the desired result.
 
 contract GetCodeHashes {
     error CodeHashesResult(bytes32 hash);
@@ -16,6 +20,6 @@ contract GetCodeHashes {
             hashes[i] = addresses[i].codehash;
         }
         bytes memory data = abi.encode(hashes);
-        return (keccak256(data));
+        return keccak256(data);
     }
 }

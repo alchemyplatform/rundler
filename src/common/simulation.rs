@@ -1,4 +1,4 @@
-use crate::common::contracts::entry_point::{EntryPoint, ValidationResult};
+use crate::common::contracts::entry_point::{EntryPoint, FailedOp, ValidationResult};
 use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
 use crate::common::types::{EntryPointOutput, StakeInfo, UserOperation};
 use crate::common::{eth, tracer};
@@ -6,7 +6,7 @@ use ethers::abi::AbiDecode;
 use ethers::providers::{Http, Middleware, Provider};
 use ethers::types::{Address, BlockId, OpCode, U256};
 use indexmap::IndexSet;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
@@ -16,49 +16,125 @@ const MIN_UNSTAKE_DELAY: u32 = 84600;
 
 #[derive(Clone, Debug)]
 pub struct SimulationSuccess {
-    signature_failed: bool,
-    valid_after: u64,
-    valid_until: u64,
-    code_hash: [u8; 32],
-    storage_accesses_with_expected_values: HashMap<StorageSlot, Option<U256>>,
+    pub signature_failed: bool,
+    pub valid_after: u64,
+    pub valid_until: u64,
+    pub code_hash: [u8; 32],
+    pub storage_accesses_with_expected_values: HashMap<StorageSlot, Option<U256>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct StorageSlot {
-    address: Address,
-    slot: U256,
+    pub address: Address,
+    pub slot: U256,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum Entity {
-    Factory = 0,
-    Account = 1,
-    Paymaster = 2,
-}
-
-impl Entity {
-    pub fn index(self) -> usize {
-        self as usize
-    }
-
-    pub fn from_index(i: usize) -> Option<Self> {
-        match i {
-            0 => Some(Self::Factory),
-            1 => Some(Self::Account),
-            2 => Some(Self::Paymaster),
-            _ => None,
+pub async fn simulate_validation(
+    provider: &Arc<Provider<Http>>,
+    entry_point: &EntryPoint<impl Middleware>,
+    op: UserOperation,
+    block_id: BlockId,
+    expected_code_hash: Option<[u8; 32]>,
+    min_stake_value: U256,
+) -> Result<SimulationSuccess, SimulationError> {
+    let context =
+        match ValidationContext::new_for_op(entry_point, op, block_id, min_stake_value).await {
+            Ok(context) => context,
+            error @ Err(_) => error?,
+        };
+    let ValidationContext {
+        entity_infos,
+        mut tracer_out,
+        entry_point_out,
+        is_wallet_creation,
+    } = context;
+    let sender_address = entity_infos.sender_address();
+    let mut violations: Vec<Violation> = vec![];
+    let mut storage_accesses_with_expected_values = HashMap::new();
+    for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
+        let entity = Entity::from_index(index).unwrap();
+        let entity_info = match entity_infos.get(entity) {
+            Some(info) => info,
+            None => continue,
+        };
+        for opcode in &phase.forbidden_opcodes_used {
+            violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
+        }
+        if phase.used_invalid_gas_opcode {
+            violations.push(Violation::InvalidGasOpcode(entity));
+        }
+        let mut needs_stake = false;
+        let mut banned_addresses_accessed = IndexSet::<Address>::new();
+        for StorageAccess { address, accesses } in &phase.storage_accesses {
+            let address = *address;
+            for &SlotAccess {
+                slot,
+                initial_value,
+            } in accesses
+            {
+                storage_accesses_with_expected_values
+                    .insert(StorageSlot { address, slot }, initial_value);
+                let restriction = get_storage_restriction(GetStorageRestrictionArgs {
+                    slots_by_address: &tracer_out.associated_slots_by_address,
+                    is_wallet_creation,
+                    entry_point_address: entry_point.address(),
+                    entity_address: entity_info.address,
+                    sender_address,
+                    accessed_address: address,
+                    slot,
+                });
+                match restriction {
+                    StorageRestriction::Allowed => {}
+                    StorageRestriction::NeedsStake => needs_stake = true,
+                    StorageRestriction::Banned => {
+                        banned_addresses_accessed.insert(address);
+                    }
+                }
+            }
+        }
+        if needs_stake && !entity_info.is_staked {
+            violations.push(Violation::NotStaked(entity));
+        }
+        for address in banned_addresses_accessed {
+            violations.push(Violation::InvalidStorageAccess(entity, address));
+        }
+        if phase.called_with_value {
+            violations.push(Violation::CallHadValue(entity));
+        }
+        if phase.ran_out_of_gas {
+            violations.push(Violation::OutOfGas(entity));
+        }
+        for &address in &phase.undeployed_contract_accesses {
+            violations.push(Violation::AccessedUndeployedContract(entity, address))
+        }
+        if phase.called_handle_ops {
+            violations.push(Violation::CalledHandleOps(entity));
         }
     }
-}
-
-impl Display for Entity {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Entity::Factory => "factory",
-            Entity::Account => "account",
-            Entity::Paymaster => "paymaster",
-        })
+    let code_hash = eth::get_code_hash(
+        provider,
+        mem::take(&mut tracer_out.accessed_contract_addresses),
+        Some(block_id),
+    )
+    .await?;
+    if let Some(expected_code_hash) = expected_code_hash {
+        if expected_code_hash != code_hash {
+            violations.push(Violation::CodeHashChanged);
+        }
     }
+    if tracer_out.factory_called_create2_twice {
+        violations.push(Violation::FactoryCalledCreate2Twice);
+    }
+    if !violations.is_empty() {
+        Err(violations)?
+    }
+    Ok(SimulationSuccess {
+        signature_failed: entry_point_out.return_info.sig_failed,
+        valid_after: entry_point_out.return_info.valid_after,
+        valid_until: entry_point_out.return_info.valid_until,
+        code_hash,
+        storage_accesses_with_expected_values,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -101,8 +177,10 @@ impl Display for SimulationError {
 
 #[derive(Clone, Debug, parse_display::Display)]
 pub enum Violation {
-    #[display("unexpected revert while simulating {0} validation")]
+    #[display("reverted while simulating {0} validation")]
     UnintendedRevert(Entity),
+    #[display("reverted while simulating validation: {0}")]
+    UnintendedRevertWithMessage(String),
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
@@ -133,116 +211,36 @@ pub enum Violation {
     FactoryCalledCreate2Twice,
 }
 
-pub async fn simulate_validation(
-    provider: &Arc<Provider<Http>>,
-    entry_point: &EntryPoint<impl Middleware>,
-    op: UserOperation,
-    expected_code_hash: Option<[u8; 32]>,
-    min_stake_value: U256,
-) -> Result<SimulationSuccess, SimulationError> {
-    let context = match ValidationContext::new_for_op(entry_point, op, min_stake_value).await {
-        Ok(context) => context,
-        error @ Err(_) => error?,
-    };
-    let ValidationContext {
-        entity_infos,
-        mut tracer_out,
-        entry_point_out,
-        is_wallet_creation,
-    } = context;
-    let sender_address = entity_infos.sender_address();
-    let mut violations: Vec<Violation> = vec![];
-    let mut storage_accesses_with_expected_values = HashMap::new();
-    for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-        let entity = Entity::from_index(index).unwrap();
-        let entity_info = match entity_infos.get(entity) {
-            Some(info) => info,
-            None => continue,
-        };
-        for opcode in &phase.banned_opcodes_used {
-            violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
-        }
-        if phase.used_invalid_gas_opcode {
-            violations.push(Violation::InvalidGasOpcode(entity));
-        }
-        let mut needs_stake = false;
-        let mut banned_addresses_accessed = IndexSet::<Address>::new();
-        for StorageAccess { address, accesses } in &phase.storage_accesses {
-            let address = *address;
-            for access in accesses {
-                storage_accesses_with_expected_values.insert(
-                    StorageSlot {
-                        address,
-                        slot: access.slot,
-                    },
-                    access.initial_value,
-                );
-                let restriction = get_storage_restriction(GetStorageRestrictionArgs {
-                    slots_by_address: &tracer_out.associated_slots_by_address,
-                    is_wallet_creation,
-                    entity_address: entity_info.address,
-                    sender_address,
-                    accessed_address: address,
-                    slot: access.slot,
-                });
-                match restriction {
-                    StorageRestriction::Allowed => {}
-                    StorageRestriction::NeedsStake => needs_stake = true,
-                    StorageRestriction::Banned => {
-                        banned_addresses_accessed.insert(address);
-                    }
-                }
-            }
-        }
-        if needs_stake && !entity_info.is_staked {
-            violations.push(Violation::NotStaked(entity));
-        }
-        for address in banned_addresses_accessed {
-            violations.push(Violation::InvalidStorageAccess(entity, address));
-        }
-        if phase.called_with_value {
-            violations.push(Violation::CallHadValue(entity));
-        }
-        if phase.ran_out_of_gas {
-            violations.push(Violation::OutOfGas(entity));
-        }
-        for &address in &phase.undeployed_contract_accesses {
-            violations.push(Violation::AccessedUndeployedContract(entity, address))
-        }
-        if phase.called_entry_point {
-            violations.push(Violation::CalledHandleOps(entity));
-        }
-        if entity == Entity::Factory {
-            if phase.create2_count > 1 {
-                violations.push(Violation::FactoryCalledCreate2Twice);
-            }
-        } else {
-            if phase.create2_count > 0 {
-                violations.push(Violation::UsedForbiddenOpcode(entity, OpCode::CREATE2));
-            }
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Entity {
+    Factory = 0,
+    Account = 1,
+    Paymaster = 2,
+}
+
+impl Entity {
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    pub fn from_index(i: usize) -> Option<Self> {
+        match i {
+            0 => Some(Self::Factory),
+            1 => Some(Self::Account),
+            2 => Some(Self::Paymaster),
+            _ => None,
         }
     }
-    let code_hash = eth::get_code_hash(
-        provider,
-        mem::take(&mut tracer_out.accessed_contract_addresses),
-        Some(BlockId::Hash(tracer_out.block_hash)),
-    )
-    .await?;
-    if let Some(expected_code_hash) = expected_code_hash {
-        if expected_code_hash != code_hash {
-            violations.push(Violation::CodeHashChanged);
-        }
+}
+
+impl Display for Entity {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Entity::Factory => "factory",
+            Entity::Account => "account",
+            Entity::Paymaster => "paymaster",
+        })
     }
-    if !violations.is_empty() {
-        Err(violations)?
-    }
-    Ok(SimulationSuccess {
-        signature_failed: entry_point_out.return_info.sig_failed,
-        valid_after: entry_point_out.return_info.valid_after,
-        valid_until: entry_point_out.return_info.valid_until,
-        code_hash,
-        storage_accesses_with_expected_values,
-    })
 }
 
 #[derive(Debug)]
@@ -257,16 +255,20 @@ impl ValidationContext {
     async fn new_for_op(
         entry_point: &EntryPoint<impl Middleware>,
         op: UserOperation,
+        block_id: BlockId,
         min_stake_value: U256,
     ) -> Result<Self, SimulationError> {
         let factory_address = op.factory();
         let sender_address = op.sender;
         let paymaster_address = op.paymaster();
         let is_wallet_creation = !op.init_code.is_empty();
-        let tracer_out = tracer::trace_op_validation(entry_point, op).await?;
+        let tracer_out = tracer::trace_op_validation(entry_point, op, block_id).await?;
         let num_phases = tracer_out.phases.len() as u32;
         if num_phases > 3 {
             Err(Violation::WrongNumberOfPhases(num_phases))?
+        }
+        if let Ok(failed_op) = FailedOp::decode_hex(&tracer_out.revert_data) {
+            Err(Violation::UnintendedRevertWithMessage(failed_op.reason))?
         }
         let entry_point_out = match ValidationResult::decode_hex(&tracer_out.revert_data) {
             Ok(out) => EntryPointOutput::from(out),
@@ -362,6 +364,7 @@ enum StorageRestriction {
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
     is_wallet_creation: bool,
+    entry_point_address: Address,
     entity_address: Address,
     sender_address: Address,
     accessed_address: Address,
@@ -372,6 +375,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
     let GetStorageRestrictionArgs {
         slots_by_address,
         is_wallet_creation,
+        entry_point_address,
         entity_address,
         sender_address,
         accessed_address,
@@ -380,7 +384,11 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
     if accessed_address == sender_address {
         StorageRestriction::Allowed
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
-        if is_wallet_creation {
+        if is_wallet_creation && accessed_address != entry_point_address {
+            // We deviate from the letter of ERC-4337 to allow unstaked access
+            // during wallet creation to the sender's associated storage on
+            // the entry point. Otherwise, the sender can't call depositTo() to
+            // pay for its own gas!
             StorageRestriction::NeedsStake
         } else {
             StorageRestriction::Allowed

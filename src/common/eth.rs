@@ -167,8 +167,8 @@ pub async fn get_code_hash(
     block_id: Option<BlockId>,
 ) -> Result<[u8; 32], anyhow::Error> {
     addresses.sort();
-    /// TODO: This is a tad inefficient, because every time we create a new
-    /// contract deployer it clones the ABI and bytecode.
+    // TODO: This is a tad inefficient, because every time we create a new
+    // contract deployer it clones the ABI and bytecode.
     let tx = GetCodeHashes::deploy(Arc::clone(provider), addresses)
         .context("should construct GetCodeHashes deployer")?
         .deployer
@@ -185,7 +185,8 @@ pub async fn get_code_hash(
     Ok(hash)
 }
 
-/// Extracts the revert reason if this is a revert error, otherwise returns the original error.
+/// Extracts the revert reason as a hex string if this is a revert error,
+/// otherwise returns the original error.
 pub fn get_revert_data(mut error: ProviderError) -> Result<String, ProviderError> {
     let dyn_error = match &mut error {
         ProviderError::JsonRpcClientError(e) => e,
@@ -198,20 +199,5 @@ pub fn get_revert_data(mut error: ProviderError) -> Result<String, ProviderError
     match &mut jsonrpc_error.data {
         Some(Value::String(s)) => Ok(mem::take(s)),
         _ => Err(error),
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use ethers::types::H256;
-    use serde_json::json;
-
-    #[test]
-    fn test() -> anyhow::Result<()> {
-        let hash: H256 = serde_json::from_str(
-            "\"0x122f4ce6f2fb2551259427a246962ffce68e25ddd38aa717d143b7ccd5dd70e7\"",
-        )?;
-        println!("{hash:#?}");
-        Ok(())
     }
 }

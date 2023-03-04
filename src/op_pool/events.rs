@@ -56,6 +56,7 @@ impl EventListener {
         })
     }
 
+    // TODO: Commented to suppress an unused warning. The code using this wouldn't compile.
     // pub fn subscribe(&self, callback: impl NewBlockCallback) {
     //     self.subscriptions.lock().push(Box::new(callback));
     // }
