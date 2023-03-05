@@ -1,6 +1,6 @@
-use crate::common::contracts::get_code_hashes::{CodeHashesResult, GetCodeHashes};
+use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
 use anyhow::Context;
-use ethers::abi::{AbiDecode, RawLog};
+use ethers::abi::{AbiDecode, AbiEncode, RawLog};
 use ethers::contract::builders::ContractCall;
 use ethers::contract::{Contract, ContractDeployer, ContractError};
 use ethers::core::k256::ecdsa::SigningKey;
@@ -9,7 +9,9 @@ use ethers::providers::{
     Http, HttpClientError, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError,
 };
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, BlockId, Bytes, Log, TransactionReceipt, TransactionRequest};
+use ethers::types::{
+    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, TransactionRequest,
+};
 use ethers::utils;
 use serde_json::Value;
 use std::future::Future;
@@ -162,27 +164,39 @@ pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
 pub async fn get_code_hash(
-    provider: Arc<Provider<Http>>,
+    provider: &Provider<Http>,
     mut addresses: Vec<Address>,
     block_id: Option<BlockId>,
 ) -> Result<[u8; 32], anyhow::Error> {
     addresses.sort();
-    // TODO: This is a tad inefficient, because every time we create a new
-    // contract deployer it clones the ABI and bytecode.
-    let tx = GetCodeHashes::deploy(Arc::clone(&provider), addresses)
-        .context("should construct GetCodeHashes deployer")?
-        .deployer
-        .tx;
+    let out: CodeHashesResult =
+        call_constructor(provider, &GETCODEHASHES_BYTECODE, addresses, block_id)
+            .await
+            .context("should compute code hashes")?;
+    Ok(out.hash)
+}
+
+async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(
+    provider: &Provider<Http>,
+    bytecode: &Bytes,
+    args: Args,
+    block_id: Option<BlockId>,
+) -> anyhow::Result<Ret> {
+    let mut data = bytecode.to_vec();
+    data.extend(AbiEncode::encode(args));
+    let tx = Eip1559TransactionRequest {
+        data: Some(data.into()),
+        ..Default::default()
+    };
     let error = provider
-        .call(&tx, block_id)
+        .call(&tx.into(), block_id)
         .await
         .err()
-        .context("GetCodeHashes constructor should revert")?;
-    let revert_data = get_revert_data(error).context("should call GetCodeHashes constructor")?;
-    let hash = CodeHashesResult::decode_hex(&revert_data)
-        .context("should decode revert data from GetCodeHashes constructor")?
-        .hash;
-    Ok(hash)
+        .context("called constructor should revert")?;
+    let revert_data = get_revert_data(error).context("should call constructor")?;
+    let ret = Ret::decode_hex(&revert_data)
+        .context("should decode revert data from called constructor")?;
+    Ok(ret)
 }
 
 /// Extracts the revert reason as a hex string if this is a revert error,

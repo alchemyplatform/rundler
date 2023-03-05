@@ -48,22 +48,39 @@ pub struct SimulatorImpl {
 }
 
 impl SimulatorImpl {
-    pub fn new(provider: Arc<Provider<Http>>, entry_point_address: Address, min_stake_value: U256) -> Self {
+    pub fn new(
+        provider: Arc<Provider<Http>>,
+        entry_point_address: Address,
+        min_stake_value: U256,
+    ) -> Self {
         let entry_point = EntryPoint::new(entry_point_address, provider.clone());
         Self {
-            provider, entry_point, min_stake_value
+            provider,
+            entry_point,
+            min_stake_value,
         }
     }
 }
 
 #[async_trait]
 impl Simulator for SimulatorImpl {
-    async fn simulate_validation(&self, op: UserOperation, block_id: BlockId, expected_code_hash: Option<[u8; 32]>) -> Result<SimulationSuccess, SimulationError> {
-        let context =
-            match ValidationContext::new_for_op(&self.entry_point, op, block_id, self.min_stake_value).await {
-                Ok(context) => context,
-                error @ Err(_) => error?,
-            };
+    async fn simulate_validation(
+        &self,
+        op: UserOperation,
+        block_id: BlockId,
+        expected_code_hash: Option<[u8; 32]>,
+    ) -> Result<SimulationSuccess, SimulationError> {
+        let context = match ValidationContext::new_for_op(
+            &self.entry_point,
+            op,
+            block_id,
+            self.min_stake_value,
+        )
+        .await
+        {
+            Ok(context) => context,
+            error @ Err(_) => error?,
+        };
         let ValidationContext {
             entity_infos,
             mut tracer_out,
@@ -134,11 +151,11 @@ impl Simulator for SimulatorImpl {
             }
         }
         let code_hash = eth::get_code_hash(
-            Arc::clone(&self.provider),
+            &self.provider,
             mem::take(&mut tracer_out.accessed_contract_addresses),
             Some(block_id),
         )
-            .await?;
+        .await?;
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
                 violations.push(Violation::CodeHashChanged);
