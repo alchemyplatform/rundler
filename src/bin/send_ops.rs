@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
 
     let provider = eth::new_local_provider();
     let chain_id = eth::get_chain_id(&provider).await?;
-    let bundler_client = eth::new_test_client(&provider, BUNDLER_ACCOUNT_ID, chain_id);
+    let bundler_client = eth::new_test_client(provider, BUNDLER_ACCOUNT_ID, chain_id);
     let wallet_owner_eoa = eth::new_test_wallet(WALLET_OWNER_ACCOUNT_ID, chain_id);
 
     let entry_point = EntryPoint::new(entry_point_address, bundler_client.clone());

@@ -10,7 +10,8 @@ use ethers::providers::{
 };
 use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{
-    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, TransactionRequest,
+    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt,
+    TransactionRequest, H256,
 };
 use ethers::utils;
 use serde_json::Value;
@@ -134,6 +135,29 @@ pub async fn get_chain_id(provider: &Provider<Http>) -> anyhow::Result<u32> {
         .as_u32())
 }
 
+/// Converts a block id, which may be something like "latest" which can refer to
+/// different blocks over time, into one which references a fixed block by its
+/// hash.
+pub async fn get_static_block_id(
+    provider: &Provider<Http>,
+    block_id: BlockId,
+) -> anyhow::Result<BlockId> {
+    Ok(get_block_hash(provider, block_id).await?.into())
+}
+
+async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> anyhow::Result<H256> {
+    if let BlockId::Hash(hash) = block_id {
+        return Ok(hash);
+    }
+    provider
+        .get_block(block_id)
+        .await
+        .context("should load block to get hash")?
+        .context("block should exist to get latest hash")?
+        .hash
+        .context("hash should be present on block")
+}
+
 /// Creates a client that can send transactions and sign them with a secret
 /// based on a fixed id. Can be used to generate accounts with deterministic
 /// addresses for testing.
@@ -194,9 +218,7 @@ async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(
         .err()
         .context("called constructor should revert")?;
     let revert_data = get_revert_data(error).context("should call constructor")?;
-    let ret = Ret::decode_hex(&revert_data)
-        .context("should decode revert data from called constructor")?;
-    Ok(ret)
+    Ret::decode_hex(revert_data).context("should decode revert data from called constructor")
 }
 
 /// Extracts the revert reason as a hex string if this is a revert error,

@@ -4,7 +4,7 @@ use crate::common::types::{EntryPointOutput, StakeInfo, UserOperation};
 use crate::common::{eth, tracer};
 use ethers::abi::AbiDecode;
 use ethers::providers::{Http, Middleware, Provider};
-use ethers::types::{Address, BlockId, OpCode, U256};
+use ethers::types::{Address, BlockId, BlockNumber, OpCode, U256};
 use indexmap::IndexSet;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -35,7 +35,7 @@ pub trait Simulator {
     async fn simulate_validation(
         &self,
         op: UserOperation,
-        block_id: BlockId,
+        block_id: Option<BlockId>,
         expected_code_hash: Option<[u8; 32]>,
     ) -> Result<SimulationSuccess, SimulationError>;
 }
@@ -67,9 +67,14 @@ impl Simulator for SimulatorImpl {
     async fn simulate_validation(
         &self,
         op: UserOperation,
-        block_id: BlockId,
+        block_id: Option<BlockId>,
         expected_code_hash: Option<[u8; 32]>,
     ) -> Result<SimulationSuccess, SimulationError> {
+        let block_id = eth::get_static_block_id(
+            &self.provider,
+            block_id.unwrap_or(BlockNumber::Latest.into()),
+        )
+        .await?;
         let context = match ValidationContext::new_for_op(
             &self.entry_point,
             op,
