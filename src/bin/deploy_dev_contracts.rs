@@ -18,8 +18,8 @@ const WALLET_OWNER_ACCOUNT_ID: u8 = 3;
 async fn main() -> anyhow::Result<()> {
     let provider = eth::new_local_provider();
     let chain_id = eth::get_chain_id(&provider).await?;
-    let deployer_client = eth::new_test_client(&provider, DEPLOYER_ACCOUNT_ID, chain_id);
-    let bundler_client = eth::new_test_client(&provider, BUNDLER_ACCOUNT_ID, chain_id);
+    let deployer_client = eth::new_test_client(Arc::clone(&provider), DEPLOYER_ACCOUNT_ID, chain_id);
+    let bundler_client = eth::new_test_client(Arc::clone(&provider), BUNDLER_ACCOUNT_ID, chain_id);
     let wallet_owner_eoa = eth::new_test_wallet(WALLET_OWNER_ACCOUNT_ID, chain_id);
     eth::grant_dev_eth(&provider, deployer_client.address()).await?;
     eth::grant_dev_eth(&provider, bundler_client.address()).await?;

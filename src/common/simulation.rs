@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
+use tonic::async_trait;
 
 // One day in seconds. Specified in ERC-4337.
 const MIN_UNSTAKE_DELAY: u32 = 84600;
@@ -29,112 +30,134 @@ pub struct StorageSlot {
     pub slot: U256,
 }
 
-pub async fn simulate_validation(
-    provider: &Arc<Provider<Http>>,
-    entry_point: &EntryPoint<impl Middleware>,
-    op: UserOperation,
-    block_id: BlockId,
-    expected_code_hash: Option<[u8; 32]>,
+#[async_trait]
+pub trait Simulator {
+    async fn simulate_validation(
+        &self,
+        op: UserOperation,
+        block_id: BlockId,
+        expected_code_hash: Option<[u8; 32]>,
+    ) -> Result<SimulationSuccess, SimulationError>;
+}
+
+#[derive(Debug)]
+pub struct SimulatorImpl {
+    provider: Arc<Provider<Http>>,
+    entry_point: EntryPoint<Provider<Http>>,
     min_stake_value: U256,
-) -> Result<SimulationSuccess, SimulationError> {
-    let context =
-        match ValidationContext::new_for_op(entry_point, op, block_id, min_stake_value).await {
-            Ok(context) => context,
-            error @ Err(_) => error?,
-        };
-    let ValidationContext {
-        entity_infos,
-        mut tracer_out,
-        entry_point_out,
-        is_wallet_creation,
-    } = context;
-    let sender_address = entity_infos.sender_address();
-    let mut violations: Vec<Violation> = vec![];
-    let mut storage_accesses_with_expected_values = HashMap::new();
-    for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-        let entity = Entity::from_index(index).unwrap();
-        let entity_info = match entity_infos.get(entity) {
-            Some(info) => info,
-            None => continue,
-        };
-        for opcode in &phase.forbidden_opcodes_used {
-            violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
+}
+
+impl SimulatorImpl {
+    pub fn new(provider: Arc<Provider<Http>>, entry_point_address: Address, min_stake_value: U256) -> Self {
+        let entry_point = EntryPoint::new(entry_point_address, provider.clone());
+        Self {
+            provider, entry_point, min_stake_value
         }
-        if phase.used_invalid_gas_opcode {
-            violations.push(Violation::InvalidGasOpcode(entity));
-        }
-        let mut needs_stake = false;
-        let mut banned_addresses_accessed = IndexSet::<Address>::new();
-        for StorageAccess { address, accesses } in &phase.storage_accesses {
-            let address = *address;
-            for &SlotAccess {
-                slot,
-                initial_value,
-            } in accesses
-            {
-                storage_accesses_with_expected_values
-                    .insert(StorageSlot { address, slot }, initial_value);
-                let restriction = get_storage_restriction(GetStorageRestrictionArgs {
-                    slots_by_address: &tracer_out.associated_slots_by_address,
-                    is_wallet_creation,
-                    entry_point_address: entry_point.address(),
-                    entity_address: entity_info.address,
-                    sender_address,
-                    accessed_address: address,
+    }
+}
+
+#[async_trait]
+impl Simulator for SimulatorImpl {
+    async fn simulate_validation(&self, op: UserOperation, block_id: BlockId, expected_code_hash: Option<[u8; 32]>) -> Result<SimulationSuccess, SimulationError> {
+        let context =
+            match ValidationContext::new_for_op(&self.entry_point, op, block_id, self.min_stake_value).await {
+                Ok(context) => context,
+                error @ Err(_) => error?,
+            };
+        let ValidationContext {
+            entity_infos,
+            mut tracer_out,
+            entry_point_out,
+            is_wallet_creation,
+        } = context;
+        let sender_address = entity_infos.sender_address();
+        let mut violations: Vec<Violation> = vec![];
+        let mut storage_accesses_with_expected_values = HashMap::new();
+        for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
+            let entity = Entity::from_index(index).unwrap();
+            let entity_info = match entity_infos.get(entity) {
+                Some(info) => info,
+                None => continue,
+            };
+            for opcode in &phase.forbidden_opcodes_used {
+                violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
+            }
+            if phase.used_invalid_gas_opcode {
+                violations.push(Violation::InvalidGasOpcode(entity));
+            }
+            let mut needs_stake = false;
+            let mut banned_addresses_accessed = IndexSet::<Address>::new();
+            for StorageAccess { address, accesses } in &phase.storage_accesses {
+                let address = *address;
+                for &SlotAccess {
                     slot,
-                });
-                match restriction {
-                    StorageRestriction::Allowed => {}
-                    StorageRestriction::NeedsStake => needs_stake = true,
-                    StorageRestriction::Banned => {
-                        banned_addresses_accessed.insert(address);
+                    initial_value,
+                } in accesses
+                {
+                    storage_accesses_with_expected_values
+                        .insert(StorageSlot { address, slot }, initial_value);
+                    let restriction = get_storage_restriction(GetStorageRestrictionArgs {
+                        slots_by_address: &tracer_out.associated_slots_by_address,
+                        is_wallet_creation,
+                        entry_point_address: self.entry_point.address(),
+                        entity_address: entity_info.address,
+                        sender_address,
+                        accessed_address: address,
+                        slot,
+                    });
+                    match restriction {
+                        StorageRestriction::Allowed => {}
+                        StorageRestriction::NeedsStake => needs_stake = true,
+                        StorageRestriction::Banned => {
+                            banned_addresses_accessed.insert(address);
+                        }
                     }
                 }
             }
+            if needs_stake && !entity_info.is_staked {
+                violations.push(Violation::NotStaked(entity));
+            }
+            for address in banned_addresses_accessed {
+                violations.push(Violation::InvalidStorageAccess(entity, address));
+            }
+            if phase.called_with_value {
+                violations.push(Violation::CallHadValue(entity));
+            }
+            if phase.ran_out_of_gas {
+                violations.push(Violation::OutOfGas(entity));
+            }
+            for &address in &phase.undeployed_contract_accesses {
+                violations.push(Violation::AccessedUndeployedContract(entity, address))
+            }
+            if phase.called_handle_ops {
+                violations.push(Violation::CalledHandleOps(entity));
+            }
         }
-        if needs_stake && !entity_info.is_staked {
-            violations.push(Violation::NotStaked(entity));
+        let code_hash = eth::get_code_hash(
+            Arc::clone(&self.provider),
+            mem::take(&mut tracer_out.accessed_contract_addresses),
+            Some(block_id),
+        )
+            .await?;
+        if let Some(expected_code_hash) = expected_code_hash {
+            if expected_code_hash != code_hash {
+                violations.push(Violation::CodeHashChanged);
+            }
         }
-        for address in banned_addresses_accessed {
-            violations.push(Violation::InvalidStorageAccess(entity, address));
+        if tracer_out.factory_called_create2_twice {
+            violations.push(Violation::FactoryCalledCreate2Twice);
         }
-        if phase.called_with_value {
-            violations.push(Violation::CallHadValue(entity));
+        if !violations.is_empty() {
+            Err(violations)?
         }
-        if phase.ran_out_of_gas {
-            violations.push(Violation::OutOfGas(entity));
-        }
-        for &address in &phase.undeployed_contract_accesses {
-            violations.push(Violation::AccessedUndeployedContract(entity, address))
-        }
-        if phase.called_handle_ops {
-            violations.push(Violation::CalledHandleOps(entity));
-        }
+        Ok(SimulationSuccess {
+            signature_failed: entry_point_out.return_info.sig_failed,
+            valid_after: entry_point_out.return_info.valid_after,
+            valid_until: entry_point_out.return_info.valid_until,
+            code_hash,
+            storage_accesses_with_expected_values,
+        })
     }
-    let code_hash = eth::get_code_hash(
-        provider,
-        mem::take(&mut tracer_out.accessed_contract_addresses),
-        Some(block_id),
-    )
-    .await?;
-    if let Some(expected_code_hash) = expected_code_hash {
-        if expected_code_hash != code_hash {
-            violations.push(Violation::CodeHashChanged);
-        }
-    }
-    if tracer_out.factory_called_create2_twice {
-        violations.push(Violation::FactoryCalledCreate2Twice);
-    }
-    if !violations.is_empty() {
-        Err(violations)?
-    }
-    Ok(SimulationSuccess {
-        signature_failed: entry_point_out.return_info.sig_failed,
-        valid_after: entry_point_out.return_info.valid_after,
-        valid_until: entry_point_out.return_info.valid_until,
-        code_hash,
-        storage_accesses_with_expected_values,
-    })
 }
 
 #[derive(Debug, thiserror::Error)]

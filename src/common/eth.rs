@@ -136,12 +136,12 @@ pub async fn get_chain_id(provider: &Provider<Http>) -> anyhow::Result<u32> {
 /// based on a fixed id. Can be used to generate accounts with deterministic
 /// addresses for testing.
 pub fn new_test_client(
-    provider: &Arc<Provider<Http>>,
+    provider: Arc<Provider<Http>>,
     test_account_id: u8,
     chain_id: u32,
 ) -> Arc<SignerMiddleware<Arc<Provider<Http>>, LocalWallet>> {
     let wallet = new_test_wallet(test_account_id, chain_id);
-    Arc::new(SignerMiddleware::new(Arc::clone(provider), wallet))
+    Arc::new(SignerMiddleware::new(provider, wallet))
 }
 
 /// Creates a wallet whose secret is based on a fixed id. Differs from
@@ -162,14 +162,14 @@ pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
 pub async fn get_code_hash(
-    provider: &Arc<Provider<Http>>,
+    provider: Arc<Provider<Http>>,
     mut addresses: Vec<Address>,
     block_id: Option<BlockId>,
 ) -> Result<[u8; 32], anyhow::Error> {
     addresses.sort();
     // TODO: This is a tad inefficient, because every time we create a new
     // contract deployer it clones the ABI and bytecode.
-    let tx = GetCodeHashes::deploy(Arc::clone(provider), addresses)
+    let tx = GetCodeHashes::deploy(Arc::clone(&provider), addresses)
         .context("should construct GetCodeHashes deployer")?
         .deployer
         .tx;
