@@ -10,7 +10,7 @@ use tonic::transport::Server;
 use crate::common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET};
 use crate::op_pool::{
     events::EventListener,
-    mempool::{uo_pool::UoPool, Mempool},
+    mempool::uo_pool::UoPool,
     reputation::{HourlyMovingAverageReputation, ReputationParams},
     server::OpPoolImpl,
 };
@@ -34,6 +34,19 @@ pub async fn run(
     tracing::info!("Chain id: {}", args.chain_id);
     tracing::info!("Websocket url: {}", args.ws_url);
 
+    // Events listener
+    let event_listener = match EventListener::connect(args.ws_url, args.entry_point).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!("Failed to connect to events listener: {:?}", e);
+            return Err(anyhow::anyhow!(
+                "Failed to connect to events listener: {:?}",
+                e
+            ));
+        }
+    };
+    tracing::info!("Connected to events listener");
+
     // Reputation manager
     let reputation = Arc::new(HourlyMovingAverageReputation::new(
         ReputationParams::bundler_default(),
@@ -48,25 +61,11 @@ pub async fn run(
         args.chain_id,
         Arc::clone(&reputation),
     ));
-
-    // Events listener
-    let event_listener = match EventListener::connect(args.ws_url, args.entry_point).await {
-        Ok(listener) => listener,
-        Err(e) => {
-            tracing::error!("Failed to connect to events listener: {:?}", e);
-            return Err(anyhow::anyhow!(
-                "Failed to connect to events listener: {:?}",
-                e
-            ));
-        }
-    };
-    tracing::info!("Connected to events listener");
-
-    // Subscribe mempool to events
-    let callback_mp = Arc::clone(&mp);
-    event_listener.subscribe(move |new_block| {
-        callback_mp.on_new_block(new_block);
-    });
+    // Start mempool
+    let mempool_shutdown = shutdown_rx.resubscribe();
+    let mempool_events = event_listener.subscribe();
+    let mp_runner = Arc::clone(&mp);
+    tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
 
     // Start events listener
     let event_listener_shutdown = shutdown_rx.resubscribe();

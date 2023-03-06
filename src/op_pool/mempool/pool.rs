@@ -97,11 +97,11 @@ impl PoolInner {
 
     pub fn remove_operation_by_hash(&mut self, hash: H256) -> bool {
         if let Entry::Occupied(e) = self.by_hash.entry(hash) {
-            self.by_id.remove(&e.get().po.uo.id());
+            self.by_id.remove(&e.get().uo().id());
             self.best.remove(e.get());
 
             if let Entry::Occupied(mut count_entry) =
-                self.count_by_sender.entry(e.get().po.uo.sender)
+                self.count_by_sender.entry(e.get().uo().sender)
             {
                 *count_entry.get_mut() -= 1;
                 if *count_entry.get() == 0 {

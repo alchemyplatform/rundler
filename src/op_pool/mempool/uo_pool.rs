@@ -10,6 +10,7 @@ use crate::{
 use ethers::types::{Address, H256, U256};
 use parking_lot::RwLock;
 use std::{collections::HashSet, sync::Arc};
+use tokio::sync::broadcast;
 
 /// User Operation Mempool
 ///
@@ -31,6 +32,26 @@ where
             pool: RwLock::new(PoolInner::new(entry_point, chain_id)),
             entry_point,
             reputation,
+        }
+    }
+
+    pub async fn run(
+        self: Arc<Self>,
+        mut new_block_events: broadcast::Receiver<Arc<NewBlockEvent>>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown.recv() => {
+                    tracing::info!("Shutting down UoPool");
+                    break;
+                }
+                new_block = new_block_events.recv() => {
+                    if let Ok(new_block) = new_block {
+                        self.on_new_block(&new_block);
+                    }
+                }
+            }
         }
     }
 
@@ -163,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_add_single_op() {
-        let pool = UoPool::new(Address::zero(), 1.into(), mock_reputation());
+        let pool = create_pool();
         let op = create_op(Address::random(), 0, 0);
         let hash = pool
             .add_operation(OperationOrigin::Local, op.clone())
@@ -175,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_add_multiple_ops() {
-        let pool = UoPool::new(Address::zero(), 1.into(), mock_reputation());
+        let pool = create_pool();
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
@@ -190,7 +211,7 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let pool = UoPool::new(Address::zero(), 1.into(), mock_reputation());
+        let pool = create_pool();
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
@@ -200,6 +221,10 @@ mod tests {
         check_ops(pool.best_operations(3), ops);
         pool.clear();
         assert_eq!(pool.best_operations(3), vec![]);
+    }
+
+    fn create_pool() -> UoPool<MockReputationManager> {
+        UoPool::new(Address::zero(), 1.into(), mock_reputation())
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
