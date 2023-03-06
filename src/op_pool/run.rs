@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
 use ethers::types::{Address, U256};
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
-use tokio::try_join;
+use tokio::{
+    sync::{broadcast, mpsc},
+    try_join,
+};
 use tonic::transport::Server;
 
-use crate::common::protos::op_pool::op_pool_server::OpPoolServer;
-use crate::common::protos::op_pool::OP_POOL_FILE_DESCRIPTOR_SET;
-use crate::op_pool::events::EventListener;
-use crate::op_pool::mempool::uo_pool::UoPool;
-use crate::op_pool::mempool::Mempool;
-use crate::op_pool::server::OpPoolImpl;
+use crate::common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET};
+use crate::op_pool::{
+    events::EventListener,
+    mempool::{uo_pool::UoPool, Mempool},
+    reputation::{HourlyMovingAverageReputationManager, ReputationManager, ReputationParams},
+    server::OpPoolImpl,
+};
 
 pub struct Args {
     pub port: u16,
@@ -32,8 +34,20 @@ pub async fn run(
     tracing::info!("Chain id: {}", args.chain_id);
     tracing::info!("Websocket url: {}", args.ws_url);
 
+    // Reputation manager
+    let reputation = Arc::new(HourlyMovingAverageReputationManager::new(
+        ReputationParams::bundler_default(),
+    ));
+    // Start reputation manager
+    let reputation_runner = Arc::clone(&reputation);
+    tokio::spawn(async move { reputation_runner.run().await });
+
     // Mempool
-    let mp = Arc::new(UoPool::new(args.entry_point, args.chain_id));
+    let mp = Arc::new(UoPool::new(
+        args.entry_point,
+        args.chain_id,
+        Arc::clone(&reputation),
+    ));
 
     // Events listener
     let event_listener = match EventListener::connect(args.ws_url, args.entry_point).await {
@@ -47,11 +61,20 @@ pub async fn run(
         }
     };
     tracing::info!("Connected to events listener");
+
+    // Subscribe mempool to events
     let callback_mp = Arc::clone(&mp);
     event_listener.subscribe(move |new_block| {
         callback_mp.on_new_block(new_block);
     });
 
+    // Subscribe reputation manager to events
+    let callback_reputation = Arc::clone(&reputation);
+    event_listener.subscribe(move |new_block| {
+        callback_reputation.on_new_block(new_block);
+    });
+
+    // Start events listener
     let event_listener_shutdown = shutdown_rx.resubscribe();
     let events_listener_handle = tokio::spawn(async move {
         event_listener
@@ -60,7 +83,7 @@ pub async fn run(
     });
 
     // gRPC server
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(args.chain_id, mp));
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(args.chain_id, reputation, mp));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;

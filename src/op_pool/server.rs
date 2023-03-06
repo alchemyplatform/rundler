@@ -2,42 +2,45 @@ use std::sync::Arc;
 
 use super::mempool::{Mempool, OperationOrigin};
 use super::metrics::OpPoolMetrics;
+use super::reputation::ReputationManager;
 use crate::common::protos::op_pool::op_pool_server::OpPool;
 use crate::common::protos::op_pool::{
     AddOpRequest, AddOpResponse, DebugClearStateRequest, DebugClearStateResponse,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
-    GetOpsRequest, GetOpsResponse, GetReputationRequest, GetReputationResponse,
-    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, RemoveOpsRequest,
-    RemoveOpsResponse, UserOperation,
+    GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    RemoveOpsRequest, RemoveOpsResponse, UserOperation,
 };
 use ethers::types::{Address, H256, U256};
 use tonic::{async_trait, Request, Response};
 
-#[derive(Default)]
-pub struct OpPoolImpl<T: Mempool> {
+pub struct OpPoolImpl<R: ReputationManager, M: Mempool> {
     chain_id: U256,
-    mempool: Arc<T>,
+    reputation: Arc<R>,
+    mempool: Arc<M>,
     metrics: OpPoolMetrics,
 }
 
-impl<T> OpPoolImpl<T>
+impl<R, M> OpPoolImpl<R, M>
 where
-    T: Mempool,
+    R: ReputationManager,
+    M: Mempool<ReputationManagerType = R>,
 {
-    pub fn new(chain_id: U256, mempool: Arc<T>) -> Self {
+    pub fn new(chain_id: U256, reputation: Arc<R>, mempool: Arc<M>) -> Self {
         Self {
             chain_id,
             metrics: OpPoolMetrics::default(),
             mempool,
+            reputation,
         }
     }
 }
 
 #[async_trait]
-impl<T> OpPool for OpPoolImpl<T>
+impl<R, M> OpPool for OpPoolImpl<R, M>
 where
-    T: Mempool + Send + Sync + 'static,
+    R: ReputationManager + 'static,
+    M: Mempool<ReputationManagerType = R> + 'static,
 {
     async fn get_supported_entry_points(
         &self,
@@ -59,7 +62,7 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        self.check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
         let op = req.op.ok_or_else(|| {
             tonic::Status::invalid_argument("Operation is required in AddOpRequest")
@@ -84,23 +87,13 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        self.check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
         let ops = self.mempool.best_operations(req.max_ops as usize);
 
         Ok(Response::new(GetOpsResponse {
             ops: ops.iter().map(|op| UserOperation::from(&(**op))).collect(),
         }))
-    }
-
-    async fn get_reputation(
-        &self,
-        _request: Request<GetReputationRequest>,
-    ) -> tonic::Result<Response<GetReputationResponse>> {
-        self.metrics.request_counter.increment(1);
-        Err(tonic::Status::unimplemented(
-            "get_reputation not implemented",
-        ))
     }
 
     async fn remove_ops(
@@ -110,7 +103,7 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        self.check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
         let hashes: Vec<H256> = req
             .hashes
@@ -146,7 +139,7 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        self.check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
         let ops = self.mempool.best_operations(usize::MAX);
 
@@ -157,42 +150,52 @@ where
 
     async fn debug_set_reputation(
         &self,
-        _request: Request<DebugSetReputationRequest>,
+        request: Request<DebugSetReputationRequest>,
     ) -> tonic::Result<Response<DebugSetReputationResponse>> {
         self.metrics.request_counter.increment(1);
-        Err(tonic::Status::unimplemented(
-            "debug_set_reputation not implemented",
-        ))
+
+        let req = request.into_inner();
+        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+
+        let rep = match &req.reputation {
+            Some(rep) => rep,
+            None => {
+                return Err(tonic::Status::invalid_argument(
+                    "Reputation is required in DebugSetReputationRequest",
+                ))
+            }
+        };
+
+        let addr = Self::get_address(&rep.address)?;
+        self.reputation
+            .set_reputation(addr, rep.ops_seen, rep.ops_included);
+
+        Ok(Response::new(DebugSetReputationResponse {}))
     }
 
     async fn debug_dump_reputation(
         &self,
-        _request: Request<DebugDumpReputationRequest>,
+        request: Request<DebugDumpReputationRequest>,
     ) -> tonic::Result<Response<DebugDumpReputationResponse>> {
         self.metrics.request_counter.increment(1);
-        Err(tonic::Status::unimplemented(
-            "debug_dump_reputation not implemented",
-        ))
+
+        let req = request.into_inner();
+        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+
+        let reps = self.reputation.dump_reputation();
+        Ok(Response::new(DebugDumpReputationResponse {
+            reputations: reps,
+        }))
     }
 }
 
-impl<T> OpPoolImpl<T>
+impl<R, M> OpPoolImpl<R, M>
 where
-    T: Mempool,
+    R: ReputationManager,
+    M: Mempool<ReputationManagerType = R>,
 {
-    fn check_entry_point(
-        &self,
-        req_entry_point: &[u8],
-        pool_entry_point: Address,
-    ) -> tonic::Result<()> {
-        let ep_len = req_entry_point.len();
-        if ep_len != 20 {
-            return Err(tonic::Status::invalid_argument(format!(
-                "Invalid entry point length: {ep_len}, expected 20"
-            )));
-        }
-
-        let req_ep = Address::from_slice(req_entry_point);
+    fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> tonic::Result<()> {
+        let req_ep = Self::get_address(req_entry_point)?;
         if req_ep != pool_entry_point {
             return Err(tonic::Status::invalid_argument(format!(
                 "Invalid entry point: {req_ep:?}, expected {pool_entry_point:?}"
@@ -200,5 +203,16 @@ where
         }
 
         Ok(())
+    }
+
+    fn get_address(bytes: &[u8]) -> tonic::Result<Address> {
+        let len = bytes.len();
+        if len != 20 {
+            return Err(tonic::Status::invalid_argument(format!(
+                "Invalid address length: {len}, expected 20"
+            )));
+        }
+
+        Ok(Address::from_slice(bytes))
     }
 }

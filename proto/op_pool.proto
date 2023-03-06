@@ -19,7 +19,6 @@ service OpPool {
   rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
-  rpc GetReputation (GetReputationRequest) returns (GetReputationResponse);
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
 
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
@@ -50,25 +49,6 @@ message GetOpsResponse {
   repeated UserOperation ops = 1;
 }
 
-enum ReputationStatus {
-  OK = 0;
-  THROTTLED = 1;
-  BANNED = 2;
-}
-
-message Reputation {
-  ReputationStatus status = 1;
-  uint64 ops_seen = 2;
-  uint64 ops_included = 3;
-}
-
-message GetReputationRequest {
-  bytes address = 1;
-}
-message GetReputationResponse {
-  Reputation reputation = 1;
-}
-
 message RemoveOpsRequest {
   bytes entry_point = 2;
   repeated bytes hashes = 1;
@@ -88,8 +68,7 @@ message DebugDumpMempoolResponse {
 
 message DebugSetReputationRequest {
   bytes entry_point = 1;
-  bytes address = 2;
-  Reputation reputation = 3;
+  Reputation reputation = 2;
 }
 message DebugSetReputationResponse {}
 
@@ -97,5 +76,18 @@ message DebugDumpReputationRequest {
   bytes entry_point = 1;
 }
 message DebugDumpReputationResponse {
-  map<string, Reputation> reputation = 1;
+  repeated Reputation reputations = 1;
+}
+
+message Reputation {
+  bytes address = 1;
+  ReputationStatus status = 2;
+  uint64 ops_seen = 3;
+  uint64 ops_included = 4;
+}
+
+enum ReputationStatus {
+  OK = 0;
+  THROTTLED = 1;
+  BANNED = 2;
 }
