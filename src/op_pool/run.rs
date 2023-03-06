@@ -11,7 +11,7 @@ use crate::common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_
 use crate::op_pool::{
     events::EventListener,
     mempool::{uo_pool::UoPool, Mempool},
-    reputation::{HourlyMovingAverageReputationManager, ReputationManager, ReputationParams},
+    reputation::{HourlyMovingAverageReputation, ReputationParams},
     server::OpPoolImpl,
 };
 
@@ -35,7 +35,7 @@ pub async fn run(
     tracing::info!("Websocket url: {}", args.ws_url);
 
     // Reputation manager
-    let reputation = Arc::new(HourlyMovingAverageReputationManager::new(
+    let reputation = Arc::new(HourlyMovingAverageReputation::new(
         ReputationParams::bundler_default(),
     ));
     // Start reputation manager
@@ -68,12 +68,6 @@ pub async fn run(
         callback_mp.on_new_block(new_block);
     });
 
-    // Subscribe reputation manager to events
-    let callback_reputation = Arc::clone(&reputation);
-    event_listener.subscribe(move |new_block| {
-        callback_reputation.on_new_block(new_block);
-    });
-
     // Start events listener
     let event_listener_shutdown = shutdown_rx.resubscribe();
     let events_listener_handle = tokio::spawn(async move {
@@ -83,7 +77,7 @@ pub async fn run(
     });
 
     // gRPC server
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(args.chain_id, reputation, mp));
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(args.chain_id, mp));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;

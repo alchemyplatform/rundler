@@ -1,46 +1,41 @@
 use std::sync::Arc;
 
-use super::mempool::{Mempool, OperationOrigin};
+use super::mempool::{Mempool, OperationOrigin, PoolOperation};
 use super::metrics::OpPoolMetrics;
-use super::reputation::ReputationManager;
 use crate::common::protos::op_pool::op_pool_server::OpPool;
 use crate::common::protos::op_pool::{
     AddOpRequest, AddOpResponse, DebugClearStateRequest, DebugClearStateResponse,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
     GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    RemoveOpsRequest, RemoveOpsResponse, UserOperation,
+    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, UserOperation,
 };
 use ethers::types::{Address, H256, U256};
 use tonic::{async_trait, Request, Response};
 
-pub struct OpPoolImpl<R: ReputationManager, M: Mempool> {
+pub struct OpPoolImpl<M: Mempool> {
     chain_id: U256,
-    reputation: Arc<R>,
     mempool: Arc<M>,
     metrics: OpPoolMetrics,
 }
 
-impl<R, M> OpPoolImpl<R, M>
+impl<M> OpPoolImpl<M>
 where
-    R: ReputationManager,
-    M: Mempool<ReputationManagerType = R>,
+    M: Mempool,
 {
-    pub fn new(chain_id: U256, reputation: Arc<R>, mempool: Arc<M>) -> Self {
+    pub fn new(chain_id: U256, mempool: Arc<M>) -> Self {
         Self {
             chain_id,
             metrics: OpPoolMetrics::default(),
             mempool,
-            reputation,
         }
     }
 }
 
 #[async_trait]
-impl<R, M> OpPool for OpPoolImpl<R, M>
+impl<M> OpPool for OpPoolImpl<M>
 where
-    R: ReputationManager + 'static,
-    M: Mempool<ReputationManagerType = R> + 'static,
+    M: Mempool + 'static,
 {
     async fn get_supported_entry_points(
         &self,
@@ -64,13 +59,25 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let op = req.op.ok_or_else(|| {
+        let uo = req.uo.ok_or_else(|| {
             tonic::Status::invalid_argument("Operation is required in AddOpRequest")
         })?;
 
+        let agg = if !req.aggregator.is_empty() {
+            Some(Self::get_address(&req.aggregator)?)
+        } else {
+            None
+        };
+
         let hash = self
             .mempool
-            .add_operation(OperationOrigin::Local, op.into())
+            .add_operation(
+                OperationOrigin::Local,
+                PoolOperation {
+                    uo: uo.into(),
+                    aggregator: agg,
+                },
+            )
             .map_err(|e| {
                 tonic::Status::internal(format!("Failed to add operation to mempool: {e}"))
             })?;
@@ -92,7 +99,7 @@ where
         let ops = self.mempool.best_operations(req.max_ops as usize);
 
         Ok(Response::new(GetOpsResponse {
-            ops: ops.iter().map(|op| UserOperation::from(&(**op))).collect(),
+            ops: ops.iter().map(|op| MempoolOp::from(&(**op))).collect(),
         }))
     }
 
@@ -144,7 +151,7 @@ where
         let ops = self.mempool.best_operations(usize::MAX);
 
         Ok(Response::new(DebugDumpMempoolResponse {
-            ops: ops.iter().map(|op| UserOperation::from(&(**op))).collect(),
+            ops: ops.iter().map(|op| MempoolOp::from(&(**op))).collect(),
         }))
     }
 
@@ -167,7 +174,7 @@ where
         };
 
         let addr = Self::get_address(&rep.address)?;
-        self.reputation
+        self.mempool
             .set_reputation(addr, rep.ops_seen, rep.ops_included);
 
         Ok(Response::new(DebugSetReputationResponse {}))
@@ -182,17 +189,16 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let reps = self.reputation.dump_reputation();
+        let reps = self.mempool.dump_reputation();
         Ok(Response::new(DebugDumpReputationResponse {
             reputations: reps,
         }))
     }
 }
 
-impl<R, M> OpPoolImpl<R, M>
+impl<M> OpPoolImpl<M>
 where
-    R: ReputationManager,
-    M: Mempool<ReputationManagerType = R>,
+    M: Mempool,
 {
     fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> tonic::Result<()> {
         let req_ep = Self::get_address(req_entry_point)?;
@@ -214,5 +220,14 @@ where
         }
 
         Ok(Address::from_slice(bytes))
+    }
+}
+
+impl From<&PoolOperation> for MempoolOp {
+    fn from(op: &PoolOperation) -> Self {
+        MempoolOp {
+            uo: Some(UserOperation::from(&op.uo)),
+            aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
+        }
     }
 }
