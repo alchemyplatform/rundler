@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::mempool::{Mempool, OperationOrigin, PoolOperation};
+use super::mempool::{ExpectedStorageSlot, Mempool, OperationOrigin, PoolOperation};
 use super::metrics::OpPoolMetrics;
 use crate::common::protos::op_pool::op_pool_server::OpPool;
 use crate::common::protos::op_pool::{
@@ -8,8 +8,10 @@ use crate::common::protos::op_pool::{
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
     GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, UserOperation,
+    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, StorageSlot, UserOperation,
 };
+use crate::common::protos::{to_le_bytes, ProtoBytes, ProtoTimestampMillis};
+use anyhow::Context;
 use ethers::types::{Address, H256, U256};
 use tonic::{async_trait, Request, Response};
 
@@ -59,25 +61,17 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let uo = req.uo.ok_or_else(|| {
+        let proto_op = req.op.ok_or_else(|| {
             tonic::Status::invalid_argument("Operation is required in AddOpRequest")
         })?;
 
-        let agg = if !req.aggregator.is_empty() {
-            Some(Self::get_address(&req.aggregator)?)
-        } else {
-            None
-        };
+        let pool_op = proto_op.try_into().map_err(|e| {
+            tonic::Status::invalid_argument(format!("Failed to parse operation: {e}"))
+        })?;
 
         let hash = self
             .mempool
-            .add_operation(
-                OperationOrigin::Local,
-                PoolOperation {
-                    uo: uo.into(),
-                    aggregator: agg,
-                },
-            )
+            .add_operation(OperationOrigin::Local, pool_op)
             .map_err(|e| {
                 tonic::Status::internal(format!("Failed to add operation to mempool: {e}"))
             })?;
@@ -96,11 +90,17 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let ops = self.mempool.best_operations(req.max_ops as usize);
+        let ops = self
+            .mempool
+            .best_operations(req.max_ops as usize)
+            .iter()
+            .map(|op| MempoolOp::try_from(&(**op)))
+            .collect::<Result<Vec<MempoolOp>, _>>()
+            .map_err(|e| {
+                tonic::Status::internal(format!("Failed to convert to proto mempool op: {e}"))
+            })?;
 
-        Ok(Response::new(GetOpsResponse {
-            ops: ops.iter().map(|op| MempoolOp::from(&(**op))).collect(),
-        }))
+        Ok(Response::new(GetOpsResponse { ops }))
     }
 
     async fn remove_ops(
@@ -148,11 +148,17 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let ops = self.mempool.best_operations(usize::MAX);
+        let ops = self
+            .mempool
+            .best_operations(usize::MAX)
+            .iter()
+            .map(|op| MempoolOp::try_from(&(**op)))
+            .collect::<Result<Vec<MempoolOp>, _>>()
+            .map_err(|e| {
+                tonic::Status::internal(format!("Failed to convert to proto mempool op: {e}"))
+            })?;
 
-        Ok(Response::new(DebugDumpMempoolResponse {
-            ops: ops.iter().map(|op| MempoolOp::from(&(**op))).collect(),
-        }))
+        Ok(Response::new(DebugDumpMempoolResponse { ops }))
     }
 
     async fn debug_set_reputation(
@@ -164,16 +170,14 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let rep = match &req.reputation {
-            Some(rep) => rep,
-            None => {
-                return Err(tonic::Status::invalid_argument(
-                    "Reputation is required in DebugSetReputationRequest",
-                ))
-            }
-        };
+        let rep = req.reputation.ok_or(tonic::Status::invalid_argument(
+            "Reputation is required in DebugSetReputationRequest",
+        ))?;
 
-        let addr = Self::get_address(&rep.address)?;
+        let addr = ProtoBytes(&rep.address)
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("Invalid address: {e}")))?;
+
         self.mempool
             .set_reputation(addr, rep.ops_seen, rep.ops_included);
 
@@ -201,7 +205,9 @@ where
     M: Mempool,
 {
     fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> tonic::Result<()> {
-        let req_ep = Self::get_address(req_entry_point)?;
+        let req_ep: Address = ProtoBytes(req_entry_point)
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("Invalid entry point: {e}")))?;
         if req_ep != pool_entry_point {
             return Err(tonic::Status::invalid_argument(format!(
                 "Invalid entry point: {req_ep:?}, expected {pool_entry_point:?}"
@@ -210,24 +216,86 @@ where
 
         Ok(())
     }
+}
 
-    fn get_address(bytes: &[u8]) -> tonic::Result<Address> {
-        let len = bytes.len();
-        if len != 20 {
-            return Err(tonic::Status::invalid_argument(format!(
-                "Invalid address length: {len}, expected 20"
-            )));
-        }
+impl TryFrom<&PoolOperation> for MempoolOp {
+    type Error = anyhow::Error;
 
-        Ok(Address::from_slice(bytes))
+    fn try_from(op: &PoolOperation) -> Result<Self, Self::Error> {
+        Ok(MempoolOp {
+            uo: Some(UserOperation::from(&op.uo)),
+            aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
+            valid_after: op.valid_after.timestamp_millis().try_into()?,
+            valid_until: op.valid_until.timestamp_millis().try_into()?,
+            expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
+            expected_storage_slots: op.expected_storage_slots.iter().map(|s| s.into()).collect(),
+        })
     }
 }
 
-impl From<&PoolOperation> for MempoolOp {
-    fn from(op: &PoolOperation) -> Self {
-        MempoolOp {
-            uo: Some(UserOperation::from(&op.uo)),
-            aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
+impl TryFrom<MempoolOp> for PoolOperation {
+    type Error = anyhow::Error;
+
+    fn try_from(op: MempoolOp) -> Result<Self, Self::Error> {
+        let uo = op
+            .uo
+            .context("Mempool op should contain user operation")?
+            .try_into()?;
+
+        let aggregator: Option<Address> = if op.aggregator.is_empty() {
+            None
+        } else {
+            Some(ProtoBytes(&op.aggregator).try_into()?)
+        };
+
+        let valid_after = ProtoTimestampMillis(op.valid_after).try_into()?;
+        let valid_until = ProtoTimestampMillis(op.valid_until).try_into()?;
+
+        let expected_storage_slots = op
+            .expected_storage_slots
+            .into_iter()
+            .map(|s| s.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let expected_code_hash = H256::from_slice(&op.expected_code_hash);
+
+        Ok(PoolOperation {
+            uo,
+            aggregator,
+            valid_after,
+            valid_until,
+            expected_code_hash,
+            expected_storage_slots,
+        })
+    }
+}
+
+impl TryFrom<StorageSlot> for ExpectedStorageSlot {
+    type Error = anyhow::Error;
+
+    fn try_from(ss: StorageSlot) -> Result<Self, Self::Error> {
+        let address = ProtoBytes(&ss.address).try_into()?;
+        let slot = ProtoBytes(&ss.slot).try_into()?;
+        let expected_value = if ss.value.is_empty() {
+            None
+        } else {
+            Some(ProtoBytes(&ss.value).try_into()?)
+        };
+
+        Ok(ExpectedStorageSlot {
+            address,
+            slot,
+            expected_value,
+        })
+    }
+}
+
+impl From<&ExpectedStorageSlot> for StorageSlot {
+    fn from(ess: &ExpectedStorageSlot) -> Self {
+        StorageSlot {
+            address: ess.address.as_bytes().to_vec(),
+            slot: to_le_bytes(ess.slot),
+            value: ess.expected_value.map_or(vec![], to_le_bytes),
         }
     }
 }

@@ -235,7 +235,7 @@ mod tests {
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
-            aggregator: None,
+            ..PoolOperation::default()
         }
     }
 

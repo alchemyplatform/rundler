@@ -1,7 +1,8 @@
 mod pool;
 pub mod uo_pool;
 
-use ethers::types::{Address, H256};
+use chrono::{DateTime, Utc};
+use ethers::types::{Address, H256, U256};
 use std::sync::Arc;
 
 use crate::common::{protos::op_pool::Reputation, types::UserOperation};
@@ -65,8 +66,20 @@ pub enum OperationOrigin {
     External,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+// TODO(danc): remove this once PR #26 is merged
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ExpectedStorageSlot {
+    pub address: Address,
+    pub slot: U256,
+    pub expected_value: Option<U256>,
+}
+
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct PoolOperation {
     pub uo: UserOperation,
     pub aggregator: Option<Address>,
+    pub valid_after: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
+    pub expected_code_hash: H256,
+    pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
