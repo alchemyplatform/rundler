@@ -1,18 +1,26 @@
 use super::{
-    error::MempoolResult, pool::PoolInner, Mempool, NewBlockEvent, OperationOrigin, PoolOperation,
+    error::{MempoolError, MempoolResult},
+    pool::PoolInner,
+    Mempool, NewBlockEvent, OperationOrigin, PoolOperation,
 };
 use crate::{
     common::{
         contracts::entry_point::EntryPointEvents,
         protos::op_pool::{Reputation, ReputationStatus},
-        types::UserOperation,
+        types::Entity,
     },
     op_pool::reputation::ReputationManager,
 };
 use ethers::types::{Address, H256, U256};
 use parking_lot::RwLock;
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::broadcast;
+
+/// The number of blocks that a throttled operation is allowed to be in the mempool
+const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
 
 /// User Operation Mempool
 ///
@@ -23,6 +31,8 @@ pub struct UoPool<R: ReputationManager> {
     pool: RwLock<PoolInner>,
     entry_point: Address,
     reputation: Arc<R>,
+    throttled_ops: RwLock<HashMap<H256, u64>>,
+    block_number: RwLock<u64>,
 }
 
 impl<R> UoPool<R>
@@ -34,6 +44,8 @@ where
             pool: RwLock::new(PoolInner::new(entry_point, chain_id)),
             entry_point,
             reputation,
+            throttled_ops: RwLock::new(HashMap::new()),
+            block_number: RwLock::new(0),
         }
     }
 
@@ -57,16 +69,16 @@ where
         }
     }
 
-    fn get_op_addresses(op: &PoolOperation) -> Vec<Address> {
-        let mut addrs = vec![op.uo.sender];
-        if let Some(paymaster) = UserOperation::get_address_from_field(&op.uo.paymaster_and_data) {
-            addrs.push(paymaster);
+    fn get_op_addresses(op: &PoolOperation) -> Vec<(Entity, Address)> {
+        let mut addrs = vec![(Entity::Sender, op.uo.sender)];
+        if let Some(paymaster) = op.uo.paymaster() {
+            addrs.push((Entity::Paymaster, paymaster));
         }
-        if let Some(factory) = UserOperation::get_address_from_field(&op.uo.init_code) {
-            addrs.push(factory);
+        if let Some(factory) = op.uo.factory() {
+            addrs.push((Entity::Factory, factory));
         }
         if let Some(agg) = op.aggregator {
-            addrs.push(agg);
+            addrs.push((Entity::Aggregator, agg));
         }
         addrs
     }
@@ -75,7 +87,7 @@ where
         let addrs = Self::get_op_addresses(op);
         addrs
             .iter()
-            .any(|addr| self.reputation.status(*addr) != ReputationStatus::Ok)
+            .any(|(_, addr)| self.reputation.status(*addr) != ReputationStatus::Ok)
     }
 }
 
@@ -118,12 +130,55 @@ where
                 _ => {}
             }
         }
+
+        // Remove throttled ops that are too old
+        let new_block_number = new_block.number.as_u64();
+        let mut throttled_ops = self.throttled_ops.write();
+        let mut to_remove = HashSet::new();
+        for (hash, block) in throttled_ops.iter() {
+            if new_block_number - block > THROTTLED_OPS_BLOCK_LIMIT {
+                to_remove.insert(*hash);
+            }
+        }
+
+        let mut pool = self.pool.write();
+        for hash in to_remove {
+            pool.remove_operation_by_hash(hash);
+            throttled_ops.remove(&hash);
+        }
+
+        *self.block_number.write() = new_block_number;
     }
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
         let addrs = Self::get_op_addresses(&op);
-        self.reputation.add_seen(&addrs);
-        self.pool.write().add_operation(op)
+
+        let mut throttled = false;
+        for (et, addr) in &addrs {
+            match self.reputation.status(*addr) {
+                ReputationStatus::Ok => {}
+                ReputationStatus::Throttled => {
+                    if self.pool.read().address_count(*addr) > 0 {
+                        return Err(MempoolError::EntityThrottled(*et, *addr));
+                    }
+                    throttled = true;
+                }
+                ReputationStatus::Banned => {
+                    return Err(MempoolError::EntityThrottled(*et, *addr));
+                }
+            }
+        }
+
+        self.reputation.add_seen(addrs.iter().map(|(_, addr)| addr));
+        let hash = self.pool.write().add_operation(op)?;
+
+        if throttled {
+            self.throttled_ops
+                .write()
+                .insert(hash, *self.block_number.read());
+        }
+
+        Ok(hash)
     }
 
     fn add_operations(
@@ -181,6 +236,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::common::protos::op_pool::{Reputation, ReputationStatus};
+    use crate::common::types::UserOperation;
 
     use super::*;
 

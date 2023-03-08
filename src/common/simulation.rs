@@ -14,6 +14,8 @@ use std::mem;
 use std::sync::Arc;
 use tonic::async_trait;
 
+use super::types::Entity;
+
 // One day in seconds. Specified in ERC-4337.
 const MIN_UNSTAKE_DELAY: u32 = 84600;
 
@@ -29,13 +31,6 @@ pub struct SimulationSuccess {
     pub entities_needing_stake: Vec<Entity>,
     pub accessed_addresses: HashSet<Address>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Entity {
-    Factory = 0,
-    Account = 1,
-    Paymaster = 2,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -97,7 +92,7 @@ impl SimulatorImpl {
         let Some(ref revert_data) = tracer_out.revert_data else {
             Err(Violation::DidNotRevert)?
         };
-        let last_entity = Entity::from_index(tracer_out.phases.len() - 1).unwrap();
+        let last_entity = Entity::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
             Err(Violation::UnintendedRevertWithMessage(
                 last_entity,
@@ -156,7 +151,7 @@ impl Simulator for SimulatorImpl {
         let mut accessed_addresses = HashSet::new();
         let mut expected_storage_slots = vec![];
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-            let entity = Entity::from_index(index).unwrap();
+            let entity = Entity::from_simulation_phase(index).unwrap();
             let Some(entity_info) = entity_infos.get(entity) else {
                 continue;
             };
@@ -330,27 +325,13 @@ pub enum Violation {
 }
 
 impl Entity {
-    pub fn index(self) -> usize {
-        self as usize
-    }
-
-    pub fn from_index(i: usize) -> Option<Self> {
+    pub fn from_simulation_phase(i: usize) -> Option<Self> {
         match i {
             0 => Some(Self::Factory),
-            1 => Some(Self::Account),
+            1 => Some(Self::Sender),
             2 => Some(Self::Paymaster),
             _ => None,
         }
-    }
-}
-
-impl Display for Entity {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Entity::Factory => "factory",
-            Entity::Account => "account",
-            Entity::Paymaster => "paymaster",
-        })
     }
 }
 
@@ -405,8 +386,9 @@ impl EntityInfos {
     pub fn get(self, entity: Entity) -> Option<EntityInfo> {
         match entity {
             Entity::Factory => self.factory,
-            Entity::Account => Some(self.sender),
+            Entity::Sender => Some(self.sender),
             Entity::Paymaster => self.paymaster,
+            _ => None,
         }
     }
 
