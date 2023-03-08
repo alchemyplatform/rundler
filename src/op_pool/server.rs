@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::mempool::{ExpectedStorageSlot, Mempool, OperationOrigin, PoolOperation};
+use super::mempool::{Mempool, OperationOrigin};
 use super::metrics::OpPoolMetrics;
 use crate::common::protos::op_pool::op_pool_server::OpPool;
 use crate::common::protos::op_pool::{
@@ -8,10 +8,9 @@ use crate::common::protos::op_pool::{
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
     DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
     GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, StorageSlot, UserOperation,
+    MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
 };
-use crate::common::protos::{to_le_bytes, ProtoBytes, ProtoTimestampMillis};
-use anyhow::Context;
+use crate::common::protos::ProtoBytes;
 use ethers::types::{Address, H256, U256};
 use tonic::{async_trait, Request, Response};
 
@@ -31,6 +30,19 @@ where
             metrics: OpPoolMetrics::default(),
             mempool,
         }
+    }
+
+    fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> tonic::Result<()> {
+        let req_ep: Address = ProtoBytes(req_entry_point)
+            .try_into()
+            .map_err(|e| tonic::Status::invalid_argument(format!("Invalid entry point: {e}")))?;
+        if req_ep != pool_entry_point {
+            return Err(tonic::Status::invalid_argument(format!(
+                "Invalid entry point: {req_ep:?}, expected {pool_entry_point:?}"
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -200,102 +212,123 @@ where
     }
 }
 
-impl<M> OpPoolImpl<M>
-where
-    M: Mempool,
-{
-    fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> tonic::Result<()> {
-        let req_ep: Address = ProtoBytes(req_entry_point)
-            .try_into()
-            .map_err(|e| tonic::Status::invalid_argument(format!("Invalid entry point: {e}")))?;
-        if req_ep != pool_entry_point {
-            return Err(tonic::Status::invalid_argument(format!(
-                "Invalid entry point: {req_ep:?}, expected {pool_entry_point:?}"
-            )));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_ADDRESS_ARR: [u8; 20] = [
+        0x11, 0xaB, 0xB0, 0x5d, 0x9A, 0xd3, 0x18, 0xbf, 0x65, 0x65, 0x26, 0x72, 0xB1, 0x3b, 0x1d,
+        0xcb, 0x0E, 0x6D, 0x4a, 0x32,
+    ];
+    const TEST_ADDRESS_STR: &'static str = "0x11aBB05d9Ad318bf65652672B13b1dcB0E6D4a32";
+
+    use crate::common::protos::op_pool::{self, Reputation};
+    use crate::op_pool::events::NewBlockEvent;
+    use crate::op_pool::mempool::PoolOperation;
+
+    #[test]
+    fn test_check_entry_point() {
+        let entry_pt_addr = TEST_ADDRESS_STR.parse().unwrap();
+        let result = OpPoolImpl::<MockMempool>::check_entry_point(&TEST_ADDRESS_ARR, entry_pt_addr);
+        assert_eq!(result.unwrap(), ());
+    }
+
+    #[tokio::test]
+    async fn test_add_op_fails_with_mismatch_entry_point() {
+        let oppool = given_oppool();
+        let request = Request::new(AddOpRequest {
+            entry_point: [0; 20].to_vec(),
+            op: None,
+        });
+
+        let result = oppool.add_op(request).await;
+
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_add_op_fails_with_null_uop() {
+        let oppool = given_oppool();
+        let request = Request::new(AddOpRequest {
+            entry_point: TEST_ADDRESS_ARR.to_vec(),
+            op: None,
+        });
+
+        let result = oppool.add_op(request).await;
+
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_add_op_fails_with_bad_proto_op() {
+        let oppool = given_oppool();
+        let request = Request::new(AddOpRequest {
+            entry_point: TEST_ADDRESS_ARR.to_vec(),
+            op: Some(op_pool::MempoolOp::default()),
+        });
+
+        let result = oppool.add_op(request).await;
+
+        assert!(result.is_err());
+        let result = result.unwrap_err();
+        assert_eq!(result.code(), tonic::Code::InvalidArgument);
+    }
+
+    fn given_oppool() -> OpPoolImpl<MockMempool> {
+        OpPoolImpl::<MockMempool>::new(1.into(), MockMempool::default().into())
+    }
+
+    pub struct MockMempool {
+        entry_point: Address,
+    }
+
+    impl Default for MockMempool {
+        fn default() -> Self {
+            Self {
+                entry_point: TEST_ADDRESS_ARR.into(),
+            }
+        }
+    }
+
+    impl Mempool for MockMempool {
+        fn entry_point(&self) -> Address {
+            self.entry_point
         }
 
-        Ok(())
-    }
-}
+        fn on_new_block(&self, _event: &NewBlockEvent) {}
 
-impl TryFrom<&PoolOperation> for MempoolOp {
-    type Error = anyhow::Error;
-
-    fn try_from(op: &PoolOperation) -> Result<Self, Self::Error> {
-        Ok(MempoolOp {
-            uo: Some(UserOperation::from(&op.uo)),
-            aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
-            valid_after: op.valid_after.timestamp_millis().try_into()?,
-            valid_until: op.valid_until.timestamp_millis().try_into()?,
-            expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
-            expected_storage_slots: op.expected_storage_slots.iter().map(|s| s.into()).collect(),
-        })
-    }
-}
-
-impl TryFrom<MempoolOp> for PoolOperation {
-    type Error = anyhow::Error;
-
-    fn try_from(op: MempoolOp) -> Result<Self, Self::Error> {
-        let uo = op
-            .uo
-            .context("Mempool op should contain user operation")?
-            .try_into()?;
-
-        let aggregator: Option<Address> = if op.aggregator.is_empty() {
-            None
-        } else {
-            Some(ProtoBytes(&op.aggregator).try_into()?)
-        };
-
-        let valid_after = ProtoTimestampMillis(op.valid_after).try_into()?;
-        let valid_until = ProtoTimestampMillis(op.valid_until).try_into()?;
-
-        let expected_storage_slots = op
-            .expected_storage_slots
-            .into_iter()
-            .map(|s| s.try_into())
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let expected_code_hash = H256::from_slice(&op.expected_code_hash);
-
-        Ok(PoolOperation {
-            uo,
-            aggregator,
-            valid_after,
-            valid_until,
-            expected_code_hash,
-            expected_storage_slots,
-        })
-    }
-}
-
-impl TryFrom<StorageSlot> for ExpectedStorageSlot {
-    type Error = anyhow::Error;
-
-    fn try_from(ss: StorageSlot) -> Result<Self, Self::Error> {
-        let address = ProtoBytes(&ss.address).try_into()?;
-        let slot = ProtoBytes(&ss.slot).try_into()?;
-        let expected_value = if ss.value.is_empty() {
-            None
-        } else {
-            Some(ProtoBytes(&ss.value).try_into()?)
-        };
-
-        Ok(ExpectedStorageSlot {
-            address,
-            slot,
-            expected_value,
-        })
-    }
-}
-
-impl From<&ExpectedStorageSlot> for StorageSlot {
-    fn from(ess: &ExpectedStorageSlot) -> Self {
-        StorageSlot {
-            address: ess.address.as_bytes().to_vec(),
-            slot: to_le_bytes(ess.slot),
-            value: ess.expected_value.map_or(vec![], to_le_bytes),
+        fn add_operation(
+            &self,
+            _origin: OperationOrigin,
+            _opp: PoolOperation,
+        ) -> anyhow::Result<H256> {
+            Ok(H256::zero())
         }
+
+        fn add_operations(
+            &self,
+            _origin: OperationOrigin,
+            _operations: impl IntoIterator<Item = PoolOperation>,
+        ) -> Vec<anyhow::Result<H256>> {
+            vec![]
+        }
+
+        fn remove_operations<'a>(&self, _hashes: impl IntoIterator<Item = &'a H256>) {}
+
+        fn best_operations(&self, _max: usize) -> Vec<Arc<PoolOperation>> {
+            vec![]
+        }
+
+        fn clear(&self) {}
+
+        fn dump_reputation(&self) -> Vec<Reputation> {
+            vec![]
+        }
+
+        fn set_reputation(&self, _address: Address, _ops_seenn: u64, _ops_included: u64) {}
     }
 }
