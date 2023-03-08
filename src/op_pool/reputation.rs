@@ -105,7 +105,7 @@ impl ReputationManager for HourlyMovingAverageReputation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ReputationParams {
     min_inclusion_rate_denominator: u64,
     throttling_slack: u64,
@@ -156,9 +156,9 @@ impl AddressReputation {
         };
 
         let min_expected_included = count.ops_seen / self.params.min_inclusion_rate_denominator;
-        if min_expected_included <= count.ops_included + self.params.throttling_slack {
+        if min_expected_included <= (count.ops_included + self.params.throttling_slack) {
             ReputationStatus::Ok
-        } else if min_expected_included <= count.ops_included + self.params.ban_slack {
+        } else if min_expected_included <= (count.ops_included + self.params.ban_slack) {
             ReputationStatus::Throttled
         } else {
             ReputationStatus::Banned
@@ -208,4 +208,154 @@ impl AddressReputation {
 struct AddressCount {
     ops_seen: u64,
     ops_included: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test AddressReputation
+
+    #[test]
+    fn seen_included() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+
+        for _ in 0..1000 {
+            reputation.add_seen(addr);
+            reputation.add_included(addr);
+        }
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 1000);
+        assert_eq!(counts.ops_included, 1000);
+    }
+
+    #[test]
+    fn set_rep() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+
+        reputation.set_reputation(addr, 1000, 1000);
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 1000);
+        assert_eq!(counts.ops_included, 1000);
+    }
+
+    #[test]
+    fn reputation_ok() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+        reputation.add_seen(addr);
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
+    }
+
+    #[test]
+    fn reputation_throttled() {
+        let addr = Address::random();
+        let params = ReputationParams::bundler_default();
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included =
+            ops_seen / params.min_inclusion_rate_denominator - params.throttling_slack - 1;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Throttled);
+    }
+
+    #[test]
+    fn reputation_throttled_edge() {
+        let addr = Address::random();
+        let params = ReputationParams::bundler_default();
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included =
+            ops_seen / params.min_inclusion_rate_denominator - params.throttling_slack;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
+    }
+
+    #[test]
+    fn reputation_banned() {
+        let addr = Address::random();
+        let params = ReputationParams::bundler_default();
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included = ops_seen / params.min_inclusion_rate_denominator - params.ban_slack - 1;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Banned);
+    }
+
+    #[test]
+    fn set_get_aggregator() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+        let txn_hash = H256::random();
+
+        reputation.set_aggregator(Some(addr), txn_hash);
+        assert_eq!(reputation.get_aggregator(txn_hash), Some(addr));
+
+        reputation.set_aggregator(Some(addr), txn_hash);
+        assert_eq!(reputation.get_aggregator(H256::zero()), None);
+
+        reputation.set_aggregator(None, H256::zero());
+        assert_eq!(reputation.get_aggregator(H256::zero()), None);
+    }
+
+    #[test]
+    fn hourly_update() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+
+        for _ in 0..1000 {
+            reputation.add_seen(addr);
+            reputation.add_included(addr);
+        }
+
+        reputation.hourly_update();
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 1000 - 1000 / 24);
+        assert_eq!(counts.ops_included, 1000 - 1000 / 24);
+    }
+
+    // Test HourlyMovingAverageReputation
+
+    #[test]
+    fn manager_seen_included() {
+        let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
+        let addrs = [Address::random(), Address::random(), Address::random()];
+
+        for _ in 0..1000 {
+            manager.add_seen(&addrs);
+            manager.add_included(&addrs);
+        }
+
+        for addr in &addrs {
+            assert_eq!(manager.status(*addr), ReputationStatus::Ok);
+
+            let rep = manager.reputation.read();
+            let counts = rep.counts.get(addr).unwrap();
+            assert_eq!(counts.ops_seen, 1000);
+            assert_eq!(counts.ops_included, 1000);
+        }
+    }
+
+    #[test]
+    fn manager_set_dump_reputation() {
+        let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
+        let addrs = [Address::random(), Address::random(), Address::random()];
+
+        for addr in &addrs {
+            manager.set_reputation(*addr, 1000, 1000);
+        }
+
+        let reps = manager.dump_reputation();
+        for rep in reps {
+            assert_eq!(rep.ops_seen, 1000);
+            assert_eq!(rep.ops_included, 1000);
+            let a = Address::from_slice(&rep.address);
+            assert!(addrs.contains(&a));
+        }
+    }
 }

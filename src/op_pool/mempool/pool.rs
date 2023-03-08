@@ -180,7 +180,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_add_single_op() {
+    fn add_single_op() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let op = create_op(Address::random(), 0, 1);
         let hash = pool.add_operation(op.clone()).unwrap();
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_multiple_ops() {
+    fn add_multiple_ops() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let ops = vec![
             create_op(Address::random(), 0, 1),
@@ -217,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_best_ties() {
+    fn best_ties() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let ops = vec![
             create_op(Address::random(), 0, 1),
@@ -238,7 +238,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_op() {
+    fn remove_op() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let ops = vec![
             create_op(Address::random(), 0, 3),
@@ -262,6 +262,19 @@ mod tests {
         pool.remove_operation_by_hash(hashes[2]);
         check_map_entry(pool.by_hash.get(&hashes[2]), None);
         check_map_entry(pool.best.iter().next(), None);
+    }
+
+    #[test]
+    fn too_many_ops() {
+        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let addr = Address::random();
+        for i in 0..MAX_MEMPOOL_USEROPS_PER_SENDER {
+            let op = create_op(addr, i, 1);
+            pool.add_operation(op).unwrap();
+        }
+
+        let op = create_op(addr, MAX_MEMPOOL_USEROPS_PER_SENDER, 1);
+        assert!(pool.add_operation(op).is_err());
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
