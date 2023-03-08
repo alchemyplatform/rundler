@@ -5,10 +5,11 @@ use ethers::{
 };
 use std::{
     cmp::Ordering,
-    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
-    ops::Deref,
+    collections::{hash_map::Entry, BTreeSet, HashMap},
     sync::Arc,
 };
+
+use super::PoolOperation;
 
 const MAX_MEMPOOL_USEROPS_PER_SENDER: usize = 1;
 
@@ -20,11 +21,11 @@ pub struct PoolInner {
     // Chain ID this pool targets
     chain_id: U256,
     // Operations by hash
-    by_hash: HashMap<H256, PoolOperation>,
+    by_hash: HashMap<H256, OrderedPoolOperation>,
     // Operations by operation ID
-    by_id: HashMap<UserOperationId, PoolOperation>,
+    by_id: HashMap<UserOperationId, OrderedPoolOperation>,
     // Best operations, sorted by gas price
-    best: BTreeSet<PoolOperation>,
+    best: BTreeSet<OrderedPoolOperation>,
     // Count of operations by sender
     count_by_sender: HashMap<Address, usize>,
     // Submission ID counter
@@ -44,23 +45,23 @@ impl PoolInner {
         }
     }
 
-    pub fn add_operation(&mut self, operation: UserOperation) -> anyhow::Result<H256> {
+    pub fn add_operation(&mut self, op: PoolOperation) -> anyhow::Result<H256> {
         // Check for replacement by ID
-        if let Some(old_op) = self.by_id.get(&operation.id()) {
+        if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
             // replace only if higher gas
-            if old_op.max_priority_fee_per_gas <= operation.max_priority_fee_per_gas
-                && old_op.max_fee_per_gas <= operation.max_fee_per_gas
+            if pool_op.uo().max_priority_fee_per_gas <= op.uo.max_priority_fee_per_gas
+                && pool_op.uo().max_fee_per_gas <= op.uo.max_fee_per_gas
             {
-                self.best.remove(old_op);
+                self.best.remove(pool_op);
                 self.by_hash
-                    .remove(&old_op.op_hash(self.entry_point, self.chain_id));
+                    .remove(&pool_op.uo().op_hash(self.entry_point, self.chain_id));
             } else {
                 anyhow::bail!("Operation with higher gas already in mempool");
             }
         }
 
         // Check sender count and reject if too many, else increment
-        let sender_count = self.count_by_sender.entry(operation.sender).or_insert(0);
+        let sender_count = self.count_by_sender.entry(op.uo.sender).or_insert(0);
         if *sender_count >= MAX_MEMPOOL_USEROPS_PER_SENDER {
             anyhow::bail!(
                 "Sender already has {MAX_MEMPOOL_USEROPS_PER_SENDER} operations in mempool, cannot add more"
@@ -68,13 +69,13 @@ impl PoolInner {
         }
         *sender_count += 1;
 
-        let pool_op = PoolOperation {
-            op: Arc::new(operation),
+        let pool_op = OrderedPoolOperation {
+            po: Arc::new(op),
             submission_id: self.next_submission_id(),
         };
-        let hash = pool_op.op_hash(self.entry_point, self.chain_id);
+        let hash = pool_op.uo().op_hash(self.entry_point, self.chain_id);
         self.by_hash.insert(hash, pool_op.clone());
-        self.by_id.insert(pool_op.id(), pool_op.clone());
+        self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
 
         Ok(hash)
@@ -82,7 +83,7 @@ impl PoolInner {
 
     pub fn add_operations(
         &mut self,
-        operations: impl IntoIterator<Item = UserOperation>,
+        operations: impl IntoIterator<Item = PoolOperation>,
     ) -> Vec<anyhow::Result<H256>> {
         operations
             .into_iter()
@@ -90,36 +91,18 @@ impl PoolInner {
             .collect()
     }
 
-    pub fn best_operations(&self, max: usize) -> Vec<Arc<UserOperation>> {
-        if max == 0 {
-            return vec![];
-        }
-
-        // Only add one op per sender
-        let mut senders = HashSet::new();
-
-        let mut best = Vec::new();
-        for operation in self.best.iter() {
-            if senders.contains(&operation.sender) {
-                continue;
-            }
-            best.push(operation.clone().into());
-            senders.insert(operation.sender);
-
-            if best.len() == max {
-                break;
-            }
-        }
-
-        best
+    pub fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
+        self.best.clone().into_iter().map(|v| v.po)
     }
 
-    pub fn remove_operation_by_hash(&mut self, hash: H256) {
+    pub fn remove_operation_by_hash(&mut self, hash: H256) -> bool {
         if let Entry::Occupied(e) = self.by_hash.entry(hash) {
-            self.by_id.remove(&e.get().id());
+            self.by_id.remove(&e.get().uo().id());
             self.best.remove(e.get());
 
-            if let Entry::Occupied(mut count_entry) = self.count_by_sender.entry(e.get().sender) {
+            if let Entry::Occupied(mut count_entry) =
+                self.count_by_sender.entry(e.get().uo().sender)
+            {
                 *count_entry.get_mut() -= 1;
                 if *count_entry.get() == 0 {
                     count_entry.remove_entry();
@@ -127,7 +110,9 @@ impl PoolInner {
             }
 
             e.remove_entry();
+            return true;
         }
+        false
     }
 
     pub fn clear(&mut self) {
@@ -144,49 +129,42 @@ impl PoolInner {
     }
 }
 
-// Wrapper type to implement a custom Ord of UserOperations for PoolInner
+/// Wrapper around PoolOperation that adds a submission ID to implement
+/// a custom ordering for the best operations
 #[derive(Debug, Clone)]
-struct PoolOperation {
-    op: Arc<UserOperation>,
+struct OrderedPoolOperation {
+    po: Arc<PoolOperation>,
     submission_id: u64,
 }
 
-impl Deref for PoolOperation {
-    type Target = Arc<UserOperation>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.op
+impl OrderedPoolOperation {
+    fn uo(&self) -> &UserOperation {
+        &self.po.uo
     }
 }
 
-impl Eq for PoolOperation {}
+impl Eq for OrderedPoolOperation {}
 
-impl Ord for PoolOperation {
+impl Ord for OrderedPoolOperation {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Sort by gas price descending
-        // then by id ascending
+        // Sort by gas price descending then by id ascending
         other
+            .uo()
             .max_fee_per_gas
-            .cmp(&self.max_fee_per_gas)
+            .cmp(&self.uo().max_fee_per_gas)
             .then_with(|| self.submission_id.cmp(&other.submission_id))
     }
 }
 
-impl PartialOrd for PoolOperation {
+impl PartialOrd for OrderedPoolOperation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl PartialEq for PoolOperation {
+impl PartialEq for OrderedPoolOperation {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl From<PoolOperation> for Arc<UserOperation> {
-    fn from(po: PoolOperation) -> Self {
-        po.op
     }
 }
 
@@ -197,11 +175,11 @@ mod tests {
     #[test]
     fn test_add_single_op() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
-        let op = UserOperation::default();
+        let op = create_op(Address::random(), 0, 1);
         let hash = pool.add_operation(op.clone()).unwrap();
 
         check_map_entry(pool.by_hash.get(&hash), Some(&op));
-        check_map_entry(pool.by_id.get(&op.id()), Some(&op));
+        check_map_entry(pool.by_id.get(&op.uo.id()), Some(&op));
         check_map_entry(pool.best.iter().next(), Some(&op));
     }
 
@@ -221,7 +199,7 @@ mod tests {
 
         for (hash, op) in hashes.iter().zip(&ops) {
             check_map_entry(pool.by_hash.get(hash), Some(op));
-            check_map_entry(pool.by_id.get(&op.id()), Some(op));
+            check_map_entry(pool.by_id.get(&op.uo.id()), Some(op));
         }
 
         // best should be sorted by gas
@@ -279,18 +257,21 @@ mod tests {
         check_map_entry(pool.best.iter().next(), None);
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> UserOperation {
-        UserOperation {
-            sender,
-            nonce: nonce.into(),
-            max_fee_per_gas: max_fee_per_gas.into(),
-            ..UserOperation::default()
+    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
+        PoolOperation {
+            uo: UserOperation {
+                sender,
+                nonce: nonce.into(),
+                max_fee_per_gas: max_fee_per_gas.into(),
+                ..UserOperation::default()
+            },
+            ..PoolOperation::default()
         }
     }
 
-    fn check_map_entry(actual: Option<&PoolOperation>, expected: Option<&UserOperation>) {
+    fn check_map_entry(actual: Option<&OrderedPoolOperation>, expected: Option<&PoolOperation>) {
         match (actual, expected) {
-            (Some(actual), Some(expected)) => assert_eq!(*actual.op, *expected),
+            (Some(actual), Some(expected)) => assert_eq!(*actual.po, *expected),
             (None, None) => (),
             _ => panic!("Expected {expected:?}, got {actual:?}"),
         }

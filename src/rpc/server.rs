@@ -1,7 +1,5 @@
 use std::env;
 
-use crate::common::protos::op_pool::AddOpRequest;
-use crate::common::protos::op_pool::UserOperation as GrpcUserOperation;
 use crate::common::types::UserOperation;
 use ethers::types::Address;
 use jsonrpsee::core::Error as RpcError;
@@ -28,13 +26,9 @@ pub struct RpcImpl;
 impl RpcServer for RpcImpl {
     async fn send_user_operation(
         &self,
-        op: UserOperation,
-        entry_point: Address,
+        _op: UserOperation,
+        _entry_point: Address,
     ) -> Result<String, RpcError> {
-        let _ = AddOpRequest {
-            op: Some(GrpcUserOperation::from(&op)),
-            entry_point: entry_point.as_bytes().to_vec(),
-        };
         todo!()
     }
 }

@@ -1,17 +1,16 @@
 mod pool;
 pub mod uo_pool;
 
-use ethers::types::{Address, H256};
+use chrono::{DateTime, Utc};
+use ethers::types::{Address, H256, U256};
 use std::sync::Arc;
 
-use crate::common::types::UserOperation;
+use crate::common::{protos::op_pool::Reputation, types::UserOperation};
 
-use super::{events::NewBlockEvent, reputation::ReputationManager};
+use super::events::NewBlockEvent;
 
 /// In-memory operation pool
 pub trait Mempool: Send + Sync {
-    type ReputationManagerType: ReputationManager;
-
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
 
@@ -24,11 +23,7 @@ pub trait Mempool: Send + Sync {
     ///
     /// Adds a user operation to the pool that was submitted via a local
     /// RPC call and was validated before submission.
-    fn add_operation(
-        &self,
-        origin: OperationOrigin,
-        operation: UserOperation,
-    ) -> anyhow::Result<H256>;
+    fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> anyhow::Result<H256>;
 
     /// Adds multiple validated user operations to the pool.
     ///
@@ -37,7 +32,7 @@ pub trait Mempool: Send + Sync {
     fn add_operations(
         &self,
         origin: OperationOrigin,
-        operations: impl IntoIterator<Item = UserOperation>,
+        operations: impl IntoIterator<Item = PoolOperation>,
     ) -> Vec<anyhow::Result<H256>>;
 
     /// Removes a set of operations from the pool.
@@ -47,10 +42,18 @@ pub trait Mempool: Send + Sync {
     ///
     /// Returns the best operations from the pool based on their gas bids up to
     /// the specified maximum number of operations.
-    fn best_operations(&self, max: usize) -> Vec<Arc<UserOperation>>;
+    fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
+
+    /// Debug methods
 
     /// Clears the mempool
     fn clear(&self);
+
+    /// Dumps the mempool's reputation tracking
+    fn dump_reputation(&self) -> Vec<Reputation>;
+
+    /// Overwrites the mempool's reputation for an address
+    fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
 }
 
 /// Origin of an operation.
@@ -61,4 +64,24 @@ pub enum OperationOrigin {
     Local,
     /// The operation was discovered via the P2P gossip protocol.
     External,
+}
+
+// TODO(danc): remove this once PR #26 is merged
+/// An expected storage slot value for a user operation during validation.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ExpectedStorageSlot {
+    pub address: Address,
+    pub slot: U256,
+    pub expected_value: Option<U256>,
+}
+
+/// A user operation with additional metadata from validation.
+#[derive(Debug, Default, Clone, Eq, PartialEq)]
+pub struct PoolOperation {
+    pub uo: UserOperation,
+    pub aggregator: Option<Address>,
+    pub valid_after: DateTime<Utc>,
+    pub valid_until: DateTime<Utc>,
+    pub expected_code_hash: H256,
+    pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }

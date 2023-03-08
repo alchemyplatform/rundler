@@ -3,24 +3,30 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::interval;
-use tracing::error;
 
-use crate::common::{
-    contracts::entry_point::EntryPointEvents,
-    protos::op_pool::{Reputation, ReputationStatus},
-};
+use crate::common::protos::op_pool::{Reputation, ReputationStatus};
 
-use super::events::NewBlockEvent;
-
+/// Reputation manager trait
+///
+/// Interior mutability pattern used as ReputationManagers may
+/// need to be thread-safe.
 pub trait ReputationManager: Send + Sync {
-    /// Callback for new block events
-    fn on_new_block(&self, new_block: &NewBlockEvent);
-
     /// Called by mempool before returning operations to bundler
     fn status(&self, address: Address) -> ReputationStatus;
 
     /// Called by mempool when an operation is added to the pool
     fn add_seen<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>);
+
+    /// Called by the mempool when an operation is removed from the pool
+    fn add_included<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>);
+
+    /// Called by the mempool during a block event when the aggregator changes
+    /// Must be called before `add_included` for an operation that uses the aggregator
+    fn set_aggregator(&self, aggregator: Option<Address>, txn_hash: H256);
+
+    /// Called by the mempool during a block event to check if
+    /// there is an aggregator set for the current txn_hash
+    fn get_aggregator(&self, txn_hash: H256) -> Option<Address>;
 
     /// Called by debug API
     fn dump_reputation(&self) -> Vec<Reputation>;
@@ -30,11 +36,11 @@ pub trait ReputationManager: Send + Sync {
 }
 
 #[derive(Debug)]
-pub struct HourlyMovingAverageReputationManager {
+pub struct HourlyMovingAverageReputation {
     reputation: RwLock<AddressReputation>,
 }
 
-impl HourlyMovingAverageReputationManager {
+impl HourlyMovingAverageReputation {
     pub fn new(params: ReputationParams) -> Self {
         Self {
             reputation: RwLock::new(AddressReputation::new(params)),
@@ -51,41 +57,7 @@ impl HourlyMovingAverageReputationManager {
     }
 }
 
-impl ReputationManager for HourlyMovingAverageReputationManager {
-    fn on_new_block(&self, new_block: &NewBlockEvent) {
-        let mut reputation = self.reputation.write();
-        for event in &new_block.events {
-            match &event.contract_event {
-                EntryPointEvents::UserOperationEventFilter(uo_event) => {
-                    let paymaster = if uo_event.paymaster.is_zero() {
-                        None
-                    } else {
-                        Some(uo_event.paymaster)
-                    };
-
-                    reputation.add_included_op(
-                        uo_event.sender,
-                        paymaster,
-                        uo_event.user_op_hash.into(),
-                    );
-                }
-                EntryPointEvents::AccountDeployedFilter(ad_event) => {
-                    reputation.add_included(ad_event.factory);
-                }
-                EntryPointEvents::SignatureAggregatorChangedFilter(sa_event) => {
-                    let aggregator = if sa_event.aggregator.is_zero() {
-                        None
-                    } else {
-                        Some(sa_event.aggregator)
-                    };
-
-                    reputation.set_aggregator(aggregator, event.txn_hash);
-                }
-                _ => {}
-            }
-        }
-    }
-
+impl ReputationManager for HourlyMovingAverageReputation {
     fn status(&self, address: Address) -> ReputationStatus {
         self.reputation.read().status(address)
     }
@@ -95,6 +67,21 @@ impl ReputationManager for HourlyMovingAverageReputationManager {
         for address in addresses {
             reputation.add_seen(*address);
         }
+    }
+
+    fn add_included<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>) {
+        let mut reputation = self.reputation.write();
+        for address in addresses {
+            reputation.add_included(*address);
+        }
+    }
+
+    fn set_aggregator(&self, aggregator: Option<Address>, txn_hash: H256) {
+        self.reputation.write().set_aggregator(aggregator, txn_hash);
+    }
+
+    fn get_aggregator(&self, txn_hash: H256) -> Option<Address> {
+        self.reputation.read().get_aggregator(txn_hash)
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -188,19 +175,16 @@ impl AddressReputation {
         count.ops_included += 1;
     }
 
-    pub fn add_included_op(&mut self, sender: Address, paymaster: Option<Address>, txn_hash: H256) {
-        self.add_included(sender);
+    pub fn set_aggregator(&mut self, aggregator: Option<Address>, txn_hash: H256) {
+        self.aggregator = aggregator;
+        self.aggregator_txn_hash = txn_hash;
+    }
 
-        if let Some(paymaster) = paymaster {
-            self.add_included(paymaster);
-        }
-
-        if self.aggregator_txn_hash == txn_hash {
-            if let Some(aggregator) = self.aggregator {
-                self.add_included(aggregator);
-            } else {
-                error!("aggregator txn hash {txn_hash:?} is equal but aggregator is not set");
-            }
+    pub fn get_aggregator(&self, txn_hash: H256) -> Option<Address> {
+        if txn_hash != self.aggregator_txn_hash {
+            None
+        } else {
+            self.aggregator
         }
     }
 
@@ -208,11 +192,6 @@ impl AddressReputation {
         let count = self.counts.entry(address).or_default();
         count.ops_seen = ops_seen;
         count.ops_included = ops_included;
-    }
-
-    pub fn set_aggregator(&mut self, aggregator: Option<Address>, txn_hash: H256) {
-        self.aggregator = aggregator;
-        self.aggregator_txn_hash = txn_hash;
     }
 
     pub fn hourly_update(&mut self) {

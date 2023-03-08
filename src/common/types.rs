@@ -37,6 +37,17 @@ impl UserOperation {
         }
     }
 
+    /// Extracts an address from the beginning of a data field
+    /// Useful to extract the paymaster address from paymaster_and_data
+    /// and the factory address from init_code
+    pub fn get_address_from_field(data: &Bytes) -> Option<Address> {
+        if data.len() < 20 {
+            None
+        } else {
+            Some(Address::from_slice(&data[..20]))
+        }
+    }
+
     fn pack(&self) -> Bytes {
         let mut packed = encode(&[
             Token::Address(self.sender),
@@ -167,6 +178,21 @@ mod tests {
         assert_eq!(
             hash,
             "0xf1f17c5eb34cf7f0584569a9d9831f17af470f8942a6ccdbca9b1597bef2e370"
+                .parse()
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_get_address_from_field() {
+        let paymaster_and_data: Bytes =
+            "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .parse()
+                .unwrap();
+        let address = UserOperation::get_address_from_field(&paymaster_and_data).unwrap();
+        assert_eq!(
+            address,
+            "0x0123456789abcdef0123456789abcdef01234567"
                 .parse()
                 .unwrap()
         );
