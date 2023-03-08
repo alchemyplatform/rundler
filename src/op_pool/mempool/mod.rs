@@ -67,6 +67,7 @@ pub enum OperationOrigin {
 }
 
 // TODO(danc): remove this once PR #26 is merged
+/// An expected storage slot value for a user operation during validation.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ExpectedStorageSlot {
     pub address: Address,
@@ -74,6 +75,7 @@ pub struct ExpectedStorageSlot {
     pub expected_value: Option<U256>,
 }
 
+/// A user operation with additional metadata from validation.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct PoolOperation {
     pub uo: UserOperation,

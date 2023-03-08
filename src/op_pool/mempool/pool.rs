@@ -129,6 +129,8 @@ impl PoolInner {
     }
 }
 
+/// Wrapper around PoolOperation that adds a submission ID to implement
+/// a custom ordering for the best operations
 #[derive(Debug, Clone)]
 struct OrderedPoolOperation {
     po: Arc<PoolOperation>,
@@ -145,8 +147,7 @@ impl Eq for OrderedPoolOperation {}
 
 impl Ord for OrderedPoolOperation {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Sort by gas price descending
-        // then by id ascending
+        // Sort by gas price descending then by id ascending
         other
             .uo()
             .max_fee_per_gas

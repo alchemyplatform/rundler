@@ -56,6 +56,7 @@ pub fn to_le_bytes(n: U256) -> Vec<u8> {
     vec
 }
 
+/// Error type for conversions from protobuf types to Ethers types.
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
     #[error("Invalid length: {0}, expected: {1}")]
@@ -64,6 +65,7 @@ pub enum ConversionError {
     InvalidTimestamp(u64),
 }
 
+/// Wrapper around protobyf bytes for converting to Ethers types.
 #[derive(Debug, Copy, Clone)]
 pub struct ProtoBytes<'a>(pub &'a [u8]);
 
@@ -106,6 +108,7 @@ impl TryInto<H256> for ProtoBytes<'_> {
     }
 }
 
+/// Wrapper around protobyf u64 timestamps for converting to chrono types.
 #[derive(Debug, Copy, Clone)]
 pub struct ProtoTimestampMillis(pub u64);
 
