@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::bail;
 use ethers::types::{Address, U256};
 use tokio::{
     sync::{broadcast, mpsc},
@@ -39,10 +40,7 @@ pub async fn run(
         Ok(listener) => listener,
         Err(e) => {
             tracing::error!("Failed to connect to events listener: {:?}", e);
-            return Err(anyhow::anyhow!(
-                "Failed to connect to events listener: {:?}",
-                e
-            ));
+            bail!("Failed to connect to events listener: {e:?}")
         }
     };
     tracing::info!("Connected to events listener");
@@ -96,12 +94,12 @@ pub async fn run(
 
     match try_join!(server_handle, events_listener_handle) {
         Ok(_) => {
-            tracing::info!("Op pool server shutdown");
+            tracing::info!("Server shutdown");
             Ok(())
         }
         Err(e) => {
-            tracing::error!("Op pool server error: {:?}", e);
-            Err(anyhow::anyhow!("Op pool server error: {:?}", e))
+            tracing::error!("OP Pool server error: {e:?}");
+            bail!("Server error: {e:?}")
         }
     }
 }

@@ -61,6 +61,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "strum",
  "thiserror",
  "tokio",
  "tonic",
