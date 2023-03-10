@@ -83,7 +83,7 @@ message DebugDumpMempoolResponse {
 
 message DebugSetReputationRequest {
   bytes entry_point = 1;
-  Reputation reputation = 2;
+  repeated Reputation reputations = 2;
 }
 message DebugSetReputationResponse {}
 

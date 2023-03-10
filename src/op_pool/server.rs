@@ -182,16 +182,22 @@ where
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let rep = req.reputation.ok_or(tonic::Status::invalid_argument(
-            "Reputation is required in DebugSetReputationRequest",
-        ))?;
+        let reps = if req.reputations.is_empty() {
+            return Err(tonic::Status::invalid_argument(
+                "Reputation is required in DebugSetReputationRequest",
+            ));
+        } else {
+            req.reputations
+        };
 
-        let addr = ProtoBytes(&rep.address)
-            .try_into()
-            .map_err(|e| tonic::Status::invalid_argument(format!("Invalid address: {e}")))?;
+        for rep in reps {
+            let addr = ProtoBytes(&rep.address)
+                .try_into()
+                .map_err(|e| tonic::Status::invalid_argument(format!("Invalid address: {e}")))?;
 
-        self.mempool
-            .set_reputation(addr, rep.ops_seen, rep.ops_included);
+            self.mempool
+                .set_reputation(addr, rep.ops_seen, rep.ops_included);
+        }
 
         Ok(Response::new(DebugSetReputationResponse {}))
     }
