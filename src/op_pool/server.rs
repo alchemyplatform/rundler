@@ -217,10 +217,10 @@ mod tests {
     use super::*;
 
     const TEST_ADDRESS_ARR: [u8; 20] = [
-        0x11, 0xaB, 0xB0, 0x5d, 0x9A, 0xd3, 0x18, 0xbf, 0x65, 0x65, 0x26, 0x72, 0xB1, 0x3b, 0x1d,
+        0x11, 0xAB, 0xB0, 0x5d, 0x9A, 0xd3, 0x18, 0xbf, 0x65, 0x65, 0x26, 0x72, 0xB1, 0x3b, 0x1d,
         0xcb, 0x0E, 0x6D, 0x4a, 0x32,
     ];
-    const TEST_ADDRESS_STR: &'static str = "0x11aBB05d9Ad318bf65652672B13b1dcB0E6D4a32";
+    const TEST_ADDRESS_STR: &str = "0x11aBB05d9Ad318bf65652672B13b1dcB0E6D4a32";
 
     use crate::common::protos::op_pool::{self, Reputation};
     use crate::op_pool::events::NewBlockEvent;
@@ -230,7 +230,7 @@ mod tests {
     fn test_check_entry_point() {
         let entry_pt_addr = TEST_ADDRESS_STR.parse().unwrap();
         let result = OpPoolImpl::<MockMempool>::check_entry_point(&TEST_ADDRESS_ARR, entry_pt_addr);
-        assert_eq!(result.unwrap(), ());
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
