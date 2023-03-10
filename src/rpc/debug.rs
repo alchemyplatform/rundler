@@ -2,8 +2,14 @@ use ethers::types::{Address, H256};
 use jsonrpsee::core::{Error as RpcError, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use tonic::async_trait;
+use tonic::transport::Channel;
 
 use super::RpcReputation;
+use crate::common::protos;
+use crate::common::protos::op_pool::{
+    op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
+    DebugSetReputationRequest,
+};
 use crate::common::types::UserOperation;
 
 /// Debug API
@@ -32,18 +38,52 @@ pub trait DebugApi {
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>>;
 }
 
-pub struct DebugApi;
+pub struct DebugApi {
+    op_pool_client: op_pool_client::OpPoolClient<Channel>,
+}
+
+impl DebugApi {
+    pub fn new(op_pool_client: op_pool_client::OpPoolClient<Channel>) -> Self {
+        Self { op_pool_client }
+    }
+}
 
 #[async_trait]
 impl DebugApiServer for DebugApi {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
-        Err(RpcError::HttpNotImplemented)
+        let _ = self
+            .op_pool_client
+            // https://docs.rs/tonic/latest/tonic/client/index.html#concurrent-usage
+            // solution to using in concurrent context is to clone
+            .clone()
+            .debug_clear_state(DebugClearStateRequest {})
+            .await
+            .map_err(|e| RpcError::Custom(e.to_string()))?;
+
+        Ok("ok".to_string())
     }
 
-    async fn bundler_dump_mempool(&self, _entry_point: Address) -> RpcResult<Vec<UserOperation>> {
-        Err(RpcError::HttpNotImplemented)
+    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<UserOperation>> {
+        let response = self
+            .op_pool_client
+            .clone()
+            .debug_dump_mempool(DebugDumpMempoolRequest {
+                entry_point: entry_point.to_fixed_bytes().into(),
+            })
+            .await
+            .map_err(|e| RpcError::Custom(e.to_string()))?;
+
+        Ok(response
+            .into_inner()
+            .ops
+            .into_iter()
+            .filter_map(|mop| mop.uo)
+            .map(|uo| uo.try_into())
+            .collect::<Result<Vec<_>, protos::ConversionError>>()
+            .map_err(|e| RpcError::Custom(e.to_string()))?)
     }
 
+    // TODO: we need bundler module defined before we can impl these two
     async fn bundler_send_bundle_now(&self, _entry_point: Address) -> RpcResult<H256> {
         Err(RpcError::HttpNotImplemented)
     }
@@ -54,16 +94,37 @@ impl DebugApiServer for DebugApi {
 
     async fn bundler_set_reputation(
         &self,
-        _reputations: Vec<RpcReputation>,
-        _entry_point: Address,
+        reputations: Vec<RpcReputation>,
+        entry_point: Address,
     ) -> RpcResult<String> {
-        Err(RpcError::HttpNotImplemented)
+        let _ = self
+            .op_pool_client
+            .clone()
+            .debug_set_reputation(DebugSetReputationRequest {
+                entry_point: entry_point.to_fixed_bytes().into(),
+                reputations: reputations.into_iter().map(Into::into).collect(),
+            })
+            .await;
+
+        Ok("ok".to_string())
     }
 
-    async fn bundler_dump_reputation(
-        &self,
-        _entry_point: Address,
-    ) -> RpcResult<Vec<RpcReputation>> {
-        Err(RpcError::HttpNotImplemented)
+    async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>> {
+        let result = self
+            .op_pool_client
+            .clone()
+            .debug_dump_reputation(DebugDumpReputationRequest {
+                entry_point: entry_point.to_fixed_bytes().into(),
+            })
+            .await
+            .map_err(|e| RpcError::Custom(e.to_string()))?;
+
+        Ok(result
+            .into_inner()
+            .reputations
+            .into_iter()
+            .map(|r| r.try_into())
+            .collect::<Result<Vec<_>, anyhow::Error>>()
+            .map_err(|e| RpcError::Custom(e.to_string()))?)
     }
 }

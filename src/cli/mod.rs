@@ -188,6 +188,10 @@ struct RpcArgs {
     )]
     host: String,
 
+    #[clap(flatten)]
+    op_pool_args: OpPoolArgs,
+
+    /// Which APIs to expose over the RPC interface
     #[arg(
         long = "rpc.api",
         name = "rpc.api",
@@ -210,6 +214,8 @@ impl RpcArgs {
         Ok(rpc::Args {
             port: self.port,
             host: self.host.clone(),
+            op_pool_host: self.op_pool_args.host.clone(),
+            op_pool_port: self.op_pool_args.port,
             entry_point: common
                 .entry_point
                 .parse()
