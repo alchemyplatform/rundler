@@ -199,6 +199,14 @@ struct RpcArgs {
         default_value = "eth,debug"
     )]
     api: String,
+
+    #[arg(
+        long = "rpc_eth_node_url",
+        name = "rpc_eth_node_url",
+        env = "RPC_ETH_NODE_URL",
+        default_value = "http://localhost:8545"
+    )]
+    rpc_url: String,
 }
 
 impl RpcArgs {
@@ -220,6 +228,7 @@ impl RpcArgs {
                 .entry_point
                 .parse()
                 .context("Invalid entry_point argument")?,
+            rpc_url: self.rpc_url.clone(),
             chain_id: common.chain_id.into(),
             api_namespaces: apis,
         })

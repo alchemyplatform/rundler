@@ -34,7 +34,7 @@ pub enum EthRpcError {
     EntrypointValidationRejected(String),
     /// Paymaster rejected the operation
     #[error("{}", .0.reason)]
-    PaymasterValidatoinRejected(PaymasterValidationRejectedData),
+    PaymasterValidationRejected(PaymasterValidationRejectedData),
     /// Opcode violation
     #[error("opcode violation: {0}")]
     OpcodeViolation(String),
@@ -57,7 +57,7 @@ pub enum EthRpcError {
     Internal(#[from] anyhow::Error),
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PaymasterValidationRejectedData {
     paymaster: Address,
     #[serde(skip_serializing)] // this is included in the message
@@ -158,30 +158,28 @@ pub struct UnsupportedAggregatorData {
 
 impl From<EthRpcError> for RpcError {
     fn from(error: EthRpcError) -> Self {
+        let msg = error.to_string();
+
         match error {
-            EthRpcError::InvalidParams(msg) => rpc_err(INVALID_PARAMS_CODE, msg),
-            EthRpcError::ValidationRejected(_) => {
-                rpc_err(VALIDATION_REJECTED_CODE, error.to_string())
+            EthRpcError::InvalidParams(_) => rpc_err(INVALID_PARAMS_CODE, msg),
+            EthRpcError::EntrypointValidationRejected(_) => {
+                rpc_err(ENTRYPOINT_VALIDATION_REJECTED_CODE, msg)
             }
-            EthRpcError::PaymasterRejected(data) => {
-                rpc_err_with_data(PAYMASTER_REJECTED_CODE, error.to_string(), data)
+            EthRpcError::PaymasterValidationRejected(data) => {
+                rpc_err_with_data(PAYMASTER_VALIDATION_REJECTED_CODE, msg, data)
             }
-            EthRpcError::OpcodeViolation(_) => rpc_err(OPCODE_VIOLATION_CODE, error.to_string()),
+            EthRpcError::OpcodeViolation(_) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
-                rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, error.to_string(), data)
+                rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)
             }
             EthRpcError::ThrottledOrBanned(data) => {
-                rpc_err_with_data(THROTTLED_OR_BANNED_CODE, error.to_string(), data)
+                rpc_err_with_data(THROTTLED_OR_BANNED_CODE, msg, data)
             }
-            EthRpcError::StakeTooLow(data) => {
-                rpc_err_with_data(STAKE_TOO_LOW_CODE, error.to_string(), data)
-            }
+            EthRpcError::StakeTooLow(data) => rpc_err_with_data(STAKE_TOO_LOW_CODE, msg, data),
             EthRpcError::UnsupportedAggregator(data) => {
-                rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, error.to_string(), data)
+                rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, msg, data)
             }
-            EthRpcError::SignatureCheckFailed => {
-                rpc_err(SIGNATURE_CHECK_FAILED_CODE, error.to_string())
-            }
+            EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::Internal(e) => rpc_err(INTERNAL_ERROR_CODE, e.to_string()),
         }
     }
