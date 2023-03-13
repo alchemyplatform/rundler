@@ -34,7 +34,7 @@ pub enum EthRpcError {
     EntrypointValidationRejected(String),
     /// Paymaster rejected the operation
     #[error("{}", .0.reason)]
-    PaymasterValidatoinRejected(PaymasterValidationRejectedData),
+    PaymasterValidationRejected(PaymasterValidationRejectedData),
     /// Opcode violation
     #[error("opcode violation: {0}")]
     OpcodeViolation(String),
@@ -57,7 +57,7 @@ pub enum EthRpcError {
     Internal(#[from] anyhow::Error),
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PaymasterValidationRejectedData {
     paymaster: Address,
     #[serde(skip_serializing)] // this is included in the message
@@ -160,12 +160,14 @@ impl From<EthRpcError> for RpcError {
     fn from(error: EthRpcError) -> Self {
         match error {
             EthRpcError::InvalidParams(msg) => rpc_err(INVALID_PARAMS_CODE, msg),
-            EthRpcError::ValidationRejected(_) => {
-                rpc_err(VALIDATION_REJECTED_CODE, error.to_string())
+            EthRpcError::EntrypointValidationRejected(_) => {
+                rpc_err(ENTRYPOINT_VALIDATION_REJECTED_CODE, error.to_string())
             }
-            EthRpcError::PaymasterRejected(data) => {
-                rpc_err_with_data(PAYMASTER_REJECTED_CODE, error.to_string(), data)
-            }
+            EthRpcError::PaymasterValidationRejected(data) => rpc_err_with_data(
+                PAYMASTER_VALIDATION_REJECTED_CODE,
+                data.reason.clone(),
+                data,
+            ),
             EthRpcError::OpcodeViolation(_) => rpc_err(OPCODE_VIOLATION_CODE, error.to_string()),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, error.to_string(), data)

@@ -1,7 +1,10 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::bail;
-use ethers::types::{Address, U256};
+use ethers::providers::{Http, Provider, ProviderExt};
+use ethers::types::{Address, Chain, U256};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::RpcModule;
 use tokio::sync::broadcast;
@@ -22,6 +25,7 @@ pub struct Args {
     pub entry_point: Address,
     pub chain_id: U256,
     pub api_namespaces: Vec<ApiNamespace>,
+    pub rpc_url: String,
 }
 
 pub async fn run(
@@ -33,12 +37,23 @@ pub async fn run(
     tracing::info!("Starting server on {}", addr);
 
     let mut module = RpcModule::new(());
+    let chain: Chain = args
+        .chain_id
+        .try_into()
+        .expect(format!("{} is not a supported chain", args.chain_id).as_str());
+
+    let provider: Arc<Provider<Http>> = Arc::new(
+        Provider::<Http>::try_from(args.rpc_url)
+            .expect("Invalid RPC URL")
+            .interval(Duration::from_millis(100))
+            .for_chain(chain),
+    );
 
     for api in args.api_namespaces {
         match api {
-            ApiNamespace::Eth => {
-                module.merge(EthApi::new(vec![args.entry_point], args.chain_id).into_rpc())?
-            }
+            ApiNamespace::Eth => module.merge(
+                EthApi::new(provider.clone(), vec![args.entry_point], args.chain_id).into_rpc(),
+            )?,
             ApiNamespace::Debug => module.merge(
                 DebugApi::new(
                     op_pool_client::OpPoolClient::connect(format_server_addr(
