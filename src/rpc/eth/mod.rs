@@ -2,21 +2,26 @@ mod error;
 
 use crate::common::{
     contracts::entry_point::{
-        EntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
+        EntryPoint, EntryPointCalls, EntryPointErrors, UserOperationEventFilter,
+        UserOperationRevertReasonFilter,
     },
-    eth::log_to_raw_log,
+    eth::{get_revert_data, log_to_raw_log},
     types::UserOperation,
 };
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use ethers::{
     abi::{AbiDecode, RawLog},
-    prelude::EthEvent,
+    prelude::{ContractError, EthEvent},
     providers::{Http, Middleware, Provider},
-    types::{Address, Bytes, Filter, Log, TransactionReceipt, H256, U256},
+    types::{
+        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
+        Log, TransactionReceipt, H256, U256,
+    },
 };
 use jsonrpsee::core::{Error as RpcError, RpcResult};
 use jsonrpsee::proc_macros::rpc;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
+use tokio::join;
 use tonic::async_trait;
 
 use self::error::EthRpcError;
@@ -54,13 +59,18 @@ pub trait EthApi {
 }
 
 pub struct EthApi {
-    entry_points: Vec<Address>,
+    entry_points: HashMap<Address, EntryPoint<Provider<Http>>>,
     provider: Arc<Provider<Http>>,
     chain_id: U256,
 }
 
 impl EthApi {
     pub fn new(provider: Arc<Provider<Http>>, entry_points: Vec<Address>, chain_id: U256) -> Self {
+        let entry_points: HashMap<Address, EntryPoint<Provider<Http>>> = entry_points
+            .iter()
+            .map(|&a| (a, EntryPoint::new(a, Arc::clone(&provider))))
+            .collect();
+
         Self {
             entry_points,
             provider,
@@ -70,7 +80,7 @@ impl EthApi {
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
         let filter = Filter::new()
-            .address(self.entry_points.clone())
+            .address::<Vec<Address>>(self.entry_points.iter().map(|ep| *ep.0).collect())
             .topic1(hash);
 
         // we don't do .query().await here because we still need the raw logs for the TX
@@ -176,6 +186,69 @@ impl EthApi {
                 .context("should have parsed revert reason as string")
         })
     }
+
+    async fn get_call_gas_limit(
+        &self,
+        entry_point: &Address,
+        op: &UserOperationOptionalGas,
+    ) -> anyhow::Result<U256> {
+        let entry_point = self
+            .entry_points
+            .get(entry_point)
+            .context("entry point should exist in the map")?;
+
+        let tx = TypedTransaction::Eip1559(Eip1559TransactionRequest {
+            to: Some(op.sender.into()),
+            from: Some(entry_point.address()),
+            data: Some(op.cheap_clone().call_data),
+            ..Default::default()
+        });
+
+        let call_gas_limit = self
+            .provider
+            .estimate_gas(&tx, None)
+            .await
+            .context("should have estimated gas successfully")?;
+
+        Ok(call_gas_limit)
+    }
+
+    async fn get_verification_gas_limit(
+        &self,
+        entry_point: &Address,
+        op: &UserOperationOptionalGas,
+    ) -> anyhow::Result<U256> {
+        let entry_point = self
+            .entry_points
+            .get(entry_point)
+            .context("entry point should exist in the map")?;
+
+        let sim_result = entry_point
+            .simulate_validation(op.cheap_clone().into())
+            .call()
+            .await
+            .err()
+            .context("simulation result should have reverted in entry point")?;
+
+        let ContractError::ProviderError(e) = sim_result else {
+                Err(EthRpcError::Internal(sim_result.into()))?
+            };
+
+        let revert_data: EntryPointErrors = get_revert_data(e)
+            .map(EntryPointErrors::decode_hex)
+            .context("should have received provider error containing revert data")?
+            .context("returned revert data should match entry point error")?;
+
+        let validation_result = match revert_data {
+            EntryPointErrors::ValidationResult(validation_result) => validation_result,
+            EntryPointErrors::FailedOp(op) => {
+                Err(EthRpcError::EntrypointValidationRejected(op.reason))?
+            }
+            _ => Err(anyhow!(revert_data))?,
+        };
+
+        Ok(validation_result.return_info.0)
+    }
 }
 
 #[async_trait]
@@ -185,15 +258,41 @@ impl EthApiServer for EthApi {
         _op: UserOperation,
         _entry_point: Address,
     ) -> RpcResult<H256> {
+        // 1. validate op
+        // 2. get user op hash
+        // 3. send op the mempool
+        // 4. return the op hash or handle RPC errors
         Err(RpcError::HttpNotImplemented)
     }
 
     async fn estimate_user_operation_gas(
         &self,
-        _op: UserOperationOptionalGas,
-        _entry_point: Address,
+        op: UserOperationOptionalGas,
+        entry_point: Address,
     ) -> RpcResult<GasEstimate> {
-        Err(RpcError::HttpNotImplemented)
+        if !self.entry_points.contains_key(&entry_point) {
+            return Err(EthRpcError::InvalidParams(
+                "supplied entry_point addr is not a known entry point".to_string(),
+            ))?;
+        }
+
+        let pre_verification_gas = op.calc_pre_verification_gas();
+        let call_gas_limit = self.get_call_gas_limit(&entry_point, &op);
+        let verification_gas_limit = self.get_verification_gas_limit(&entry_point, &op);
+
+        let (call_gas_limit, verification_gas_limit) =
+            join!(call_gas_limit, verification_gas_limit);
+
+        let call_gas_limit =
+            call_gas_limit.context("should have successfully estimated call gas")?;
+        let verification_gas_limit = verification_gas_limit
+            .context("should have successfully estimated verification gas")?;
+
+        Ok(GasEstimate {
+            call_gas_limit,
+            verification_gas_limit,
+            pre_verification_gas,
+        })
     }
 
     async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>> {
@@ -232,7 +331,7 @@ impl EthApiServer for EthApi {
 
         let to = tx
             .to
-            .filter(|to| self.entry_points.contains(to))
+            .filter(|to| self.entry_points.contains_key(to))
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. parse the tx data using the EntryPoint interface and extract UserOperation[] from it
@@ -300,7 +399,7 @@ impl EthApiServer for EthApi {
 
         let to = tx_receipt
             .to
-            .filter(|to| self.entry_points.contains(to))
+            .filter(|to| self.entry_points.contains_key(to))
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. filter receipt logs to match just those belonging to the user op
@@ -336,7 +435,7 @@ impl EthApiServer for EthApi {
     }
 
     async fn supported_entry_points(&self) -> RpcResult<Vec<Address>> {
-        Ok(self.entry_points.clone())
+        Ok(self.entry_points.keys().copied().collect())
     }
 
     async fn chain_id(&self) -> RpcResult<U256> {
