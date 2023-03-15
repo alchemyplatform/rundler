@@ -108,16 +108,6 @@ pub fn compact_call_data<M, D>(address: Address, call: ContractCall<M, D>) -> By
     bytes.into()
 }
 
-/// Gets an address stored in the first 20 bytes of a `Bytes`. See
-/// `.compact_call_data()`.
-pub fn address_from_compacted_data(call_data: &Bytes) -> Option<Address> {
-    if call_data.len() >= 20 {
-        Some(Address::from_slice(&call_data[..20]))
-    } else {
-        None
-    }
-}
-
 /// Converts an ethers `Log` into an ethabi `RawLog`.
 pub fn log_to_raw_log(log: Log) -> RawLog {
     let Log { topics, data, .. } = log;

@@ -33,9 +33,7 @@ fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
     Ok(Abigen::new(
         contract,
         format!("contracts/out/{contract}.sol/{contract}.json"),
-    )?
-    .add_event_derive("serde::Deserialize")
-    .add_event_derive("serde::Serialize"))
+    )?)
 }
 
 fn generate_abis() -> Result<(), Box<dyn error::Error>> {

@@ -15,11 +15,25 @@ message UserOperation {
   bytes signature = 11;
 }
 
+message MempoolOp {
+  UserOperation uo = 1;
+  bytes aggregator = 2;
+  uint64 valid_after = 3;
+  uint64 valid_until = 4;
+  bytes expected_code_hash = 5;
+  repeated StorageSlot expected_storage_slots = 6;
+}
+
+message StorageSlot {
+  bytes address = 1;
+  bytes slot = 2;
+  bytes value = 3;
+}
+
 service OpPool {
   rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
-  rpc GetReputation (GetReputationRequest) returns (GetReputationResponse);
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
 
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
@@ -35,43 +49,24 @@ message GetSupportedEntryPointsResponse {
 }
 
 message AddOpRequest {
-  UserOperation op = 1;
-  bytes entry_point = 2;
+  bytes entry_point = 1;
+  MempoolOp op = 2;
 }
 message AddOpResponse {
   bytes hash = 1;
 }
 
 message GetOpsRequest {
-  uint64 max_ops = 1;
-  bytes entry_point = 2;
+  bytes entry_point = 1;
+  uint64 max_ops = 2;
 }
 message GetOpsResponse {
-  repeated UserOperation ops = 1;
-}
-
-enum ReputationStatus {
-  OK = 0;
-  THROTTLED = 1;
-  BANNED = 2;
-}
-
-message Reputation {
-  ReputationStatus status = 1;
-  uint64 ops_seen = 2;
-  uint64 ops_included = 3;
-}
-
-message GetReputationRequest {
-  bytes address = 1;
-}
-message GetReputationResponse {
-  Reputation reputation = 1;
+  repeated MempoolOp ops = 1;
 }
 
 message RemoveOpsRequest {
-  bytes entry_point = 2;
-  repeated bytes hashes = 1;
+  bytes entry_point = 1;
+  repeated bytes hashes = 2;
 }
 
 message RemoveOpsResponse {}
@@ -83,13 +78,12 @@ message DebugDumpMempoolRequest {
   bytes entry_point = 1;
 }
 message DebugDumpMempoolResponse {
-  repeated UserOperation ops = 1;
+  repeated MempoolOp ops = 1;
 }
 
 message DebugSetReputationRequest {
   bytes entry_point = 1;
-  bytes address = 2;
-  Reputation reputation = 3;
+  repeated Reputation reputations = 2;
 }
 message DebugSetReputationResponse {}
 
@@ -97,5 +91,18 @@ message DebugDumpReputationRequest {
   bytes entry_point = 1;
 }
 message DebugDumpReputationResponse {
-  map<string, Reputation> reputation = 1;
+  repeated Reputation reputations = 1;
+}
+
+message Reputation {
+  bytes address = 1;
+  ReputationStatus status = 2;
+  uint64 ops_seen = 3;
+  uint64 ops_included = 4;
+}
+
+enum ReputationStatus {
+  OK = 0;
+  THROTTLED = 1;
+  BANNED = 2;
 }

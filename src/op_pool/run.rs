@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
+use anyhow::bail;
 use ethers::types::{Address, U256};
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
-use tokio::try_join;
+use tokio::{
+    sync::{broadcast, mpsc},
+    try_join,
+};
 use tonic::transport::Server;
-
-use crate::common::protos::op_pool::op_pool_server::OpPoolServer;
-use crate::common::protos::op_pool::OP_POOL_FILE_DESCRIPTOR_SET;
-use crate::op_pool::events::EventListener;
-use crate::op_pool::mempool::uo_pool::UoPool;
-use crate::op_pool::server::OpPoolImpl;
+use crate::common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET};
+use crate::op_pool::{
+    events::EventListener,
+    mempool::uo_pool::UoPool,
+    reputation::{HourlyMovingAverageReputation, ReputationParams},
+    server::OpPoolImpl,
+};
 
 pub struct Args {
     pub port: u16,
@@ -31,27 +34,37 @@ pub async fn run(
     tracing::info!("Chain id: {}", args.chain_id);
     tracing::info!("Websocket url: {}", args.ws_url);
 
-    // Mempool
-    let mp = Arc::new(UoPool::new(args.entry_point, args.chain_id));
-
     // Events listener
     let event_listener = match EventListener::connect(args.ws_url, args.entry_point).await {
         Ok(listener) => listener,
         Err(e) => {
             tracing::error!("Failed to connect to events listener: {:?}", e);
-            return Err(anyhow::anyhow!(
-                "Failed to connect to events listener: {:?}",
-                e
-            ));
+            bail!("Failed to connect to events listener: {e:?}")
         }
     };
     tracing::info!("Connected to events listener");
-    // TODO: This is commented out because it doesn't compile.
-    // let callback_mp = Arc::clone(&mp);
-    // event_listener.subscribe(move |new_block| {
-    //     callback_mp.on_new_block(new_block);
-    // });
 
+    // Reputation manager
+    let reputation = Arc::new(HourlyMovingAverageReputation::new(
+        ReputationParams::bundler_default(),
+    ));
+    // Start reputation manager
+    let reputation_runner = Arc::clone(&reputation);
+    tokio::spawn(async move { reputation_runner.run().await });
+
+    // Mempool
+    let mp = Arc::new(UoPool::new(
+        args.entry_point,
+        args.chain_id,
+        Arc::clone(&reputation),
+    ));
+    // Start mempool
+    let mempool_shutdown = shutdown_rx.resubscribe();
+    let mempool_events = event_listener.subscribe();
+    let mp_runner = Arc::clone(&mp);
+    tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
+
+    // Start events listener
     let event_listener_shutdown = shutdown_rx.resubscribe();
     let events_listener_handle = tokio::spawn(async move {
         event_listener
@@ -80,12 +93,12 @@ pub async fn run(
 
     match try_join!(server_handle, events_listener_handle) {
         Ok(_) => {
-            tracing::info!("Op pool server shutdown");
+            tracing::info!("Server shutdown");
             Ok(())
         }
         Err(e) => {
-            tracing::error!("Op pool server error: {:?}", e);
-            Err(anyhow::anyhow!("Op pool server error: {:?}", e))
+            tracing::error!("OP Pool server error: {e:?}");
+            bail!("Server error: {e:?}")
         }
     }
 }

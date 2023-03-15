@@ -187,20 +187,41 @@ struct RpcArgs {
         default_value = "0.0.0.0"
     )]
     host: String,
+
+    #[clap(flatten)]
+    op_pool_args: OpPoolArgs,
+
+    /// Which APIs to expose over the RPC interface
+    #[arg(
+        long = "rpc.api",
+        name = "rpc.api",
+        env = "RPC_API",
+        default_value = "eth,debug"
+    )]
+    api: String,
 }
 
 impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
     pub fn to_args(&self, common: &Common) -> anyhow::Result<rpc::Args> {
+        let apis = self
+            .api
+            .split(',')
+            .map(|api| api.parse())
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(rpc::Args {
             port: self.port,
             host: self.host.clone(),
+            op_pool_host: self.op_pool_args.host.clone(),
+            op_pool_port: self.op_pool_args.port,
             entry_point: common
                 .entry_point
                 .parse()
                 .context("Invalid entry_point argument")?,
             chain_id: common.chain_id.into(),
+            api_namespaces: apis,
         })
     }
 }

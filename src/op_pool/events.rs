@@ -4,9 +4,8 @@ use ethers::{
     providers::{Middleware, Provider, Ws},
     types::{Address, H256, U256, U64},
 };
-use parking_lot::Mutex;
 use std::{sync::Arc, time::Duration};
-use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
 use crate::common::contracts::entry_point::{EntryPoint, EntryPointEvents};
@@ -31,14 +30,10 @@ pub struct EntryPointEvent {
     pub txn_index: U64,
 }
 
-pub trait NewBlockCallback: Fn(&NewBlockEvent) + Send + Sync + 'static {}
-
-impl<T> NewBlockCallback for T where T: Fn(&NewBlockEvent) + Send + Sync + 'static {}
-
 pub struct EventListener {
     provider: Arc<Provider<Ws>>,
     entry_point: EntryPoint<Provider<Ws>>,
-    subscriptions: Mutex<Vec<Box<dyn NewBlockCallback>>>,
+    new_block_broadcast: broadcast::Sender<Arc<NewBlockEvent>>,
 }
 
 impl EventListener {
@@ -52,16 +47,18 @@ impl EventListener {
         Ok(Self {
             provider,
             entry_point,
-            subscriptions: Mutex::new(vec![]),
+            new_block_broadcast: broadcast::channel(1000).0,
         })
     }
 
-    // TODO: Commented to suppress an unused warning. The code using this wouldn't compile.
-    // pub fn subscribe(&self, callback: impl NewBlockCallback) {
-    //     self.subscriptions.lock().push(Box::new(callback));
-    // }
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<NewBlockEvent>> {
+        self.new_block_broadcast.subscribe()
+    }
 
-    pub async fn listen_with_shutdown(&self, mut shutdown_rx: Receiver<()>) -> anyhow::Result<()> {
+    pub async fn listen_with_shutdown(
+        &self,
+        mut shutdown_rx: broadcast::Receiver<()>,
+    ) -> anyhow::Result<()> {
         // TODO(danc): Handle initial reconnects
         let blocks = self.provider.watch_blocks().await?;
         let mut block_stream = blocks.stream();
@@ -122,18 +119,18 @@ impl EventListener {
             })
             .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-        let new_block_event = NewBlockEvent {
+        let new_block_event = Arc::new(NewBlockEvent {
             hash: block_hash,
             number: block_number,
             next_base_fee: block
                 .next_block_base_fee()
                 .context("block should calculate next base fee")?,
             events,
-        };
+        });
 
-        for subscription in self.subscriptions.lock().iter() {
-            subscription(&new_block_event);
-        }
+        self.new_block_broadcast
+            .send(new_block_event)
+            .context("should broadcast new block event")?;
 
         Ok(())
     }

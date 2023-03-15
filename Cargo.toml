@@ -26,7 +26,9 @@ parking_lot = "0.12.1"
 dotenv = "0.15.0"
 thiserror = "1.0.38"
 parse-display = "0.8.0"
+chrono = "0.4.23"
 indexmap = "1.9.2"
+strum = { version = "0.24.1", features = ["derive"] }
 
 [build-dependencies]
 ethers = "1.0.2"
