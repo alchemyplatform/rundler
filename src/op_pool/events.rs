@@ -41,6 +41,7 @@ impl EventListener {
         let provider = Arc::new(
             Provider::<Ws>::connect(ws_url)
                 .await?
+                // TODO: revisit a safe default for production
                 .interval(Duration::from_millis(100)),
         );
         let entry_point = EntryPoint::new(entry_point, provider.clone());
