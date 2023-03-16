@@ -7,7 +7,7 @@ declare function toWord(s: string | Bytes): Bytes;
 
 interface Output {
   phases: Phase[];
-  revertData: string;
+  revertData: string | null;
   accessedContractAddresses: string[];
   associatedSlotsByAddress: Record<string, string[]>;
   factoryCalledCreate2Twice: boolean;
@@ -72,7 +72,7 @@ type InternalPhase = Omit<
   const EXT_OPCODES = new Set(["EXTCODECOPY", "EXTCODEHASH", "EXTCODELENGTH"]);
 
   const phases: Phase[] = [];
-  let revertData = "";
+  let revertData: string | null = null;
   const accessedContractAddresses = new Set<string>();
   const associatedSlotsByAddressMap = new Map<string, Set<string>>();
   let factoryCreate2Count = 0;
@@ -165,6 +165,9 @@ type InternalPhase = Omit<
         currentPhase.ranOutOfGas = true;
       }
       if (pendingKeccakAddress) {
+        // We just computed what may be an associated address keccak(addr || X),
+        // so the result is now on top of the stack. See the comment in the
+        // handling of the KECCAK256 opcode below for details.
         const keccakResult = toHex(toWord(log.stack.peek(0).toString(16)));
         computeIfAbsent(
           associatedSlotsByAddressMap,
@@ -200,15 +203,18 @@ type InternalPhase = Omit<
           currentPhase.forbiddenOpcodesUsed.add(opcode);
         }
       } else if (opcode === "KECCAK256") {
+        //
         const offset = bigIntToNumber(log.stack.peek(0));
         const length = bigIntToNumber(log.stack.peek(1));
         if (length >= 32) {
-          pendingKeccakAddress = toHex(
-            log.memory.slice(offset + 12, offset + 32)
-          );
+          const keccakInputWord = toHex(log.memory.slice(offset, offset + 32));
+          if (keccakInputWord.startsWith("0x000000000000000000000000")) {
+            // The word starts with 24 zeroes = 12 zero bytes, so the remaining
+            // 20 bytes may represent an address.
+            pendingKeccakAddress = "0x" + pendingKeccakAddress.slice(26);
+          }
         }
-      }
-      if (opcode === "SLOAD" || opcode === "SSTORE") {
+      } else if (opcode === "SLOAD" || opcode === "SSTORE") {
         const address = log.contract.getAddress();
         const addressHex = toHex(address);
         const slot = toWord(log.stack.peek(0).toString(16));

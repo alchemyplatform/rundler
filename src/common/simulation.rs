@@ -1,12 +1,11 @@
 use crate::common::contracts::entry_point::{EntryPoint, FailedOp, ValidationResult};
 use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
-use crate::common::types::{EntryPointOutput, StakeInfo, UserOperation};
+use crate::common::types::{EntryPointOutput, ExpectedStorageSlot, StakeInfo, UserOperation};
 use crate::common::{eth, tracer};
 use ethers::abi::AbiDecode;
-use ethers::providers::{Http, Middleware, Provider};
-use ethers::types::{Address, BlockId, BlockNumber, OpCode, U256};
+use ethers::providers::{Http, Provider};
+use ethers::types::{Address, BlockId, BlockNumber, H256, OpCode, U256};
 use indexmap::IndexSet;
-use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
@@ -17,15 +16,16 @@ const MIN_UNSTAKE_DELAY: u32 = 84600;
 
 #[derive(Clone, Debug)]
 pub struct SimulationSuccess {
+    pub pre_op_gas: U256,
     pub signature_failed: bool,
     pub valid_after: u64,
     pub valid_until: u64,
-    pub code_hash: [u8; 32],
-    pub storage_accesses_with_expected_values: HashMap<StorageSlot, Option<U256>>,
+    pub code_hash: H256,
+    pub expected_storage_slots: Vec<ExpectedStorageSlot>
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-pub struct StorageSlot {
+struct StorageSlot {
     pub address: Address,
     pub slot: U256,
 }
@@ -36,7 +36,7 @@ pub trait Simulator {
         &self,
         op: UserOperation,
         block_id: Option<BlockId>,
-        expected_code_hash: Option<[u8; 32]>,
+        expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError>;
 }
 
@@ -60,6 +60,56 @@ impl SimulatorImpl {
             min_stake_value,
         }
     }
+
+    async fn create_context(
+        &self,
+        op: UserOperation,
+        block_id: BlockId,
+    ) -> Result<ValidationContext, SimulationError> {
+        let factory_address = op.factory();
+        let sender_address = op.sender;
+        let paymaster_address = op.paymaster();
+        let is_wallet_creation = !op.init_code.is_empty();
+        let tracer_out = tracer::trace_op_validation(&self.entry_point, op, block_id).await?;
+        let num_phases = tracer_out.phases.len() as u32;
+        // Check if there are too many phases here, then check too few at the
+        // end. We are detecting cases where the entry point is broken. Too many
+        // phases definitely means it's broken, but too few phases could still
+        // mean the entry point is fine if one of the phases fails and it
+        // doesn't reach the end of execution.
+        if num_phases > 3 {
+            Err(Violation::WrongNumberOfPhases(num_phases))?
+        }
+        let Some(ref revert_data) = tracer_out.revert_data else {
+            Err(Violation::DidNotRevert)?
+        };
+        if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
+            Err(Violation::UnintendedRevertWithMessage(failed_op.reason))?
+        }
+        let entry_point_out = match ValidationResult::decode_hex(revert_data) {
+            Ok(out) => EntryPointOutput::from(out),
+            Err(_) => {
+                let last_entity = Entity::from_index(tracer_out.phases.len()).unwrap();
+                Err(Violation::UnintendedRevert(last_entity))?
+            }
+        };
+        let entity_infos = EntityInfos::new(
+            factory_address,
+            sender_address,
+            paymaster_address,
+            &entry_point_out,
+            self.min_stake_value,
+        );
+        if num_phases < 3 {
+            Err(Violation::WrongNumberOfPhases(num_phases))?
+        };
+        Ok(ValidationContext {
+            entity_infos,
+            tracer_out,
+            entry_point_out,
+            is_wallet_creation,
+        })
+    }
 }
 
 #[async_trait]
@@ -68,18 +118,16 @@ impl Simulator for SimulatorImpl {
         &self,
         op: UserOperation,
         block_id: Option<BlockId>,
-        expected_code_hash: Option<[u8; 32]>,
+        expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError> {
         let block_id = eth::get_static_block_id(
             &self.provider,
             block_id.unwrap_or(BlockNumber::Latest.into()),
         )
         .await?;
-        let context = match ValidationContext::new_for_op(
-            &self.entry_point,
+        let context = match self.create_context(
             op,
             block_id,
-            self.min_stake_value,
         )
         .await
         {
@@ -94,7 +142,7 @@ impl Simulator for SimulatorImpl {
         } = context;
         let sender_address = entity_infos.sender_address();
         let mut violations: Vec<Violation> = vec![];
-        let mut storage_accesses_with_expected_values = HashMap::new();
+        let mut expected_storage_slots = vec![];
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let entity = Entity::from_index(index).unwrap();
             let entity_info = match entity_infos.get(entity) {
@@ -116,8 +164,9 @@ impl Simulator for SimulatorImpl {
                     initial_value,
                 } in accesses
                 {
-                    storage_accesses_with_expected_values
-                        .insert(StorageSlot { address, slot }, initial_value);
+                    if let Some(initial_value) = initial_value {
+                        expected_storage_slots.push(ExpectedStorageSlot { address, slot, value: initial_value });
+                    }
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         is_wallet_creation,
@@ -173,11 +222,12 @@ impl Simulator for SimulatorImpl {
             Err(violations)?
         }
         Ok(SimulationSuccess {
+            pre_op_gas: entry_point_out.return_info.pre_op_gas,
             signature_failed: entry_point_out.return_info.sig_failed,
             valid_after: entry_point_out.return_info.valid_after,
             valid_until: entry_point_out.return_info.valid_until,
             code_hash,
-            storage_accesses_with_expected_values,
+            expected_storage_slots,
         })
     }
 }
@@ -294,51 +344,6 @@ struct ValidationContext {
     tracer_out: TracerOutput,
     entry_point_out: EntryPointOutput,
     is_wallet_creation: bool,
-}
-
-impl ValidationContext {
-    async fn new_for_op(
-        entry_point: &EntryPoint<impl Middleware>,
-        op: UserOperation,
-        block_id: BlockId,
-        min_stake_value: U256,
-    ) -> Result<Self, SimulationError> {
-        let factory_address = op.factory();
-        let sender_address = op.sender;
-        let paymaster_address = op.paymaster();
-        let is_wallet_creation = !op.init_code.is_empty();
-        let tracer_out = tracer::trace_op_validation(entry_point, op, block_id).await?;
-        let num_phases = tracer_out.phases.len() as u32;
-        if num_phases > 3 {
-            Err(Violation::WrongNumberOfPhases(num_phases))?
-        }
-        if let Ok(failed_op) = FailedOp::decode_hex(&tracer_out.revert_data) {
-            Err(Violation::UnintendedRevertWithMessage(failed_op.reason))?
-        }
-        let entry_point_out = match ValidationResult::decode_hex(&tracer_out.revert_data) {
-            Ok(out) => EntryPointOutput::from(out),
-            Err(_) => {
-                let last_entity = Entity::from_index(tracer_out.phases.len()).unwrap();
-                Err(Violation::UnintendedRevert(last_entity))?
-            }
-        };
-        let entity_infos = EntityInfos::new(
-            factory_address,
-            sender_address,
-            paymaster_address,
-            &entry_point_out,
-            min_stake_value,
-        );
-        if num_phases < 3 {
-            Err(Violation::WrongNumberOfPhases(num_phases))?
-        };
-        Ok(Self {
-            entity_infos,
-            tracer_out,
-            entry_point_out,
-            is_wallet_creation,
-        })
-    }
 }
 
 #[derive(Clone, Copy, Debug)]

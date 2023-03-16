@@ -13,7 +13,7 @@ use std::fmt::Debug;
 #[serde(rename_all = "camelCase")]
 pub struct TracerOutput {
     pub phases: Vec<Phase>,
-    pub revert_data: String,
+    pub revert_data: Option<String>,
     pub accessed_contract_addresses: Vec<Address>,
     pub associated_slots_by_address: AssociatedSlotsByAddress,
     pub factory_called_create2_twice: bool,

@@ -181,13 +181,13 @@ pub async fn get_code_hash(
     provider: &Provider<Http>,
     mut addresses: Vec<Address>,
     block_id: Option<BlockId>,
-) -> Result<[u8; 32], anyhow::Error> {
+) -> Result<H256, anyhow::Error> {
     addresses.sort();
     let out: CodeHashesResult =
         call_constructor(provider, &GETCODEHASHES_BYTECODE, addresses, block_id)
             .await
             .context("should compute code hashes")?;
-    Ok(out.hash)
+    Ok(H256(out.hash))
 }
 
 async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(

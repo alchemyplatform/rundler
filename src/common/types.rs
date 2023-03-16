@@ -1,6 +1,5 @@
 use crate::common::contracts::entry_point::ValidationResult;
 pub use crate::common::contracts::shared_types::UserOperation;
-use crate::common::eth;
 use ethers::{
     abi::{encode, AbiEncode, Token},
     types::{Address, Bytes, H256, U256},
@@ -78,6 +77,13 @@ impl UserOperation {
         packed.truncate(packed.len() - 32);
         packed.into()
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct ExpectedStorageSlot {
+    pub address: Address,
+    pub slot: U256,
+    pub value: U256,
 }
 
 /// Equivalent to the generated `ValidationResult` from `EntryPoint`, but with
