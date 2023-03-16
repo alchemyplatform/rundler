@@ -1,5 +1,5 @@
 mod timestamp;
-pub use timestamp::*;
+mod validation_results;
 
 pub use crate::common::contracts::shared_types::UserOperation;
 use ethers::{
@@ -7,6 +7,8 @@ use ethers::{
     types::{Address, Bytes, H256, U256},
     utils::keccak256,
 };
+pub use timestamp::*;
+pub use validation_results::*;
 
 /// Unique identifier for a user operation from a given sender
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]

@@ -1,7 +1,8 @@
 use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
 use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
-use crate::common::types::{ExpectedStorageSlot, UserOperation};
-use crate::common::validation_results::{EntryPointOutput, StakeInfo};
+use crate::common::types::{
+    ExpectedStorageSlot, StakeInfo, Timestamp, UserOperation, ValidationOutput,
+};
 use crate::common::{eth, tracer};
 use ethers::abi::AbiDecode;
 use ethers::providers::{Http, Provider};
@@ -19,8 +20,8 @@ const MIN_UNSTAKE_DELAY: u32 = 84600;
 pub struct SimulationSuccess {
     pub pre_op_gas: U256,
     pub signature_failed: bool,
-    pub valid_after: u64,
-    pub valid_until: u64,
+    pub valid_after: Timestamp,
+    pub valid_until: Timestamp,
     pub aggregator_address: Option<Address>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
@@ -96,7 +97,7 @@ impl SimulatorImpl {
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
             Err(Violation::UnintendedRevertWithMessage(failed_op.reason))?
         }
-        let Ok(entry_point_out) = EntryPointOutput::decode_hex(revert_data) else {
+        let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
             let last_entity = Entity::from_index(tracer_out.phases.len()).unwrap();
             Err(Violation::UnintendedRevert(last_entity))?
         };
@@ -346,7 +347,7 @@ impl Display for Entity {
 struct ValidationContext {
     entity_infos: EntityInfos,
     tracer_out: TracerOutput,
-    entry_point_out: EntryPointOutput,
+    entry_point_out: ValidationOutput,
     is_wallet_creation: bool,
 }
 
@@ -368,7 +369,7 @@ impl EntityInfos {
         factory_address: Option<Address>,
         sender_address: Address,
         paymaster_address: Option<Address>,
-        entry_point_out: &EntryPointOutput,
+        entry_point_out: &ValidationOutput,
         min_stake_value: U256,
     ) -> Self {
         let factory = factory_address.map(|address| EntityInfo {

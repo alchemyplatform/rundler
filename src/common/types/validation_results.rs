@@ -1,4 +1,5 @@
 use crate::common::contracts::entry_point::{ValidationResult, ValidationResultWithAggregation};
+use crate::common::types::Timestamp;
 use ethers::abi;
 use ethers::abi::{AbiDecode, AbiError};
 use ethers::types::{Address, Bytes, U256};
@@ -7,15 +8,15 @@ use ethers::types::{Address, Bytes, U256};
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs
 /// instead of tuples and with a helper for deserializing.
 #[derive(Debug)]
-pub struct EntryPointOutput {
-    pub return_info: EntryPointReturnInfo,
+pub struct ValidationOutput {
+    pub return_info: ValidationReturnInfo,
     pub sender_info: StakeInfo,
     pub factory_info: StakeInfo,
     pub paymaster_info: StakeInfo,
     pub aggregator_info: Option<AggregatorInfo>,
 }
 
-impl AbiDecode for EntryPointOutput {
+impl AbiDecode for ValidationOutput {
     fn decode(bytes: impl AsRef<[u8]>) -> Result<Self, AbiError> {
         if let Ok(result) = ValidationResult::decode(bytes.as_ref()) {
             return Ok(result.into());
@@ -27,7 +28,7 @@ impl AbiDecode for EntryPointOutput {
     }
 }
 
-impl From<ValidationResult> for EntryPointOutput {
+impl From<ValidationResult> for ValidationOutput {
     fn from(value: ValidationResult) -> Self {
         let ValidationResult {
             return_info,
@@ -45,7 +46,7 @@ impl From<ValidationResult> for EntryPointOutput {
     }
 }
 
-impl From<ValidationResultWithAggregation> for EntryPointOutput {
+impl From<ValidationResultWithAggregation> for ValidationOutput {
     fn from(value: ValidationResultWithAggregation) -> Self {
         let ValidationResultWithAggregation {
             return_info,
@@ -65,24 +66,24 @@ impl From<ValidationResultWithAggregation> for EntryPointOutput {
 }
 
 #[derive(Debug)]
-pub struct EntryPointReturnInfo {
+pub struct ValidationReturnInfo {
     pub pre_op_gas: U256,
     pub prefund: U256,
     pub sig_failed: bool,
-    pub valid_after: u64,
-    pub valid_until: u64,
+    pub valid_after: Timestamp,
+    pub valid_until: Timestamp,
     pub paymaster_context: Bytes,
 }
 
-impl From<(U256, U256, bool, u64, u64, Bytes)> for EntryPointReturnInfo {
+impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
     fn from(value: (U256, U256, bool, u64, u64, Bytes)) -> Self {
         let (pre_op_gas, prefund, sig_failed, valid_after, valid_until, paymaster_context) = value;
         Self {
             pre_op_gas,
             prefund,
             sig_failed,
-            valid_after,
-            valid_until,
+            valid_after: valid_after.into(),
+            valid_until: valid_until.into(),
             paymaster_context,
         }
     }
