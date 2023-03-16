@@ -21,7 +21,15 @@ pub struct SimulationSuccess {
     pub valid_after: u64,
     pub valid_until: u64,
     pub code_hash: H256,
+    pub entities_needing_stake: Vec<Entity>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Entity {
+    Factory = 0,
+    Account = 1,
+    Paymaster = 2,
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
@@ -137,6 +145,7 @@ impl Simulator for SimulatorImpl {
         } = context;
         let sender_address = entity_infos.sender_address();
         let mut violations: Vec<Violation> = vec![];
+        let mut entities_needing_stake = vec![];
         let mut expected_storage_slots = vec![];
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let entity = Entity::from_index(index).unwrap();
@@ -183,8 +192,11 @@ impl Simulator for SimulatorImpl {
                     }
                 }
             }
-            if needs_stake && !entity_info.is_staked {
-                violations.push(Violation::NotStaked(entity));
+            if needs_stake {
+                entities_needing_stake.push(entity);
+                if !entity_info.is_staked {
+                    violations.push(Violation::NotStaked(entity));
+                }
             }
             for address in banned_addresses_accessed {
                 violations.push(Violation::InvalidStorageAccess(entity, address));
@@ -225,6 +237,7 @@ impl Simulator for SimulatorImpl {
             valid_after: entry_point_out.return_info.valid_after,
             valid_until: entry_point_out.return_info.valid_until,
             code_hash,
+            entities_needing_stake,
             expected_storage_slots,
         })
     }
@@ -302,13 +315,6 @@ pub enum Violation {
     CodeHashChanged,
     #[display("factory may only call CREATE2 once during initialization")]
     FactoryCalledCreate2Twice,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Entity {
-    Factory = 0,
-    Account = 1,
-    Paymaster = 2,
 }
 
 impl Entity {
