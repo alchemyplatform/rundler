@@ -53,13 +53,11 @@ impl AssociatedSlotsByAddress {
         if slot == address.as_bytes().into() {
             return true;
         }
-        let associated_slots = match self.0.get(&address) {
-            Some(slots) => slots,
-            None => return false,
+        let Some(associated_slots) = self.0.get(&address) else {
+            return false;
         };
-        let &next_smallest_slot = match associated_slots.range(..(slot + 1)).next_back() {
-            Some(slot) => slot,
-            None => return false,
+        let Some(&next_smallest_slot) = associated_slots.range(..(slot + 1)).next_back() else {
+            return false;
         };
         slot - next_smallest_slot < 128.into()
     }

@@ -214,13 +214,11 @@ async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(
 /// Extracts the revert reason as a hex string if this is a revert error,
 /// otherwise returns the original error.
 pub fn get_revert_data(mut error: ProviderError) -> Result<String, ProviderError> {
-    let dyn_error = match &mut error {
-        ProviderError::JsonRpcClientError(e) => e,
-        _ => return Err(error),
+    let ProviderError::JsonRpcClientError(dyn_error) = &mut error else {
+        return Err(error);
     };
-    let jsonrpc_error = match dyn_error.downcast_mut::<HttpClientError>() {
-        Some(HttpClientError::JsonRpcError(e)) => e,
-        _ => return Err(error),
+    let Some(HttpClientError::JsonRpcError(jsonrpc_error)) = dyn_error.downcast_mut::<HttpClientError>() else {
+        return Err(error)
     };
     match &mut jsonrpc_error.data {
         Some(Value::String(s)) => Ok(mem::take(s)),

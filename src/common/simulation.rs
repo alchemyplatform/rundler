@@ -4,7 +4,7 @@ use crate::common::types::{EntryPointOutput, ExpectedStorageSlot, StakeInfo, Use
 use crate::common::{eth, tracer};
 use ethers::abi::AbiDecode;
 use ethers::providers::{Http, Provider};
-use ethers::types::{Address, BlockId, BlockNumber, H256, OpCode, U256};
+use ethers::types::{Address, BlockId, BlockNumber, OpCode, H256, U256};
 use indexmap::IndexSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::mem;
@@ -21,7 +21,7 @@ pub struct SimulationSuccess {
     pub valid_after: u64,
     pub valid_until: u64,
     pub code_hash: H256,
-    pub expected_storage_slots: Vec<ExpectedStorageSlot>
+    pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
@@ -125,12 +125,7 @@ impl Simulator for SimulatorImpl {
             block_id.unwrap_or(BlockNumber::Latest.into()),
         )
         .await?;
-        let context = match self.create_context(
-            op,
-            block_id,
-        )
-        .await
-        {
+        let context = match self.create_context(op, block_id).await {
             Ok(context) => context,
             error @ Err(_) => error?,
         };
@@ -145,9 +140,8 @@ impl Simulator for SimulatorImpl {
         let mut expected_storage_slots = vec![];
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let entity = Entity::from_index(index).unwrap();
-            let entity_info = match entity_infos.get(entity) {
-                Some(info) => info,
-                None => continue,
+            let Some(entity_info) = entity_infos.get(entity) else {
+                continue;
             };
             for opcode in &phase.forbidden_opcodes_used {
                 violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
@@ -165,7 +159,11 @@ impl Simulator for SimulatorImpl {
                 } in accesses
                 {
                     if let Some(initial_value) = initial_value {
-                        expected_storage_slots.push(ExpectedStorageSlot { address, slot, value: initial_value });
+                        expected_storage_slots.push(ExpectedStorageSlot {
+                            address,
+                            slot,
+                            value: initial_value,
+                        });
                     }
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,

@@ -1,12 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::bail;
-use ethers::types::{Address, U256};
-use tokio::{
-    sync::{broadcast, mpsc},
-    try_join,
-};
-use tonic::transport::Server;
 use crate::common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET};
 use crate::op_pool::{
     events::EventListener,
@@ -14,6 +7,13 @@ use crate::op_pool::{
     reputation::{HourlyMovingAverageReputation, ReputationParams},
     server::OpPoolImpl,
 };
+use anyhow::bail;
+use ethers::types::{Address, U256};
+use tokio::{
+    sync::{broadcast, mpsc},
+    try_join,
+};
+use tonic::transport::Server;
 
 pub struct Args {
     pub port: u16,
