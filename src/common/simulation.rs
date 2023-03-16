@@ -1,6 +1,7 @@
-use crate::common::contracts::entry_point::{EntryPoint, FailedOp, ValidationResult};
+use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
 use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
-use crate::common::types::{EntryPointOutput, ExpectedStorageSlot, StakeInfo, UserOperation};
+use crate::common::types::{ExpectedStorageSlot, UserOperation};
+use crate::common::validation_results::{EntryPointOutput, StakeInfo};
 use crate::common::{eth, tracer};
 use ethers::abi::AbiDecode;
 use ethers::providers::{Http, Provider};
@@ -20,19 +21,20 @@ pub struct SimulationSuccess {
     pub signature_failed: bool,
     pub valid_after: u64,
     pub valid_until: u64,
+    pub aggregator_address: Option<Address>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Entity {
     Factory = 0,
     Account = 1,
     Paymaster = 2,
 }
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct StorageSlot {
     pub address: Address,
     pub slot: U256,
@@ -94,12 +96,9 @@ impl SimulatorImpl {
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
             Err(Violation::UnintendedRevertWithMessage(failed_op.reason))?
         }
-        let entry_point_out = match ValidationResult::decode_hex(revert_data) {
-            Ok(out) => EntryPointOutput::from(out),
-            Err(_) => {
-                let last_entity = Entity::from_index(tracer_out.phases.len()).unwrap();
-                Err(Violation::UnintendedRevert(last_entity))?
-            }
+        let Ok(entry_point_out) = EntryPointOutput::decode_hex(revert_data) else {
+            let last_entity = Entity::from_index(tracer_out.phases.len()).unwrap();
+            Err(Violation::UnintendedRevert(last_entity))?
         };
         let entity_infos = EntityInfos::new(
             factory_address,
@@ -236,6 +235,7 @@ impl Simulator for SimulatorImpl {
             signature_failed: entry_point_out.return_info.sig_failed,
             valid_after: entry_point_out.return_info.valid_after,
             valid_until: entry_point_out.return_info.valid_until,
+            aggregator_address: entry_point_out.aggregator_info.map(|info| info.address),
             code_hash,
             entities_needing_stake,
             expected_storage_slots,
@@ -407,14 +407,14 @@ fn is_staked(info: StakeInfo, min_stake_value: U256) -> bool {
     info.stake > min_stake_value && info.unstake_delay_sec > MIN_UNSTAKE_DELAY.into()
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StorageRestriction {
     Allowed,
     NeedsStake,
     Banned,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
     is_wallet_creation: bool,

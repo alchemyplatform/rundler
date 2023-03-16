@@ -38,7 +38,7 @@ pub struct StorageAccess {
     pub accesses: Vec<SlotAccess>,
 }
 
-#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlotAccess {
     pub slot: U256,

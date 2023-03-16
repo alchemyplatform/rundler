@@ -5,3 +5,4 @@ pub mod server;
 pub mod simulation;
 pub mod tracer;
 pub mod types;
+pub mod validation_results;
