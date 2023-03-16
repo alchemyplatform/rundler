@@ -68,7 +68,6 @@ message RemoveOpsRequest {
   bytes entry_point = 1;
   repeated bytes hashes = 2;
 }
-
 message RemoveOpsResponse {}
 
 message DebugClearStateRequest {}
@@ -105,4 +104,15 @@ enum ReputationStatus {
   OK = 0;
   THROTTLED = 1;
   BANNED = 2;
+}
+
+message ErrorInfo {
+  string reason = 1;
+  map<string, string> metadata = 2;
+}
+
+enum ErrorReason {
+  UNSPECIFIED = 0;
+  ENTITY_THROTTLED = 1;
+  OPERATION_REJECTED = 2;
 }
