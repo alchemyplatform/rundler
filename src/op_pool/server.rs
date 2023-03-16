@@ -1,18 +1,21 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::mempool::error::MempoolError;
 use super::mempool::{Mempool, OperationOrigin};
 use super::metrics::OpPoolMetrics;
 use crate::common::protos::op_pool::op_pool_server::OpPool;
 use crate::common::protos::op_pool::{
     AddOpRequest, AddOpResponse, DebugClearStateRequest, DebugClearStateResponse,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
-    DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
-    GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
+    DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse, ErrorInfo,
+    ErrorReason, GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest,
+    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
 };
 use crate::common::protos::ProtoBytes;
 use ethers::types::{Address, H256, U256};
-use tonic::{async_trait, Request, Response};
+use prost::Message;
+use tonic::{async_trait, Code, Request, Response, Result, Status};
 
 pub struct OpPoolImpl<M: Mempool> {
     chain_id: U256,
@@ -32,12 +35,12 @@ where
         }
     }
 
-    fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> tonic::Result<()> {
+    fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> Result<()> {
         let req_ep: Address = ProtoBytes(req_entry_point)
             .try_into()
-            .map_err(|e| tonic::Status::invalid_argument(format!("Invalid entry point: {e}")))?;
+            .map_err(|e| Status::invalid_argument(format!("Invalid entry point: {e}")))?;
         if req_ep != pool_entry_point {
-            return Err(tonic::Status::invalid_argument(format!(
+            return Err(Status::invalid_argument(format!(
                 "Invalid entry point: {req_ep:?}, expected {pool_entry_point:?}"
             )));
         }
@@ -54,8 +57,9 @@ where
     async fn get_supported_entry_points(
         &self,
         _request: Request<GetSupportedEntryPointsRequest>,
-    ) -> tonic::Result<Response<GetSupportedEntryPointsResponse>> {
+    ) -> Result<Response<GetSupportedEntryPointsResponse>> {
         self.metrics.request_counter.increment(1);
+
         let mempool_ep = self.mempool.entry_point();
         let cid: [u8; 32] = self.chain_id.into();
         Ok(Response::new(GetSupportedEntryPointsResponse {
@@ -64,39 +68,30 @@ where
         }))
     }
 
-    async fn add_op(
-        &self,
-        request: Request<AddOpRequest>,
-    ) -> tonic::Result<Response<AddOpResponse>> {
+    async fn add_op(&self, request: Request<AddOpRequest>) -> Result<Response<AddOpResponse>> {
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
-        let proto_op = req.op.ok_or_else(|| {
-            tonic::Status::invalid_argument("Operation is required in AddOpRequest")
-        })?;
+        let proto_op = req
+            .op
+            .ok_or_else(|| Status::invalid_argument("Operation is required in AddOpRequest"))?;
 
-        let pool_op = proto_op.try_into().map_err(|e| {
-            tonic::Status::invalid_argument(format!("Failed to parse operation: {e}"))
-        })?;
+        let pool_op = proto_op
+            .try_into()
+            .map_err(|e| Status::invalid_argument(format!("Failed to parse operation: {e}")))?;
 
         let hash = self
             .mempool
-            .add_operation(OperationOrigin::Local, pool_op)
-            .map_err(|e| {
-                tonic::Status::internal(format!("Failed to add operation to mempool: {e}"))
-            })?;
+            .add_operation(OperationOrigin::Local, pool_op)?;
 
         Ok(Response::new(AddOpResponse {
             hash: hash.as_bytes().to_vec(),
         }))
     }
 
-    async fn get_ops(
-        &self,
-        request: Request<GetOpsRequest>,
-    ) -> tonic::Result<Response<GetOpsResponse>> {
+    async fn get_ops(&self, request: Request<GetOpsRequest>) -> Result<Response<GetOpsResponse>> {
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
@@ -108,9 +103,7 @@ where
             .iter()
             .map(|op| MempoolOp::try_from(&(**op)))
             .collect::<Result<Vec<MempoolOp>, _>>()
-            .map_err(|e| {
-                tonic::Status::internal(format!("Failed to convert to proto mempool op: {e}"))
-            })?;
+            .map_err(|e| Status::internal(format!("Failed to convert to proto mempool op: {e}")))?;
 
         Ok(Response::new(GetOpsResponse { ops }))
     }
@@ -118,7 +111,7 @@ where
     async fn remove_ops(
         &self,
         request: Request<RemoveOpsRequest>,
-    ) -> tonic::Result<Response<RemoveOpsResponse>> {
+    ) -> Result<Response<RemoveOpsResponse>> {
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
@@ -129,9 +122,7 @@ where
             .into_iter()
             .map(|h| {
                 if h.len() != 32 {
-                    return Err(tonic::Status::invalid_argument(
-                        "Hash must be 32 bytes long",
-                    ));
+                    return Err(Status::invalid_argument("Hash must be 32 bytes long"));
                 }
                 Ok(H256::from_slice(&h))
             })
@@ -145,7 +136,7 @@ where
     async fn debug_clear_state(
         &self,
         _request: Request<DebugClearStateRequest>,
-    ) -> tonic::Result<Response<DebugClearStateResponse>> {
+    ) -> Result<Response<DebugClearStateResponse>> {
         self.metrics.request_counter.increment(1);
         self.mempool.clear();
         Ok(Response::new(DebugClearStateResponse {}))
@@ -154,7 +145,7 @@ where
     async fn debug_dump_mempool(
         &self,
         request: Request<DebugDumpMempoolRequest>,
-    ) -> tonic::Result<Response<DebugDumpMempoolResponse>> {
+    ) -> Result<Response<DebugDumpMempoolResponse>> {
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
@@ -166,9 +157,7 @@ where
             .iter()
             .map(|op| MempoolOp::try_from(&(**op)))
             .collect::<Result<Vec<MempoolOp>, _>>()
-            .map_err(|e| {
-                tonic::Status::internal(format!("Failed to convert to proto mempool op: {e}"))
-            })?;
+            .map_err(|e| Status::internal(format!("Failed to convert to proto mempool op: {e}")))?;
 
         Ok(Response::new(DebugDumpMempoolResponse { ops }))
     }
@@ -176,14 +165,14 @@ where
     async fn debug_set_reputation(
         &self,
         request: Request<DebugSetReputationRequest>,
-    ) -> tonic::Result<Response<DebugSetReputationResponse>> {
+    ) -> Result<Response<DebugSetReputationResponse>> {
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
         Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
 
         let reps = if req.reputations.is_empty() {
-            return Err(tonic::Status::invalid_argument(
+            return Err(Status::invalid_argument(
                 "Reputation is required in DebugSetReputationRequest",
             ));
         } else {
@@ -193,7 +182,7 @@ where
         for rep in reps {
             let addr = ProtoBytes(&rep.address)
                 .try_into()
-                .map_err(|e| tonic::Status::invalid_argument(format!("Invalid address: {e}")))?;
+                .map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))?;
 
             self.mempool
                 .set_reputation(addr, rep.ops_seen, rep.ops_included);
@@ -205,7 +194,7 @@ where
     async fn debug_dump_reputation(
         &self,
         request: Request<DebugDumpReputationRequest>,
-    ) -> tonic::Result<Response<DebugDumpReputationResponse>> {
+    ) -> Result<Response<DebugDumpReputationResponse>> {
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
@@ -215,6 +204,39 @@ where
         Ok(Response::new(DebugDumpReputationResponse {
             reputations: reps,
         }))
+    }
+}
+
+impl From<MempoolError> for Status {
+    fn from(e: MempoolError) -> Self {
+        let ei = match &e {
+            MempoolError::EntityThrottled(et, addr) => ErrorInfo {
+                reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
+                metadata: HashMap::from([(et.to_string(), addr.to_string())]),
+            },
+            MempoolError::MaxOperationsReached(_, _)
+            | MempoolError::ReplacementUnderpriced(_, _) => ErrorInfo {
+                reason: ErrorReason::OperationRejected.as_str_name().to_string(),
+                metadata: HashMap::new(),
+            },
+        };
+
+        let msg = e.to_string();
+        let details = tonic_types::Status {
+            // code and message are not used by the client
+            code: 0,
+            message: "".into(),
+            details: vec![prost_types::Any {
+                type_url: "type.alchemy.com/op_pool.ErrorInfo".to_string(),
+                value: ei.encode_to_vec(),
+            }],
+        };
+
+        Status::with_details(
+            Code::FailedPrecondition,
+            msg,
+            details.encode_to_vec().into(),
+        )
     }
 }
 
@@ -230,6 +252,7 @@ mod tests {
 
     use crate::common::protos::op_pool::{self, Reputation};
     use crate::op_pool::events::NewBlockEvent;
+    use crate::op_pool::mempool::error::MempoolResult;
     use crate::op_pool::mempool::PoolOperation;
 
     #[test]
@@ -251,7 +274,7 @@ mod tests {
 
         assert!(result.is_err());
         let result = result.unwrap_err();
-        assert_eq!(result.code(), tonic::Code::InvalidArgument);
+        assert_eq!(result.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
@@ -266,7 +289,7 @@ mod tests {
 
         assert!(result.is_err());
         let result = result.unwrap_err();
-        assert_eq!(result.code(), tonic::Code::InvalidArgument);
+        assert_eq!(result.code(), Code::InvalidArgument);
     }
 
     #[tokio::test]
@@ -281,7 +304,7 @@ mod tests {
 
         assert!(result.is_err());
         let result = result.unwrap_err();
-        assert_eq!(result.code(), tonic::Code::InvalidArgument);
+        assert_eq!(result.code(), Code::InvalidArgument);
     }
 
     fn given_oppool() -> OpPoolImpl<MockMempool> {
@@ -311,7 +334,7 @@ mod tests {
             &self,
             _origin: OperationOrigin,
             _opp: PoolOperation,
-        ) -> anyhow::Result<H256> {
+        ) -> MempoolResult<H256> {
             Ok(H256::zero())
         }
 
@@ -319,7 +342,7 @@ mod tests {
             &self,
             _origin: OperationOrigin,
             _operations: impl IntoIterator<Item = PoolOperation>,
-        ) -> Vec<anyhow::Result<H256>> {
+        ) -> Vec<MempoolResult<H256>> {
             vec![]
         }
 

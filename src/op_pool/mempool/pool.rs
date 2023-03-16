@@ -9,7 +9,10 @@ use std::{
     sync::Arc,
 };
 
-use super::PoolOperation;
+use super::{
+    error::{MempoolError, MempoolResult},
+    PoolOperation,
+};
 
 const MAX_MEMPOOL_USEROPS_PER_SENDER: usize = 1;
 
@@ -45,7 +48,7 @@ impl PoolInner {
         }
     }
 
-    pub fn add_operation(&mut self, op: PoolOperation) -> anyhow::Result<H256> {
+    pub fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
         // Check for replacement by ID
         if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
             // replace only if higher gas
@@ -56,16 +59,20 @@ impl PoolInner {
                 self.by_hash
                     .remove(&pool_op.uo().op_hash(self.entry_point, self.chain_id));
             } else {
-                anyhow::bail!("Operation with higher gas already in mempool");
+                return Err(MempoolError::ReplacementUnderpriced(
+                    pool_op.uo().max_priority_fee_per_gas,
+                    pool_op.uo().max_fee_per_gas,
+                ));
             }
         }
 
         // Check sender count and reject if too many, else increment
         let sender_count = self.count_by_sender.entry(op.uo.sender).or_insert(0);
         if *sender_count >= MAX_MEMPOOL_USEROPS_PER_SENDER {
-            anyhow::bail!(
-                "Sender already has {MAX_MEMPOOL_USEROPS_PER_SENDER} operations in mempool, cannot add more"
-            );
+            return Err(MempoolError::MaxOperationsReached(
+                MAX_MEMPOOL_USEROPS_PER_SENDER,
+                op.uo.sender,
+            ));
         }
         *sender_count += 1;
 
@@ -84,7 +91,7 @@ impl PoolInner {
     pub fn add_operations(
         &mut self,
         operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<anyhow::Result<H256>> {
+    ) -> Vec<MempoolResult<H256>> {
         operations
             .into_iter()
             .map(|op| self.add_operation(op))

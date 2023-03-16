@@ -1,3 +1,4 @@
+pub mod error;
 mod pool;
 pub mod uo_pool;
 
@@ -6,6 +7,8 @@ use ethers::types::{Address, H256, U256};
 use std::sync::Arc;
 
 use crate::common::{protos::op_pool::Reputation, types::UserOperation};
+
+use self::error::MempoolResult;
 
 use super::events::NewBlockEvent;
 
@@ -23,7 +26,7 @@ pub trait Mempool: Send + Sync {
     ///
     /// Adds a user operation to the pool that was submitted via a local
     /// RPC call and was validated before submission.
-    fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> anyhow::Result<H256>;
+    fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256>;
 
     /// Adds multiple validated user operations to the pool.
     ///
@@ -33,7 +36,7 @@ pub trait Mempool: Send + Sync {
         &self,
         origin: OperationOrigin,
         operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<anyhow::Result<H256>>;
+    ) -> Vec<MempoolResult<H256>>;
 
     /// Removes a set of operations from the pool.
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>);

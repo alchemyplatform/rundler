@@ -1,4 +1,6 @@
-use super::{pool::PoolInner, Mempool, NewBlockEvent, OperationOrigin, PoolOperation};
+use super::{
+    error::MempoolResult, pool::PoolInner, Mempool, NewBlockEvent, OperationOrigin, PoolOperation,
+};
 use crate::{
     common::{
         contracts::entry_point::EntryPointEvents,
@@ -118,7 +120,7 @@ where
         }
     }
 
-    fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> anyhow::Result<H256> {
+    fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
         let addrs = Self::get_op_addresses(&op);
         self.reputation.add_seen(&addrs);
         self.pool.write().add_operation(op)
@@ -128,7 +130,7 @@ where
         &self,
         _origin: OperationOrigin,
         operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<anyhow::Result<H256>> {
+    ) -> Vec<MempoolResult<H256>> {
         self.pool.write().add_operations(operations)
     }
 
