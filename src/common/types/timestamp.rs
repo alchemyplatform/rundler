@@ -20,11 +20,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct Timestamp(u64);
 
 impl Timestamp {
-    fn new(seconds_since_epoch: u64) -> Self {
+    pub fn new(seconds_since_epoch: u64) -> Self {
         Self(seconds_since_epoch)
     }
 
-    fn now() -> Self {
+    pub fn now() -> Self {
         Self(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -33,8 +33,14 @@ impl Timestamp {
         )
     }
 
-    fn seconds_since_epoch(self) -> u64 {
+    pub fn seconds_since_epoch(self) -> u64 {
         self.0
+    }
+}
+
+impl From<u64> for Timestamp {
+    fn from(value: u64) -> Self {
+        Self(value)
     }
 }
 

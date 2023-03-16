@@ -1,18 +1,25 @@
+use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
 use anyhow::Context;
-use ethers::abi::RawLog;
+use ethers::abi::{AbiDecode, AbiEncode, RawLog};
 use ethers::contract::builders::ContractCall;
 use ethers::contract::{Contract, ContractDeployer, ContractError};
 use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::SignerMiddleware;
-use ethers::providers::{Http, JsonRpcClient, Middleware, PendingTransaction, Provider};
+use ethers::providers::{
+    Http, HttpClientError, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError,
+};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, Bytes, Log, TransactionReceipt, TransactionRequest};
+use ethers::types::{
+    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt,
+    TransactionRequest, H256,
+};
 use ethers::utils;
-use std::error;
+use serde_json::Value;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{error, mem};
 
 /// Creates a provider that connects to a locally running Geth node on its
 /// default port of 8545.
@@ -118,16 +125,39 @@ pub async fn get_chain_id(provider: &Provider<Http>) -> anyhow::Result<u32> {
         .as_u32())
 }
 
+/// Converts a block id, which may be something like "latest" which can refer to
+/// different blocks over time, into one which references a fixed block by its
+/// hash.
+pub async fn get_static_block_id(
+    provider: &Provider<Http>,
+    block_id: BlockId,
+) -> anyhow::Result<BlockId> {
+    Ok(get_block_hash(provider, block_id).await?.into())
+}
+
+async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> anyhow::Result<H256> {
+    if let BlockId::Hash(hash) = block_id {
+        return Ok(hash);
+    }
+    provider
+        .get_block(block_id)
+        .await
+        .context("should load block to get hash")?
+        .context("block should exist to get latest hash")?
+        .hash
+        .context("hash should be present on block")
+}
+
 /// Creates a client that can send transactions and sign them with a secret
 /// based on a fixed id. Can be used to generate accounts with deterministic
 /// addresses for testing.
 pub fn new_test_client(
-    provider: &Arc<Provider<Http>>,
+    provider: Arc<Provider<Http>>,
     test_account_id: u8,
     chain_id: u32,
 ) -> Arc<SignerMiddleware<Arc<Provider<Http>>, LocalWallet>> {
     let wallet = new_test_wallet(test_account_id, chain_id);
-    Arc::new(SignerMiddleware::new(Arc::clone(provider), wallet))
+    Arc::new(SignerMiddleware::new(provider, wallet))
 }
 
 /// Creates a wallet whose secret is based on a fixed id. Differs from
@@ -143,4 +173,55 @@ pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     bytes[31] = test_account_id;
     bytes
+}
+
+/// Hashes together the code from all the provided addresses. The order of the input addresses does
+/// not matter.
+pub async fn get_code_hash(
+    provider: &Provider<Http>,
+    mut addresses: Vec<Address>,
+    block_id: Option<BlockId>,
+) -> Result<H256, anyhow::Error> {
+    addresses.sort();
+    let out: CodeHashesResult =
+        call_constructor(provider, &GETCODEHASHES_BYTECODE, addresses, block_id)
+            .await
+            .context("should compute code hashes")?;
+    Ok(H256(out.hash))
+}
+
+async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(
+    provider: &Provider<Http>,
+    bytecode: &Bytes,
+    args: Args,
+    block_id: Option<BlockId>,
+) -> anyhow::Result<Ret> {
+    let mut data = bytecode.to_vec();
+    data.extend(AbiEncode::encode(args));
+    let tx = Eip1559TransactionRequest {
+        data: Some(data.into()),
+        ..Default::default()
+    };
+    let error = provider
+        .call(&tx.into(), block_id)
+        .await
+        .err()
+        .context("called constructor should revert")?;
+    let revert_data = get_revert_data(error).context("should call constructor")?;
+    Ret::decode_hex(revert_data).context("should decode revert data from called constructor")
+}
+
+/// Extracts the revert reason as a hex string if this is a revert error,
+/// otherwise returns the original error.
+pub fn get_revert_data(mut error: ProviderError) -> Result<String, ProviderError> {
+    let ProviderError::JsonRpcClientError(dyn_error) = &mut error else {
+        return Err(error);
+    };
+    let Some(HttpClientError::JsonRpcError(jsonrpc_error)) = dyn_error.downcast_mut::<HttpClientError>() else {
+        return Err(error)
+    };
+    match &mut jsonrpc_error.data {
+        Some(Value::String(s)) => Ok(mem::take(s)),
+        _ => Err(error),
+    }
 }

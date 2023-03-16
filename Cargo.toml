@@ -24,9 +24,10 @@ metrics-exporter-prometheus = "0.11.0"
 metrics-util = "0.14.0"
 parking_lot = "0.12.1"
 dotenv = "0.15.0"
-chrono = "0.4.23"
 thiserror = "1.0.38"
 parse-display = "0.8.0"
+chrono = "0.4.23"
+indexmap = "1.9.2"
 strum = { version = "0.24.1", features = ["derive"] }
 
 [build-dependencies]

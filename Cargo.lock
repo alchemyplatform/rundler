@@ -70,6 +70,7 @@ dependencies = [
  "clap 4.1.4",
  "dotenv",
  "ethers",
+ "indexmap",
  "jsonrpsee",
  "metrics",
  "metrics-exporter-prometheus",

@@ -6,6 +6,7 @@ export interface BigInt {
   value: number;
   sign: boolean;
   isSmall: boolean;
+  toString(radix?: 16): string;
 }
 
 export type Address = number[]; // Always length 20
@@ -65,7 +66,7 @@ export interface LogCallFrame {
   // - returns a Number which has the amount of gas provided for the frame
   getGas: () => number;
   // - returns a big.Int with the amount to be transferred only if available, otherwise undefined
-  getValue: () => BigInt;
+  getValue: () => BigInt | undefined;
 }
 
 export interface LogFrameResult {
@@ -116,7 +117,7 @@ export interface LogStep {
 export interface LogDb {
   getBalance: (address: string) => BigInt; // - returns a big.Int with the specified account’s balance
   getNonce: (address: string) => number; // returns a Number with the specified account’s nonce
-  getCode: (address: string) => Bytes; // returns a byte slice with the code for the specified account
-  getState: (address: string, hash: string) => any; // returns the state value for the specified account and the specified hash
+  getCode: (address: Address) => Bytes; // returns a byte slice with the code for the specified account
+  getState: (address: Address, hash: Bytes) => any; // returns the state value for the specified account and the specified hash
   exists: (address: string) => boolean; // returns true if the specified address exists
 }

@@ -1,5 +1,5 @@
 mod timestamp;
-pub use timestamp::*;
+mod validation_results;
 
 pub use crate::common::contracts::shared_types::UserOperation;
 use ethers::{
@@ -7,6 +7,8 @@ use ethers::{
     types::{Address, Bytes, H256, U256},
     utils::keccak256,
 };
+pub use timestamp::*;
+pub use validation_results::*;
 
 /// Unique identifier for a user operation from a given sender
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -40,6 +42,14 @@ impl UserOperation {
         }
     }
 
+    pub fn factory(&self) -> Option<Address> {
+        Self::get_address_from_field(&self.init_code)
+    }
+
+    pub fn paymaster(&self) -> Option<Address> {
+        Self::get_address_from_field(&self.paymaster_and_data)
+    }
+
     /// Extracts an address from the beginning of a data field
     /// Useful to extract the paymaster address from paymaster_and_data
     /// and the factory address from init_code
@@ -71,6 +81,13 @@ impl UserOperation {
         packed.truncate(packed.len() - 32);
         packed.into()
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExpectedStorageSlot {
+    pub address: Address,
+    pub slot: U256,
+    pub value: U256,
 }
 
 #[cfg(test)]

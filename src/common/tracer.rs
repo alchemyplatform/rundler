@@ -3,24 +3,90 @@ use crate::common::types::UserOperation;
 use anyhow::Context;
 use ethers::providers::{JsonRpcClient, Middleware, Provider};
 use ethers::types::transaction::eip2718::TypedTransaction;
-use serde_json::Value;
+use ethers::types::{Address, BlockId, OpCode, U256};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
+use std::fmt::Debug;
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TracerOutput {
+    pub phases: Vec<Phase>,
+    pub revert_data: Option<String>,
+    pub accessed_contract_addresses: Vec<Address>,
+    pub associated_slots_by_address: AssociatedSlotsByAddress,
+    pub factory_called_create2_twice: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Phase {
+    pub forbidden_opcodes_used: Vec<OpCode>,
+    pub used_invalid_gas_opcode: bool,
+    pub storage_accesses: Vec<StorageAccess>,
+    pub called_handle_ops: bool,
+    pub called_with_value: bool,
+    pub ran_out_of_gas: bool,
+    pub undeployed_contract_accesses: Vec<Address>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageAccess {
+    pub address: Address,
+    pub accesses: Vec<SlotAccess>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotAccess {
+    pub slot: U256,
+    pub initial_value: Option<U256>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AssociatedSlotsByAddress(HashMap<Address, BTreeSet<U256>>);
+
+impl AssociatedSlotsByAddress {
+    pub fn is_associated_slot(&self, address: Address, slot: U256) -> bool {
+        if slot == address.as_bytes().into() {
+            return true;
+        }
+        let Some(associated_slots) = self.0.get(&address) else {
+            return false;
+        };
+        let Some(&next_smallest_slot) = associated_slots.range(..(slot + 1)).next_back() else {
+            return false;
+        };
+        slot - next_smallest_slot < 128.into()
+    }
+}
+
+/// Runs the bundler's custom tracer on the entry point's `simulateValidation`
+/// method for the provided user operation.
 pub async fn trace_op_validation(
     entry_point: &EntryPoint<impl Middleware>,
     op: UserOperation,
-) -> anyhow::Result<Value> {
+    block_id: BlockId,
+) -> anyhow::Result<TracerOutput> {
     let tx = entry_point.simulate_validation(op).tx;
-    bundler_trace_call(entry_point.client().provider(), tx).await
+    trace_call(entry_point.client().provider(), tx, block_id, tracer_js()).await
 }
 
-async fn bundler_trace_call(
+async fn trace_call<T>(
     provider: &Provider<impl JsonRpcClient>,
     tx: TypedTransaction,
-) -> anyhow::Result<Value> {
+    block_id: BlockId,
+    tracer_code: &str,
+) -> anyhow::Result<T>
+where
+    T: Debug + DeserializeOwned + Serialize,
+{
     let out = provider
         .request(
             "debug_traceCall",
-            (tx, "latest", serde_json::json!({ "tracer": tracer_js() })),
+            (tx, block_id, serde_json::json!({ "tracer": tracer_code })),
         )
         .await
         .context("failed to run bundler trace")?;
