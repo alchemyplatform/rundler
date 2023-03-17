@@ -1,4 +1,4 @@
-use ethers::types::{Address, H256};
+use ethers::types::Address;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -14,19 +14,11 @@ pub trait ReputationManager: Send + Sync {
     /// Called by mempool before returning operations to bundler
     fn status(&self, address: Address) -> ReputationStatus;
 
-    /// Called by mempool when an operation is added to the pool
-    fn add_seen<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>);
+    /// Called by mempool when an operation that requires stake is added to the pool
+    fn add_seen(&self, address: Address);
 
-    /// Called by the mempool when an operation is removed from the pool
-    fn add_included<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>);
-
-    /// Called by the mempool during a block event when the aggregator changes
-    /// Must be called before `add_included` for an operation that uses the aggregator
-    fn set_aggregator(&self, aggregator: Option<Address>, txn_hash: H256);
-
-    /// Called by the mempool during a block event to check if
-    /// there is an aggregator set for the current txn_hash
-    fn get_aggregator(&self, txn_hash: H256) -> Option<Address>;
+    /// Called by the mempool when an operation that requires stake is removed from the pool
+    fn add_included(&self, address: Address);
 
     /// Called by debug API
     fn dump_reputation(&self) -> Vec<Reputation>;
@@ -62,26 +54,12 @@ impl ReputationManager for HourlyMovingAverageReputation {
         self.reputation.read().status(address)
     }
 
-    fn add_seen<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>) {
-        let mut reputation = self.reputation.write();
-        for address in addresses {
-            reputation.add_seen(*address);
-        }
+    fn add_seen<'a>(&self, address: Address) {
+        self.reputation.write().add_seen(address);
     }
 
-    fn add_included<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>) {
-        let mut reputation = self.reputation.write();
-        for address in addresses {
-            reputation.add_included(*address);
-        }
-    }
-
-    fn set_aggregator(&self, aggregator: Option<Address>, txn_hash: H256) {
-        self.reputation.write().set_aggregator(aggregator, txn_hash);
-    }
-
-    fn get_aggregator(&self, txn_hash: H256) -> Option<Address> {
-        self.reputation.read().get_aggregator(txn_hash)
+    fn add_included<'a>(&self, address: Address) {
+        self.reputation.write().add_included(address);
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -135,8 +113,6 @@ impl ReputationParams {
 struct AddressReputation {
     counts: HashMap<Address, AddressCount>,
     params: ReputationParams,
-    aggregator: Option<Address>,
-    aggregator_txn_hash: H256,
 }
 
 impl AddressReputation {
@@ -144,8 +120,6 @@ impl AddressReputation {
         Self {
             counts: HashMap::new(),
             params,
-            aggregator: None,
-            aggregator_txn_hash: H256::zero(),
         }
     }
 
@@ -173,19 +147,6 @@ impl AddressReputation {
     pub fn add_included(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_included += 1;
-    }
-
-    pub fn set_aggregator(&mut self, aggregator: Option<Address>, txn_hash: H256) {
-        self.aggregator = aggregator;
-        self.aggregator_txn_hash = txn_hash;
-    }
-
-    pub fn get_aggregator(&self, txn_hash: H256) -> Option<Address> {
-        if txn_hash != self.aggregator_txn_hash {
-            None
-        } else {
-            self.aggregator
-        }
     }
 
     pub fn set_reputation(&mut self, address: Address, ops_seen: u64, ops_included: u64) {
@@ -288,22 +249,6 @@ mod tests {
     }
 
     #[test]
-    fn set_get_aggregator() {
-        let addr = Address::random();
-        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
-        let txn_hash = H256::random();
-
-        reputation.set_aggregator(Some(addr), txn_hash);
-        assert_eq!(reputation.get_aggregator(txn_hash), Some(addr));
-
-        reputation.set_aggregator(Some(addr), txn_hash);
-        assert_eq!(reputation.get_aggregator(H256::zero()), None);
-
-        reputation.set_aggregator(None, H256::zero());
-        assert_eq!(reputation.get_aggregator(H256::zero()), None);
-    }
-
-    #[test]
     fn hourly_update() {
         let addr = Address::random();
         let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
@@ -326,9 +271,11 @@ mod tests {
         let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
         let addrs = [Address::random(), Address::random(), Address::random()];
 
-        for _ in 0..1000 {
-            manager.add_seen(&addrs);
-            manager.add_included(&addrs);
+        for _ in 0..10 {
+            for addr in addrs {
+                manager.add_seen(addr);
+                manager.add_included(addr);
+            }
         }
 
         for addr in &addrs {
@@ -336,8 +283,8 @@ mod tests {
 
             let rep = manager.reputation.read();
             let counts = rep.counts.get(addr).unwrap();
-            assert_eq!(counts.ops_seen, 1000);
-            assert_eq!(counts.ops_included, 1000);
+            assert_eq!(counts.ops_seen, 10);
+            assert_eq!(counts.ops_included, 10);
         }
     }
 

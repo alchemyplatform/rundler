@@ -219,6 +219,10 @@ impl From<MempoolError> for Status {
                 reason: ErrorReason::OperationRejected.as_str_name().to_string(),
                 metadata: HashMap::new(),
             },
+            MempoolError::Other(_) => ErrorInfo {
+                reason: ErrorReason::Unspecified.as_str_name().to_string(),
+                metadata: HashMap::new(),
+            },
         };
 
         let msg = e.to_string();

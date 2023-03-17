@@ -67,26 +67,21 @@ impl PoolInner {
             }
         }
 
-        // Check sender count and reject if too many, else increment
-        let sender_count = self.count_by_address.entry(op.uo.sender).or_insert(0);
-        if *sender_count >= MAX_MEMPOOL_USEROPS_PER_SENDER {
+        // Check sender count in mempool
+        if *self.count_by_address.get(&op.uo.sender).unwrap_or(&0) >= MAX_MEMPOOL_USEROPS_PER_SENDER
+        {
             return Err(MempoolError::MaxOperationsReached(
                 MAX_MEMPOOL_USEROPS_PER_SENDER,
                 op.uo.sender,
             ));
         }
-        *sender_count += 1;
 
-        if let Some(paymaster) = op.uo.paymaster() {
-            *self.count_by_address.entry(paymaster).or_insert(0) += 1;
-        }
-        if let Some(factory) = op.uo.factory() {
-            *self.count_by_address.entry(factory).or_insert(0) += 1;
-        }
-        if let Some(aggregator) = op.aggregator {
-            *self.count_by_address.entry(aggregator).or_insert(0) += 1;
+        // update counts
+        for (_, addr) in op.entities() {
+            *self.count_by_address.entry(addr).or_insert(0) += 1;
         }
 
+        // create and insert ordered operation
         let pool_op = OrderedPoolOperation {
             po: Arc::new(op),
             submission_id: self.next_submission_id(),
@@ -117,27 +112,19 @@ impl PoolInner {
         self.count_by_address.get(&address).copied().unwrap_or(0)
     }
 
-    pub fn remove_operation_by_hash(&mut self, hash: H256) -> bool {
-        let mut addrs = vec![];
-        if let Entry::Occupied(e) = self.by_hash.entry(hash) {
-            let uo = e.get().uo();
+    pub fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+        if let Some(op) = self.by_hash.remove(&hash) {
+            self.by_id.remove(&op.uo().id());
+            self.best.remove(&op);
 
-            self.by_id.remove(&uo.id());
-            self.best.remove(e.get());
+            for (_, addr) in op.po.entities() {
+                self.decrement_address_count(addr);
+            }
 
-            addrs.push(Some(uo.sender));
-            addrs.push(uo.paymaster());
-            addrs.push(uo.factory());
-            addrs.push(e.get().po.aggregator);
-
-            e.remove_entry();
+            return Some(op.po);
         }
 
-        for addr in &addrs {
-            self.decrement_address_count(addr);
-        }
-
-        !addrs.is_empty()
+        None
     }
 
     pub fn clear(&mut self) {
@@ -147,13 +134,11 @@ impl PoolInner {
         self.count_by_address.clear();
     }
 
-    fn decrement_address_count(&mut self, address: &Option<Address>) {
-        if let Some(address) = address {
-            if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(*address) {
-                *count_entry.get_mut() -= 1;
-                if *count_entry.get() == 0 {
-                    count_entry.remove_entry();
-                }
+    fn decrement_address_count(&mut self, address: Address) {
+        if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
+            *count_entry.get_mut() -= 1;
+            if *count_entry.get() == 0 {
+                count_entry.remove_entry();
             }
         }
     }
@@ -282,21 +267,21 @@ mod tests {
             hashes.push(pool.add_operation(op.clone()).unwrap());
         }
 
-        assert!(pool.remove_operation_by_hash(hashes[0]));
+        assert!(pool.remove_operation_by_hash(hashes[0]).is_some());
         check_map_entry(pool.by_hash.get(&hashes[0]), None);
         check_map_entry(pool.best.iter().next(), Some(&ops[1]));
 
-        assert!(pool.remove_operation_by_hash(hashes[1]));
+        assert!(pool.remove_operation_by_hash(hashes[1]).is_some());
         check_map_entry(pool.by_hash.get(&hashes[1]), None);
         check_map_entry(pool.best.iter().next(), Some(&ops[2]));
 
-        assert!(pool.remove_operation_by_hash(hashes[2]));
+        assert!(pool.remove_operation_by_hash(hashes[2]).is_some());
         check_map_entry(pool.by_hash.get(&hashes[2]), None);
         check_map_entry(pool.best.iter().next(), None);
 
-        assert!(!pool.remove_operation_by_hash(hashes[0]));
-        assert!(!pool.remove_operation_by_hash(hashes[1]));
-        assert!(!pool.remove_operation_by_hash(hashes[2]));
+        assert!(pool.remove_operation_by_hash(hashes[0]).is_none());
+        assert!(pool.remove_operation_by_hash(hashes[1]).is_none());
+        assert!(pool.remove_operation_by_hash(hashes[2]).is_none());
     }
 
     #[test]
@@ -339,7 +324,7 @@ mod tests {
         assert_eq!(pool.address_count(aggregator), 5);
 
         for hash in hashes.iter() {
-            assert!(pool.remove_operation_by_hash(*hash));
+            assert!(pool.remove_operation_by_hash(*hash).is_some());
         }
 
         assert_eq!(pool.address_count(sender), 0);

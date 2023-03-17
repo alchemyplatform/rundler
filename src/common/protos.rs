@@ -1,3 +1,4 @@
+use crate::common::types::Entity as EntityType;
 use crate::common::types::UserOperation as RpcUserOperation;
 use chrono::{DateTime, LocalResult, TimeZone, Utc};
 use ethers::types::{Address, Bytes, H256, U256};
@@ -48,6 +49,31 @@ pub mod op_pool {
             })
         }
     }
+
+    impl TryFrom<Entity> for EntityType {
+        type Error = ConversionError;
+
+        fn try_from(entity: Entity) -> Result<Self, Self::Error> {
+            match entity {
+                Entity::Unspecified => Err(ConversionError::InvalidEntity(entity as i32)),
+                Entity::Sender => Ok(EntityType::Sender),
+                Entity::Paymaster => Ok(EntityType::Paymaster),
+                Entity::Aggregator => Ok(EntityType::Aggregator),
+                Entity::Factory => Ok(EntityType::Factory),
+            }
+        }
+    }
+
+    impl From<EntityType> for Entity {
+        fn from(entity: EntityType) -> Self {
+            match entity {
+                EntityType::Sender => Entity::Sender,
+                EntityType::Paymaster => Entity::Paymaster,
+                EntityType::Aggregator => Entity::Aggregator,
+                EntityType::Factory => Entity::Factory,
+            }
+        }
+    }
 }
 
 pub fn to_le_bytes(n: U256) -> Vec<u8> {
@@ -56,13 +82,15 @@ pub fn to_le_bytes(n: U256) -> Vec<u8> {
     vec
 }
 
-/// Error type for conversions from protobuf types to Ethers types.
+/// Error type for conversions from protobuf types to Ethers/local types.
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
     #[error("Invalid length: {0}, expected: {1}")]
     InvalidLength(usize, usize),
     #[error("Invalid timestamp: {0}")]
     InvalidTimestamp(u64),
+    #[error("Entity was invalid or unspecified: {0}")]
+    InvalidEntity(i32),
 }
 
 /// Wrapper around protobyf bytes for converting to Ethers types.

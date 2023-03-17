@@ -2,6 +2,7 @@ mod timestamp;
 mod validation_results;
 
 pub use crate::common::contracts::shared_types::UserOperation;
+use strum::EnumIter;
 pub use timestamp::*;
 pub use validation_results::*;
 
@@ -92,7 +93,7 @@ pub struct ExpectedStorageSlot {
     pub value: U256,
 }
 
-#[derive(Display, Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Display, Debug, Clone, Copy, Eq, PartialEq, EnumIter)]
 #[display(style = "lowercase")]
 pub enum Entity {
     Sender,

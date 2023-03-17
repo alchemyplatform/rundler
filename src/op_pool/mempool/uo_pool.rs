@@ -11,12 +11,14 @@ use crate::{
     },
     op_pool::reputation::ReputationManager,
 };
+use anyhow::Context;
 use ethers::types::{Address, H256, U256};
 use parking_lot::RwLock;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+use strum::IntoEnumIterator;
 use tokio::sync::broadcast;
 
 /// The number of blocks that a throttled operation is allowed to be in the mempool
@@ -68,27 +70,6 @@ where
             }
         }
     }
-
-    fn get_op_addresses(op: &PoolOperation) -> Vec<(Entity, Address)> {
-        let mut addrs = vec![(Entity::Sender, op.uo.sender)];
-        if let Some(paymaster) = op.uo.paymaster() {
-            addrs.push((Entity::Paymaster, paymaster));
-        }
-        if let Some(factory) = op.uo.factory() {
-            addrs.push((Entity::Factory, factory));
-        }
-        if let Some(agg) = op.aggregator {
-            addrs.push((Entity::Aggregator, agg));
-        }
-        addrs
-    }
-
-    fn is_throttled(&self, op: &PoolOperation) -> bool {
-        let addrs = Self::get_op_addresses(op);
-        addrs
-            .iter()
-            .any(|(_, addr)| self.reputation.status(*addr) != ReputationStatus::Ok)
-    }
 }
 
 impl<R> Mempool for UoPool<R>
@@ -103,31 +84,23 @@ where
         let mut pool = self.pool.write();
         tracing::debug!("New block: {:?}", new_block.number);
         for event in &new_block.events {
-            match &event.contract_event {
-                EntryPointEvents::UserOperationEventFilter(uo_event) => {
-                    if pool.remove_operation_by_hash(uo_event.user_op_hash.into()) {
-                        let mut addrs = vec![uo_event.sender];
-                        if !uo_event.paymaster.is_zero() {
-                            addrs.push(uo_event.paymaster);
+            if let EntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
+                let op_hash = uo_event.user_op_hash.into();
+                if let Some(op) = pool.remove_operation_by_hash(op_hash) {
+                    for entity in Entity::iter() {
+                        if op.requires_stake(entity) {
+                            match op.entity_address(entity) {
+                                Some(e) => self.reputation.add_included(e),
+                                None => {
+                                    tracing::error!("Entity address not found for entity {entity:?} in operation {op:?}");
+                                }
+                            }
                         }
-                        if let Some(agg) = self.reputation.get_aggregator(event.txn_hash) {
-                            addrs.push(agg);
-                        }
-                        self.reputation.add_included(&addrs);
                     }
                 }
-                EntryPointEvents::AccountDeployedFilter(deploy_event) => {
-                    self.reputation.add_included(&[deploy_event.factory]);
-                }
-                EntryPointEvents::SignatureAggregatorChangedFilter(aggregator_change_event) => {
-                    let agg = if aggregator_change_event.aggregator.is_zero() {
-                        None
-                    } else {
-                        Some(aggregator_change_event.aggregator)
-                    };
-                    self.reputation.set_aggregator(agg, event.txn_hash);
-                }
-                _ => {}
+
+                // Remove throttled ops that were included in the block
+                self.throttled_ops.write().remove(&op_hash);
             }
         }
 
@@ -151,25 +124,26 @@ where
     }
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
-        let addrs = Self::get_op_addresses(&op);
-
         let mut throttled = false;
-        for (et, addr) in &addrs {
-            match self.reputation.status(*addr) {
+        for entity in &op.entities_needing_stake {
+            let addr = op
+                .entity_address(*entity)
+                .context(format!("entity {entity} should be present in operation"))?;
+            match self.reputation.status(addr) {
                 ReputationStatus::Ok => {}
                 ReputationStatus::Throttled => {
-                    if self.pool.read().address_count(*addr) > 0 {
-                        return Err(MempoolError::EntityThrottled(*et, *addr));
+                    if self.pool.read().address_count(addr) > 0 {
+                        return Err(MempoolError::EntityThrottled(*entity, addr));
                     }
                     throttled = true;
                 }
                 ReputationStatus::Banned => {
-                    return Err(MempoolError::EntityThrottled(*et, *addr));
+                    return Err(MempoolError::EntityThrottled(*entity, addr));
                 }
             }
+            self.reputation.add_seen(addr);
         }
 
-        self.reputation.add_seen(addrs.iter().map(|(_, addr)| addr));
         let hash = self.pool.write().add_operation(op)?;
 
         if throttled {
@@ -206,9 +180,9 @@ where
         ordered_ops
             .into_iter()
             .filter(|op| {
-                // filter out ops from senders we've already seen, or that have been throttled due to reputation
+                // filter out ops from senders we've already seen
                 let sender = op.uo.sender;
-                if senders.contains(&sender) || self.is_throttled(op) {
+                if senders.contains(&sender) {
                     false
                 } else {
                     senders.insert(sender);
@@ -316,15 +290,9 @@ mod tests {
             ReputationStatus::Ok
         }
 
-        fn add_seen<'a>(&self, _addresses: impl IntoIterator<Item = &'a Address>) {}
+        fn add_seen(&self, _address: Address) {}
 
-        fn add_included<'a>(&self, _addresses: impl IntoIterator<Item = &'a Address>) {}
-
-        fn set_aggregator(&self, _aggregator: Option<Address>, _txn_hash: H256) {}
-
-        fn get_aggregator(&self, _txn_hash: H256) -> Option<Address> {
-            None
-        }
+        fn add_included(&self, _address: Address) {}
 
         fn dump_reputation(&self) -> Vec<Reputation> {
             vec![]

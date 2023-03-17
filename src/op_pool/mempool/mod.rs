@@ -5,8 +5,12 @@ pub mod uo_pool;
 use chrono::{DateTime, Utc};
 use ethers::types::{Address, H256, U256};
 use std::sync::Arc;
+use strum::IntoEnumIterator;
 
-use crate::common::{protos::op_pool::Reputation, types::UserOperation};
+use crate::common::{
+    protos::op_pool::Reputation,
+    types::{Entity, UserOperation},
+};
 
 use self::error::MempoolResult;
 
@@ -86,5 +90,80 @@ pub struct PoolOperation {
     pub valid_after: DateTime<Utc>,
     pub valid_until: DateTime<Utc>,
     pub expected_code_hash: H256,
+    pub entities_needing_stake: Vec<Entity>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
+}
+
+impl PoolOperation {
+    /// Returns the address of the entity that is required to stake for this operation.
+    pub fn entity_address(&self, entity: Entity) -> Option<Address> {
+        match entity {
+            Entity::Sender => Some(self.uo.sender),
+            Entity::Paymaster => self.uo.paymaster(),
+            Entity::Factory => self.uo.factory(),
+            Entity::Aggregator => self.aggregator,
+        }
+    }
+
+    /// Returns true if the operation requires the given entity to stake.
+    pub fn requires_stake(&self, entity: Entity) -> bool {
+        self.entities_needing_stake.contains(&entity)
+    }
+
+    /// Returns an iterator over all entities that are included in this opearation.
+    pub fn entities(&'_ self) -> impl Iterator<Item = (Entity, Address)> + '_ {
+        Entity::iter()
+            .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ethers::types::Bytes;
+
+    use super::*;
+
+    #[test]
+    fn test_entities() {
+        let sender = Address::random();
+        let aggregator = Address::random();
+        let paymaster = Address::random();
+        let factory = Address::random();
+
+        let po = PoolOperation {
+            uo: UserOperation {
+                sender,
+                paymaster_and_data: Bytes::from(paymaster.as_fixed_bytes()),
+                init_code: Bytes::from(factory.as_fixed_bytes()),
+                ..Default::default()
+            },
+            aggregator: Some(aggregator),
+            valid_after: Utc::now(),
+            valid_until: Utc::now(),
+            expected_code_hash: H256::random(),
+            entities_needing_stake: vec![Entity::Sender, Entity::Aggregator],
+            expected_storage_slots: vec![],
+        };
+
+        assert!(po.requires_stake(Entity::Sender));
+        assert!(!po.requires_stake(Entity::Paymaster));
+        assert!(!po.requires_stake(Entity::Factory));
+        assert!(po.requires_stake(Entity::Aggregator));
+
+        assert_eq!(po.entity_address(Entity::Sender), Some(sender));
+        assert_eq!(po.entity_address(Entity::Paymaster), Some(paymaster));
+        assert_eq!(po.entity_address(Entity::Factory), Some(factory));
+        assert_eq!(po.entity_address(Entity::Aggregator), Some(aggregator));
+
+        let entities = po.entities().collect::<Vec<_>>();
+        assert_eq!(entities.len(), 4);
+        for (entity, address) in entities {
+            match entity {
+                Entity::Sender => assert_eq!(address, sender),
+                Entity::Paymaster => assert_eq!(address, paymaster),
+                Entity::Factory => assert_eq!(address, factory),
+                Entity::Aggregator => assert_eq!(address, aggregator),
+            }
+        }
+    }
 }
