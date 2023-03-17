@@ -30,11 +30,15 @@ const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
 pub struct UoPool<R: ReputationManager> {
-    pool: RwLock<PoolInner>,
     entry_point: Address,
     reputation: Arc<R>,
-    throttled_ops: RwLock<HashMap<H256, u64>>,
-    block_number: RwLock<u64>,
+    state: RwLock<UoPoolState>,
+}
+
+struct UoPoolState {
+    pool: PoolInner,
+    throttled_ops: HashMap<H256, u64>,
+    block_number: u64,
 }
 
 impl<R> UoPool<R>
@@ -43,11 +47,13 @@ where
 {
     pub fn new(entry_point: Address, chain_id: U256, reputation: Arc<R>) -> Self {
         Self {
-            pool: RwLock::new(PoolInner::new(entry_point, chain_id)),
             entry_point,
             reputation,
-            throttled_ops: RwLock::new(HashMap::new()),
-            block_number: RwLock::new(0),
+            state: RwLock::new(UoPoolState {
+                pool: PoolInner::new(entry_point, chain_id),
+                throttled_ops: HashMap::new(),
+                block_number: 0,
+            }),
         }
     }
 
@@ -81,12 +87,12 @@ where
     }
 
     fn on_new_block(&self, new_block: &NewBlockEvent) {
-        let mut pool = self.pool.write();
+        let mut state = self.state.write();
         tracing::debug!("New block: {:?}", new_block.number);
         for event in &new_block.events {
             if let EntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
                 let op_hash = uo_event.user_op_hash.into();
-                if let Some(op) = pool.remove_operation_by_hash(op_hash) {
+                if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
                     for entity in Entity::iter() {
                         if op.requires_stake(entity) {
                             match op.entity_address(entity) {
@@ -100,27 +106,25 @@ where
                 }
 
                 // Remove throttled ops that were included in the block
-                self.throttled_ops.write().remove(&op_hash);
+                state.throttled_ops.remove(&op_hash);
             }
         }
 
         // Remove throttled ops that are too old
         let new_block_number = new_block.number.as_u64();
-        let mut throttled_ops = self.throttled_ops.write();
         let mut to_remove = HashSet::new();
-        for (hash, block) in throttled_ops.iter() {
+        for (hash, block) in state.throttled_ops.iter() {
             if new_block_number - block > THROTTLED_OPS_BLOCK_LIMIT {
                 to_remove.insert(*hash);
             }
         }
 
-        let mut pool = self.pool.write();
         for hash in to_remove {
-            pool.remove_operation_by_hash(hash);
-            throttled_ops.remove(&hash);
+            state.pool.remove_operation_by_hash(hash);
+            state.throttled_ops.remove(&hash);
         }
 
-        *self.block_number.write() = new_block_number;
+        state.block_number = new_block_number;
     }
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
@@ -132,7 +136,7 @@ where
             match self.reputation.status(addr) {
                 ReputationStatus::Ok => {}
                 ReputationStatus::Throttled => {
-                    if self.pool.read().address_count(addr) > 0 {
+                    if self.state.read().pool.address_count(addr) > 0 {
                         return Err(MempoolError::EntityThrottled(*entity, addr));
                     }
                     throttled = true;
@@ -144,12 +148,11 @@ where
             self.reputation.add_seen(addr);
         }
 
-        let hash = self.pool.write().add_operation(op)?;
-
+        let mut state = self.state.write();
+        let hash = state.pool.add_operation(op)?;
+        let bn = state.block_number;
         if throttled {
-            self.throttled_ops
-                .write()
-                .insert(hash, *self.block_number.read());
+            state.throttled_ops.insert(hash, bn);
         }
 
         Ok(hash)
@@ -160,20 +163,20 @@ where
         _origin: OperationOrigin,
         operations: impl IntoIterator<Item = PoolOperation>,
     ) -> Vec<MempoolResult<H256>> {
-        self.pool.write().add_operations(operations)
+        self.state.write().pool.add_operations(operations)
     }
 
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>) {
         // hold the lock for the duration of the operation
-        let mut lg = self.pool.write();
+        let mut state = self.state.write();
         for hash in hashes {
-            lg.remove_operation_by_hash(*hash);
+            state.pool.remove_operation_by_hash(*hash);
         }
     }
 
     fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
         // get the best operations from the pool
-        let ordered_ops = self.pool.read().best_operations();
+        let ordered_ops = self.state.read().pool.best_operations();
         // keep track of senders to avoid sending multiple ops from the same sender
         let mut senders = HashSet::<Address>::new();
 
@@ -181,20 +184,14 @@ where
             .into_iter()
             .filter(|op| {
                 // filter out ops from senders we've already seen
-                let sender = op.uo.sender;
-                if senders.contains(&sender) {
-                    false
-                } else {
-                    senders.insert(sender);
-                    true
-                }
+                senders.insert(op.uo.sender)
             })
             .take(max)
             .collect()
     }
 
     fn clear(&self) {
-        self.pool.write().clear()
+        self.state.write().pool.clear()
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
