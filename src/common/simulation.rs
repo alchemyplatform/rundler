@@ -8,6 +8,7 @@ use ethers::abi::AbiDecode;
 use ethers::providers::{Http, Provider};
 use ethers::types::{Address, BlockId, BlockNumber, OpCode, H256, U256};
 use indexmap::IndexSet;
+use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ pub struct SimulationSuccess {
     pub aggregator_address: Option<Address>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
+    pub accessed_addresses: HashSet<Address>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
 
@@ -149,6 +151,7 @@ impl Simulator for SimulatorImpl {
         let sender_address = entity_infos.sender_address();
         let mut violations: Vec<Violation> = vec![];
         let mut entities_needing_stake = vec![];
+        let mut accessed_addresses = HashSet::new();
         let mut expected_storage_slots = vec![];
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let entity = Entity::from_index(index).unwrap();
@@ -165,6 +168,7 @@ impl Simulator for SimulatorImpl {
             let mut banned_addresses_accessed = IndexSet::<Address>::new();
             for StorageAccess { address, accesses } in &phase.storage_accesses {
                 let address = *address;
+                accessed_addresses.insert(address);
                 for &SlotAccess {
                     slot,
                     initial_value,
@@ -242,6 +246,7 @@ impl Simulator for SimulatorImpl {
             aggregator_address: entry_point_out.aggregator_info.map(|info| info.address),
             code_hash,
             entities_needing_stake,
+            accessed_addresses,
             expected_storage_slots,
         })
     }
