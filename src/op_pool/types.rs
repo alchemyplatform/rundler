@@ -17,6 +17,7 @@ impl TryFrom<&PoolOperation> for MempoolOp {
             valid_after: op.valid_time_range.valid_after.seconds_since_epoch(),
             valid_until: op.valid_time_range.valid_until.seconds_since_epoch(),
             expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
+            sim_block_hash: op.sim_block_hash.as_bytes().to_vec(),
             entities_needing_stake: op
                 .entities_needing_stake
                 .iter()
@@ -49,6 +50,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             .collect::<Result<Vec<_>, _>>()?;
 
         let expected_code_hash = H256::from_slice(&op.expected_code_hash);
+        let sim_block_hash = H256::from_slice(&op.sim_block_hash);
         let entities_needing_stake = op
             .entities_needing_stake
             .into_iter()
@@ -65,6 +67,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             expected_code_hash,
             entities_needing_stake,
             expected_storage_slots,
+            sim_block_hash,
         })
     }
 }
@@ -133,6 +136,7 @@ mod tests {
             valid_after: now_secs,
             valid_until: now_secs,
             expected_code_hash: vec![0; 32],
+            sim_block_hash: vec![0; 32],
             entities_needing_stake: vec![],
             expected_storage_slots: vec![op_pool::StorageSlot {
                 address: TEST_ADDRESS_ARR.to_vec(),
@@ -172,6 +176,7 @@ mod tests {
             valid_time_range: ValidTimeRange::new(now, now),
             expected_code_hash: H256::random(),
             entities_needing_stake: vec![],
+            sim_block_hash: H256::random(),
             expected_storage_slots: vec![ExpectedStorageSlot {
                 address: TEST_ADDRESS_STR.parse().unwrap(),
                 slot: 1234.into(),

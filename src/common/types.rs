@@ -1,7 +1,10 @@
 mod timestamp;
 mod validation_results;
 
+use std::str::FromStr;
+
 pub use crate::common::contracts::shared_types::UserOperation;
+use anyhow::bail;
 use strum::EnumIter;
 pub use timestamp::*;
 pub use validation_results::*;
@@ -100,6 +103,20 @@ pub enum Entity {
     Paymaster,
     Aggregator,
     Factory,
+}
+
+impl FromStr for Entity {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "sender" => Ok(Entity::Sender),
+            "paymaster" => Ok(Entity::Paymaster),
+            "aggregator" => Ok(Entity::Aggregator),
+            "factory" => Ok(Entity::Factory),
+            _ => bail!("Invalid entity: {s}"),
+        }
+    }
 }
 
 #[cfg(test)]

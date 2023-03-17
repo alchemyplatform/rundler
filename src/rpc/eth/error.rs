@@ -1,3 +1,4 @@
+use crate::common::types::Timestamp;
 use ethers::types::{Address, U256};
 use jsonrpsee::{
     core::Error as RpcError,
@@ -59,20 +60,20 @@ pub enum EthRpcError {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PaymasterValidationRejectedData {
-    paymaster: Address,
+    pub paymaster: Address,
     #[serde(skip_serializing)] // this is included in the message
-    reason: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OutOfTimeRangeData {
-    valid_until: U256,
-    valid_after: U256,
-    paymaster: Option<Address>,
+    pub valid_until: Timestamp,
+    pub valid_after: Timestamp,
+    pub paymaster: Option<Address>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct ThrottledOrBannedData {
     paymaster: Option<Address>,
     aggregator: Option<Address>,
@@ -153,7 +154,7 @@ impl StakeTooLowData {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct UnsupportedAggregatorData {
-    aggregator: Address,
+    pub aggregator: Address,
 }
 
 impl From<EthRpcError> for RpcError {

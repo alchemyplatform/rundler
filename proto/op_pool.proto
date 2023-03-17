@@ -29,8 +29,9 @@ message MempoolOp {
   uint64 valid_after = 3;
   uint64 valid_until = 4;
   bytes expected_code_hash = 5;
-  repeated Entity entities_needing_stake = 6;
-  repeated StorageSlot expected_storage_slots = 7;
+  repeated Entity entities_needing_stake = 7;
+  repeated StorageSlot expected_storage_slots = 8;
+  bytes sim_block_hash = 9;
 }
 
 message StorageSlot {

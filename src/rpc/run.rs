@@ -50,15 +50,25 @@ pub async fn run(
             .for_chain(chain),
     );
 
+    let op_pool_client = op_pool_client::OpPoolClient::connect(args.pool_url)
+        .await
+        .context("should have been able to connect to op pool")?;
+
     for api in args.api_namespaces {
         match api {
             ApiNamespace::Eth => module.merge(
-                EthApi::new(provider.clone(), vec![args.entry_point], args.chain_id).into_rpc(),
+                EthApi::new(
+                    provider.clone(),
+                    vec![args.entry_point],
+                    args.chain_id,
+                    // NOTE: this clone is cheap according to the docs because all it's doing is copying the reference to the channel
+                    op_pool_client.clone(),
+                )
+                .into_rpc(),
             )?,
-            ApiNamespace::Debug => module.merge(
-                DebugApi::new(op_pool_client::OpPoolClient::connect(args.pool_url.clone()).await?)
-                    .into_rpc(),
-            )?,
+            ApiNamespace::Debug => {
+                module.merge(DebugApi::new(op_pool_client.clone()).into_rpc())?
+            }
         }
     }
 

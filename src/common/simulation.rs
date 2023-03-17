@@ -18,7 +18,7 @@ use tonic::async_trait;
 use super::types::Entity;
 
 // One day in seconds. Specified in ERC-4337.
-const MIN_UNSTAKE_DELAY: u32 = 84600;
+pub const MIN_UNSTAKE_DELAY: u32 = 84600;
 
 #[derive(Clone, Debug)]
 pub struct SimulationSuccess {
@@ -94,9 +94,16 @@ impl SimulatorImpl {
         };
         let last_entity = Entity::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
+            let entity_addr = match last_entity {
+                Entity::Factory => factory_address,
+                Entity::Paymaster => paymaster_address,
+                Entity::Sender => Some(sender_address),
+                _ => None,
+            };
             Err(Violation::UnintendedRevertWithMessage(
                 last_entity,
                 failed_op.reason,
+                entity_addr,
             ))?
         }
         let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
@@ -200,7 +207,7 @@ impl Simulator for SimulatorImpl {
             if needs_stake {
                 entities_needing_stake.push(entity);
                 if !entity_info.is_staked {
-                    violations.push(Violation::NotStaked(entity));
+                    violations.push(Violation::NotStaked(entity, entity_info.address));
                 }
             }
             for address in banned_addresses_accessed {
@@ -222,7 +229,10 @@ impl Simulator for SimulatorImpl {
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             entities_needing_stake.push(Entity::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.min_stake_value) {
-                violations.push(Violation::NotStaked(Entity::Aggregator));
+                violations.push(Violation::NotStaked(
+                    Entity::Aggregator,
+                    aggregator_info.address,
+                ));
             }
         }
         if tracer_out.factory_called_create2_twice {
@@ -312,8 +322,8 @@ impl Display for SimulationError {
 pub enum Violation {
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(Entity),
-    #[display("reverted while simulating {0} validation: {0}")]
-    UnintendedRevertWithMessage(Entity, String),
+    #[display("reverted while simulating {0} validation: {1}")]
+    UnintendedRevertWithMessage(Entity, String, Option<Address>),
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
@@ -327,7 +337,7 @@ pub enum Violation {
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, Address),
     #[display("{0} must be staked")]
-    NotStaked(Entity),
+    NotStaked(Entity, Address),
     #[display("{0} must not send ETH during validation (except to entry point)")]
     CallHadValue(Entity),
     #[display("ran out of gas during {0} validation")]
