@@ -61,7 +61,7 @@ impl UserOperation {
         }
     }
 
-    fn pack(&self) -> Bytes {
+    pub fn pack(&self) -> Bytes {
         let mut packed = encode(&[
             Token::Address(self.sender),
             Token::Uint(self.nonce),
