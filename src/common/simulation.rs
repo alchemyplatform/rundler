@@ -19,6 +19,7 @@ const MIN_UNSTAKE_DELAY: u32 = 84600;
 
 #[derive(Clone, Debug)]
 pub struct SimulationSuccess {
+    pub block_hash: H256,
     pub pre_op_gas: U256,
     pub signature_failed: bool,
     pub valid_after: Timestamp,
@@ -133,11 +134,12 @@ impl Simulator for SimulatorImpl {
         block_id: Option<BlockId>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError> {
-        let block_id = eth::get_static_block_id(
+        let block_hash = eth::get_block_hash(
             &self.provider,
             block_id.unwrap_or(BlockNumber::Latest.into()),
         )
         .await?;
+        let block_id = block_hash.into();
         let context = match self.create_context(op, block_id).await {
             Ok(context) => context,
             error @ Err(_) => error?,
@@ -239,6 +241,7 @@ impl Simulator for SimulatorImpl {
             Err(violations)?
         }
         Ok(SimulationSuccess {
+            block_hash,
             pre_op_gas: entry_point_out.return_info.pre_op_gas,
             signature_failed: entry_point_out.return_info.sig_failed,
             valid_after: entry_point_out.return_info.valid_after,

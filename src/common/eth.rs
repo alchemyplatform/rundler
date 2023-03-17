@@ -135,7 +135,7 @@ pub async fn get_static_block_id(
     Ok(get_block_hash(provider, block_id).await?.into())
 }
 
-async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> anyhow::Result<H256> {
+pub async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> anyhow::Result<H256> {
     if let BlockId::Hash(hash) = block_id {
         return Ok(hash);
     }
