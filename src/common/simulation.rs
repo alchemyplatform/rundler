@@ -94,11 +94,14 @@ impl SimulatorImpl {
         let Some(ref revert_data) = tracer_out.revert_data else {
             Err(Violation::DidNotRevert)?
         };
+        let last_entity = Entity::from_index(tracer_out.phases.len() - 1).unwrap();
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
-            Err(Violation::UnintendedRevertWithMessage(failed_op.reason))?
+            Err(Violation::UnintendedRevertWithMessage(
+                last_entity,
+                failed_op.reason,
+            ))?
         }
         let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
-            let last_entity = Entity::from_index(tracer_out.phases.len()).unwrap();
             Err(Violation::UnintendedRevert(last_entity))?
         };
         let entity_infos = EntityInfos::new(
@@ -286,8 +289,8 @@ impl Display for SimulationError {
 pub enum Violation {
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(Entity),
-    #[display("reverted while simulating validation: {0}")]
-    UnintendedRevertWithMessage(String),
+    #[display("reverted while simulating {0} validation: {0}")]
+    UnintendedRevertWithMessage(Entity, String),
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
