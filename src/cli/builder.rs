@@ -1,5 +1,7 @@
+use anyhow::bail;
 use clap::Args;
 use tokio::{signal, sync::broadcast, sync::mpsc};
+use tracing::{error, info};
 
 use crate::builder;
 
@@ -55,19 +57,27 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
 
-    tokio::spawn(builder::run(
+    let handle = tokio::spawn(builder::run(
         builder_args.to_args(&common_args, pool_url)?,
         shutdown_rx,
         shutdown_scope,
     ));
 
-    match signal::ctrl_c().await {
-        Ok(_) => {
-            tracing::info!("Received SIGINT, shutting down");
-            shutdown_tx.send(())?;
+    tokio::select! {
+        res = handle => {
+            error!("Pool server exited unexpectedly: {res:?}");
         }
-        Err(err) => {
-            tracing::error!("Error while waiting for SIGINT: {err:?}");
+        res = signal::ctrl_c() => {
+            match res {
+                Ok(_) => {
+                    info!("Received SIGINT, shutting down");
+                    shutdown_tx.send(())?;
+                    shutdown_wait.recv().await;
+                }
+                Err(err) => {
+                    bail!("Error while waiting for SIGINT: {err:?}");
+                }
+            }
         }
     }
 

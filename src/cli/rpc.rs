@@ -1,6 +1,7 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::Args;
 use tokio::{signal, sync::broadcast, sync::mpsc};
+use tracing::{error, info};
 
 use crate::rpc;
 
@@ -106,19 +107,27 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
 
-    tokio::spawn(rpc::run(
+    let handle = tokio::spawn(rpc::run(
         rpc_args.to_args(&common_args, pool_url, builder_url)?,
         shutdown_rx,
         shutdown_scope,
     ));
 
-    match signal::ctrl_c().await {
-        Ok(_) => {
-            tracing::info!("Received SIGINT, shutting down");
-            shutdown_tx.send(())?;
+    tokio::select! {
+        res = handle => {
+            error!("Rpc server exited unexpectedly: {res:?}");
         }
-        Err(err) => {
-            tracing::error!("Error while waiting for SIGINT: {err:?}");
+        res = signal::ctrl_c() => {
+            match res {
+                Ok(_) => {
+                    info!("Received SIGINT, shutting down");
+                    shutdown_tx.send(())?;
+                    shutdown_wait.recv().await;
+                }
+                Err(err) => {
+                    bail!("Error while waiting for SIGINT: {err:?}");
+                }
+            }
         }
     }
 

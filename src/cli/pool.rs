@@ -1,6 +1,7 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::Args;
 use tokio::{signal, sync::broadcast, sync::mpsc};
+use tracing::{error, info};
 
 use crate::op_pool;
 
@@ -62,22 +63,29 @@ pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Res
     let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
     let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
 
-    tokio::spawn(op_pool::run(
+    let handle = tokio::spawn(op_pool::run(
         pool_args.to_args(&common_args)?,
         shutdown_rx,
         shutdown_scope,
     ));
 
-    match signal::ctrl_c().await {
-        Ok(_) => {
-            tracing::info!("Received SIGINT, shutting down");
-            shutdown_tx.send(())?;
+    tokio::select! {
+        res = handle => {
+            error!("Pool server exited unexpectedly: {res:?}");
         }
-        Err(err) => {
-            tracing::error!("Error while waiting for SIGINT: {err:?}");
+        res = signal::ctrl_c() => {
+            match res {
+                Ok(_) => {
+                    info!("Received SIGINT, shutting down");
+                    shutdown_tx.send(())?;
+                    shutdown_wait.recv().await;
+                }
+                Err(err) => {
+                    bail!("Error while waiting for SIGINT: {err:?}");
+                }
+            }
         }
     }
 
-    shutdown_wait.recv().await;
     Ok(())
 }

@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use anyhow::bail;
 use clap::Args;
 use tokio::signal;
 use tokio::sync::{broadcast, mpsc};
+use tracing::{error, info};
 
 use crate::builder;
 use crate::common::server::format_server_addr;
@@ -36,36 +38,49 @@ pub async fn run(bundler_args: BundlerCliArgs, common_args: CommonArgs) -> anyho
     let pool_url = format_server_addr(&pool_args.host, pool_args.port);
     let builder_url = None; // TODO(builder): add builder url
 
-    tokio::spawn(op_pool::run(
+    let pool_handle = tokio::spawn(op_pool::run(
         pool_args.to_args(&common_args)?,
         shutdown_tx.subscribe(),
         shutdown_scope.clone(),
     ));
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(builder::run(
+    let builder_handle = tokio::spawn(builder::run(
         builder_args.to_args(&common_args, pool_url.clone())?,
         shutdown_tx.subscribe(),
         shutdown_scope.clone(),
     ));
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(rpc::run(
+    let rpc_handle = tokio::spawn(rpc::run(
         rpc_args.to_args(&common_args, pool_url, builder_url)?,
         shutdown_rx,
         shutdown_scope,
     ));
 
-    match signal::ctrl_c().await {
-        Ok(_) => {
-            tracing::info!("Received SIGINT, shutting down");
-            shutdown_tx.send(())?;
+    tokio::select! {
+        res = pool_handle => {
+            error!("Pool server exited unexpectedly: {res:?}");
         }
-        Err(err) => {
-            tracing::error!("Error while waiting for SIGINT: {err:?}");
+        res = builder_handle => {
+            error!("Builder server exited unexpectedly: {res:?}");
+        }
+        res = rpc_handle => {
+            error!("RPC server exited unexpectedly: {res:?}");
+        }
+        res = signal::ctrl_c() => {
+            match res {
+                Ok(_) => {
+                    info!("Received SIGINT, shutting down");
+                }
+                Err(err) => {
+                    bail!("Error while waiting for SIGINT: {err:?}");
+                }
+            }
         }
     }
 
+    shutdown_tx.send(())?;
     shutdown_wait.recv().await;
     Ok(())
 }
