@@ -1,14 +1,8 @@
-use ethers::types::{Address, U256};
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
-pub struct Args {
-    pub port: u16,
-    pub host: String,
-    pub entry_point: Address,
-    pub chain_id: U256,
-}
+pub struct Args {}
 
 pub async fn run(
     _args: Args,
