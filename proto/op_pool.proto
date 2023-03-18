@@ -15,13 +15,22 @@ message UserOperation {
   bytes signature = 11;
 }
 
+enum Entity {
+  ENTITY_UNSPECIFIED = 0;
+  ENTITY_SENDER = 1;
+  ENTITY_PAYMASTER = 2;
+  ENTITY_AGGREGATOR = 3;
+  ENTITY_FACTORY = 4;
+}
+
 message MempoolOp {
   UserOperation uo = 1;
   bytes aggregator = 2;
   uint64 valid_after = 3;
   uint64 valid_until = 4;
   bytes expected_code_hash = 5;
-  repeated StorageSlot expected_storage_slots = 6;
+  repeated Entity entities_needing_stake = 6;
+  repeated StorageSlot expected_storage_slots = 7;
 }
 
 message StorageSlot {
@@ -112,7 +121,8 @@ message ErrorInfo {
 }
 
 enum ErrorReason {
-  UNSPECIFIED = 0;
-  ENTITY_THROTTLED = 1;
-  OPERATION_REJECTED = 2;
+  ERROR_REASON_UNSPECIFIED = 0;
+  ERROR_REASON_INTERNAL = 1;
+  ERROR_REASON_ENTITY_THROTTLED = 2;
+  ERROR_REASON_OPERATION_REJECTED = 3;
 }

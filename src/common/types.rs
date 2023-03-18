@@ -2,13 +2,16 @@ mod timestamp;
 mod validation_results;
 
 pub use crate::common::contracts::shared_types::UserOperation;
+use strum::EnumIter;
+pub use timestamp::*;
+pub use validation_results::*;
+
 use ethers::{
     abi::{encode, AbiEncode, Token},
     types::{Address, Bytes, H256, U256},
     utils::keccak256,
 };
-pub use timestamp::*;
-pub use validation_results::*;
+use parse_display::Display;
 
 /// Unique identifier for a user operation from a given sender
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -88,6 +91,15 @@ pub struct ExpectedStorageSlot {
     pub address: Address,
     pub slot: U256,
     pub value: U256,
+}
+
+#[derive(Display, Debug, Clone, Copy, Eq, PartialEq, EnumIter)]
+#[display(style = "lowercase")]
+pub enum Entity {
+    Sender,
+    Paymaster,
+    Aggregator,
+    Factory,
 }
 
 #[cfg(test)]

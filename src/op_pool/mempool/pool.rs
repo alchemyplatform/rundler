@@ -14,7 +14,8 @@ use super::{
     PoolOperation,
 };
 
-const MAX_MEMPOOL_USEROPS_PER_SENDER: usize = 1;
+/// The maximum number of operations a sender can have in the mempool
+const MAX_MEMPOOL_USEROPS_PER_SENDER: usize = 16;
 
 /// Pool of user operations
 #[derive(Debug)]
@@ -30,7 +31,7 @@ pub struct PoolInner {
     // Best operations, sorted by gas price
     best: BTreeSet<OrderedPoolOperation>,
     // Count of operations by sender
-    count_by_sender: HashMap<Address, usize>,
+    count_by_address: HashMap<Address, usize>,
     // Submission ID counter
     submission_id: u64,
 }
@@ -41,7 +42,7 @@ impl PoolInner {
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
-            count_by_sender: HashMap::new(),
+            count_by_address: HashMap::new(),
             entry_point,
             chain_id,
             submission_id: 0,
@@ -66,16 +67,21 @@ impl PoolInner {
             }
         }
 
-        // Check sender count and reject if too many, else increment
-        let sender_count = self.count_by_sender.entry(op.uo.sender).or_insert(0);
-        if *sender_count >= MAX_MEMPOOL_USEROPS_PER_SENDER {
+        // Check sender count in mempool
+        if *self.count_by_address.get(&op.uo.sender).unwrap_or(&0) >= MAX_MEMPOOL_USEROPS_PER_SENDER
+        {
             return Err(MempoolError::MaxOperationsReached(
                 MAX_MEMPOOL_USEROPS_PER_SENDER,
                 op.uo.sender,
             ));
         }
-        *sender_count += 1;
 
+        // update counts
+        for (_, addr) in op.entities() {
+            *self.count_by_address.entry(addr).or_insert(0) += 1;
+        }
+
+        // create and insert ordered operation
         let pool_op = OrderedPoolOperation {
             po: Arc::new(op),
             submission_id: self.next_submission_id(),
@@ -102,31 +108,39 @@ impl PoolInner {
         self.best.clone().into_iter().map(|v| v.po)
     }
 
-    pub fn remove_operation_by_hash(&mut self, hash: H256) -> bool {
-        if let Entry::Occupied(e) = self.by_hash.entry(hash) {
-            self.by_id.remove(&e.get().uo().id());
-            self.best.remove(e.get());
+    pub fn address_count(&self, address: Address) -> usize {
+        self.count_by_address.get(&address).copied().unwrap_or(0)
+    }
 
-            if let Entry::Occupied(mut count_entry) =
-                self.count_by_sender.entry(e.get().uo().sender)
-            {
-                *count_entry.get_mut() -= 1;
-                if *count_entry.get() == 0 {
-                    count_entry.remove_entry();
-                }
+    pub fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+        if let Some(op) = self.by_hash.remove(&hash) {
+            self.by_id.remove(&op.uo().id());
+            self.best.remove(&op);
+
+            for (_, addr) in op.po.entities() {
+                self.decrement_address_count(addr);
             }
 
-            e.remove_entry();
-            return true;
+            return Some(op.po);
         }
-        false
+
+        None
     }
 
     pub fn clear(&mut self) {
         self.by_hash.clear();
         self.by_id.clear();
         self.best.clear();
-        self.count_by_sender.clear();
+        self.count_by_address.clear();
+    }
+
+    fn decrement_address_count(&mut self, address: Address) {
+        if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
+            *count_entry.get_mut() -= 1;
+            if *count_entry.get() == 0 {
+                count_entry.remove_entry();
+            }
+        }
     }
 
     fn next_submission_id(&mut self) -> u64 {
@@ -177,10 +191,12 @@ impl PartialEq for OrderedPoolOperation {
 
 #[cfg(test)]
 mod tests {
+    use ethers::types::Bytes;
+
     use super::*;
 
     #[test]
-    fn test_add_single_op() {
+    fn add_single_op() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let op = create_op(Address::random(), 0, 1);
         let hash = pool.add_operation(op.clone()).unwrap();
@@ -191,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_multiple_ops() {
+    fn add_multiple_ops() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let ops = vec![
             create_op(Address::random(), 0, 1),
@@ -217,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn test_best_ties() {
+    fn best_ties() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let ops = vec![
             create_op(Address::random(), 0, 1),
@@ -238,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_op() {
+    fn remove_op() {
         let mut pool = PoolInner::new(Address::zero(), 1.into());
         let ops = vec![
             create_op(Address::random(), 0, 3),
@@ -251,17 +267,70 @@ mod tests {
             hashes.push(pool.add_operation(op.clone()).unwrap());
         }
 
-        pool.remove_operation_by_hash(hashes[0]);
+        assert!(pool.remove_operation_by_hash(hashes[0]).is_some());
         check_map_entry(pool.by_hash.get(&hashes[0]), None);
         check_map_entry(pool.best.iter().next(), Some(&ops[1]));
 
-        pool.remove_operation_by_hash(hashes[1]);
+        assert!(pool.remove_operation_by_hash(hashes[1]).is_some());
         check_map_entry(pool.by_hash.get(&hashes[1]), None);
         check_map_entry(pool.best.iter().next(), Some(&ops[2]));
 
-        pool.remove_operation_by_hash(hashes[2]);
+        assert!(pool.remove_operation_by_hash(hashes[2]).is_some());
         check_map_entry(pool.by_hash.get(&hashes[2]), None);
         check_map_entry(pool.best.iter().next(), None);
+
+        assert!(pool.remove_operation_by_hash(hashes[0]).is_none());
+        assert!(pool.remove_operation_by_hash(hashes[1]).is_none());
+        assert!(pool.remove_operation_by_hash(hashes[2]).is_none());
+    }
+
+    #[test]
+    fn too_many_ops() {
+        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let addr = Address::random();
+        for i in 0..MAX_MEMPOOL_USEROPS_PER_SENDER {
+            let op = create_op(addr, i, 1);
+            pool.add_operation(op).unwrap();
+        }
+
+        let op = create_op(addr, MAX_MEMPOOL_USEROPS_PER_SENDER, 1);
+        assert!(pool.add_operation(op).is_err());
+    }
+
+    #[test]
+    fn address_count() {
+        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let sender = Address::random();
+        let paymaster = Address::random();
+        let factory = Address::random();
+        let aggregator = Address::random();
+
+        let mut op = create_op(sender, 0, 1);
+        op.uo.paymaster_and_data = Bytes::from(paymaster.as_bytes().to_vec());
+        op.uo.init_code = Bytes::from(factory.as_bytes().to_vec());
+        op.aggregator = Some(aggregator);
+
+        let count = 5;
+        let mut hashes = vec![];
+        for i in 0..count {
+            let mut op = op.clone();
+            op.uo.nonce = i.into();
+            hashes.push(pool.add_operation(op).unwrap());
+        }
+
+        assert_eq!(pool.address_count(sender), 5);
+        assert_eq!(pool.address_count(paymaster), 5);
+        assert_eq!(pool.address_count(factory), 5);
+        assert_eq!(pool.address_count(aggregator), 5);
+
+        for hash in hashes.iter() {
+            assert!(pool.remove_operation_by_hash(*hash).is_some());
+        }
+
+        assert_eq!(pool.address_count(sender), 0);
+        assert_eq!(pool.address_count(paymaster), 0);
+        assert_eq!(pool.address_count(factory), 0);
+        assert_eq!(pool.address_count(aggregator), 0);
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {

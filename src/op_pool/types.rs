@@ -1,6 +1,8 @@
 use super::mempool::{ExpectedStorageSlot, PoolOperation};
-use crate::common::protos::op_pool::{MempoolOp, StorageSlot, UserOperation};
-use crate::common::protos::{to_le_bytes, ProtoBytes, ProtoTimestampMillis};
+use crate::common::protos::op_pool::{
+    Entity as ProtoEntity, MempoolOp, StorageSlot, UserOperation,
+};
+use crate::common::protos::{to_le_bytes, ConversionError, ProtoBytes, ProtoTimestampMillis};
 use anyhow::Context;
 use ethers::types::{Address, H256};
 
@@ -14,6 +16,11 @@ impl TryFrom<&PoolOperation> for MempoolOp {
             valid_after: op.valid_after.timestamp_millis().try_into()?,
             valid_until: op.valid_until.timestamp_millis().try_into()?,
             expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
+            entities_needing_stake: op
+                .entities_needing_stake
+                .iter()
+                .map(|e| ProtoEntity::from(*e).into())
+                .collect(),
             expected_storage_slots: op.expected_storage_slots.iter().map(|s| s.into()).collect(),
         })
     }
@@ -42,6 +49,14 @@ impl TryFrom<MempoolOp> for PoolOperation {
             .collect::<Result<Vec<_>, _>>()?;
 
         let expected_code_hash = H256::from_slice(&op.expected_code_hash);
+        let entities_needing_stake = op
+            .entities_needing_stake
+            .into_iter()
+            .map(|e| {
+                let pe = ProtoEntity::from_i32(e).ok_or(ConversionError::InvalidEntity(e))?;
+                pe.try_into()
+            })
+            .collect::<Result<Vec<_>, ConversionError>>()?;
 
         Ok(PoolOperation {
             uo,
@@ -49,6 +64,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             valid_after,
             valid_until,
             expected_code_hash,
+            entities_needing_stake,
             expected_storage_slots,
         })
     }
@@ -120,6 +136,7 @@ mod tests {
             valid_after: now_ms.try_into().unwrap(),
             valid_until: now_ms.try_into().unwrap(),
             expected_code_hash: vec![0; 32],
+            entities_needing_stake: vec![],
             expected_storage_slots: vec![op_pool::StorageSlot {
                 address: TEST_ADDRESS_ARR.to_vec(),
                 slot: vec![0; 32],
@@ -158,6 +175,7 @@ mod tests {
             valid_after: now,
             valid_until: now,
             expected_code_hash: H256::random(),
+            entities_needing_stake: vec![],
             expected_storage_slots: vec![ExpectedStorageSlot {
                 address: TEST_ADDRESS_STR.parse().unwrap(),
                 slot: 1234.into(),

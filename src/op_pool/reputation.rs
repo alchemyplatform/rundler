@@ -1,4 +1,4 @@
-use ethers::types::{Address, H256};
+use ethers::types::Address;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -14,19 +14,11 @@ pub trait ReputationManager: Send + Sync {
     /// Called by mempool before returning operations to bundler
     fn status(&self, address: Address) -> ReputationStatus;
 
-    /// Called by mempool when an operation is added to the pool
-    fn add_seen<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>);
+    /// Called by mempool when an operation that requires stake is added to the pool
+    fn add_seen(&self, address: Address);
 
-    /// Called by the mempool when an operation is removed from the pool
-    fn add_included<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>);
-
-    /// Called by the mempool during a block event when the aggregator changes
-    /// Must be called before `add_included` for an operation that uses the aggregator
-    fn set_aggregator(&self, aggregator: Option<Address>, txn_hash: H256);
-
-    /// Called by the mempool during a block event to check if
-    /// there is an aggregator set for the current txn_hash
-    fn get_aggregator(&self, txn_hash: H256) -> Option<Address>;
+    /// Called by the mempool when an operation that requires stake is removed from the pool
+    fn add_included(&self, address: Address);
 
     /// Called by debug API
     fn dump_reputation(&self) -> Vec<Reputation>;
@@ -62,26 +54,12 @@ impl ReputationManager for HourlyMovingAverageReputation {
         self.reputation.read().status(address)
     }
 
-    fn add_seen<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>) {
-        let mut reputation = self.reputation.write();
-        for address in addresses {
-            reputation.add_seen(*address);
-        }
+    fn add_seen<'a>(&self, address: Address) {
+        self.reputation.write().add_seen(address);
     }
 
-    fn add_included<'a>(&self, addresses: impl IntoIterator<Item = &'a Address>) {
-        let mut reputation = self.reputation.write();
-        for address in addresses {
-            reputation.add_included(*address);
-        }
-    }
-
-    fn set_aggregator(&self, aggregator: Option<Address>, txn_hash: H256) {
-        self.reputation.write().set_aggregator(aggregator, txn_hash);
-    }
-
-    fn get_aggregator(&self, txn_hash: H256) -> Option<Address> {
-        self.reputation.read().get_aggregator(txn_hash)
+    fn add_included<'a>(&self, address: Address) {
+        self.reputation.write().add_included(address);
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -105,7 +83,7 @@ impl ReputationManager for HourlyMovingAverageReputation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ReputationParams {
     min_inclusion_rate_denominator: u64,
     throttling_slack: u64,
@@ -135,8 +113,6 @@ impl ReputationParams {
 struct AddressReputation {
     counts: HashMap<Address, AddressCount>,
     params: ReputationParams,
-    aggregator: Option<Address>,
-    aggregator_txn_hash: H256,
 }
 
 impl AddressReputation {
@@ -144,8 +120,6 @@ impl AddressReputation {
         Self {
             counts: HashMap::new(),
             params,
-            aggregator: None,
-            aggregator_txn_hash: H256::zero(),
         }
     }
 
@@ -156,9 +130,9 @@ impl AddressReputation {
         };
 
         let min_expected_included = count.ops_seen / self.params.min_inclusion_rate_denominator;
-        if min_expected_included <= count.ops_included + self.params.throttling_slack {
+        if min_expected_included <= (count.ops_included + self.params.throttling_slack) {
             ReputationStatus::Ok
-        } else if min_expected_included <= count.ops_included + self.params.ban_slack {
+        } else if min_expected_included <= (count.ops_included + self.params.ban_slack) {
             ReputationStatus::Throttled
         } else {
             ReputationStatus::Banned
@@ -173,19 +147,6 @@ impl AddressReputation {
     pub fn add_included(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_included += 1;
-    }
-
-    pub fn set_aggregator(&mut self, aggregator: Option<Address>, txn_hash: H256) {
-        self.aggregator = aggregator;
-        self.aggregator_txn_hash = txn_hash;
-    }
-
-    pub fn get_aggregator(&self, txn_hash: H256) -> Option<Address> {
-        if txn_hash != self.aggregator_txn_hash {
-            None
-        } else {
-            self.aggregator
-        }
     }
 
     pub fn set_reputation(&mut self, address: Address, ops_seen: u64, ops_included: u64) {
@@ -208,4 +169,140 @@ impl AddressReputation {
 struct AddressCount {
     ops_seen: u64,
     ops_included: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test AddressReputation
+
+    #[test]
+    fn seen_included() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+
+        for _ in 0..1000 {
+            reputation.add_seen(addr);
+            reputation.add_included(addr);
+        }
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 1000);
+        assert_eq!(counts.ops_included, 1000);
+    }
+
+    #[test]
+    fn set_rep() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+
+        reputation.set_reputation(addr, 1000, 1000);
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 1000);
+        assert_eq!(counts.ops_included, 1000);
+    }
+
+    #[test]
+    fn reputation_ok() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+        reputation.add_seen(addr);
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
+    }
+
+    #[test]
+    fn reputation_throttled() {
+        let addr = Address::random();
+        let params = ReputationParams::bundler_default();
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included =
+            ops_seen / params.min_inclusion_rate_denominator - params.throttling_slack - 1;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Throttled);
+    }
+
+    #[test]
+    fn reputation_throttled_edge() {
+        let addr = Address::random();
+        let params = ReputationParams::bundler_default();
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included =
+            ops_seen / params.min_inclusion_rate_denominator - params.throttling_slack;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
+    }
+
+    #[test]
+    fn reputation_banned() {
+        let addr = Address::random();
+        let params = ReputationParams::bundler_default();
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included = ops_seen / params.min_inclusion_rate_denominator - params.ban_slack - 1;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Banned);
+    }
+
+    #[test]
+    fn hourly_update() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
+
+        for _ in 0..1000 {
+            reputation.add_seen(addr);
+            reputation.add_included(addr);
+        }
+
+        reputation.hourly_update();
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 1000 - 1000 / 24);
+        assert_eq!(counts.ops_included, 1000 - 1000 / 24);
+    }
+
+    // Test HourlyMovingAverageReputation
+
+    #[test]
+    fn manager_seen_included() {
+        let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
+        let addrs = [Address::random(), Address::random(), Address::random()];
+
+        for _ in 0..10 {
+            for addr in addrs {
+                manager.add_seen(addr);
+                manager.add_included(addr);
+            }
+        }
+
+        for addr in &addrs {
+            assert_eq!(manager.status(*addr), ReputationStatus::Ok);
+
+            let rep = manager.reputation.read();
+            let counts = rep.counts.get(addr).unwrap();
+            assert_eq!(counts.ops_seen, 10);
+            assert_eq!(counts.ops_included, 10);
+        }
+    }
+
+    #[test]
+    fn manager_set_dump_reputation() {
+        let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
+        let addrs = [Address::random(), Address::random(), Address::random()];
+
+        for addr in &addrs {
+            manager.set_reputation(*addr, 1000, 1000);
+        }
+
+        let reps = manager.dump_reputation();
+        for rep in reps {
+            assert_eq!(rep.ops_seen, 1000);
+            assert_eq!(rep.ops_included, 1000);
+            let a = Address::from_slice(&rep.address);
+            assert!(addrs.contains(&a));
+        }
+    }
 }
