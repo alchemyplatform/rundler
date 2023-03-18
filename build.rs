@@ -23,6 +23,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("GetCodeHashes")?,
         abigen_of("SimpleAccount")?,
         abigen_of("SimpleAccountFactory")?,
+        abigen_of("VerifyingPaymaster")?,
     ])
     .build()?
     .write_to_module("src/common/contracts", false)?;

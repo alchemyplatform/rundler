@@ -3,55 +3,17 @@ use anyhow::Context;
 use ethers::abi::{AbiDecode, AbiEncode, RawLog};
 use ethers::contract::builders::ContractCall;
 use ethers::contract::{Contract, ContractDeployer, ContractError};
-use ethers::core::k256::ecdsa::SigningKey;
-use ethers::middleware::SignerMiddleware;
 use ethers::providers::{
     Http, HttpClientError, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError,
 };
-use ethers::signers::{LocalWallet, Signer};
 use ethers::types::{
-    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt,
-    TransactionRequest, H256,
+    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, H256,
 };
-use ethers::utils;
 use serde_json::Value;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::time::Duration;
 use std::{error, mem};
-
-/// Creates a provider that connects to a locally running Geth node on its
-/// default port of 8545.
-pub fn new_local_provider() -> Arc<Provider<Http>> {
-    // Set low interval because Geth node in --dev mode mines very quickly once
-    // it sees a transaction. By default, the provider waits seven seconds to
-    // poll for new blocks, which is excruciating while testing.
-    let provider = Provider::<Http>::try_from("http://localhost:8545")
-        .expect("localhost url should parse")
-        .interval(Duration::from_millis(100));
-    Arc::new(provider)
-}
-
-/// Given a provider connected to a Geth node in --dev mode, grants a large
-/// amount of ETH to the specified address.
-pub async fn grant_dev_eth(provider: &Provider<Http>, to: Address) -> anyhow::Result<()> {
-    // A Geth node in --dev mode has one account with massive amounts of ETH.
-    let funder_address = *provider
-        .get_accounts()
-        .await
-        .context("should be able to get accounts from node")?
-        .first()
-        .context("a Geth node in dev mode should have one account")?;
-    // 1000 ETH ought to be enough for anyone.
-    let value = utils::parse_ether(1000).unwrap();
-    let tx = provider.send_transaction(
-        TransactionRequest::pay(to, value).from(funder_address),
-        None,
-    );
-    await_mined_tx(tx, "grant ETH").await?;
-    Ok(())
-}
 
 /// Waits for a pending transaction to be mined, providing appropriate error
 /// messages for each point of failure.
@@ -146,33 +108,6 @@ pub async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> any
         .context("block should exist to get latest hash")?
         .hash
         .context("hash should be present on block")
-}
-
-/// Creates a client that can send transactions and sign them with a secret
-/// based on a fixed id. Can be used to generate accounts with deterministic
-/// addresses for testing.
-pub fn new_test_client(
-    provider: Arc<Provider<Http>>,
-    test_account_id: u8,
-    chain_id: u32,
-) -> Arc<SignerMiddleware<Arc<Provider<Http>>, LocalWallet>> {
-    let wallet = new_test_wallet(test_account_id, chain_id);
-    Arc::new(SignerMiddleware::new(provider, wallet))
-}
-
-/// Creates a wallet whose secret is based on a fixed id. Differs from
-/// `new_test_client` in that a wallet on its own can only sign messages but
-/// not send transactions.
-pub fn new_test_wallet(test_account_id: u8, chain_id: u32) -> LocalWallet {
-    let bytes = test_signing_key_bytes(test_account_id);
-    let key = SigningKey::from_bytes(&bytes).expect("should create signing key for test wallet");
-    LocalWallet::from(key).with_chain_id(chain_id)
-}
-
-pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
-    let mut bytes = [0_u8; 32];
-    bytes[31] = test_account_id;
-    bytes
 }
 
 /// Hashes together the code from all the provided addresses. The order of the input addresses does

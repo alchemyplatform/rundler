@@ -1,4 +1,5 @@
 pub mod contracts;
+pub mod dev;
 pub mod eth;
 pub mod protos;
 pub mod server;
