@@ -3,7 +3,7 @@ use clap::Args;
 use tokio::{signal, sync::broadcast, sync::mpsc};
 use tracing::{error, info};
 
-use crate::builder;
+use crate::{builder, common::server::format_server_addr};
 
 use super::CommonArgs;
 
@@ -29,6 +29,13 @@ impl BuilderArgs {
         _pool_url: String,
     ) -> anyhow::Result<builder::Args> {
         Ok(builder::Args {})
+    }
+
+    pub fn url(&self, secure: bool) -> Option<String> {
+        match (self.host.as_ref(), self.port) {
+            (Some(host), Some(port)) => Some(format_server_addr(host, port, secure)),
+            _ => None,
+        }
     }
 }
 

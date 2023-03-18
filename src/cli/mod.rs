@@ -2,7 +2,7 @@ use std::io;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod builder;
 mod bundler;
@@ -28,7 +28,10 @@ pub async fn run() -> anyhow::Result<()> {
         tracing_appender::non_blocking(io::stdout())
     };
 
-    let subscriber = FmtSubscriber::builder().with_writer(appender).finish();
+    let subscriber = FmtSubscriber::builder()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(appender)
+        .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
     tracing::info!("Parsed CLI options: {:#?}", opt);

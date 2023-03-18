@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
 use crate::common::protos::op_pool::op_pool_client;
-use crate::common::server::format_server_addr;
+use crate::common::server::format_socket_addr;
 use crate::rpc::debug::{DebugApi, DebugApiServer};
 use crate::rpc::eth::{EthApi, EthApiServer};
 
@@ -33,7 +33,7 @@ pub async fn run(
     mut shutdown_rx: broadcast::Receiver<()>,
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
-    let addr: SocketAddr = format_server_addr(&args.host, args.port).parse()?;
+    let addr: SocketAddr = format_socket_addr(&args.host, args.port).parse()?;
     tracing::info!("Starting server on {}", addr);
 
     let mut module = RpcModule::new(());

@@ -1,3 +1,4 @@
+use anyhow::Context;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
@@ -6,8 +7,11 @@ pub struct Args {}
 
 pub async fn run(
     _args: Args,
-    _shutdown_rx: broadcast::Receiver<()>,
+    mut shutdown_rx: broadcast::Receiver<()>,
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
-    Ok(())
+    shutdown_rx
+        .recv()
+        .await
+        .context("should wait for shutdown signal")
 }
