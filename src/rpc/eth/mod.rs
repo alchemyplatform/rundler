@@ -1,5 +1,6 @@
 mod error;
 
+use crate::common::types::CheapClone;
 use crate::common::{
     contracts::entry_point::{
         EntryPoint, EntryPointCalls, EntryPointErrors, UserOperationEventFilter,

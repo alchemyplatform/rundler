@@ -14,6 +14,7 @@ use ethers::types::{Address, Bytes, Log, TransactionReceipt, H256, U256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 
+use crate::common::types::CheapClone;
 pub use run::*;
 
 /// API namespace
@@ -76,11 +77,7 @@ pub struct UserOperationOptionalGas {
     signature: Bytes,
 }
 
-impl UserOperationOptionalGas {
-    pub fn cheap_clone(&self) -> Self {
-        self.clone()
-    }
-}
+impl CheapClone for UserOperationOptionalGas {}
 
 /// Gas overheads for user operations
 /// used in calculating the pre-verification gas

@@ -1,7 +1,7 @@
 use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
 use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
 use crate::common::types::{
-    ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
+    CheapClone, ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
     ValidationReturnInfo,
 };
 use crate::common::{eth, tracer};
@@ -62,7 +62,7 @@ impl SimulatorImpl {
         entry_point_address: Address,
         min_stake_value: U256,
     ) -> Self {
-        let entry_point = EntryPoint::new(entry_point_address, provider.clone());
+        let entry_point = EntryPoint::new(entry_point_address, provider.cheap_clone());
         Self {
             provider,
             entry_point,
@@ -156,7 +156,7 @@ impl Simulator for SimulatorImpl {
                 continue;
             };
             for opcode in &phase.forbidden_opcodes_used {
-                violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
+                violations.push(Violation::UsedForbiddenOpcode(entity, opcode.cheap_clone()));
             }
             if phase.used_invalid_gas_opcode {
                 violations.push(Violation::InvalidGasOpcode(entity));

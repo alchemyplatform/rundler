@@ -12,6 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::common::protos::op_pool::op_pool_client;
 use crate::common::server::format_socket_addr;
+use crate::common::types::CheapClone;
 use crate::rpc::debug::{DebugApi, DebugApiServer};
 use crate::rpc::eth::{EthApi, EthApiServer};
 
@@ -53,7 +54,12 @@ pub async fn run(
     for api in args.api_namespaces {
         match api {
             ApiNamespace::Eth => module.merge(
-                EthApi::new(provider.clone(), vec![args.entry_point], args.chain_id).into_rpc(),
+                EthApi::new(
+                    provider.cheap_clone(),
+                    vec![args.entry_point],
+                    args.chain_id,
+                )
+                .into_rpc(),
             )?,
             ApiNamespace::Debug => module.merge(
                 DebugApi::new(op_pool_client::OpPoolClient::connect(args.pool_url.clone()).await?)

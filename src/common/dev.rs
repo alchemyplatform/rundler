@@ -3,7 +3,7 @@ use crate::common::contracts::simple_account::SimpleAccount;
 use crate::common::contracts::simple_account_factory::SimpleAccountFactory;
 use crate::common::contracts::verifying_paymaster::VerifyingPaymaster;
 use crate::common::eth;
-use crate::common::types::UserOperation;
+use crate::common::types::{CheapClone, UserOperation};
 use anyhow::Context;
 use ethers::abi::AbiEncode;
 use ethers::contract::builders::ContractCall;
@@ -11,7 +11,7 @@ use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Middleware, Provider};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, Bytes, TransactionRequest, U256};
+use ethers::types::{Address, TransactionRequest, U256};
 use ethers::utils;
 use std::env;
 use std::io::Write;
@@ -280,10 +280,10 @@ impl DevClients {
         use_paymaster: bool,
     ) -> anyhow::Result<UserOperation> {
         let tx = &call.tx;
-        let inner_call_data = Bytes::clone(
-            tx.data()
-                .context("call executed by wallet should have call data")?,
-        );
+        let inner_call_data = tx
+            .data()
+            .context("call executed by wallet should have call data")?
+            .cheap_clone();
         let &to = tx
             .to_addr()
             .context("call executed by wallet should have to address")?;
@@ -292,13 +292,13 @@ impl DevClients {
             .nonce()
             .await
             .context("should read nonce from wallet")?;
-        let call_data = Bytes::clone(
-            self.wallet
-                .execute(to, value, inner_call_data)
-                .tx
-                .data()
-                .context("wallet execute should have call data")?,
-        );
+        let call_data = self
+            .wallet
+            .execute(to, value, inner_call_data)
+            .tx
+            .data()
+            .context("wallet execute should have call data")?
+            .cheap_clone();
         let mut op = UserOperation {
             sender: self.wallet.address(),
             call_data,
@@ -315,7 +315,7 @@ impl DevClients {
             // Yes, the paymaster really takes valid_until before valid_after.
             let paymaster_op_hash = self
                 .paymaster
-                .get_hash(op.clone(), valid_until, valid_after)
+                .get_hash(op.cheap_clone(), valid_until, valid_after)
                 .await
                 .context("should call paymaster to get op hash")?;
             let paymaster_signature = self

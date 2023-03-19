@@ -8,6 +8,7 @@ use tracing::{error, info};
 
 use crate::builder;
 use crate::common::server::format_server_addr;
+use crate::common::types::CheapClone;
 use crate::op_pool;
 use crate::rpc;
 
@@ -44,14 +45,14 @@ pub async fn run(bundler_args: BundlerCliArgs, common_args: CommonArgs) -> anyho
     let pool_handle = tokio::spawn(op_pool::run(
         pool_args.to_args(&common_args)?,
         shutdown_tx.subscribe(),
-        shutdown_scope.clone(),
+        shutdown_scope.cheap_clone(),
     ));
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let builder_handle = tokio::spawn(builder::run(
         builder_args.to_args(&common_args, pool_url.clone())?,
         shutdown_tx.subscribe(),
-        shutdown_scope.clone(),
+        shutdown_scope.cheap_clone(),
     ));
     tokio::time::sleep(Duration::from_millis(100)).await;
 

@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
 use crate::common::contracts::entry_point::{EntryPoint, EntryPointEvents};
+use crate::common::types::CheapClone;
 
 /// Event when a new block is mined.
 #[derive(Debug)]
@@ -44,7 +45,7 @@ impl EventListener {
                 // TODO: revisit a safe default for production
                 .interval(Duration::from_millis(100)),
         );
-        let entry_point = EntryPoint::new(entry_point, provider.clone());
+        let entry_point = EntryPoint::new(entry_point, provider.cheap_clone());
         Ok(Self {
             provider,
             entry_point,

@@ -1,16 +1,15 @@
-use ethers::types::{Address, H256};
-use jsonrpsee::core::{Error as RpcError, RpcResult};
-use jsonrpsee::proc_macros::rpc;
-use tonic::async_trait;
-use tonic::transport::Channel;
-
 use super::RpcReputation;
 use crate::common::protos;
 use crate::common::protos::op_pool::{
     op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
     DebugSetReputationRequest,
 };
-use crate::common::types::UserOperation;
+use crate::common::types::{CheapClone, UserOperation};
+use ethers::types::{Address, H256};
+use jsonrpsee::core::{Error as RpcError, RpcResult};
+use jsonrpsee::proc_macros::rpc;
+use tonic::async_trait;
+use tonic::transport::Channel;
 
 /// Debug API
 #[rpc(server, namespace = "debug")]
@@ -55,7 +54,7 @@ impl DebugApiServer for DebugApi {
             .op_pool_client
             // https://docs.rs/tonic/latest/tonic/client/index.html#concurrent-usage
             // solution to using in concurrent context is to clone
-            .clone()
+            .cheap_clone()
             .debug_clear_state(DebugClearStateRequest {})
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
@@ -66,7 +65,7 @@ impl DebugApiServer for DebugApi {
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<UserOperation>> {
         let response = self
             .op_pool_client
-            .clone()
+            .cheap_clone()
             .debug_dump_mempool(DebugDumpMempoolRequest {
                 entry_point: entry_point.to_fixed_bytes().into(),
             })
@@ -99,7 +98,7 @@ impl DebugApiServer for DebugApi {
     ) -> RpcResult<String> {
         let _ = self
             .op_pool_client
-            .clone()
+            .cheap_clone()
             .debug_set_reputation(DebugSetReputationRequest {
                 entry_point: entry_point.to_fixed_bytes().into(),
                 reputations: reputations.into_iter().map(Into::into).collect(),
@@ -112,7 +111,7 @@ impl DebugApiServer for DebugApi {
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>> {
         let result = self
             .op_pool_client
-            .clone()
+            .cheap_clone()
             .debug_dump_reputation(DebugDumpReputationRequest {
                 entry_point: entry_point.to_fixed_bytes().into(),
             })
