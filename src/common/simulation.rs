@@ -161,7 +161,8 @@ impl Simulator for SimulatorImpl {
             if phase.used_invalid_gas_opcode {
                 violations.push(Violation::InvalidGasOpcode(entity));
             }
-            let mut needs_stake = false;
+            let mut needs_stake = entity == Entity::Paymaster
+                && !entry_point_out.return_info.paymaster_context.is_empty();
             let mut banned_addresses_accessed = IndexSet::<Address>::new();
             for StorageAccess { address, accesses } in &phase.storage_accesses {
                 let address = *address;
