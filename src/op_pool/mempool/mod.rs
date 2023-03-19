@@ -2,11 +2,11 @@ pub mod error;
 mod pool;
 pub mod uo_pool;
 
-use chrono::{DateTime, Utc};
 use ethers::types::{Address, H256, U256};
 use std::sync::Arc;
 use strum::IntoEnumIterator;
 
+use crate::common::types::Timestamp;
 use crate::common::{
     protos::op_pool::Reputation,
     types::{Entity, UserOperation},
@@ -87,8 +87,8 @@ pub struct ExpectedStorageSlot {
 pub struct PoolOperation {
     pub uo: UserOperation,
     pub aggregator: Option<Address>,
-    pub valid_after: DateTime<Utc>,
-    pub valid_until: DateTime<Utc>,
+    pub valid_after: Timestamp,
+    pub valid_until: Timestamp,
     pub expected_code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
@@ -138,8 +138,8 @@ mod tests {
                 ..Default::default()
             },
             aggregator: Some(aggregator),
-            valid_after: Utc::now(),
-            valid_until: Utc::now(),
+            valid_after: Timestamp::new(0),
+            valid_until: Timestamp::new(0),
             expected_code_hash: H256::random(),
             entities_needing_stake: vec![Entity::Sender, Entity::Aggregator],
             expected_storage_slots: vec![],

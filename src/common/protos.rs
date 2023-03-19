@@ -1,6 +1,5 @@
 use crate::common::types::Entity as EntityType;
 use crate::common::types::UserOperation as RpcUserOperation;
-use chrono::{DateTime, LocalResult, TimeZone, Utc};
 use ethers::types::{Address, Bytes, H256, U256};
 use std::mem;
 
@@ -132,25 +131,6 @@ impl TryInto<H256> for ProtoBytes<'_> {
             Err(ConversionError::InvalidLength(len, 32))
         } else {
             Ok(H256::from_slice(self.0))
-        }
-    }
-}
-
-/// Wrapper around protobyf u64 timestamps for converting to chrono types.
-#[derive(Debug, Copy, Clone)]
-pub struct ProtoTimestampMillis(pub u64);
-
-impl TryInto<DateTime<Utc>> for ProtoTimestampMillis {
-    type Error = ConversionError;
-
-    fn try_into(self) -> Result<DateTime<Utc>, Self::Error> {
-        match Utc.timestamp_millis_opt(
-            self.0
-                .try_into()
-                .map_err(|_| ConversionError::InvalidTimestamp(self.0))?,
-        ) {
-            LocalResult::Single(t) => Ok(t),
-            _ => Err(ConversionError::InvalidTimestamp(self.0)),
         }
     }
 }

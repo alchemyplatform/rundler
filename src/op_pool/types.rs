@@ -2,7 +2,7 @@ use super::mempool::{ExpectedStorageSlot, PoolOperation};
 use crate::common::protos::op_pool::{
     Entity as ProtoEntity, MempoolOp, StorageSlot, UserOperation,
 };
-use crate::common::protos::{to_le_bytes, ConversionError, ProtoBytes, ProtoTimestampMillis};
+use crate::common::protos::{to_le_bytes, ConversionError, ProtoBytes};
 use anyhow::Context;
 use ethers::types::{Address, H256};
 
@@ -13,8 +13,8 @@ impl TryFrom<&PoolOperation> for MempoolOp {
         Ok(MempoolOp {
             uo: Some(UserOperation::from(&op.uo)),
             aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
-            valid_after: op.valid_after.timestamp_millis().try_into()?,
-            valid_until: op.valid_until.timestamp_millis().try_into()?,
+            valid_after: op.valid_after.seconds_since_epoch(),
+            valid_until: op.valid_until.seconds_since_epoch(),
             expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
             entities_needing_stake: op
                 .entities_needing_stake
@@ -39,8 +39,8 @@ impl TryFrom<MempoolOp> for PoolOperation {
             Some(ProtoBytes(&op.aggregator).try_into()?)
         };
 
-        let valid_after = ProtoTimestampMillis(op.valid_after).try_into()?;
-        let valid_until = ProtoTimestampMillis(op.valid_until).try_into()?;
+        let valid_after = op.valid_after.into();
+        let valid_until = op.valid_until.into();
 
         let expected_storage_slots = op
             .expected_storage_slots
@@ -102,11 +102,10 @@ impl From<&ExpectedStorageSlot> for StorageSlot {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
-    use ethers::types::U256;
-
     use crate::common::contracts::shared_types;
     use crate::common::protos::op_pool;
+    use crate::common::types::Timestamp;
+    use ethers::types::U256;
 
     use super::*;
 
@@ -118,8 +117,7 @@ mod tests {
 
     #[test]
     fn test_mempool_op_to_pool_op() {
-        let now = Utc::now();
-        let now_ms = now.timestamp_millis();
+        let now_secs = Timestamp::now().seconds_since_epoch();
 
         let mempool_op = MempoolOp {
             uo: Some(op_pool::UserOperation {
@@ -133,8 +131,8 @@ mod tests {
                 ..Default::default()
             }),
             aggregator: TEST_ADDRESS_ARR.to_vec(),
-            valid_after: now_ms.try_into().unwrap(),
-            valid_until: now_ms.try_into().unwrap(),
+            valid_after: now_secs,
+            valid_until: now_secs,
             expected_code_hash: vec![0; 32],
             entities_needing_stake: vec![],
             expected_storage_slots: vec![op_pool::StorageSlot {
@@ -161,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_pool_op_to_mempool_op() {
-        let now = Utc::now();
+        let now = Timestamp::now();
         let expected_ss = ExpectedStorageSlot {
             address: TEST_ADDRESS_STR.parse().unwrap(),
             slot: 1234.into(),
@@ -199,8 +197,8 @@ mod tests {
             })
         );
         assert_eq!(mempool_op.aggregator, TEST_ADDRESS_ARR.to_vec());
-        assert_eq!(mempool_op.valid_after, now.timestamp_millis() as u64);
-        assert_eq!(mempool_op.valid_until, now.timestamp_millis() as u64);
+        assert_eq!(mempool_op.valid_after, now.seconds_since_epoch());
+        assert_eq!(mempool_op.valid_until, now.seconds_since_epoch() as u64);
         assert_eq!(
             mempool_op.expected_storage_slots[0],
             (&expected_ss).try_into().unwrap()
