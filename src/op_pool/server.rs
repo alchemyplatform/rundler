@@ -13,12 +13,12 @@ use crate::common::protos::op_pool::{
     GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
 };
 use crate::common::protos::ProtoBytes;
-use ethers::types::{Address, H256, U256};
+use ethers::types::{Address, H256};
 use prost::Message;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
 
 pub struct OpPoolImpl<M: Mempool> {
-    chain_id: U256,
+    chain_id: u64,
     mempool: Arc<M>,
     metrics: OpPoolMetrics,
 }
@@ -27,7 +27,7 @@ impl<M> OpPoolImpl<M>
 where
     M: Mempool,
 {
-    pub fn new(chain_id: U256, mempool: Arc<M>) -> Self {
+    pub fn new(chain_id: u64, mempool: Arc<M>) -> Self {
         Self {
             chain_id,
             metrics: OpPoolMetrics::default(),
@@ -61,9 +61,8 @@ where
         self.metrics.request_counter.increment(1);
 
         let mempool_ep = self.mempool.entry_point();
-        let cid: [u8; 32] = self.chain_id.into();
         Ok(Response::new(GetSupportedEntryPointsResponse {
-            chain_id: cid.to_vec(),
+            chain_id: self.chain_id,
             entry_points: vec![mempool_ep.as_bytes().to_vec()],
         }))
     }
@@ -312,7 +311,7 @@ mod tests {
     }
 
     fn given_oppool() -> OpPoolImpl<MockMempool> {
-        OpPoolImpl::<MockMempool>::new(1.into(), MockMempool::default().into())
+        OpPoolImpl::<MockMempool>::new(1, MockMempool::default().into())
     }
 
     pub struct MockMempool {

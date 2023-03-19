@@ -12,7 +12,7 @@ use crate::{
     op_pool::reputation::ReputationManager,
 };
 use anyhow::Context;
-use ethers::types::{Address, H256, U256};
+use ethers::types::{Address, H256};
 use parking_lot::RwLock;
 use std::{
     collections::{HashMap, HashSet},
@@ -45,7 +45,7 @@ impl<R> UoPool<R>
 where
     R: ReputationManager,
 {
-    pub fn new(entry_point: Address, chain_id: U256, reputation: Arc<R>) -> Self {
+    pub fn new(entry_point: Address, chain_id: u64, reputation: Arc<R>) -> Self {
         Self {
             entry_point,
             reputation,
@@ -253,7 +253,7 @@ mod tests {
     }
 
     fn create_pool() -> UoPool<MockReputationManager> {
-        UoPool::new(Address::zero(), 1.into(), mock_reputation())
+        UoPool::new(Address::zero(), 1, mock_reputation())
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use ethers::providers::{Http, Provider, ProviderExt};
-use ethers::types::{Address, Chain, U256};
+use ethers::types::{Address, Chain};
 use jsonrpsee::server::ServerBuilder;
 use jsonrpsee::RpcModule;
 use tokio::sync::broadcast;
@@ -23,7 +23,7 @@ pub struct Args {
     pub pool_url: String,
     pub builder_url: Option<String>,
     pub entry_point: Address,
-    pub chain_id: U256,
+    pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
 }

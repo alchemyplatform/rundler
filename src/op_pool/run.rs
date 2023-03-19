@@ -8,7 +8,7 @@ use crate::op_pool::{
     server::OpPoolImpl,
 };
 use anyhow::bail;
-use ethers::types::{Address, U256};
+use ethers::types::Address;
 use tokio::{
     sync::{broadcast, mpsc},
     try_join,
@@ -19,7 +19,7 @@ pub struct Args {
     pub port: u16,
     pub host: String,
     pub entry_point: Address,
-    pub chain_id: U256,
+    pub chain_id: u64,
     pub ws_url: String,
 }
 

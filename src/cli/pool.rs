@@ -41,7 +41,7 @@ impl PoolArgs {
                 .entry_point
                 .parse()
                 .context("Invalid entry_point argument")?,
-            chain_id: common.chain_id.into(),
+            chain_id: common.chain_id,
             ws_url: common
                 .node_ws
                 .clone()
