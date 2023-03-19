@@ -131,7 +131,7 @@ impl Simulator for SimulatorImpl {
     ) -> Result<SimulationSuccess, SimulationError> {
         let block_hash = eth::get_block_hash(
             &self.provider,
-            block_id.unwrap_or(BlockNumber::Latest.into()),
+            block_id.unwrap_or_else(|| BlockNumber::Latest.into()),
         )
         .await?;
         let block_id = block_hash.into();
