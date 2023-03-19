@@ -3,6 +3,7 @@ use crate::common::protos::op_pool::{
     Entity as ProtoEntity, MempoolOp, StorageSlot, UserOperation,
 };
 use crate::common::protos::{to_le_bytes, ConversionError, ProtoBytes};
+use crate::common::types::ValidTimeRange;
 use anyhow::Context;
 use ethers::types::{Address, H256};
 
@@ -13,8 +14,8 @@ impl TryFrom<&PoolOperation> for MempoolOp {
         Ok(MempoolOp {
             uo: Some(UserOperation::from(&op.uo)),
             aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
-            valid_after: op.valid_after.seconds_since_epoch(),
-            valid_until: op.valid_until.seconds_since_epoch(),
+            valid_after: op.valid_time_range.valid_after.seconds_since_epoch(),
+            valid_until: op.valid_time_range.valid_until.seconds_since_epoch(),
             expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
             entities_needing_stake: op
                 .entities_needing_stake
@@ -39,8 +40,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             Some(ProtoBytes(&op.aggregator).try_into()?)
         };
 
-        let valid_after = op.valid_after.into();
-        let valid_until = op.valid_until.into();
+        let valid_time_range = ValidTimeRange::new(op.valid_after.into(), op.valid_until.into());
 
         let expected_storage_slots = op
             .expected_storage_slots
@@ -61,8 +61,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
         Ok(PoolOperation {
             uo,
             aggregator,
-            valid_after,
-            valid_until,
+            valid_time_range,
             expected_code_hash,
             entities_needing_stake,
             expected_storage_slots,
@@ -170,8 +169,7 @@ mod tests {
                 ..Default::default()
             },
             aggregator: Some(TEST_ADDRESS_STR.parse().unwrap()),
-            valid_after: now,
-            valid_until: now,
+            valid_time_range: ValidTimeRange::new(now, now),
             expected_code_hash: H256::random(),
             entities_needing_stake: vec![],
             expected_storage_slots: vec![ExpectedStorageSlot {
