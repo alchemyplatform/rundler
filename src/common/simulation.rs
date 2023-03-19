@@ -1,7 +1,8 @@
 use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
 use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
 use crate::common::types::{
-    ExpectedStorageSlot, StakeInfo, Timestamp, UserOperation, ValidationOutput,
+    ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
+    ValidationReturnInfo,
 };
 use crate::common::{eth, tracer};
 use ethers::abi::AbiDecode;
@@ -24,8 +25,7 @@ pub struct SimulationSuccess {
     pub block_hash: H256,
     pub pre_op_gas: U256,
     pub signature_failed: bool,
-    pub valid_after: Timestamp,
-    pub valid_until: Timestamp,
+    pub valid_time_range: ValidTimeRange,
     pub aggregator_address: Option<Address>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
@@ -235,13 +235,24 @@ impl Simulator for SimulatorImpl {
         if !violations.is_empty() {
             Err(violations)?
         }
+        let ValidationOutput {
+            return_info,
+            aggregator_info,
+            ..
+        } = entry_point_out;
+        let ValidationReturnInfo {
+            pre_op_gas,
+            sig_failed,
+            valid_after,
+            valid_until,
+            ..
+        } = return_info;
         Ok(SimulationSuccess {
             block_hash,
-            pre_op_gas: entry_point_out.return_info.pre_op_gas,
-            signature_failed: entry_point_out.return_info.sig_failed,
-            valid_after: entry_point_out.return_info.valid_after,
-            valid_until: entry_point_out.return_info.valid_until,
-            aggregator_address: entry_point_out.aggregator_info.map(|info| info.address),
+            pre_op_gas,
+            signature_failed: sig_failed,
+            valid_time_range: ValidTimeRange::new(valid_after, valid_until),
+            aggregator_address: aggregator_info.map(|info| info.address),
             code_hash,
             entities_needing_stake,
             accessed_addresses,

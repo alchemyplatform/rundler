@@ -128,6 +128,36 @@ impl Display for TimestampTooLarge {
 
 impl Error for TimestampTooLarge {}
 
+/// Represents a `(valid_after, valid_before)` pair as seen in ERC-4337 validity
+/// checks. A `valid_until` of zero means that there is no bound on end time.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ValidTimeRange {
+    pub valid_after: Timestamp,
+    pub valid_until: Timestamp,
+}
+
+impl ValidTimeRange {
+    pub fn new(valid_after: Timestamp, valid_until: Timestamp) -> Self {
+        Self {
+            valid_after,
+            valid_until,
+        }
+    }
+
+    /// A time range representing that the operation is valid for all time.
+    pub fn all_time() -> Self {
+        Self::default()
+    }
+
+    /// Returns true if the given timestamp falls within this time range,
+    /// including a minimum buffer time that must be remaining before the time
+    /// range expires.
+    pub fn contains(self, timestamp: Timestamp, buffer: Duration) -> bool {
+        self.valid_after <= timestamp
+            && (self.valid_until == Timestamp::default() || timestamp + buffer < self.valid_until)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
