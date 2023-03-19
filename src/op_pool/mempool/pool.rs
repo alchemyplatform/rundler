@@ -1,8 +1,5 @@
 use crate::common::types::{UserOperation, UserOperationId};
-use ethers::{
-    abi::Address,
-    types::{H256, U256},
-};
+use ethers::{abi::Address, types::H256};
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, BTreeSet, HashMap},
@@ -23,7 +20,7 @@ pub struct PoolInner {
     // Address of the entry point this pool targets
     entry_point: Address,
     // Chain ID this pool targets
-    chain_id: U256,
+    chain_id: u64,
     // Operations by hash
     by_hash: HashMap<H256, OrderedPoolOperation>,
     // Operations by operation ID
@@ -37,7 +34,7 @@ pub struct PoolInner {
 }
 
 impl PoolInner {
-    pub fn new(entry_point: Address, chain_id: U256) -> Self {
+    pub fn new(entry_point: Address, chain_id: u64) -> Self {
         Self {
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
@@ -197,7 +194,7 @@ mod tests {
 
     #[test]
     fn add_single_op() {
-        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let mut pool = PoolInner::new(Address::zero(), 1);
         let op = create_op(Address::random(), 0, 1);
         let hash = pool.add_operation(op.clone()).unwrap();
 
@@ -208,7 +205,7 @@ mod tests {
 
     #[test]
     fn add_multiple_ops() {
-        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let mut pool = PoolInner::new(Address::zero(), 1);
         let ops = vec![
             create_op(Address::random(), 0, 1),
             create_op(Address::random(), 0, 2),
@@ -234,7 +231,7 @@ mod tests {
 
     #[test]
     fn best_ties() {
-        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let mut pool = PoolInner::new(Address::zero(), 1);
         let ops = vec![
             create_op(Address::random(), 0, 1),
             create_op(Address::random(), 0, 1),
@@ -255,7 +252,7 @@ mod tests {
 
     #[test]
     fn remove_op() {
-        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let mut pool = PoolInner::new(Address::zero(), 1);
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
@@ -286,7 +283,7 @@ mod tests {
 
     #[test]
     fn too_many_ops() {
-        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let mut pool = PoolInner::new(Address::zero(), 1);
         let addr = Address::random();
         for i in 0..MAX_MEMPOOL_USEROPS_PER_SENDER {
             let op = create_op(addr, i, 1);
@@ -299,7 +296,7 @@ mod tests {
 
     #[test]
     fn address_count() {
-        let mut pool = PoolInner::new(Address::zero(), 1.into());
+        let mut pool = PoolInner::new(Address::zero(), 1);
         let sender = Address::random();
         let paymaster = Address::random();
         let factory = Address::random();

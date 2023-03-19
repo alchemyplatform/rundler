@@ -53,7 +53,7 @@ service OpPool {
 
 message GetSupportedEntryPointsRequest {}
 message GetSupportedEntryPointsResponse {
-  bytes chain_id = 1;
+  uint64 chain_id = 1;
   repeated bytes entry_points = 2;
 }
 

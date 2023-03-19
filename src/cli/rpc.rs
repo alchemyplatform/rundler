@@ -67,7 +67,7 @@ impl RpcArgs {
                 .node_http
                 .clone()
                 .context("rpc requires node_http arg")?,
-            chain_id: common.chain_id.into(),
+            chain_id: common.chain_id,
             api_namespaces: apis,
         })
     }

@@ -55,17 +55,17 @@ pub trait EthApi {
     async fn supported_entry_points(&self) -> RpcResult<Vec<Address>>;
 
     #[method(name = "chainId")]
-    async fn chain_id(&self) -> RpcResult<U256>;
+    async fn chain_id(&self) -> RpcResult<u64>;
 }
 
 pub struct EthApi {
     entry_points: HashMap<Address, EntryPoint<Provider<Http>>>,
     provider: Arc<Provider<Http>>,
-    chain_id: U256,
+    chain_id: u64,
 }
 
 impl EthApi {
-    pub fn new(provider: Arc<Provider<Http>>, entry_points: Vec<Address>, chain_id: U256) -> Self {
+    pub fn new(provider: Arc<Provider<Http>>, entry_points: Vec<Address>, chain_id: u64) -> Self {
         let entry_points: HashMap<Address, EntryPoint<Provider<Http>>> = entry_points
             .iter()
             .map(|&a| (a, EntryPoint::new(a, Arc::clone(&provider))))
@@ -438,7 +438,7 @@ impl EthApiServer for EthApi {
         Ok(self.entry_points.keys().copied().collect())
     }
 
-    async fn chain_id(&self) -> RpcResult<U256> {
+    async fn chain_id(&self) -> RpcResult<u64> {
         Ok(self.chain_id)
     }
 }

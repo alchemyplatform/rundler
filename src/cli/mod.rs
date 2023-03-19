@@ -100,7 +100,7 @@ pub struct CommonArgs {
         default_value = "1337",
         global = true
     )]
-    chain_id: u128,
+    chain_id: u64,
 
     /// ETH Node websocket URL to connect to
     #[arg(long = "node_ws", name = "node_ws", env = "NODE_WS", global = true)]

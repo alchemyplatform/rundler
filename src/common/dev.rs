@@ -18,7 +18,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const DEV_CHAIN_ID: u32 = 1337;
+pub const DEV_CHAIN_ID: u64 = 1337;
 pub const DEPLOYER_ACCOUNT_ID: u8 = 1;
 pub const BUNDLER_ACCOUNT_ID: u8 = 2;
 pub const WALLET_OWNER_ACCOUNT_ID: u8 = 3;
@@ -193,7 +193,7 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
         init_code,
         ..base_user_op()
     };
-    let op_hash = op.op_hash(entry_point.address(), DEV_CHAIN_ID.into());
+    let op_hash = op.op_hash(entry_point.address(), DEV_CHAIN_ID);
     let signature = wallet_owner_eoa
         .sign_message(op_hash)
         .await
@@ -328,7 +328,7 @@ impl DevClients {
             paymaster_and_data.extend(paymaster_signature.to_vec());
             op.paymaster_and_data = paymaster_and_data.into()
         }
-        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID.into());
+        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID);
         let signature = self
             .wallet_owner_signer
             .sign_message(op_hash)
