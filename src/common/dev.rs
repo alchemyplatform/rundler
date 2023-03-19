@@ -5,18 +5,20 @@ use crate::common::contracts::verifying_paymaster::VerifyingPaymaster;
 use crate::common::eth;
 use crate::common::types::UserOperation;
 use anyhow::Context;
+use ethers::abi::AbiEncode;
+use ethers::contract::builders::ContractCall;
 use ethers::core::k256::ecdsa::SigningKey;
 use ethers::middleware::SignerMiddleware;
 use ethers::providers::{Http, Middleware, Provider};
 use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, TransactionRequest, U256};
+use ethers::types::{Address, Bytes, TransactionRequest, U256};
 use ethers::utils;
 use std::env;
 use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const CHAIN_ID: u32 = 1337;
+pub const DEV_CHAIN_ID: u32 = 1337;
 pub const DEPLOYER_ACCOUNT_ID: u8 = 1;
 pub const BUNDLER_ACCOUNT_ID: u8 = 2;
 pub const WALLET_OWNER_ACCOUNT_ID: u8 = 3;
@@ -37,21 +39,30 @@ pub fn new_local_provider() -> Arc<Provider<Http>> {
 /// Given a provider connected to a Geth node in --dev mode, grants a large
 /// amount of ETH to the specified address.
 pub async fn grant_eth(provider: &Provider<Http>, to: Address) -> anyhow::Result<()> {
-    // A Geth node in --dev mode has one account with massive amounts of ETH.
-    let funder_address = *provider
-        .get_accounts()
-        .await
-        .context("should be able to get accounts from node")?
-        .first()
-        .context("a Geth node in dev mode should have one account")?;
-    // 1000 ETH ought to be enough for anyone.
-    let value = utils::parse_ether(1000).unwrap();
+    let funder_address = get_funder_address(provider).await?;
+    let value = thousand_eth();
     let tx = provider.send_transaction(
         TransactionRequest::pay(to, value).from(funder_address),
         None,
     );
     eth::await_mined_tx(tx, "grant ETH").await?;
     Ok(())
+}
+
+/// A Geth node in --dev mode starts with one account with massive amounts of
+/// ETH. This returns that address.
+pub async fn get_funder_address(provider: &Provider<Http>) -> anyhow::Result<Address> {
+    Ok(*provider
+        .get_accounts()
+        .await
+        .context("should be able to get accounts from node")?
+        .first()
+        .context("a Geth node in dev mode should have one account")?)
+}
+
+/// 1000 ETH ought to be enough for anyone.
+fn thousand_eth() -> U256 {
+    utils::parse_ether(1000).unwrap()
 }
 
 /// Creates a client that can send transactions and sign them with a secret
@@ -71,7 +82,7 @@ pub fn new_test_client(
 pub fn new_test_wallet(test_account_id: u8) -> LocalWallet {
     let bytes = test_signing_key_bytes(test_account_id);
     let key = SigningKey::from_bytes(&bytes).expect("should create signing key for test wallet");
-    LocalWallet::from(key).with_chain_id(CHAIN_ID)
+    LocalWallet::from(key).with_chain_id(DEV_CHAIN_ID)
 }
 
 pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
@@ -160,6 +171,12 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
     );
     let paymaster =
         eth::await_contract_deployment(paymaster_deployer, "VerifyingPaymaster").await?;
+    let funder_address = get_funder_address(&provider).await?;
+    let call = paymaster
+        .deposit()
+        .from(funder_address)
+        .value(thousand_eth());
+    eth::await_mined_tx(call.send(), "deposit funds for paymaster").await?;
     let salt = U256::from(1);
     let wallet_address = factory
         .get_address(wallet_owner_eoa.address(), salt)
@@ -176,11 +193,7 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
         init_code,
         ..base_user_op()
     };
-    let op_hash = entry_point
-        .get_user_op_hash(op.clone())
-        .call()
-        .await
-        .context("entry point should compute hash of user operation")?;
+    let op_hash = op.op_hash(entry_point.address(), DEV_CHAIN_ID.into());
     let signature = wallet_owner_eoa
         .sign_message(op_hash)
         .await
@@ -242,5 +255,86 @@ impl DevClients {
     pub fn new_from_env() -> anyhow::Result<Self> {
         let addresses = DevAddresses::new_from_env()?;
         Ok(Self::new(addresses))
+    }
+
+    pub async fn new_wallet_op<M, D>(
+        &self,
+        call: ContractCall<M, D>,
+        value: U256,
+    ) -> anyhow::Result<UserOperation> {
+        self.new_wallet_op_internal(call, value, false).await
+    }
+
+    pub async fn new_wallet_op_with_paymaster<M, D>(
+        &self,
+        call: ContractCall<M, D>,
+        value: U256,
+    ) -> anyhow::Result<UserOperation> {
+        self.new_wallet_op_internal(call, value, true).await
+    }
+
+    async fn new_wallet_op_internal<M, D>(
+        &self,
+        call: ContractCall<M, D>,
+        value: U256,
+        use_paymaster: bool,
+    ) -> anyhow::Result<UserOperation> {
+        let tx = &call.tx;
+        let inner_call_data = Bytes::clone(
+            tx.data()
+                .context("call executed by wallet should have call data")?,
+        );
+        let &to = tx
+            .to_addr()
+            .context("call executed by wallet should have to address")?;
+        let nonce = self
+            .wallet
+            .nonce()
+            .await
+            .context("should read nonce from wallet")?;
+        let call_data = Bytes::clone(
+            self.wallet
+                .execute(to, value, inner_call_data)
+                .tx
+                .data()
+                .context("wallet execute should have call data")?,
+        );
+        let mut op = UserOperation {
+            sender: self.wallet.address(),
+            call_data,
+            nonce,
+            ..base_user_op()
+        };
+        if use_paymaster {
+            // For the paymaster op hash to work correctly, our paymasterAndData
+            // field must be the correct length, which is space for an address,
+            // ABI-encoding of two ints, and a 65-byte signature.
+            op.paymaster_and_data = [0_u8; 20 + 64 + 65].into();
+            let valid_after = 0;
+            let valid_until = 0;
+            // Yes, the paymaster really takes valid_until before valid_after.
+            let paymaster_op_hash = self
+                .paymaster
+                .get_hash(op.clone(), valid_until, valid_after)
+                .await
+                .context("should call paymaster to get op hash")?;
+            let paymaster_signature = self
+                .paymaster_signer
+                .sign_message(paymaster_op_hash)
+                .await
+                .context("should sign paymaster op hash")?;
+            let mut paymaster_and_data = self.paymaster.address().as_bytes().to_vec();
+            paymaster_and_data.extend(AbiEncode::encode((valid_until, valid_after)));
+            paymaster_and_data.extend(paymaster_signature.to_vec());
+            op.paymaster_and_data = paymaster_and_data.into()
+        }
+        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID.into());
+        let signature = self
+            .wallet_owner_signer
+            .sign_message(op_hash)
+            .await
+            .context("wallet owner should sign op hash")?;
+        op.signature = signature.to_vec().into();
+        Ok(op)
     }
 }
