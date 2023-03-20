@@ -7,3 +7,4 @@ import "account-abstraction/samples/SimpleAccount.sol";
 import "account-abstraction/samples/SimpleAccountFactory.sol";
 import "account-abstraction/samples/VerifyingPaymaster.sol";
 import "account-abstraction/core/EntryPoint.sol";
+import "account-abstraction/interfaces/IAggregator.sol";

@@ -20,6 +20,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
     generate_abis()?;
     MultiAbigen::from_abigens([
         abigen_of("EntryPoint")?,
+        abigen_of("IAggregator")?,
         abigen_of("GetCodeHashes")?,
         abigen_of("SimpleAccount")?,
         abigen_of("SimpleAccountFactory")?,
