@@ -219,6 +219,20 @@ impl Simulator for SimulatorImpl {
                 violations.push(Violation::CalledHandleOps(entity));
             }
         }
+        if let Some(aggregator_info) = entry_point_out.aggregator_info {
+            entities_needing_stake.push(Entity::Aggregator);
+            if !is_staked(aggregator_info.stake_info, self.min_stake_value) {
+                violations.push(Violation::NotStaked(Entity::Aggregator));
+            }
+        }
+        if tracer_out.factory_called_create2_twice {
+            violations.push(Violation::FactoryCalledCreate2Twice);
+        }
+        if !violations.is_empty() {
+            Err(violations)?;
+        }
+        // To spare the Geth node, only check code hashes if there are no other
+        // violations.
         let code_hash = eth::get_code_hash(
             &self.provider,
             mem::take(&mut tracer_out.accessed_contract_addresses),
@@ -227,14 +241,8 @@ impl Simulator for SimulatorImpl {
         .await?;
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
-                violations.push(Violation::CodeHashChanged);
+                Err(vec![Violation::CodeHashChanged])?;
             }
-        }
-        if tracer_out.factory_called_create2_twice {
-            violations.push(Violation::FactoryCalledCreate2Twice);
-        }
-        if !violations.is_empty() {
-            Err(violations)?
         }
         let ValidationOutput {
             return_info,
