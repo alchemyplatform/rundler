@@ -1,5 +1,7 @@
 use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
-use crate::common::tracer::{AssociatedSlotsByAddress, SlotAccess, StorageAccess, TracerOutput};
+use crate::common::tracer::{
+    AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
+};
 use crate::common::types::{
     ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
     ValidationReturnInfo,
@@ -156,7 +158,6 @@ impl Simulator for SimulatorImpl {
         let mut violations: Vec<Violation> = vec![];
         let mut entities_needing_stake = vec![];
         let mut accessed_addresses = HashSet::new();
-        let mut expected_storage_slots = vec![];
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let entity = Entity::from_simulation_phase(index).unwrap();
             let Some(entity_info) = entity_infos.get(entity) else {
@@ -171,21 +172,10 @@ impl Simulator for SimulatorImpl {
             let mut needs_stake = entity == Entity::Paymaster
                 && !entry_point_out.return_info.paymaster_context.is_empty();
             let mut banned_addresses_accessed = IndexSet::<Address>::new();
-            for StorageAccess { address, accesses } in &phase.storage_accesses {
+            for StorageAccess { address, slots } in &phase.storage_accesses {
                 let address = *address;
                 accessed_addresses.insert(address);
-                for &SlotAccess {
-                    slot,
-                    initial_value,
-                } in accesses
-                {
-                    if let Some(initial_value) = initial_value {
-                        expected_storage_slots.push(ExpectedStorageSlot {
-                            address,
-                            slot,
-                            value: initial_value,
-                        });
-                    }
+                for &slot in slots {
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         is_wallet_creation,
@@ -252,6 +242,16 @@ impl Simulator for SimulatorImpl {
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
                 Err(vec![Violation::CodeHashChanged])?;
+            }
+        }
+        let mut expected_storage_slots = vec![];
+        for ExpectedStorage { address, slots } in &tracer_out.expected_storage {
+            for &ExpectedSlot { slot, value } in slots {
+                expected_storage_slots.push(ExpectedStorageSlot {
+                    address: *address,
+                    slot,
+                    value,
+                });
             }
         }
         let ValidationOutput {

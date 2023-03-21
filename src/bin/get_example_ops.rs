@@ -10,14 +10,12 @@ async fn main() -> anyhow::Result<()> {
         .new_wallet_op(clients.entry_point.add_stake(1), 1.into())
         .await?;
     println!("User operation to make wallet call EntryPoint#addStake():");
-    println!();
-    println!("{}", serde_json::to_string_pretty(&op)?);
+    println!("{}", serde_json::to_string(&op)?);
     let op = clients
         .new_wallet_op_with_paymaster(clients.entry_point.add_stake(1), 1.into())
         .await?;
     println!();
     println!("User operation to make wallet call EntryPoint#addStake() with paymaster:");
-    println!();
-    println!("{}", serde_json::to_string_pretty(&op)?);
+    println!("{}", serde_json::to_string(&op)?);
     Ok(())
 }
