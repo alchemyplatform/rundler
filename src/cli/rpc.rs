@@ -16,7 +16,7 @@ pub struct RpcArgs {
         long = "rpc.port",
         name = "rpc.port",
         env = "RPC_PORT",
-        default_value = "8545"
+        default_value = "3000"
     )]
     port: u16,
 
@@ -34,9 +34,11 @@ pub struct RpcArgs {
         long = "rpc.api",
         name = "rpc.api",
         env = "RPC_API",
-        default_value = "eth,debug"
+        default_value = "eth",
+        value_delimiter = ',',
+        value_parser = ["eth", "debug"]
     )]
-    api: String,
+    api: Vec<String>,
 }
 
 impl RpcArgs {
@@ -50,7 +52,7 @@ impl RpcArgs {
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
-            .split(',')
+            .iter()
             .map(|api| api.parse())
             .collect::<Result<Vec<_>, _>>()?;
 

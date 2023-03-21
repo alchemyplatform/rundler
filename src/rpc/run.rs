@@ -72,7 +72,7 @@ pub async fn run(
         }
     }
 
-    let server = ServerBuilder::default().build(addr).await?;
+    let server = ServerBuilder::default().http_only().build(addr).await?;
     let handle = server.start(module)?;
 
     tokio::select! {
