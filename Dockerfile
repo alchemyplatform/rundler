@@ -1,32 +1,41 @@
-# syntax=docker/dockerfile:1.3
-FROM rust:1.67.0 AS builder
+# Adapted from https://github.com/paradigmxyz/reth/blob/main/Dockerfile
+# syntax=docker/dockerfile:1.4
 
-ARG TARGETPLATFORM
+FROM rust:1.68 AS chef-builder
+
+# Install system dependencies
+RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
+RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config protobuf-compiler nodejs yarn
+RUN cargo install --git https://github.com/foundry-rs/foundry --profile local --locked foundry-cli
+RUN cargo install cargo-chef 
+
+WORKDIR /app
+
+# Builds a cargo-chef plan
+FROM chef-builder AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef-builder AS builder
+COPY --from=planner /app/recipe.json recipe.json
 
 # Set the build profile to be release
 ARG BUILD_PROFILE=release
 ENV BUILD_PROFILE $BUILD_PROFILE
 
-WORKDIR /root
+# Builds dependencies
+RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
 
-# Update and install dependencies
-RUN apt-get update && apt-get -y upgrade && apt-get install -y protobuf-compiler
-
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} \
-    cargo install cargo-strip
-
+# Build application
 COPY . .
+RUN cargo build --profile $BUILD_PROFILE --locked --bin alchemy-bundler
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry,id=${TARGETPLATFORM} --mount=type=cache,target=/root/target,id=${TARGETPLATFORM} \
-    cargo build --release && \
-    cargo strip && \
-    mv /root/target/release/alchemy-bundler /root
+# Use Ubuntu as the release image
+FROM ubuntu AS runtime
+WORKDIR /app
 
-# Use alpine as the release image
-FROM frolvlad/alpine-glibc
+# Copy reth over from the build stage
+COPY --from=builder /app/target/release/alchemy-bundler /usr/local/bin
 
-RUN apk add --no-cache linux-headers
-
-COPY --from=builder /root/alchemy-bundler /
-
-ENTRYPOINT ["./alchemy-bundler"]
+EXPOSE 3000 8080
+CMD ["/usr/local/bin/alchemy-bundler", "bundler"]

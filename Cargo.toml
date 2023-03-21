@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.68"
 clap = { version = "4.1.4", features = ["derive", "env"] }
-ethers = { version = "1.0.2", features = ["ws", "openssl"] }
+ethers = { version = "1.0.2", features = ["ws", "rustls"] }
 jsonrpsee = { version = "0.16.2", features = ["macros", "server"] }
 prost = "0.11.6"
 serde = { version = "1.0.152", features = ["derive"] }

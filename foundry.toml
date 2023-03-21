@@ -2,6 +2,7 @@
 src = 'contracts/src'
 out = 'contracts/out'
 libs = ['contracts/lib']
+test = 'contracts/test'
 cache_path = 'contracts/cache'
 
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
