@@ -40,6 +40,7 @@ use prost::Message;
 use std::{collections::HashMap, mem, str::FromStr, sync::Arc, time::Duration};
 use tokio::join;
 use tonic::{async_trait, transport::Channel, Status};
+use tracing::debug;
 
 /// Eth API
 #[rpc(server, namespace = "eth")]
@@ -303,6 +304,8 @@ impl EthApiServer for EthApi {
         op: UserOperation,
         entry_point: Address,
     ) -> RpcResult<H256> {
+        debug!("send_user_operation: {:?}", op);
+
         if !self.entry_points_and_sims.contains_key(&entry_point) {
             return Err(EthRpcError::InvalidParams(
                 "supplied entry_point addr is not a known entry point".to_string(),
@@ -339,7 +342,7 @@ impl EthApiServer for EthApi {
         let now = Timestamp::now();
         let valid_after = valid_time_range.valid_after;
         let valid_until = valid_time_range.valid_until;
-        if valid_time_range.contains(now, EXPIRATION_BUFFER) {
+        if !valid_time_range.contains(now, EXPIRATION_BUFFER) {
             Err(EthRpcError::OutOfTimeRange(OutOfTimeRangeData {
                 valid_after,
                 valid_until,
@@ -565,6 +568,8 @@ impl EthApiServer for EthApi {
 
 impl From<SimulationError> for EthRpcError {
     fn from(mut value: SimulationError) -> Self {
+        debug!("Simulation error: {value:?}");
+
         // TODO: handle unsupported signature aggregator (assuming not throttled/banned and staked)
         // this requires calling aggregator.validateUserOpSignature
         let SimulationError::Violations(violations) = &mut value else {
