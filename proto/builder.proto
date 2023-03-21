@@ -1,0 +1,27 @@
+syntax = "proto3";
+package builder;
+
+enum BundlingMode {
+    UNSPECIFIED = 0;
+    MANUAL = 1;
+    AUTO = 2;
+}
+
+service Builder {
+    rpc DebugSendBundleNow(DebugSendBundleNowRequest) returns (DebugSendBundleNowResponse);
+    rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
+}
+
+message DebugSendBundleNowRequest {
+    bytes entry_point = 1;
+}
+
+message DebugSendBundleNowResponse {
+    bytes transaction_hash = 1;
+}
+
+message DebugSetBundlingModeRequest {
+    BundlingMode mode = 1;
+}
+
+message DebugSetBundlingModeResponse {}

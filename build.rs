@@ -51,6 +51,9 @@ fn generate_protos() -> Result<(), Box<dyn error::Error>> {
     tonic_build::configure()
         .file_descriptor_set_path(out_dir.join("op_pool_descriptor.bin"))
         .compile(&["proto/op_pool.proto"], &["proto"])?;
+    tonic_build::configure()
+        .file_descriptor_set_path(out_dir.join("builder_descriptor.bin"))
+        .compile(&["proto/builder.proto"], &["builder"])?;
     Ok(())
 }
 

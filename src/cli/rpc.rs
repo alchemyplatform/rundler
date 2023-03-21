@@ -48,7 +48,7 @@ impl RpcArgs {
         &self,
         common: &CommonArgs,
         pool_url: String,
-        builder_url: Option<String>,
+        builder_url: String,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
@@ -94,9 +94,10 @@ pub struct RpcCliArgs {
         long = "rpc.builder_url",
         name = "rpc.builder_url",
         env = "RPC_BUILDER_URL",
+        default_value = "http://localhost:50052",
         global = true
     )]
-    builder_url: Option<String>,
+    builder_url: String,
 }
 
 pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {

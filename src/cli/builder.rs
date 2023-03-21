@@ -12,12 +12,22 @@ use super::CommonArgs;
 #[command(next_help_heading = "BUILDER")]
 pub struct BuilderArgs {
     /// Port to listen on for gRPC requests
-    #[arg(long = "builder.port", name = "builder.port", env = "BUILDER_PORT")]
-    port: Option<u16>,
+    #[arg(
+        long = "builder.port",
+        name = "builder.port",
+        env = "BUILDER_PORT",
+        default_value = "50052"
+    )]
+    port: u16,
 
     /// Host to listen on for gRPC requests
-    #[arg(long = "builder.host", name = "builder.host", env = "BUILDER_HOST")]
-    host: Option<String>,
+    #[arg(
+        long = "builder.host",
+        name = "builder.host",
+        env = "BUILDER_HOST",
+        default_value = "127.0.0.1"
+    )]
+    host: String,
 }
 
 impl BuilderArgs {
@@ -28,14 +38,14 @@ impl BuilderArgs {
         _common: &CommonArgs,
         _pool_url: String,
     ) -> anyhow::Result<builder::Args> {
-        Ok(builder::Args {})
+        Ok(builder::Args {
+            port: self.port,
+            host: self.host.clone(),
+        })
     }
 
-    pub fn url(&self, secure: bool) -> Option<String> {
-        match (self.host.as_ref(), self.port) {
-            (Some(host), Some(port)) => Some(format_server_addr(host, port, secure)),
-            _ => None,
-        }
+    pub fn url(&self, secure: bool) -> String {
+        format_server_addr(&self.host, self.port, secure)
     }
 }
 

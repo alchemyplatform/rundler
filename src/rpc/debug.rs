@@ -1,16 +1,19 @@
+use super::RpcReputation;
+use crate::common::protos;
+use crate::common::protos::builder::BundlingMode as ProtoBundlingMode;
+use crate::common::protos::builder::{
+    builder_client, DebugSendBundleNowRequest, DebugSetBundlingModeRequest,
+};
+use crate::common::protos::op_pool::{
+    op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
+    DebugSetReputationRequest,
+};
+use crate::common::types::{BundlingMode, UserOperation};
 use ethers::types::{Address, H256};
 use jsonrpsee::core::{Error as RpcError, RpcResult};
 use jsonrpsee::proc_macros::rpc;
 use tonic::async_trait;
 use tonic::transport::Channel;
-
-use super::RpcReputation;
-use crate::common::protos;
-use crate::common::protos::op_pool::{
-    op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest,
-};
-use crate::common::types::UserOperation;
 
 /// Debug API
 #[rpc(server, namespace = "debug")]
@@ -25,7 +28,7 @@ pub trait DebugApi {
     async fn bundler_send_bundle_now(&self, entry_point: Address) -> RpcResult<H256>;
 
     #[method(name = "bundler_setBundlingMode")]
-    async fn bundler_set_bundling_mode(&self, mode: String) -> RpcResult<String>;
+    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String>;
 
     #[method(name = "bundler_setReputation")]
     async fn bundler_set_reputation(
@@ -40,11 +43,18 @@ pub trait DebugApi {
 
 pub struct DebugApi {
     op_pool_client: op_pool_client::OpPoolClient<Channel>,
+    builder_client: builder_client::BuilderClient<Channel>,
 }
 
 impl DebugApi {
-    pub fn new(op_pool_client: op_pool_client::OpPoolClient<Channel>) -> Self {
-        Self { op_pool_client }
+    pub fn new(
+        op_pool_client: op_pool_client::OpPoolClient<Channel>,
+        builder_client: builder_client::BuilderClient<Channel>,
+    ) -> Self {
+        Self {
+            op_pool_client,
+            builder_client,
+        }
     }
 }
 
@@ -83,13 +93,29 @@ impl DebugApiServer for DebugApi {
             .map_err(|e| RpcError::Custom(e.to_string()))?)
     }
 
-    // TODO: we need bundler module defined before we can impl these two
-    async fn bundler_send_bundle_now(&self, _entry_point: Address) -> RpcResult<H256> {
-        Err(RpcError::HttpNotImplemented)
+    async fn bundler_send_bundle_now(&self, entry_point: Address) -> RpcResult<H256> {
+        let response = self
+            .builder_client
+            .clone()
+            .debug_send_bundle_now(DebugSendBundleNowRequest {
+                entry_point: entry_point.to_fixed_bytes().into(),
+            })
+            .await
+            .map_err(|e| RpcError::Custom(e.to_string()))?;
+
+        Ok(H256::from_slice(&response.into_inner().transaction_hash))
     }
 
-    async fn bundler_set_bundling_mode(&self, _mode: String) -> RpcResult<String> {
-        Err(RpcError::HttpNotImplemented)
+    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
+        let mode: ProtoBundlingMode = mode.into();
+
+        self.builder_client
+            .clone()
+            .debug_set_bundling_mode(DebugSetBundlingModeRequest { mode: mode.into() })
+            .await
+            .map_err(|e| RpcError::Custom(e.to_string()))?;
+
+        Ok("ok".to_string())
     }
 
     async fn bundler_set_reputation(

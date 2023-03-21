@@ -10,6 +10,7 @@ use jsonrpsee::RpcModule;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
+use crate::common::protos::builder::builder_client;
 use crate::common::protos::op_pool::op_pool_client;
 use crate::common::server::format_socket_addr;
 use crate::rpc::debug::{DebugApi, DebugApiServer};
@@ -21,7 +22,7 @@ pub struct Args {
     pub port: u16,
     pub host: String,
     pub pool_url: String,
-    pub builder_url: Option<String>,
+    pub builder_url: String,
     pub entry_point: Address,
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
@@ -54,6 +55,10 @@ pub async fn run(
         .await
         .context("should have been able to connect to op pool")?;
 
+    let builder_client = builder_client::BuilderClient::connect(args.builder_url)
+        .await
+        .context("builder server should be started")?;
+
     for api in args.api_namespaces {
         match api {
             ApiNamespace::Eth => module.merge(
@@ -66,9 +71,8 @@ pub async fn run(
                 )
                 .into_rpc(),
             )?,
-            ApiNamespace::Debug => {
-                module.merge(DebugApi::new(op_pool_client.clone()).into_rpc())?
-            }
+            ApiNamespace::Debug => module
+                .merge(DebugApi::new(op_pool_client.clone(), builder_client.clone()).into_rpc())?,
         }
     }
 
