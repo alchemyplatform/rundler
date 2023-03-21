@@ -98,7 +98,7 @@ impl PoolOperation {
     /// Returns the address of the entity that is required to stake for this operation.
     pub fn entity_address(&self, entity: Entity) -> Option<Address> {
         match entity {
-            Entity::Sender => Some(self.uo.sender),
+            Entity::Account => Some(self.uo.sender),
             Entity::Paymaster => self.uo.paymaster(),
             Entity::Factory => self.uo.factory(),
             Entity::Aggregator => self.aggregator,
@@ -141,16 +141,16 @@ mod tests {
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
-            entities_needing_stake: vec![Entity::Sender, Entity::Aggregator],
+            entities_needing_stake: vec![Entity::Account, Entity::Aggregator],
             expected_storage_slots: vec![],
         };
 
-        assert!(po.requires_stake(Entity::Sender));
+        assert!(po.requires_stake(Entity::Account));
         assert!(!po.requires_stake(Entity::Paymaster));
         assert!(!po.requires_stake(Entity::Factory));
         assert!(po.requires_stake(Entity::Aggregator));
 
-        assert_eq!(po.entity_address(Entity::Sender), Some(sender));
+        assert_eq!(po.entity_address(Entity::Account), Some(sender));
         assert_eq!(po.entity_address(Entity::Paymaster), Some(paymaster));
         assert_eq!(po.entity_address(Entity::Factory), Some(factory));
         assert_eq!(po.entity_address(Entity::Aggregator), Some(aggregator));
@@ -159,7 +159,7 @@ mod tests {
         assert_eq!(entities.len(), 4);
         for (entity, address) in entities {
             match entity {
-                Entity::Sender => assert_eq!(address, sender),
+                Entity::Account => assert_eq!(address, sender),
                 Entity::Paymaster => assert_eq!(address, paymaster),
                 Entity::Factory => assert_eq!(address, factory),
                 Entity::Aggregator => assert_eq!(address, aggregator),

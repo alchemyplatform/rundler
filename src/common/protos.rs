@@ -56,7 +56,7 @@ pub mod op_pool {
         fn try_from(entity: Entity) -> Result<Self, Self::Error> {
             match entity {
                 Entity::Unspecified => Err(ConversionError::InvalidEntity(entity as i32)),
-                Entity::Sender => Ok(EntityType::Sender),
+                Entity::Account => Ok(EntityType::Account),
                 Entity::Paymaster => Ok(EntityType::Paymaster),
                 Entity::Aggregator => Ok(EntityType::Aggregator),
                 Entity::Factory => Ok(EntityType::Factory),
@@ -67,7 +67,7 @@ pub mod op_pool {
     impl From<EntityType> for Entity {
         fn from(entity: EntityType) -> Self {
             match entity {
-                EntityType::Sender => Entity::Sender,
+                EntityType::Account => Entity::Account,
                 EntityType::Paymaster => Entity::Paymaster,
                 EntityType::Aggregator => Entity::Aggregator,
                 EntityType::Factory => Entity::Factory,

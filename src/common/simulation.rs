@@ -99,7 +99,7 @@ impl SimulatorImpl {
             let entity_addr = match last_entity {
                 Entity::Factory => factory_address,
                 Entity::Paymaster => paymaster_address,
-                Entity::Sender => Some(sender_address),
+                Entity::Account => Some(sender_address),
                 _ => None,
             };
             Err(Violation::UnintendedRevertWithMessage(
@@ -328,11 +328,9 @@ pub enum Violation {
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
     WrongNumberOfPhases(u32),
-    #[display("{0} used forbidden opcode {1:?} during validation")]
+    #[display("{0} uses banned opcode: {1:?}")]
     UsedForbiddenOpcode(Entity, OpCode),
-    #[display(
-        "{0} used GAS opcode and did not immediately follow with a call opcode during validation"
-    )]
+    #[display("{0} uses banned opcode: GAS")]
     InvalidGasOpcode(Entity),
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, Address),
@@ -358,7 +356,7 @@ impl Entity {
     pub fn from_simulation_phase(i: usize) -> Option<Self> {
         match i {
             0 => Some(Self::Factory),
-            1 => Some(Self::Sender),
+            1 => Some(Self::Account),
             2 => Some(Self::Paymaster),
             _ => None,
         }
@@ -416,7 +414,7 @@ impl EntityInfos {
     pub fn get(self, entity: Entity) -> Option<EntityInfo> {
         match entity {
             Entity::Factory => self.factory,
-            Entity::Sender => Some(self.sender),
+            Entity::Account => Some(self.sender),
             Entity::Paymaster => self.paymaster,
             _ => None,
         }
