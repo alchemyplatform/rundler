@@ -30,8 +30,9 @@ use ethers::{
     providers::{Http, Middleware, Provider},
     types::{
         transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
-        Log, TransactionReceipt, H256, U256,
+        Log, TransactionReceipt, H256, U256, U64,
     },
+    utils::to_checksum,
 };
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
@@ -64,10 +65,10 @@ pub trait EthApi {
     ) -> RpcResult<Option<UserOperationReceipt>>;
 
     #[method(name = "supportedEntryPoints")]
-    async fn supported_entry_points(&self) -> RpcResult<Vec<Address>>;
+    async fn supported_entry_points(&self) -> RpcResult<Vec<String>>;
 
     #[method(name = "chainId")]
-    async fn chain_id(&self) -> RpcResult<u64>;
+    async fn chain_id(&self) -> RpcResult<U64>;
 }
 
 #[derive(Debug)]
@@ -549,12 +550,16 @@ impl EthApiServer for EthApi {
         }))
     }
 
-    async fn supported_entry_points(&self) -> RpcResult<Vec<Address>> {
-        Ok(self.entry_points_and_sims.keys().copied().collect())
+    async fn supported_entry_points(&self) -> RpcResult<Vec<String>> {
+        Ok(self
+            .entry_points_and_sims
+            .keys()
+            .map(|ep| to_checksum(ep, None))
+            .collect())
     }
 
-    async fn chain_id(&self) -> RpcResult<u64> {
-        Ok(self.chain_id)
+    async fn chain_id(&self) -> RpcResult<U64> {
+        Ok(self.chain_id.into())
     }
 }
 

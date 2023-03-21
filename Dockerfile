@@ -1,25 +1,27 @@
 # Adapted from https://github.com/paradigmxyz/reth/blob/main/Dockerfile
 # syntax=docker/dockerfile:1.4
 
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
-WORKDIR /app
-
-# Builds a cargo-chef plan
-FROM chef AS planner
-COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
-
-FROM chef AS builder
-COPY --from=planner /app/recipe.json recipe.json
-
-# Set the build profile to be release
-ARG BUILD_PROFILE=release
-ENV BUILD_PROFILE $BUILD_PROFILE
+FROM rust:1.68 AS chef-builder
 
 # Install system dependencies
 RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
 RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config protobuf-compiler nodejs yarn
 RUN cargo install --git https://github.com/foundry-rs/foundry --profile local --locked foundry-cli
+RUN cargo install cargo-chef 
+
+WORKDIR /app
+
+# Builds a cargo-chef plan
+FROM chef-builder AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef-builder AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+# Set the build profile to be release
+ARG BUILD_PROFILE=release
+ENV BUILD_PROFILE $BUILD_PROFILE
 
 # Builds dependencies
 RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
