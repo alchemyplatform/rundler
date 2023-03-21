@@ -89,6 +89,7 @@ pub struct PoolOperation {
     pub aggregator: Option<Address>,
     pub valid_time_range: ValidTimeRange,
     pub expected_code_hash: H256,
+    pub sim_block_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
@@ -139,6 +140,7 @@ mod tests {
             aggregator: Some(aggregator),
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),
+            sim_block_hash: H256::random(),
             entities_needing_stake: vec![Entity::Sender, Entity::Aggregator],
             expected_storage_slots: vec![],
         };

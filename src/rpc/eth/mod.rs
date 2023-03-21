@@ -1,12 +1,27 @@
 mod error;
 
+use self::error::{
+    EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
+    ThrottledOrBannedData,
+};
+use super::{GasEstimate, RichUserOperation, UserOperationOptionalGas, UserOperationReceipt};
 use crate::common::{
     contracts::entry_point::{
         EntryPoint, EntryPointCalls, EntryPointErrors, UserOperationEventFilter,
         UserOperationRevertReasonFilter,
     },
     eth::{get_revert_data, log_to_raw_log},
-    types::UserOperation,
+    protos::{
+        op_pool::{
+            op_pool_client::OpPoolClient, AddOpRequest, Entity as OpPoolEntity, ErrorInfo,
+            ErrorReason, MempoolOp, StorageSlot,
+        },
+        to_le_bytes,
+    },
+    simulation::{
+        SimulationError, SimulationSuccess, Simulator, SimulatorImpl, Violation, MIN_UNSTAKE_DELAY,
+    },
+    types::{Entity, Timestamp, UserOperation},
 };
 use anyhow::{anyhow, bail, Context};
 use ethers::{
@@ -18,15 +33,12 @@ use ethers::{
         Log, TransactionReceipt, H256, U256,
     },
 };
-use jsonrpsee::core::{Error as RpcError, RpcResult};
+use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
-use std::{collections::HashMap, sync::Arc};
+use prost::Message;
+use std::{collections::HashMap, mem, str::FromStr, sync::Arc, time::Duration};
 use tokio::join;
-use tonic::async_trait;
-
-use self::error::EthRpcError;
-
-use super::{GasEstimate, RichUserOperation, UserOperationOptionalGas, UserOperationReceipt};
+use tonic::{async_trait, transport::Channel, Status};
 
 /// Eth API
 #[rpc(server, namespace = "eth")]
@@ -58,29 +70,62 @@ pub trait EthApi {
     async fn chain_id(&self) -> RpcResult<u64>;
 }
 
-pub struct EthApi {
-    entry_points: HashMap<Address, EntryPoint<Provider<Http>>>,
-    provider: Arc<Provider<Http>>,
-    chain_id: u64,
+#[derive(Debug)]
+struct EntryPointAndSimulator {
+    entry_point: EntryPoint<Provider<Http>>,
+    simulator: SimulatorImpl,
 }
 
+impl EntryPointAndSimulator {
+    pub fn new(address: Address, provider: Arc<Provider<Http>>) -> Self {
+        let entry_point = EntryPoint::new(address, Arc::clone(&provider));
+        let simulator = SimulatorImpl::new(Arc::clone(&provider), address, MIN_STAKE_VALUE.into());
+        Self {
+            entry_point,
+            simulator,
+        }
+    }
+}
+
+pub struct EthApi {
+    entry_points_and_sims: HashMap<Address, EntryPointAndSimulator>,
+    provider: Arc<Provider<Http>>,
+    chain_id: u64,
+    op_pool_client: OpPoolClient<Channel>,
+}
+
+// 10^18 wei = 1 eth
+const MIN_STAKE_VALUE: u64 = 1_000_000_000_000_000_000;
+
 impl EthApi {
-    pub fn new(provider: Arc<Provider<Http>>, entry_points: Vec<Address>, chain_id: u64) -> Self {
-        let entry_points: HashMap<Address, EntryPoint<Provider<Http>>> = entry_points
+    pub fn new(
+        provider: Arc<Provider<Http>>,
+        entry_points: Vec<Address>,
+        chain_id: u64,
+        op_pool_client: OpPoolClient<Channel>,
+    ) -> Self {
+        let entry_points_and_sims = entry_points
             .iter()
-            .map(|&a| (a, EntryPoint::new(a, Arc::clone(&provider))))
+            .map(|&a| (a, EntryPointAndSimulator::new(a, Arc::clone(&provider))))
             .collect();
 
         Self {
-            entry_points,
+            entry_points_and_sims,
             provider,
             chain_id,
+            op_pool_client,
         }
+    }
+
+    fn get_entry_point(&self, address: &Address) -> Option<&EntryPoint<Provider<Http>>> {
+        self.entry_points_and_sims
+            .get(address)
+            .map(|eps| &eps.entry_point)
     }
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
         let filter = Filter::new()
-            .address::<Vec<Address>>(self.entry_points.iter().map(|ep| *ep.0).collect())
+            .address::<Vec<Address>>(self.entry_points_and_sims.iter().map(|ep| *ep.0).collect())
             .topic1(hash);
 
         // we don't do .query().await here because we still need the raw logs for the TX
@@ -193,8 +238,7 @@ impl EthApi {
         op: &UserOperationOptionalGas,
     ) -> anyhow::Result<U256> {
         let entry_point = self
-            .entry_points
-            .get(entry_point)
+            .get_entry_point(entry_point)
             .context("entry point should exist in the map")?;
 
         let tx = TypedTransaction::Eip1559(Eip1559TransactionRequest {
@@ -219,8 +263,7 @@ impl EthApi {
         op: &UserOperationOptionalGas,
     ) -> anyhow::Result<U256> {
         let entry_point = self
-            .entry_points
-            .get(entry_point)
+            .get_entry_point(entry_point)
             .context("entry point should exist in the map")?;
 
         let sim_result = entry_point
@@ -251,18 +294,90 @@ impl EthApi {
     }
 }
 
+const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
 #[async_trait]
 impl EthApiServer for EthApi {
     async fn send_user_operation(
         &self,
-        _op: UserOperation,
-        _entry_point: Address,
+        op: UserOperation,
+        entry_point: Address,
     ) -> RpcResult<H256> {
+        if !self.entry_points_and_sims.contains_key(&entry_point) {
+            return Err(EthRpcError::InvalidParams(
+                "supplied entry_point addr is not a known entry point".to_string(),
+            ))?;
+        }
+
+        let EntryPointAndSimulator {
+            simulator,
+            entry_point,
+        } = self
+            .entry_points_and_sims
+            .get(&entry_point)
+            .context("entry point should exist in the map")?;
+
         // 1. validate op
-        // 2. get user op hash
-        // 3. send op the mempool
-        // 4. return the op hash or handle RPC errors
-        Err(RpcError::HttpNotImplemented)
+        let SimulationSuccess {
+            valid_time_range,
+            code_hash,
+            aggregator_address,
+            expected_storage_slots,
+            signature_failed,
+            entities_needing_stake,
+            block_hash,
+            ..
+        } = simulator
+            .simulate_validation(op.clone(), None, None)
+            .await
+            .map_err(EthRpcError::from)?;
+
+        if signature_failed {
+            Err(EthRpcError::SignatureCheckFailed)?
+        }
+
+        let now = Timestamp::now();
+        let valid_after = valid_time_range.valid_after;
+        let valid_until = valid_time_range.valid_until;
+        if valid_time_range.contains(now, EXPIRATION_BUFFER) {
+            Err(EthRpcError::OutOfTimeRange(OutOfTimeRangeData {
+                valid_after,
+                valid_until,
+                paymaster: op.paymaster(),
+            }))?
+        }
+
+        // 2. send op the mempool
+        let add_op_result = self
+            .op_pool_client
+            .clone()
+            .add_op(AddOpRequest {
+                entry_point: entry_point.address().as_bytes().to_vec(),
+                op: Some(MempoolOp {
+                    uo: Some((&op).into()),
+                    aggregator: aggregator_address.unwrap_or_default().as_bytes().to_vec(),
+                    valid_after: valid_after.seconds_since_epoch(),
+                    valid_until: valid_until.seconds_since_epoch(),
+                    expected_code_hash: code_hash.as_bytes().to_vec(),
+                    sim_block_hash: block_hash.as_bytes().to_vec(),
+                    entities_needing_stake: entities_needing_stake
+                        .iter()
+                        .map(|&e| OpPoolEntity::from(e).into())
+                        .collect(),
+                    expected_storage_slots: expected_storage_slots
+                        .iter()
+                        .map(|ss| StorageSlot {
+                            address: ss.address.as_bytes().to_vec(),
+                            slot: to_le_bytes(ss.slot),
+                            value: to_le_bytes(ss.value),
+                        })
+                        .collect(),
+                }),
+            })
+            .await
+            .map_err(EthRpcError::from)?;
+
+        // 3. return the op hash
+        Ok(H256::from_slice(&add_op_result.into_inner().hash))
     }
 
     async fn estimate_user_operation_gas(
@@ -270,7 +385,7 @@ impl EthApiServer for EthApi {
         op: UserOperationOptionalGas,
         entry_point: Address,
     ) -> RpcResult<GasEstimate> {
-        if !self.entry_points.contains_key(&entry_point) {
+        if !self.entry_points_and_sims.contains_key(&entry_point) {
             return Err(EthRpcError::InvalidParams(
                 "supplied entry_point addr is not a known entry point".to_string(),
             ))?;
@@ -331,7 +446,7 @@ impl EthApiServer for EthApi {
 
         let to = tx
             .to
-            .filter(|to| self.entry_points.contains_key(to))
+            .filter(|to| self.entry_points_and_sims.contains_key(to))
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. parse the tx data using the EntryPoint interface and extract UserOperation[] from it
@@ -399,7 +514,7 @@ impl EthApiServer for EthApi {
 
         let to = tx_receipt
             .to
-            .filter(|to| self.entry_points.contains_key(to))
+            .filter(|to| self.entry_points_and_sims.contains_key(to))
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. filter receipt logs to match just those belonging to the user op
@@ -435,7 +550,7 @@ impl EthApiServer for EthApi {
     }
 
     async fn supported_entry_points(&self) -> RpcResult<Vec<Address>> {
-        Ok(self.entry_points.keys().copied().collect())
+        Ok(self.entry_points_and_sims.keys().copied().collect())
     }
 
     async fn chain_id(&self) -> RpcResult<u64> {
@@ -443,15 +558,174 @@ impl EthApiServer for EthApi {
     }
 }
 
+impl From<SimulationError> for EthRpcError {
+    fn from(mut value: SimulationError) -> Self {
+        // TODO: handle unsupported signature aggregator (assuming not throttled/banned and staked)
+        // this requires calling aggregator.validateUserOpSignature
+        let SimulationError::Violations(violations) = &mut value else {
+            return Self::Internal(value.into())
+        };
+
+        let mut paymaster_or_entry_violation = violations
+            .iter_mut()
+            .find(|v| matches!(v, Violation::UnintendedRevertWithMessage(_, _, _)));
+        if let Some(Violation::UnintendedRevertWithMessage(
+            Entity::Paymaster,
+            reason,
+            Some(paymaster),
+        )) = &mut paymaster_or_entry_violation
+        {
+            return Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
+                paymaster: *paymaster,
+                reason: mem::take(reason),
+            });
+        } else if let Some(Violation::UnintendedRevertWithMessage(_, reason, _)) =
+            paymaster_or_entry_violation
+        {
+            return Self::EntrypointValidationRejected(reason.clone());
+        }
+
+        let forbidden_op_code = violations.iter().find(|v| {
+            matches!(
+                v,
+                Violation::UsedForbiddenOpcode(_, _) | Violation::InvalidGasOpcode(_)
+            )
+        });
+        if let Some(violation) = forbidden_op_code {
+            return Self::OpcodeViolation(violation.to_string());
+        }
+
+        let stake_violation = violations
+            .iter()
+            .find(|v| matches!(v, Violation::NotStaked(_, _)));
+        if let Some(Violation::NotStaked(entity, address)) = stake_violation {
+            let err_data = match entity {
+                Entity::Paymaster => Some(StakeTooLowData::paymaster(
+                    *address,
+                    MIN_STAKE_VALUE.into(),
+                    MIN_UNSTAKE_DELAY.into(),
+                )),
+                _ => None,
+            };
+
+            if let Some(err_data) = err_data {
+                return Self::StakeTooLow(err_data);
+            }
+        }
+
+        Self::Internal(value.into())
+    }
+}
+
+impl TryFrom<Status> for ErrorInfo {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Status) -> Result<Self, Self::Error> {
+        let decoded_status =
+            tonic_types::Status::decode(value.details()).context("should have decoded status")?;
+
+        // This could actually contain more error details, but we only use the first right now
+        let any = decoded_status
+            .details
+            .first()
+            .context("should have details")?;
+
+        if any.type_url == "type.alchemy.com/op_pool.ErrorInfo" {
+            ErrorInfo::decode(&any.value[..])
+                .context("should have decoded successfully into ErrorInfo")
+        } else {
+            bail!("Unknown type_url: {}", any.type_url);
+        }
+    }
+}
+
+impl From<ErrorInfo> for EthRpcError {
+    fn from(value: ErrorInfo) -> Self {
+        let ErrorInfo { reason, metadata } = value;
+
+        if reason == ErrorReason::EntityThrottled.as_str_name() {
+            let (entity, address) = metadata.iter().next().unwrap();
+            let Some(address) = Address::from_str(address).ok() else {
+                return anyhow!("should have valid address in ErrorInfo metadata").into()
+            };
+
+            let Some(entity) = Entity::from_str(entity).ok() else {
+                return anyhow!("should be a valid Entity type in ErrorInfo metadata").into()
+            };
+
+            let data = match entity {
+                Entity::Aggregator => ThrottledOrBannedData::aggregator(address),
+                Entity::Paymaster => ThrottledOrBannedData::paymaster(address),
+                Entity::Factory => ThrottledOrBannedData::factory(address),
+                _ => return anyhow!("unsupported entity {} as throttled reason", entity).into(),
+            };
+
+            return EthRpcError::ThrottledOrBanned(data);
+        }
+
+        anyhow!("operation rejected").into()
+    }
+}
+
+impl From<Status> for EthRpcError {
+    fn from(status: Status) -> Self {
+        let status_details: anyhow::Result<ErrorInfo> = status.try_into();
+        let Ok(error_info) = status_details else {
+            return EthRpcError::Internal(status_details.unwrap_err())
+        };
+
+        EthRpcError::from(error_info)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::{common::protos::op_pool::ErrorReason, rpc::eth::error::ThrottledOrBannedData};
+
     use super::*;
     use ethers::{
         types::{Log, TransactionReceipt},
-        utils::keccak256,
+        utils::{hex::ToHex, keccak256},
     };
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
+
+    #[test]
+    fn test_throttled_or_banned_decode() {
+        let error_info = ErrorInfo {
+            reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
+            metadata: HashMap::from([(
+                Entity::Paymaster.to_string(),
+                Address::default().encode_hex(),
+            )]),
+        };
+
+        let details = tonic_types::Status {
+            code: 0,
+            message: "".to_string(),
+            details: vec![prost_types::Any {
+                type_url: "type.alchemy.com/op_pool.ErrorInfo".to_string(),
+                value: error_info.encode_to_vec(),
+            }],
+        };
+
+        let status = Status::with_details(
+            tonic::Code::Internal,
+            "error_message".to_string(),
+            details.encode_to_vec().into(),
+        );
+
+        let rpc_error: EthRpcError = status.into();
+
+        assert!(
+            matches!(
+                rpc_error,
+                EthRpcError::ThrottledOrBanned(data) if data == ThrottledOrBannedData::paymaster(Address::default())
+            ),
+            "{:?}",
+            rpc_error
+        );
+    }
 
     #[test]
     fn test_filter_receipt_logs_when_at_begining_of_list() {

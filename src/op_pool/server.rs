@@ -14,6 +14,7 @@ use crate::common::protos::op_pool::{
 };
 use crate::common::protos::ProtoBytes;
 use ethers::types::{Address, H256};
+use ethers::utils::hex::ToHex;
 use prost::Message;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
 
@@ -211,7 +212,8 @@ impl From<MempoolError> for Status {
         let ei = match &e {
             MempoolError::EntityThrottled(et, addr) => ErrorInfo {
                 reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
-                metadata: HashMap::from([(et.to_string(), addr.to_string())]),
+                // to stringing an address actually shortens it in the style of 0x000...000 -- bad.
+                metadata: HashMap::from([(et.to_string(), (&addr).encode_hex())]),
             },
             MempoolError::MaxOperationsReached(_, _)
             | MempoolError::ReplacementUnderpriced(_, _) => ErrorInfo {
