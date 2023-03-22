@@ -20,6 +20,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct Timestamp(u64);
 
 impl Timestamp {
+    pub const MIN: Timestamp = Timestamp(u64::MIN);
+    pub const MAX: Timestamp = Timestamp(u64::MAX);
+
     pub fn new(seconds_since_epoch: u64) -> Self {
         Self(seconds_since_epoch)
     }
@@ -130,10 +133,19 @@ impl Error for TimestampTooLarge {}
 
 /// Represents a `(valid_after, valid_before)` pair as seen in ERC-4337 validity
 /// checks. A `valid_until` of zero means that there is no bound on end time.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ValidTimeRange {
     pub valid_after: Timestamp,
     pub valid_until: Timestamp,
+}
+
+impl Default for ValidTimeRange {
+    fn default() -> Self {
+        Self {
+            valid_after: Timestamp::MIN,
+            valid_until: Timestamp::MAX,
+        }
+    }
 }
 
 impl ValidTimeRange {
@@ -153,8 +165,7 @@ impl ValidTimeRange {
     /// including a minimum buffer time that must be remaining before the time
     /// range expires.
     pub fn contains(self, timestamp: Timestamp, buffer: Duration) -> bool {
-        self.valid_after <= timestamp
-            && (self.valid_until == Timestamp::default() || timestamp + buffer < self.valid_until)
+        self.valid_after <= timestamp && timestamp + buffer < self.valid_until
     }
 }
 
