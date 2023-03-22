@@ -37,9 +37,6 @@ pub async fn run(bundler_args: BundlerCliArgs, common_args: CommonArgs) -> anyho
 
     let pool_url = format_server_addr(&pool_args.host, pool_args.port, false);
     let builder_url = builder_args.url(false);
-    if builder_url.is_none() {
-        info!("Builder server is missing port or host, disabled");
-    }
 
     let pool_handle = tokio::spawn(op_pool::run(
         pool_args.to_args(&common_args)?,

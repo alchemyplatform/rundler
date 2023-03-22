@@ -1,3 +1,4 @@
+use crate::common::types::BundlingMode as RpcBundlingMode;
 use crate::common::types::Entity as EntityType;
 use crate::common::types::UserOperation as RpcUserOperation;
 use ethers::types::{Address, Bytes, H256, U256};
@@ -75,6 +76,36 @@ pub mod op_pool {
     }
 }
 
+pub mod builder {
+    use super::*;
+
+    tonic::include_proto!("builder");
+
+    pub const BUILDER_FILE_DESCRIPTOR_SET: &[u8] =
+        tonic::include_file_descriptor_set!("builder_descriptor");
+
+    impl From<RpcBundlingMode> for BundlingMode {
+        fn from(mode: RpcBundlingMode) -> Self {
+            match mode {
+                RpcBundlingMode::Auto => BundlingMode::Auto,
+                RpcBundlingMode::Manual => BundlingMode::Manual,
+            }
+        }
+    }
+
+    impl TryFrom<BundlingMode> for RpcBundlingMode {
+        type Error = ConversionError;
+
+        fn try_from(value: BundlingMode) -> Result<Self, Self::Error> {
+            match value {
+                BundlingMode::Auto => Ok(RpcBundlingMode::Auto),
+                BundlingMode::Manual => Ok(RpcBundlingMode::Manual),
+                _ => Err(ConversionError::InvalidBundlingMode(value as i32)),
+            }
+        }
+    }
+}
+
 pub fn to_le_bytes(n: U256) -> Vec<u8> {
     let mut vec = vec![0_u8; 32];
     n.to_little_endian(&mut vec);
@@ -90,6 +121,8 @@ pub enum ConversionError {
     InvalidTimestamp(u64),
     #[error("Entity was invalid or unspecified: {0}")]
     InvalidEntity(i32),
+    #[error("Bundling Mode was invalid or unspecified: {0}")]
+    InvalidBundlingMode(i32),
 }
 
 /// Wrapper around protobyf bytes for converting to Ethers types.

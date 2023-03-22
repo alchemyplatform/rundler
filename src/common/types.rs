@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 pub use crate::common::contracts::shared_types::UserOperation;
 use anyhow::bail;
+use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 pub use timestamp::*;
 pub use validation_results::*;
@@ -117,6 +118,13 @@ impl FromStr for Entity {
             _ => bail!("Invalid entity: {s}"),
         }
     }
+}
+
+#[derive(Display, Debug, Clone, Copy, Eq, PartialEq, EnumIter, Serialize, Deserialize)]
+#[display(style = "lowercase")]
+pub enum BundlingMode {
+    Manual,
+    Auto,
 }
 
 #[cfg(test)]
