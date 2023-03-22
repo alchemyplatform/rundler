@@ -11,6 +11,7 @@ interface Output {
   accessedContractAddresses: string[];
   associatedSlotsByAddress: Record<string, string[]>;
   factoryCalledCreate2Twice: boolean;
+  expectedStorage: ExpectedStorage[];
 }
 
 interface Phase {
@@ -25,12 +26,17 @@ interface Phase {
 
 interface StorageAccess {
   address: string;
-  accesses: SlotAccess[];
+  slots: string[];
 }
 
-interface SlotAccess {
+interface ExpectedStorage {
+  address: string;
+  slots: ExpectedSlot[];
+}
+
+interface ExpectedSlot {
   slot: string;
-  initialValue: string | null;
+  value: string;
 }
 
 type InternalPhase = Omit<
@@ -38,7 +44,7 @@ type InternalPhase = Omit<
   "forbiddenOpcodesUsed" | "storageAccesses" | "undeployedContractAccesses"
 > & {
   forbiddenOpcodesUsed: Set<string>;
-  storageAccesses: Map<string, Map<string, string | null>>;
+  storageAccesses: Map<string, Set<string>>;
   undeployedContractAccesses: Set<string>;
 };
 
@@ -75,6 +81,7 @@ type InternalPhase = Omit<
   let revertData: string | null = null;
   const accessedContractAddresses = new Set<string>();
   const associatedSlotsByAddressMap = new Map<string, Set<string>>();
+  const allStorageAccesses = new Map<string, Map<string, string | null>>();
   let factoryCreate2Count = 0;
   let currentPhase = newInternalPhase();
   let entryPointAddress = "";
@@ -105,12 +112,8 @@ type InternalPhase = Omit<
       ...currentPhase.undeployedContractAccesses,
     ];
     const storageAccesses: StorageAccess[] = [];
-    for (const [address, initialValuesBySlot] of currentPhase.storageAccesses) {
-      const storageAccess: StorageAccess = { address, accesses: [] };
-      for (const [slot, initialValue] of initialValuesBySlot) {
-        storageAccess.accesses.push({ slot, initialValue });
-      }
-      storageAccesses.push(storageAccess);
+    for (const [address, slotsSet] of currentPhase.storageAccesses) {
+      storageAccesses.push({ address, slots: [...slotsSet] });
     }
     const phase: Phase = {
       forbiddenOpcodesUsed,
@@ -146,12 +149,25 @@ type InternalPhase = Omit<
       for (const [address, slots] of associatedSlotsByAddressMap) {
         associatedSlotsByAddress[address] = [...slots];
       }
+      const expectedStorage: ExpectedStorage[] = [];
+      for (const [address, slotAccesses] of allStorageAccesses) {
+        const slots: ExpectedSlot[] = [];
+        for (const [slot, value] of slotAccesses) {
+          if (value) {
+            slots.push({ slot, value });
+          }
+        }
+        if (slots.length > 0) {
+          expectedStorage.push({ address, slots });
+        }
+      }
       return {
         phases,
         revertData,
         accessedContractAddresses: [...accessedContractAddresses],
         associatedSlotsByAddress,
         factoryCalledCreate2Twice: factoryCreate2Count > 1,
+        expectedStorage,
       };
     },
 
@@ -177,8 +193,8 @@ type InternalPhase = Omit<
         pendingKeccakAddress = "";
       }
       const opcode = log.op.toString();
-      if (log.getDepth() === 1) {
-        // EntryPoint is executing.
+      const entryPointIsExecuting = log.getDepth() === 1;
+      if (entryPointIsExecuting) {
         if (opcode === "NUMBER") {
           concludePhase();
         } else if (opcode === "REVERT") {
@@ -187,6 +203,8 @@ type InternalPhase = Omit<
           revertData = toHex(log.memory.slice(offset, offset + length));
         }
       } else {
+        // The entry point is allowed to freely call `GAS`, but otherwise we
+        // require that a call opcode comes next.
         if (justCalledGas && !CALL_OPCODES.has(opcode)) {
           currentPhase.usedInvalidGasOpcode = true;
         }
@@ -211,7 +229,7 @@ type InternalPhase = Omit<
           if (keccakInputWord.startsWith("0x000000000000000000000000")) {
             // The word starts with 24 zeroes = 12 zero bytes, so the remaining
             // 20 bytes may represent an address.
-            pendingKeccakAddress = "0x" + pendingKeccakAddress.slice(26);
+            pendingKeccakAddress = "0x" + keccakInputWord.slice(26);
           }
         }
       } else if (opcode === "SLOAD" || opcode === "SSTORE") {
@@ -219,15 +237,26 @@ type InternalPhase = Omit<
         const addressHex = toHex(address);
         const slot = toWord(log.stack.peek(0).toString(16));
         const slotHex = toHex(slot);
-        const slotAccesses = computeIfAbsent(
-          currentPhase.storageAccesses,
+        if (!entryPointIsExecuting) {
+          // The entry point can access whatever it wants, but otherwise track
+          // access for this phase so we can check validity later.
+          computeIfAbsent(
+            currentPhase.storageAccesses,
+            addressHex,
+            () => new Set<string>()
+          ).add(slotHex);
+        }
+        let initialValuesBySlot = computeIfAbsent(
+          allStorageAccesses,
           addressHex,
           () => new Map<string, string | null>()
         );
-        if (!slotAccesses.has(slotHex)) {
+        if (!initialValuesBySlot.has(slotHex)) {
+          // If the first access to this slot is a load, then whatever value it
+          // contains will be an expected value.
           const expectedValue =
             opcode === "SLOAD" ? toHex(db.getState(address, slot)) : null;
-          slotAccesses.set(slotHex, expectedValue);
+          initialValuesBySlot.set(slotHex, expectedValue);
         }
       } else if (EXT_OPCODES.has(opcode) || CALL_OPCODES.has(opcode)) {
         const index = EXT_OPCODES.has(opcode) ? 0 : 1;

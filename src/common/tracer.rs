@@ -17,6 +17,7 @@ pub struct TracerOutput {
     pub accessed_contract_addresses: Vec<Address>,
     pub associated_slots_by_address: AssociatedSlotsByAddress,
     pub factory_called_create2_twice: bool,
+    pub expected_storage: Vec<ExpectedStorage>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -35,14 +36,21 @@ pub struct Phase {
 #[serde(rename_all = "camelCase")]
 pub struct StorageAccess {
     pub address: Address,
-    pub accesses: Vec<SlotAccess>,
+    pub slots: Vec<U256>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SlotAccess {
+pub struct ExpectedStorage {
+    pub address: Address,
+    pub slots: Vec<ExpectedSlot>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpectedSlot {
     pub slot: U256,
-    pub initial_value: Option<U256>,
+    pub value: U256,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
