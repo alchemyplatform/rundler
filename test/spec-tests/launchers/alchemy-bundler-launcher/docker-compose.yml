@@ -15,6 +15,12 @@ services:
       - NODE_HTTP=http://geth:8545
       - NODE_WS=ws://geth:8546
       - RPC_API=eth,debug
+    healthcheck:
+      test: curl --fail http://localhost:8080/metrics || exit 1
+      interval: 1s
+      timeout: 1s
+      retries: 60
+      start_period: 10s
 
   geth:
     image: ethereum/client-go:v1.10.26
