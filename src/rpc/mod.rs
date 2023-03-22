@@ -156,7 +156,7 @@ impl From<UserOperationOptionalGas> for UserOperation {
 #[serde(rename_all = "camelCase")]
 pub struct GasEstimate {
     pub pre_verification_gas: U256,
-    pub verification_gas_limit: U256,
+    pub verification_gas: U256,
     pub call_gas_limit: U256,
 }
 

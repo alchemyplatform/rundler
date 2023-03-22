@@ -23,6 +23,7 @@ const THROTTLED_OR_BANNED_CODE: i32 = -32504;
 // const STAKE_TOO_LOW_CODE: i32 = -32505;
 const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
+const EXECUTION_REVERTED: i32 = -32521;
 
 /// Error returned by the RPC server eth namespace
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +61,8 @@ pub enum EthRpcError {
     SignatureCheckFailed,
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
+    #[error("{0}")]
+    ExecutionReverted(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,6 +192,7 @@ impl From<EthRpcError> for RpcError {
             }
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::Internal(e) => rpc_err(INTERNAL_ERROR_CODE, e.to_string()),
+            EthRpcError::ExecutionReverted(msg) => rpc_err(EXECUTION_REVERTED, msg),
         }
     }
 }
