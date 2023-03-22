@@ -33,6 +33,9 @@ RUN cargo build --profile $BUILD_PROFILE --locked --bin alchemy-bundler
 # Use Ubuntu as the release image
 FROM ubuntu AS runtime
 WORKDIR /app
+# Install system dependencies for the runtime
+# install curl for healthcheck
+RUN apt-get -y update; apt-get -y install curl
 
 # Copy reth over from the build stage
 COPY --from=builder /app/target/release/alchemy-bundler /usr/local/bin
