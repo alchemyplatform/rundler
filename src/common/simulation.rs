@@ -161,7 +161,10 @@ impl Simulator for SimulatorImpl {
                 continue;
             };
             for opcode in &phase.forbidden_opcodes_used {
-                violations.push(Violation::UsedForbiddenOpcode(entity, opcode.clone()));
+                violations.push(Violation::UsedForbiddenOpcode(
+                    entity,
+                    ViolationOpCode(opcode.clone()),
+                ));
             }
             if phase.used_invalid_gas_opcode {
                 violations.push(Violation::InvalidGasOpcode(entity));
@@ -325,24 +328,28 @@ impl Display for SimulationError {
     }
 }
 
-#[derive(Clone, Debug, parse_display::Display)]
+#[derive(Clone, Debug, parse_display::Display, Ord, Eq, PartialOrd, PartialEq)]
 pub enum Violation {
-    #[display("reverted while simulating {0} validation")]
-    UnintendedRevert(Entity),
+    // Make sure to maintain the order here based on the importance
+    // of the violation for converting to an JRPC error
     #[display("reverted while simulating {0} validation: {1}")]
     UnintendedRevertWithMessage(Entity, String, Option<Address>),
-    #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
-    DidNotRevert,
-    #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
-    WrongNumberOfPhases(u32),
-    #[display("{0} uses banned opcode: {1:?}")]
-    UsedForbiddenOpcode(Entity, OpCode),
+    #[display("{0} uses banned opcode: {1}")]
+    UsedForbiddenOpcode(Entity, ViolationOpCode),
     #[display("{0} uses banned opcode: GAS")]
     InvalidGasOpcode(Entity),
+    #[display("factory may only call CREATE2 once during initialization")]
+    FactoryCalledCreate2Twice,
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, Address),
     #[display("{0} must be staked")]
     NotStaked(Entity, Address, U256, U256),
+    #[display("reverted while simulating {0} validation")]
+    UnintendedRevert(Entity),
+    #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
+    DidNotRevert,
+    #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
+    WrongNumberOfPhases(u32),
     #[display("{0} must not send ETH during validation (except to entry point)")]
     CallHadValue(Entity),
     #[display("ran out of gas during {0} validation")]
@@ -355,8 +362,25 @@ pub enum Violation {
     CalledHandleOps(Entity),
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
-    #[display("factory may only call CREATE2 once during initialization")]
-    FactoryCalledCreate2Twice,
+}
+
+#[derive(Debug, PartialEq, Clone, parse_display::Display, Eq)]
+#[display("{0:?}")]
+pub struct ViolationOpCode(pub OpCode);
+
+impl PartialOrd for ViolationOpCode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ViolationOpCode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let left = self.0.clone() as i32;
+        let right = other.0.clone() as i32;
+
+        left.cmp(&right)
+    }
 }
 
 impl Entity {
