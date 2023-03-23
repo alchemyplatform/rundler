@@ -97,7 +97,7 @@ pub struct ExpectedStorageSlot {
     pub value: U256,
 }
 
-#[derive(Display, Debug, Clone, Copy, Eq, PartialEq, EnumIter)]
+#[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd)]
 #[display(style = "lowercase")]
 pub enum Entity {
     Account,

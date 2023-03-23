@@ -36,7 +36,7 @@ use ethers::{
 use jsonrpsee::core::RpcResult;
 use jsonrpsee::proc_macros::rpc;
 use prost::Message;
-use std::{collections::HashMap, mem, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::join;
 use tonic::{async_trait, transport::Channel, Status};
 use tracing::debug;
@@ -591,87 +591,50 @@ impl From<SimulationError> for EthRpcError {
             return Self::Internal(value.into())
         };
 
-        let mut paymaster_or_entry_violation = violations
-            .iter_mut()
-            .find(|v| matches!(v, Violation::UnintendedRevertWithMessage(_, _, _)));
-        if let Some(Violation::UnintendedRevertWithMessage(
-            Entity::Paymaster,
-            reason,
-            Some(paymaster),
-        )) = &mut paymaster_or_entry_violation
-        {
-            return Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
-                paymaster: *paymaster,
-                reason: mem::take(reason),
-            });
-        } else if let Some(Violation::UnintendedRevertWithMessage(_, reason, _)) =
-            paymaster_or_entry_violation
-        {
-            return Self::EntrypointValidationRejected(reason.clone());
-        }
+        let Some(violation) = violations.iter().min() else {
+            return Self::Internal(value.into())
+        };
 
-        let forbidden_op_code = violations.iter().find(|v| {
-            matches!(
-                v,
-                Violation::UsedForbiddenOpcode(_, _)
-                    | Violation::InvalidGasOpcode(_)
-                    | Violation::FactoryCalledCreate2Twice
-                    | Violation::InvalidStorageAccess(_, _)
-            )
-        });
-        if let Some(violation) = forbidden_op_code {
-            match violation {
-                Violation::UsedForbiddenOpcode(entity, op) => {
-                    return Self::OpcodeViolation(*entity, op.clone())
-                }
-                Violation::InvalidGasOpcode(entity) => {
-                    return Self::OpcodeViolation(*entity, OpCode::GAS)
-                }
-                Violation::FactoryCalledCreate2Twice => {
-                    return Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2)
-                }
-                Violation::InvalidStorageAccess(entity, address) => {
-                    return Self::InvalidStorageAccess(*entity, *address)
-                }
-                Violation::InvalidStorageAccess(entity, address) => {
-                    return Self::InvalidStorageAccess(*entity, *address)
-                }
-                // This should never happen
-                _ => {}
+        match violation {
+            Violation::UnintendedRevertWithMessage(Entity::Paymaster, reason, Some(paymaster)) => {
+                Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
+                    paymaster: *paymaster,
+                    reason: reason.to_string(),
+                })
             }
-        }
-
-        let stake_violation = violations
-            .iter()
-            .find(|v| matches!(v, Violation::NotStaked(_, _, _, _)));
-        if let Some(Violation::NotStaked(entity, address, min_stake, min_unstake_delay)) =
-            stake_violation
-        {
-            let err_data = match entity {
-                Entity::Paymaster => Some(StakeTooLowData::paymaster(
-                    *address,
-                    *min_stake,
-                    *min_unstake_delay,
-                )),
-                Entity::Aggregator => Some(StakeTooLowData::aggregator(
-                    *address,
-                    *min_stake,
-                    *min_unstake_delay,
-                )),
-                Entity::Factory => Some(StakeTooLowData::factory(
-                    *address,
-                    *min_stake,
-                    *min_unstake_delay,
-                )),
-                _ => None,
-            };
-
-            if let Some(err_data) = err_data {
-                return Self::StakeTooLow(err_data);
+            Violation::UnintendedRevertWithMessage(_, reason, _) => {
+                Self::EntrypointValidationRejected(reason.clone())
             }
-        }
+            Violation::UsedForbiddenOpcode(entity, op) => {
+                Self::OpcodeViolation(*entity, op.clone().0)
+            }
+            Violation::InvalidGasOpcode(entity) => Self::OpcodeViolation(*entity, OpCode::GAS),
+            Violation::FactoryCalledCreate2Twice => {
+                Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2)
+            }
+            Violation::InvalidStorageAccess(entity, address) => {
+                Self::InvalidStorageAccess(*entity, *address)
+            }
+            Violation::NotStaked(entity, address, min_stake, min_unstake_delay) => {
+                let err_data = match entity {
+                    Entity::Account => {
+                        StakeTooLowData::account(*address, *min_stake, *min_unstake_delay)
+                    }
+                    Entity::Paymaster => {
+                        StakeTooLowData::paymaster(*address, *min_stake, *min_unstake_delay)
+                    }
+                    Entity::Aggregator => {
+                        StakeTooLowData::aggregator(*address, *min_stake, *min_unstake_delay)
+                    }
+                    Entity::Factory => {
+                        StakeTooLowData::factory(*address, *min_stake, *min_unstake_delay)
+                    }
+                };
 
-        Self::Internal(value.into())
+                Self::StakeTooLow(err_data)
+            }
+            _ => Self::Internal(value.into()),
+        }
     }
 }
 

@@ -119,6 +119,7 @@ pub struct StakeTooLowData {
     paymaster: Option<Address>,
     aggregator: Option<Address>,
     factory: Option<Address>,
+    account: Option<Address>,
     minimum_stake: U256,
     minimum_unstake_delay: U256,
 }
@@ -129,6 +130,7 @@ impl StakeTooLowData {
             paymaster: Some(paymaster),
             aggregator: None,
             factory: None,
+            account: None,
             minimum_stake,
             minimum_unstake_delay,
         }
@@ -143,6 +145,7 @@ impl StakeTooLowData {
             paymaster: None,
             aggregator: Some(aggregator),
             factory: None,
+            account: None,
             minimum_stake,
             minimum_unstake_delay,
         }
@@ -153,6 +156,18 @@ impl StakeTooLowData {
             paymaster: None,
             aggregator: None,
             factory: Some(factory),
+            account: None,
+            minimum_stake,
+            minimum_unstake_delay,
+        }
+    }
+
+    pub fn account(account: Address, minimum_stake: U256, minimum_unstake_delay: U256) -> Self {
+        Self {
+            paymaster: None,
+            aggregator: None,
+            factory: None,
+            account: Some(account),
             minimum_stake,
             minimum_unstake_delay,
         }
