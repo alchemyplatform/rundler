@@ -100,7 +100,7 @@ pub struct ExpectedStorageSlot {
 #[derive(Display, Debug, Clone, Copy, Eq, PartialEq, EnumIter)]
 #[display(style = "lowercase")]
 pub enum Entity {
-    Sender,
+    Account,
     Paymaster,
     Aggregator,
     Factory,
@@ -111,7 +111,7 @@ impl FromStr for Entity {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "sender" => Ok(Entity::Sender),
+            "account" => Ok(Entity::Account),
             "paymaster" => Ok(Entity::Paymaster),
             "aggregator" => Ok(Entity::Aggregator),
             "factory" => Ok(Entity::Factory),

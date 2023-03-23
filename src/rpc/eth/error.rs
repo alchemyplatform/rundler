@@ -1,5 +1,5 @@
-use crate::common::types::Timestamp;
-use ethers::types::{Address, U256};
+use crate::common::types::{Entity, Timestamp};
+use ethers::types::{Address, OpCode, U256};
 use jsonrpsee::{
     core::Error as RpcError,
     types::{
@@ -37,8 +37,8 @@ pub enum EthRpcError {
     #[error("{}", .0.reason)]
     PaymasterValidationRejected(PaymasterValidationRejectedData),
     /// Opcode violation
-    #[error("opcode violation: {0}")]
-    OpcodeViolation(String),
+    #[error("{0} uses banned opcode: {1:?}")]
+    OpcodeViolation(Entity, OpCode),
     /// Operation is out of time range
     #[error("operation is out of time range")]
     OutOfTimeRange(OutOfTimeRangeData),
@@ -169,7 +169,7 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::PaymasterValidationRejected(data) => {
                 rpc_err_with_data(PAYMASTER_VALIDATION_REJECTED_CODE, msg, data)
             }
-            EthRpcError::OpcodeViolation(_) => rpc_err(OPCODE_VIOLATION_CODE, msg),
+            EthRpcError::OpcodeViolation(_, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)
             }

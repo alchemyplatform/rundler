@@ -17,7 +17,7 @@ message UserOperation {
 
 enum Entity {
   ENTITY_UNSPECIFIED = 0;
-  ENTITY_SENDER = 1;
+  ENTITY_ACCOUNT = 1;
   ENTITY_PAYMASTER = 2;
   ENTITY_AGGREGATOR = 3;
   ENTITY_FACTORY = 4;

@@ -30,7 +30,7 @@ use ethers::{
     providers::{Http, Middleware, Provider},
     types::{
         transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
-        Log, TransactionReceipt, H256, U256, U64,
+        Log, OpCode, TransactionReceipt, H256, U256, U64,
     },
     utils::to_checksum,
 };
@@ -487,7 +487,7 @@ impl EthApiServer for EthApi {
     ) -> RpcResult<Option<UserOperationReceipt>> {
         if hash == H256::zero() {
             return Err(EthRpcError::InvalidParams(
-                "hash cannot be zero".to_string(),
+                "Missing/invalid userOpHash".to_string(),
             ))?;
         }
 
@@ -598,11 +598,26 @@ impl From<SimulationError> for EthRpcError {
         let forbidden_op_code = violations.iter().find(|v| {
             matches!(
                 v,
-                Violation::UsedForbiddenOpcode(_, _) | Violation::InvalidGasOpcode(_)
+                Violation::UsedForbiddenOpcode(_, _)
+                    | Violation::InvalidGasOpcode(_)
+                    | Violation::FactoryCalledCreate2Twice
             )
         });
         if let Some(violation) = forbidden_op_code {
-            return Self::OpcodeViolation(violation.to_string());
+            match violation {
+                Violation::UsedForbiddenOpcode(entity, op) => {
+                    // this clone should be cheap
+                    return Self::OpcodeViolation(*entity, op.clone());
+                }
+                Violation::InvalidGasOpcode(entity) => {
+                    return Self::OpcodeViolation(*entity, OpCode::GAS);
+                }
+                Violation::FactoryCalledCreate2Twice => {
+                    return Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2);
+                }
+                // This should never happen
+                _ => {}
+            }
         }
 
         let stake_violation = violations
