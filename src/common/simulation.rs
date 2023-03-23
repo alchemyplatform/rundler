@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    fmt::{Debug, Display, Formatter},
+    fmt::{Display, Formatter},
     mem,
     sync::Arc,
 };
@@ -18,7 +18,7 @@ use tonic::async_trait;
 
 use crate::common::{
     contracts::{
-        entry_point::{EntryPoint, FailedOp},
+        entry_point::{EntryPoint, EntryPointErrors, FailedOp},
         i_aggregator::IAggregator,
     },
     eth, tracer,
@@ -46,6 +46,21 @@ pub struct SimulationSuccess {
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, ethers::contract::EthError)]
+#[etherror(name = "Error", abi = "Error(string)")]
+/// This is the abi for what happens when you just revert("message") in a contract
+pub struct ContractRevertError {
+    pub reason: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct GasSimulationSuccess {
+    /// This is the gas used by the entry point in actually executing the user op
+    pub call_gas: U256,
+    /// this is the gas cost of validating the user op. It does NOT include the preOp verification cost
+    pub verification_gas: U256,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct StorageSlot {
     pub address: Address,
@@ -60,6 +75,12 @@ pub trait Simulator {
         block_id: Option<BlockId>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError>;
+
+    async fn simulate_handle_op(
+        &self,
+        op: UserOperation,
+        block_id: Option<BlockId>,
+    ) -> Result<GasSimulationSuccess, GasSimulationError>;
 }
 
 #[derive(Debug)]
@@ -92,7 +113,7 @@ impl SimulatorImpl {
         let sender_address = op.sender;
         let paymaster_address = op.paymaster();
         let is_wallet_creation = !op.init_code.is_empty();
-        let tracer_out = tracer::trace_op_validation(&self.entry_point, op, block_id).await?;
+        let tracer_out = tracer::trace_simulate_validation(&self.entry_point, op, block_id).await?;
         let num_phases = tracer_out.phases.len() as u32;
         // Check if there are too many phases here, then check too few at the
         // end. We are detecting cases where the entry point is broken. Too many
@@ -336,6 +357,81 @@ impl Simulator for SimulatorImpl {
             expected_storage_slots,
         })
     }
+
+    async fn simulate_handle_op(
+        &self,
+        op: UserOperation,
+        block_id: Option<BlockId>,
+    ) -> Result<GasSimulationSuccess, GasSimulationError> {
+        let block_hash = eth::get_block_hash(
+            &self.provider,
+            block_id.unwrap_or_else(|| BlockNumber::Latest.into()),
+        )
+        .await?;
+
+        let block_id = block_hash.into();
+        let tracer_out = tracer::trace_simulate_handle_op(&self.entry_point, op, block_id).await?;
+
+        let Some(ref revert_data) = tracer_out.revert_data else {
+            return Err(GasSimulationError::DidNotRevert);
+        };
+
+        let ep_error = EntryPointErrors::decode_hex(revert_data)
+            .map_err(|e| GasSimulationError::Other(e.into()))?;
+
+        // we don't use the verification gas returned here because it adds the preVerificationGas passed in from the UserOperation
+        // that value *should* be 0 but might not be, so we won't use it here and just use the gas from tracing
+        // we just want to make sure we completed successfully
+        match ep_error {
+            EntryPointErrors::ExecutionResult(_) => (),
+            _ => {
+                return Err(GasSimulationError::DidNotRevertWithExecutionResult(
+                    ep_error,
+                ))
+            }
+        };
+
+        // This should be 3 phases (actually there are 5, but we merge the first 3 as one since that's the validation phase)
+        if tracer_out.phases.len() != 3 {
+            return Err(GasSimulationError::IncorrectPhaseCount(
+                tracer_out.phases.len(),
+            ));
+        }
+
+        if let Some(inner_revert) = &tracer_out.phases[1].account_revert_data {
+            match ContractRevertError::decode_hex(inner_revert) {
+                Ok(error) => {
+                    return Err(GasSimulationError::AccountExecutionReverted(error.reason))
+                }
+                // Inner revert was a different type that we don't know know how to decode
+                // just return that body for now
+                _ => {
+                    return Err(GasSimulationError::AccountExecutionReverted(
+                        inner_revert.clone(),
+                    ))
+                }
+            };
+        };
+
+        Ok(GasSimulationSuccess {
+            call_gas: tracer_out.phases[1].gas_used.into(),
+            verification_gas: tracer_out.phases[0].gas_used.into(),
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum GasSimulationError {
+    #[error("handle op simulation did not revert")]
+    DidNotRevert,
+    #[error("handle op simulation should have reverted with exection result: {0}")]
+    DidNotRevertWithExecutionResult(EntryPointErrors),
+    #[error("account execution reverted: {0}")]
+    AccountExecutionReverted(String),
+    #[error("handle op simulation should have had 5 phases, but had {0}")]
+    IncorrectPhaseCount(usize),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

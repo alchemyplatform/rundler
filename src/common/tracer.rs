@@ -6,11 +6,11 @@ use std::{
 use anyhow::Context;
 use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, BlockId, OpCode, U256},
+    types::{transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, OpCode, U256},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::common::{contracts::entry_point::EntryPoint, types::UserOperation};
+use super::{contracts::entry_point::EntryPoint, types::UserOperation};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,15 +74,56 @@ impl AssociatedSlotsByAddress {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GasTracerOutput {
+    pub phases: Vec<GasPhase>,
+    pub revert_data: Option<String>,
+    pub gas_used: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GasPhase {
+    pub gas_used: u64,
+    pub gas_remaining_at_conclusion: u64,
+    pub account_revert_data: Option<String>,
+}
+
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
 /// method for the provided user operation.
-pub async fn trace_op_validation(
+pub async fn trace_simulate_validation(
     entry_point: &EntryPoint<impl Middleware>,
     op: UserOperation,
     block_id: BlockId,
 ) -> anyhow::Result<TracerOutput> {
     let tx = entry_point.simulate_validation(op).tx;
-    trace_call(entry_point.client().provider(), tx, block_id, tracer_js()).await
+    trace_call(
+        entry_point.client().provider(),
+        tx,
+        block_id,
+        validation_tracer_js(),
+    )
+    .await
+}
+
+/// Runs the bundler's custom tracer on the entry point's `simulateHandleOp`
+/// method for the provided user operation.
+pub async fn trace_simulate_handle_op(
+    entry_point: &EntryPoint<impl Middleware>,
+    op: UserOperation,
+    block_id: BlockId,
+) -> anyhow::Result<GasTracerOutput> {
+    let tx = entry_point
+        .simulate_handle_op(op, Address::default(), Bytes::default())
+        .tx;
+    trace_call(
+        entry_point.client().provider(),
+        tx,
+        block_id,
+        gas_tracer_js(),
+    )
+    .await
 }
 
 async fn trace_call<T>(
@@ -104,6 +145,10 @@ where
     Ok(out)
 }
 
-fn tracer_js() -> &'static str {
-    include_str!("../../tracer/dist/index.js").trim_end_matches(";\n")
+fn validation_tracer_js() -> &'static str {
+    include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";\n")
+}
+
+fn gas_tracer_js() -> &'static str {
+    include_str!("../../tracer/dist/gasTracer.js").trim_end_matches(";\n")
 }

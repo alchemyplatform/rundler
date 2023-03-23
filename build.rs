@@ -7,7 +7,8 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/src");
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=tracer/package.json");
-    println!("cargo:rerun-if-changed=tracer/src/index.ts");
+    println!("cargo:rerun-if-changed=tracer/src/validationTracer.ts");
+    println!("cargo:rerun-if-changed=tracer/src/gasTracer.ts");
     generate_contract_bindings()?;
     generate_protos()?;
     compile_tracer()?;
