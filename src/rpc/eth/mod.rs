@@ -6,6 +6,7 @@ use self::error::{
 };
 use super::{GasEstimate, RichUserOperation, UserOperationOptionalGas, UserOperationReceipt};
 use crate::common::{
+    context::LogWithContext,
     contracts::entry_point::{
         EntryPoint, EntryPointCalls, EntryPointErrors, UserOperationEventFilter,
         UserOperationRevertReasonFilter,
@@ -25,7 +26,7 @@ use anyhow::{anyhow, bail, Context};
 use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::{ContractError, EthEvent},
-    providers::{Http, Middleware, Provider},
+    providers::{Http, Middleware, Provider, ProviderError},
     types::{
         transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
         Log, OpCode, TransactionReceipt, H256, U256, U64,
@@ -243,7 +244,7 @@ impl EthApi {
         &self,
         entry_point: &Address,
         op: &UserOperationOptionalGas,
-    ) -> anyhow::Result<U256> {
+    ) -> Result<U256, EthRpcError> {
         let entry_point = self
             .get_entry_point(entry_point)
             .context("entry point should exist in the map")?;
@@ -255,11 +256,16 @@ impl EthApi {
             ..Default::default()
         });
 
-        let call_gas_limit = self
-            .provider
-            .estimate_gas(&tx, None)
-            .await
-            .context("should have estimated gas successfully")?;
+        let call_gas_limit =
+            self.provider
+                .estimate_gas(&tx, None)
+                .await
+                .map_err(|pe| match pe {
+                    ProviderError::JsonRpcClientError(e) => {
+                        EthRpcError::ExecutionReverted(e.to_string())
+                    }
+                    _ => EthRpcError::Internal(pe.into()),
+                })?;
 
         Ok(call_gas_limit)
     }
@@ -268,7 +274,7 @@ impl EthApi {
         &self,
         entry_point: &Address,
         op: &UserOperationOptionalGas,
-    ) -> anyhow::Result<U256> {
+    ) -> Result<U256, EthRpcError> {
         let entry_point = self
             .get_entry_point(entry_point)
             .context("entry point should exist in the map")?;
@@ -280,13 +286,18 @@ impl EthApi {
             .err()
             .context("simulation result should have reverted in entry point")?;
 
-        let ContractError::ProviderError(e) = sim_result else {
+        let provider_error = match sim_result {
+            ContractError::MiddlewareError(e) => e,
+            ContractError::ProviderError(e) => e,
+            _ => {
+                tracing::debug!("unexpected sim_result error: {sim_result:?}");
                 Err(EthRpcError::Internal(sim_result.into()))?
-            };
+            }
+        };
 
-        let revert_data: EntryPointErrors = get_revert_data(e)
+        let revert_data: EntryPointErrors = get_revert_data(provider_error)
             .map(EntryPointErrors::decode_hex)
-            .context("should have received provider error containing revert data")?
+            .log_context("should have received provider error containing revert data")?
             .context("returned revert data should match entry point error")?;
 
         let validation_result = match revert_data {
@@ -402,19 +413,18 @@ impl EthApiServer for EthApi {
 
         let pre_verification_gas = op.calc_pre_verification_gas();
         let call_gas_limit = self.get_call_gas_limit(&entry_point, &op);
-        let verification_gas_limit = self.get_verification_gas_limit(&entry_point, &op);
+        let verification_gas = self.get_verification_gas_limit(&entry_point, &op);
 
-        let (call_gas_limit, verification_gas_limit) =
-            join!(call_gas_limit, verification_gas_limit);
+        let (call_gas_limit, verification_gas) = join!(call_gas_limit, verification_gas);
 
+        let verification_gas =
+            verification_gas.log_on_error("should have computed verification gas successfully")?;
         let call_gas_limit =
-            call_gas_limit.context("should have successfully estimated call gas")?;
-        let verification_gas_limit = verification_gas_limit
-            .context("should have successfully estimated verification gas")?;
+            call_gas_limit.log_on_error("should have computed call gas limit successfully")?;
 
         Ok(GasEstimate {
             call_gas_limit,
-            verification_gas_limit,
+            verification_gas,
             pre_verification_gas,
         })
     }
@@ -612,14 +622,16 @@ impl From<SimulationError> for EthRpcError {
         if let Some(violation) = forbidden_op_code {
             match violation {
                 Violation::UsedForbiddenOpcode(entity, op) => {
-                    // this clone should be cheap
-                    return Self::OpcodeViolation(*entity, op.clone());
+                    return Self::OpcodeViolation(*entity, op.clone())
                 }
                 Violation::InvalidGasOpcode(entity) => {
-                    return Self::OpcodeViolation(*entity, OpCode::GAS);
+                    return Self::OpcodeViolation(*entity, OpCode::GAS)
                 }
                 Violation::FactoryCalledCreate2Twice => {
-                    return Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2);
+                    return Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2)
+                }
+                Violation::InvalidStorageAccess(entity, address) => {
+                    return Self::InvalidStorageAccess(*entity, *address)
                 }
                 Violation::InvalidStorageAccess(entity, address) => {
                     return Self::InvalidStorageAccess(*entity, *address)
