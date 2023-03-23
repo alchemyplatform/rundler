@@ -27,6 +27,7 @@ pub struct SimulationSuccess {
     pub aggregator_address: Option<Address>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
+    pub sender_is_staked: bool,
     pub accessed_addresses: HashSet<Address>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
 }
@@ -259,9 +260,11 @@ impl Simulator for SimulatorImpl {
         }
         let ValidationOutput {
             return_info,
+            sender_info,
             aggregator_info,
             ..
         } = entry_point_out;
+        let sender_is_staked = is_staked(sender_info, self.sim_settings);
         let ValidationReturnInfo {
             pre_op_gas,
             sig_failed,
@@ -277,6 +280,7 @@ impl Simulator for SimulatorImpl {
             aggregator_address: aggregator_info.map(|info| info.address),
             code_hash,
             entities_needing_stake,
+            sender_is_staked,
             accessed_addresses,
             expected_storage_slots,
         })
