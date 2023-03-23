@@ -1,5 +1,4 @@
-use super::RpcReputation;
-use crate::common::protos;
+use super::{RpcReputation, RpcUserOperation};
 use crate::common::protos::builder::BundlingMode as ProtoBundlingMode;
 use crate::common::protos::builder::{
     builder_client, DebugSendBundleNowRequest, DebugSetBundlingModeRequest,
@@ -22,7 +21,7 @@ pub trait DebugApi {
     async fn bundler_clear_state(&self) -> RpcResult<String>;
 
     #[method(name = "bundler_dumpMempool")]
-    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<UserOperation>>;
+    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>>;
 
     #[method(name = "bundler_sendBundleNow")]
     async fn bundler_send_bundle_now(&self, entry_point: Address) -> RpcResult<H256>;
@@ -73,7 +72,7 @@ impl DebugApiServer for DebugApi {
         Ok("ok".to_string())
     }
 
-    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<UserOperation>> {
+    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
         let response = self
             .op_pool_client
             .clone()
@@ -83,14 +82,16 @@ impl DebugApiServer for DebugApi {
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
 
-        Ok(response
+        let ops = response
             .into_inner()
             .ops
             .into_iter()
             .filter_map(|mop| mop.uo)
             .map(|uo| uo.try_into())
-            .collect::<Result<Vec<_>, protos::ConversionError>>()
-            .map_err(|e| RpcError::Custom(e.to_string()))?)
+            .collect::<Result<Vec<UserOperation>, _>>()
+            .map_err(|e| RpcError::Custom(e.to_string()))?;
+
+        Ok(ops.into_iter().map(|uo| uo.into()).collect())
     }
 
     async fn bundler_send_bundle_now(&self, entry_point: Address) -> RpcResult<H256> {

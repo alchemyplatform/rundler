@@ -1,7 +1,7 @@
 use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
-    Mempool, NewBlockEvent, OperationOrigin, PoolOperation,
+    Mempool, NewBlockEvent, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
     common::{
@@ -11,7 +11,6 @@ use crate::{
     },
     op_pool::reputation::ReputationManager,
 };
-use anyhow::Context;
 use ethers::types::{Address, H256};
 use parking_lot::RwLock;
 use std::{
@@ -45,12 +44,12 @@ impl<R> UoPool<R>
 where
     R: ReputationManager,
 {
-    pub fn new(entry_point: Address, chain_id: u64, reputation: Arc<R>) -> Self {
+    pub fn new(args: PoolConfig, reputation: Arc<R>) -> Self {
         Self {
-            entry_point,
+            entry_point: args.entry_point,
             reputation,
             state: RwLock::new(UoPoolState {
-                pool: PoolInner::new(entry_point, chain_id),
+                pool: PoolInner::new(args),
                 throttled_ops: HashMap::new(),
                 block_number: 0,
             }),
@@ -129,20 +128,17 @@ where
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
         let mut throttled = false;
-        for entity in &op.entities_needing_stake {
-            let addr = op
-                .entity_address(*entity)
-                .context(format!("entity {entity} should be present in operation"))?;
+        for (entity, addr) in op.staked_entities() {
             match self.reputation.status(addr) {
                 ReputationStatus::Ok => {}
                 ReputationStatus::Throttled => {
                     if self.state.read().pool.address_count(addr) > 0 {
-                        return Err(MempoolError::EntityThrottled(*entity, addr));
+                        return Err(MempoolError::EntityThrottled(entity, addr));
                     }
                     throttled = true;
                 }
                 ReputationStatus::Banned => {
-                    return Err(MempoolError::EntityThrottled(*entity, addr));
+                    return Err(MempoolError::EntityThrottled(entity, addr));
                 }
             }
             self.reputation.add_seen(addr);
@@ -188,6 +184,10 @@ where
             })
             .take(max)
             .collect()
+    }
+
+    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
+        self.state.read().pool.best_operations().take(max).collect()
     }
 
     fn clear(&self) {
@@ -253,7 +253,13 @@ mod tests {
     }
 
     fn create_pool() -> UoPool<MockReputationManager> {
-        UoPool::new(Address::zero(), 1, mock_reputation())
+        let args = PoolConfig {
+            entry_point: Address::random(),
+            chain_id: 1,
+            max_userops_per_sender: 16,
+            min_replacement_fee_increase_percentage: 10,
+        };
+        UoPool::new(args, mock_reputation())
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {

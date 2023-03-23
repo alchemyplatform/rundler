@@ -4,7 +4,10 @@ use self::error::{
     EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
     ThrottledOrBannedData,
 };
-use super::{GasEstimate, RichUserOperation, UserOperationOptionalGas, UserOperationReceipt};
+use super::{
+    GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
+    UserOperationReceipt,
+};
 use crate::common::{
     context::LogWithContext,
     contracts::entry_point::{
@@ -45,8 +48,11 @@ use tracing::debug;
 #[rpc(server, namespace = "eth")]
 pub trait EthApi {
     #[method(name = "sendUserOperation")]
-    async fn send_user_operation(&self, op: UserOperation, entry_point: Address)
-        -> RpcResult<H256>;
+    async fn send_user_operation(
+        &self,
+        op: RpcUserOperation,
+        entry_point: Address,
+    ) -> RpcResult<H256>;
 
     #[method(name = "estimateUserOperationGas")]
     async fn estimate_user_operation_gas(
@@ -317,7 +323,7 @@ const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
 impl EthApiServer for EthApi {
     async fn send_user_operation(
         &self,
-        op: UserOperation,
+        op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<H256> {
         debug!("send_user_operation: {:?}", op);
@@ -327,6 +333,8 @@ impl EthApiServer for EthApi {
                 "supplied entry_point addr is not a known entry point".to_string(),
             ))?;
         }
+
+        let op: UserOperation = op.into();
 
         let EntryPointAndSimulator {
             simulator,
@@ -345,6 +353,7 @@ impl EthApiServer for EthApi {
             signature_failed,
             entities_needing_stake,
             block_hash,
+            account_is_staked,
             ..
         } = simulator
             .simulate_validation(op.clone(), None, None)
@@ -391,10 +400,12 @@ impl EthApiServer for EthApi {
                             value: to_le_bytes(ss.value),
                         })
                         .collect(),
+                    account_is_staked,
                 }),
             })
             .await
-            .map_err(EthRpcError::from)?;
+            .map_err(EthRpcError::from)
+            .log_on_error("failed to add op to the mempool")?;
 
         // 3. return the op hash
         Ok(H256::from_slice(&add_op_result.into_inner().hash))
@@ -485,8 +496,8 @@ impl EthApiServer for EthApi {
 
         // 5. return the result
         Ok(Some(RichUserOperation {
-            user_operation,
-            entry_point: to,
+            user_operation: user_operation.into(),
+            entry_point: to.into(),
             block_number: tx
                 .block_number
                 .map(|n| U256::from(n.as_u64()))
@@ -555,10 +566,10 @@ impl EthApiServer for EthApi {
         // 5. Return the result
         Ok(Some(UserOperationReceipt {
             user_op_hash: hash,
-            entry_point: to,
-            sender: log.sender,
+            entry_point: to.into(),
+            sender: log.sender.into(),
             nonce: log.nonce,
-            paymaster: log.paymaster,
+            paymaster: log.paymaster.into(),
             actual_gas_cost: log.actual_gas_cost,
             acutal_gas_used: log.actual_gas_used,
             success: log.success,
@@ -682,6 +693,8 @@ impl From<ErrorInfo> for EthRpcError {
             };
 
             return EthRpcError::ThrottledOrBanned(data);
+        } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
+            return EthRpcError::ReplacementUnderpriced;
         }
 
         anyhow!("operation rejected").into()

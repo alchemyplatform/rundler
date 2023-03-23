@@ -48,8 +48,12 @@ pub trait Mempool: Send + Sync {
     /// Returns the best operations from the pool.
     ///
     /// Returns the best operations from the pool based on their gas bids up to
-    /// the specified maximum number of operations.
+    /// the specified maximum number of operations. Will only return one operation
+    /// per sender.
     fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
+
+    /// Returns the all operations from the pool up to a max size
+    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
 
     /// Debug methods
 
@@ -61,6 +65,20 @@ pub trait Mempool: Send + Sync {
 
     /// Overwrites the mempool's reputation for an address
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
+}
+
+/// Config for the mempool
+#[derive(Debug, Clone)]
+pub struct PoolConfig {
+    /// Address of the entry point this pool targets
+    pub entry_point: Address,
+    /// Chain ID this pool targets
+    pub chain_id: u64,
+    /// The maximum number of operations an unstaked sender can have in the mempool
+    pub max_userops_per_sender: usize,
+    /// The minimum fee bump required to replace an operation in the mempool
+    /// Applies to both priority fee and fee. Expressed as an integer percentage value
+    pub min_replacement_fee_increase_percentage: usize,
 }
 
 /// Origin of an operation.
@@ -92,6 +110,7 @@ pub struct PoolOperation {
     pub sim_block_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
+    pub account_is_staked: bool,
 }
 
 impl PoolOperation {
@@ -107,12 +126,22 @@ impl PoolOperation {
 
     /// Returns true if the operation requires the given entity to stake.
     pub fn requires_stake(&self, entity: Entity) -> bool {
-        self.entities_needing_stake.contains(&entity)
+        match entity {
+            Entity::Account => return self.account_is_staked,
+            _ => self.entities_needing_stake.contains(&entity),
+        }
     }
 
     /// Returns an iterator over all entities that are included in this opearation.
     pub fn entities(&'_ self) -> impl Iterator<Item = (Entity, Address)> + '_ {
         Entity::iter()
+            .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
+    }
+
+    /// Returns an iterator over all staked entities that are included in this opearation.
+    pub fn staked_entities(&'_ self) -> impl Iterator<Item = (Entity, Address)> + '_ {
+        Entity::iter()
+            .filter(|entity| self.requires_stake(*entity))
             .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
     }
 }
@@ -143,6 +172,7 @@ mod tests {
             sim_block_hash: H256::random(),
             entities_needing_stake: vec![Entity::Account, Entity::Aggregator],
             expected_storage_slots: vec![],
+            account_is_staked: true,
         };
 
         assert!(po.requires_stake(Entity::Account));

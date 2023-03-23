@@ -3,7 +3,7 @@ use clap::Args;
 use tokio::{signal, sync::broadcast, sync::mpsc};
 use tracing::{error, info};
 
-use crate::op_pool;
+use crate::op_pool::{self, PoolConfig};
 
 use super::CommonArgs;
 
@@ -28,24 +28,46 @@ pub struct PoolArgs {
         default_value = "127.0.0.1"
     )]
     pub host: String,
+
+    #[arg(
+        long = "pool.max_userops_per_sender",
+        name = "pool.max_userops_per_sender",
+        env = "POOL_MAX_USEROPS_PER_SENDER",
+        default_value = "4"
+    )]
+    pub max_userops_per_sender: usize,
+
+    #[arg(
+        long = "pool.min_replacement_fee_increase_percentage",
+        name = "pool.min_replacement_fee_increase_percentage",
+        env = "POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE",
+        default_value = "10"
+    )]
+    pub min_replacement_fee_increase_percentage: usize,
 }
 
 impl PoolArgs {
     /// Convert the CLI arguments into the arguments for the OP Pool combining
     /// common and op pool specific arguments.
     pub fn to_args(&self, common: &CommonArgs) -> anyhow::Result<op_pool::Args> {
-        Ok(op_pool::Args {
-            port: self.port,
-            host: self.host.clone(),
+        let pool_config = PoolConfig {
             entry_point: common
                 .entry_point
                 .parse()
                 .context("Invalid entry_point argument")?,
             chain_id: common.chain_id,
+            max_userops_per_sender: self.max_userops_per_sender,
+            min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
+        };
+
+        Ok(op_pool::Args {
+            port: self.port,
+            host: self.host.clone(),
             ws_url: common
                 .node_ws
                 .clone()
                 .context("pool requires node_ws arg")?,
+            pool_config,
         })
     }
 }

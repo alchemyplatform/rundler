@@ -2,6 +2,8 @@ mod debug;
 mod eth;
 mod run;
 
+use std::str::FromStr;
+
 use crate::common::{
     protos::{
         op_pool::{Reputation, ReputationStatus},
@@ -10,7 +12,10 @@ use crate::common::{
     types::UserOperation,
 };
 use anyhow::bail;
-use ethers::types::{Address, Bytes, Log, TransactionReceipt, H256, U256};
+use ethers::{
+    types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
+    utils::to_checksum,
+};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 
@@ -24,29 +29,46 @@ pub enum ApiNamespace {
     Debug,
 }
 
-impl<'de> Deserialize<'de> for UserOperation {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        UserOperationDef::deserialize(deserializer)
-    }
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RpcAddress(H160);
 
-impl Serialize for UserOperation {
+impl Serialize for RpcAddress {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        UserOperationDef::serialize(self, serializer)
+        serializer.serialize_str(&to_checksum(&self.0, None))
+    }
+}
+
+impl<'de> Deserialize<'de> for RpcAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let address = H160::from_str(&s).map_err(de::Error::custom)?;
+        Ok(RpcAddress(address))
+    }
+}
+
+impl From<RpcAddress> for Address {
+    fn from(def: RpcAddress) -> Self {
+        def.0
+    }
+}
+
+impl From<Address> for RpcAddress {
+    fn from(address: Address) -> Self {
+        RpcAddress(address)
     }
 }
 
 /// User operation definition for RPC
-#[derive(Deserialize, Serialize)]
-#[serde(remote = "UserOperation", rename_all = "camelCase")]
-struct UserOperationDef {
-    sender: Address,
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcUserOperation {
+    sender: RpcAddress,
     nonce: U256,
     init_code: Bytes,
     call_data: Bytes,
@@ -57,6 +79,42 @@ struct UserOperationDef {
     max_priority_fee_per_gas: U256,
     paymaster_and_data: Bytes,
     signature: Bytes,
+}
+
+impl From<UserOperation> for RpcUserOperation {
+    fn from(op: UserOperation) -> Self {
+        RpcUserOperation {
+            sender: op.sender.into(),
+            nonce: op.nonce,
+            init_code: op.init_code,
+            call_data: op.call_data,
+            call_gas_limit: op.call_gas_limit,
+            verification_gas_limit: op.verification_gas_limit,
+            pre_verification_gas: op.pre_verification_gas,
+            max_fee_per_gas: op.max_fee_per_gas,
+            max_priority_fee_per_gas: op.max_priority_fee_per_gas,
+            paymaster_and_data: op.paymaster_and_data,
+            signature: op.signature,
+        }
+    }
+}
+
+impl From<RpcUserOperation> for UserOperation {
+    fn from(def: RpcUserOperation) -> Self {
+        UserOperation {
+            sender: def.sender.into(),
+            nonce: def.nonce,
+            init_code: def.init_code,
+            call_data: def.call_data,
+            call_gas_limit: def.call_gas_limit,
+            verification_gas_limit: def.verification_gas_limit,
+            pre_verification_gas: def.pre_verification_gas,
+            max_fee_per_gas: def.max_fee_per_gas,
+            max_priority_fee_per_gas: def.max_priority_fee_per_gas,
+            paymaster_and_data: def.paymaster_and_data,
+            signature: def.signature,
+        }
+    }
 }
 
 /// User operation with optional gas fields for gas estimation RPC
@@ -152,7 +210,7 @@ impl From<UserOperationOptionalGas> for UserOperation {
 }
 
 /// Gas estimate for a user operation
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GasEstimate {
     pub pre_verification_gas: U256,
@@ -161,25 +219,25 @@ pub struct GasEstimate {
 }
 
 /// User operation with additional metadata
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RichUserOperation {
-    pub user_operation: UserOperation,
-    pub entry_point: Address,
+    pub user_operation: RpcUserOperation,
+    pub entry_point: RpcAddress,
     pub block_number: U256,
     pub block_hash: H256,
     pub transaction_hash: H256,
 }
 
 /// User operation receipt
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserOperationReceipt {
     pub user_op_hash: H256,
-    pub entry_point: Address,
-    pub sender: Address,
+    pub entry_point: RpcAddress,
+    pub sender: RpcAddress,
     pub nonce: U256,
-    pub paymaster: Address,
+    pub paymaster: RpcAddress,
     pub actual_gas_cost: U256,
     pub acutal_gas_used: U256,
     pub success: bool,

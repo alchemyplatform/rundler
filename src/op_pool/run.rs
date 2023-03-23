@@ -8,19 +8,19 @@ use crate::op_pool::{
     server::OpPoolImpl,
 };
 use anyhow::bail;
-use ethers::types::Address;
 use tokio::{
     sync::{broadcast, mpsc},
     try_join,
 };
 use tonic::transport::Server;
 
+use super::mempool::PoolConfig;
+
 pub struct Args {
     pub port: u16,
     pub host: String,
-    pub entry_point: Address,
-    pub chain_id: u64,
     pub ws_url: String,
+    pub pool_config: PoolConfig,
 }
 
 pub async fn run(
@@ -29,13 +29,15 @@ pub async fn run(
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
     let addr = format!("{}:{}", args.host, args.port).parse()?;
+    let entry_point = args.pool_config.entry_point;
+    let chain_id = args.pool_config.chain_id;
     tracing::info!("Starting server on {}", addr);
-    tracing::info!("Entry point: {}", args.entry_point);
-    tracing::info!("Chain id: {}", args.chain_id);
+    tracing::info!("Entry point: {}", entry_point);
+    tracing::info!("Chain id: {}", chain_id);
     tracing::info!("Websocket url: {}", args.ws_url);
 
     // Events listener
-    let event_listener = match EventListener::connect(args.ws_url, args.entry_point).await {
+    let event_listener = match EventListener::connect(args.ws_url, entry_point).await {
         Ok(listener) => listener,
         Err(e) => {
             tracing::error!("Failed to connect to events listener: {:?}", e);
@@ -53,11 +55,7 @@ pub async fn run(
     tokio::spawn(async move { reputation_runner.run().await });
 
     // Mempool
-    let mp = Arc::new(UoPool::new(
-        args.entry_point,
-        args.chain_id,
-        Arc::clone(&reputation),
-    ));
+    let mp = Arc::new(UoPool::new(args.pool_config, Arc::clone(&reputation)));
     // Start mempool
     let mempool_shutdown = shutdown_rx.resubscribe();
     let mempool_events = event_listener.subscribe();
@@ -73,7 +71,7 @@ pub async fn run(
     });
 
     // gRPC server
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(args.chain_id, mp));
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mp));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;

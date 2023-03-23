@@ -8,19 +8,14 @@ use std::{
 
 use super::{
     error::{MempoolError, MempoolResult},
-    PoolOperation,
+    PoolConfig, PoolOperation,
 };
-
-/// The maximum number of operations a sender can have in the mempool
-const MAX_MEMPOOL_USEROPS_PER_SENDER: usize = 16;
 
 /// Pool of user operations
 #[derive(Debug)]
 pub struct PoolInner {
-    // Address of the entry point this pool targets
-    entry_point: Address,
-    // Chain ID this pool targets
-    chain_id: u64,
+    // Pool settings
+    config: PoolConfig,
     // Operations by hash
     by_hash: HashMap<H256, OrderedPoolOperation>,
     // Operations by operation ID
@@ -34,14 +29,13 @@ pub struct PoolInner {
 }
 
 impl PoolInner {
-    pub fn new(entry_point: Address, chain_id: u64) -> Self {
+    pub fn new(config: PoolConfig) -> Self {
         Self {
+            config,
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
             count_by_address: HashMap::new(),
-            entry_point,
-            chain_id,
             submission_id: 0,
         }
     }
@@ -49,13 +43,31 @@ impl PoolInner {
     pub fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
         // Check for replacement by ID
         if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
+            let mult = 1.0 + self.config.min_replacement_fee_increase_percentage as f64 / 100.0;
+            if op.uo.max_fee_per_gas > u128::MAX.into()
+                || op.uo.max_priority_fee_per_gas > u128::MAX.into()
+            {
+                // TODO(danc): we can likely filter out operations with much smaller fees
+                // based on the maximum gas limit of the block. Using this for now.
+                return Err(anyhow::anyhow!(
+                    "Fee is too high: max_fee_per_gas={}, max_priority_fee_per_gas={}",
+                    op.uo.max_fee_per_gas,
+                    op.uo.max_priority_fee_per_gas
+                ))?;
+            }
+
             // replace only if higher gas
-            if pool_op.uo().max_priority_fee_per_gas <= op.uo.max_priority_fee_per_gas
-                && pool_op.uo().max_fee_per_gas <= op.uo.max_fee_per_gas
+            if pool_op.uo().max_priority_fee_per_gas.as_u128() as f64 * mult
+                <= op.uo.max_priority_fee_per_gas.as_u128() as f64
+                && pool_op.uo().max_fee_per_gas.as_u128() as f64 * mult
+                    <= op.uo.max_fee_per_gas.as_u128() as f64
             {
                 self.best.remove(pool_op);
-                self.by_hash
-                    .remove(&pool_op.uo().op_hash(self.entry_point, self.chain_id));
+                self.by_hash.remove(
+                    &pool_op
+                        .uo()
+                        .op_hash(self.config.entry_point, self.config.chain_id),
+                );
             } else {
                 return Err(MempoolError::ReplacementUnderpriced(
                     pool_op.uo().max_priority_fee_per_gas,
@@ -64,11 +76,13 @@ impl PoolInner {
             }
         }
 
-        // Check sender count in mempool
-        if *self.count_by_address.get(&op.uo.sender).unwrap_or(&0) >= MAX_MEMPOOL_USEROPS_PER_SENDER
+        // Check sender count in mempool. If sender has too many operations, must be staked
+        if *self.count_by_address.get(&op.uo.sender).unwrap_or(&0)
+            >= self.config.max_userops_per_sender
+            && !op.account_is_staked
         {
             return Err(MempoolError::MaxOperationsReached(
-                MAX_MEMPOOL_USEROPS_PER_SENDER,
+                self.config.max_userops_per_sender,
                 op.uo.sender,
             ));
         }
@@ -83,7 +97,9 @@ impl PoolInner {
             po: Arc::new(op),
             submission_id: self.next_submission_id(),
         };
-        let hash = pool_op.uo().op_hash(self.entry_point, self.chain_id);
+        let hash = pool_op
+            .uo()
+            .op_hash(self.config.entry_point, self.config.chain_id);
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
@@ -194,7 +210,7 @@ mod tests {
 
     #[test]
     fn add_single_op() {
-        let mut pool = PoolInner::new(Address::zero(), 1);
+        let mut pool = PoolInner::new(conf());
         let op = create_op(Address::random(), 0, 1);
         let hash = pool.add_operation(op.clone()).unwrap();
 
@@ -205,7 +221,7 @@ mod tests {
 
     #[test]
     fn add_multiple_ops() {
-        let mut pool = PoolInner::new(Address::zero(), 1);
+        let mut pool = PoolInner::new(conf());
         let ops = vec![
             create_op(Address::random(), 0, 1),
             create_op(Address::random(), 0, 2),
@@ -231,7 +247,7 @@ mod tests {
 
     #[test]
     fn best_ties() {
-        let mut pool = PoolInner::new(Address::zero(), 1);
+        let mut pool = PoolInner::new(conf());
         let ops = vec![
             create_op(Address::random(), 0, 1),
             create_op(Address::random(), 0, 1),
@@ -252,7 +268,7 @@ mod tests {
 
     #[test]
     fn remove_op() {
-        let mut pool = PoolInner::new(Address::zero(), 1);
+        let mut pool = PoolInner::new(conf());
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
@@ -283,20 +299,21 @@ mod tests {
 
     #[test]
     fn too_many_ops() {
-        let mut pool = PoolInner::new(Address::zero(), 1);
+        let args = conf();
+        let mut pool = PoolInner::new(args.clone());
         let addr = Address::random();
-        for i in 0..MAX_MEMPOOL_USEROPS_PER_SENDER {
+        for i in 0..args.max_userops_per_sender {
             let op = create_op(addr, i, 1);
             pool.add_operation(op).unwrap();
         }
 
-        let op = create_op(addr, MAX_MEMPOOL_USEROPS_PER_SENDER, 1);
+        let op = create_op(addr, args.max_userops_per_sender, 1);
         assert!(pool.add_operation(op).is_err());
     }
 
     #[test]
     fn address_count() {
-        let mut pool = PoolInner::new(Address::zero(), 1);
+        let mut pool = PoolInner::new(conf());
         let sender = Address::random();
         let paymaster = Address::random();
         let factory = Address::random();
@@ -328,6 +345,15 @@ mod tests {
         assert_eq!(pool.address_count(paymaster), 0);
         assert_eq!(pool.address_count(factory), 0);
         assert_eq!(pool.address_count(aggregator), 0);
+    }
+
+    fn conf() -> PoolConfig {
+        PoolConfig {
+            entry_point: Address::random(),
+            chain_id: 1,
+            max_userops_per_sender: 16,
+            min_replacement_fee_increase_percentage: 10,
+        }
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
