@@ -18,3 +18,4 @@
 /src/common/contracts
 
 .env
+*.log
