@@ -93,7 +93,7 @@ where
                 let op_hash = uo_event.user_op_hash.into();
                 if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
                     for entity in Entity::iter() {
-                        if op.requires_stake(entity) {
+                        if op.is_staked(entity) {
                             match op.entity_address(entity) {
                                 Some(e) => self.reputation.add_included(e),
                                 None => {

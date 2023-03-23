@@ -1,6 +1,7 @@
 use std::{convert::Infallible, fmt::Display};
 
 use anyhow::{bail, Context};
+use tracing::Level;
 
 pub trait LogWithContext<T, E> {
     /// Used to log the original error and then wrap it in an anyhow::Error
@@ -17,6 +18,11 @@ pub trait LogWithContext<T, E> {
 
     /// This will log an error if there is one, but will preserve the original error type
     fn log_on_error<C>(self, context: C) -> Self
+    where
+        C: Display + Send + Sync + 'static;
+
+    /// This will log at the given level if there is an error, but will preserve the original error type
+    fn log_on_error_level<C>(self, level: Level, context: C) -> Self
     where
         C: Display + Send + Sync + 'static;
 }
@@ -59,9 +65,16 @@ where
     where
         C: Display + Send + Sync + 'static,
     {
+        self.log_on_error_level(Level::ERROR, context)
+    }
+
+    fn log_on_error_level<C>(self, level: Level, context: C) -> Result<T, E>
+    where
+        C: Display + Send + Sync + 'static,
+    {
         match self {
             Err(error) => {
-                tracing::error!("{context}: {error:?}");
+                log_at_level(level, &format!("{context}: {error:?}"));
                 Err(error)
             }
             _ => self,
@@ -102,10 +115,27 @@ impl<T> LogWithContext<T, Infallible> for Option<T> {
     where
         C: Display + Send + Sync + 'static,
     {
+        self.log_on_error_level(Level::ERROR, context)
+    }
+
+    fn log_on_error_level<C>(self, level: Level, context: C) -> Self
+    where
+        C: Display + Send + Sync + 'static,
+    {
         if self.is_none() {
-            tracing::error!("{context}");
+            log_at_level(level, &format!("{context}"));
         }
 
         self
+    }
+}
+
+fn log_at_level(level: Level, s: &str) {
+    match level {
+        Level::TRACE => tracing::trace!(s),
+        Level::DEBUG => tracing::debug!(s),
+        Level::INFO => tracing::info!(s),
+        Level::WARN => tracing::warn!(s),
+        Level::ERROR => tracing::error!(s),
     }
 }

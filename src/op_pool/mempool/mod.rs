@@ -125,7 +125,16 @@ impl PoolOperation {
     }
 
     /// Returns true if the operation requires the given entity to stake.
-    pub fn requires_stake(&self, entity: Entity) -> bool {
+    ///
+    /// For non-accounts, its possible that the entity is staked, but doesn't
+    /// ~need~ to take for this operation. For example, if the operation does not
+    /// access any storage slots that require staking. In that case this function
+    /// will return false.
+    ///
+    /// For staked accounts, this function will always return true. Staked accounts
+    /// are able to circumvent the mempool operation limits always need their reputation
+    /// checked to prevent them from filling the pool.
+    pub fn is_staked(&self, entity: Entity) -> bool {
         match entity {
             Entity::Account => return self.account_is_staked,
             _ => self.entities_needing_stake.contains(&entity),
@@ -141,7 +150,7 @@ impl PoolOperation {
     /// Returns an iterator over all staked entities that are included in this opearation.
     pub fn staked_entities(&'_ self) -> impl Iterator<Item = (Entity, Address)> + '_ {
         Entity::iter()
-            .filter(|entity| self.requires_stake(*entity))
+            .filter(|entity| self.is_staked(*entity))
             .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
     }
 }
@@ -175,10 +184,10 @@ mod tests {
             account_is_staked: true,
         };
 
-        assert!(po.requires_stake(Entity::Account));
-        assert!(!po.requires_stake(Entity::Paymaster));
-        assert!(!po.requires_stake(Entity::Factory));
-        assert!(po.requires_stake(Entity::Aggregator));
+        assert!(po.is_staked(Entity::Account));
+        assert!(!po.is_staked(Entity::Paymaster));
+        assert!(!po.is_staked(Entity::Factory));
+        assert!(po.is_staked(Entity::Aggregator));
 
         assert_eq!(po.entity_address(Entity::Account), Some(sender));
         assert_eq!(po.entity_address(Entity::Paymaster), Some(paymaster));

@@ -2,8 +2,6 @@ mod debug;
 mod eth;
 mod run;
 
-use std::str::FromStr;
-
 use crate::common::{
     protos::{
         op_pool::{Reputation, ReputationStatus},
@@ -46,21 +44,20 @@ impl<'de> Deserialize<'de> for RpcAddress {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        let address = H160::from_str(&s).map_err(de::Error::custom)?;
+        let address = Address::deserialize(deserializer)?;
         Ok(RpcAddress(address))
     }
 }
 
 impl From<RpcAddress> for Address {
-    fn from(def: RpcAddress) -> Self {
-        def.0
+    fn from(rpc_addr: RpcAddress) -> Self {
+        rpc_addr.0
     }
 }
 
 impl From<Address> for RpcAddress {
-    fn from(address: Address) -> Self {
-        RpcAddress(address)
+    fn from(addr: Address) -> Self {
+        RpcAddress(addr)
     }
 }
 

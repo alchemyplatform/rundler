@@ -42,7 +42,7 @@ use prost::Message;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::join;
 use tonic::{async_trait, transport::Channel, Status};
-use tracing::debug;
+use tracing::{debug, Level};
 
 /// Eth API
 #[rpc(server, namespace = "eth")]
@@ -405,7 +405,7 @@ impl EthApiServer for EthApi {
             })
             .await
             .map_err(EthRpcError::from)
-            .log_on_error("failed to add op to the mempool")?;
+            .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?;
 
         // 3. return the op hash
         Ok(H256::from_slice(&add_op_result.into_inner().hash))
