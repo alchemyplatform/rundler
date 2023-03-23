@@ -1,3 +1,4 @@
+use super::types::Entity;
 use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
 use crate::common::tracer::{
     AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
@@ -16,11 +17,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 use std::sync::Arc;
 use tonic::async_trait;
-
-use super::types::Entity;
-
-// One day in seconds. Specified in ERC-4337.
-pub const MIN_UNSTAKE_DELAY: u32 = 84600;
 
 #[derive(Clone, Debug)]
 pub struct SimulationSuccess {
@@ -55,20 +51,20 @@ pub trait Simulator {
 pub struct SimulatorImpl {
     provider: Arc<Provider<Http>>,
     entry_point: EntryPoint<Provider<Http>>,
-    min_stake_value: U256,
+    sim_settings: Settings,
 }
 
 impl SimulatorImpl {
     pub fn new(
         provider: Arc<Provider<Http>>,
         entry_point_address: Address,
-        min_stake_value: U256,
+        sim_settings: Settings,
     ) -> Self {
         let entry_point = EntryPoint::new(entry_point_address, provider.clone());
         Self {
             provider,
             entry_point,
-            min_stake_value,
+            sim_settings,
         }
     }
 
@@ -116,7 +112,7 @@ impl SimulatorImpl {
             sender_address,
             paymaster_address,
             &entry_point_out,
-            self.min_stake_value,
+            self.sim_settings,
         );
         if num_phases < 3 {
             Err(Violation::WrongNumberOfPhases(num_phases))?
@@ -197,7 +193,12 @@ impl Simulator for SimulatorImpl {
             if needs_stake {
                 entities_needing_stake.push(entity);
                 if !entity_info.is_staked {
-                    violations.push(Violation::NotStaked(entity, entity_info.address));
+                    violations.push(Violation::NotStaked(
+                        entity,
+                        entity_info.address,
+                        self.sim_settings.min_stake_value.into(),
+                        self.sim_settings.min_unstake_delay.into(),
+                    ));
                 }
             }
             for address in banned_addresses_accessed {
@@ -218,10 +219,12 @@ impl Simulator for SimulatorImpl {
         }
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             entities_needing_stake.push(Entity::Aggregator);
-            if !is_staked(aggregator_info.stake_info, self.min_stake_value) {
+            if !is_staked(aggregator_info.stake_info, self.sim_settings) {
                 violations.push(Violation::NotStaked(
                     Entity::Aggregator,
                     aggregator_info.address,
+                    self.sim_settings.min_stake_value.into(),
+                    self.sim_settings.min_unstake_delay.into(),
                 ));
             }
         }
@@ -335,7 +338,7 @@ pub enum Violation {
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, Address),
     #[display("{0} must be staked")]
-    NotStaked(Entity, Address),
+    NotStaked(Entity, Address, U256, U256),
     #[display("{0} must not send ETH during validation (except to entry point)")]
     CallHadValue(Entity),
     #[display("ran out of gas during {0} validation")]
@@ -390,19 +393,19 @@ impl EntityInfos {
         sender_address: Address,
         paymaster_address: Option<Address>,
         entry_point_out: &ValidationOutput,
-        min_stake_value: U256,
+        sim_settings: Settings,
     ) -> Self {
         let factory = factory_address.map(|address| EntityInfo {
             address,
-            is_staked: is_staked(entry_point_out.factory_info, min_stake_value),
+            is_staked: is_staked(entry_point_out.factory_info, sim_settings),
         });
         let sender = EntityInfo {
             address: sender_address,
-            is_staked: is_staked(entry_point_out.sender_info, min_stake_value),
+            is_staked: is_staked(entry_point_out.sender_info, sim_settings),
         };
         let paymaster = paymaster_address.map(|address| EntityInfo {
             address,
-            is_staked: is_staked(entry_point_out.paymaster_info, min_stake_value),
+            is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
         });
         Self {
             factory,
@@ -425,8 +428,9 @@ impl EntityInfos {
     }
 }
 
-fn is_staked(info: StakeInfo, min_stake_value: U256) -> bool {
-    info.stake > min_stake_value && info.unstake_delay_sec > MIN_UNSTAKE_DELAY.into()
+fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
+    info.stake >= sim_settings.min_stake_value.into()
+        && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -475,5 +479,31 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
         StorageRestriction::NeedsStake
     } else {
         StorageRestriction::Banned
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Settings {
+    pub min_unstake_delay: u32,
+    pub min_stake_value: u64,
+}
+
+impl Settings {
+    pub fn new(min_unstake_delay: u32, min_stake_value: u64) -> Self {
+        Self {
+            min_unstake_delay,
+            min_stake_value,
+        }
+    }
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            // one day in seconds: defined in the ERC-4337 spec
+            min_unstake_delay: 84600,
+            // 10^18 wei = 1 eth
+            min_stake_value: 1_000_000_000_000_000_000,
+        }
     }
 }

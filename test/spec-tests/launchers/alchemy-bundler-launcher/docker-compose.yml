@@ -15,6 +15,7 @@ services:
       - NODE_HTTP=http://geth:8545
       - NODE_WS=ws://geth:8546
       - RPC_API=eth,debug
+      - MIN_UNSTAKE_DELAY=2
     healthcheck:
       test: curl --fail http://localhost:8080/metrics || exit 1
       interval: 1s

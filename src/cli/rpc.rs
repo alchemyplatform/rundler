@@ -3,7 +3,7 @@ use clap::Args;
 use tokio::{signal, sync::broadcast, sync::mpsc};
 use tracing::{error, info};
 
-use crate::rpc;
+use crate::{common::simulation, rpc};
 
 use super::CommonArgs;
 
@@ -49,6 +49,7 @@ impl RpcArgs {
         common: &CommonArgs,
         pool_url: String,
         builder_url: String,
+        sim_settings: simulation::Settings,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
@@ -71,6 +72,7 @@ impl RpcArgs {
                 .context("rpc requires node_http arg")?,
             chain_id: common.chain_id,
             api_namespaces: apis,
+            sim_settings,
         })
     }
 }
@@ -111,7 +113,7 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
 
     let handle = tokio::spawn(rpc::run(
-        rpc_args.to_args(&common_args, pool_url, builder_url)?,
+        rpc_args.to_args(&common_args, pool_url, builder_url, (&common_args).into())?,
         shutdown_rx,
         shutdown_scope,
     ));

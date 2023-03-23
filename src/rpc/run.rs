@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use crate::common::protos::builder::builder_client;
 use crate::common::protos::op_pool::op_pool_client;
 use crate::common::server::format_socket_addr;
+use crate::common::simulation;
 use crate::rpc::debug::{DebugApi, DebugApiServer};
 use crate::rpc::eth::{EthApi, EthApiServer};
 
@@ -27,6 +28,7 @@ pub struct Args {
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
+    pub sim_settings: simulation::Settings,
 }
 
 pub async fn run(
@@ -68,6 +70,7 @@ pub async fn run(
                     args.chain_id,
                     // NOTE: this clone is cheap according to the docs because all it's doing is copying the reference to the channel
                     op_pool_client.clone(),
+                    args.sim_settings,
                 )
                 .into_rpc(),
             )?,

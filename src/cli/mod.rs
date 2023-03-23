@@ -15,6 +15,8 @@ use bundler::BundlerCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
 
+use crate::common::simulation;
+
 /// Main entry point for the CLI
 ///
 /// Parses the CLI arguments and runs the appropriate subcommand.
@@ -114,6 +116,30 @@ pub struct CommonArgs {
         global = true
     )]
     node_http: Option<String>,
+
+    #[arg(
+        long = "min_stake_value",
+        name = "min_stake_value",
+        default_value = "1000000000000000000",
+        env = "MIN_STAKE_VALUE",
+        global = true
+    )]
+    min_stake_value: u64,
+
+    #[arg(
+        long = "min_unstake_delay",
+        name = "min_unstake_delay",
+        default_value = "84600",
+        env = "MIN_UNSTAKE_DELAY",
+        global = true
+    )]
+    min_unstake_delay: u32,
+}
+
+impl From<&CommonArgs> for simulation::Settings {
+    fn from(value: &CommonArgs) -> Self {
+        Self::new(value.min_unstake_delay, value.min_stake_value)
+    }
 }
 
 /// CLI options for the metrics server

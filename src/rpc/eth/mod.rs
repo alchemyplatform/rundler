@@ -18,9 +18,7 @@ use crate::common::{
         },
         to_le_bytes,
     },
-    simulation::{
-        SimulationError, SimulationSuccess, Simulator, SimulatorImpl, Violation, MIN_UNSTAKE_DELAY,
-    },
+    simulation::{self, SimulationError, SimulationSuccess, Simulator, SimulatorImpl, Violation},
     types::{Entity, Timestamp, UserOperation},
 };
 use anyhow::{anyhow, bail, Context};
@@ -79,9 +77,13 @@ struct EntryPointAndSimulator {
 }
 
 impl EntryPointAndSimulator {
-    pub fn new(address: Address, provider: Arc<Provider<Http>>) -> Self {
+    pub fn new(
+        address: Address,
+        provider: Arc<Provider<Http>>,
+        sim_settings: simulation::Settings,
+    ) -> Self {
         let entry_point = EntryPoint::new(address, Arc::clone(&provider));
-        let simulator = SimulatorImpl::new(Arc::clone(&provider), address, MIN_STAKE_VALUE.into());
+        let simulator = SimulatorImpl::new(Arc::clone(&provider), address, sim_settings);
         Self {
             entry_point,
             simulator,
@@ -96,19 +98,22 @@ pub struct EthApi {
     op_pool_client: OpPoolClient<Channel>,
 }
 
-// 10^18 wei = 1 eth
-const MIN_STAKE_VALUE: u64 = 1_000_000_000_000_000_000;
-
 impl EthApi {
     pub fn new(
         provider: Arc<Provider<Http>>,
         entry_points: Vec<Address>,
         chain_id: u64,
         op_pool_client: OpPoolClient<Channel>,
+        sim_settings: simulation::Settings,
     ) -> Self {
         let entry_points_and_sims = entry_points
             .iter()
-            .map(|&a| (a, EntryPointAndSimulator::new(a, Arc::clone(&provider))))
+            .map(|&a| {
+                (
+                    a,
+                    EntryPointAndSimulator::new(a, Arc::clone(&provider), sim_settings),
+                )
+            })
             .collect();
 
         Self {
@@ -601,6 +606,7 @@ impl From<SimulationError> for EthRpcError {
                 Violation::UsedForbiddenOpcode(_, _)
                     | Violation::InvalidGasOpcode(_)
                     | Violation::FactoryCalledCreate2Twice
+                    | Violation::InvalidStorageAccess(_, _)
             )
         });
         if let Some(violation) = forbidden_op_code {
@@ -615,6 +621,9 @@ impl From<SimulationError> for EthRpcError {
                 Violation::FactoryCalledCreate2Twice => {
                     return Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2);
                 }
+                Violation::InvalidStorageAccess(entity, address) => {
+                    return Self::InvalidStorageAccess(*entity, *address)
+                }
                 // This should never happen
                 _ => {}
             }
@@ -622,13 +631,25 @@ impl From<SimulationError> for EthRpcError {
 
         let stake_violation = violations
             .iter()
-            .find(|v| matches!(v, Violation::NotStaked(_, _)));
-        if let Some(Violation::NotStaked(entity, address)) = stake_violation {
+            .find(|v| matches!(v, Violation::NotStaked(_, _, _, _)));
+        if let Some(Violation::NotStaked(entity, address, min_stake, min_unstake_delay)) =
+            stake_violation
+        {
             let err_data = match entity {
                 Entity::Paymaster => Some(StakeTooLowData::paymaster(
                     *address,
-                    MIN_STAKE_VALUE.into(),
-                    MIN_UNSTAKE_DELAY.into(),
+                    *min_stake,
+                    *min_unstake_delay,
+                )),
+                Entity::Aggregator => Some(StakeTooLowData::aggregator(
+                    *address,
+                    *min_stake,
+                    *min_unstake_delay,
+                )),
+                Entity::Factory => Some(StakeTooLowData::factory(
+                    *address,
+                    *min_stake,
+                    *min_unstake_delay,
                 )),
                 _ => None,
             };
