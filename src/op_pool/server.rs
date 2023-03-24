@@ -1,22 +1,27 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use super::mempool::error::MempoolError;
-use super::mempool::{Mempool, OperationOrigin};
-use super::metrics::OpPoolMetrics;
-use crate::common::protos::op_pool::op_pool_server::OpPool;
-use crate::common::protos::op_pool::{
-    AddOpRequest, AddOpResponse, DebugClearStateRequest, DebugClearStateResponse,
-    DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
-    DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse, ErrorInfo,
-    ErrorReason, GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
+use ethers::{
+    types::{Address, H256},
+    utils::hex::ToHex,
 };
-use crate::common::protos::ProtoBytes;
-use ethers::types::{Address, H256};
-use ethers::utils::hex::ToHex;
 use prost::Message;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
+
+use super::{
+    mempool::{error::MempoolError, Mempool, OperationOrigin},
+    metrics::OpPoolMetrics,
+};
+use crate::common::protos::{
+    op_pool::{
+        op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
+        DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
+        DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
+        DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
+        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
+        RemoveOpsRequest, RemoveOpsResponse,
+    },
+    ProtoBytes,
+};
 
 pub struct OpPoolImpl<M: Mempool> {
     chain_id: u64,
@@ -255,10 +260,13 @@ mod tests {
     ];
     const TEST_ADDRESS_STR: &str = "0x11aBB05d9Ad318bf65652672B13b1dcB0E6D4a32";
 
-    use crate::common::protos::op_pool::{self, Reputation};
-    use crate::op_pool::events::NewBlockEvent;
-    use crate::op_pool::mempool::error::MempoolResult;
-    use crate::op_pool::mempool::PoolOperation;
+    use crate::{
+        common::protos::op_pool::{self, Reputation},
+        op_pool::{
+            events::NewBlockEvent,
+            mempool::{error::MempoolResult, PoolOperation},
+        },
+    };
 
     #[test]
     fn test_check_entry_point() {

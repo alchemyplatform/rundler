@@ -1,15 +1,16 @@
-use crate::common::types::{UserOperation, UserOperationId};
-use ethers::{abi::Address, types::H256};
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, BTreeSet, HashMap},
     sync::Arc,
 };
 
+use ethers::{abi::Address, types::H256};
+
 use super::{
     error::{MempoolError, MempoolResult},
     PoolOperation,
 };
+use crate::common::types::{UserOperation, UserOperationId};
 
 /// The maximum number of operations a sender can have in the mempool
 const MAX_MEMPOOL_USEROPS_PER_SENDER: usize = 16;

@@ -2,6 +2,12 @@ mod debug;
 mod eth;
 mod run;
 
+use anyhow::bail;
+use ethers::types::{Address, Bytes, Log, TransactionReceipt, H256, U256};
+pub use run::*;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use strum;
+
 use crate::common::{
     protos::{
         op_pool::{Reputation, ReputationStatus},
@@ -9,12 +15,6 @@ use crate::common::{
     },
     types::UserOperation,
 };
-use anyhow::bail;
-use ethers::types::{Address, Bytes, Log, TransactionReceipt, H256, U256};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use strum;
-
-pub use run::*;
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]

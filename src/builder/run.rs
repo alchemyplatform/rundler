@@ -1,11 +1,14 @@
-use crate::builder::server::BuilderImpl;
-use crate::common::protos::builder::builder_server::BuilderServer;
-use crate::common::protos::builder::BUILDER_FILE_DESCRIPTOR_SET;
-use crate::common::server::format_socket_addr;
 use anyhow::Context;
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tonic::transport::Server;
+
+use crate::{
+    builder::server::BuilderImpl,
+    common::{
+        protos::builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
+        server::format_socket_addr,
+    },
+};
 
 #[derive(Debug)]
 pub struct Args {

@@ -1,11 +1,13 @@
 use anyhow::bail;
 use clap::Args;
-use tokio::{signal, sync::broadcast, sync::mpsc};
+use tokio::{
+    signal,
+    sync::{broadcast, mpsc},
+};
 use tracing::{error, info};
 
-use crate::{builder, common::server::format_server_addr};
-
 use super::CommonArgs;
+use crate::{builder, common::server::format_server_addr};
 
 /// CLI options for the builder
 #[derive(Args, Debug)]

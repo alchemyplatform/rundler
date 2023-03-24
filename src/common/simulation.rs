@@ -1,22 +1,30 @@
-use super::types::Entity;
-use crate::common::contracts::entry_point::{EntryPoint, FailedOp};
-use crate::common::tracer::{
-    AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Display, Formatter},
+    mem,
+    sync::Arc,
 };
-use crate::common::types::{
-    ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
-    ValidationReturnInfo,
+
+use ethers::{
+    abi::AbiDecode,
+    providers::{Http, Provider},
+    types::{Address, BlockId, BlockNumber, OpCode, H256, U256},
 };
-use crate::common::{eth, tracer};
-use ethers::abi::AbiDecode;
-use ethers::providers::{Http, Provider};
-use ethers::types::{Address, BlockId, BlockNumber, OpCode, H256, U256};
 use indexmap::IndexSet;
-use std::collections::HashSet;
-use std::fmt::{Debug, Display, Formatter};
-use std::mem;
-use std::sync::Arc;
 use tonic::async_trait;
+
+use super::types::Entity;
+use crate::common::{
+    contracts::entry_point::{EntryPoint, FailedOp},
+    eth, tracer,
+    tracer::{
+        AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
+    },
+    types::{
+        ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
+        ValidationReturnInfo,
+    },
+};
 
 #[derive(Clone, Debug)]
 pub struct SimulationSuccess {

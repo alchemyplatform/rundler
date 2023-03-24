@@ -1,3 +1,14 @@
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use anyhow::Context;
+use ethers::types::{Address, H256};
+use parking_lot::RwLock;
+use strum::IntoEnumIterator;
+use tokio::sync::broadcast;
+
 use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
@@ -11,15 +22,6 @@ use crate::{
     },
     op_pool::reputation::ReputationManager,
 };
-use anyhow::Context;
-use ethers::types::{Address, H256};
-use parking_lot::RwLock;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-use strum::IntoEnumIterator;
-use tokio::sync::broadcast;
 
 /// The number of blocks that a throttled operation is allowed to be in the mempool
 const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
@@ -206,10 +208,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::common::protos::op_pool::{Reputation, ReputationStatus};
-    use crate::common::types::UserOperation;
-
     use super::*;
+    use crate::common::{
+        protos::op_pool::{Reputation, ReputationStatus},
+        types::UserOperation,
+    };
 
     #[test]
     fn test_add_single_op() {

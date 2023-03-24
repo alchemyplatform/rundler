@@ -3,19 +3,19 @@ mod validation_results;
 
 use std::str::FromStr;
 
-pub use crate::common::contracts::shared_types::UserOperation;
 use anyhow::bail;
-use serde::{Deserialize, Serialize};
-use strum::EnumIter;
-pub use timestamp::*;
-pub use validation_results::*;
-
 use ethers::{
     abi::{encode, AbiEncode, Token},
     types::{Address, Bytes, H256, U256},
     utils::keccak256,
 };
 use parse_display::Display;
+use serde::{Deserialize, Serialize};
+use strum::EnumIter;
+pub use timestamp::*;
+pub use validation_results::*;
+
+pub use crate::common::contracts::shared_types::UserOperation;
 
 /// Unique identifier for a user operation from a given sender
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]

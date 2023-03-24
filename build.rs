@@ -1,8 +1,6 @@
+use std::{env, error, io::ErrorKind, path::PathBuf, process::Command};
+
 use ethers::contract::{Abigen, MultiAbigen};
-use std::io::ErrorKind;
-use std::path::PathBuf;
-use std::process::Command;
-use std::{env, error};
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/lib");

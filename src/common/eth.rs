@@ -1,19 +1,18 @@
-use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
+use std::{error, future::Future, mem, ops::Deref, sync::Arc};
+
 use anyhow::Context;
-use ethers::abi::{AbiDecode, AbiEncode, RawLog};
-use ethers::contract::builders::ContractCall;
-use ethers::contract::{Contract, ContractDeployer, ContractError};
-use ethers::providers::{
-    Http, HttpClientError, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError,
-};
-use ethers::types::{
-    Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, H256,
+use ethers::{
+    abi::{AbiDecode, AbiEncode, RawLog},
+    contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
+    providers::{
+        Http, HttpClientError, JsonRpcClient, Middleware, PendingTransaction, Provider,
+        ProviderError,
+    },
+    types::{Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, H256},
 };
 use serde_json::Value;
-use std::future::Future;
-use std::ops::Deref;
-use std::sync::Arc;
-use std::{error, mem};
+
+use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
 
 /// Waits for a pending transaction to be mined, providing appropriate error
 /// messages for each point of failure.

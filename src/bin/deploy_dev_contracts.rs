@@ -1,6 +1,6 @@
-use alchemy_bundler::common::dev;
-use alchemy_bundler::common::dev::{
-    DevAddresses, BUNDLER_ACCOUNT_ID, PAYMASTER_SIGNER_ACCOUNT_ID, WALLET_OWNER_ACCOUNT_ID,
+use alchemy_bundler::common::{
+    dev,
+    dev::{DevAddresses, BUNDLER_ACCOUNT_ID, PAYMASTER_SIGNER_ACCOUNT_ID, WALLET_OWNER_ACCOUNT_ID},
 };
 use ethers::utils::hex;
 

@@ -1,6 +1,7 @@
+use std::net::SocketAddr;
+
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_util::layers::{PrefixLayer, Stack};
-use std::net::SocketAddr;
 
 pub fn initialize(listen_addr: SocketAddr) -> anyhow::Result<()> {
     let (recorder, exporter) = PrometheusBuilder::new()

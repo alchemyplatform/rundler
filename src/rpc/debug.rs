@@ -1,19 +1,25 @@
-use super::RpcReputation;
-use crate::common::protos;
-use crate::common::protos::builder::BundlingMode as ProtoBundlingMode;
-use crate::common::protos::builder::{
-    builder_client, DebugSendBundleNowRequest, DebugSetBundlingModeRequest,
-};
-use crate::common::protos::op_pool::{
-    op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest,
-};
-use crate::common::types::{BundlingMode, UserOperation};
 use ethers::types::{Address, H256};
-use jsonrpsee::core::{Error as RpcError, RpcResult};
-use jsonrpsee::proc_macros::rpc;
-use tonic::async_trait;
-use tonic::transport::Channel;
+use jsonrpsee::{
+    core::{Error as RpcError, RpcResult},
+    proc_macros::rpc,
+};
+use tonic::{async_trait, transport::Channel};
+
+use super::RpcReputation;
+use crate::common::{
+    protos,
+    protos::{
+        builder::{
+            builder_client, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
+            DebugSetBundlingModeRequest,
+        },
+        op_pool::{
+            op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest,
+            DebugDumpReputationRequest, DebugSetReputationRequest,
+        },
+    },
+    types::{BundlingMode, UserOperation},
+};
 
 /// Debug API
 #[rpc(server, namespace = "debug")]
