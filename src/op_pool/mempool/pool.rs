@@ -1,15 +1,16 @@
-use crate::common::types::{UserOperation, UserOperationId};
-use ethers::{abi::Address, types::H256};
 use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, BTreeSet, HashMap},
     sync::Arc,
 };
 
+use ethers::{abi::Address, types::H256};
+
 use super::{
     error::{MempoolError, MempoolResult},
     PoolConfig, PoolOperation,
 };
+use crate::common::types::{UserOperation, UserOperationId};
 
 /// Pool of user operations
 #[derive(Debug)]

@@ -1,12 +1,5 @@
 use std::sync::Arc;
 
-use crate::common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET};
-use crate::op_pool::{
-    events::EventListener,
-    mempool::uo_pool::UoPool,
-    reputation::{HourlyMovingAverageReputation, ReputationParams},
-    server::OpPoolImpl,
-};
 use anyhow::bail;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -15,6 +8,15 @@ use tokio::{
 use tonic::transport::Server;
 
 use super::mempool::PoolConfig;
+use crate::{
+    common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
+    op_pool::{
+        events::EventListener,
+        mempool::uo_pool::UoPool,
+        reputation::{HourlyMovingAverageReputation, ReputationParams},
+        server::OpPoolImpl,
+    },
+};
 
 pub struct Args {
     pub port: u16,

@@ -1,11 +1,14 @@
+use std::{
+    error::Error,
+    fmt,
+    fmt::{Debug, Display, Formatter},
+    ops::{Add, AddAssign, Sub, SubAssign},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
 use chrono::{DateTime, LocalResult, TimeZone, Utc};
 use ethers::types::U64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::error::Error;
-use std::fmt;
-use std::fmt::{Debug, Display, Formatter};
-use std::ops::{Add, AddAssign, Sub, SubAssign};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// An on-chain timestamp expressed as seconds since the epoch, as might be
 /// returned in a block header or in the `valid_before`/`valid_after` bounds in

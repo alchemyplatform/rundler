@@ -1,4 +1,3 @@
-use crate::common::types::{Entity, Timestamp};
 use ethers::types::{Address, OpCode, U256};
 use jsonrpsee::{
     core::Error as RpcError,
@@ -8,6 +7,8 @@ use jsonrpsee::{
     },
 };
 use serde::Serialize;
+
+use crate::common::types::{Entity, Timestamp};
 
 // Error codes borrowed from jsonrpsee
 // INVALID_PARAMS_CODE = -32602

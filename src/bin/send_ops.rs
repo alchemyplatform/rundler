@@ -1,5 +1,4 @@
-use alchemy_bundler::common::dev::DevClients;
-use alchemy_bundler::common::eth;
+use alchemy_bundler::common::{dev::DevClients, eth};
 use dotenv::dotenv;
 
 #[tokio::main]

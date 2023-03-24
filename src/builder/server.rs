@@ -1,8 +1,9 @@
+use tonic::{async_trait, Request, Response, Result};
+
 use crate::common::protos::builder::{
     builder_server::Builder, DebugSendBundleNowRequest, DebugSendBundleNowResponse,
     DebugSetBundlingModeRequest, DebugSetBundlingModeResponse,
 };
-use tonic::{async_trait, Request, Response, Result};
 
 pub struct BuilderImpl {}
 

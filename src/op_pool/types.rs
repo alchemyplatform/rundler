@@ -1,11 +1,14 @@
-use super::mempool::{ExpectedStorageSlot, PoolOperation};
-use crate::common::protos::op_pool::{
-    Entity as ProtoEntity, MempoolOp, StorageSlot, UserOperation,
-};
-use crate::common::protos::{to_le_bytes, ConversionError, ProtoBytes};
-use crate::common::types::ValidTimeRange;
 use anyhow::Context;
 use ethers::types::{Address, H256};
+
+use super::mempool::{ExpectedStorageSlot, PoolOperation};
+use crate::common::{
+    protos::{
+        op_pool::{Entity as ProtoEntity, MempoolOp, StorageSlot, UserOperation},
+        to_le_bytes, ConversionError, ProtoBytes,
+    },
+    types::ValidTimeRange,
+};
 
 impl TryFrom<&PoolOperation> for MempoolOp {
     type Error = anyhow::Error;
@@ -106,12 +109,10 @@ impl From<&ExpectedStorageSlot> for StorageSlot {
 
 #[cfg(test)]
 mod tests {
-    use crate::common::contracts::shared_types;
-    use crate::common::protos::op_pool;
-    use crate::common::types::Timestamp;
     use ethers::types::U256;
 
     use super::*;
+    use crate::common::{contracts::shared_types, protos::op_pool, types::Timestamp};
 
     const TEST_ADDRESS_ARR: [u8; 20] = [
         0x11, 0xAB, 0xB0, 0x5d, 0x9A, 0xd3, 0x18, 0xbf, 0x65, 0x65, 0x26, 0x72, 0xB1, 0x3b, 0x1d,

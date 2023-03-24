@@ -2,16 +2,14 @@ use std::time::Duration;
 
 use anyhow::bail;
 use clap::Args;
-use tokio::signal;
-use tokio::sync::{broadcast, mpsc};
+use tokio::{
+    signal,
+    sync::{broadcast, mpsc},
+};
 use tracing::{error, info};
 
-use crate::builder;
-use crate::common::server::format_server_addr;
-use crate::op_pool;
-use crate::rpc;
-
 use super::{builder::BuilderArgs, pool::PoolArgs, rpc::RpcArgs, CommonArgs};
+use crate::{builder, common::server::format_server_addr, op_pool, rpc};
 
 #[derive(Debug, Args)]
 pub struct BundlerCliArgs {

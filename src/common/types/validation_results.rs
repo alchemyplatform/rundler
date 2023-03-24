@@ -1,8 +1,13 @@
-use crate::common::contracts::entry_point::{ValidationResult, ValidationResultWithAggregation};
-use crate::common::types::Timestamp;
-use ethers::abi;
-use ethers::abi::{AbiDecode, AbiError};
-use ethers::types::{Address, Bytes, U256};
+use ethers::{
+    abi,
+    abi::{AbiDecode, AbiError},
+    types::{Address, Bytes, U256},
+};
+
+use crate::common::{
+    contracts::entry_point::{ValidationResult, ValidationResultWithAggregation},
+    types::Timestamp,
+};
 
 /// Equivalent to the generated `ValidationResult` or
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs

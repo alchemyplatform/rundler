@@ -1,7 +1,7 @@
+use std::{collections::HashMap, time::Duration};
+
 use ethers::types::Address;
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::time::Duration;
 use tokio::time::interval;
 
 use crate::common::protos::op_pool::{Reputation, ReputationStatus};

@@ -1,22 +1,25 @@
-use crate::common::contracts::entry_point::EntryPoint;
-use crate::common::contracts::simple_account::SimpleAccount;
-use crate::common::contracts::simple_account_factory::SimpleAccountFactory;
-use crate::common::contracts::verifying_paymaster::VerifyingPaymaster;
-use crate::common::eth;
-use crate::common::types::UserOperation;
+use std::{env, io::Write, sync::Arc, time::Duration};
+
 use anyhow::Context;
-use ethers::abi::AbiEncode;
-use ethers::contract::builders::ContractCall;
-use ethers::core::k256::ecdsa::SigningKey;
-use ethers::middleware::SignerMiddleware;
-use ethers::providers::{Http, Middleware, Provider};
-use ethers::signers::{LocalWallet, Signer};
-use ethers::types::{Address, Bytes, TransactionRequest, U256};
-use ethers::utils;
-use std::env;
-use std::io::Write;
-use std::sync::Arc;
-use std::time::Duration;
+use ethers::{
+    abi::AbiEncode,
+    contract::builders::ContractCall,
+    core::k256::ecdsa::SigningKey,
+    middleware::SignerMiddleware,
+    providers::{Http, Middleware, Provider},
+    signers::{LocalWallet, Signer},
+    types::{Address, Bytes, TransactionRequest, U256},
+    utils,
+};
+
+use crate::common::{
+    contracts::{
+        entry_point::EntryPoint, simple_account::SimpleAccount,
+        simple_account_factory::SimpleAccountFactory, verifying_paymaster::VerifyingPaymaster,
+    },
+    eth,
+    types::UserOperation,
+};
 
 pub const DEV_CHAIN_ID: u64 = 1337;
 pub const DEPLOYER_ACCOUNT_ID: u8 = 1;

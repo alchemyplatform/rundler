@@ -1,5 +1,24 @@
 mod error;
 
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+
+use anyhow::{anyhow, bail, Context};
+use ethers::{
+    abi::{AbiDecode, RawLog},
+    prelude::{ContractError, EthEvent},
+    providers::{Http, Middleware, Provider, ProviderError},
+    types::{
+        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
+        Log, OpCode, TransactionReceipt, H256, U256, U64,
+    },
+    utils::to_checksum,
+};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use prost::Message;
+use tokio::join;
+use tonic::{async_trait, transport::Channel, Status};
+use tracing::{debug, Level};
+
 use self::error::{
     EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
     ThrottledOrBannedData,
@@ -25,24 +44,6 @@ use crate::common::{
     simulation::{self, SimulationError, SimulationSuccess, Simulator, SimulatorImpl, Violation},
     types::{Entity, Timestamp, UserOperation},
 };
-use anyhow::{anyhow, bail, Context};
-use ethers::{
-    abi::{AbiDecode, RawLog},
-    prelude::{ContractError, EthEvent},
-    providers::{Http, Middleware, Provider, ProviderError},
-    types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
-        Log, OpCode, TransactionReceipt, H256, U256, U64,
-    },
-    utils::to_checksum,
-};
-use jsonrpsee::core::RpcResult;
-use jsonrpsee::proc_macros::rpc;
-use prost::Message;
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
-use tokio::join;
-use tonic::{async_trait, transport::Channel, Status};
-use tracing::{debug, Level};
 
 /// Eth API
 #[rpc(server, namespace = "eth")]
@@ -714,13 +715,13 @@ impl From<Status> for EthRpcError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{common::protos::op_pool::ErrorReason, rpc::eth::error::ThrottledOrBannedData};
-
-    use super::*;
     use ethers::{
         types::{Log, TransactionReceipt},
         utils::{hex::ToHex, keccak256},
     };
+
+    use super::*;
+    use crate::{common::protos::op_pool::ErrorReason, rpc::eth::error::ThrottledOrBannedData};
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
 

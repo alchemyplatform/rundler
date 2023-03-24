@@ -1,10 +1,11 @@
+use std::{sync::Arc, time::Duration};
+
 use anyhow::Context;
 use ethers::{
     prelude::StreamExt,
     providers::{Middleware, Provider, Ws},
     types::{Address, H256, U256, U64},
 };
-use std::{sync::Arc, time::Duration};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
