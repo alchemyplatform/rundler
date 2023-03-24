@@ -5,23 +5,28 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
+    contract::ContractError,
+    prelude::ProviderError,
     providers::{Http, Provider},
-    types::{Address, BlockId, BlockNumber, OpCode, H256, U256},
+    types::{Address, BlockId, BlockNumber, Bytes, OpCode, H256, U256},
 };
 use indexmap::IndexSet;
 use tonic::async_trait;
 
-use super::types::Entity;
 use crate::common::{
-    contracts::entry_point::{EntryPoint, FailedOp},
+    contracts::{
+        entry_point::{EntryPoint, FailedOp},
+        i_aggregator::IAggregator,
+    },
     eth, tracer,
     tracer::{
         AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
     },
     types::{
-        ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
+        Entity, ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
         ValidationReturnInfo,
     },
 };
@@ -33,6 +38,7 @@ pub struct SimulationSuccess {
     pub signature_failed: bool,
     pub valid_time_range: ValidTimeRange,
     pub aggregator_address: Option<Address>,
+    pub aggregator_signature: Option<Bytes>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
     pub account_is_staked: bool,
@@ -133,6 +139,25 @@ impl SimulatorImpl {
             is_wallet_creation,
         })
     }
+
+    async fn validate_aggregator_signature(
+        &self,
+        op: UserOperation,
+        aggregator_address: Option<Address>,
+    ) -> anyhow::Result<AggregatorOut> {
+        let Some(aggregator_address) = aggregator_address else {
+            return Ok(AggregatorOut::NotNeeded);
+        };
+        let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
+        // TODO: Add gas limit to prevent DoS?
+        match aggregator.validate_user_op_signature(op).call().await {
+            Ok(sig) => Ok(AggregatorOut::SuccessWithSignature(sig)),
+            Err(ContractError::ProviderError(ProviderError::JsonRpcClientError(_))) => {
+                Ok(AggregatorOut::ValidationFailed)
+            }
+            Err(error) => Err(error).context("should call aggregator to validate signature")?,
+        }
+    }
 }
 
 #[async_trait]
@@ -149,7 +174,7 @@ impl Simulator for SimulatorImpl {
         )
         .await?;
         let block_id = block_hash.into();
-        let context = match self.create_context(op, block_id).await {
+        let context = match self.create_context(op.clone(), block_id).await {
             Ok(context) => context,
             error @ Err(_) => error?,
         };
@@ -243,21 +268,36 @@ impl Simulator for SimulatorImpl {
         if tracer_out.factory_called_create2_twice {
             violations.push(Violation::FactoryCalledCreate2Twice);
         }
+        // To spare the Geth node, only check code hashes and validate with
+        // aggregator if there are no other violations.
         if !violations.is_empty() {
-            Err(violations)?;
+            return Err(violations.into());
         }
-        // To spare the Geth node, only check code hashes if there are no other
-        // violations.
-        let code_hash = eth::get_code_hash(
+        let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
+        let code_hash_future = eth::get_code_hash(
             &self.provider,
             mem::take(&mut tracer_out.accessed_contract_addresses),
             Some(block_id),
-        )
-        .await?;
+        );
+        let aggregator_signature_future =
+            self.validate_aggregator_signature(op, aggregator_address);
+        let (code_hash, aggregator_out) =
+            tokio::try_join!(code_hash_future, aggregator_signature_future)?;
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
-                Err(vec![Violation::CodeHashChanged])?;
+                violations.push(Violation::CodeHashChanged)
             }
+        }
+        let aggregator_signature = match aggregator_out {
+            AggregatorOut::NotNeeded => None,
+            AggregatorOut::SuccessWithSignature(sig) => Some(sig),
+            AggregatorOut::ValidationFailed => {
+                violations.push(Violation::AggregatorValidationFailed);
+                None
+            }
+        };
+        if !violations.is_empty() {
+            return Err(violations.into());
         }
         let mut expected_storage_slots = vec![];
         for ExpectedStorage { address, slots } in &tracer_out.expected_storage {
@@ -272,7 +312,6 @@ impl Simulator for SimulatorImpl {
         let ValidationOutput {
             return_info,
             sender_info,
-            aggregator_info,
             ..
         } = entry_point_out;
         let account_is_staked = is_staked(sender_info, self.sim_settings);
@@ -288,7 +327,8 @@ impl Simulator for SimulatorImpl {
             pre_op_gas,
             signature_failed: sig_failed,
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
-            aggregator_address: aggregator_info.map(|info| info.address),
+            aggregator_address,
+            aggregator_signature,
             code_hash,
             entities_needing_stake,
             account_is_staked,
@@ -370,6 +410,8 @@ pub enum Violation {
     CalledHandleOps(Entity),
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
+    #[display("aggregator signature validation failed")]
+    AggregatorValidationFailed,
 }
 
 #[derive(Debug, PartialEq, Clone, parse_display::Display, Eq)]
@@ -408,6 +450,13 @@ struct ValidationContext {
     tracer_out: TracerOutput,
     entry_point_out: ValidationOutput,
     is_wallet_creation: bool,
+}
+
+#[derive(Debug)]
+enum AggregatorOut {
+    NotNeeded,
+    SuccessWithSignature(Bytes),
+    ValidationFailed,
 }
 
 #[derive(Clone, Copy, Debug)]
