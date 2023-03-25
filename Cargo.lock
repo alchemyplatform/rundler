@@ -3333,6 +3333,7 @@ dependencies = [
  "clap 4.1.4",
  "dotenv",
  "ethers",
+ "futures",
  "indexmap",
  "itertools",
  "jsonrpsee",

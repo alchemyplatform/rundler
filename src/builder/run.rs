@@ -28,8 +28,7 @@ pub async fn run(
     let builder_server = BuilderServer::new(BuilderImpl::new());
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
-        .build()
-        .unwrap();
+        .build()?;
 
     // health service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
