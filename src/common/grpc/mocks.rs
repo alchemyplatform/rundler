@@ -1,7 +1,8 @@
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{future::Future, time::Duration};
 
 use mockall::mock;
 use tokio::{net::TcpListener, task::AbortHandle, time};
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{
     async_trait,
     transport::{self, Channel, Server},
@@ -26,7 +27,12 @@ use crate::common::protos::{
     },
 };
 
+/// Maximum number of incrementing ports to try when looking for an open port
+/// for a mock server.
+const MAX_PORT_ATTEMPTS: u16 = 10;
+
 mock! {
+    #[derive(Debug)]
     pub OpPool {}
 
     #[async_trait]
@@ -68,6 +74,7 @@ mock! {
 }
 
 mock! {
+    #[derive(Debug)]
     pub Builder {}
 
     #[async_trait]
@@ -111,10 +118,10 @@ pub async fn mock_op_pool_client(mock: impl OpPool) -> OpPoolHandle {
 /// Like `mock_op_pool_client`, but accepts a custom port to avoid conflicts.
 pub async fn mock_op_pool_client_with_port(mock: impl OpPool, port: u16) -> OpPoolHandle {
     mock_client_with_port(
-        |addr| {
+        |listener_stream| {
             Server::builder()
                 .add_service(OpPoolServer::new(mock))
-                .serve(addr)
+                .serve_with_incoming(listener_stream)
         },
         OpPoolClient::connect,
         port,
@@ -132,10 +139,10 @@ pub async fn mock_builder_client(mock: impl Builder) -> BuilderHandle {
 /// Like `mock_builder_client`, but accepts a custom port to avoid conflicts.
 pub async fn mock_builder_client_with_port(mock: impl Builder, port: u16) -> BuilderHandle {
     mock_client_with_port(
-        |addr| {
+        |listener_stream| {
             Server::builder()
                 .add_service(BuilderServer::new(mock))
-                .serve(addr)
+                .serve_with_incoming(listener_stream)
         },
         BuilderClient::connect,
         port,
@@ -149,18 +156,14 @@ async fn mock_client_with_port<FnS, FutS, FnC, FutC, C>(
     port: u16,
 ) -> ClientHandle<C>
 where
-    FnS: FnOnce(SocketAddr) -> FutS,
+    FnS: FnOnce(TcpListenerStream) -> FutS,
     FutS: Future<Output = Result<(), transport::Error>> + Send + 'static,
     FnC: FnOnce(String) -> FutC,
     FutC: Future<Output = Result<C, transport::Error>>,
 {
-    let server_addr = format!("[::1]:{port}");
-    assert!(
-        port_is_available(port).await,
-        "port {port} is not available for mock client"
-    );
-    let client_addr = format!("http://{server_addr}");
-    let abort_handle = tokio::spawn(new_server(server_addr.parse().unwrap())).abort_handle();
+    let (port, listener_stream) = find_open_port(port).await;
+    let client_addr = format!("http://[::1]:{port}");
+    let abort_handle = tokio::spawn(new_server(listener_stream)).abort_handle();
     // Sleeping any amount of time is enough for the server to become ready.
     time::sleep(Duration::from_millis(1)).await;
     let client = new_client(client_addr)
@@ -172,8 +175,16 @@ where
     }
 }
 
-async fn port_is_available(port: u16) -> bool {
-    TcpListener::bind(format!("[::1]:{port}")).await.is_ok()
+async fn find_open_port(starting_port: u16) -> (u16, TcpListenerStream) {
+    for i in 0..MAX_PORT_ATTEMPTS {
+        let port = starting_port + i;
+        if let Ok(listener) = TcpListener::bind(format!("[::1]:{port}")).await {
+            return (port, TcpListenerStream::new(listener));
+        }
+    }
+    panic!(
+        "couldn't find an open port in {MAX_PORT_ATTEMPTS} attempts starting from {starting_port}"
+    );
 }
 
 #[cfg(test)]
@@ -222,6 +233,42 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_multiple_mocks_avoid_port_collision() {
+        let mut op_pool = MockOpPool::new();
+        op_pool.expect_get_supported_entry_points().returning(|_| {
+            Ok(Response::new(GetSupportedEntryPointsResponse {
+                chain_id: 10,
+                entry_points: vec![],
+            }))
+        });
+        let mut handle1 = mock_op_pool_client(op_pool).await;
+        let mut op_pool = MockOpPool::new();
+        op_pool.expect_get_supported_entry_points().returning(|_| {
+            Ok(Response::new(GetSupportedEntryPointsResponse {
+                chain_id: 20,
+                entry_points: vec![],
+            }))
+        });
+        let mut handle2 = mock_op_pool_client(op_pool).await;
+        let chain_id1 = handle1
+            .client
+            .get_supported_entry_points(GetSupportedEntryPointsRequest {})
+            .await
+            .expect("should get response from mock")
+            .into_inner()
+            .chain_id;
+        assert_eq!(chain_id1, 10);
+        let chain_id2 = handle2
+            .client
+            .get_supported_entry_points(GetSupportedEntryPointsRequest {})
+            .await
+            .expect("should get response from mock")
+            .into_inner()
+            .chain_id;
+        assert_eq!(chain_id2, 20)
+    }
+
+    #[tokio::test]
     async fn test_server_shutdown_when_handle_drops() {
         let port = 10000;
         assert!(port_is_available(port).await);
@@ -232,5 +279,9 @@ mod test {
         // Sleeping any duration is enough for the server to shut down.
         time::sleep(Duration::from_millis(1)).await;
         assert!(port_is_available(port).await);
+    }
+
+    async fn port_is_available(port: u16) -> bool {
+        TcpListener::bind(format!("[::1]:{port}")).await.is_ok()
     }
 }

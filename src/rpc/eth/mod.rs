@@ -295,7 +295,7 @@ where
         let SimulationSuccess {
             valid_time_range,
             code_hash,
-            aggregator_address,
+            aggregator,
             signature_failed,
             entities_needing_stake,
             block_hash,
@@ -329,7 +329,7 @@ where
                 entry_point: entry_point.address().as_bytes().to_vec(),
                 op: Some(MempoolOp {
                     uo: Some((&op).into()),
-                    aggregator: aggregator_address.unwrap_or_default().as_bytes().to_vec(),
+                    aggregator: aggregator.unwrap_or_default().address.as_bytes().to_vec(),
                     valid_after: valid_after.seconds_since_epoch(),
                     valid_until: valid_until.seconds_since_epoch(),
                     expected_code_hash: code_hash.as_bytes().to_vec(),
@@ -367,18 +367,19 @@ where
 
         let pre_verification_gas = op.calc_pre_verification_gas();
 
-        let gas_sim_result = simulator
-            .simulate_handle_op(op.into(), None)
-            .await
-            .map_err(|err| match err {
-                GasSimulationError::DidNotRevertWithExecutionResult(
-                    IEntryPointErrors::FailedOp(op),
-                ) => EthRpcError::EntryPointValidationRejected(op.reason),
-                GasSimulationError::AccountExecutionReverted(err) => {
-                    EthRpcError::ExecutionReverted(err)
-                }
-                _ => EthRpcError::Internal(err.into()),
-            })?;
+        let gas_sim_result =
+            simulator
+                .simulate_handle_op(op.into())
+                .await
+                .map_err(|err| match err {
+                    GasSimulationError::DidNotRevertWithExecutionResult(
+                        IEntryPointErrors::FailedOp(op),
+                    ) => EthRpcError::EntryPointValidationRejected(op.reason),
+                    GasSimulationError::AccountExecutionReverted(err) => {
+                        EthRpcError::ExecutionReverted(err)
+                    }
+                    _ => EthRpcError::Internal(err.into()),
+                })?;
 
         Ok(GasEstimate {
             call_gas_limit: gas_sim_result.call_gas,

@@ -84,32 +84,6 @@ pub async fn get_chain_id<Client: JsonRpcClient>(
         .as_u32())
 }
 
-/// Converts a block id, which may be something like "latest" which can refer to
-/// different blocks over time, into one which references a fixed block by its
-/// hash.
-pub async fn get_static_block_id<Client: JsonRpcClient>(
-    provider: &Provider<Client>,
-    block_id: BlockId,
-) -> anyhow::Result<BlockId> {
-    Ok(get_block_hash(provider, block_id).await?.into())
-}
-
-pub async fn get_block_hash<Client: JsonRpcClient>(
-    provider: &Provider<Client>,
-    block_id: BlockId,
-) -> anyhow::Result<H256> {
-    if let BlockId::Hash(hash) = block_id {
-        return Ok(hash);
-    }
-    provider
-        .get_block(block_id)
-        .await
-        .context("should load block to get hash")?
-        .context("block should exist to get latest hash")?
-        .hash
-        .context("hash should be present on block")
-}
-
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
 pub async fn get_code_hash<Client: JsonRpcClient>(

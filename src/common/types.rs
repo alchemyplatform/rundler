@@ -1,3 +1,4 @@
+mod provider_like;
 mod timestamp;
 mod validation_results;
 mod violations;
@@ -11,6 +12,7 @@ use ethers::{
     utils::keccak256,
 };
 use parse_display::Display;
+pub use provider_like::*;
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 pub use timestamp::*;

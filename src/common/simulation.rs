@@ -8,6 +8,8 @@ use ethers::{
     types::{Address, BlockId, BlockNumber, Bytes, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
+#[cfg(test)]
+use mockall::automock;
 use tonic::async_trait;
 
 use crate::common::{
@@ -20,24 +22,29 @@ use crate::common::{
         AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
     },
     types::{
-        Entity, ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
-        ValidationReturnInfo, ViolationError,
+        Entity, ExpectedStorageSlot, ProviderLike, StakeInfo, UserOperation, ValidTimeRange,
+        ValidationOutput, ValidationReturnInfo, ViolationError,
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SimulationSuccess {
     pub block_hash: H256,
     pub pre_op_gas: U256,
     pub signature_failed: bool,
     pub valid_time_range: ValidTimeRange,
-    pub aggregator_address: Option<Address>,
-    pub aggregator_signature: Option<Bytes>,
+    pub aggregator: Option<AggregatorSimOut>,
     pub code_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
     pub account_is_staked: bool,
     pub accessed_addresses: HashSet<Address>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct AggregatorSimOut {
+    pub address: Address,
+    pub signature: Bytes,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers::contract::EthError)]
@@ -63,19 +70,19 @@ struct StorageSlot {
     pub slot: U256,
 }
 
+#[cfg_attr(test, automock)]
 #[async_trait]
-pub trait Simulator {
+pub trait Simulator: Send + Sync {
     async fn simulate_validation(
         &self,
         op: UserOperation,
-        block_id: Option<BlockId>,
+        block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError>;
 
     async fn simulate_handle_op(
         &self,
         op: UserOperation,
-        block_id: Option<BlockId>,
     ) -> Result<GasSimulationSuccess, GasSimulationError>;
 }
 
@@ -171,7 +178,10 @@ where
         let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
         // TODO: Add gas limit to prevent DoS?
         match aggregator.validate_user_op_signature(op).call().await {
-            Ok(sig) => Ok(AggregatorOut::SuccessWithSignature(sig)),
+            Ok(sig) => Ok(AggregatorOut::SuccerssWithInfo(AggregatorSimOut {
+                address: aggregator_address,
+                signature: sig,
+            })),
             Err(ContractError::Revert(_)) => Ok(AggregatorOut::ValidationReverted),
             Err(error) => Err(error).context("should call aggregator to validate signature")?,
         }
@@ -186,14 +196,13 @@ where
     async fn simulate_validation(
         &self,
         op: UserOperation,
-        block_id: Option<BlockId>,
+        block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError> {
-        let block_hash = eth::get_block_hash(
-            &self.provider,
-            block_id.unwrap_or_else(|| BlockNumber::Latest.into()),
-        )
-        .await?;
+        let block_hash = match block_hash {
+            Some(block_hash) => block_hash,
+            None => ProviderLike::get_latest_block_hash(&self.provider).await?,
+        };
         let block_id = block_hash.into();
         let context = match self.create_context(op.clone(), block_id).await {
             Ok(context) => context,
@@ -312,9 +321,9 @@ where
                 violations.push(SimulationViolation::CodeHashChanged)
             }
         }
-        let aggregator_signature = match aggregator_out {
+        let aggregator = match aggregator_out {
             AggregatorOut::NotNeeded => None,
-            AggregatorOut::SuccessWithSignature(sig) => Some(sig),
+            AggregatorOut::SuccerssWithInfo(info) => Some(info),
             AggregatorOut::ValidationReverted => {
                 violations.push(SimulationViolation::AggregatorValidationFailed);
                 None
@@ -351,8 +360,7 @@ where
             pre_op_gas,
             signature_failed: sig_failed,
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
-            aggregator_address,
-            aggregator_signature,
+            aggregator,
             code_hash,
             entities_needing_stake,
             account_is_staked,
@@ -364,19 +372,11 @@ where
     async fn simulate_handle_op(
         &self,
         op: UserOperation,
-        block_id: Option<BlockId>,
     ) -> Result<GasSimulationSuccess, GasSimulationError> {
-        let block_hash = eth::get_block_hash(
-            &self.provider,
-            block_id.unwrap_or_else(|| BlockNumber::Latest.into()),
-        )
-        .await?;
-
-        let block_id = block_hash.into();
         let tracer_out = tracer::trace_simulate_handle_op(
             &self.entry_point,
             op,
-            block_id,
+            BlockNumber::Latest.into(),
             self.sim_settings.max_simulate_handle_ops_gas,
         )
         .await?;
@@ -522,7 +522,7 @@ struct ValidationContext {
 #[derive(Debug)]
 enum AggregatorOut {
     NotNeeded,
-    SuccessWithSignature(Bytes),
+    SuccerssWithInfo(AggregatorSimOut),
     ValidationReverted,
 }
 
