@@ -32,6 +32,14 @@ pub struct PoolArgs {
     pub host: String,
 
     #[arg(
+        long = "pool.max_size_in_bytes",
+        name = "pool.max_size_in_bytes",
+        env = "POOL_MAX_SIZE_IN_BYTES",
+        default_value = "500000000" // .5gigs
+    )]
+    pub max_size_in_bytes: usize,
+
+    #[arg(
         long = "pool.max_userops_per_sender",
         name = "pool.max_userops_per_sender",
         env = "POOL_MAX_USEROPS_PER_SENDER",
@@ -60,6 +68,7 @@ impl PoolArgs {
             chain_id: common.chain_id,
             max_userops_per_sender: self.max_userops_per_sender,
             min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
+            max_size_of_pool_bytes: self.max_size_in_bytes,
         };
 
         Ok(op_pool::Args {

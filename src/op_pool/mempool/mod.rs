@@ -1,5 +1,6 @@
 pub mod error;
 mod pool;
+mod size;
 pub mod uo_pool;
 
 use std::sync::Arc;
@@ -77,6 +78,8 @@ pub struct PoolConfig {
     /// The minimum fee bump required to replace an operation in the mempool
     /// Applies to both priority fee and fee. Expressed as an integer percentage value
     pub min_replacement_fee_increase_percentage: usize,
+    /// After this threshold is met, we will start to drop the worst userops from the mempool
+    pub max_size_of_pool_bytes: usize,
 }
 
 /// Origin of an operation.
@@ -150,6 +153,10 @@ impl PoolOperation {
         Entity::iter()
             .filter(|entity| self.is_staked(*entity))
             .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
+    }
+
+    pub fn size(&self) -> usize {
+        self.uo.pack().len()
     }
 }
 
