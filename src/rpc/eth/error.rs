@@ -56,6 +56,9 @@ pub enum EthRpcError {
     /// Unsupported aggregator
     #[error("unsupported aggregator")]
     UnsupportedAggregator(UnsupportedAggregatorData),
+    /// Replacement underpriced
+    #[error("operation rejected")]
+    ReplacementUnderpriced,
     /// Other internal errors
     #[error("signature check failed")]
     SignatureCheckFailed,
@@ -205,6 +208,7 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::UnsupportedAggregator(data) => {
                 rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, msg, data)
             }
+            EthRpcError::ReplacementUnderpriced => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::Internal(e) => rpc_err(INTERNAL_ERROR_CODE, e.to_string()),
             EthRpcError::ExecutionReverted(msg) => rpc_err(EXECUTION_REVERTED, msg),

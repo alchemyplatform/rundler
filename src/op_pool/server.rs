@@ -153,7 +153,7 @@ where
 
         let ops = self
             .mempool
-            .best_operations(usize::MAX)
+            .all_operations(usize::MAX)
             .iter()
             .map(|op| MempoolOp::try_from(&(**op)))
             .collect::<Result<Vec<MempoolOp>, _>>()
@@ -215,9 +215,14 @@ impl From<MempoolError> for Status {
                 // to stringing an address actually shortens it in the style of 0x000...000 -- bad.
                 metadata: HashMap::from([(et.to_string(), (&addr).encode_hex())]),
             },
-            MempoolError::MaxOperationsReached(_, _)
-            | MempoolError::ReplacementUnderpriced(_, _) => ErrorInfo {
+            MempoolError::MaxOperationsReached(_, _) => ErrorInfo {
                 reason: ErrorReason::OperationRejected.as_str_name().to_string(),
+                metadata: HashMap::new(),
+            },
+            MempoolError::ReplacementUnderpriced(_, _) => ErrorInfo {
+                reason: ErrorReason::ReplacementUnderpriced
+                    .as_str_name()
+                    .to_string(),
                 metadata: HashMap::new(),
             },
             MempoolError::Other(_) => ErrorInfo {
@@ -354,6 +359,10 @@ mod tests {
         fn remove_operations<'a>(&self, _hashes: impl IntoIterator<Item = &'a H256>) {}
 
         fn best_operations(&self, _max: usize) -> Vec<Arc<PoolOperation>> {
+            vec![]
+        }
+
+        fn all_operations(&self, _max: usize) -> Vec<Arc<PoolOperation>> {
             vec![]
         }
 

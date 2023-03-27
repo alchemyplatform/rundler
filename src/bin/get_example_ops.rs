@@ -1,4 +1,4 @@
-use alchemy_bundler::common::dev::DevClients;
+use alchemy_bundler::{common::dev::DevClients, rpc::RpcUserOperation};
 use dotenv::dotenv;
 
 #[tokio::main]
@@ -10,12 +10,15 @@ async fn main() -> anyhow::Result<()> {
         .new_wallet_op(clients.entry_point.add_stake(1), 1.into())
         .await?;
     println!("User operation to make wallet call EntryPoint#addStake():");
-    println!("{}", serde_json::to_string(&op)?);
+    println!(
+        "{}",
+        serde_json::to_string(&RpcUserOperation::from(op.clone()))?
+    );
     let op = clients
         .new_wallet_op_with_paymaster(clients.entry_point.add_stake(1), 1.into())
         .await?;
     println!();
     println!("User operation to make wallet call EntryPoint#addStake() with paymaster:");
-    println!("{}", serde_json::to_string(&op)?);
+    println!("{}", serde_json::to_string(&RpcUserOperation::from(op))?);
     Ok(())
 }

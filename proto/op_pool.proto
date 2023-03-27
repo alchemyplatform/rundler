@@ -32,6 +32,7 @@ message MempoolOp {
   repeated Entity entities_needing_stake = 7;
   repeated StorageSlot expected_storage_slots = 8;
   bytes sim_block_hash = 9;
+  bool account_is_staked = 10;
 }
 
 message StorageSlot {
@@ -126,4 +127,5 @@ enum ErrorReason {
   ERROR_REASON_INTERNAL = 1;
   ERROR_REASON_ENTITY_THROTTLED = 2;
   ERROR_REASON_OPERATION_REJECTED = 3;
+  ERROR_REASON_REPLACEMENT_UNDERPRICED = 4;
 }

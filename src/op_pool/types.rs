@@ -24,6 +24,7 @@ impl TryFrom<&PoolOperation> for MempoolOp {
                 .map(|e| ProtoEntity::from(*e).into())
                 .collect(),
             expected_storage_slots: op.expected_storage_slots.iter().map(|s| s.into()).collect(),
+            account_is_staked: op.account_is_staked,
         })
     }
 }
@@ -68,6 +69,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             entities_needing_stake,
             expected_storage_slots,
             sim_block_hash,
+            account_is_staked: op.account_is_staked,
         })
     }
 }
@@ -143,6 +145,7 @@ mod tests {
                 slot: vec![0; 32],
                 value: vec![0; 32],
             }],
+            account_is_staked: false,
         };
 
         let pool_op: PoolOperation = mempool_op.try_into().unwrap();
@@ -182,6 +185,7 @@ mod tests {
                 slot: 1234.into(),
                 expected_value: Some(12345.into()),
             }],
+            account_is_staked: false,
         };
 
         let mempool_op: MempoolOp = (&pool_op).try_into().unwrap();
