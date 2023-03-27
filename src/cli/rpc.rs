@@ -1,11 +1,13 @@
 use anyhow::{bail, Context};
 use clap::Args;
-use tokio::{signal, sync::broadcast, sync::mpsc};
+use tokio::{
+    signal,
+    sync::{broadcast, mpsc},
+};
 use tracing::{error, info};
 
-use crate::{common::simulation, rpc};
-
 use super::CommonArgs;
+use crate::{common::simulation, rpc};
 
 /// CLI options for the RPC server
 #[derive(Args, Debug)]

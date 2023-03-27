@@ -11,11 +11,11 @@
 .vscode
 
 # Foundry, configured in foundry.toml
-/contracts/cache/
-/contracts/out/
+contracts/cache/
+contracts/out/
 
 # Generated contract bindings, created in build.rs
-/src/common/contracts
+src/common/contracts/
 
 .env
 *.log

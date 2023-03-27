@@ -1,11 +1,13 @@
 use anyhow::{bail, Context};
 use clap::Args;
-use tokio::{signal, sync::broadcast, sync::mpsc};
+use tokio::{
+    signal,
+    sync::{broadcast, mpsc},
+};
 use tracing::{error, info};
 
-use crate::op_pool::{self, PoolConfig};
-
 use super::CommonArgs;
+use crate::op_pool::{self, PoolConfig};
 
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]

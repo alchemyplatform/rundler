@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+echo 'Running rustfmt in pre-commit hook'
+
+cargo +nightly fmt --version &>/dev/null || {
+  echo >&2 'Nightly rustfmt is required for pre-commit hook. Try running "rustup toolchain add nightly"'
+  exit 1
+}
+
+# Format all the files, then `git add` any Rust files which were staged and had
+# no staged changes.
+
+git_short_status=$(git status -s | grep '\.rs$')
+files_to_git_add=$(echo "$git_short_status" | grep '^[^ ] ' | awk '{ print $NF }')
+files_with_unstaged_changes=$(echo "$git_short_status" | grep '^[^ ][^ ]' | awk '{ print $NF }')
+
+cargo +nightly fmt --all || {
+  echo >&2 'Formatting failed. This most likely means you have syntax errors'
+  exit 1
+}
+
+declare -a file_array=()
+for file in $files_to_git_add; do
+  file_array+=("${file}")
+done
+if [ ${#file_array[@]} -ne 0 ]; then
+  git add "${file_array[@]}"
+fi
+
+for file in $files_with_unstaged_changes; do
+  echo "Formatting hook skipped adding file with uncommitted changes: ${file}"
+done

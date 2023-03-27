@@ -2,19 +2,17 @@ pub mod error;
 mod pool;
 pub mod uo_pool;
 
-use ethers::types::{Address, H256, U256};
 use std::sync::Arc;
+
+use ethers::types::{Address, H256, U256};
 use strum::IntoEnumIterator;
 
-use crate::common::types::ValidTimeRange;
+use self::error::MempoolResult;
+use super::events::NewBlockEvent;
 use crate::common::{
     protos::op_pool::Reputation,
-    types::{Entity, UserOperation},
+    types::{Entity, UserOperation, ValidTimeRange},
 };
-
-use self::error::MempoolResult;
-
-use super::events::NewBlockEvent;
 
 /// In-memory operation pool
 pub trait Mempool: Send + Sync {

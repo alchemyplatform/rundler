@@ -29,12 +29,14 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - name: Install deps
+      - name: Install protobuf
         run: sudo apt-get -y install protobuf-compiler
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
+      - name: Install toolchain (nightly)
+        run: rustup toolchain add nightly --component rustfmt --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -45,12 +47,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: build
-      - name: cargo fmt
+      - name: cargo +nightly fmt
         uses: actions-rs/cargo@v1
         with:
           command: fmt
+          toolchain: nightly
           args: --all --check
-
       - name: cargo clippy
         uses: actions-rs/clippy-check@v1
         with:

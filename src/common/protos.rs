@@ -1,8 +1,10 @@
-use crate::common::types::BundlingMode as RpcBundlingMode;
-use crate::common::types::Entity as EntityType;
-use crate::common::types::UserOperation as RpcUserOperation;
-use ethers::types::{Address, Bytes, H256, U256};
 use std::mem;
+
+use ethers::types::{Address, Bytes, H256, U256};
+
+use crate::common::types::{
+    BundlingMode as RpcBundlingMode, Entity as EntityType, UserOperation as RpcUserOperation,
+};
 
 pub mod op_pool {
     use super::*;

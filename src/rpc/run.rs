@@ -1,23 +1,25 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
-use ethers::providers::{Http, Provider, ProviderExt};
-use ethers::types::{Address, Chain};
-use jsonrpsee::server::ServerBuilder;
-use jsonrpsee::RpcModule;
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
-
-use crate::common::protos::builder::builder_client;
-use crate::common::protos::op_pool::op_pool_client;
-use crate::common::server::format_socket_addr;
-use crate::common::simulation;
-use crate::rpc::debug::{DebugApi, DebugApiServer};
-use crate::rpc::eth::{EthApi, EthApiServer};
+use ethers::{
+    providers::{Http, Provider, ProviderExt},
+    types::{Address, Chain},
+};
+use jsonrpsee::{server::ServerBuilder, RpcModule};
+use tokio::sync::{broadcast, mpsc};
 
 use super::ApiNamespace;
+use crate::{
+    common::{
+        protos::{builder::builder_client, op_pool::op_pool_client},
+        server::format_socket_addr,
+        simulation,
+    },
+    rpc::{
+        debug::{DebugApi, DebugApiServer},
+        eth::{EthApi, EthApiServer},
+    },
+};
 
 pub struct Args {
     pub port: u16,

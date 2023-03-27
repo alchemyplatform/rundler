@@ -1,13 +1,16 @@
-use crate::common::contracts::entry_point::EntryPoint;
-use crate::common::types::UserOperation;
+use std::{
+    collections::{BTreeSet, HashMap},
+    fmt::Debug,
+};
+
 use anyhow::Context;
-use ethers::providers::{JsonRpcClient, Middleware, Provider};
-use ethers::types::transaction::eip2718::TypedTransaction;
-use ethers::types::{Address, BlockId, OpCode, U256};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
-use std::fmt::Debug;
+use ethers::{
+    providers::{JsonRpcClient, Middleware, Provider},
+    types::{transaction::eip2718::TypedTransaction, Address, BlockId, OpCode, U256},
+};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+use crate::common::{contracts::entry_point::EntryPoint, types::UserOperation};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
