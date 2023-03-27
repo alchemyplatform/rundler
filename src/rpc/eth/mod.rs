@@ -645,6 +645,7 @@ impl From<SimulationError> for EthRpcError {
 
                 Self::StakeTooLow(err_data)
             }
+            Violation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             _ => Self::Internal(value.into()),
         }
     }
