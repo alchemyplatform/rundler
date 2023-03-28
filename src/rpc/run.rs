@@ -26,7 +26,7 @@ pub struct Args {
     pub host: String,
     pub pool_url: String,
     pub builder_url: String,
-    pub entry_point: Address,
+    pub entry_points: Vec<Address>,
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
@@ -63,12 +63,16 @@ pub async fn run(
         .await
         .context("builder server should be started")?;
 
+    if args.entry_points.len() != 1 {
+        bail!("Only one entry point is supported at the moment");
+    }
+
     for api in args.api_namespaces {
         match api {
             ApiNamespace::Eth => module.merge(
                 EthApi::new(
                     provider.clone(),
-                    vec![args.entry_point],
+                    args.entry_points.clone(),
                     args.chain_id,
                     // NOTE: this clone is cheap according to the docs because all it's doing is copying the reference to the channel
                     op_pool_client.clone(),

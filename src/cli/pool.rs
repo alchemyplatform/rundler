@@ -60,25 +60,31 @@ impl PoolArgs {
     /// Convert the CLI arguments into the arguments for the OP Pool combining
     /// common and op pool specific arguments.
     pub fn to_args(&self, common: &CommonArgs) -> anyhow::Result<op_pool::Args> {
-        let pool_config = PoolConfig {
-            entry_point: common
-                .entry_point
-                .parse()
-                .context("Invalid entry_point argument")?,
-            chain_id: common.chain_id,
-            max_userops_per_sender: self.max_userops_per_sender,
-            min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
-            max_size_of_pool_bytes: self.max_size_in_bytes,
-        };
+        let pool_configs = common
+            .entry_points
+            .iter()
+            .map(|ep| {
+                let entry_point = ep.parse().context("Invalid entry_points argument")?;
+                Ok(PoolConfig {
+                    entry_point,
+                    chain_id: common.chain_id,
+                    max_userops_per_sender: self.max_userops_per_sender,
+                    min_replacement_fee_increase_percentage: self
+                        .min_replacement_fee_increase_percentage,
+                    max_size_of_pool_bytes: self.max_size_in_bytes,
+                })
+            })
+            .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
 
         Ok(op_pool::Args {
             port: self.port,
             host: self.host.clone(),
+            chain_id: common.chain_id,
             ws_url: common
                 .node_ws
                 .clone()
                 .context("pool requires node_ws arg")?,
-            pool_config,
+            pool_configs,
         })
     }
 }

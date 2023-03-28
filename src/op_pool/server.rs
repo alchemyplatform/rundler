@@ -25,7 +25,7 @@ use crate::common::protos::{
 
 pub struct OpPoolImpl<M: Mempool> {
     chain_id: u64,
-    mempool: Arc<M>,
+    mempools: HashMap<Address, Arc<M>>,
     metrics: OpPoolMetrics,
 }
 
@@ -33,25 +33,25 @@ impl<M> OpPoolImpl<M>
 where
     M: Mempool,
 {
-    pub fn new(chain_id: u64, mempool: Arc<M>) -> Self {
+    pub fn new(chain_id: u64, mempools: HashMap<Address, Arc<M>>) -> Self {
         Self {
             chain_id,
             metrics: OpPoolMetrics::default(),
-            mempool,
+            mempools,
         }
     }
 
-    fn check_entry_point(req_entry_point: &[u8], pool_entry_point: Address) -> Result<()> {
+    fn get_mempool_for_entry_point(&self, req_entry_point: &[u8]) -> Result<&Arc<M>> {
         let req_ep: Address = ProtoBytes(req_entry_point)
             .try_into()
             .map_err(|e| Status::invalid_argument(format!("Invalid entry point: {e}")))?;
-        if req_ep != pool_entry_point {
+        let Some(mempool) = self.mempools.get(&req_ep) else {
             return Err(Status::invalid_argument(format!(
-                "Invalid entry point: {req_ep:?}, expected {pool_entry_point:?}"
+                "Entry point not supported: {req_ep:?}"
             )));
-        }
+        };
 
-        Ok(())
+        Ok(mempool)
     }
 }
 
@@ -66,10 +66,14 @@ where
     ) -> Result<Response<GetSupportedEntryPointsResponse>> {
         self.metrics.request_counter.increment(1);
 
-        let mempool_ep = self.mempool.entry_point();
+        let entry_points = self
+            .mempools
+            .keys()
+            .map(|k| k.as_bytes().to_vec())
+            .collect();
         Ok(Response::new(GetSupportedEntryPointsResponse {
             chain_id: self.chain_id,
-            entry_points: vec![mempool_ep.as_bytes().to_vec()],
+            entry_points,
         }))
     }
 
@@ -77,7 +81,7 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
         let proto_op = req
             .op
@@ -87,9 +91,7 @@ where
             .try_into()
             .map_err(|e| Status::invalid_argument(format!("Failed to parse operation: {e}")))?;
 
-        let hash = self
-            .mempool
-            .add_operation(OperationOrigin::Local, pool_op)?;
+        let hash = mempool.add_operation(OperationOrigin::Local, pool_op)?;
 
         Ok(Response::new(AddOpResponse {
             hash: hash.as_bytes().to_vec(),
@@ -100,10 +102,9 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
-        let ops = self
-            .mempool
+        let ops = mempool
             .best_operations(req.max_ops as usize)
             .iter()
             .map(|op| MempoolOp::try_from(&(**op)))
@@ -120,7 +121,7 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
         let hashes: Vec<H256> = req
             .hashes
@@ -133,7 +134,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        self.mempool.remove_operations(&hashes);
+        mempool.remove_operations(&hashes);
 
         Ok(Response::new(RemoveOpsResponse {}))
     }
@@ -143,7 +144,7 @@ where
         _request: Request<DebugClearStateRequest>,
     ) -> Result<Response<DebugClearStateResponse>> {
         self.metrics.request_counter.increment(1);
-        self.mempool.clear();
+        self.mempools.values().for_each(|mempool| mempool.clear());
         Ok(Response::new(DebugClearStateResponse {}))
     }
 
@@ -154,10 +155,9 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
-        let ops = self
-            .mempool
+        let ops = mempool
             .all_operations(usize::MAX)
             .iter()
             .map(|op| MempoolOp::try_from(&(**op)))
@@ -174,7 +174,7 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
         let reps = if req.reputations.is_empty() {
             return Err(Status::invalid_argument(
@@ -189,8 +189,7 @@ where
                 .try_into()
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))?;
 
-            self.mempool
-                .set_reputation(addr, rep.ops_seen, rep.ops_included);
+            mempool.set_reputation(addr, rep.ops_seen, rep.ops_included);
         }
 
         Ok(Response::new(DebugSetReputationResponse {}))
@@ -203,9 +202,9 @@ where
         self.metrics.request_counter.increment(1);
 
         let req = request.into_inner();
-        Self::check_entry_point(&req.entry_point, self.mempool.entry_point())?;
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
-        let reps = self.mempool.dump_reputation();
+        let reps = mempool.dump_reputation();
         Ok(Response::new(DebugDumpReputationResponse {
             reputations: reps,
         }))
@@ -269,7 +268,6 @@ mod tests {
         0x11, 0xAB, 0xB0, 0x5d, 0x9A, 0xd3, 0x18, 0xbf, 0x65, 0x65, 0x26, 0x72, 0xB1, 0x3b, 0x1d,
         0xcb, 0x0E, 0x6D, 0x4a, 0x32,
     ];
-    const TEST_ADDRESS_STR: &str = "0x11aBB05d9Ad318bf65652672B13b1dcB0E6D4a32";
 
     use crate::{
         common::protos::op_pool::{self, Reputation},
@@ -281,8 +279,8 @@ mod tests {
 
     #[test]
     fn test_check_entry_point() {
-        let entry_pt_addr = TEST_ADDRESS_STR.parse().unwrap();
-        let result = OpPoolImpl::<MockMempool>::check_entry_point(&TEST_ADDRESS_ARR, entry_pt_addr);
+        let pool = given_oppool();
+        let result = pool.get_mempool_for_entry_point(&TEST_ADDRESS_ARR);
         assert!(result.is_ok());
     }
 
@@ -332,7 +330,10 @@ mod tests {
     }
 
     fn given_oppool() -> OpPoolImpl<MockMempool> {
-        OpPoolImpl::<MockMempool>::new(1, MockMempool::default().into())
+        OpPoolImpl::<MockMempool>::new(
+            1,
+            HashMap::from([(TEST_ADDRESS_ARR.into(), MockMempool::default().into())]),
+        )
     }
 
     pub struct MockMempool {
