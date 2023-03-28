@@ -1,12 +1,12 @@
 #!/bin/bash 
-# Launcher script for the alchemy-bundler.
+# Launcher script for the rundler.
 
 export TAG=latest
 cd `dirname \`realpath $0\``
 case $1 in
 
  name)
-	echo "alchemy-bundler/$TAG"
+	echo "rundler/$TAG"
 	;;
 
  start)

@@ -1,5 +1,5 @@
-use alchemy_bundler::cli;
 use dotenv::dotenv;
+use rundler::cli;
 
 #[tokio::main]
 async fn main() {

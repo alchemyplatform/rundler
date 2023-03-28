@@ -1,4 +1,4 @@
-# Alchemy Bundler (working name)
+# Rundler
 
 ## Development
 
@@ -21,7 +21,7 @@ Prerequisites:
 * [Rust & Cargo](https://rustup.rs/)
 
 ```
-git clone https://github.com/OMGWINNING/alchemy-bundler
-cd alchemy-bundler
+git clone https://github.com/OMGWINNING/rundler
+cd rundler
 cargo test --all
 ```

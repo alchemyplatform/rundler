@@ -8,10 +8,10 @@ case $1 in
 	docker-compose up -d
 	sleep 10
     (cd ../bundler-spec-tests/@account-abstraction && yarn deploy --network localhost)
-	../../../target/debug/alchemy-bundler bundler --log.file out.log &
+	../../../target/debug/rundler node --log.file out.log &
 	;;
  stop)
-	pkill alchemy-bundler
+	pkill rundler
  	docker-compose down -t 3
 	;;
 

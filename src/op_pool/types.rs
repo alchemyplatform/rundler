@@ -206,7 +206,7 @@ mod tests {
         );
         assert_eq!(mempool_op.aggregator, TEST_ADDRESS_ARR.to_vec());
         assert_eq!(mempool_op.valid_after, now.seconds_since_epoch());
-        assert_eq!(mempool_op.valid_until, now.seconds_since_epoch() as u64);
+        assert_eq!(mempool_op.valid_until, now.seconds_since_epoch());
         assert_eq!(
             mempool_op.expected_storage_slots[0],
             (&expected_ss).try_into().unwrap()
