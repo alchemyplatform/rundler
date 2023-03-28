@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-echo 'Running rustfmt in pre-commit hook'
+echo 'Running pre-commit hook...'
 
 cargo +nightly fmt --version &>/dev/null || {
   echo >&2 'Nightly rustfmt is required for pre-commit hook. Try running "rustup toolchain add nightly"'
@@ -14,8 +14,15 @@ git_short_status=$(git status -s | grep '\.rs$')
 files_to_git_add=$(echo "$git_short_status" | grep '^[^ ] ' | awk '{ print $NF }')
 files_with_unstaged_changes=$(echo "$git_short_status" | grep '^[^ ][^ ]' | awk '{ print $NF }')
 
+echo 'Running rustfmt (+nightly)'
 cargo +nightly fmt --all || {
   echo >&2 'Formatting failed. This most likely means you have syntax errors'
+  exit 1
+}
+
+echo 'Running clippy'
+cargo clippy --all --all-features -- -D warnings || {
+  echo >&2 'Clippy failed. This most likely means you have linting errors'
   exit 1
 }
 

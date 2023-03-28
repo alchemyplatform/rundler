@@ -134,7 +134,7 @@ impl PoolOperation {
     /// checked to prevent them from filling the pool.
     pub fn is_staked(&self, entity: Entity) -> bool {
         match entity {
-            Entity::Account => return self.account_is_staked,
+            Entity::Account => self.account_is_staked,
             _ => self.entities_needing_stake.contains(&entity),
         }
     }
