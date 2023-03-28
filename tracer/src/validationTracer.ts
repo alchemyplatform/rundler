@@ -18,7 +18,7 @@ interface Phase {
   forbiddenOpcodesUsed: string[];
   usedInvalidGasOpcode: boolean;
   storageAccesses: StorageAccess[];
-  calledHandleOps: boolean;
+  calledBannedEntryPointMethod: boolean;
   calledWithValue: boolean;
   ranOutOfGas: boolean;
   undeployedContractAccesses: string[];
@@ -49,7 +49,7 @@ type InternalPhase = Omit<
 };
 
 ((): LogTracer<Output> => {
-  const HANDLE_OPS_SELECTOR = "0x1fad948c";
+  const DEPOSIT_TO_SELECTOR = "0xb760faf9";
   const FORBIDDEN_OPCODES = new Set([
     "GASPRICE",
     "GASLIMIT",
@@ -93,7 +93,7 @@ type InternalPhase = Omit<
       forbiddenOpcodesUsed: new Set(),
       usedInvalidGasOpcode: false,
       storageAccesses: new Map(),
-      calledHandleOps: false,
+      calledBannedEntryPointMethod: false,
       calledWithValue: false,
       ranOutOfGas: false,
       undeployedContractAccesses: new Set(),
@@ -103,7 +103,7 @@ type InternalPhase = Omit<
   function concludePhase(): void {
     const {
       usedInvalidGasOpcode,
-      calledHandleOps,
+      calledBannedEntryPointMethod,
       calledWithValue,
       ranOutOfGas,
     } = currentPhase;
@@ -119,7 +119,7 @@ type InternalPhase = Omit<
       forbiddenOpcodesUsed,
       usedInvalidGasOpcode,
       storageAccesses,
-      calledHandleOps,
+      calledBannedEntryPointMethod,
       calledWithValue,
       ranOutOfGas,
       undeployedContractAccesses,
@@ -285,9 +285,20 @@ type InternalPhase = Omit<
     },
 
     enter(frame) {
-      if (toHex(frame.getTo()) === entryPointAddress) {
-        if (toHex(frame.getInput().slice(0, 4)) === HANDLE_OPS_SELECTOR) {
-          currentPhase.calledHandleOps = true;
+      if (
+        toHex(frame.getFrom()) !== entryPointAddress &&
+        toHex(frame.getTo()) === entryPointAddress
+      ) {
+        const input = frame.getInput();
+        // The spec says that calling methods other than `depositTo` is banned.
+        // We deviate and also allow calling the entrypoint with no calldata, as
+        // this is equivalent to calling `depositTo` and without it many spec
+        // tests fail
+        if (
+          input.length > 0 &&
+          toHex(input.slice(0, 4)) !== DEPOSIT_TO_SELECTOR
+        ) {
+          currentPhase.calledBannedEntryPointMethod = true;
         }
       } else {
         const value = frame.getValue();
