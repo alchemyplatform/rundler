@@ -1,21 +1,16 @@
 mod error;
-
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context};
 use ethers::{
     abi::{AbiDecode, RawLog},
-    prelude::{ContractError, EthEvent},
-    providers::{Http, Middleware, Provider, ProviderError},
-    types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, Filter,
-        Log, OpCode, TransactionReceipt, H256, U256, U64,
-    },
+    prelude::EthEvent,
+    providers::{Http, Middleware, Provider},
+    types::{Address, Bytes, Filter, Log, OpCode, TransactionReceipt, H256, U256, U64},
     utils::to_checksum,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use prost::Message;
-use tokio::join;
 use tonic::{async_trait, transport::Channel, Status};
 use tracing::{debug, Level};
 
@@ -33,7 +28,7 @@ use crate::common::{
         EntryPoint, EntryPointCalls, EntryPointErrors, UserOperationEventFilter,
         UserOperationRevertReasonFilter,
     },
-    eth::{get_revert_data, log_to_raw_log},
+    eth::log_to_raw_log,
     protos::{
         op_pool::{
             op_pool_client::OpPoolClient, AddOpRequest, Entity as OpPoolEntity, ErrorInfo,
@@ -41,7 +36,10 @@ use crate::common::{
         },
         to_le_bytes,
     },
-    simulation::{self, SimulationError, SimulationSuccess, Simulator, SimulatorImpl, Violation},
+    simulation::{
+        self, GasSimulationError, SimulationError, SimulationSuccess, Simulator, SimulatorImpl,
+        Violation,
+    },
     types::{Entity, Timestamp, UserOperation},
 };
 
@@ -130,12 +128,6 @@ impl EthApi {
             chain_id,
             op_pool_client,
         }
-    }
-
-    fn get_entry_point(&self, address: &Address) -> Option<&EntryPoint<Provider<Http>>> {
-        self.entry_points_and_sims
-            .get(address)
-            .map(|eps| &eps.entry_point)
     }
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
@@ -246,77 +238,6 @@ impl EthApi {
                 .context("should have parsed revert reason as string")
         })
     }
-
-    async fn get_call_gas_limit(
-        &self,
-        entry_point: &Address,
-        op: &UserOperationOptionalGas,
-    ) -> Result<U256, EthRpcError> {
-        let entry_point = self
-            .get_entry_point(entry_point)
-            .context("entry point should exist in the map")?;
-
-        let tx = TypedTransaction::Eip1559(Eip1559TransactionRequest {
-            to: Some(op.sender.into()),
-            from: Some(entry_point.address()),
-            data: Some(op.cheap_clone().call_data),
-            ..Default::default()
-        });
-
-        let call_gas_limit =
-            self.provider
-                .estimate_gas(&tx, None)
-                .await
-                .map_err(|pe| match pe {
-                    ProviderError::JsonRpcClientError(e) => {
-                        EthRpcError::ExecutionReverted(e.to_string())
-                    }
-                    _ => EthRpcError::Internal(pe.into()),
-                })?;
-
-        Ok(call_gas_limit)
-    }
-
-    async fn get_verification_gas_limit(
-        &self,
-        entry_point: &Address,
-        op: &UserOperationOptionalGas,
-    ) -> Result<U256, EthRpcError> {
-        let entry_point = self
-            .get_entry_point(entry_point)
-            .context("entry point should exist in the map")?;
-
-        let sim_result = entry_point
-            .simulate_validation(op.cheap_clone().into())
-            .call()
-            .await
-            .err()
-            .context("simulation result should have reverted in entry point")?;
-
-        let provider_error = match sim_result {
-            ContractError::MiddlewareError(e) => e,
-            ContractError::ProviderError(e) => e,
-            _ => {
-                tracing::debug!("unexpected sim_result error: {sim_result:?}");
-                Err(EthRpcError::Internal(sim_result.into()))?
-            }
-        };
-
-        let revert_data: EntryPointErrors = get_revert_data(provider_error)
-            .map(EntryPointErrors::decode_hex)
-            .log_context("should have received provider error containing revert data")?
-            .context("returned revert data should match entry point error")?;
-
-        let validation_result = match revert_data {
-            EntryPointErrors::ValidationResult(validation_result) => validation_result,
-            EntryPointErrors::FailedOp(op) => {
-                Err(EthRpcError::EntrypointValidationRejected(op.reason))?
-            }
-            _ => Err(anyhow!(revert_data))?,
-        };
-
-        Ok(validation_result.return_info.0)
-    }
 }
 
 const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
@@ -422,21 +343,30 @@ impl EthApiServer for EthApi {
                 "supplied entry_point addr is not a known entry point".to_string(),
             ))?;
         }
+        let simulator = &self
+            .entry_points_and_sims
+            .get(&entry_point)
+            .unwrap()
+            .simulator;
 
         let pre_verification_gas = op.calc_pre_verification_gas();
-        let call_gas_limit = self.get_call_gas_limit(&entry_point, &op);
-        let verification_gas = self.get_verification_gas_limit(&entry_point, &op);
 
-        let (call_gas_limit, verification_gas) = join!(call_gas_limit, verification_gas);
-
-        let verification_gas =
-            verification_gas.log_on_error("should have computed verification gas successfully")?;
-        let call_gas_limit =
-            call_gas_limit.log_on_error("should have computed call gas limit successfully")?;
+        let gas_sim_result = simulator
+            .simulate_handle_op(op.into(), None)
+            .await
+            .map_err(|err| match err {
+                GasSimulationError::DidNotRevertWithExecutionResult(
+                    EntryPointErrors::FailedOp(op),
+                ) => EthRpcError::EntrypointValidationRejected(op.reason),
+                GasSimulationError::AccountExecutionReverted(err) => {
+                    EthRpcError::ExecutionReverted(err)
+                }
+                _ => EthRpcError::Internal(err.into()),
+            })?;
 
         Ok(GasEstimate {
-            call_gas_limit,
-            verification_gas,
+            call_gas_limit: gas_sim_result.call_gas,
+            verification_gas: gas_sim_result.verification_gas,
             pre_verification_gas,
         })
     }

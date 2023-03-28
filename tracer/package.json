@@ -3,7 +3,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "esbuild src/index.ts --minify --outdir=dist",
+    "build": "esbuild src/validationTracer.ts src/gasTracer.ts --minify --outdir=dist",
     "typecheck": "tsc --noEmit",
     "watch": "yarn build --watch"
   },
