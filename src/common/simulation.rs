@@ -11,7 +11,7 @@ use ethers::{
     contract::ContractError,
     prelude::ProviderError,
     providers::{Http, Provider},
-    types::{Address, BlockId, BlockNumber, Bytes, OpCode, H256, U256},
+    types::{Address, BlockId, BlockNumber, Bytes, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
 use tonic::async_trait;
@@ -173,9 +173,9 @@ impl SimulatorImpl {
         // TODO: Add gas limit to prevent DoS?
         match aggregator.validate_user_op_signature(op).call().await {
             Ok(sig) => Ok(AggregatorOut::SuccessWithSignature(sig)),
-            Err(ContractError::ProviderError(ProviderError::JsonRpcClientError(_))) => {
-                Ok(AggregatorOut::ValidationFailed)
-            }
+            Err(ContractError::ProviderError {
+                e: ProviderError::JsonRpcClientError(_),
+            }) => Ok(AggregatorOut::ValidationFailed),
             Err(error) => Err(error).context("should call aggregator to validate signature")?,
         }
     }
@@ -217,7 +217,7 @@ impl Simulator for SimulatorImpl {
             for opcode in &phase.forbidden_opcodes_used {
                 violations.push(Violation::UsedForbiddenOpcode(
                     entity,
-                    ViolationOpCode(opcode.clone()),
+                    ViolationOpCode(*opcode),
                 ));
             }
             if phase.used_invalid_gas_opcode {
@@ -512,7 +512,7 @@ pub enum Violation {
 
 #[derive(Debug, PartialEq, Clone, parse_display::Display, Eq)]
 #[display("{0:?}")]
-pub struct ViolationOpCode(pub OpCode);
+pub struct ViolationOpCode(pub Opcode);
 
 impl PartialOrd for ViolationOpCode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
@@ -522,8 +522,8 @@ impl PartialOrd for ViolationOpCode {
 
 impl Ord for ViolationOpCode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let left = self.0.clone() as i32;
-        let right = other.0.clone() as i32;
+        let left = self.0 as i32;
+        let right = other.0 as i32;
 
         left.cmp(&right)
     }

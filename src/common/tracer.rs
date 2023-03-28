@@ -6,7 +6,7 @@ use std::{
 use anyhow::Context;
 use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, OpCode, U256},
+    types::{transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Opcode, U256},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ pub struct TracerOutput {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Phase {
-    pub forbidden_opcodes_used: Vec<OpCode>,
+    pub forbidden_opcodes_used: Vec<Opcode>,
     pub used_invalid_gas_opcode: bool,
     pub storage_accesses: Vec<StorageAccess>,
     pub called_handle_ops: bool,
@@ -133,7 +133,7 @@ async fn trace_call<T>(
     tracer_code: &str,
 ) -> anyhow::Result<T>
 where
-    T: Debug + DeserializeOwned + Serialize,
+    T: Debug + DeserializeOwned + Serialize + Send,
 {
     let out = provider
         .request(

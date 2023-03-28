@@ -84,7 +84,8 @@ pub fn new_test_client(
 /// not send transactions.
 pub fn new_test_wallet(test_account_id: u8) -> LocalWallet {
     let bytes = test_signing_key_bytes(test_account_id);
-    let key = SigningKey::from_bytes(&bytes).expect("should create signing key for test wallet");
+    let key =
+        SigningKey::from_bytes(&bytes.into()).expect("should create signing key for test wallet");
     LocalWallet::from(key).with_chain_id(DEV_CHAIN_ID)
 }
 
