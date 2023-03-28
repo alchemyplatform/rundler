@@ -261,6 +261,7 @@ mod tests {
             chain_id: 1,
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
+            max_size_of_pool_bytes: 10000,
         };
         UoPool::new(args, mock_reputation())
     }

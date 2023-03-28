@@ -21,4 +21,6 @@ pub enum MempoolError {
     /// An entity associated with the operation is throttled/banned.
     #[error("Entity {0}:{1} is throttled/banned")]
     EntityThrottled(Entity, Address),
+    #[error("Operation was discarded on inserting")]
+    DiscardedOnInsert,
 }

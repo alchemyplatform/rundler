@@ -697,6 +697,9 @@ impl From<ErrorInfo> for EthRpcError {
             return EthRpcError::ThrottledOrBanned(data);
         } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
             return EthRpcError::ReplacementUnderpriced;
+        } else if reason == ErrorReason::OperationDiscardedOnInsert.as_str_name() {
+            return anyhow!("operation rejected: mempool full try again with higher gas price")
+                .into();
         }
 
         anyhow!("operation rejected").into()

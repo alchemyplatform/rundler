@@ -4,10 +4,12 @@ use std::{
     sync::Arc,
 };
 
+use anyhow::Context;
 use ethers::{abi::Address, types::H256};
 
 use super::{
     error::{MempoolError, MempoolResult},
+    size::SizeTracker,
     PoolConfig, PoolOperation,
 };
 use crate::common::types::{UserOperation, UserOperationId};
@@ -27,6 +29,8 @@ pub struct PoolInner {
     count_by_address: HashMap<Address, usize>,
     // Submission ID counter
     submission_id: u64,
+    // keeps track of the size of the pool in bytes
+    size: SizeTracker,
 }
 
 impl PoolInner {
@@ -38,6 +42,7 @@ impl PoolInner {
             best: BTreeSet::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
+            size: SizeTracker::default(),
         }
     }
 
@@ -88,22 +93,32 @@ impl PoolInner {
             ));
         }
 
-        // update counts
-        for (_, addr) in op.entities() {
-            *self.count_by_address.entry(addr).or_insert(0) += 1;
-        }
-
-        // create and insert ordered operation
         let pool_op = OrderedPoolOperation {
             po: Arc::new(op),
             submission_id: self.next_submission_id(),
         };
+
+        // update counts
+        for (_, addr) in pool_op.po.entities() {
+            *self.count_by_address.entry(addr).or_insert(0) += 1;
+        }
+
+        // create and insert ordered operation
         let hash = pool_op
             .uo()
             .op_hash(self.config.entry_point, self.config.chain_id);
+        self.size += pool_op.size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
+
+        let removed = self
+            .enforce_size()
+            .context("should have succeeded in resizing the pool")?;
+
+        if removed.contains(&hash) {
+            Err(MempoolError::DiscardedOnInsert)?;
+        }
 
         Ok(hash)
     }
@@ -148,6 +163,27 @@ impl PoolInner {
         self.count_by_address.clear();
     }
 
+    fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
+        let mut removed = Vec::new();
+
+        while self.size > self.config.max_size_of_pool_bytes {
+            if let Some(worst) = self.best.pop_last() {
+                let hash = worst
+                    .uo()
+                    .op_hash(self.config.entry_point, self.config.chain_id);
+
+                let po = self
+                    .remove_operation_by_hash(hash)
+                    .context("should have removed the worst operation")?;
+
+                removed.push(hash);
+                self.size -= po.size();
+            }
+        }
+
+        Ok(removed)
+    }
+
     fn decrement_address_count(&mut self, address: Address) {
         if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
             *count_entry.get_mut() -= 1;
@@ -175,6 +211,10 @@ struct OrderedPoolOperation {
 impl OrderedPoolOperation {
     fn uo(&self) -> &UserOperation {
         &self.po.uo
+    }
+
+    fn size(&self) -> usize {
+        self.po.size()
     }
 }
 
@@ -348,13 +388,51 @@ mod tests {
         assert_eq!(pool.address_count(aggregator), 0);
     }
 
+    #[test]
+    fn pool_full_new_replaces_worst() {
+        let args = conf();
+        let mut pool = PoolInner::new(args.clone());
+        for i in 0..20 {
+            let op = create_op(Address::random(), i, i + 1);
+            pool.add_operation(op).unwrap();
+        }
+
+        // on greater gas, new op should win
+        let op = create_op(Address::random(), args.max_size_of_pool_bytes, 2);
+        let result = pool.add_operation(op);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn pool_full_worst_remains() {
+        let args = conf();
+        let mut pool = PoolInner::new(args.clone());
+        for i in 0..20 {
+            let op = create_op(Address::random(), i, i + 1);
+            pool.add_operation(op).unwrap();
+        }
+
+        let op = create_op(Address::random(), args.max_userops_per_sender, 1);
+        assert!(pool.add_operation(op).is_err());
+
+        // on equal gas, worst should remain because it came first
+        let op = create_op(Address::random(), args.max_userops_per_sender, 2);
+        let result = pool.add_operation(op);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
     fn conf() -> PoolConfig {
         PoolConfig {
             entry_point: Address::random(),
             chain_id: 1,
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
+            max_size_of_pool_bytes: 20 * size_of_op(),
         }
+    }
+
+    fn size_of_op() -> usize {
+        create_op(Address::random(), 1, 1).size()
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
