@@ -2,7 +2,7 @@
 
 Based on https://github.com/eth-infinitism/bundler-spec-tests.
 
-Keep the `launchers` directory consistent with the alchemy-bundler folder here: https://github.com/eth-infinitism/bundler-test-executor/tree/master/launchers.
+Keep the `launchers` directory consistent with the rundler folder here: https://github.com/eth-infinitism/bundler-test-executor/tree/master/launchers.
 
 ### Prerequisites
 

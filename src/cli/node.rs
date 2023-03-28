@@ -12,7 +12,7 @@ use super::{builder::BuilderArgs, pool::PoolArgs, rpc::RpcArgs, CommonArgs};
 use crate::{builder, common::server::format_server_addr, op_pool, rpc};
 
 #[derive(Debug, Args)]
-pub struct BundlerCliArgs {
+pub struct NodeCliArgs {
     #[command(flatten)]
     pool: PoolArgs,
 
@@ -23,8 +23,8 @@ pub struct BundlerCliArgs {
     rpc: RpcArgs,
 }
 
-pub async fn run(bundler_args: BundlerCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
-    let BundlerCliArgs {
+pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
+    let NodeCliArgs {
         pool: pool_args,
         builder: builder_args,
         rpc: rpc_args,

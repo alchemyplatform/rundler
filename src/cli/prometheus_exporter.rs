@@ -9,7 +9,7 @@ pub fn initialize(listen_addr: SocketAddr) -> anyhow::Result<()> {
         .build()?;
     tokio::spawn(exporter);
     Stack::new(recorder)
-        .push(PrefixLayer::new("alchemy-bundler"))
+        .push(PrefixLayer::new("rundler"))
         .install()?;
 
     Ok(())

@@ -62,38 +62,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alchemy-bundler"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap 4.1.4",
- "dotenv",
- "ethers",
- "indexmap",
- "jsonrpsee",
- "metrics",
- "metrics-exporter-prometheus",
- "metrics-util",
- "parking_lot 0.12.1",
- "parse-display",
- "prost",
- "prost-types",
- "serde",
- "serde_json",
- "strum",
- "thiserror",
- "tokio",
- "tonic",
- "tonic-build",
- "tonic-reflection",
- "tonic-types",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3162,6 +3130,38 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "rundler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap 4.1.4",
+ "dotenv",
+ "ethers",
+ "indexmap",
+ "jsonrpsee",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "metrics-util",
+ "parking_lot 0.12.1",
+ "parse-display",
+ "prost",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tonic-reflection",
+ "tonic-types",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
 ]
 
 [[package]]

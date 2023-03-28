@@ -5,13 +5,13 @@ use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod builder;
-mod bundler;
+mod node;
 mod pool;
 mod prometheus_exporter;
 mod rpc;
 
 use builder::BuilderCliArgs;
-use bundler::BundlerCliArgs;
+use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
 
@@ -42,7 +42,7 @@ pub async fn run() -> anyhow::Result<()> {
     prometheus_exporter::initialize(metrics_addr).context("metrics server should start")?;
 
     match opt.command {
-        Command::Bundler(args) => bundler::run(args, opt.common).await?,
+        Command::Node(args) => node::run(args, opt.common).await?,
         Command::Pool(args) => pool::run(args, opt.common).await?,
         Command::Rpc(args) => rpc::run(args, opt.common).await?,
         Command::Builder(args) => builder::run(args, opt.common).await?,
@@ -58,8 +58,8 @@ enum Command {
     /// Bundler command
     ///
     /// Runs the Pool, Builder, and RPC servers in a single process.
-    #[command(name = "bundler")]
-    Bundler(BundlerCliArgs),
+    #[command(name = "node")]
+    Node(NodeCliArgs),
 
     /// Rpc command
     ///

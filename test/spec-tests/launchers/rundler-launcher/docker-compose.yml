@@ -2,13 +2,13 @@ version: "3.8"
 
 services:
   bundler:
-    image: alchemy-platform/alchemy-bundler:$TAG
+    image: alchemy-platform/rundler:$TAG
     depends_on:
       - geth
     ports:
       - "3000:3000"
       - "8080:8080"
-    command: bash -c "sleep 10; /usr/local/bin/alchemy-bundler bundler"
+    command: bash -c "sleep 10; /usr/local/bin/rundler node"
     environment:
       - RUST_LOG=debug
       - ENTRY_POINT=0x0576a174D229E3cFA37253523E645A78A0C91B57

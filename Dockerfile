@@ -28,7 +28,7 @@ RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN cargo build --profile $BUILD_PROFILE --locked --bin alchemy-bundler
+RUN cargo build --profile $BUILD_PROFILE --locked --bin rundler
 
 # Use Ubuntu as the release image
 FROM ubuntu AS runtime
@@ -38,7 +38,7 @@ WORKDIR /app
 RUN apt-get -y update; apt-get -y install curl
 
 # Copy reth over from the build stage
-COPY --from=builder /app/target/release/alchemy-bundler /usr/local/bin
+COPY --from=builder /app/target/release/rundler /usr/local/bin
 
 EXPOSE 3000 8080
-CMD ["/usr/local/bin/alchemy-bundler", "bundler"]
+CMD ["/usr/local/bin/rundler", "node"]
