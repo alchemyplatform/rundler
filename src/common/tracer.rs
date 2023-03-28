@@ -29,7 +29,7 @@ pub struct Phase {
     pub forbidden_opcodes_used: Vec<Opcode>,
     pub used_invalid_gas_opcode: bool,
     pub storage_accesses: Vec<StorageAccess>,
-    pub called_handle_ops: bool,
+    pub called_banned_entry_point_method: bool,
     pub called_with_value: bool,
     pub ran_out_of_gas: bool,
     pub undeployed_contract_accesses: Vec<Address>,

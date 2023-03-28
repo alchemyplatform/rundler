@@ -199,7 +199,7 @@ impl From<UserOperationOptionalGas> for UserOperation {
             call_data: op.call_data,
             call_gas_limit: op.call_gas_limit.unwrap_or_default(),
             verification_gas_limit: op.verification_gas_limit.unwrap_or_default(),
-            pre_verification_gas: op.pre_verification_gas.unwrap_or(21000.into()), // this dummy is used in calc_pre_verification_gas
+            pre_verification_gas: op.pre_verification_gas.unwrap_or_else(|| 21000.into()), // this dummy is used in calc_pre_verification_gas
             max_fee_per_gas: op.max_fee_per_gas.unwrap_or_default(),
             max_priority_fee_per_gas: op.max_priority_fee_per_gas.unwrap_or_default(),
             paymaster_and_data: op.paymaster_and_data,

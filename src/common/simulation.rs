@@ -232,6 +232,7 @@ impl Simulator for SimulatorImpl {
                 for &slot in slots {
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
+                        entity,
                         is_wallet_creation,
                         entry_point_address: self.entry_point.address(),
                         entity_address: entity_info.address,
@@ -271,8 +272,8 @@ impl Simulator for SimulatorImpl {
             for &address in &phase.undeployed_contract_accesses {
                 violations.push(Violation::AccessedUndeployedContract(entity, address))
             }
-            if phase.called_handle_ops {
-                violations.push(Violation::CalledHandleOps(entity));
+            if phase.called_banned_entry_point_method {
+                violations.push(Violation::CalledBannedEntryPointMethod(entity));
             }
         }
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
@@ -508,8 +509,8 @@ pub enum Violation {
         "{0} tried to access code at {1} during validation, but that address is not a contract"
     )]
     AccessedUndeployedContract(Entity, Address),
-    #[display("{0} called handleOps on the entry point")]
-    CalledHandleOps(Entity),
+    #[display("{0} called entry point method other than depositTo")]
+    CalledBannedEntryPointMethod(Entity),
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     #[display("aggregator signature validation failed")]
@@ -630,6 +631,7 @@ enum StorageRestriction {
 #[derive(Clone, Copy, Debug)]
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
+    entity: Entity,
     is_wallet_creation: bool,
     entry_point_address: Address,
     entity_address: Address,
@@ -641,6 +643,7 @@ struct GetStorageRestrictionArgs<'a> {
 fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestriction {
     let GetStorageRestrictionArgs {
         slots_by_address,
+        entity,
         is_wallet_creation,
         entry_point_address,
         entity_address,
@@ -651,11 +654,20 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
     if accessed_address == sender_address {
         StorageRestriction::Allowed
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
-        if is_wallet_creation && accessed_address != entry_point_address {
-            // We deviate from the letter of ERC-4337 to allow unstaked access
-            // during wallet creation to the sender's associated storage on
-            // the entry point. Otherwise, the sender can't call depositTo() to
-            // pay for its own gas!
+        if is_wallet_creation
+            && entity != Entity::Account
+            && accessed_address != entry_point_address
+        {
+            // We deviate from the letter of ERC-4337 to allow an unstaked
+            // sender to access its own associated storage during account
+            // creation, based on discussion with the ERC authors.
+            //
+            // We also deviate by allowing unstaked access to the sender's
+            // associated storage on the entry point during account creation.
+            // Without this, several spec tests fail because the `SimpleWallet`
+            // used in the tests deposits in its constructor, which causes the
+            // factory to access the sender's associated storage on the entry
+            // point.
             StorageRestriction::NeedsStake
         } else {
             StorageRestriction::Allowed
