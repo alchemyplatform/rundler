@@ -35,7 +35,7 @@ pub enum EthRpcError {
     /// Validation rejected the operation in entrypoint or during
     /// wallet creation or validation
     #[error("{0}")]
-    EntrypointValidationRejected(String),
+    EntryPointValidationRejected(String),
     /// Paymaster rejected the operation
     #[error("{}", .0.reason)]
     PaymasterValidationRejected(PaymasterValidationRejectedData),
@@ -189,7 +189,7 @@ impl From<EthRpcError> for RpcError {
 
         match error {
             EthRpcError::InvalidParams(_) => rpc_err(INVALID_PARAMS_CODE, msg),
-            EthRpcError::EntrypointValidationRejected(_) => {
+            EthRpcError::EntryPointValidationRejected(_) => {
                 rpc_err(ENTRYPOINT_VALIDATION_REJECTED_CODE, msg)
             }
             EthRpcError::PaymasterValidationRejected(data) => {

@@ -24,8 +24,8 @@ use super::{
 };
 use crate::common::{
     context::LogWithContext,
-    contracts::entry_point::{
-        EntryPoint, EntryPointCalls, EntryPointErrors, UserOperationEventFilter,
+    contracts::i_entry_point::{
+        IEntryPoint, IEntryPointCalls, IEntryPointErrors, UserOperationEventFilter,
         UserOperationRevertReasonFilter,
     },
     eth::log_to_raw_log,
@@ -78,7 +78,7 @@ pub trait EthApi {
 
 #[derive(Debug)]
 struct EntryPointAndSimulator {
-    entry_point: EntryPoint<Provider<Http>>,
+    entry_point: IEntryPoint<Provider<Http>>,
     simulator: SimulatorImpl,
 }
 
@@ -88,7 +88,7 @@ impl EntryPointAndSimulator {
         provider: Arc<Provider<Http>>,
         sim_settings: simulation::Settings,
     ) -> Self {
-        let entry_point = EntryPoint::new(address, Arc::clone(&provider));
+        let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
         let simulator = SimulatorImpl::new(Arc::clone(&provider), address, sim_settings);
         Self {
             entry_point,
@@ -144,12 +144,12 @@ impl EthApi {
         &self,
         tx_data: Bytes,
     ) -> anyhow::Result<Vec<UserOperation>> {
-        let entry_point_calls = EntryPointCalls::decode(tx_data)
+        let entry_point_calls = IEntryPointCalls::decode(tx_data)
             .context("should parse tx data as calls to the entry point")?;
 
         match entry_point_calls {
-            EntryPointCalls::HandleOps(handle_ops_call) => Ok(handle_ops_call.ops),
-            EntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
+            IEntryPointCalls::HandleOps(handle_ops_call) => Ok(handle_ops_call.ops),
+            IEntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
                 Ok(handle_aggregated_ops_call
                     .ops_per_aggregator
                     .into_iter()
@@ -352,8 +352,8 @@ impl EthApiServer for EthApi {
             .await
             .map_err(|err| match err {
                 GasSimulationError::DidNotRevertWithExecutionResult(
-                    EntryPointErrors::FailedOp(op),
-                ) => EthRpcError::EntrypointValidationRejected(op.reason),
+                    IEntryPointErrors::FailedOp(op),
+                ) => EthRpcError::EntryPointValidationRejected(op.reason),
                 GasSimulationError::AccountExecutionReverted(err) => {
                     EthRpcError::ExecutionReverted(err)
                 }
@@ -541,7 +541,7 @@ impl From<SimulationError> for EthRpcError {
                 })
             }
             Violation::UnintendedRevertWithMessage(_, reason, _) => {
-                Self::EntrypointValidationRejected(reason.clone())
+                Self::EntryPointValidationRejected(reason.clone())
             }
             Violation::UsedForbiddenOpcode(entity, op) => {
                 Self::OpcodeViolation(*entity, op.clone().0)

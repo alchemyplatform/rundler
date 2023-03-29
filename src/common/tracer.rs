@@ -10,7 +10,7 @@ use ethers::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use super::{contracts::entry_point::EntryPoint, types::UserOperation};
+use super::{contracts::i_entry_point::IEntryPoint, types::UserOperation};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,7 +93,7 @@ pub struct GasPhase {
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
 /// method for the provided user operation.
 pub async fn trace_simulate_validation(
-    entry_point: &EntryPoint<impl Middleware>,
+    entry_point: &IEntryPoint<impl Middleware>,
     op: UserOperation,
     block_id: BlockId,
 ) -> anyhow::Result<TracerOutput> {
@@ -110,7 +110,7 @@ pub async fn trace_simulate_validation(
 /// Runs the bundler's custom tracer on the entry point's `simulateHandleOp`
 /// method for the provided user operation.
 pub async fn trace_simulate_handle_op(
-    entry_point: &EntryPoint<impl Middleware>,
+    entry_point: &IEntryPoint<impl Middleware>,
     op: UserOperation,
     block_id: BlockId,
 ) -> anyhow::Result<GasTracerOutput> {

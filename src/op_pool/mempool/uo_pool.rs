@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{
     common::{
-        contracts::entry_point::EntryPointEvents,
+        contracts::i_entry_point::IEntryPointEvents,
         protos::op_pool::{Reputation, ReputationStatus},
         types::Entity,
     },
@@ -91,7 +91,7 @@ where
         let mut state = self.state.write();
         tracing::debug!("New block: {:?}", new_block.number);
         for event in &new_block.events {
-            if let EntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
+            if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
                 let op_hash = uo_event.user_op_hash.into();
                 if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
                     for entity in Entity::iter() {
