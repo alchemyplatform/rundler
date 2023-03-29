@@ -1,0 +1,10 @@
+#!/bin/sh
+
+echo 'Running pre-push hook...'
+
+if cog check -l; then
+    exit 0
+fi
+
+echo "Invalid commits were found, force push with '--no-verify'"
+exit 1

@@ -58,3 +58,18 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --all --all-features -- -D warnings
+
+  cog_check_job:
+    runs-on: ubuntu-latest
+    name: check conventional commit compliance
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          # pick the pr HEAD instead of the merge commit
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Conventional commit check
+        uses: cocogitto/cocogitto-action@v3
+        with:
+          check-latest-tag-only: true

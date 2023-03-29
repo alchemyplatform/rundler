@@ -19,9 +19,15 @@ git config core.hooksPath .githooks
 Prerequisites:
 
 * [Rust & Cargo](https://rustup.rs/)
+* [Cocogitto](https://github.com/cocogitto/cocogitto)
+    * `cargo install --locked cocogitto`
 
 ```
 git clone https://github.com/OMGWINNING/rundler
 cd rundler
 cargo test --all
 ```
+
+### Contributing:
+
+* Commit messages must follow [conventional commits sytle](https://www.conventionalcommits.org/en/v1.0.0/).
