@@ -1,16 +1,12 @@
-use std::{error, future::Future, mem, ops::Deref, sync::Arc};
+use std::{error, future::Future, ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, AbiEncode, RawLog},
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
-    providers::{
-        Http, HttpClientError, JsonRpcClient, Middleware, PendingTransaction, Provider,
-        ProviderError,
-    },
+    providers::{Http, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError},
     types::{Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, H256},
 };
-use serde_json::Value;
 
 use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
 
@@ -141,21 +137,22 @@ async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(
         .await
         .err()
         .context("called constructor should revert")?;
-    let revert_data = get_revert_data(error).context("should call constructor")?;
-    Ret::decode_hex(revert_data).context("should decode revert data from called constructor")
+    get_revert_data(error).context("should decode revert data from called constructor")
 }
 
-/// Extracts the revert reason as a hex string if this is a revert error,
-/// otherwise returns the original error.
-pub fn get_revert_data(mut error: ProviderError) -> Result<String, ProviderError> {
+// Gets and decodes the revert data from a provider error, if it is a revert error.
+fn get_revert_data<D: AbiDecode>(mut error: ProviderError) -> Result<D, ProviderError> {
     let ProviderError::JsonRpcClientError(dyn_error) = &mut error else {
         return Err(error);
     };
-    let Some(HttpClientError::JsonRpcError(jsonrpc_error)) = dyn_error.downcast_mut::<HttpClientError>() else {
+    let Some(jsonrpc_error) = dyn_error.as_error_response() else {
         return Err(error)
     };
-    match &mut jsonrpc_error.data {
-        Some(Value::String(s)) => Ok(mem::take(s)),
-        _ => Err(error),
+    if !jsonrpc_error.is_revert() {
+        return Err(error);
+    }
+    match jsonrpc_error.decode_revert_data() {
+        Some(ret) => Ok(ret),
+        None => Err(error),
     }
 }

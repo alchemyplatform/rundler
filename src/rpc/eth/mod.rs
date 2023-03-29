@@ -6,7 +6,7 @@ use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::EthEvent,
     providers::{Http, Middleware, Provider},
-    types::{Address, Bytes, Filter, Log, OpCode, TransactionReceipt, H256, U256, U64},
+    types::{Address, Bytes, Filter, Log, Opcode, TransactionReceipt, H256, U256, U64},
     utils::to_checksum,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
@@ -133,14 +133,10 @@ impl EthApi {
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
         let filter = Filter::new()
             .address::<Vec<Address>>(self.entry_points_and_sims.iter().map(|ep| *ep.0).collect())
+            .event(&UserOperationEventFilter::abi_signature())
             .topic1(hash);
 
-        // we don't do .query().await here because we still need the raw logs for the TX
-        // hash later. But hopefully this is a bit clearer than using .abi_signature()
-        let filter = UserOperationEventFilter::new(filter, &self.provider).filter;
-
         let logs = self.provider.get_logs(&filter).await?;
-
         Ok(logs.into_iter().next())
     }
 
@@ -550,9 +546,9 @@ impl From<SimulationError> for EthRpcError {
             Violation::UsedForbiddenOpcode(entity, op) => {
                 Self::OpcodeViolation(*entity, op.clone().0)
             }
-            Violation::InvalidGasOpcode(entity) => Self::OpcodeViolation(*entity, OpCode::GAS),
+            Violation::InvalidGasOpcode(entity) => Self::OpcodeViolation(*entity, Opcode::GAS),
             Violation::FactoryCalledCreate2Twice => {
-                Self::OpcodeViolation(Entity::Factory, OpCode::CREATE2)
+                Self::OpcodeViolation(Entity::Factory, Opcode::CREATE2)
             }
             Violation::InvalidStorageAccess(entity, address) => {
                 Self::InvalidStorageAccess(*entity, *address)

@@ -1,4 +1,4 @@
-use ethers::types::{Address, OpCode, U256};
+use ethers::types::{Address, Opcode, U256};
 use jsonrpsee::{
     core::Error as RpcError,
     types::{
@@ -41,7 +41,7 @@ pub enum EthRpcError {
     PaymasterValidationRejected(PaymasterValidationRejectedData),
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
-    OpcodeViolation(Entity, OpCode),
+    OpcodeViolation(Entity, Opcode),
     /// Invalid storage access maps to Opcode Violation
     #[error("{0} accesses inaccessible storage at {1:?}")]
     InvalidStorageAccess(Entity, Address),

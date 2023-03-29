@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
 use ethers::{
-    prelude::StreamExt,
+    prelude::{parse_log, StreamExt},
     providers::{Middleware, Provider, Ws},
     types::{Address, H256, U256, U64},
 };
@@ -114,7 +114,7 @@ impl EventListener {
                     .transaction_index
                     .context("log should have transaction index")?;
                 Ok(EntryPointEvent {
-                    contract_event: self.entry_point.events().parse_log(log)?,
+                    contract_event: parse_log(log)?,
                     txn_hash,
                     txn_index,
                 })
