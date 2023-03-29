@@ -1,19 +1,22 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use ethers::{
     prelude::{parse_log, StreamExt},
     providers::{Middleware, Provider, Ws},
-    types::{Address, H256, U256, U64},
+    types::{Address, Filter, H256, U256, U64},
 };
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::common::contracts::i_entry_point::{IEntryPoint, IEntryPointEvents};
+use crate::common::contracts::i_entry_point::IEntryPointEvents;
 
 /// Event when a new block is mined.
+/// Events correspond to a single entry point
 #[derive(Debug)]
 pub struct NewBlockEvent {
+    /// The entry point address
+    pub address: Address,
     /// The block hash
     pub hash: H256,
     /// The block number
@@ -33,28 +36,40 @@ pub struct EntryPointEvent {
 
 pub struct EventListener {
     provider: Arc<Provider<Ws>>,
-    entry_point: IEntryPoint<Provider<Ws>>,
-    new_block_broadcast: broadcast::Sender<Arc<NewBlockEvent>>,
+    log_filter_base: Filter,
+    entrypoint_event_broadcasts: HashMap<Address, broadcast::Sender<Arc<NewBlockEvent>>>,
 }
 
 impl EventListener {
-    pub async fn connect(ws_url: String, entry_point: Address) -> anyhow::Result<Self> {
-        let provider = Arc::new(
-            Provider::<Ws>::connect(ws_url)
-                .await?
-                // TODO: revisit a safe default for production
-                .interval(Duration::from_millis(100)),
-        );
-        let entry_point = IEntryPoint::new(entry_point, provider.clone());
+    pub async fn connect(
+        ws_url: String,
+        entry_points: impl IntoIterator<Item = &Address>,
+    ) -> anyhow::Result<Self> {
+        let provider = Arc::new(Provider::<Ws>::connect(ws_url).await?);
+
+        let mut entry_point_addresses = vec![];
+        let mut entrypoint_event_broadcasts = HashMap::new();
+        for ep in entry_points {
+            entry_point_addresses.push(*ep);
+            entrypoint_event_broadcasts.insert(*ep, broadcast::channel(1000).0);
+        }
+
+        let log_filter_base = Filter::new().address(entry_point_addresses);
+
         Ok(Self {
             provider,
-            entry_point,
-            new_block_broadcast: broadcast::channel(1000).0,
+            log_filter_base,
+            entrypoint_event_broadcasts,
         })
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<NewBlockEvent>> {
-        self.new_block_broadcast.subscribe()
+    pub fn subscribe_by_entrypoint(
+        &self,
+        entry_point: Address,
+    ) -> Option<broadcast::Receiver<Arc<NewBlockEvent>>> {
+        self.entrypoint_event_broadcasts
+            .get(&entry_point)
+            .map(|b| b.subscribe())
     }
 
     pub async fn listen_with_shutdown(
@@ -100,39 +115,52 @@ impl EventListener {
         let block_number = block.number.context("block should have number")?;
         debug!("Received block number/hash {block_number:?}/{block_hash:?}");
 
-        let event_filter = self.entry_point.events().from_block(block_number);
-        let mut logs = self.provider.get_logs(&event_filter.filter).await?;
+        let log_filter = self.log_filter_base.clone().from_block(block_number);
+        let mut logs = self.provider.get_logs(&log_filter).await?;
         logs.sort_by(|a, b| a.log_index.cmp(&b.log_index));
 
-        let events: Vec<EntryPointEvent> = logs
-            .into_iter()
-            .map(|log| {
-                let txn_hash = log
-                    .transaction_hash
-                    .context("log should have transaction hash")?;
-                let txn_index = log
-                    .transaction_index
-                    .context("log should have transaction index")?;
-                Ok(EntryPointEvent {
-                    contract_event: parse_log(log)?,
-                    txn_hash,
-                    txn_index,
-                })
-            })
-            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+        let mut block_events = HashMap::new();
+        let next_base_fee = block
+            .next_block_base_fee()
+            .context("block should calculate next base fee")?;
 
-        let new_block_event = Arc::new(NewBlockEvent {
-            hash: block_hash,
-            number: block_number,
-            next_base_fee: block
-                .next_block_base_fee()
-                .context("block should calculate next base fee")?,
-            events,
-        });
+        for log in logs {
+            let ep_address = log.address;
+            let txn_hash = log
+                .transaction_hash
+                .context("log should have transaction hash")?;
+            let txn_index = log
+                .transaction_index
+                .context("log should have transaction index")?;
 
-        self.new_block_broadcast
-            .send(new_block_event)
-            .context("should broadcast new block event")?;
+            let event = EntryPointEvent {
+                contract_event: parse_log(log)?,
+                txn_hash,
+                txn_index,
+            };
+
+            let block_event = block_events
+                .entry(ep_address)
+                .or_insert_with(|| NewBlockEvent {
+                    address: ep_address,
+                    hash: block_hash,
+                    number: block_number,
+                    next_base_fee,
+                    events: vec![],
+                });
+            block_event.events.push(event);
+        }
+
+        for (ep, block_event) in block_events {
+            match self.entrypoint_event_broadcasts.get(&ep) {
+                Some(broadcast) => {
+                    broadcast.send(Arc::new(block_event))?;
+                }
+                None => {
+                    bail!("No broadcast channel for entry point: {:?}", ep);
+                }
+            }
+        }
 
         Ok(())
     }
