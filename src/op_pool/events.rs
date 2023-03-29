@@ -9,7 +9,7 @@ use ethers::{
 use tokio::sync::broadcast;
 use tracing::{debug, error, info};
 
-use crate::common::contracts::entry_point::{EntryPoint, EntryPointEvents};
+use crate::common::contracts::i_entry_point::{IEntryPoint, IEntryPointEvents};
 
 /// Event when a new block is mined.
 #[derive(Debug)]
@@ -20,20 +20,20 @@ pub struct NewBlockEvent {
     pub number: U64,
     /// The next base fee
     pub next_base_fee: U256,
-    /// Ordered entrypoint events
+    /// Ordered EntryPoint events
     pub events: Vec<EntryPointEvent>,
 }
 
 #[derive(Debug)]
 pub struct EntryPointEvent {
-    pub contract_event: EntryPointEvents,
+    pub contract_event: IEntryPointEvents,
     pub txn_hash: H256,
     pub txn_index: U64,
 }
 
 pub struct EventListener {
     provider: Arc<Provider<Ws>>,
-    entry_point: EntryPoint<Provider<Ws>>,
+    entry_point: IEntryPoint<Provider<Ws>>,
     new_block_broadcast: broadcast::Sender<Arc<NewBlockEvent>>,
 }
 
@@ -45,7 +45,7 @@ impl EventListener {
                 // TODO: revisit a safe default for production
                 .interval(Duration::from_millis(100)),
         );
-        let entry_point = EntryPoint::new(entry_point, provider.clone());
+        let entry_point = IEntryPoint::new(entry_point, provider.clone());
         Ok(Self {
             provider,
             entry_point,

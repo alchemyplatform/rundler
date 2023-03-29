@@ -18,8 +18,8 @@ use tonic::async_trait;
 
 use crate::common::{
     contracts::{
-        entry_point::{EntryPoint, EntryPointErrors, FailedOp},
         i_aggregator::IAggregator,
+        i_entry_point::{FailedOp, IEntryPoint, IEntryPointErrors},
     },
     eth, tracer,
     tracer::{
@@ -86,7 +86,7 @@ pub trait Simulator {
 #[derive(Debug)]
 pub struct SimulatorImpl {
     provider: Arc<Provider<Http>>,
-    entry_point: EntryPoint<Provider<Http>>,
+    entry_point: IEntryPoint<Provider<Http>>,
     sim_settings: Settings,
 }
 
@@ -96,7 +96,7 @@ impl SimulatorImpl {
         entry_point_address: Address,
         sim_settings: Settings,
     ) -> Self {
-        let entry_point = EntryPoint::new(entry_point_address, provider.clone());
+        let entry_point = IEntryPoint::new(entry_point_address, provider.clone());
         Self {
             provider,
             entry_point,
@@ -376,14 +376,14 @@ impl Simulator for SimulatorImpl {
             return Err(GasSimulationError::DidNotRevert);
         };
 
-        let ep_error = EntryPointErrors::decode_hex(revert_data)
+        let ep_error = IEntryPointErrors::decode_hex(revert_data)
             .map_err(|e| GasSimulationError::Other(e.into()))?;
 
         // we don't use the verification gas returned here because it adds the preVerificationGas passed in from the UserOperation
         // that value *should* be 0 but might not be, so we won't use it here and just use the gas from tracing
         // we just want to make sure we completed successfully
         match ep_error {
-            EntryPointErrors::ExecutionResult(_) => (),
+            IEntryPointErrors::ExecutionResult(_) => (),
             _ => {
                 return Err(GasSimulationError::DidNotRevertWithExecutionResult(
                     ep_error,
@@ -425,7 +425,7 @@ pub enum GasSimulationError {
     #[error("handle op simulation did not revert")]
     DidNotRevert,
     #[error("handle op simulation should have reverted with exection result: {0}")]
-    DidNotRevertWithExecutionResult(EntryPointErrors),
+    DidNotRevertWithExecutionResult(IEntryPointErrors),
     #[error("account execution reverted: {0}")]
     AccountExecutionReverted(String),
     #[error("handle op simulation should have had 5 phases, but had {0}")]
