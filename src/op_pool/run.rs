@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use tokio::{
     sync::{broadcast, mpsc},
     try_join,
@@ -39,7 +39,7 @@ pub async fn run(
     tracing::info!("Websocket url: {}", args.ws_url);
 
     // Events listener
-    let event_listener = match EventListener::connect(args.ws_url, entry_point).await {
+    let event_listener = match EventListener::connect(args.ws_url, vec![&entry_point]).await {
         Ok(listener) => listener,
         Err(e) => {
             tracing::error!("Failed to connect to events listener: {:?}", e);
@@ -60,7 +60,9 @@ pub async fn run(
     let mp = Arc::new(UoPool::new(args.pool_config, Arc::clone(&reputation)));
     // Start mempool
     let mempool_shutdown = shutdown_rx.resubscribe();
-    let mempool_events = event_listener.subscribe();
+    let mempool_events = event_listener
+        .subscribe_by_entrypoint(entry_point)
+        .context("event listener should have entrypoint subscriber")?;
     let mp_runner = Arc::clone(&mp);
     tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
 
