@@ -1,4 +1,4 @@
-mod events;
+mod event;
 mod mempool;
 mod reputation;
 mod run;

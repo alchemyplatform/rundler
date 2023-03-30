@@ -1,7 +1,7 @@
 use anyhow::Context;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use tonic::{async_trait, transport::Channel};
-use tonic_health::proto::{health_client::HealthClient, HealthCheckRequest};
+use tonic_health::pb::{health_client::HealthClient, HealthCheckRequest};
 
 #[rpc(server, namespace = "system")]
 pub trait SystemApi {

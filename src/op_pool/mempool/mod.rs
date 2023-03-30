@@ -9,7 +9,7 @@ use ethers::types::{Address, H256, U256};
 use strum::IntoEnumIterator;
 
 use self::error::MempoolResult;
-use super::events::NewBlockEvent;
+use super::event::NewBlockEvent;
 use crate::common::{
     protos::op_pool::Reputation,
     types::{Entity, UserOperation, ValidTimeRange},

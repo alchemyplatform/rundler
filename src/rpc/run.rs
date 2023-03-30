@@ -11,7 +11,7 @@ use jsonrpsee::{
 };
 use tokio::sync::{broadcast, mpsc};
 use tonic::transport::{Channel, Uri};
-use tonic_health::proto::health_client::HealthClient;
+use tonic_health::pb::health_client::HealthClient;
 
 use super::ApiNamespace;
 use crate::{
