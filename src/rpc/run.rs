@@ -18,6 +18,7 @@ use crate::{
     rpc::{
         debug::{DebugApi, DebugApiServer},
         eth::{EthApi, EthApiServer},
+        metrics::RpcMetricsLogger,
     },
 };
 
@@ -85,7 +86,11 @@ pub async fn run(
         }
     }
 
-    let server = ServerBuilder::default().http_only().build(addr).await?;
+    let server = ServerBuilder::default()
+        .set_logger(RpcMetricsLogger)
+        .http_only()
+        .build(addr)
+        .await?;
     let handle = server.start(module)?;
 
     tokio::select! {

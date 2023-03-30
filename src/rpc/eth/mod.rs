@@ -244,8 +244,6 @@ impl EthApiServer for EthApi {
         op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<H256> {
-        debug!("send_user_operation: {:?}", op);
-
         if !self.entry_points_and_sims.contains_key(&entry_point) {
             return Err(EthRpcError::InvalidParams(
                 "supplied entry_point addr is not a known entry point".to_string(),

@@ -1,5 +1,6 @@
 mod debug;
 mod eth;
+mod metrics;
 mod run;
 
 use anyhow::bail;

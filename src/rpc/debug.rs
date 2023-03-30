@@ -68,8 +68,6 @@ impl DebugApiServer for DebugApi {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
             .op_pool_client
-            // https://docs.rs/tonic/latest/tonic/client/index.html#concurrent-usage
-            // solution to using in concurrent context is to clone
             .clone()
             .debug_clear_state(DebugClearStateRequest {})
             .await
@@ -150,12 +148,12 @@ impl DebugApiServer for DebugApi {
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
 
-        Ok(result
+        result
             .into_inner()
             .reputations
             .into_iter()
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, anyhow::Error>>()
-            .map_err(|e| RpcError::Custom(e.to_string()))?)
+            .map_err(|e| RpcError::Custom(e.to_string()))
     }
 }
