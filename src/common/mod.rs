@@ -3,6 +3,7 @@ pub mod contracts;
 pub mod dev;
 pub mod eth;
 pub mod grpc;
+pub mod handle;
 pub mod protos;
 pub mod server;
 pub mod simulation;

@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
-    Mempool, NewBlockEvent, OperationOrigin, PoolConfig, PoolOperation,
+    Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
     common::{
@@ -19,7 +19,7 @@ use crate::{
         protos::op_pool::{Reputation, ReputationStatus},
         types::Entity,
     },
-    op_pool::reputation::ReputationManager,
+    op_pool::{event::NewBlockEvent, reputation::ReputationManager},
 };
 
 /// The number of blocks that a throttled operation is allowed to be in the mempool
@@ -215,7 +215,7 @@ mod tests {
     };
 
     #[test]
-    fn test_add_single_op() {
+    fn add_single_op() {
         let pool = create_pool();
         let op = create_op(Address::random(), 0, 0);
         let hash = pool
@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_add_multiple_ops() {
+    fn add_multiple_ops() {
         let pool = create_pool();
         let ops = vec![
             create_op(Address::random(), 0, 3),
@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn test_clear() {
+    fn clear() {
         let pool = create_pool();
         let ops = vec![
             create_op(Address::random(), 0, 3),

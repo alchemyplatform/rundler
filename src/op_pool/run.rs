@@ -7,14 +7,18 @@ use tokio::{
 };
 use tonic::transport::Server;
 
-use super::mempool::{Mempool, PoolConfig};
+use super::{
+    event::EventProvider,
+    mempool::{Mempool, PoolConfig},
+};
 use crate::{
     common::{
         grpc::metrics::GrpcMetricsLayer,
+        handle::flatten_handle,
         protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
     },
     op_pool::{
-        events::EventListener,
+        event::{EventListener, WsBlockProviderFactory},
         mempool::uo_pool::UoPool,
         reputation::{HourlyMovingAverageReputation, ReputationParams},
         server::OpPoolImpl,
@@ -42,14 +46,8 @@ pub async fn run(
     tracing::info!("Websocket url: {}", args.ws_url);
 
     // Events listener
-    let event_listener = match EventListener::connect(args.ws_url, entry_points).await {
-        Ok(listener) => listener,
-        Err(e) => {
-            tracing::error!("Failed to connect to events listener: {:?}", e);
-            bail!("Failed to connect to events listener: {e:?}")
-        }
-    };
-    tracing::info!("Connected to events listener");
+    let connection_factory = WsBlockProviderFactory::new(args.ws_url.clone(), 10);
+    let event_listener = EventListener::new(connection_factory, entry_points);
 
     // create mempools
     let mut mempools = Vec::new();
@@ -99,9 +97,13 @@ pub async fn run(
                     .expect("should have received shutdown signal")
             })
             .await
+            .map_err(|err| anyhow::anyhow!("Server error: {err:?}"))
     });
 
-    match try_join!(server_handle, events_listener_handle) {
+    match try_join!(
+        flatten_handle(server_handle),
+        flatten_handle(events_listener_handle)
+    ) {
         Ok(_) => {
             tracing::info!("Server shutdown");
             Ok(())
@@ -113,11 +115,14 @@ pub async fn run(
     }
 }
 
-async fn create_mempool(
+async fn create_mempool<P>(
     pool_config: PoolConfig,
-    event_listener: &EventListener,
+    event_provider: &P,
     shutdown_rx: &broadcast::Receiver<()>,
-) -> anyhow::Result<Arc<UoPool<HourlyMovingAverageReputation>>> {
+) -> anyhow::Result<Arc<UoPool<HourlyMovingAverageReputation>>>
+where
+    P: EventProvider,
+{
     let entry_point = pool_config.entry_point;
     // Reputation manager
     let reputation = Arc::new(HourlyMovingAverageReputation::new(
@@ -131,7 +136,7 @@ async fn create_mempool(
     let mp = Arc::new(UoPool::new(pool_config, Arc::clone(&reputation)));
     // Start mempool
     let mempool_shutdown = shutdown_rx.resubscribe();
-    let mempool_events = event_listener
+    let mempool_events = event_provider
         .subscribe_by_entrypoint(entry_point)
         .context("event listener should have entrypoint subscriber")?;
     let mp_runner = Arc::clone(&mp);

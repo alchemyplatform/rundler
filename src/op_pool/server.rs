@@ -249,7 +249,7 @@ mod tests {
     use crate::{
         common::protos::op_pool::{self, Reputation},
         op_pool::{
-            events::NewBlockEvent,
+            event::NewBlockEvent,
             mempool::{error::MempoolResult, PoolOperation},
         },
     };
