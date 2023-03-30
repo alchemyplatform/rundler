@@ -86,13 +86,14 @@ enum Command {
 pub struct CommonArgs {
     /// Entry point address to target
     #[arg(
-        long = "entry_point",
-        name = "entry_point",
-        env = "ENTRY_POINT",
-        default_value = "0x0", // required or will error
+        long = "entry_points",
+        name = "entry_points",
+        env = "ENTRY_POINTS",
+        default_values_t = Vec::<String>::new(), // required or will error
+        value_delimiter = ',',
         global = true
     )]
-    entry_point: String,
+    entry_points: Vec<String>,
 
     /// Chain ID to target
     #[arg(

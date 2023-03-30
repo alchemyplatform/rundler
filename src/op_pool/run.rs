@@ -7,7 +7,7 @@ use tokio::{
 };
 use tonic::transport::Server;
 
-use super::mempool::PoolConfig;
+use super::mempool::{Mempool, PoolConfig};
 use crate::{
     common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
     op_pool::{
@@ -22,7 +22,8 @@ pub struct Args {
     pub port: u16,
     pub host: String,
     pub ws_url: String,
-    pub pool_config: PoolConfig,
+    pub chain_id: u64,
+    pub pool_configs: Vec<PoolConfig>,
 }
 
 pub async fn run(
@@ -31,15 +32,14 @@ pub async fn run(
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
     let addr = format!("{}:{}", args.host, args.port).parse()?;
-    let entry_point = args.pool_config.entry_point;
-    let chain_id = args.pool_config.chain_id;
+    let chain_id = args.chain_id;
+    let entry_points = args.pool_configs.iter().map(|pc| &pc.entry_point);
     tracing::info!("Starting server on {}", addr);
-    tracing::info!("Entry point: {}", entry_point);
     tracing::info!("Chain id: {}", chain_id);
     tracing::info!("Websocket url: {}", args.ws_url);
 
     // Events listener
-    let event_listener = match EventListener::connect(args.ws_url, vec![&entry_point]).await {
+    let event_listener = match EventListener::connect(args.ws_url, entry_points).await {
         Ok(listener) => listener,
         Err(e) => {
             tracing::error!("Failed to connect to events listener: {:?}", e);
@@ -48,23 +48,19 @@ pub async fn run(
     };
     tracing::info!("Connected to events listener");
 
-    // Reputation manager
-    let reputation = Arc::new(HourlyMovingAverageReputation::new(
-        ReputationParams::bundler_default(),
-    ));
-    // Start reputation manager
-    let reputation_runner = Arc::clone(&reputation);
-    tokio::spawn(async move { reputation_runner.run().await });
-
-    // Mempool
-    let mp = Arc::new(UoPool::new(args.pool_config, Arc::clone(&reputation)));
-    // Start mempool
-    let mempool_shutdown = shutdown_rx.resubscribe();
-    let mempool_events = event_listener
-        .subscribe_by_entrypoint(entry_point)
-        .context("event listener should have entrypoint subscriber")?;
-    let mp_runner = Arc::clone(&mp);
-    tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
+    // create mempools
+    let mut mempools = Vec::new();
+    for pool_config in args.pool_configs {
+        mempools.push(
+            create_mempool(pool_config, &event_listener, &shutdown_rx)
+                .await
+                .context("should have created mempool")?,
+        );
+    }
+    let mempool_map = mempools
+        .into_iter()
+        .map(|mp| (mp.entry_point(), mp))
+        .collect();
 
     // Start events listener
     let event_listener_shutdown = shutdown_rx.resubscribe();
@@ -75,7 +71,7 @@ pub async fn run(
     });
 
     // gRPC server
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mp));
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_map));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
@@ -103,4 +99,31 @@ pub async fn run(
             bail!("Server error: {e:?}")
         }
     }
+}
+
+async fn create_mempool(
+    pool_config: PoolConfig,
+    event_listener: &EventListener,
+    shutdown_rx: &broadcast::Receiver<()>,
+) -> anyhow::Result<Arc<UoPool<HourlyMovingAverageReputation>>> {
+    let entry_point = pool_config.entry_point;
+    // Reputation manager
+    let reputation = Arc::new(HourlyMovingAverageReputation::new(
+        ReputationParams::bundler_default(),
+    ));
+    // Start reputation manager
+    let reputation_runner = Arc::clone(&reputation);
+    tokio::spawn(async move { reputation_runner.run().await });
+
+    // Mempool
+    let mp = Arc::new(UoPool::new(pool_config, Arc::clone(&reputation)));
+    // Start mempool
+    let mempool_shutdown = shutdown_rx.resubscribe();
+    let mempool_events = event_listener
+        .subscribe_by_entrypoint(entry_point)
+        .context("event listener should have entrypoint subscriber")?;
+    let mp_runner = Arc::clone(&mp);
+    tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
+
+    Ok(mp)
 }

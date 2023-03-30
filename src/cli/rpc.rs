@@ -64,10 +64,12 @@ impl RpcArgs {
             host: self.host.clone(),
             pool_url,
             builder_url,
-            entry_point: common
-                .entry_point
-                .parse()
-                .context("Invalid entry_point argument")?,
+            entry_points: common
+                .entry_points
+                .iter()
+                .map(|ep| ep.parse())
+                .collect::<Result<Vec<_>, _>>()
+                .context("Invalid entry_points argument")?,
             rpc_url: common
                 .node_http
                 .clone()
