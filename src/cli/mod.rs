@@ -135,11 +135,23 @@ pub struct CommonArgs {
         global = true
     )]
     min_unstake_delay: u32,
+
+    #[arg(
+        long = "max_simulate_handle_ops_gas",
+        name = "max_simulate_handle_ops_gas",
+        default_value = "550000000",
+        global = true
+    )]
+    max_simulate_handle_ops_gas: u64,
 }
 
 impl From<&CommonArgs> for simulation::Settings {
     fn from(value: &CommonArgs) -> Self {
-        Self::new(value.min_unstake_delay, value.min_stake_value)
+        Self::new(
+            value.min_unstake_delay,
+            value.min_stake_value,
+            value.max_simulate_handle_ops_gas,
+        )
     }
 }
 
