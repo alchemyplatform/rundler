@@ -34,6 +34,7 @@ strum = { version = "0.24.1", features = ["derive"] }
 tower-http = { version = "0.4.0", features = ["trace"] }
 tower = "0.4.13"
 pin-project = "1.0.12"
+tonic-health = "0.8.0"
 
 [build-dependencies]
 ethers = "2.0.2"

@@ -78,12 +78,20 @@ pub async fn run(
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
+
+    // health service
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<OpPoolServer<OpPoolImpl<UoPool<HourlyMovingAverageReputation>>>>()
+        .await;
+
     let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
     let server_handle = tokio::spawn(async move {
         Server::builder()
             .layer(metrics_layer)
             .add_service(op_pool_server)
             .add_service(reflection_service)
+            .add_service(health_service)
             .serve_with_shutdown(addr, async move {
                 shutdown_rx
                     .recv()
