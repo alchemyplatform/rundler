@@ -1,5 +1,6 @@
 mod debug;
 mod eth;
+mod health;
 mod metrics;
 mod run;
 

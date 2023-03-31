@@ -31,9 +31,16 @@ pub async fn run(
         .build()
         .unwrap();
 
+    // health service
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<BuilderServer<BuilderImpl>>()
+        .await;
+
     let server_handle = Server::builder()
         .add_service(builder_server)
         .add_service(reflection_service)
+        .add_service(health_service)
         .serve_with_shutdown(addr, async move {
             shutdown_rx
                 .recv()
