@@ -1,6 +1,9 @@
 /target
 /.github
+/.githooks
 /.vscode
+/test
 *.iml
 *.rs.bk
 .idea
+Dockerfile
