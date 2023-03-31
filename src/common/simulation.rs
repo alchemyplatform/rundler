@@ -370,7 +370,13 @@ impl Simulator for SimulatorImpl {
         .await?;
 
         let block_id = block_hash.into();
-        let tracer_out = tracer::trace_simulate_handle_op(&self.entry_point, op, block_id).await?;
+        let tracer_out = tracer::trace_simulate_handle_op(
+            &self.entry_point,
+            op,
+            block_id,
+            self.sim_settings.max_simulate_handle_ops_gas,
+        )
+        .await?;
 
         let Some(ref revert_data) = tracer_out.revert_data else {
             return Err(GasSimulationError::DidNotRevert);
@@ -667,13 +673,19 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
 pub struct Settings {
     pub min_unstake_delay: u32,
     pub min_stake_value: u64,
+    pub max_simulate_handle_ops_gas: u64,
 }
 
 impl Settings {
-    pub fn new(min_unstake_delay: u32, min_stake_value: u64) -> Self {
+    pub fn new(
+        min_unstake_delay: u32,
+        min_stake_value: u64,
+        max_simulate_handle_ops_gas: u64,
+    ) -> Self {
         Self {
             min_unstake_delay,
             min_stake_value,
+            max_simulate_handle_ops_gas,
         }
     }
 }
@@ -685,6 +697,8 @@ impl Default for Settings {
             min_unstake_delay: 84600,
             // 10^18 wei = 1 eth
             min_stake_value: 1_000_000_000_000_000_000,
+            // 550 million gas: currently the defaults for Alchemy eth_call
+            max_simulate_handle_ops_gas: 550_000_000,
         }
     }
 }
