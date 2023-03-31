@@ -7,10 +7,7 @@ use ethers::{
 use prost::Message;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
 
-use super::{
-    mempool::{error::MempoolError, Mempool, OperationOrigin},
-    metrics::OpPoolMetrics,
-};
+use super::mempool::{error::MempoolError, Mempool, OperationOrigin};
 use crate::common::protos::{
     op_pool::{
         op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
@@ -26,7 +23,6 @@ use crate::common::protos::{
 pub struct OpPoolImpl<M: Mempool> {
     chain_id: u64,
     mempools: HashMap<Address, Arc<M>>,
-    metrics: OpPoolMetrics,
 }
 
 impl<M> OpPoolImpl<M>
@@ -34,11 +30,7 @@ where
     M: Mempool,
 {
     pub fn new(chain_id: u64, mempools: HashMap<Address, Arc<M>>) -> Self {
-        Self {
-            chain_id,
-            metrics: OpPoolMetrics::default(),
-            mempools,
-        }
+        Self { chain_id, mempools }
     }
 
     fn get_mempool_for_entry_point(&self, req_entry_point: &[u8]) -> Result<&Arc<M>> {
@@ -64,8 +56,6 @@ where
         &self,
         _request: Request<GetSupportedEntryPointsRequest>,
     ) -> Result<Response<GetSupportedEntryPointsResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let entry_points = self
             .mempools
             .keys()
@@ -78,8 +68,6 @@ where
     }
 
     async fn add_op(&self, request: Request<AddOpRequest>) -> Result<Response<AddOpResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
@@ -99,8 +87,6 @@ where
     }
 
     async fn get_ops(&self, request: Request<GetOpsRequest>) -> Result<Response<GetOpsResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
@@ -118,8 +104,6 @@ where
         &self,
         request: Request<RemoveOpsRequest>,
     ) -> Result<Response<RemoveOpsResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
@@ -143,7 +127,6 @@ where
         &self,
         _request: Request<DebugClearStateRequest>,
     ) -> Result<Response<DebugClearStateResponse>> {
-        self.metrics.request_counter.increment(1);
         self.mempools.values().for_each(|mempool| mempool.clear());
         Ok(Response::new(DebugClearStateResponse {}))
     }
@@ -152,8 +135,6 @@ where
         &self,
         request: Request<DebugDumpMempoolRequest>,
     ) -> Result<Response<DebugDumpMempoolResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
@@ -171,8 +152,6 @@ where
         &self,
         request: Request<DebugSetReputationRequest>,
     ) -> Result<Response<DebugSetReputationResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
@@ -199,8 +178,6 @@ where
         &self,
         request: Request<DebugDumpReputationRequest>,
     ) -> Result<Response<DebugDumpReputationResponse>> {
-        self.metrics.request_counter.increment(1);
-
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 

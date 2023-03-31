@@ -9,7 +9,10 @@ use tonic::transport::Server;
 
 use super::mempool::{Mempool, PoolConfig};
 use crate::{
-    common::protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
+    common::{
+        grpc::metrics::GrpcMetricsLayer,
+        protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
+    },
     op_pool::{
         events::EventListener,
         mempool::uo_pool::UoPool,
@@ -75,9 +78,10 @@ pub async fn run(
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
-
+    let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
     let server_handle = tokio::spawn(async move {
         Server::builder()
+            .layer(metrics_layer)
             .add_service(op_pool_server)
             .add_service(reflection_service)
             .serve_with_shutdown(addr, async move {
