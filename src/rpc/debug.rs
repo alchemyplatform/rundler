@@ -30,7 +30,7 @@ pub trait DebugApi {
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>>;
 
     #[method(name = "bundler_sendBundleNow")]
-    async fn bundler_send_bundle_now(&self, entry_point: Address) -> RpcResult<H256>;
+    async fn bundler_send_bundle_now(&self) -> RpcResult<H256>;
 
     #[method(name = "bundler_setBundlingMode")]
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String>;
@@ -100,13 +100,11 @@ impl DebugApiServer for DebugApi {
         Ok(ops.into_iter().map(|uo| uo.into()).collect())
     }
 
-    async fn bundler_send_bundle_now(&self, entry_point: Address) -> RpcResult<H256> {
+    async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
         let response = self
             .builder_client
             .clone()
-            .debug_send_bundle_now(DebugSendBundleNowRequest {
-                entry_point: entry_point.to_fixed_bytes().into(),
-            })
+            .debug_send_bundle_now(DebugSendBundleNowRequest {})
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
 

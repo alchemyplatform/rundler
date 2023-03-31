@@ -12,9 +12,7 @@ service Builder {
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
 }
 
-message DebugSendBundleNowRequest {
-    bytes entry_point = 1;
-}
+message DebugSendBundleNowRequest {}
 
 message DebugSendBundleNowResponse {
     bytes transaction_hash = 1;
