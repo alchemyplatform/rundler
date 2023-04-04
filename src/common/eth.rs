@@ -4,7 +4,7 @@ use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, AbiEncode, RawLog},
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
-    providers::{Http, JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError},
+    providers::{JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError},
     types::{Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, H256},
 };
 
@@ -74,7 +74,9 @@ pub fn log_to_raw_log(log: Log) -> RawLog {
     }
 }
 
-pub async fn get_chain_id(provider: &Provider<Http>) -> anyhow::Result<u32> {
+pub async fn get_chain_id<Client: JsonRpcClient>(
+    provider: &Provider<Client>,
+) -> anyhow::Result<u32> {
     Ok(provider
         .get_chainid()
         .await
@@ -85,14 +87,17 @@ pub async fn get_chain_id(provider: &Provider<Http>) -> anyhow::Result<u32> {
 /// Converts a block id, which may be something like "latest" which can refer to
 /// different blocks over time, into one which references a fixed block by its
 /// hash.
-pub async fn get_static_block_id(
-    provider: &Provider<Http>,
+pub async fn get_static_block_id<Client: JsonRpcClient>(
+    provider: &Provider<Client>,
     block_id: BlockId,
 ) -> anyhow::Result<BlockId> {
     Ok(get_block_hash(provider, block_id).await?.into())
 }
 
-pub async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> anyhow::Result<H256> {
+pub async fn get_block_hash<Client: JsonRpcClient>(
+    provider: &Provider<Client>,
+    block_id: BlockId,
+) -> anyhow::Result<H256> {
     if let BlockId::Hash(hash) = block_id {
         return Ok(hash);
     }
@@ -107,8 +112,8 @@ pub async fn get_block_hash(provider: &Provider<Http>, block_id: BlockId) -> any
 
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
-pub async fn get_code_hash(
-    provider: &Provider<Http>,
+pub async fn get_code_hash<Client: JsonRpcClient>(
+    provider: &Provider<Client>,
     mut addresses: Vec<Address>,
     block_id: Option<BlockId>,
 ) -> Result<H256, anyhow::Error> {
@@ -120,8 +125,8 @@ pub async fn get_code_hash(
     Ok(H256(out.hash))
 }
 
-async fn call_constructor<Args: AbiEncode, Ret: AbiDecode>(
-    provider: &Provider<Http>,
+async fn call_constructor<Args: AbiEncode, Ret: AbiDecode, Client: JsonRpcClient>(
+    provider: &Provider<Client>,
     bytecode: &Bytes,
     args: Args,
     block_id: Option<BlockId>,

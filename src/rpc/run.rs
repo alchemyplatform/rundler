@@ -2,8 +2,8 @@ use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
-    providers::{Http, Provider, ProviderExt},
-    types::{Address, Chain},
+    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClientBuilder},
+    types::Address,
 };
 use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
@@ -12,6 +12,7 @@ use jsonrpsee::{
 use tokio::sync::{broadcast, mpsc};
 use tonic::transport::{Channel, Uri};
 use tonic_health::pb::health_client::HealthClient;
+use url::Url;
 
 use super::ApiNamespace;
 use crate::{
@@ -49,18 +50,20 @@ pub async fn run(
     tracing::info!("Starting server on {}", addr);
 
     let mut module = RpcModule::new(());
-    let chain: Chain = args
-        .chain_id
-        .try_into()
-        .with_context(|| format!("{} is not a supported chain", args.chain_id))?;
 
-    let provider: Arc<Provider<Http>> = Arc::new(
-        Provider::<Http>::try_from(args.rpc_url)
-            .context("Invalid RPC URL")?
-            // TODO: revisit a safe default for production
-            .interval(Duration::from_millis(100))
-            .for_chain(chain),
-    );
+    let parsed_url = Url::parse(&args.rpc_url).context("Invalid RPC URL")?;
+    let http = Http::new(parsed_url);
+
+    // right now this retry policy will retry only on 429ish errors OR connectivity errors
+    let client = RetryClientBuilder::default()
+        // these retries are if the server returns a 429
+        .rate_limit_retries(10)
+        // these rerties are if the connection is dubious
+        .timeout_retries(3)
+        .initial_backoff(Duration::from_millis(500))
+        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
+
+    let provider = Arc::new(Provider::new(client));
 
     let op_pool_uri = Uri::from_str(&args.pool_url).context("should be a valid URI for op_pool")?;
     let op_pool_client = op_pool_client::OpPoolClient::connect(args.pool_url)
