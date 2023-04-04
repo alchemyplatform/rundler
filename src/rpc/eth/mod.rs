@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context};
 use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::EthEvent,
-    providers::{Http, Middleware, Provider},
+    providers::{JsonRpcClient, Middleware, Provider},
     types::{Address, Bytes, Filter, Log, Opcode, TransactionReceipt, H256, U256, U64},
     utils::to_checksum,
 };
@@ -77,15 +77,18 @@ pub trait EthApi {
 }
 
 #[derive(Debug)]
-struct EntryPointAndSimulator {
-    entry_point: IEntryPoint<Provider<Http>>,
-    simulator: SimulatorImpl,
+struct EntryPointAndSimulator<Client: JsonRpcClient> {
+    entry_point: IEntryPoint<Provider<Client>>,
+    simulator: SimulatorImpl<Client>,
 }
 
-impl EntryPointAndSimulator {
+impl<Client> EntryPointAndSimulator<Client>
+where
+    Client: JsonRpcClient + 'static,
+{
     pub fn new(
         address: Address,
-        provider: Arc<Provider<Http>>,
+        provider: Arc<Provider<Client>>,
         sim_settings: simulation::Settings,
     ) -> Self {
         let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
@@ -97,16 +100,19 @@ impl EntryPointAndSimulator {
     }
 }
 
-pub struct EthApi {
-    entry_points_and_sims: HashMap<Address, EntryPointAndSimulator>,
-    provider: Arc<Provider<Http>>,
+pub struct EthApi<Client: JsonRpcClient> {
+    entry_points_and_sims: HashMap<Address, EntryPointAndSimulator<Client>>,
+    provider: Arc<Provider<Client>>,
     chain_id: u64,
     op_pool_client: OpPoolClient<Channel>,
 }
 
-impl EthApi {
+impl<Client> EthApi<Client>
+where
+    Client: JsonRpcClient + 'static,
+{
     pub fn new(
-        provider: Arc<Provider<Http>>,
+        provider: Arc<Provider<Client>>,
         entry_points: Vec<Address>,
         chain_id: u64,
         op_pool_client: OpPoolClient<Channel>,
@@ -238,7 +244,10 @@ impl EthApi {
 
 const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
 #[async_trait]
-impl EthApiServer for EthApi {
+impl<Client> EthApiServer for EthApi<Client>
+where
+    Client: JsonRpcClient + 'static,
+{
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
@@ -473,8 +482,9 @@ impl EthApiServer for EthApi {
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. filter receipt logs to match just those belonging to the user op
-        let filtered_logs = EthApi::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
-            .context("should have found receipt logs matching user op")?;
+        let filtered_logs =
+            EthApi::<Client>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
+                .context("should have found receipt logs matching user op")?;
 
         // 4. decode log and find failure reason if not success
         let log = self
@@ -484,7 +494,7 @@ impl EthApiServer for EthApi {
         let reason: Option<String> = if log.success {
             None
         } else {
-            EthApi::get_user_operation_failure_reason(&tx_receipt.logs, hash)
+            EthApi::<Client>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
                 .context("should have found revert reason if tx wasn't successful")?
         };
 
@@ -644,6 +654,7 @@ impl From<Status> for EthRpcError {
 #[cfg(test)]
 mod tests {
     use ethers::{
+        providers::Http,
         types::{Log, TransactionReceipt},
         utils::{hex::ToHex, keccak256},
     };
@@ -700,7 +711,7 @@ mod tests {
             given_log(UO_OP_TOPIC, "another-hash"),
         ]);
 
-        let result = EthApi::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -719,7 +730,7 @@ mod tests {
             given_log(UO_OP_TOPIC, "another-hash"),
         ]);
 
-        let result = EthApi::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -738,7 +749,7 @@ mod tests {
             reference_log.clone(),
         ]);
 
-        let result = EthApi::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -761,7 +772,7 @@ mod tests {
             reference_log.clone(),
         ]);
 
-        let result = EthApi::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -783,7 +794,7 @@ mod tests {
             given_log(UO_OP_TOPIC, "other-hash"),
         ]);
 
-        let result = EthApi::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -801,7 +812,7 @@ mod tests {
             given_log("another-topic-2", "some-hash"),
         ]);
 
-        let result = EthApi::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
 
         assert!(result.is_err(), "{:?}", result.unwrap());
     }

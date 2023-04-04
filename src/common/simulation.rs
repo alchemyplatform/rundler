@@ -10,7 +10,7 @@ use ethers::{
     abi::AbiDecode,
     contract::ContractError,
     prelude::ProviderError,
-    providers::{Http, Provider},
+    providers::{JsonRpcClient, Provider},
     types::{Address, BlockId, BlockNumber, Bytes, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
@@ -84,15 +84,18 @@ pub trait Simulator {
 }
 
 #[derive(Debug)]
-pub struct SimulatorImpl {
-    provider: Arc<Provider<Http>>,
-    entry_point: IEntryPoint<Provider<Http>>,
+pub struct SimulatorImpl<T: JsonRpcClient> {
+    provider: Arc<Provider<T>>,
+    entry_point: IEntryPoint<Provider<T>>,
     sim_settings: Settings,
 }
 
-impl SimulatorImpl {
+impl<T> SimulatorImpl<T>
+where
+    T: JsonRpcClient + 'static,
+{
     pub fn new(
-        provider: Arc<Provider<Http>>,
+        provider: Arc<Provider<T>>,
         entry_point_address: Address,
         sim_settings: Settings,
     ) -> Self {
@@ -182,7 +185,10 @@ impl SimulatorImpl {
 }
 
 #[async_trait]
-impl Simulator for SimulatorImpl {
+impl<T> Simulator for SimulatorImpl<T>
+where
+    T: JsonRpcClient + 'static,
+{
     async fn simulate_validation(
         &self,
         op: UserOperation,
