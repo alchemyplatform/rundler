@@ -85,8 +85,8 @@ pub async fn run(
             .context("should have connected to builder health service channel")?,
     );
 
-    if args.entry_points.len() != 1 {
-        bail!("Only one entry point is supported at the moment");
+    if args.entry_points.is_empty() {
+        bail!("No entry points provided");
     }
 
     for api in args.api_namespaces {
