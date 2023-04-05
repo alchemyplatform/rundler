@@ -1,5 +1,6 @@
 mod timestamp;
 mod validation_results;
+mod violations;
 
 use std::str::FromStr;
 
@@ -14,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 pub use timestamp::*;
 pub use validation_results::*;
+pub use violations::*;
 
 pub use crate::common::contracts::shared_types::UserOperation;
 

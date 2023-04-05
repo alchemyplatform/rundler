@@ -51,7 +51,13 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     let rpc_handle = tokio::spawn(rpc::run(
-        rpc_args.to_args(&common_args, pool_url, builder_url, (&common_args).into())?,
+        rpc_args.to_args(
+            &common_args,
+            pool_url,
+            builder_url,
+            (&common_args).into(),
+            (&common_args).into(),
+        )?,
         shutdown_rx,
         shutdown_scope,
     ));

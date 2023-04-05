@@ -1,15 +1,9 @@
-use std::{
-    collections::HashSet,
-    fmt::{Display, Formatter},
-    mem,
-    sync::Arc,
-};
+use std::{collections::HashSet, mem, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
     contract::ContractError,
-    prelude::ProviderError,
     providers::{JsonRpcClient, Provider},
     types::{Address, BlockId, BlockNumber, Bytes, Opcode, H256, U256},
 };
@@ -27,7 +21,7 @@ use crate::common::{
     },
     types::{
         Entity, ExpectedStorageSlot, StakeInfo, UserOperation, ValidTimeRange, ValidationOutput,
-        ValidationReturnInfo,
+        ValidationReturnInfo, ViolationError,
     },
 };
 
@@ -60,6 +54,8 @@ pub struct GasSimulationSuccess {
     /// this is the gas cost of validating the user op. It does NOT include the preOp verification cost
     pub verification_gas: U256,
 }
+
+pub type SimulationError = ViolationError<SimulationViolation>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct StorageSlot {
@@ -124,10 +120,10 @@ where
         // mean the entry point is fine if one of the phases fails and it
         // doesn't reach the end of execution.
         if num_phases > 3 {
-            Err(Violation::WrongNumberOfPhases(num_phases))?
+            Err(vec![SimulationViolation::WrongNumberOfPhases(num_phases)])?
         }
         let Some(ref revert_data) = tracer_out.revert_data else {
-            Err(Violation::DidNotRevert)?
+            Err(vec![SimulationViolation::DidNotRevert])?
         };
         let last_entity = Entity::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
@@ -137,14 +133,14 @@ where
                 Entity::Account => Some(sender_address),
                 _ => None,
             };
-            Err(Violation::UnintendedRevertWithMessage(
+            Err(vec![SimulationViolation::UnintendedRevertWithMessage(
                 last_entity,
                 failed_op.reason,
                 entity_addr,
-            ))?
+            )])?
         }
         let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
-            Err(Violation::UnintendedRevert(last_entity))?
+            Err(vec![SimulationViolation::UnintendedRevert(last_entity)])?
         };
         let entity_infos = EntityInfos::new(
             factory_address,
@@ -154,7 +150,7 @@ where
             self.sim_settings,
         );
         if num_phases < 3 {
-            Err(Violation::WrongNumberOfPhases(num_phases))?
+            Err(vec![SimulationViolation::WrongNumberOfPhases(num_phases)])?
         };
         Ok(ValidationContext {
             entity_infos,
@@ -176,9 +172,7 @@ where
         // TODO: Add gas limit to prevent DoS?
         match aggregator.validate_user_op_signature(op).call().await {
             Ok(sig) => Ok(AggregatorOut::SuccessWithSignature(sig)),
-            Err(ContractError::ProviderError {
-                e: ProviderError::JsonRpcClientError(_),
-            }) => Ok(AggregatorOut::ValidationFailed),
+            Err(ContractError::Revert(_)) => Ok(AggregatorOut::ValidationReverted),
             Err(error) => Err(error).context("should call aggregator to validate signature")?,
         }
     }
@@ -212,7 +206,7 @@ where
             is_wallet_creation,
         } = context;
         let sender_address = entity_infos.sender_address();
-        let mut violations: Vec<Violation> = vec![];
+        let mut violations: Vec<SimulationViolation> = vec![];
         let mut entities_needing_stake = vec![];
         let mut accessed_addresses = HashSet::new();
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
@@ -221,13 +215,13 @@ where
                 continue;
             };
             for opcode in &phase.forbidden_opcodes_used {
-                violations.push(Violation::UsedForbiddenOpcode(
+                violations.push(SimulationViolation::UsedForbiddenOpcode(
                     entity,
                     ViolationOpCode(*opcode),
                 ));
             }
             if phase.used_invalid_gas_opcode {
-                violations.push(Violation::InvalidGasOpcode(entity));
+                violations.push(SimulationViolation::InvalidGasOpcode(entity));
             }
             let mut needs_stake = entity == Entity::Paymaster
                 && !entry_point_out.return_info.paymaster_context.is_empty();
@@ -258,7 +252,7 @@ where
             if needs_stake {
                 entities_needing_stake.push(entity);
                 if !entity_info.is_staked {
-                    violations.push(Violation::NotStaked(
+                    violations.push(SimulationViolation::NotStaked(
                         entity,
                         entity_info.address,
                         self.sim_settings.min_stake_value.into(),
@@ -267,25 +261,27 @@ where
                 }
             }
             for address in banned_addresses_accessed {
-                violations.push(Violation::InvalidStorageAccess(entity, address));
+                violations.push(SimulationViolation::InvalidStorageAccess(entity, address));
             }
             if phase.called_with_value {
-                violations.push(Violation::CallHadValue(entity));
+                violations.push(SimulationViolation::CallHadValue(entity));
             }
             if phase.ran_out_of_gas {
-                violations.push(Violation::OutOfGas(entity));
+                violations.push(SimulationViolation::OutOfGas(entity));
             }
             for &address in &phase.undeployed_contract_accesses {
-                violations.push(Violation::AccessedUndeployedContract(entity, address))
+                violations.push(SimulationViolation::AccessedUndeployedContract(
+                    entity, address,
+                ))
             }
             if phase.called_banned_entry_point_method {
-                violations.push(Violation::CalledBannedEntryPointMethod(entity));
+                violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
             }
         }
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             entities_needing_stake.push(Entity::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
-                violations.push(Violation::NotStaked(
+                violations.push(SimulationViolation::NotStaked(
                     Entity::Aggregator,
                     aggregator_info.address,
                     self.sim_settings.min_stake_value.into(),
@@ -294,7 +290,7 @@ where
             }
         }
         if tracer_out.factory_called_create2_twice {
-            violations.push(Violation::FactoryCalledCreate2Twice);
+            violations.push(SimulationViolation::FactoryCalledCreate2Twice);
         }
         // To spare the Geth node, only check code hashes and validate with
         // aggregator if there are no other violations.
@@ -313,14 +309,14 @@ where
             tokio::try_join!(code_hash_future, aggregator_signature_future)?;
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
-                violations.push(Violation::CodeHashChanged)
+                violations.push(SimulationViolation::CodeHashChanged)
             }
         }
         let aggregator_signature = match aggregator_out {
             AggregatorOut::NotNeeded => None,
             AggregatorOut::SuccessWithSignature(sig) => Some(sig),
-            AggregatorOut::ValidationFailed => {
-                violations.push(Violation::AggregatorValidationFailed);
+            AggregatorOut::ValidationReverted => {
+                violations.push(SimulationViolation::AggregatorValidationFailed);
                 None
             }
         };
@@ -447,46 +443,8 @@ pub enum GasSimulationError {
     Other(#[from] anyhow::Error),
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum SimulationError {
-    Violations(Vec<Violation>),
-    Other(#[from] anyhow::Error),
-}
-
-impl From<Vec<Violation>> for SimulationError {
-    fn from(violations: Vec<Violation>) -> Self {
-        Self::Violations(violations)
-    }
-}
-
-impl From<Violation> for SimulationError {
-    fn from(violation: Violation) -> Self {
-        vec![violation].into()
-    }
-}
-
-impl Display for SimulationError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SimulationError::Violations(violations) => {
-                if violations.len() == 1 {
-                    Display::fmt(&violations[0], f)
-                } else {
-                    f.write_str("multiple violations during validation: ")?;
-                    for violation in violations {
-                        Display::fmt(violation, f)?;
-                        f.write_str("; ")?;
-                    }
-                    Ok(())
-                }
-            }
-            SimulationError::Other(error) => Display::fmt(error, f),
-        }
-    }
-}
-
 #[derive(Clone, Debug, parse_display::Display, Ord, Eq, PartialOrd, PartialEq)]
-pub enum Violation {
+pub enum SimulationViolation {
     // Make sure to maintain the order here based on the importance
     // of the violation for converting to an JRPC error
     #[display("reverted while simulating {0} validation: {1}")]
@@ -565,7 +523,7 @@ struct ValidationContext {
 enum AggregatorOut {
     NotNeeded,
     SuccessWithSignature(Bytes),
-    ValidationFailed,
+    ValidationReverted,
 }
 
 #[derive(Clone, Copy, Debug)]
