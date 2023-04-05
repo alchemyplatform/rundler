@@ -2,15 +2,20 @@ use ethers::types::{Address, Opcode, U256};
 use jsonrpsee::{
     core::Error as RpcError,
     types::{
-        error::{CallError, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
+        error::{CallError, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE, INVALID_REQUEST_CODE},
         ErrorObject,
     },
 };
 use serde::Serialize;
 
-use crate::common::types::{Entity, Timestamp};
+use crate::common::{
+    precheck::PrecheckError,
+    simulation::SimulationError,
+    types::{Entity, Timestamp},
+};
 
 // Error codes borrowed from jsonrpsee
+// INVALID_REQUEST_CODE = -32600
 // INVALID_PARAMS_CODE = -32602
 // INTERNAL_ERROR_CODE = -32603
 
@@ -63,6 +68,10 @@ pub enum EthRpcError {
     /// Other internal errors
     #[error("signature check failed")]
     SignatureCheckFailed,
+    #[error("precheck failed: {0}")]
+    PrecheckFailed(PrecheckError),
+    #[error("validation simulation failed: {0}")]
+    SimulationFailed(SimulationError),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
     #[error("{0}")]
@@ -211,7 +220,9 @@ impl From<EthRpcError> for RpcError {
             }
             EthRpcError::ReplacementUnderpriced => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
-            EthRpcError::Internal(e) => rpc_err(INTERNAL_ERROR_CODE, e.to_string()),
+            EthRpcError::PrecheckFailed(_) => rpc_err(INVALID_PARAMS_CODE, msg),
+            EthRpcError::SimulationFailed(_) => rpc_err(INVALID_REQUEST_CODE, msg),
+            EthRpcError::Internal(_) => rpc_err(INTERNAL_ERROR_CODE, msg),
             EthRpcError::ExecutionReverted(msg) => rpc_err(EXECUTION_REVERTED, msg),
         }
     }

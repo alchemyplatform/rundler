@@ -3212,6 +3212,7 @@ name = "rundler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arrayvec",
  "chrono",
  "clap 4.1.4",
  "dotenv",

@@ -31,6 +31,7 @@ use crate::common::{
         UserOperationRevertReasonFilter,
     },
     eth::log_to_raw_log,
+    precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
     protos::{
         op_pool::{
             op_pool_client::OpPoolClient, AddOpRequest, Entity as OpPoolEntity, ErrorInfo,
@@ -39,8 +40,8 @@ use crate::common::{
         to_le_bytes,
     },
     simulation::{
-        self, GasSimulationError, SimulationError, SimulationSuccess, Simulator, SimulatorImpl,
-        Violation,
+        self, GasSimulationError, SimulationError, SimulationSuccess, SimulationViolation,
+        Simulator, SimulatorImpl,
     },
     types::{Entity, Timestamp, UserOperation},
 };
@@ -79,59 +80,69 @@ pub trait EthApi {
 }
 
 #[derive(Debug)]
-struct EntryPointAndSimulator<Client: JsonRpcClient> {
+struct EntryPointContext<Client: JsonRpcClient + 'static> {
     entry_point: IEntryPoint<Provider<Client>>,
+    prechecker: PrecheckerImpl<Provider<Client>>,
     simulator: SimulatorImpl<Client>,
 }
 
-impl<Client> EntryPointAndSimulator<Client>
+impl<Client> EntryPointContext<Client>
 where
     Client: JsonRpcClient + 'static,
 {
     pub fn new(
         address: Address,
         provider: Arc<Provider<Client>>,
+        precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
     ) -> Self {
         let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
+        let prechecker = PrecheckerImpl::new(Arc::clone(&provider), address, precheck_settings);
         let simulator = SimulatorImpl::new(Arc::clone(&provider), address, sim_settings);
         Self {
             entry_point,
+            prechecker,
             simulator,
         }
     }
 }
 
-pub struct EthApi<Client: JsonRpcClient> {
-    entry_points_and_sims: HashMap<Address, EntryPointAndSimulator<Client>>,
-    provider: Arc<Provider<Client>>,
+pub struct EthApi<C: JsonRpcClient + 'static> {
+    contexts_by_entry_point: HashMap<Address, EntryPointContext<C>>,
+    provider: Arc<Provider<C>>,
     chain_id: u64,
     op_pool_client: OpPoolClient<Channel>,
 }
 
-impl<Client> EthApi<Client>
+impl<C> EthApi<C>
 where
-    Client: JsonRpcClient + 'static,
+    C: JsonRpcClient + 'static,
 {
     pub fn new(
-        provider: Arc<Provider<Client>>,
+        provider: Arc<Provider<C>>,
         entry_points: Vec<Address>,
         chain_id: u64,
         op_pool_client: OpPoolClient<Channel>,
+        precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
     ) -> Self {
-        let entry_points_and_sims = entry_points
+        let contexts_by_entry_point = entry_points
             .iter()
             .map(|&a| {
                 (
                     a,
-                    EntryPointAndSimulator::new(a, Arc::clone(&provider), sim_settings),
+                    EntryPointContext::new(
+                        a,
+                        Arc::clone(&provider),
+                        precheck_settings,
+                        sim_settings,
+                    ),
                 )
             })
             .collect();
 
         Self {
-            entry_points_and_sims,
+            contexts_by_entry_point,
             provider,
             chain_id,
             op_pool_client,
@@ -140,7 +151,12 @@ where
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
         let filter = Filter::new()
-            .address::<Vec<Address>>(self.entry_points_and_sims.iter().map(|ep| *ep.0).collect())
+            .address::<Vec<Address>>(
+                self.contexts_by_entry_point
+                    .iter()
+                    .map(|ep| *ep.0)
+                    .collect(),
+            )
             .event(&UserOperationEventFilter::abi_signature())
             .from_block(BlockNumber::Earliest)
             .to_block(BlockNumber::Latest)
@@ -248,32 +264,36 @@ where
 
 const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
 #[async_trait]
-impl<Client> EthApiServer for EthApi<Client>
+impl<C> EthApiServer for EthApi<C>
 where
-    Client: JsonRpcClient + 'static,
+    C: JsonRpcClient + 'static,
 {
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<H256> {
-        if !self.entry_points_and_sims.contains_key(&entry_point) {
+        if !self.contexts_by_entry_point.contains_key(&entry_point) {
             return Err(EthRpcError::InvalidParams(
-                "supplied entry_point addr is not a known entry point".to_string(),
+                "supplied entry point addr is not a known entry point".to_string(),
             ))?;
         }
 
         let op: UserOperation = op.into();
 
-        let EntryPointAndSimulator {
-            simulator,
+        let EntryPointContext {
             entry_point,
+            prechecker,
+            simulator,
         } = self
-            .entry_points_and_sims
+            .contexts_by_entry_point
             .get(&entry_point)
             .context("entry point should exist in the map")?;
 
-        // 1. validate op
+        // 1. Validate op with simple prechecks
+        prechecker.check(&op).await.map_err(EthRpcError::from)?;
+
+        // 2. Validate op with simulation
         let SimulationSuccess {
             valid_time_range,
             code_hash,
@@ -304,7 +324,7 @@ where
             }))?
         }
 
-        // 2. send op the mempool
+        // 3. send op the mempool
         let add_op_result = self
             .op_pool_client
             .clone()
@@ -336,7 +356,7 @@ where
             .map_err(EthRpcError::from)
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?;
 
-        // 3. return the op hash
+        // 4. return the op hash
         Ok(H256::from_slice(&add_op_result.into_inner().hash))
     }
 
@@ -345,13 +365,13 @@ where
         op: UserOperationOptionalGas,
         entry_point: Address,
     ) -> RpcResult<GasEstimate> {
-        if !self.entry_points_and_sims.contains_key(&entry_point) {
+        if !self.contexts_by_entry_point.contains_key(&entry_point) {
             return Err(EthRpcError::InvalidParams(
                 "supplied entry_point addr is not a known entry point".to_string(),
             ))?;
         }
         let simulator = &self
-            .entry_points_and_sims
+            .contexts_by_entry_point
             .get(&entry_point)
             .unwrap()
             .simulator;
@@ -414,7 +434,7 @@ where
 
         let to = tx
             .to
-            .filter(|to| self.entry_points_and_sims.contains_key(to))
+            .filter(|to| self.contexts_by_entry_point.contains_key(to))
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. parse the tx data using the EntryPoint interface and extract UserOperation[] from it
@@ -482,13 +502,12 @@ where
 
         let to = tx_receipt
             .to
-            .filter(|to| self.entry_points_and_sims.contains_key(to))
+            .filter(|to| self.contexts_by_entry_point.contains_key(to))
             .context("Failed to parse tx or tx doesn't belong to entry point")?;
 
         // 3. filter receipt logs to match just those belonging to the user op
-        let filtered_logs =
-            EthApi::<Client>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
-                .context("should have found receipt logs matching user op")?;
+        let filtered_logs = EthApi::<C>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
+            .context("should have found receipt logs matching user op")?;
 
         // 4. decode log and find failure reason if not success
         let log = self
@@ -498,7 +517,7 @@ where
         let reason: Option<String> = if log.success {
             None
         } else {
-            EthApi::<Client>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
+            EthApi::<C>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
                 .context("should have found revert reason if tx wasn't successful")?
         };
 
@@ -520,7 +539,7 @@ where
 
     async fn supported_entry_points(&self) -> RpcResult<Vec<String>> {
         Ok(self
-            .entry_points_and_sims
+            .contexts_by_entry_point
             .keys()
             .map(|ep| to_checksum(ep, None))
             .collect())
@@ -531,12 +550,19 @@ where
     }
 }
 
+impl From<PrecheckError> for EthRpcError {
+    fn from(value: PrecheckError) -> Self {
+        match &value {
+            PrecheckError::Violations(_) => Self::PrecheckFailed(value),
+            PrecheckError::Other(_) => Self::Internal(value.into()),
+        }
+    }
+}
+
 impl From<SimulationError> for EthRpcError {
     fn from(mut value: SimulationError) -> Self {
         debug!("Simulation error: {value:?}");
 
-        // TODO: handle unsupported signature aggregator (assuming not throttled/banned and staked)
-        // this requires calling aggregator.validateUserOpSignature
         let SimulationError::Violations(violations) = &mut value else {
             return Self::Internal(value.into())
         };
@@ -546,26 +572,30 @@ impl From<SimulationError> for EthRpcError {
         };
 
         match violation {
-            Violation::UnintendedRevertWithMessage(Entity::Paymaster, reason, Some(paymaster)) => {
-                Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
-                    paymaster: *paymaster,
-                    reason: reason.to_string(),
-                })
-            }
-            Violation::UnintendedRevertWithMessage(_, reason, _) => {
+            SimulationViolation::UnintendedRevertWithMessage(
+                Entity::Paymaster,
+                reason,
+                Some(paymaster),
+            ) => Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
+                paymaster: *paymaster,
+                reason: reason.to_string(),
+            }),
+            SimulationViolation::UnintendedRevertWithMessage(_, reason, _) => {
                 Self::EntryPointValidationRejected(reason.clone())
             }
-            Violation::UsedForbiddenOpcode(entity, op) => {
+            SimulationViolation::UsedForbiddenOpcode(entity, op) => {
                 Self::OpcodeViolation(*entity, op.clone().0)
             }
-            Violation::InvalidGasOpcode(entity) => Self::OpcodeViolation(*entity, Opcode::GAS),
-            Violation::FactoryCalledCreate2Twice => {
+            SimulationViolation::InvalidGasOpcode(entity) => {
+                Self::OpcodeViolation(*entity, Opcode::GAS)
+            }
+            SimulationViolation::FactoryCalledCreate2Twice => {
                 Self::OpcodeViolation(Entity::Factory, Opcode::CREATE2)
             }
-            Violation::InvalidStorageAccess(entity, address) => {
+            SimulationViolation::InvalidStorageAccess(entity, address) => {
                 Self::InvalidStorageAccess(*entity, *address)
             }
-            Violation::NotStaked(entity, address, min_stake, min_unstake_delay) => {
+            SimulationViolation::NotStaked(entity, address, min_stake, min_unstake_delay) => {
                 let err_data = match entity {
                     Entity::Account => {
                         StakeTooLowData::account(*address, *min_stake, *min_unstake_delay)
@@ -583,8 +613,8 @@ impl From<SimulationError> for EthRpcError {
 
                 Self::StakeTooLow(err_data)
             }
-            Violation::AggregatorValidationFailed => Self::SignatureCheckFailed,
-            _ => Self::Internal(value.into()),
+            SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
+            _ => Self::SimulationFailed(value),
         }
     }
 }

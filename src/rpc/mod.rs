@@ -14,6 +14,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 
 use crate::common::{
+    gas,
     protos::{
         op_pool::{Reputation, ReputationStatus},
         ProtoBytes,
@@ -139,54 +140,9 @@ impl UserOperationOptionalGas {
     }
 }
 
-/// Gas overheads for user operations
-/// used in calculating the pre-verification gas
-/// see: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
-#[derive(Debug)]
-pub struct GasOverheads {
-    pub fixed: U256,
-    pub per_user_op: U256,
-    pub per_user_op_word: U256,
-    pub zero_byte: U256,
-    pub non_zero_byte: U256,
-    pub bundle_size: U256,
-    pub sig_size: U256,
-}
-
-impl Default for GasOverheads {
-    fn default() -> Self {
-        Self {
-            fixed: 21000.into(),
-            per_user_op: 18300.into(),
-            per_user_op_word: 4.into(),
-            zero_byte: 4.into(),
-            non_zero_byte: 16.into(),
-            bundle_size: 1.into(),
-            sig_size: 65.into(),
-        }
-    }
-}
-
 impl UserOperationOptionalGas {
     pub fn calc_pre_verification_gas(&self) -> U256 {
-        let ov = GasOverheads::default(); // use some dummy val if this isn't set
-        let packed = UserOperation::from(self.cheap_clone()).pack();
-        let call_data_cost: U256 = packed
-            .iter()
-            .map(|&x| {
-                if x == 0 {
-                    ov.zero_byte
-                } else {
-                    ov.non_zero_byte
-                }
-            })
-            .reduce(|a, b| a + b)
-            .unwrap_or_default();
-
-        ov.fixed / ov.bundle_size
-            + call_data_cost
-            + ov.per_user_op
-            + ov.per_user_op_word * packed.len()
+        gas::calc_pre_verification_gas(&UserOperation::from(self.cheap_clone()))
     }
 }
 

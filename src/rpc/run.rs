@@ -17,6 +17,7 @@ use url::Url;
 use super::ApiNamespace;
 use crate::{
     common::{
+        precheck,
         protos::{builder::builder_client, op_pool::op_pool_client},
         server::format_socket_addr,
         simulation,
@@ -38,6 +39,7 @@ pub struct Args {
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
+    pub precheck_settings: precheck::Settings,
     pub sim_settings: simulation::Settings,
 }
 
@@ -101,6 +103,7 @@ pub async fn run(
                     args.chain_id,
                     // NOTE: this clone is cheap according to the docs because all it's doing is copying the reference to the channel
                     op_pool_client.clone(),
+                    args.precheck_settings,
                     args.sim_settings,
                 )
                 .into_rpc(),

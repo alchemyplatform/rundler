@@ -15,7 +15,7 @@ use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
 
-use crate::common::simulation;
+use crate::common::{precheck, simulation};
 
 /// Main entry point for the CLI
 ///
@@ -123,6 +123,24 @@ pub struct CommonArgs {
     node_http: Option<String>,
 
     #[arg(
+        long = "min_priority_fee_per_gas",
+        name = "min_priority_fee_per_gas",
+        default_value = "100000000",
+        env = "MIN_PRIORITY_FEE_PER_GAS",
+        global = true
+    )]
+    min_priority_fee_per_gas: u64,
+
+    #[arg(
+        long = "max_verification_gas",
+        name = "max_verification_gas",
+        default_value = "5000000",
+        env = "MAX_VERIFICATION_GAS",
+        global = true
+    )]
+    max_verification_gas: u64,
+
+    #[arg(
         long = "min_stake_value",
         name = "min_stake_value",
         env = "MIN_STAKE_VALUE",
@@ -148,6 +166,15 @@ pub struct CommonArgs {
         global = true
     )]
     max_simulate_handle_ops_gas: u64,
+}
+
+impl From<&CommonArgs> for precheck::Settings {
+    fn from(value: &CommonArgs) -> Self {
+        Self {
+            min_priority_fee_per_gas: value.min_priority_fee_per_gas.into(),
+            max_verification_gas: value.max_verification_gas.into(),
+        }
+    }
 }
 
 impl From<&CommonArgs> for simulation::Settings {
