@@ -17,7 +17,7 @@ services:
       - RPC_API=eth,debug
       - MIN_UNSTAKE_DELAY=2
     healthcheck:
-      test: curl --fail http://localhost:8080/metrics || exit 1
+      test: curl --fail http://localhost:8080/health || exit 1
       interval: 1s
       timeout: 1s
       retries: 60
