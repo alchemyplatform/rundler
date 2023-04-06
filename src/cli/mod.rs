@@ -30,11 +30,14 @@ pub async fn run() -> anyhow::Result<()> {
         tracing_appender::non_blocking(io::stdout())
     };
 
-    let subscriber = FmtSubscriber::builder()
+    let subscriber_builder = FmtSubscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
-        .with_writer(appender)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
+        .with_writer(appender);
+    if opt.logs.json {
+        tracing::subscriber::set_global_default(subscriber_builder.json().finish())?;
+    } else {
+        tracing::subscriber::set_global_default(subscriber_builder.pretty().finish())?;
+    }
 
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
@@ -210,6 +213,19 @@ struct LogsArgs {
         global = true
     )]
     file: Option<String>,
+
+    /// Log JSON
+    ///
+    /// If set, logs will be written in JSON format
+    #[arg(
+        long = "log.json",
+        name = "log.json",
+        env = "LOG_JSON",
+        required = false,
+        num_args = 0,
+        global = true
+    )]
+    json: bool,
 }
 
 /// CLI options
