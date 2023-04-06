@@ -6,7 +6,9 @@ use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::EthEvent,
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{Address, Bytes, Filter, Log, Opcode, TransactionReceipt, H256, U256, U64},
+    types::{
+        Address, BlockNumber, Bytes, Filter, Log, Opcode, TransactionReceipt, H256, U256, U64,
+    },
     utils::to_checksum,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
@@ -140,6 +142,8 @@ where
         let filter = Filter::new()
             .address::<Vec<Address>>(self.entry_points_and_sims.iter().map(|ep| *ep.0).collect())
             .event(&UserOperationEventFilter::abi_signature())
+            .from_block(BlockNumber::Earliest)
+            .to_block(BlockNumber::Latest)
             .topic1(hash);
 
         let logs = self.provider.get_logs(&filter).await?;
