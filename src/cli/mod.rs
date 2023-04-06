@@ -39,7 +39,8 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
-    prometheus_exporter::initialize(metrics_addr).context("metrics server should start")?;
+    prometheus_exporter::initialize(metrics_addr, &opt.metrics.tags)
+        .context("metrics server should start")?;
 
     match opt.command {
         Command::Node(args) => node::run(args, opt.common).await?,
@@ -121,8 +122,8 @@ pub struct CommonArgs {
     #[arg(
         long = "min_stake_value",
         name = "min_stake_value",
-        default_value = "1000000000000000000",
         env = "MIN_STAKE_VALUE",
+        default_value = "1000000000000000000",
         global = true
     )]
     min_stake_value: u64,
@@ -130,8 +131,8 @@ pub struct CommonArgs {
     #[arg(
         long = "min_unstake_delay",
         name = "min_unstake_delay",
-        default_value = "84600",
         env = "MIN_UNSTAKE_DELAY",
+        default_value = "84600",
         global = true
     )]
     min_unstake_delay: u32,
@@ -139,6 +140,7 @@ pub struct CommonArgs {
     #[arg(
         long = "max_simulate_handle_ops_gas",
         name = "max_simulate_handle_ops_gas",
+        env = "MAX_SIMULATE_HANDLE_OPS_GAS",
         default_value = "550000000",
         global = true
     )]
@@ -178,6 +180,19 @@ struct MetricsArgs {
         global = true
     )]
     host: String,
+
+    /// Tags for metrics
+    ///
+    /// Format: key1=value1,key2=value2,...
+    #[arg(
+        long = "metrics.tags",
+        name = "metrics.tags",
+        env = "METRICS_TAGS",
+        default_values_t = Vec::<String>::new(),
+        value_delimiter = ',',
+        global = true
+    )]
+    tags: Vec<String>,
 }
 
 /// CLI options for logging
