@@ -3082,6 +3082,7 @@ dependencies = [
  "dotenv",
  "ethers",
  "indexmap",
+ "itertools",
  "jsonrpsee",
  "metrics",
  "metrics-exporter-prometheus",
