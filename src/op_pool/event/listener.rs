@@ -1,4 +1,9 @@
-use std::{cmp, collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    cmp,
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context;
 use ethers::{
@@ -6,7 +11,7 @@ use ethers::{
     types::{Address, Filter},
 };
 use rand::Rng;
-use tokio::{select, sync::broadcast, time::sleep};
+use tokio::{select, sync::broadcast, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 use tracing::{error, info};
 
@@ -15,17 +20,17 @@ use super::{
     NewBlockEvent,
 };
 
+const MAX_BACKOFF_SECONDS: u64 = 60;
+
 /// An event listener that listens for new blocks and emits events
 /// for each provided entry point
 pub struct EventListener<F: BlockProviderFactory> {
-    /// A block provider factory
     provider_factory: F,
-    /// The block provider, if connected
     provider: Option<F::Provider>,
-    /// The log filter corresponding to the entry points
     log_filter_base: Filter,
-    /// Broadcast channels for each entry point to notify of new blocks
     entrypoint_event_broadcasts: HashMap<Address, broadcast::Sender<Arc<NewBlockEvent>>>,
+    last_reconnect: Option<Instant>,
+    backoff_idx: u32,
 }
 
 impl<F: BlockProviderFactory> EventProvider for EventListener<F> {
@@ -36,6 +41,13 @@ impl<F: BlockProviderFactory> EventProvider for EventListener<F> {
         self.entrypoint_event_broadcasts
             .get(&entry_point)
             .map(|b| b.subscribe())
+    }
+
+    fn spawn(
+        self: Box<Self>,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> JoinHandle<Result<(), anyhow::Error>> {
+        tokio::spawn(async move { self.listen_with_shutdown(shutdown_rx).await })
     }
 }
 
@@ -60,6 +72,8 @@ impl<F: BlockProviderFactory> EventListener<F> {
             provider: None,
             log_filter_base,
             entrypoint_event_broadcasts,
+            last_reconnect: None,
+            backoff_idx: 0,
         }
     }
 
@@ -110,7 +124,24 @@ impl<F: BlockProviderFactory> EventListener<F> {
             provider.unsubscribe().await;
         }
 
-        let mut n = 0;
+        let since_last_recovery = self.last_reconnect.map(|t| Instant::now() - t);
+        if let Some(since_last_recovery) = since_last_recovery {
+            let expected_backoff = self.backoff_time();
+            if since_last_recovery < expected_backoff {
+                let sleep_duration = expected_backoff - since_last_recovery;
+                info!(
+                    "Reconnecting too quickly, sleeping {:?} before reconnecting",
+                    sleep_duration
+                );
+                if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
+                    return Err(anyhow::anyhow!("Shutdown signal received"));
+                }
+            } else {
+                info!("Reconnecting after {since_last_recovery:?}, expected backoff {expected_backoff:?}");
+                self.backoff_idx = 0;
+            }
+        }
+
         loop {
             self.provider = Some(self.provider_factory.new_provider());
             match self
@@ -122,30 +153,17 @@ impl<F: BlockProviderFactory> EventListener<F> {
             {
                 Ok(block_stream) => {
                     info!("Connected to event provider");
+                    self.last_reconnect = Some(Instant::now());
                     return Ok(block_stream);
                 }
                 Err(err) => {
-                    // exponential backoff connections with jitter
-                    let sleep_duration = {
-                        // rng must drop from scope before sleep
-                        let mut rng = rand::thread_rng();
-                        let jitter = rng.gen_range(0..1000);
-                        let millis = cmp::min(60_000, 1000 * (2_u64.pow(n))) + jitter;
-                        n += 1;
-                        Duration::from_millis(millis)
-                    };
-
+                    EventListenerMetrics::increment_provider_errors();
+                    let sleep_duration = self.backoff_time();
                     error!(
                         "Error connecting to event provider, sleeping {sleep_duration:?}: {err:?}"
                     );
-                    EventListenerMetrics::increment_provider_errors();
-
-                    select! {
-                        _ = sleep(sleep_duration) => {},
-                        _ = shutdown_rx.recv() => {
-                            info!("Shutting down event listener");
-                            return Err(anyhow::anyhow!("shutting down during connections"));
-                        }
+                    if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
+                        return Err(anyhow::anyhow!("Shutdown signal received"));
                     }
                 }
             }
@@ -220,6 +238,30 @@ impl<F: BlockProviderFactory> EventListener<F> {
         }
 
         Ok(())
+    }
+
+    fn backoff_time(&self) -> Duration {
+        let mut rng = rand::thread_rng();
+        let jitter = rng.gen_range(0..1000);
+        let millis = cmp::min(MAX_BACKOFF_SECONDS, 2_u64.pow(self.backoff_idx)) * 1000 + jitter;
+        Duration::from_millis(millis)
+    }
+
+    async fn sleep_or_shutdown(
+        &mut self,
+        shutdown_rx: &mut broadcast::Receiver<()>,
+        duration: Duration,
+    ) -> bool {
+        select! {
+            _ = sleep(duration) => {
+                self.backoff_idx += 1;
+                false
+            },
+            _ = shutdown_rx.recv() => {
+                info!("Shutting down event listener");
+                true
+            }
+        }
     }
 }
 

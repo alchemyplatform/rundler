@@ -89,7 +89,11 @@ where
 
     fn on_new_block(&self, new_block: &NewBlockEvent) {
         let mut state = self.state.write();
-        tracing::debug!("New block: {:?}", new_block.number);
+        tracing::info!(
+            "New block: {:?} with {} entrypoint events",
+            new_block.number,
+            new_block.events.len()
+        );
         for event in &new_block.events {
             if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
                 let op_hash = uo_event.user_op_hash.into();
