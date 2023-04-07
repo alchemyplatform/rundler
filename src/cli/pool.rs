@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{bail, Context};
 use clap::Args;
 use tokio::{
@@ -54,6 +56,17 @@ pub struct PoolArgs {
         default_value = "10"
     )]
     pub min_replacement_fee_increase_percentage: usize,
+
+    /// ETH Node HTTP polling interval in milliseconds
+    /// (only used if node_http is set)
+    #[arg(
+        long = "pool.http_poll_interval_millis",
+        name = "pool.http_poll_interval_millis",
+        env = "POOL_HTTP_POLL_INTERVAL_MILLIS",
+        default_value = "100",
+        global = true
+    )]
+    pub http_poll_interval_millis: u64,
 }
 
 impl PoolArgs {
@@ -80,10 +93,9 @@ impl PoolArgs {
             port: self.port,
             host: self.host.clone(),
             chain_id: common.chain_id,
-            ws_url: common
-                .node_ws
-                .clone()
-                .context("pool requires node_ws arg")?,
+            ws_url: common.node_ws.clone(),
+            http_url: common.node_http.clone(),
+            http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
             pool_configs,
         })
     }

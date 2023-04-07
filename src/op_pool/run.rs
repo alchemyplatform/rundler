@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use tokio::{
@@ -18,7 +18,7 @@ use crate::{
         protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
     },
     op_pool::{
-        event::{EventListener, WsBlockProviderFactory},
+        event::{EventListener, HttpBlockProviderFactory, WsBlockProviderFactory},
         mempool::uo_pool::UoPool,
         reputation::{HourlyMovingAverageReputation, ReputationParams},
         server::OpPoolImpl,
@@ -28,7 +28,9 @@ use crate::{
 pub struct Args {
     pub port: u16,
     pub host: String,
-    pub ws_url: String,
+    pub ws_url: Option<String>,
+    pub http_url: Option<String>,
+    pub http_poll_interval: Duration,
     pub chain_id: u64,
     pub pool_configs: Vec<PoolConfig>,
 }
@@ -41,19 +43,28 @@ pub async fn run(
     let addr = format!("{}:{}", args.host, args.port).parse()?;
     let chain_id = args.chain_id;
     let entry_points = args.pool_configs.iter().map(|pc| &pc.entry_point);
-    tracing::info!("Starting server on {}", addr);
-    tracing::info!("Chain id: {}", chain_id);
-    tracing::info!("Websocket url: {}", args.ws_url);
+    tracing::info!("Starting server on {addr}");
+    tracing::info!("Chain id: {chain_id}");
+    tracing::info!("Websocket url: {:?}", args.http_url);
+    tracing::info!("Http url: {:?}", args.http_url);
 
     // Events listener
-    let connection_factory = WsBlockProviderFactory::new(args.ws_url.clone(), 10);
-    let event_listener = EventListener::new(connection_factory, entry_points);
+    let event_provider: Box<dyn EventProvider> = if let Some(ws_url) = args.ws_url {
+        let connection_factory = WsBlockProviderFactory::new(ws_url, 10);
+        Box::new(EventListener::new(connection_factory, entry_points))
+    } else if let Some(http_url) = args.http_url {
+        let connection_factory =
+            HttpBlockProviderFactory::new(http_url, args.http_poll_interval, 10);
+        Box::new(EventListener::new(connection_factory, entry_points))
+    } else {
+        bail!("Either ws_url or http_url must be provided");
+    };
 
     // create mempools
     let mut mempools = Vec::new();
     for pool_config in args.pool_configs {
         mempools.push(
-            create_mempool(pool_config, &event_listener, &shutdown_rx)
+            create_mempool(pool_config, event_provider.as_ref(), &shutdown_rx)
                 .await
                 .context("should have created mempool")?,
         );
@@ -64,12 +75,8 @@ pub async fn run(
         .collect();
 
     // Start events listener
-    let event_listener_shutdown = shutdown_rx.resubscribe();
-    let events_listener_handle = tokio::spawn(async move {
-        event_listener
-            .listen_with_shutdown(event_listener_shutdown)
-            .await
-    });
+    let event_provider_shutdown = shutdown_rx.resubscribe();
+    let events_provider_handle = event_provider.spawn(event_provider_shutdown);
 
     // gRPC server
     let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_map));
@@ -102,7 +109,7 @@ pub async fn run(
 
     match try_join!(
         flatten_handle(server_handle),
-        flatten_handle(events_listener_handle)
+        flatten_handle(events_provider_handle)
     ) {
         Ok(_) => {
             tracing::info!("Server shutdown");
@@ -115,14 +122,11 @@ pub async fn run(
     }
 }
 
-async fn create_mempool<P>(
+async fn create_mempool(
     pool_config: PoolConfig,
-    event_provider: &P,
+    event_provider: &dyn EventProvider,
     shutdown_rx: &broadcast::Receiver<()>,
-) -> anyhow::Result<Arc<UoPool<HourlyMovingAverageReputation>>>
-where
-    P: EventProvider,
-{
+) -> anyhow::Result<Arc<UoPool<HourlyMovingAverageReputation>>> {
     let entry_point = pool_config.entry_point;
     // Reputation manager
     let reputation = Arc::new(HourlyMovingAverageReputation::new(

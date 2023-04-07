@@ -13,7 +13,6 @@ services:
       - RUST_LOG=debug
       - ENTRY_POINTS=0x0576a174D229E3cFA37253523E645A78A0C91B57
       - NODE_HTTP=http://geth:8545
-      - NODE_WS=ws://geth:8546
       - RPC_API=eth,debug
       - MIN_UNSTAKE_DELAY=2
     healthcheck:

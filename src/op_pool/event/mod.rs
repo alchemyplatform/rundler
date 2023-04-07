@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::types::{Address, Block, Filter, Log, H256, U64};
-use tokio::sync::broadcast;
+use tokio::{sync::broadcast, task::JoinHandle};
 use tonic::async_trait;
 
 use crate::common::contracts::i_entry_point::IEntryPointEvents;
@@ -12,6 +12,8 @@ pub use listener::EventListener;
 mod mock;
 mod ws;
 pub use ws::WsBlockProviderFactory;
+mod http;
+pub use http::HttpBlockProviderFactory;
 
 /// Event when a new block is mined.
 /// Events correspond to a single entry point
@@ -39,18 +41,24 @@ pub struct EntryPointEvent {
 }
 
 /// A trait that provides a stream of new blocks with thier events by entrypoint
-pub trait EventProvider {
+pub trait EventProvider: Send + Sync {
     /// Subscribe to new blocks by entrypoint
     fn subscribe_by_entrypoint(
         &self,
         entry_point: Address,
     ) -> Option<broadcast::Receiver<Arc<NewBlockEvent>>>;
+
+    /// Spawn the event provider
+    fn spawn(
+        self: Box<Self>,
+        shutdown_rx: broadcast::Receiver<()>,
+    ) -> JoinHandle<Result<(), anyhow::Error>>;
 }
 
 /// A factory that creates a new event provider
 #[async_trait]
-pub trait BlockProviderFactory {
-    type Provider: BlockProvider;
+pub trait BlockProviderFactory: Send + Sync + 'static {
+    type Provider: BlockProvider + Send + Sync + 'static;
 
     /// Create a new block provider
     fn new_provider(&self) -> Self::Provider;
@@ -61,6 +69,8 @@ pub trait BlockProviderFactory {
 pub enum BlockProviderError {
     #[error("Connection error: {0}")]
     ConnectionError(String),
+    #[error("Rpc error: {0}")]
+    RpcError(String),
 }
 
 /// A block with its logs correspoinding to a filter

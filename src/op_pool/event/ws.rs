@@ -34,6 +34,7 @@ impl BlockProviderFactory for WsBlockProviderFactory {
 }
 
 /// A block provider that uses an ethers websocket provider
+#[derive(Debug)]
 pub struct WsBlockProvider {
     ws_url: String,
     num_retries: usize,
@@ -55,6 +56,12 @@ impl BlockProvider for WsBlockProvider {
     type BlockStream = ReceiverStream<Result<BlockWithLogs, BlockProviderError>>;
 
     async fn subscribe(&mut self, filter: Filter) -> Result<Self::BlockStream, BlockProviderError> {
+        if self.shutdown_sender.is_some() {
+            return Err(BlockProviderError::ConnectionError(
+                "already subscribed".to_string(),
+            ));
+        }
+
         let provider =
             Provider::<Ws>::connect_with_reconnects(self.ws_url.clone(), self.num_retries)
                 .await
@@ -102,7 +109,7 @@ impl BlockProvider for WsBlockProvider {
                         }
                     },
                     _ = &mut shutdown_rx => {
-                        break;
+                        return;
                     }
                 }
             }
