@@ -5,7 +5,7 @@ pub mod uo_pool;
 
 use std::sync::Arc;
 
-use ethers::types::{Address, H256, U256};
+use ethers::types::{Address, H256};
 use strum::IntoEnumIterator;
 
 use self::error::MempoolResult;
@@ -92,15 +92,6 @@ pub enum OperationOrigin {
     External,
 }
 
-// TODO(danc): remove this once PR #26 is merged
-/// An expected storage slot value for a user operation during validation.
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
-pub struct ExpectedStorageSlot {
-    pub address: Address,
-    pub slot: U256,
-    pub expected_value: Option<U256>,
-}
-
 /// A user operation with additional metadata from validation.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct PoolOperation {
@@ -110,7 +101,6 @@ pub struct PoolOperation {
     pub expected_code_hash: H256,
     pub sim_block_hash: H256,
     pub entities_needing_stake: Vec<Entity>,
-    pub expected_storage_slots: Vec<ExpectedStorageSlot>,
     pub account_is_staked: bool,
 }
 
@@ -185,7 +175,6 @@ mod tests {
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
             entities_needing_stake: vec![Entity::Account, Entity::Aggregator],
-            expected_storage_slots: vec![],
             account_is_staked: true,
         };
 
