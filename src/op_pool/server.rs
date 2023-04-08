@@ -9,6 +9,7 @@ use tonic::{async_trait, Code, Request, Response, Result, Status};
 
 use super::mempool::{error::MempoolError, Mempool, OperationOrigin};
 use crate::common::protos::{
+    self,
     op_pool::{
         op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
         DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
@@ -17,7 +18,6 @@ use crate::common::protos::{
         GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
         RemoveOpsRequest, RemoveOpsResponse,
     },
-    ProtoBytes,
 };
 
 pub struct OpPoolImpl<M: Mempool> {
@@ -34,8 +34,7 @@ where
     }
 
     fn get_mempool_for_entry_point(&self, req_entry_point: &[u8]) -> Result<&Arc<M>> {
-        let req_ep: Address = ProtoBytes(req_entry_point)
-            .try_into()
+        let req_ep: Address = protos::from_bytes(req_entry_point)
             .map_err(|e| Status::invalid_argument(format!("Invalid entry point: {e}")))?;
         let Some(mempool) = self.mempools.get(&req_ep) else {
             return Err(Status::invalid_argument(format!(
@@ -164,8 +163,7 @@ where
         };
 
         for rep in reps {
-            let addr = ProtoBytes(&rep.address)
-                .try_into()
+            let addr = protos::from_bytes(&rep.address)
                 .map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))?;
 
             mempool.set_reputation(addr, rep.ops_seen, rep.ops_included);

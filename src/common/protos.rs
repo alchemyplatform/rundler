@@ -1,6 +1,4 @@
-use std::mem;
-
-use ethers::types::{Address, Bytes, H256, U256};
+use ethers::types::{Address, H256, U256};
 
 use crate::common::types::{
     BundlingMode as RpcBundlingMode, Entity as EntityType, UserOperation as RpcUserOperation,
@@ -35,19 +33,19 @@ pub mod op_pool {
     impl TryFrom<UserOperation> for RpcUserOperation {
         type Error = ConversionError;
 
-        fn try_from(mut op: UserOperation) -> Result<Self, Self::Error> {
+        fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
             Ok(RpcUserOperation {
-                sender: ProtoBytes(&op.sender).try_into()?,
-                nonce: ProtoBytes(&op.nonce).try_into()?,
-                init_code: Bytes::from(mem::take(&mut op.init_code)),
-                call_data: Bytes::from(mem::take(&mut op.call_data)),
-                call_gas_limit: ProtoBytes(&op.call_gas_limit).try_into()?,
-                verification_gas_limit: ProtoBytes(&op.verification_gas_limit).try_into()?,
-                pre_verification_gas: ProtoBytes(&op.pre_verification_gas).try_into()?,
-                max_fee_per_gas: ProtoBytes(&op.max_fee_per_gas).try_into()?,
-                max_priority_fee_per_gas: ProtoBytes(&op.max_priority_fee_per_gas).try_into()?,
-                paymaster_and_data: Bytes::from(mem::take(&mut op.paymaster_and_data)),
-                signature: Bytes::from(mem::take(&mut op.signature)),
+                sender: from_bytes(&op.sender)?,
+                nonce: from_bytes(&op.nonce)?,
+                init_code: op.init_code.into(),
+                call_data: op.call_data.into(),
+                call_gas_limit: from_bytes(&op.call_gas_limit)?,
+                verification_gas_limit: from_bytes(&op.verification_gas_limit)?,
+                pre_verification_gas: from_bytes(&op.pre_verification_gas)?,
+                max_fee_per_gas: from_bytes(&op.max_fee_per_gas)?,
+                max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
+                paymaster_and_data: op.paymaster_and_data.into(),
+                signature: op.signature.into(),
             })
         }
     }
@@ -127,45 +125,51 @@ pub enum ConversionError {
     InvalidBundlingMode(i32),
 }
 
-/// Wrapper around protobyf bytes for converting to Ethers types.
-#[derive(Debug, Copy, Clone)]
-pub struct ProtoBytes<'a>(pub &'a [u8]);
+pub fn from_bytes<T: FromProtoBytes>(bytes: &[u8]) -> Result<T, ConversionError> {
+    T::from_proto_bytes(bytes)
+}
 
-impl TryInto<Address> for ProtoBytes<'_> {
-    type Error = ConversionError;
+pub trait FromProtoBytes: Sized {
+    fn from_proto_bytes(bytes: &[u8]) -> Result<Self, ConversionError>;
+}
 
-    fn try_into(self) -> Result<Address, Self::Error> {
-        let len = self.0.len();
-        if len != 20 {
-            Err(ConversionError::InvalidLength(len, 20))
+pub trait FromFixedLengthProtoBytes: Sized {
+    const LEN: usize;
+
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self;
+}
+
+impl<T: FromFixedLengthProtoBytes> FromProtoBytes for T {
+    fn from_proto_bytes(bytes: &[u8]) -> Result<Self, ConversionError> {
+        let len = bytes.len();
+        if len != Self::LEN {
+            Err(ConversionError::InvalidLength(len, Self::LEN))
         } else {
-            Ok(Address::from_slice(self.0))
+            Ok(Self::from_fixed_length_bytes(bytes))
         }
     }
 }
 
-impl TryInto<U256> for ProtoBytes<'_> {
-    type Error = ConversionError;
+impl FromFixedLengthProtoBytes for Address {
+    const LEN: usize = 20;
 
-    fn try_into(self) -> Result<U256, Self::Error> {
-        let len = self.0.len();
-        if len != 32 {
-            Err(ConversionError::InvalidLength(len, 32))
-        } else {
-            Ok(U256::from_little_endian(self.0))
-        }
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        Self::from_slice(bytes)
     }
 }
 
-impl TryInto<H256> for ProtoBytes<'_> {
-    type Error = ConversionError;
+impl FromFixedLengthProtoBytes for U256 {
+    const LEN: usize = 32;
 
-    fn try_into(self) -> Result<H256, Self::Error> {
-        let len = self.0.len();
-        if len != 32 {
-            Err(ConversionError::InvalidLength(len, 32))
-        } else {
-            Ok(H256::from_slice(self.0))
-        }
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        Self::from_little_endian(bytes)
+    }
+}
+
+impl FromFixedLengthProtoBytes for H256 {
+    const LEN: usize = 32;
+
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        Self::from_slice(bytes)
     }
 }

@@ -176,8 +176,8 @@ mod tests {
         let po = PoolOperation {
             uo: UserOperation {
                 sender,
-                paymaster_and_data: Bytes::from(paymaster.as_fixed_bytes()),
-                init_code: Bytes::from(factory.as_fixed_bytes()),
+                paymaster_and_data: paymaster.as_fixed_bytes().into(),
+                init_code: factory.as_fixed_bytes().into(),
                 ..Default::default()
             },
             aggregator: Some(aggregator),

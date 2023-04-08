@@ -245,8 +245,6 @@ impl PartialEq for OrderedPoolOperation {
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::Bytes;
-
     use super::*;
 
     #[test]
@@ -361,8 +359,8 @@ mod tests {
         let aggregator = Address::random();
 
         let mut op = create_op(sender, 0, 1);
-        op.uo.paymaster_and_data = Bytes::from(paymaster.as_bytes().to_vec());
-        op.uo.init_code = Bytes::from(factory.as_bytes().to_vec());
+        op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+        op.uo.init_code = factory.as_bytes().to_vec().into();
         op.aggregator = Some(aggregator);
 
         let count = 5;
