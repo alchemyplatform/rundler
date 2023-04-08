@@ -16,8 +16,8 @@ use strum;
 use crate::common::{
     gas,
     protos::{
+        self,
         op_pool::{Reputation, ReputationStatus},
-        ProtoBytes,
     },
     types::UserOperation,
 };
@@ -266,7 +266,7 @@ impl TryFrom<Reputation> for RpcReputation {
 
     fn try_from(reputation: Reputation) -> Result<Self, Self::Error> {
         Ok(RpcReputation {
-            address: ProtoBytes(&reputation.address).try_into()?,
+            address: protos::from_bytes(&reputation.address)?,
             ops_seen: reputation.ops_seen.into(),
             ops_included: reputation.ops_included.into(),
             status: reputation.status.try_into()?,

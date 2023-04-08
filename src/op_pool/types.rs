@@ -4,8 +4,9 @@ use ethers::types::{Address, H256};
 use super::mempool::{ExpectedStorageSlot, PoolOperation};
 use crate::common::{
     protos::{
+        self,
         op_pool::{Entity as ProtoEntity, MempoolOp, StorageSlot, UserOperation},
-        to_le_bytes, ConversionError, ProtoBytes,
+        to_le_bytes, ConversionError,
     },
     types::ValidTimeRange,
 };
@@ -42,7 +43,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
         let aggregator: Option<Address> = if op.aggregator.is_empty() {
             None
         } else {
-            Some(ProtoBytes(&op.aggregator).try_into()?)
+            Some(protos::from_bytes(&op.aggregator)?)
         };
 
         let valid_time_range = ValidTimeRange::new(op.valid_after.into(), op.valid_until.into());
@@ -81,12 +82,12 @@ impl TryFrom<&StorageSlot> for ExpectedStorageSlot {
     type Error = anyhow::Error;
 
     fn try_from(ss: &StorageSlot) -> Result<Self, Self::Error> {
-        let address = ProtoBytes(&ss.address).try_into()?;
-        let slot = ProtoBytes(&ss.slot).try_into()?;
+        let address = protos::from_bytes(&ss.address)?;
+        let slot = protos::from_bytes(&ss.slot)?;
         let expected_value = if ss.value.is_empty() {
             None
         } else {
-            Some(ProtoBytes(&ss.value).try_into()?)
+            Some(protos::from_bytes(&ss.value)?)
         };
 
         Ok(ExpectedStorageSlot {
