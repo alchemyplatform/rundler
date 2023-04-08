@@ -238,6 +238,103 @@ impl From<MempoolError> for Status {
 }
 
 #[cfg(test)]
+pub mod mock {
+    use std::time::Duration;
+
+    use mockall::mock;
+    use tokio::task::AbortHandle;
+    use tonic::transport::{Channel, Server};
+
+    use super::*;
+    use crate::common::protos::op_pool::{
+        op_pool_client::OpPoolClient, op_pool_server::OpPoolServer,
+    };
+
+    mock! {
+        pub OpPool {}
+
+        #[async_trait]
+        impl OpPool for OpPool {
+            async fn get_supported_entry_points(
+                &self,
+                _request: Request<GetSupportedEntryPointsRequest>,
+            ) -> Result<Response<GetSupportedEntryPointsResponse>>;
+
+            async fn add_op(&self, request: Request<AddOpRequest>) -> Result<Response<AddOpResponse>>;
+
+            async fn get_ops(&self, request: Request<GetOpsRequest>) -> Result<Response<GetOpsResponse>>;
+
+            async fn remove_ops(
+                &self,
+                request: Request<RemoveOpsRequest>,
+            ) -> Result<Response<RemoveOpsResponse>>;
+
+            async fn debug_clear_state(
+                &self,
+                _request: Request<DebugClearStateRequest>,
+            ) -> Result<Response<DebugClearStateResponse>>;
+
+            async fn debug_dump_mempool(
+                &self,
+                request: Request<DebugDumpMempoolRequest>,
+            ) -> Result<Response<DebugDumpMempoolResponse>>;
+
+            async fn debug_set_reputation(
+                &self,
+                request: Request<DebugSetReputationRequest>,
+            ) -> Result<Response<DebugSetReputationResponse>>;
+
+            async fn debug_dump_reputation(
+                &self,
+                request: Request<DebugDumpReputationRequest>,
+            ) -> Result<Response<DebugDumpReputationResponse>>;
+        }
+    }
+
+    /// An `OpPoolClient` packaged with context that when dropped will cause the
+    /// corresponding server to shut down.
+    #[derive(Debug)]
+    pub struct OpPoolClientHandle {
+        pub client: OpPoolClient<Channel>,
+        server_handle: AbortHandle,
+    }
+
+    impl Drop for OpPoolClientHandle {
+        fn drop(&mut self) {
+            self.server_handle.abort();
+        }
+    }
+
+    /// Creates an `OpPoolClient` connected to a local gRPC server which uses
+    /// the provided `mock` to respond to requests. Returns a handle which
+    /// exposes the client and shuts down the server when dropped.
+    pub async fn mock_op_pool_client(mock: MockOpPool) -> OpPoolClientHandle {
+        mock_op_pool_client_with_port(mock, 56776).await
+    }
+
+    /// Like `mock_op_pool_client`, but allows a custom port to avoid conflicts.
+    pub async fn mock_op_pool_client_with_port(mock: MockOpPool, port: u16) -> OpPoolClientHandle {
+        let server_addr = format!("[::1]:{port}");
+        let client_addr = format!("http://{server_addr}");
+        let server_handle = tokio::spawn(
+            Server::builder()
+                .add_service(OpPoolServer::new(mock))
+                .serve(server_addr.parse().unwrap()),
+        )
+        .abort_handle();
+        // Sleeping any amount of time is enough for the server to become ready.
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let client = OpPoolClient::connect(client_addr)
+            .await
+            .expect("should connect to mock gRPC server");
+        OpPoolClientHandle {
+            client,
+            server_handle,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -251,6 +348,7 @@ mod tests {
         op_pool::{
             event::NewBlockEvent,
             mempool::{error::MempoolResult, PoolOperation},
+            server::mock::MockOpPool,
         },
     };
 
@@ -304,6 +402,26 @@ mod tests {
         assert!(result.is_err());
         let result = result.unwrap_err();
         assert_eq!(result.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_mock() {
+        let mut op_pool = MockOpPool::new();
+        op_pool.expect_get_supported_entry_points().returning(|_| {
+            Ok(Response::new(GetSupportedEntryPointsResponse {
+                chain_id: 1337,
+                entry_points: vec![vec![1, 2, 3]],
+            }))
+        });
+        let mut client_handle = mock::mock_op_pool_client(op_pool).await;
+        let response = client_handle
+            .client
+            .get_supported_entry_points(GetSupportedEntryPointsRequest {})
+            .await
+            .expect("should get response from mock")
+            .into_inner();
+        assert_eq!(response.chain_id, 1337);
+        assert_eq!(response.entry_points, vec![vec![1, 2, 3]]);
     }
 
     fn given_oppool() -> OpPoolImpl<MockMempool> {
