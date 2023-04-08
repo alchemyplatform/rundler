@@ -107,6 +107,7 @@ where
     }
 }
 
+#[derive(Debug)]
 pub struct EthApi<C: JsonRpcClient + 'static> {
     contexts_by_entry_point: HashMap<Address, EntryPointContext<C>>,
     provider: Arc<Provider<C>>,
