@@ -29,16 +29,9 @@ message MempoolOp {
   uint64 valid_after = 3;
   uint64 valid_until = 4;
   bytes expected_code_hash = 5;
-  repeated Entity entities_needing_stake = 7;
-  repeated StorageSlot expected_storage_slots = 8;
-  bytes sim_block_hash = 9;
-  bool account_is_staked = 10;
-}
-
-message StorageSlot {
-  bytes address = 1;
-  bytes slot = 2;
-  bytes value = 3;
+  repeated Entity entities_needing_stake = 6;
+  bytes sim_block_hash = 7;
+  bool account_is_staked = 8;
 }
 
 service OpPool {
