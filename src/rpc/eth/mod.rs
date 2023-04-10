@@ -32,9 +32,12 @@ use crate::common::{
     },
     eth::log_to_raw_log,
     precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
-    protos::op_pool::{
-        op_pool_client::OpPoolClient, AddOpRequest, Entity as OpPoolEntity, ErrorInfo, ErrorReason,
-        MempoolOp,
+    protos::{
+        op_pool::{
+            op_pool_client::OpPoolClient, AddOpRequest, Entity as OpPoolEntity, ErrorInfo,
+            ErrorReason, MempoolOp, StorageSlot,
+        },
+        to_le_bytes,
     },
     simulation::{
         self, GasSimulationError, SimulationError, SimulationSuccess, SimulationViolation,
@@ -296,6 +299,7 @@ where
             valid_time_range,
             code_hash,
             aggregator_address,
+            expected_storage_slots,
             signature_failed,
             entities_needing_stake,
             block_hash,
@@ -337,6 +341,14 @@ where
                     entities_needing_stake: entities_needing_stake
                         .iter()
                         .map(|&e| OpPoolEntity::from(e).into())
+                        .collect(),
+                    expected_storage_slots: expected_storage_slots
+                        .iter()
+                        .map(|ss| StorageSlot {
+                            address: ss.address.as_bytes().to_vec(),
+                            slot: to_le_bytes(ss.slot),
+                            value: to_le_bytes(ss.value),
+                        })
                         .collect(),
                     account_is_staked,
                 }),
