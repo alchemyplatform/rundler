@@ -322,13 +322,18 @@ where
         }
 
         // 3. send op the mempool
-        let add_op_result = self
-            .op_pool_client
+        let proto_uo = (&op).into();
+        let uo_hash = entry_point
+            .get_user_op_hash(op)
+            .await
+            .context("should have gotten hash from entry point")?;
+
+        self.op_pool_client
             .clone()
             .add_op(AddOpRequest {
                 entry_point: entry_point.address().as_bytes().to_vec(),
                 op: Some(MempoolOp {
-                    uo: Some((&op).into()),
+                    uo: Some(proto_uo),
                     aggregator: aggregator_address.unwrap_or_default().as_bytes().to_vec(),
                     valid_after: valid_after.seconds_since_epoch(),
                     valid_until: valid_until.seconds_since_epoch(),
@@ -339,6 +344,7 @@ where
                         .map(|&e| OpPoolEntity::from(e).into())
                         .collect(),
                     account_is_staked,
+                    uo_hash: uo_hash.to_vec(),
                 }),
             })
             .await
@@ -346,7 +352,7 @@ where
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?;
 
         // 4. return the op hash
-        Ok(H256::from_slice(&add_op_result.into_inner().hash))
+        Ok(H256::from_slice(&uo_hash))
     }
 
     async fn estimate_user_operation_gas(

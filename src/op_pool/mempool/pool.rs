@@ -69,11 +69,7 @@ impl PoolInner {
                     <= op.uo.max_fee_per_gas.as_u128() as f64
             {
                 self.best.remove(pool_op);
-                self.by_hash.remove(
-                    &pool_op
-                        .uo()
-                        .op_hash(self.config.entry_point, self.config.chain_id),
-                );
+                self.by_hash.remove(&pool_op.hash);
             } else {
                 return Err(MempoolError::ReplacementUnderpriced(
                     pool_op.uo().max_priority_fee_per_gas,
@@ -94,6 +90,7 @@ impl PoolInner {
         }
 
         let pool_op = OrderedPoolOperation {
+            hash: op.uo_hash,
             po: Arc::new(op),
             submission_id: self.next_submission_id(),
         };
@@ -104,9 +101,7 @@ impl PoolInner {
         }
 
         // create and insert ordered operation
-        let hash = pool_op
-            .uo()
-            .op_hash(self.config.entry_point, self.config.chain_id);
+        let hash = pool_op.hash;
         self.size += pool_op.size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
@@ -168,15 +163,11 @@ impl PoolInner {
 
         while self.size > self.config.max_size_of_pool_bytes {
             if let Some(worst) = self.best.pop_last() {
-                let hash = worst
-                    .uo()
-                    .op_hash(self.config.entry_point, self.config.chain_id);
-
                 let po = self
-                    .remove_operation_by_hash(hash)
+                    .remove_operation_by_hash(worst.hash)
                     .context("should have removed the worst operation")?;
 
-                removed.push(hash);
+                removed.push(worst.hash);
                 self.size -= po.size();
             }
         }
@@ -206,6 +197,7 @@ impl PoolInner {
 struct OrderedPoolOperation {
     po: Arc<PoolOperation>,
     submission_id: u64,
+    hash: H256,
 }
 
 impl OrderedPoolOperation {
@@ -368,6 +360,7 @@ mod tests {
         for i in 0..count {
             let mut op = op.clone();
             op.uo.nonce = i.into();
+            op.uo_hash = H256::random();
             hashes.push(pool.add_operation(op).unwrap());
         }
 
@@ -441,6 +434,7 @@ mod tests {
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
+            uo_hash: H256::random(),
             ..PoolOperation::default()
         }
     }

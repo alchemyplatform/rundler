@@ -278,6 +278,7 @@ mod tests {
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
+            uo_hash: H256::random(),
             ..PoolOperation::default()
         }
     }

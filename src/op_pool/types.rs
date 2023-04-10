@@ -28,6 +28,7 @@ impl TryFrom<&PoolOperation> for MempoolOp {
                 .map(|e| ProtoEntity::from(*e).into())
                 .collect(),
             account_is_staked: op.account_is_staked,
+            uo_hash: op.uo_hash.as_bytes().to_vec(),
         })
     }
 }
@@ -57,6 +58,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
                 pe.try_into()
             })
             .collect::<Result<Vec<_>, ConversionError>>()?;
+        let uo_hash = H256::from_slice(&op.uo_hash);
 
         Ok(PoolOperation {
             uo,
@@ -66,6 +68,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             entities_needing_stake,
             sim_block_hash,
             account_is_staked: op.account_is_staked,
+            uo_hash,
         })
     }
 }
@@ -96,6 +99,7 @@ mod tests {
                 max_priority_fee_per_gas: vec![0; 32],
                 ..Default::default()
             }),
+            uo_hash: vec![0; 32],
             aggregator: TEST_ADDRESS_ARR.to_vec(),
             valid_after: now_secs,
             valid_until: now_secs,
@@ -119,6 +123,7 @@ mod tests {
             uo: shared_types::UserOperation {
                 ..Default::default()
             },
+            uo_hash: H256::random(),
             aggregator: Some(TEST_ADDRESS_STR.parse().unwrap()),
             valid_time_range: ValidTimeRange::new(now, now),
             expected_code_hash: H256::random(),

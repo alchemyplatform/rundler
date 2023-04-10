@@ -96,6 +96,7 @@ pub enum OperationOrigin {
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct PoolOperation {
     pub uo: UserOperation,
+    pub uo_hash: H256,
     pub aggregator: Option<Address>,
     pub valid_time_range: ValidTimeRange,
     pub expected_code_hash: H256,
@@ -152,8 +153,6 @@ impl PoolOperation {
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::Bytes;
-
     use super::*;
 
     #[test]
@@ -170,6 +169,7 @@ mod tests {
                 init_code: factory.as_fixed_bytes().into(),
                 ..Default::default()
             },
+            uo_hash: H256::random(),
             aggregator: Some(aggregator),
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),

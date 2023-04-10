@@ -197,7 +197,10 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
         init_code,
         ..base_user_op()
     };
-    let op_hash = op.op_hash(entry_point.address(), DEV_CHAIN_ID);
+    let op_hash = entry_point
+        .get_user_op_hash(op.clone())
+        .await
+        .context("should have gotten op hash from ep")?;
     let signature = wallet_owner_eoa
         .sign_message(op_hash)
         .await
@@ -293,7 +296,7 @@ impl DevClients {
             .context("call executed by wallet should have to address")?;
         let nonce = self
             .wallet
-            .nonce()
+            .get_nonce()
             .await
             .context("should read nonce from wallet")?;
         let call_data = Bytes::clone(
@@ -332,7 +335,11 @@ impl DevClients {
             paymaster_and_data.extend(paymaster_signature.to_vec());
             op.paymaster_and_data = paymaster_and_data.into()
         }
-        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID);
+        let op_hash = self
+            .entry_point
+            .get_user_op_hash(op.clone())
+            .await
+            .context("should get op hash")?;
         let signature = self
             .wallet_owner_signer
             .sign_message(op_hash)
