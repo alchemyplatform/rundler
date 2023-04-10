@@ -152,8 +152,6 @@ impl PoolOperation {
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::Bytes;
-
     use super::*;
 
     #[test]
