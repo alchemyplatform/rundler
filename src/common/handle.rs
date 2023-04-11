@@ -1,5 +1,6 @@
 use anyhow::Context;
-use tokio::task::JoinHandle;
+use futures::Future;
+use tokio::task::{AbortHandle, JoinHandle};
 
 /// Flatten a JoinHandle result.
 ///
@@ -12,5 +13,25 @@ pub async fn flatten_handle<T>(
         Ok(Ok(result)) => Ok(result),
         Ok(Err(err)) => Err(err)?,
         Err(err) => Err(err).context("handling failed")?,
+    }
+}
+
+/// A guard that aborts a spawned task when dropped.
+#[derive(Debug)]
+pub struct SpawnGuard(AbortHandle);
+
+impl SpawnGuard {
+    pub fn spawn_with_guard<T>(fut: T) -> Self
+    where
+        T: Future + Send + 'static,
+        T::Output: Send + 'static,
+    {
+        Self(tokio::spawn(fut).abort_handle())
+    }
+}
+
+impl Drop for SpawnGuard {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }

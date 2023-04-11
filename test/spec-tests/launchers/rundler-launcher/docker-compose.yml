@@ -15,6 +15,7 @@ services:
       - NODE_HTTP=http://geth:8545
       - RPC_API=eth,debug
       - MIN_UNSTAKE_DELAY=2
+      - BUILDER_PRIVATE_KEY=0xafdfd9c3d2095ef696594f6cedcae59e72dcd697e2a7521b1578140422a4f890
     healthcheck:
       test: curl --fail http://localhost:8080/health || exit 1
       interval: 1s
