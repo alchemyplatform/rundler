@@ -505,6 +505,7 @@ mod tests {
         make_bundle_with_aggregators(mock_ops, vec![]).await
     }
 
+    #[allow(clippy::mutable_key_type)]
     async fn make_bundle_with_aggregators(
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,

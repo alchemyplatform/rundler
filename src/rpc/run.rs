@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{cmp, future::Future, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
@@ -9,16 +9,22 @@ use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use tokio::sync::{broadcast, mpsc};
+use rand::Rng;
+use tokio::{
+    select,
+    sync::{broadcast, mpsc},
+    try_join,
+};
 use tonic::transport::{Channel, Uri};
 use tonic_health::pb::health_client::HealthClient;
+use tracing::info;
 use url::Url;
 
 use super::ApiNamespace;
 use crate::{
     common::{
         precheck,
-        protos::{builder::builder_client, op_pool::op_pool_client},
+        protos::{builder::builder_client::BuilderClient, op_pool::op_pool_client::OpPoolClient},
         server::format_socket_addr,
         simulation,
     },
@@ -68,27 +74,26 @@ pub async fn run(
     let provider = Arc::new(Provider::new(client));
 
     let op_pool_uri = Uri::from_str(&args.pool_url).context("should be a valid URI for op_pool")?;
-    let op_pool_client = op_pool_client::OpPoolClient::connect(args.pool_url)
-        .await
-        .context("should have been able to connect to op pool")?;
+    let builder_uri =
+        Uri::from_str(&args.builder_url).context("should be a valid URI for op_pool")?;
+    let (op_pool_client, builder_client) =
+        connect_clients_with_shutdown(&args.pool_url, &args.builder_url, shutdown_rx.resubscribe())
+            .await?;
+
     let op_pool_health_client = HealthClient::new(
         Channel::builder(op_pool_uri)
             .connect()
             .await
             .context("should have connected to op_pool health service channel")?,
     );
-
-    let builder_uri =
-        Uri::from_str(&args.builder_url).context("should be a valid URI for op_pool")?;
-    let builder_client = builder_client::BuilderClient::connect(args.builder_url)
-        .await
-        .context("builder server should be started")?;
     let builder_health_client = HealthClient::new(
         Channel::builder(builder_uri)
             .connect()
             .await
             .context("should have connected to builder health service channel")?,
     );
+    info!("Connected to op_pool service at {}", args.pool_url);
+    info!("Connected to builder service at {}", args.builder_url);
 
     if args.entry_points.is_empty() {
         bail!("No entry points provided");
@@ -141,4 +146,47 @@ pub async fn run(
             Ok(())
         }
     }
+}
+
+async fn connect_clients_with_shutdown(
+    op_pool_url: &str,
+    builder_url: &str,
+    mut shutdown_rx: broadcast::Receiver<()>,
+) -> anyhow::Result<(OpPoolClient<Channel>, BuilderClient<Channel>)> {
+    select! {
+        _ = shutdown_rx.recv() => {
+            tracing::error!("bailing from conneting clients, server shutting down");
+            bail!("Server shutting down")
+        }
+        res = async {
+            try_join!(
+                connect_with_retries(op_pool_url, OpPoolClient::connect),
+                connect_with_retries(builder_url, BuilderClient::connect)
+            )
+            .context("should connect to op pool and builder")
+        } => {
+            res
+        }
+    }
+}
+
+async fn connect_with_retries<F, C, FutF>(url: &str, func: F) -> anyhow::Result<C>
+where
+    F: Fn(String) -> FutF,
+    FutF: Future<Output = Result<C, tonic::transport::Error>> + Send + 'static,
+{
+    for i in 0..10 {
+        match func(url.to_owned()).await {
+            Ok(client) => return Ok(client),
+            Err(e) => tracing::warn!("Failed to connect to server {e:?} (attempt {})", i),
+        }
+        let sleep_dur = {
+            let mut rng = rand::thread_rng();
+            let jitter = rng.gen_range(0..1000);
+            let millis = cmp::min(10, 2_u64.pow(i)) * 1000 + jitter;
+            Duration::from_millis(millis)
+        };
+        tokio::time::sleep(sleep_dur).await;
+    }
+    bail!("Failed to connect to server after 10 attempts");
 }

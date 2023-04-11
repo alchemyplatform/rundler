@@ -1,4 +1,4 @@
-use anyhow::bail;
+use anyhow::{bail, Context};
 use clap::Args;
 use tokio::{
     signal,
@@ -30,19 +30,72 @@ pub struct BuilderArgs {
         default_value = "127.0.0.1"
     )]
     host: String,
+
+    /// Private key to use for signing transactions
+    #[arg(
+        long = "builder.private_key",
+        name = "builder.private_key",
+        env = "BUILDER_PRIVATE_KEY"
+    )]
+    private_key: Option<String>,
+
+    /// AWS KMS key IDs to use for signing transactions
+    #[arg(
+        long = "builder.aws_kms_key_ids",
+        name = "builder.aws_kms_key_ids",
+        env = "BUILDER_AWS_KMS_KEY_IDS",
+        value_delimiter = ','
+    )]
+    aws_kms_key_ids: Vec<String>,
+
+    /// AWS KMS region to use for KMS
+    #[arg(
+        long = "builder.aws_region",
+        name = "builder.aws_region",
+        env = "BUILDER_AWS_REGION",
+        default_value = "us-east-1"
+    )]
+    aws_kms_region: String,
+
+    /// Redis URI to use for KMS leasing
+    #[arg(
+        long = "builder.redis_uri",
+        name = "builder.redis_uri",
+        env = "BUILDER_REDIS_URI",
+        default_value = ""
+    )]
+    redis_uri: String,
+
+    /// Redis lock TTL in milliseconds
+    #[arg(
+        long = "builder.redis_lock_ttl_millis",
+        name = "builder.redis_lock_ttl_millis",
+        env = "BUILDER_REDIS_LOCK_TTL_MILLIS",
+        default_value = "60000"
+    )]
+    redis_lock_ttl_millis: u64,
 }
 
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
-    pub fn to_args(
-        &self,
-        _common: &CommonArgs,
-        _pool_url: String,
-    ) -> anyhow::Result<builder::Args> {
+    pub fn to_args(&self, common: &CommonArgs, _pool_url: String) -> anyhow::Result<builder::Args> {
         Ok(builder::Args {
             port: self.port,
             host: self.host.clone(),
+            rpc_url: common
+                .node_http
+                .clone()
+                .context("should have a node HTTP URL")?,
+            private_key: self.private_key.clone(),
+            aws_kms_key_ids: self.aws_kms_key_ids.clone(),
+            aws_kms_region: self
+                .aws_kms_region
+                .parse()
+                .context("should be a valid aws region")?,
+            redis_uri: self.redis_uri.clone(),
+            redis_lock_ttl_millis: self.redis_lock_ttl_millis,
+            chain_id: common.chain_id,
         })
     }
 
@@ -84,7 +137,7 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
 
     tokio::select! {
         res = handle => {
-            error!("Pool server exited unexpectedly: {res:?}");
+            error!("Builder server exited unexpectedly: {res:?}");
         }
         res = signal::ctrl_c() => {
             match res {
