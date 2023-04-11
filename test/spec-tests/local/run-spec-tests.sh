@@ -10,6 +10,6 @@ cargo build
 ./launcher.sh stop # kill already running processes if any
 ./launcher.sh start
 
-(cd ../bundler-spec-tests && pdm run pytest -rA -W ignore::DeprecationWarning --url http://localhost:3000 --entry-point 0x0576a174D229E3cFA37253523E645A78A0C91B57 --ethereum-node http://localhost:8545 $@)
+(cd ../bundler-spec-tests && pdm run pytest -rA -W ignore::DeprecationWarning --url http://localhost:3000 --entry-point 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789 --ethereum-node http://localhost:8545 $@)
 
 ./launcher.sh stop
