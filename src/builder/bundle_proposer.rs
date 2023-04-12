@@ -2,11 +2,13 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
     time::Duration,
+    usize,
 };
 
 use anyhow::Context;
 use ethers::types::{Address, Bytes, H256, U256};
 use futures::future;
+use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
 use tonic::{async_trait, transport::Channel};
@@ -18,16 +20,17 @@ use crate::common::{
         self,
         op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
     },
-    simulation::{AggregatorSimOut, SimulationError, SimulationSuccess, Simulator},
-    types::{ProviderLike, Timestamp, UserOperation},
+    simulation::{SimulationError, SimulationSuccess, Simulator},
+    types::{EntryPointLike, HandleOpsOut, ProviderLike, Timestamp, UserOperation},
 };
 
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Bundle {
     pub ops_per_aggregator: Vec<UserOpsPerAggregator>,
+    pub gas_estimate: U256,
     pub expected_storage_slots: HashMap<Address, HashMap<U256, U256>>,
     pub rejected_ops: Vec<UserOperation>,
 }
@@ -39,22 +42,33 @@ pub trait BundleProposer {
 }
 
 #[derive(Debug)]
-pub struct BundleProposerImpl<S: Simulator, P: ProviderLike> {
-    entry_point_address: Address,
+pub struct BundleProposerImpl<S, E, P>
+where
+    S: Simulator,
+    E: EntryPointLike,
+    P: ProviderLike,
+{
     bundle_size: u64,
+    beneficiary: Address,
     op_pool: OpPoolClient<Channel>,
     simulator: S,
+    entry_point: E,
     provider: Arc<P>,
 }
 
 #[async_trait]
-impl<S: Simulator, P: ProviderLike> BundleProposer for BundleProposerImpl<S, P> {
+impl<S, E, P> BundleProposer for BundleProposerImpl<S, E, P>
+where
+    S: Simulator,
+    E: EntryPointLike,
+    P: ProviderLike,
+{
     async fn make_bundle(&self) -> anyhow::Result<Bundle> {
         let ops = self
             .op_pool
             .clone()
             .get_ops(GetOpsRequest {
-                entry_point: self.entry_point_address.as_bytes().to_vec(),
+                entry_point: self.entry_point.address().as_bytes().to_vec(),
                 max_ops: self.bundle_size,
             })
             .await
@@ -77,25 +91,47 @@ impl<S: Simulator, P: ProviderLike> BundleProposer for BundleProposerImpl<S, P> 
                 }
             })
             .collect::<Vec<_>>();
-        Ok(self.assemble_ops(ops_with_simulations).await)
+        let mut context = self.assemble_context(ops_with_simulations).await;
+        while !context.is_empty() {
+            let gas_estimate = self.estimate_gas_rejecting_failed_ops(&mut context).await?;
+            if let Some(gas_estimate) = gas_estimate {
+                return Ok(Bundle {
+                    ops_per_aggregator: context.to_ops_per_aggregator(),
+                    gas_estimate,
+                    expected_storage_slots: HashMap::default(), // TODO: actually compute this
+                    rejected_ops: context.rejected_ops,
+                });
+            }
+        }
+        Ok(Bundle {
+            rejected_ops: context.rejected_ops,
+            ..Default::default()
+        })
     }
 }
 
-impl<S: Simulator, P: ProviderLike> BundleProposerImpl<S, P> {
+impl<S, E, P> BundleProposerImpl<S, E, P>
+where
+    S: Simulator,
+    E: EntryPointLike,
+    P: ProviderLike,
+{
     // TODO: Remove the allow directive after we start using this.
     #[allow(dead_code)]
     pub fn new(
-        entry_point_address: Address,
         bundle_size: u64,
+        beneficiary: Address,
         op_pool: OpPoolClient<Channel>,
         simulator: S,
+        entry_point: E,
         provider: Arc<P>,
     ) -> Self {
         Self {
-            entry_point_address,
             bundle_size,
+            beneficiary,
             op_pool,
             simulator,
+            entry_point,
             provider,
         }
     }
@@ -127,16 +163,15 @@ impl<S: Simulator, P: ProviderLike> BundleProposerImpl<S, P> {
         }
     }
 
-    async fn assemble_ops(
+    async fn assemble_context(
         &self,
         ops_with_simulations: Vec<(UserOperation, Option<SimulationSuccess>)>,
-    ) -> Bundle {
+    ) -> ProposalContext {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
             .map(|(op, _)| op.sender)
             .collect();
-        let mut ops_without_aggregator = Vec::<UserOperation>::new();
-        let mut ops_by_aggregator = HashMap::<Address, Vec<AggregatedOp>>::new();
+        let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
         let mut rejected_ops = Vec::<UserOperation>::new();
         for (op, simulation) in ops_with_simulations {
             let Some(simulation) = simulation else {
@@ -148,69 +183,108 @@ impl<S: Simulator, P: ProviderLike> BundleProposerImpl<S, P> {
                 .iter()
                 .any(|&address| address != op.sender && all_sender_addresses.contains(&address))
             {
-                // Exclude ops that access the sender of another op in the batch.
+                // Exclude ops that access the sender of another op in the
+                // batch, but don't reject them (remove them from pool).
                 continue;
             }
-            if let Some(AggregatorSimOut { address, signature }) = simulation.aggregator {
-                ops_by_aggregator
-                    .entry(address)
-                    .or_default()
-                    .push(AggregatedOp { op, signature });
-            } else {
-                ops_without_aggregator.push(op);
-            }
+            groups_by_aggregator
+                .entry(simulation.aggregator_address())
+                .or_default()
+                .ops_with_simulations
+                .push(OpWithSimulation { op, simulation });
             // TODO: Track paymaster balances
         }
-        let mut signed_ops_by_aggregator = Vec::<UserOpsPerAggregator>::new();
-        if !ops_without_aggregator.is_empty() {
-            signed_ops_by_aggregator.push(UserOpsPerAggregator {
-                user_ops: ops_without_aggregator,
-                aggregator: Address::default(),
-                signature: Bytes::default(),
-            });
-        }
-        let aggregation_futures = ops_by_aggregator.iter().map(|(&aggregator, ops)| {
-            self.aggregate_signatures(aggregator, ops.iter().map(|op| op.op.clone()).collect())
-        });
-        let aggregation_signatures = future::join_all(aggregation_futures).await;
-        for (aggregator, signature) in aggregation_signatures {
-            match signature {
-                Ok(Some(signature)) => signed_ops_by_aggregator.push(UserOpsPerAggregator {
-                    user_ops: ops_by_aggregator
-                        .remove(&aggregator)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|op| op.with_replaced_signature())
-                        .collect(),
-                    aggregator,
-                    signature,
-                }),
-                Ok(None) => {
-                    rejected_ops.extend(
-                        ops_by_aggregator
-                            .remove(&aggregator)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|op| op.op),
-                    );
-                }
-                Err(error) => {
-                    error!("Failed to compute aggregator signature: {error}");
-                }
-            }
-        }
-        Bundle {
-            ops_per_aggregator: signed_ops_by_aggregator,
-            expected_storage_slots: Default::default(), // TODO: actually compute storage slots
+        let mut context = ProposalContext {
+            groups_by_aggregator,
             rejected_ops,
+        };
+        self.compute_aggregator_signatures(&mut context).await;
+        context
+    }
+
+    async fn compute_aggregator_signatures(&self, context: &mut ProposalContext) {
+        let signature_futures =
+            context
+                .groups_by_aggregator
+                .iter()
+                .filter_map(|(option_address, group)| {
+                    option_address.map(|address| self.aggregate_signatures(address, group))
+                });
+        let signatures = future::join_all(signature_futures).await;
+        for (aggregator, result) in signatures {
+            context.apply_aggregation_signature_result(aggregator, result);
+        }
+    }
+
+    async fn reject_index(&self, context: &mut ProposalContext, i: usize) {
+        let mut remaining_i = i;
+        let mut found_aggregator: Option<Option<Address>> = None;
+        for (&aggregator, group) in &mut context.groups_by_aggregator {
+            if remaining_i < group.ops_with_simulations.len() {
+                let rejected = group.ops_with_simulations.remove(i);
+                context.rejected_ops.push(rejected.op);
+                found_aggregator = Some(aggregator);
+                break;
+            }
+            remaining_i -= group.ops_with_simulations.len();
+        }
+        let Some(found_aggregator) = found_aggregator else {
+            error!("cannot reject op with index {i} because there are not enough ops");
+            return;
+        };
+        // If we just removed the last op from a group, delete that group.
+        // Otherwise, the signature is invalidated and we need to recompute it.
+        if context.groups_by_aggregator[&found_aggregator]
+            .ops_with_simulations
+            .is_empty()
+        {
+            context.groups_by_aggregator.remove(&found_aggregator);
+        } else if let Some(aggregator) = found_aggregator {
+            let (_, sig_result) = self
+                .aggregate_signatures(aggregator, &context.groups_by_aggregator[&found_aggregator])
+                .await;
+            context.apply_aggregation_signature_result(aggregator, sig_result);
+        }
+    }
+
+    /// Estimates the gas needed to send this bundle. If successful, returns the
+    /// amount of gas, but if not then mutates the context to remove whichever
+    /// op(s) caused the failure.
+    async fn estimate_gas_rejecting_failed_ops(
+        &self,
+        context: &mut ProposalContext,
+    ) -> anyhow::Result<Option<U256>> {
+        let handle_ops_out = self
+            .entry_point
+            .estimate_handle_ops_gas(context.to_ops_per_aggregator(), self.beneficiary)
+            .await
+            .context("should estimate gas for proposed bundle")?;
+        match handle_ops_out {
+            HandleOpsOut::SuccessWithGas(gas) => Ok(Some(gas)),
+            HandleOpsOut::FailedOp(index, _message) => {
+                // TODO: look at message to see if caused by a factory or
+                // paymaster. If so, return something to purge the op pool of
+                // all other ops using that entity.
+                self.reject_index(context, index).await;
+                Ok(None)
+            }
+            HandleOpsOut::SignatureValidationFailed(aggregator) => {
+                context.reject_aggregator(aggregator);
+                Ok(None)
+            }
         }
     }
 
     async fn aggregate_signatures(
         &self,
         aggregator: Address,
-        ops: Vec<UserOperation>,
+        group: &AggregatorGroup,
     ) -> (Address, anyhow::Result<Option<Bytes>>) {
+        let ops = group
+            .ops_with_simulations
+            .iter()
+            .map(|op_with_simulation| op_with_simulation.op.clone())
+            .collect();
         let result = Arc::clone(&self.provider)
             .aggregate_signatures(aggregator, ops)
             .await;
@@ -238,17 +312,81 @@ impl TryFrom<MempoolOp> for OpFromPool {
     }
 }
 
-#[derive(Clone, Debug)]
-struct AggregatedOp {
+#[derive(Debug)]
+struct OpWithSimulation {
     op: UserOperation,
+    simulation: SimulationSuccess,
+}
+
+impl OpWithSimulation {
+    fn op_with_replaced_sig(&self) -> UserOperation {
+        let mut op = self.op.clone();
+        if let Some(aggregator) = &self.simulation.aggregator {
+            op.signature = aggregator.signature.clone();
+        }
+        op
+    }
+}
+
+/// A struct used internally to represent the current state of a proposed bundle
+/// as it goes through iterations. Contains similar data to the
+/// `Vec<UserOpsPerAggregator>` that will eventually be passed to the entry
+/// point, but contains extra context needed for the computation.
+#[derive(Debug)]
+struct ProposalContext {
+    groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
+    rejected_ops: Vec<UserOperation>,
+}
+
+#[derive(Debug, Default)]
+struct AggregatorGroup {
+    ops_with_simulations: Vec<OpWithSimulation>,
     signature: Bytes,
 }
 
-impl AggregatedOp {
-    fn with_replaced_signature(self) -> UserOperation {
-        let Self { mut op, signature } = self;
-        op.signature = signature;
-        op
+impl ProposalContext {
+    fn is_empty(&self) -> bool {
+        self.groups_by_aggregator.is_empty()
+    }
+
+    fn apply_aggregation_signature_result(
+        &mut self,
+        aggregator: Address,
+        result: anyhow::Result<Option<Bytes>>,
+    ) {
+        match result {
+            Ok(Some(sig)) => self.groups_by_aggregator[&Some(aggregator)].signature = sig,
+            Ok(None) => self.reject_aggregator(aggregator),
+            Err(error) => {
+                error!("Failed to compute aggregator signature: {error}");
+                self.groups_by_aggregator.remove(&Some(aggregator));
+            }
+        }
+    }
+
+    fn reject_aggregator(&mut self, address: Address) {
+        let rejected = self.groups_by_aggregator.remove(&Some(address));
+        let Some(rejected) = rejected else {
+            error!("tried to reject ops from aggregator {address}, but no such ops exist in bundle");
+            return;
+        };
+        let rejected_ops = rejected.ops_with_simulations.into_iter().map(|op| op.op);
+        self.rejected_ops.extend(rejected_ops);
+    }
+
+    fn to_ops_per_aggregator(&self) -> Vec<UserOpsPerAggregator> {
+        self.groups_by_aggregator
+            .iter()
+            .map(|(&aggregator, group)| UserOpsPerAggregator {
+                user_ops: group
+                    .ops_with_simulations
+                    .iter()
+                    .map(|op| op.op_with_replaced_sig())
+                    .collect(),
+                aggregator: aggregator.unwrap_or_default(),
+                signature: group.signature.clone(),
+            })
+            .collect()
     }
 }
 
@@ -262,14 +400,14 @@ mod tests {
     use crate::common::{
         grpc::mocks::{self, MockOpPool},
         protos::op_pool::GetOpsResponse,
-        simulation::{MockSimulator, SimulationError, SimulationSuccess},
-        types::{MockProviderLike, ValidTimeRange},
+        simulation::{AggregatorSimOut, MockSimulator, SimulationError, SimulationSuccess},
+        types::{MockEntryPointLike, MockProviderLike, ValidTimeRange},
     };
 
     #[tokio::test]
     async fn test_singleton_valid_bundle() {
         let op = UserOperation::default();
-        let bundle = make_bundle(vec![MockOp {
+        let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
         }])
@@ -281,12 +419,13 @@ mod tests {
                 ..Default::default()
             }]
         );
+        assert_eq!(bundle.gas_estimate, default_estimated_gas());
     }
 
     #[tokio::test]
     async fn test_rejects_on_violation() {
         let op = UserOperation::default();
-        let bundle = make_bundle(vec![MockOp {
+        let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| Err(SimulationError::Violations(vec![]))),
         }])
@@ -298,7 +437,7 @@ mod tests {
     #[tokio::test]
     async fn test_drops_but_not_rejects_on_simulation_failure() {
         let op = UserOperation::default();
-        let bundle = make_bundle(vec![MockOp {
+        let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
                 Err(SimulationError::Other(anyhow!("simulation failed")))
@@ -312,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn test_rejects_on_signature_failure() {
         let op = UserOperation::default();
-        let bundle = make_bundle(vec![MockOp {
+        let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
                 Ok(SimulationSuccess {
@@ -334,7 +473,7 @@ mod tests {
         ];
         for time_range in invalid_time_ranges {
             let op = UserOperation::default();
-            let bundle = make_bundle(vec![MockOp {
+            let bundle = simple_make_bundle(vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(move || {
                     Ok(SimulationSuccess {
@@ -353,7 +492,7 @@ mod tests {
     async fn test_drops_but_not_rejects_op_accessing_another_sender() {
         let op1 = op_with_sender(address(1));
         let op2 = op_with_sender(address(2));
-        let bundle = make_bundle(vec![
+        let bundle = simple_make_bundle(vec![
             MockOp {
                 op: op1,
                 simulation_result: Box::new(|| {
@@ -399,7 +538,7 @@ mod tests {
         let op_b_aggregated_sig = 21;
         let aggregator_a_signature = 101;
         let aggregator_b_signature = 102;
-        let bundle = make_bundle_with_aggregators(
+        let bundle = make_bundle(
             vec![
                 MockOp {
                     op: unaggregated_op.clone(),
@@ -452,6 +591,7 @@ mod tests {
                     signature: Box::new(move || Ok(Some(bytes(aggregator_b_signature)))),
                 },
             ],
+            vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -501,18 +641,24 @@ mod tests {
         signature: Box<dyn Fn() -> anyhow::Result<Option<Bytes>> + Send + Sync>,
     }
 
-    async fn make_bundle(mock_ops: Vec<MockOp>) -> Bundle {
-        make_bundle_with_aggregators(mock_ops, vec![]).await
+    async fn simple_make_bundle(mock_ops: Vec<MockOp>) -> Bundle {
+        make_bundle(
+            mock_ops,
+            vec![],
+            vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+        )
+        .await
     }
 
-    #[allow(clippy::mutable_key_type)]
-    async fn make_bundle_with_aggregators(
+    async fn make_bundle(
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,
+        mock_estimate_gasses: Vec<HandleOpsOut>,
     ) -> Bundle {
         let entry_point_address = address(123);
-        let current_block_hash = hash(124);
-        let expected_code_hash = hash(125);
+        let beneficiary_address = address(124);
+        let current_block_hash = hash(125);
+        let expected_code_hash = hash(126);
         let bundle_size = mock_ops.len() as u64;
         let mut op_pool = MockOpPool::new();
         let ops: Vec<_> = mock_ops
@@ -538,6 +684,17 @@ mod tests {
                 block_hash == Some(current_block_hash) && code_hash == Some(expected_code_hash)
             })
             .returning(move |op, _, _| simulations_by_op[&op]());
+        let mut entry_point = MockEntryPointLike::new();
+        entry_point
+            .expect_address()
+            .return_const(entry_point_address);
+        for estimated_gas in mock_estimate_gasses {
+            entry_point
+                .expect_estimate_handle_ops_gas()
+                .times(..=1)
+                .withf(move |_, &beneficiary| beneficiary == beneficiary_address)
+                .return_once(|_, _| Ok(estimated_gas));
+        }
         let signatures_by_aggregator: HashMap<_, _> = mock_aggregators
             .into_iter()
             .map(|agg| (agg.address, agg.signature))
@@ -550,10 +707,11 @@ mod tests {
             .expect_aggregate_signatures()
             .returning(move |address, _| signatures_by_aggregator[&address]());
         let proposer = BundleProposerImpl::new(
-            entry_point_address,
             bundle_size,
+            beneficiary_address,
             op_pool_handle.client.clone(),
             simulator,
+            entry_point,
             Arc::new(provider),
         );
         proposer.make_bundle().await.expect("should make a bundle")
@@ -580,5 +738,9 @@ mod tests {
             sender,
             ..Default::default()
         }
+    }
+
+    fn default_estimated_gas() -> U256 {
+        20000.into()
     }
 }

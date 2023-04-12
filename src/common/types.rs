@@ -1,3 +1,4 @@
+mod entry_point_like;
 mod provider_like;
 mod timestamp;
 mod validation_results;
@@ -6,6 +7,7 @@ mod violations;
 use std::str::FromStr;
 
 use anyhow::bail;
+pub use entry_point_like::*;
 use ethers::{
     abi::{encode, Token},
     types::{Address, Bytes, H256, U256},
@@ -31,8 +33,8 @@ pub struct UserOperationId {
 impl UserOperation {
     /// Hash a user operation with the given entry point and chain ID.
     ///
-    /// The hash is used to uniquely identify a user operation in the entry point
-    /// it does not include the signature field.
+    /// The hash is used to uniquely identify a user operation in the entry point.
+    /// It does not include the signature field.
     pub fn op_hash(&self, entry_point: Address, chain_id: u64) -> H256 {
         keccak256(encode(&[
             Token::FixedBytes(keccak256(self.pack()).to_vec()),
