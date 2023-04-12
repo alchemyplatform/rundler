@@ -47,6 +47,12 @@ pub struct AggregatorSimOut {
     pub signature: Bytes,
 }
 
+impl SimulationSuccess {
+    pub fn aggregator_address(&self) -> Option<Address> {
+        self.aggregator.as_ref().map(|agg| agg.address)
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, ethers::contract::EthError)]
 #[etherror(name = "Error", abi = "Error(string)")]
 /// This is the abi for what happens when you just revert("message") in a contract
