@@ -1,19 +1,32 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use ethers::providers::{Http, Provider};
+use ethers::{
+    abi::Address,
+    prelude::MiddlewareBuilder,
+    providers::{Http, Provider},
+};
+use ethers_signers::{LocalWallet, Signer};
 use rusoto_core::Region;
 use tokio::sync::{broadcast, mpsc};
 use tonic::transport::Server;
+use tracing::info;
 
 use crate::{
     builder::{
+        bundle_proposer::{BundleProposer, BundleProposerImpl},
         server::BuilderImpl,
-        signer::{KmsSigner, LocalSigner, SignerLike},
+        signer::{monitor_account_balance, KmsSigner},
     },
     common::{
-        protos::builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
+        contracts::i_entry_point::IEntryPoint,
+        handle::SpawnGuard,
+        protos::{
+            builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
+            op_pool::op_pool_client::OpPoolClient,
+        },
         server::format_socket_addr,
+        simulation::{Settings, SimulatorImpl},
     },
 };
 
@@ -28,6 +41,8 @@ pub struct Args {
     pub redis_uri: String,
     pub redis_lock_ttl_millis: u64,
     pub chain_id: u64,
+    pub entry_point_address: Address,
+    pub pool_url: String,
 }
 
 pub async fn run(
@@ -38,26 +53,71 @@ pub async fn run(
     let addr = format_socket_addr(&args.host, args.port).parse()?;
     tracing::info!("Starting builder server on {}", addr);
 
-    let provider =
-        Arc::new(Provider::<Http>::try_from(args.rpc_url).context("should create provider")?);
+    let provider = Arc::new(
+        Provider::<Http>::try_from(args.rpc_url.to_owned()).context("should create provider")?,
+    );
 
-    let _tx_sender: Box<dyn SignerLike> = if let Some(pk) = args.private_key {
+    let pool = OpPoolClient::connect(args.pool_url.to_owned())
+        .await
+        .context("should connect to pool")?;
+    let simulator = SimulatorImpl::new(
+        provider.clone(),
+        args.entry_point_address,
+        Settings::default(),
+    );
+
+    let (bp, signer_addr): (Box<dyn BundleProposer>, Address) = if let Some(pk) = args.private_key {
         tracing::info!("Using local signer");
-        Box::new(LocalSigner::connect(provider.clone(), args.chain_id, pk).await?)
+        let s = pk
+            .parse::<LocalWallet>()
+            .context("should parse private_key")?
+            .with_chain_id(args.chain_id);
+        let p = Arc::new(provider.clone().with_signer(s));
+        let addr = p.address();
+        let ep = IEntryPoint::new(args.entry_point_address, p.clone());
+
+        (
+            Box::new(BundleProposerImpl::new(
+                100,
+                args.entry_point_address,
+                pool,
+                simulator,
+                ep,
+                p,
+            )),
+            addr,
+        )
     } else {
         tracing::info!("Using AWS KMS signer");
-        Box::new(
-            KmsSigner::connect(
-                provider.clone(),
-                args.chain_id,
-                args.aws_kms_region,
-                args.aws_kms_key_ids,
-                args.redis_uri,
-                args.redis_lock_ttl_millis,
-            )
-            .await?,
+        let s = KmsSigner::connect(
+            args.chain_id,
+            args.aws_kms_region,
+            args.aws_kms_key_ids,
+            args.redis_uri,
+            args.redis_lock_ttl_millis,
+        )
+        .await?;
+        let p = Arc::new(provider.clone().with_signer(s));
+        let addr = p.address();
+        let ep = IEntryPoint::new(args.entry_point_address, p.clone());
+
+        (
+            Box::new(BundleProposerImpl::new(
+                100,
+                args.entry_point_address,
+                pool,
+                simulator,
+                ep,
+                p,
+            )),
+            addr,
         )
     };
+
+    let _monitor_guard =
+        SpawnGuard::spawn_with_guard(monitor_account_balance(signer_addr, provider.clone()));
+    let bundle = bp.make_bundle().await?;
+    info!("Made bundle {:?}", bundle);
 
     // gRPC server
     let builder_server = BuilderServer::new(BuilderImpl::new());
