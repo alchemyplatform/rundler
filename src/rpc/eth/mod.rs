@@ -391,7 +391,7 @@ where
     async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>> {
         if hash == H256::zero() {
             return Err(EthRpcError::InvalidParams(
-                "hash cannot be zero".to_string(),
+                "Missing/invalid userOpHash".to_string(),
             ))?;
         }
 
@@ -504,11 +504,12 @@ where
             .decode_user_operation_event(log)
             .context("should have decoded user operation event")?;
 
-        let reason: Option<String> = if log.success {
-            None
+        let reason: String = if log.success {
+            "".to_owned()
         } else {
             EthApi::<C>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
                 .context("should have found revert reason if tx wasn't successful")?
+                .unwrap_or_default()
         };
 
         // 5. Return the result
@@ -519,7 +520,7 @@ where
             nonce: log.nonce,
             paymaster: log.paymaster.into(),
             actual_gas_cost: log.actual_gas_cost,
-            acutal_gas_used: log.actual_gas_used,
+            actual_gas_used: log.actual_gas_used,
             success: log.success,
             logs: filtered_logs,
             receipt: tx_receipt,

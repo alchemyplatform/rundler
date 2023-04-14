@@ -35,7 +35,7 @@ const EXECUTION_REVERTED: i32 = -32521;
 #[derive(Debug, thiserror::Error)]
 pub enum EthRpcError {
     /// Invalid parameters
-    #[error("invalid parameters: {0:?}")]
+    #[error("{0}")]
     InvalidParams(String),
     /// Validation rejected the operation in entrypoint or during
     /// wallet creation or validation
