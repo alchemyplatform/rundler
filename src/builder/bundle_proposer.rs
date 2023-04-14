@@ -34,9 +34,22 @@ pub struct Bundle {
     pub rejected_ops: Vec<UserOperation>,
 }
 
+impl Bundle {
+    pub fn len(&self) -> usize {
+        self.ops_per_aggregator
+            .iter()
+            .map(|ops| ops.user_ops.len())
+            .sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ops_per_aggregator.is_empty()
+    }
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait BundleProposer {
+pub trait BundleProposer: Send + Sync + 'static {
     async fn make_bundle(&self) -> anyhow::Result<Bundle>;
 }
 
@@ -47,7 +60,7 @@ where
     E: EntryPointLike,
     P: ProviderLike,
 {
-    bundle_size: u64,
+    max_bundle_size: u64,
     beneficiary: Address,
     op_pool: OpPoolClient<Channel>,
     simulator: S,
@@ -68,7 +81,7 @@ where
             .clone()
             .get_ops(GetOpsRequest {
                 entry_point: self.entry_point.address().as_bytes().to_vec(),
-                max_ops: self.bundle_size,
+                max_ops: self.max_bundle_size,
             })
             .await
             .context("should get ops from op pool to bundle")?
@@ -118,7 +131,7 @@ where
     // TODO: Remove the allow directive after we start using this.
     #[allow(dead_code)]
     pub fn new(
-        bundle_size: u64,
+        max_bundle_size: u64,
         beneficiary: Address,
         op_pool: OpPoolClient<Channel>,
         simulator: S,
@@ -126,7 +139,7 @@ where
         provider: Arc<P>,
     ) -> Self {
         Self {
-            bundle_size,
+            max_bundle_size,
             beneficiary,
             op_pool,
             simulator,

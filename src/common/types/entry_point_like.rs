@@ -1,10 +1,11 @@
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 
+use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::ContractError,
+    contract::{ContractError, FunctionCall},
     providers::Middleware,
-    types::{Address, U256},
+    types::{Address, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
@@ -17,7 +18,7 @@ use crate::common::contracts::{
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait EntryPointLike: Send + Sync {
+pub trait EntryPointLike: Send + Sync + 'static {
     fn address(&self) -> Address;
 
     async fn estimate_handle_ops_gas(
@@ -25,6 +26,13 @@ pub trait EntryPointLike: Send + Sync {
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
     ) -> anyhow::Result<HandleOpsOut>;
+
+    async fn send_bundle(
+        &self,
+        ops_per_aggregator: Vec<UserOpsPerAggregator>,
+        beneficiary: Address,
+        gas: U256,
+    ) -> anyhow::Result<H256>;
 }
 
 #[derive(Clone, Debug)]
@@ -45,20 +53,12 @@ where
 
     async fn estimate_handle_ops_gas(
         &self,
-        mut ops_per_aggregator: Vec<UserOpsPerAggregator>,
+        ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
     ) -> anyhow::Result<HandleOpsOut> {
-        let result = if ops_per_aggregator.len() == 1
-            && ops_per_aggregator[0].aggregator == Address::zero()
-        {
-            self.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)
-                .estimate_gas()
-                .await
-        } else {
-            self.handle_aggregated_ops(ops_per_aggregator, beneficiary)
-                .estimate_gas()
-                .await
-        };
+        let result = get_handle_ops_call(self, ops_per_aggregator, beneficiary)
+            .estimate_gas()
+            .await;
         let error = match result {
             Ok(gas) => return Ok(HandleOpsOut::SuccessWithGas(gas)),
             Err(error) => error,
@@ -72,5 +72,31 @@ where
             }
         }
         Err(error)?
+    }
+
+    async fn send_bundle(
+        &self,
+        ops_per_aggregator: Vec<UserOpsPerAggregator>,
+        beneficiary: Address,
+        gas: U256,
+    ) -> anyhow::Result<H256> {
+        Ok(get_handle_ops_call(self, ops_per_aggregator, beneficiary)
+            .gas(gas)
+            .send()
+            .await
+            .context("should send bundle transaction")?
+            .tx_hash())
+    }
+}
+
+fn get_handle_ops_call<M: Middleware>(
+    entry_point: &IEntryPoint<M>,
+    mut ops_per_aggregator: Vec<UserOpsPerAggregator>,
+    beneficiary: Address,
+) -> FunctionCall<Arc<M>, M, ()> {
+    if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::zero() {
+        entry_point.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)
+    } else {
+        entry_point.handle_aggregated_ops(ops_per_aggregator, beneficiary)
     }
 }
