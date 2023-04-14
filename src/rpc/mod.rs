@@ -194,9 +194,9 @@ pub struct UserOperationReceipt {
     pub nonce: U256,
     pub paymaster: RpcAddress,
     pub actual_gas_cost: U256,
-    pub acutal_gas_used: U256,
+    pub actual_gas_used: U256,
     pub success: bool,
-    pub reason: Option<String>,
+    pub reason: String,
     pub logs: Vec<Log>,
     pub receipt: TransactionReceipt,
 }

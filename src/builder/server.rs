@@ -15,7 +15,7 @@ use tokio::{join, time};
 use tonic::{async_trait, transport::Channel, Request, Response, Status};
 use tracing::{
     error,
-    log::{info, trace},
+    log::{debug, info, trace},
 };
 
 use crate::{
@@ -95,7 +95,7 @@ where
                     receipt.block_number.unwrap_or_default()
                 ),
                 Ok(None) => trace!("No ops to send at block {last_block_number}"),
-                Err(error) => error!("Failed to send bundle. Will retry next block: {error}"),
+                Err(error) => error!("Failed to send bundle. Will retry next block: {error:?}"),
             }
         }
     }
@@ -199,6 +199,7 @@ where
         &self,
         _request: Request<DebugSendBundleNowRequest>,
     ) -> tonic::Result<Response<DebugSendBundleNowResponse>> {
+        debug!("Send bundle now called");
         let result = self.send_bundle().await;
         let tx_hash = match result {
             Ok(Some(tx_hash)) => tx_hash,
