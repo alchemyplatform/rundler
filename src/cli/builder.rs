@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{bail, Context};
 use clap::Args;
 use tokio::{
@@ -74,12 +76,31 @@ pub struct BuilderArgs {
         default_value = "60000"
     )]
     redis_lock_ttl_millis: u64,
+
+    /// Maximum number of ops to include in one bundle.
+    #[arg(
+        long = "builder.max_bundle_size",
+        name = "builder.max_bundle_size",
+        env = "BUILDER_MAX_BUNDLE_SIZE",
+        default_value = "10"
+    )]
+    max_bundle_size: u64,
+
+    /// Interval at which the builder polls an Eth node for new blocks and
+    /// mined transactions.
+    #[arg(
+        long = "builder.eth_poll_interval_millis",
+        name = "builder.eth_poll_interval_millis",
+        env = "BUILDER_ETH_POLL_INTERVAL_MILLIS",
+        default_value = "250"
+    )]
+    pub eth_poll_interval_millis: u64,
 }
 
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
-    pub fn to_args(&self, common: &CommonArgs, _pool_url: String) -> anyhow::Result<builder::Args> {
+    pub fn to_args(&self, common: &CommonArgs, pool_url: String) -> anyhow::Result<builder::Args> {
         Ok(builder::Args {
             port: self.port,
             host: self.host.clone(),
@@ -87,6 +108,13 @@ impl BuilderArgs {
                 .node_http
                 .clone()
                 .context("should have a node HTTP URL")?,
+            pool_url,
+            entry_point_address: common
+                .entry_points
+                .get(0)
+                .context("should have at least one entry point")?
+                .parse()
+                .context("should parse entry point address")?,
             private_key: self.private_key.clone(),
             aws_kms_key_ids: self.aws_kms_key_ids.clone(),
             aws_kms_region: self
@@ -96,6 +124,9 @@ impl BuilderArgs {
             redis_uri: self.redis_uri.clone(),
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             chain_id: common.chain_id,
+            max_bundle_size: self.max_bundle_size,
+            eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
+            sim_settings: common.into(),
         })
     }
 

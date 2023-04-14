@@ -1,4 +1,4 @@
-use std::{cmp, future::Future, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
@@ -9,7 +9,6 @@ use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use rand::Rng;
 use tokio::{
     select,
     sync::{broadcast, mpsc},
@@ -25,7 +24,7 @@ use crate::{
     common::{
         precheck,
         protos::{builder::builder_client::BuilderClient, op_pool::op_pool_client::OpPoolClient},
-        server::format_socket_addr,
+        server::{self, format_socket_addr},
         simulation,
     },
     rpc::{
@@ -66,7 +65,7 @@ pub async fn run(
     let client = RetryClientBuilder::default()
         // these retries are if the server returns a 429
         .rate_limit_retries(10)
-        // these rerties are if the connection is dubious
+        // these retries are if the connection is dubious
         .timeout_retries(3)
         .initial_backoff(Duration::from_millis(500))
         .build(http, Box::<HttpRateLimitRetryPolicy>::default());
@@ -155,38 +154,17 @@ async fn connect_clients_with_shutdown(
 ) -> anyhow::Result<(OpPoolClient<Channel>, BuilderClient<Channel>)> {
     select! {
         _ = shutdown_rx.recv() => {
-            tracing::error!("bailing from conneting clients, server shutting down");
+            tracing::error!("bailing from conneting client, server shutting down");
             bail!("Server shutting down")
         }
         res = async {
             try_join!(
-                connect_with_retries(op_pool_url, OpPoolClient::connect),
-                connect_with_retries(builder_url, BuilderClient::connect)
+                server::connect_with_retries(op_pool_url, OpPoolClient::connect),
+                server::connect_with_retries(builder_url, BuilderClient::connect)
             )
             .context("should connect to op pool and builder")
         } => {
             res
         }
     }
-}
-
-async fn connect_with_retries<F, C, FutF>(url: &str, func: F) -> anyhow::Result<C>
-where
-    F: Fn(String) -> FutF,
-    FutF: Future<Output = Result<C, tonic::transport::Error>> + Send + 'static,
-{
-    for i in 0..10 {
-        match func(url.to_owned()).await {
-            Ok(client) => return Ok(client),
-            Err(e) => tracing::warn!("Failed to connect to server {e:?} (attempt {})", i),
-        }
-        let sleep_dur = {
-            let mut rng = rand::thread_rng();
-            let jitter = rng.gen_range(0..1000);
-            let millis = cmp::min(10, 2_u64.pow(i)) * 1000 + jitter;
-            Duration::from_millis(millis)
-        };
-        tokio::time::sleep(sleep_dur).await;
-    }
-    bail!("Failed to connect to server after 10 attempts");
 }

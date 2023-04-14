@@ -1,47 +1,27 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use ethers::{
-    prelude::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider},
-    types::{Eip1559TransactionRequest, TransactionReceipt},
-};
+use ethers::providers::Middleware;
 use ethers_signers::{AwsSigner, Signer};
 use rslock::{LockGuard, LockManager};
 use rusoto_core::Region;
 use rusoto_kms::KmsClient;
 use tokio::{sync::oneshot, time::sleep};
-use tonic::async_trait;
 
-use super::{monitor_account_balance, SignerLike};
+use super::monitor_account_balance;
 use crate::common::handle::SpawnGuard;
 
 /// A KMS signer handle that will release the key_id when dropped.
 #[derive(Debug)]
-pub struct KmsSigner<C: JsonRpcClient> {
-    signer: SignerMiddleware<Arc<Provider<C>>, AwsSigner>,
+pub struct KmsSigner {
+    pub signer: AwsSigner,
     _kms_guard: SpawnGuard,
     _monitor_guard: SpawnGuard,
 }
 
-#[async_trait]
-impl<C: JsonRpcClient + 'static> SignerLike for KmsSigner<C> {
-    async fn send_transaction(
-        &self,
-        tx: Eip1559TransactionRequest,
-    ) -> anyhow::Result<TransactionReceipt> {
-        Middleware::send_transaction(&self.signer, tx, None)
-            .await
-            .context("should send tx")?
-            .await
-            .context("should get receipt")?
-            .context("receipt should be some")
-    }
-}
-
-impl<C: JsonRpcClient + 'static> KmsSigner<C> {
-    pub async fn connect(
-        provider: Arc<Provider<C>>,
+impl KmsSigner {
+    pub async fn connect<M: Middleware + 'static>(
+        provider: Arc<M>,
         chain_id: u64,
         region: Region,
         key_ids: Vec<String>,
@@ -63,7 +43,7 @@ impl<C: JsonRpcClient + 'static> KmsSigner<C> {
         ));
 
         Ok(Self {
-            signer: SignerMiddleware::new(provider, signer),
+            signer,
             _kms_guard: kms_guard,
             _monitor_guard: monitor_guard,
         })

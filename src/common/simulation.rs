@@ -78,7 +78,7 @@ struct StorageSlot {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait Simulator: Send + Sync {
+pub trait Simulator: Send + Sync + 'static {
     async fn simulate_validation(
         &self,
         op: UserOperation,
@@ -207,7 +207,7 @@ where
     ) -> Result<SimulationSuccess, SimulationError> {
         let block_hash = match block_hash {
             Some(block_hash) => block_hash,
-            None => ProviderLike::get_latest_block_hash(&self.provider).await?,
+            None => self.provider.get_latest_block_hash().await?,
         };
         let block_id = block_hash.into();
         let context = match self.create_context(op.clone(), block_id).await {
