@@ -383,7 +383,7 @@ where
 
         Ok(GasEstimate {
             call_gas_limit: gas_sim_result.call_gas,
-            verification_gas: gas_sim_result.verification_gas,
+            verification_gas_limit: gas_sim_result.verification_gas,
             pre_verification_gas,
         })
     }
