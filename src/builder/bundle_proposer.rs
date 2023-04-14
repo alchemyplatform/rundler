@@ -34,7 +34,7 @@ pub struct Bundle {
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait BundleProposer {
+pub trait BundleProposer: Send + Sync {
     async fn make_bundle(&self) -> anyhow::Result<Bundle>;
 }
 

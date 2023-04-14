@@ -1,47 +1,31 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use anyhow::Context;
 use ethers::{
-    prelude::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider},
-    types::{Eip1559TransactionRequest, TransactionReceipt},
+    abi::Address,
+    types::{
+        transaction::{eip2718::TypedTransaction, eip712::Eip712},
+        Signature,
+    },
 };
-use ethers_signers::{AwsSigner, Signer};
+use ethers_signers::{AwsSigner, AwsSignerError, Signer};
 use rslock::{LockGuard, LockManager};
 use rusoto_core::Region;
 use rusoto_kms::KmsClient;
 use tokio::{sync::oneshot, time::sleep};
 use tonic::async_trait;
 
-use super::{monitor_account_balance, SignerLike};
 use crate::common::handle::SpawnGuard;
 
 /// A KMS signer handle that will release the key_id when dropped.
 #[derive(Debug)]
-pub struct KmsSigner<C: JsonRpcClient> {
-    signer: SignerMiddleware<Arc<Provider<C>>, AwsSigner>,
+pub struct KmsSigner {
+    signer: AwsSigner,
     _kms_guard: SpawnGuard,
-    _monitor_guard: SpawnGuard,
 }
 
-#[async_trait]
-impl<C: JsonRpcClient + 'static> SignerLike for KmsSigner<C> {
-    async fn send_transaction(
-        &self,
-        tx: Eip1559TransactionRequest,
-    ) -> anyhow::Result<TransactionReceipt> {
-        Middleware::send_transaction(&self.signer, tx, None)
-            .await
-            .context("should send tx")?
-            .await
-            .context("should get receipt")?
-            .context("receipt should be some")
-    }
-}
-
-impl<C: JsonRpcClient + 'static> KmsSigner<C> {
+impl KmsSigner {
     pub async fn connect(
-        provider: Arc<Provider<C>>,
         chain_id: u64,
         region: Region,
         key_ids: Vec<String>,
@@ -57,15 +41,10 @@ impl<C: JsonRpcClient + 'static> KmsSigner<C> {
         let signer = AwsSigner::new(client, key_id, chain_id)
             .await
             .context("should create signer")?;
-        let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
-            signer.address(),
-            provider.clone(),
-        ));
 
         Ok(Self {
-            signer: SignerMiddleware::new(provider, signer),
+            signer,
             _kms_guard: kms_guard,
-            _monitor_guard: monitor_guard,
         })
     }
 
@@ -111,6 +90,46 @@ impl<C: JsonRpcClient + 'static> KmsSigner<C> {
                     tracing::error!("could not extend lock: {e:?}");
                 }
             }
+        }
+    }
+}
+
+#[async_trait]
+impl Signer for KmsSigner {
+    type Error = AwsSignerError;
+
+    async fn sign_message<S: Send + Sync + AsRef<[u8]>>(
+        &self,
+        message: S,
+    ) -> Result<Signature, Self::Error> {
+        self.signer.sign_message(message).await
+    }
+
+    async fn sign_transaction(&self, tx: &TypedTransaction) -> Result<Signature, Self::Error> {
+        self.signer.sign_transaction(tx).await
+    }
+
+    async fn sign_typed_data<T: Eip712 + Send + Sync>(
+        &self,
+        payload: &T,
+    ) -> Result<Signature, Self::Error> {
+        self.signer.sign_typed_data(payload).await
+    }
+
+    fn address(&self) -> Address {
+        self.signer.address()
+    }
+
+    /// Gets the wallet's chain id
+    fn chain_id(&self) -> u64 {
+        self.signer.chain_id()
+    }
+
+    /// Sets the wallet's chain_id, used in conjunction with EIP-155 signing
+    fn with_chain_id<T: Into<u64>>(self, chain_id: T) -> Self {
+        Self {
+            signer: self.signer.with_chain_id(chain_id),
+            _kms_guard: self._kms_guard,
         }
     }
 }

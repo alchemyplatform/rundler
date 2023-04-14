@@ -79,7 +79,7 @@ pub struct BuilderArgs {
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
-    pub fn to_args(&self, common: &CommonArgs, _pool_url: String) -> anyhow::Result<builder::Args> {
+    pub fn to_args(&self, common: &CommonArgs, pool_url: String) -> anyhow::Result<builder::Args> {
         Ok(builder::Args {
             port: self.port,
             host: self.host.clone(),
@@ -96,6 +96,10 @@ impl BuilderArgs {
             redis_uri: self.redis_uri.clone(),
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             chain_id: common.chain_id,
+            pool_url,
+            entry_point_address: common.entry_points[0]
+                .parse()
+                .context("should parse entry point")?, // TODO multiple entry points
         })
     }
 
