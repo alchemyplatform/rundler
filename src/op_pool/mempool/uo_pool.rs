@@ -16,7 +16,7 @@ use super::{
 use crate::{
     common::{
         contracts::i_entry_point::IEntryPointEvents,
-        protos::op_pool::{Reputation, ReputationStatus},
+        protos::op_pool::{NewBlock, Reputation, ReputationStatus},
         types::Entity,
     },
     op_pool::{event::NewBlockEvent, reputation::ReputationManager},
@@ -34,6 +34,7 @@ pub struct UoPool<R: ReputationManager> {
     entry_point: Address,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
+    blocks: broadcast::Sender<NewBlock>,
 }
 
 struct UoPoolState {
@@ -47,6 +48,7 @@ where
     R: ReputationManager,
 {
     pub fn new(args: PoolConfig, reputation: Arc<R>) -> Self {
+        let (blocks, _) = broadcast::channel(100);
         Self {
             entry_point: args.entry_point,
             reputation,
@@ -55,6 +57,7 @@ where
                 throttled_ops: HashMap::new(),
                 block_number: 0,
             }),
+            blocks,
         }
     }
 
@@ -76,15 +79,6 @@ where
                 }
             }
         }
-    }
-}
-
-impl<R> Mempool for UoPool<R>
-where
-    R: ReputationManager,
-{
-    fn entry_point(&self) -> Address {
-        self.entry_point
     }
 
     fn on_new_block(&self, new_block: &NewBlockEvent) {
@@ -130,6 +124,25 @@ where
         }
 
         state.block_number = new_block_number;
+        self.blocks
+            .send(NewBlock {
+                number: new_block.number.as_u64(),
+                hash: new_block.hash.as_bytes().to_vec(),
+            })
+            .unwrap();
+    }
+}
+
+impl<R> Mempool for UoPool<R>
+where
+    R: ReputationManager,
+{
+    fn entry_point(&self) -> Address {
+        self.entry_point
+    }
+
+    fn new_blocks(&self) -> broadcast::Receiver<NewBlock> {
+        self.blocks.subscribe()
     }
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {

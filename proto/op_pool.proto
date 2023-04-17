@@ -39,6 +39,7 @@ service OpPool {
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
+  rpc SubscribeNewBlocks(SubscribeNewBlocksRequest) returns (stream NewBlock);
 
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
   rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
@@ -73,6 +74,12 @@ message RemoveOpsRequest {
   repeated bytes hashes = 2;
 }
 message RemoveOpsResponse {}
+
+message SubscribeNewBlocksRequest {}
+message NewBlock {
+  bytes hash = 1;
+  uint64 number = 2;
+}
 
 message DebugClearStateRequest {}
 message DebugClearStateResponse {}

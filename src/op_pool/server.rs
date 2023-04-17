@@ -5,6 +5,7 @@ use ethers::{
     utils::hex::ToHex,
 };
 use prost::Message;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
 
 use super::mempool::{error::MempoolError, Mempool, OperationOrigin};
@@ -15,8 +16,8 @@ use crate::common::protos::{
         DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
         DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
         DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
-        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-        RemoveOpsRequest, RemoveOpsResponse,
+        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp, NewBlock,
+        RemoveOpsRequest, RemoveOpsResponse, SubscribeNewBlocksRequest,
     },
 };
 
@@ -120,6 +121,23 @@ where
         mempool.remove_operations(&hashes);
 
         Ok(Response::new(RemoveOpsResponse {}))
+    }
+
+    type SubscribeNewBlocksStream = ReceiverStream<Result<NewBlock>>;
+
+    async fn subscribe_new_blocks(
+        &self,
+        _request: Request<SubscribeNewBlocksRequest>,
+    ) -> Result<Response<Self::SubscribeNewBlocksStream>> {
+        let mut rx_blocks = self.mempools.values().next().unwrap().new_blocks();
+        let (tx, rx) = tokio::sync::mpsc::channel(1000);
+        tokio::spawn(async move {
+            loop {
+                let block = rx_blocks.recv().await.unwrap();
+                tx.send(Ok(block)).await.unwrap();
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 
     async fn debug_clear_state(
@@ -237,6 +255,8 @@ impl From<MempoolError> for Status {
 
 #[cfg(test)]
 mod tests {
+    use tokio::sync::broadcast;
+
     use super::*;
 
     const TEST_ADDRESS_ARR: [u8; 20] = [
@@ -246,10 +266,7 @@ mod tests {
 
     use crate::{
         common::protos::op_pool::{self, Reputation},
-        op_pool::{
-            event::NewBlockEvent,
-            mempool::{error::MempoolResult, PoolOperation},
-        },
+        op_pool::mempool::{error::MempoolResult, PoolOperation},
     };
 
     #[test]
@@ -328,7 +345,9 @@ mod tests {
             self.entry_point
         }
 
-        fn on_new_block(&self, _event: &NewBlockEvent) {}
+        fn new_blocks(&self) -> broadcast::Receiver<NewBlock> {
+            unimplemented!()
+        }
 
         fn add_operation(
             &self,

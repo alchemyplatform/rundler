@@ -128,8 +128,6 @@ where
     E: EntryPointLike,
     P: ProviderLike,
 {
-    // TODO: Remove the allow directive after we start using this.
-    #[allow(dead_code)]
     pub fn new(
         max_bundle_size: u64,
         beneficiary: Address,
@@ -662,6 +660,7 @@ mod tests {
         .await
     }
 
+    #[allow(clippy::mutable_key_type)]
     async fn make_bundle(
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,

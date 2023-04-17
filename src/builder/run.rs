@@ -18,6 +18,7 @@ use url::Url;
 use crate::{
     builder::{
         bundle_proposer::BundleProposerImpl,
+        pool::RemotePoolClient,
         server::{BuilderImpl, DummyBuilder},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
     },
@@ -106,14 +107,18 @@ pub async fn run(
         entry_point.clone(),
         Arc::clone(&provider),
     );
+
+    let client2 = op_pool.clone();
+    let pool = RemotePoolClient::new(client2);
+
     let builder = Arc::new(BuilderImpl::new(
         args.chain_id,
         beneficiary,
-        args.eth_poll_interval,
         op_pool,
         proposer,
         entry_point,
         provider,
+        pool,
     ));
 
     let _builder_loop_guard = {

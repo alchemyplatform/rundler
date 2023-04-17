@@ -7,11 +7,11 @@ use std::sync::Arc;
 
 use ethers::types::{Address, H256};
 use strum::IntoEnumIterator;
+use tokio::sync::broadcast;
 
 use self::error::MempoolResult;
-use super::event::NewBlockEvent;
 use crate::common::{
-    protos::op_pool::Reputation,
+    protos::op_pool::{NewBlock, Reputation},
     types::{Entity, UserOperation, ValidTimeRange},
 };
 
@@ -20,10 +20,8 @@ pub trait Mempool: Send + Sync {
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
 
-    /// Event listener for when a new block is mined.
     ///
-    /// Pool is updated according to the new blocks events.
-    fn on_new_block(&self, event: &NewBlockEvent);
+    fn new_blocks(&self) -> broadcast::Receiver<NewBlock>;
 
     /// Adds a validated user operation to the pool.
     ///

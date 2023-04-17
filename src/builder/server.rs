@@ -1,23 +1,21 @@
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use anyhow::Context;
 use ethers::{
-    providers::{Http, Middleware, Provider, RetryClient},
+    providers::{Http, Provider, RetryClient},
     types::{Address, TransactionReceipt, H256},
 };
-use tokio::{join, time};
+use tokio::{join, sync::broadcast};
 use tonic::{async_trait, transport::Channel, Request, Response, Status};
 use tracing::{
     error,
     log::{debug, info, trace},
 };
 
+use super::pool::{NewBlock, PoolClient};
 use crate::{
     builder::bundle_proposer::BundleProposer,
     common::{
@@ -34,45 +32,47 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub struct BuilderImpl<P, E>
+pub struct BuilderImpl<P, E, C>
 where
     P: BundleProposer,
     E: EntryPointLike,
+    C: PoolClient,
 {
     is_manual_bundling_mode: AtomicBool,
     chain_id: u64,
     beneficiary: Address,
-    eth_poll_interval: Duration,
-    op_pool: OpPoolClient<Channel>,
     proposer: P,
     entry_point: E,
-    // TODO: Figure out what we really want to do for detecting new blocks.
+    // TODO consolidate these types
     provider: Arc<Provider<RetryClient<Http>>>,
+    op_pool: OpPoolClient<Channel>,
+    pool_client: C,
 }
 
-impl<P, E> BuilderImpl<P, E>
+impl<P, E, C> BuilderImpl<P, E, C>
 where
     P: BundleProposer,
     E: EntryPointLike,
+    C: PoolClient,
 {
     pub fn new(
         chain_id: u64,
         beneficiary: Address,
-        eth_poll_interval: Duration,
         op_pool: OpPoolClient<Channel>,
         proposer: P,
         entry_point: E,
         provider: Arc<Provider<RetryClient<Http>>>,
+        pool_client: C,
     ) -> Self {
         Self {
             is_manual_bundling_mode: AtomicBool::new(false),
             chain_id,
             beneficiary,
-            eth_poll_interval,
             op_pool,
             proposer,
             entry_point,
             provider,
+            pool_client,
         }
     }
 
@@ -81,12 +81,14 @@ where
     /// next one.
     pub async fn send_bundles_in_loop(&self) -> ! {
         let mut last_block_number = 0;
+        let mut block_subscription = self.pool_client.subscribe_new_blocks();
         loop {
+            last_block_number = self
+                .wait_for_new_block(last_block_number, &mut block_subscription)
+                .await;
             if self.is_manual_bundling_mode.load(Ordering::Relaxed) {
-                time::sleep(self.eth_poll_interval).await;
                 continue;
             }
-            last_block_number = self.wait_for_new_block(last_block_number).await;
             let result = self.send_bundle_and_wait_for_mine().await;
             match result {
                 Ok(Some(receipt)) => info!(
@@ -100,23 +102,16 @@ where
         }
     }
 
-    async fn wait_for_new_block(&self, prev_block_number: u64) -> u64 {
+    async fn wait_for_new_block(
+        &self,
+        prev_block_number: u64,
+        block_subscription: &mut broadcast::Receiver<NewBlock>,
+    ) -> u64 {
         loop {
-            let block_number = self.provider.get_block_number().await;
-            match block_number {
-                Ok(n) => {
-                    let n = n.as_u64();
-                    if n > prev_block_number {
-                        return n;
-                    }
-                }
-                Err(error) => {
-                    error!(
-                        "Failed to load latest block number in builder. Will keep trying: {error}"
-                    );
-                }
+            let block = block_subscription.recv().await.unwrap();
+            if block.number > prev_block_number {
+                return block.number;
             }
-            time::sleep(self.eth_poll_interval).await;
         }
     }
 
@@ -190,10 +185,11 @@ where
 }
 
 #[async_trait]
-impl<P, E> Builder for Arc<BuilderImpl<P, E>>
+impl<P, E, C> Builder for Arc<BuilderImpl<P, E, C>>
 where
     P: BundleProposer,
     E: EntryPointLike,
+    C: PoolClient,
 {
     async fn debug_send_bundle_now(
         &self,

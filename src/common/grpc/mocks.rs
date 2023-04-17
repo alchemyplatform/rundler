@@ -1,5 +1,6 @@
-use std::{future::Future, time::Duration};
+use std::{future::Future, pin::Pin, time::Duration};
 
+use futures::Stream;
 use mockall::mock;
 use tokio::{net::TcpListener, task::AbortHandle, time};
 use tokio_stream::wrappers::TcpListenerStream;
@@ -23,7 +24,8 @@ use crate::common::protos::{
         DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
         DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
         GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest,
-        GetSupportedEntryPointsResponse, RemoveOpsRequest, RemoveOpsResponse,
+        GetSupportedEntryPointsResponse, NewBlock, RemoveOpsRequest, RemoveOpsResponse,
+        SubscribeNewBlocksRequest,
     },
 };
 
@@ -50,6 +52,13 @@ mock! {
             &self,
             request: Request<RemoveOpsRequest>,
         ) -> tonic::Result<Response<RemoveOpsResponse>>;
+
+        type SubscribeNewBlocksStream = Pin<Box<dyn Stream<Item = tonic::Result<NewBlock>> + Send + Sync + 'static>>;
+
+        async fn subscribe_new_blocks(
+            &self,
+            _request: Request<SubscribeNewBlocksRequest>,
+        ) -> tonic::Result<Response<<MockOpPool as OpPool>::SubscribeNewBlocksStream>>;
 
         async fn debug_clear_state(
             &self,
