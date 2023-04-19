@@ -242,7 +242,7 @@ where
     ) -> Result<Option<String>, anyhow::Error> {
         let revert_reason_evt: Option<UserOperationRevertReasonFilter> = logs
             .iter()
-            .filter(|l| l.topics[1] == user_op_hash)
+            .filter(|l| l.topics.len() > 1 && l.topics[1] == user_op_hash)
             .map_while(|l| {
                 UserOperationRevertReasonFilter::decode_log(&RawLog {
                     topics: l.topics.clone(),
