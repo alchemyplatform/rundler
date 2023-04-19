@@ -8,7 +8,7 @@ use std::ops::{AddAssign, SubAssign};
 /// additions and subtractions the total size might be slightly off. Therefore, the underlying value
 /// is an `isize`, so that the value does not wrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SizeTracker(isize);
+pub struct SizeTracker(pub isize);
 
 impl AddAssign<usize> for SizeTracker {
     fn add_assign(&mut self, rhs: usize) {

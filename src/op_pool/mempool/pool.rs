@@ -120,6 +120,8 @@ impl PoolInner {
             Err(MempoolError::DiscardedOnInsert)?;
         }
 
+        metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
+        metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
         Ok(hash)
     }
 
@@ -150,6 +152,8 @@ impl PoolInner {
                 self.decrement_address_count(addr);
             }
 
+            metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
+            metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
             return Some(op.po);
         }
 
