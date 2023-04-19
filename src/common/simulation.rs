@@ -116,6 +116,10 @@ where
         }
     }
 
+    pub fn settings(&self) -> &Settings {
+        &self.sim_settings
+    }
+
     async fn create_context(
         &self,
         op: UserOperation,
@@ -659,6 +663,8 @@ pub struct Settings {
     pub min_unstake_delay: u32,
     pub min_stake_value: u64,
     pub max_simulate_handle_ops_gas: u64,
+    pub max_call_gas: u64,
+    pub max_verification_gas: u64,
 }
 
 impl Settings {
@@ -666,11 +672,15 @@ impl Settings {
         min_unstake_delay: u32,
         min_stake_value: u64,
         max_simulate_handle_ops_gas: u64,
+        max_call_gas: u64,
+        max_verification_gas: u64,
     ) -> Self {
         Self {
             min_unstake_delay,
             min_stake_value,
             max_simulate_handle_ops_gas,
+            max_call_gas,
+            max_verification_gas,
         }
     }
 }
@@ -684,6 +694,8 @@ impl Default for Settings {
             min_stake_value: 1_000_000_000_000_000_000,
             // 550 million gas: currently the defaults for Alchemy eth_call
             max_simulate_handle_ops_gas: 550_000_000,
+            max_call_gas: 500_000_000,
+            max_verification_gas: 5_000_000,
         }
     }
 }

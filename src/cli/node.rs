@@ -56,7 +56,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
             pool_url,
             builder_url,
             (&common_args).into(),
-            (&common_args).into(),
+            (&common_args).try_into()?,
         )?,
         shutdown_rx,
         shutdown_scope,
