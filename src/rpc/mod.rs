@@ -142,7 +142,21 @@ impl UserOperationOptionalGas {
 
 impl UserOperationOptionalGas {
     pub fn calc_pre_verification_gas(&self) -> U256 {
-        gas::calc_pre_verification_gas(&UserOperation::from(self.cheap_clone()))
+        // If someone is asking for pre-verification gas here, it means that
+        // they are most likely going to be taking the results and plugging them
+        // into their user operation. However, doing so changes the
+        // pre-verification gas, which depends on the number of nonzero bytes in
+        // the packed user operation. To make sure the returned gas is enough to
+        // cover the modified user op, calculate the gas needed for the worst
+        // case scenario where the gas fields of the user operation are entirely
+        // nonzero bytes.
+        let op = UserOperation {
+            call_gas_limit: U256::MAX,
+            verification_gas_limit: U256::MAX,
+            pre_verification_gas: U256::MAX,
+            ..self.cheap_clone().into()
+        };
+        gas::calc_pre_verification_gas(&op)
     }
 }
 
