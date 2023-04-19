@@ -351,7 +351,7 @@ where
 
     async fn estimate_user_operation_gas(
         &self,
-        op: UserOperationOptionalGas,
+        mut op: UserOperationOptionalGas,
         entry_point: Address,
     ) -> RpcResult<GasEstimate> {
         if !self.contexts_by_entry_point.contains_key(&entry_point) {
@@ -365,21 +365,21 @@ where
             .unwrap()
             .simulator;
 
-        let pre_verification_gas = op.calc_pre_verification_gas();
+        let pre_verification_gas = op.calc_pre_verification_gas(simulator.settings());
+        op.pre_verification_gas = Some(pre_verification_gas);
 
-        let gas_sim_result =
-            simulator
-                .simulate_handle_op(op.into())
-                .await
-                .map_err(|err| match err {
-                    GasSimulationError::DidNotRevertWithExecutionResult(
-                        IEntryPointErrors::FailedOp(op),
-                    ) => EthRpcError::EntryPointValidationRejected(op.reason),
-                    GasSimulationError::AccountExecutionReverted(_) => {
-                        EthRpcError::ExecutionReverted(err.to_string())
-                    }
-                    _ => EthRpcError::Internal(err.into()),
-                })?;
+        let gas_sim_result = simulator
+            .simulate_handle_op(op.into_user_operation(simulator.settings()))
+            .await
+            .map_err(|err| match err {
+                GasSimulationError::DidNotRevertWithExecutionResult(
+                    IEntryPointErrors::FailedOp(op),
+                ) => EthRpcError::EntryPointValidationRejected(op.reason),
+                GasSimulationError::AccountExecutionReverted(_) => {
+                    EthRpcError::ExecutionReverted(err.to_string())
+                }
+                _ => EthRpcError::Internal(err.into()),
+            })?;
 
         Ok(GasEstimate {
             call_gas_limit: gas_sim_result.call_gas,

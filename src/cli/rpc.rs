@@ -127,7 +127,7 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
             pool_url,
             builder_url,
             (&common_args).into(),
-            (&common_args).into(),
+            (&common_args).try_into()?,
         )?,
         shutdown_rx,
         shutdown_scope,

@@ -126,7 +126,7 @@ impl BuilderArgs {
             chain_id: common.chain_id,
             max_bundle_size: self.max_bundle_size,
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
-            sim_settings: common.into(),
+            sim_settings: common.try_into()?,
         })
     }
 

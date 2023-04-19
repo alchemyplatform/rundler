@@ -19,6 +19,7 @@ use crate::common::{
         self,
         op_pool::{Reputation, ReputationStatus},
     },
+    simulation::Settings,
     types::UserOperation,
 };
 
@@ -138,10 +139,8 @@ impl UserOperationOptionalGas {
     pub fn cheap_clone(&self) -> Self {
         self.clone()
     }
-}
 
-impl UserOperationOptionalGas {
-    pub fn calc_pre_verification_gas(&self) -> U256 {
+    pub fn calc_pre_verification_gas(&self, settings: &Settings) -> U256 {
         // If someone is asking for pre-verification gas here, it means that
         // they are most likely going to be taking the results and plugging them
         // into their user operation. However, doing so changes the
@@ -154,26 +153,28 @@ impl UserOperationOptionalGas {
             call_gas_limit: U256::MAX,
             verification_gas_limit: U256::MAX,
             pre_verification_gas: U256::MAX,
-            ..self.cheap_clone().into()
+            ..self.cheap_clone().into_user_operation(settings)
         };
         gas::calc_pre_verification_gas(&op)
     }
-}
 
-impl From<UserOperationOptionalGas> for UserOperation {
-    fn from(op: UserOperationOptionalGas) -> Self {
+    pub fn into_user_operation(self, settings: &Settings) -> UserOperation {
         UserOperation {
-            sender: op.sender,
-            nonce: op.nonce,
-            init_code: op.init_code,
-            call_data: op.call_data,
-            call_gas_limit: op.call_gas_limit.unwrap_or_default(),
-            verification_gas_limit: op.verification_gas_limit.unwrap_or_default(),
-            pre_verification_gas: op.pre_verification_gas.unwrap_or_else(|| 21000.into()), // this dummy is used in calc_pre_verification_gas
-            max_fee_per_gas: op.max_fee_per_gas.unwrap_or_default(),
-            max_priority_fee_per_gas: op.max_priority_fee_per_gas.unwrap_or_default(),
-            paymaster_and_data: op.paymaster_and_data,
-            signature: op.signature,
+            sender: self.sender,
+            nonce: self.nonce,
+            init_code: self.init_code,
+            call_data: self.call_data,
+            paymaster_and_data: self.paymaster_and_data,
+            signature: self.signature,
+            // If unset, default these to gas limits from settings
+            verification_gas_limit: self
+                .verification_gas_limit
+                .unwrap_or(settings.max_verification_gas.into()),
+            call_gas_limit: self.call_gas_limit.unwrap_or(settings.max_call_gas.into()),
+            // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
+            pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
+            max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
         }
     }
 }

@@ -177,13 +177,39 @@ impl From<&CommonArgs> for precheck::Settings {
     }
 }
 
-impl From<&CommonArgs> for simulation::Settings {
-    fn from(value: &CommonArgs) -> Self {
-        Self::new(
+const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
+
+impl TryFrom<&CommonArgs> for simulation::Settings {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+        if value.max_verification_gas
+            > (value.max_simulate_handle_ops_gas + SIMULATION_GAS_OVERHEAD)
+        {
+            anyhow::bail!(
+                "max_verification_gas ({}) must be less than max_simulate_handle_ops_gas ({}) by at least {}",
+                value.max_verification_gas,
+                value.max_simulate_handle_ops_gas,
+                SIMULATION_GAS_OVERHEAD
+            );
+        }
+
+        // The max call gas used during simulation is the total gas cap, minus the verification gas, minus
+        // some overhead. This is then scaled by 31/32 to account for the EVM 1/64th rule which sets asside
+        // gas during each call.
+        let max_call_gas = (value.max_simulate_handle_ops_gas
+            - value.max_verification_gas
+            - SIMULATION_GAS_OVERHEAD)
+            * 31
+            / 32;
+
+        Ok(Self::new(
             value.min_unstake_delay,
             value.min_stake_value,
             value.max_simulate_handle_ops_gas,
-        )
+            max_call_gas,
+            value.max_verification_gas,
+        ))
     }
 }
 
