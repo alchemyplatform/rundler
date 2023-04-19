@@ -3,14 +3,13 @@ use std::{
     fmt::Debug,
 };
 
-use anyhow::Context;
 use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
     types::{transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Opcode, U256},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use super::{contracts::i_entry_point::IEntryPoint, types::UserOperation};
+use super::{context::LogWithContext, contracts::i_entry_point::IEntryPoint, types::UserOperation};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -144,7 +143,7 @@ where
             (tx, block_id, serde_json::json!({ "tracer": tracer_code })),
         )
         .await
-        .context("failed to run bundler trace")?;
+        .log_context("failed to run bundler trace")?;
     Ok(out)
 }
 

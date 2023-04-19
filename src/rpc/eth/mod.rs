@@ -375,8 +375,8 @@ where
                     GasSimulationError::DidNotRevertWithExecutionResult(
                         IEntryPointErrors::FailedOp(op),
                     ) => EthRpcError::EntryPointValidationRejected(op.reason),
-                    GasSimulationError::AccountExecutionReverted(err) => {
-                        EthRpcError::ExecutionReverted(err)
+                    GasSimulationError::AccountExecutionReverted(_) => {
+                        EthRpcError::ExecutionReverted(err.to_string())
                     }
                     _ => EthRpcError::Internal(err.into()),
                 })?;

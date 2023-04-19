@@ -13,6 +13,7 @@ use tokio::{
     sync::{broadcast, mpsc},
 };
 use tonic::transport::{Channel, Server};
+use tracing::info;
 use url::Url;
 
 use crate::{
@@ -57,7 +58,7 @@ pub async fn run(
     _shutdown_scope: mpsc::Sender<()>,
 ) -> anyhow::Result<()> {
     let addr = format_socket_addr(&args.host, args.port).parse()?;
-    tracing::info!("Starting builder server on {}", addr);
+    info!("Starting builder server on {}", addr);
 
     let provider = {
         let parsed_url = Url::parse(&args.rpc_url).context("Invalid RPC URL")?;
@@ -73,11 +74,11 @@ pub async fn run(
     };
 
     let signer = if let Some(pk) = args.private_key {
-        tracing::info!("Using local signer");
+        info!("Using local signer");
         BundlerSigner::Local(LocalSigner::connect(Arc::clone(&provider), args.chain_id, pk).await?)
     } else {
-        tracing::info!("Using AWS KMS signer");
-        BundlerSigner::Kms(
+        info!("Using AWS KMS signer");
+        let ret = BundlerSigner::Kms(
             KmsSigner::connect(
                 Arc::clone(&provider),
                 args.chain_id,
@@ -87,7 +88,9 @@ pub async fn run(
                 args.redis_lock_ttl_millis,
             )
             .await?,
-        )
+        );
+        info!("Created AWS KMS signer");
+        ret
     };
     let beneficiary = signer.address();
     let op_pool = connect_client_with_shutdown(&args.pool_url, shutdown_rx.resubscribe()).await?;
@@ -145,6 +148,8 @@ pub async fn run(
                 .expect("should have received shutdown signal")
         })
         .await;
+
+    info!("Started bundle builder");
 
     match server_handle {
         Ok(_) => {
