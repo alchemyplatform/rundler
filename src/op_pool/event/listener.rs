@@ -144,6 +144,7 @@ impl<F: BlockProviderFactory> EventListener<F> {
 
         loop {
             self.provider = Some(self.provider_factory.new_provider());
+            // TODO add timeout to this
             match self
                 .provider
                 .as_mut()

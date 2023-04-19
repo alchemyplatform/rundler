@@ -135,6 +135,8 @@ pub async fn run(
         .await?;
     let handle = server.start(module)?;
 
+    info!("Started rpc server");
+
     tokio::select! {
         _ = handle.stopped() => {
             tracing::error!("Server stopped unexpectedly");

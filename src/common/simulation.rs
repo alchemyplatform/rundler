@@ -1,6 +1,6 @@
 use std::{collections::HashSet, mem, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use ethers::{
     abi::AbiDecode,
     contract::ContractError,
@@ -391,8 +391,11 @@ where
             return Err(GasSimulationError::DidNotRevert);
         };
 
-        let ep_error = IEntryPointErrors::decode_hex(revert_data)
-            .map_err(|e| GasSimulationError::Other(e.into()))?;
+        let ep_error = IEntryPointErrors::decode_hex(revert_data).map_err(|e| {
+            GasSimulationError::Other(anyhow!(
+                "Failed to decode revert data as IEntryPointError (possible OOG): {e:?}"
+            ))
+        })?;
 
         // we don't use the verification gas returned here because it adds the preVerificationGas passed in from the UserOperation
         // that value *should* be 0 but might not be, so we won't use it here and just use the gas from tracing
@@ -441,7 +444,7 @@ pub enum GasSimulationError {
     DidNotRevert,
     #[error("handle op simulation should have reverted with exection result: {0}")]
     DidNotRevertWithExecutionResult(IEntryPointErrors),
-    #[error("account execution reverted: {0}")]
+    #[error("account execution reverted, reason: {0}")]
     AccountExecutionReverted(String),
     #[error("handle op simulation should have had 5 phases, but had {0}")]
     IncorrectPhaseCount(usize),

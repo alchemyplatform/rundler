@@ -45,7 +45,7 @@ pub async fn run(
     let entry_points = args.pool_configs.iter().map(|pc| &pc.entry_point);
     tracing::info!("Starting server on {addr}");
     tracing::info!("Chain id: {chain_id}");
-    tracing::info!("Websocket url: {:?}", args.http_url);
+    tracing::info!("Websocket url: {:?}", args.ws_url);
     tracing::info!("Http url: {:?}", args.http_url);
 
     // Events listener
@@ -106,6 +106,8 @@ pub async fn run(
             .await
             .map_err(|err| anyhow::anyhow!("Server error: {err:?}"))
     });
+
+    tracing::info!("Started op_pool");
 
     match try_join!(
         flatten_handle(server_handle),
