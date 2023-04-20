@@ -167,12 +167,15 @@ impl UserOperationOptionalGas {
             paymaster_and_data: self.paymaster_and_data,
             signature: self.signature,
             // If unset, default these to gas limits from settings
+            // Cap their values to the gas limits from settings
             verification_gas_limit: self
                 .verification_gas_limit
-                .unwrap_or_else(|| settings.max_verification_gas.into()),
+                .map(|v| v.min(settings.max_verification_gas.into()))
+                .unwrap_or(settings.max_verification_gas.into()),
             call_gas_limit: self
                 .call_gas_limit
-                .unwrap_or_else(|| settings.max_call_gas.into()),
+                .map(|c| c.min(settings.max_call_gas.into()))
+                .unwrap_or(settings.max_call_gas.into()),
             // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
             pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
             max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
