@@ -381,9 +381,10 @@ where
                 _ => EthRpcError::Internal(err.into()),
             })?;
 
+        // TODO - this is a temporary solution, we should have a better way to estimate gas
         Ok(GasEstimate {
-            call_gas_limit: gas_sim_result.call_gas,
-            verification_gas_limit: gas_sim_result.verification_gas,
+            call_gas_limit: (gas_sim_result.call_gas * 5) / 4,
+            verification_gas_limit: gas_sim_result.verification_gas * 3,
             pre_verification_gas,
         })
     }

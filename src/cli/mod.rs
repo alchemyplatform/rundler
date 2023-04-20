@@ -162,7 +162,7 @@ pub struct CommonArgs {
         long = "max_simulate_handle_ops_gas",
         name = "max_simulate_handle_ops_gas",
         env = "MAX_SIMULATE_HANDLE_OPS_GAS",
-        default_value = "550000000",
+        default_value = "20000000",
         global = true
     )]
     max_simulate_handle_ops_gas: u64,
@@ -197,10 +197,10 @@ impl TryFrom<&CommonArgs> for simulation::Settings {
         // The max call gas used during simulation is the total gas cap, minus the verification gas, minus
         // some overhead. This is then scaled by 31/32 to account for the EVM 1/64th rule which sets asside
         // gas during each call.
-        let max_call_gas = (value.max_simulate_handle_ops_gas
+        let max_call_gas = ((value.max_simulate_handle_ops_gas
             - value.max_verification_gas
             - SIMULATION_GAS_OVERHEAD)
-            * 31
+            * 31)
             / 32;
 
         Ok(Self::new(
