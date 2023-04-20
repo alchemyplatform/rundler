@@ -152,6 +152,7 @@ impl PoolInner {
                 self.decrement_address_count(addr);
             }
 
+            self.size -= op.size();
             metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
             metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
             return Some(op.po);
@@ -176,12 +177,11 @@ impl PoolInner {
                     .uo()
                     .op_hash(self.config.entry_point, self.config.chain_id);
 
-                let po = self
+                let _ = self
                     .remove_operation_by_hash(hash)
                     .context("should have removed the worst operation")?;
 
                 removed.push(hash);
-                self.size -= po.size();
             }
         }
 
