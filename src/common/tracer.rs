@@ -112,11 +112,9 @@ pub async fn trace_simulate_handle_op(
     entry_point: &IEntryPoint<impl Middleware>,
     op: UserOperation,
     block_id: BlockId,
-    gas: u64,
 ) -> anyhow::Result<GasTracerOutput> {
     let tx = entry_point
         .simulate_handle_op(op, Address::default(), Bytes::default())
-        .gas(gas)
         .tx;
 
     trace_call(

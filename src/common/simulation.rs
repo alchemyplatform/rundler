@@ -383,13 +383,9 @@ where
         &self,
         op: UserOperation,
     ) -> Result<GasSimulationSuccess, GasSimulationError> {
-        let tracer_out = tracer::trace_simulate_handle_op(
-            &self.entry_point,
-            op,
-            BlockNumber::Latest.into(),
-            self.sim_settings.max_simulate_handle_ops_gas,
-        )
-        .await?;
+        let tracer_out =
+            tracer::trace_simulate_handle_op(&self.entry_point, op, BlockNumber::Latest.into())
+                .await?;
 
         let Some(ref revert_data) = tracer_out.revert_data else {
             return Err(GasSimulationError::DidNotRevert);

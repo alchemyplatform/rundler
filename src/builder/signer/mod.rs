@@ -45,12 +45,18 @@ impl LocalSigner {
 
 pub async fn monitor_account_balance<M: Middleware>(addr: Address, provider: Arc<M>) {
     loop {
-        let balance = provider.get_balance(addr, None).await.unwrap();
-        // Divide balance by a large number first to prevent overflow when
-        // converting to u64. This keeps six decimal places.
-        let eth_balance = (balance / 10_u64.pow(12)).as_u64() as f64 / 1e6;
-        tracing::info!("account {addr:?} balance: {}", eth_balance);
-        metrics::gauge!("bundle_builder_account_balance", eth_balance, "addr" => addr.to_string());
+        match provider.get_balance(addr, None).await {
+            Ok(balance) => {
+                // Divide balance by a large number first to prevent overflow when
+                // converting to u64. This keeps six decimal places.
+                let eth_balance = (balance / 10_u64.pow(12)).as_u64() as f64 / 1e6;
+                tracing::info!("account {addr:?} balance: {}", eth_balance);
+                metrics::gauge!("bundle_builder_account_balance", eth_balance, "addr" => format!("{addr:?}"));
+            }
+            Err(err) => {
+                tracing::error!("Get account {addr:?} balance error {err:?}");
+            }
+        };
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
 }
