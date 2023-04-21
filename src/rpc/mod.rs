@@ -66,7 +66,7 @@ impl From<Address> for RpcAddress {
 }
 
 /// User operation definition for RPC
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcUserOperation {
     sender: RpcAddress,
@@ -180,7 +180,7 @@ impl UserOperationOptionalGas {
 }
 
 /// Gas estimate for a user operation
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GasEstimate {
     pub pre_verification_gas: U256,
@@ -189,7 +189,7 @@ pub struct GasEstimate {
 }
 
 /// User operation with additional metadata
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RichUserOperation {
     pub user_operation: RpcUserOperation,
@@ -200,7 +200,7 @@ pub struct RichUserOperation {
 }
 
 /// User operation receipt
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserOperationReceipt {
     pub user_op_hash: H256,
