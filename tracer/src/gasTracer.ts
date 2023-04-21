@@ -1,4 +1,4 @@
-import { BigInt, Bytes, LogStep, LogTracer } from "./types";
+import type { BigInt, Bytes, LogStep, LogTracer } from "./types";
 
 declare function toHex(x: Bytes): string;
 

@@ -148,9 +148,9 @@ where
 }
 
 fn validation_tracer_js() -> &'static str {
-    include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";\n")
+    include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
 }
 
 fn gas_tracer_js() -> &'static str {
-    include_str!("../../tracer/dist/gasTracer.js").trim_end_matches(";\n")
+    include_str!("../../tracer/dist/gasTracer.js").trim_end_matches(";export{};")
 }

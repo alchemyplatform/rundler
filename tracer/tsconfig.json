@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES6",
-    "lib": ["ES6"],
+    "lib": ["ES5"],
     "module": "esnext",
     "moduleResolution": "node",
     "noEmit": true,
