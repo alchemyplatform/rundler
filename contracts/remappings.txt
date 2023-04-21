@@ -1,2 +1,2 @@
-account-abstraction/=contracts/lib/account-abstraction/contracts/
-@openzeppelin/=contracts/lib/openzeppelin-contracts/
+account-abstraction/=lib/account-abstraction/contracts/
+@openzeppelin/=lib/openzeppelin-contracts/
