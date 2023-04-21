@@ -40,10 +40,7 @@ fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
 
 fn generate_abis() -> Result<(), Box<dyn error::Error>> {
     run_command(
-        Command::new("forge")
-            .arg("build")
-            .arg("--root")
-            .arg("./contracts"),
+        Command::new("forge").arg("build"),
         "https://getfoundry.sh/",
         "generate ABIs",
     )

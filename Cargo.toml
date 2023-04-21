@@ -53,11 +53,6 @@ url = "2.3.1"
 mockall = "0.11.4"
 tokio-util = "0.7.7"
 
-[dev-dependencies.cargo-husky]
-version = "1"
-default-features = false
-features = ["user-hooks"]
-
 [build-dependencies]
 ethers = "2.0.3"
 tonic-build = "0.9.2"
