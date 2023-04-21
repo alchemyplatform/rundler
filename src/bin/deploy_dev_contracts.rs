@@ -7,7 +7,10 @@ use rundler::common::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let addresses = dev::deploy_dev_contracts().await?;
-    addresses.write_to_env_file()?;
+
+    // TODO fix this not to overwrite, but to append/modify the existing vars
+    // addresses.write_to_env_file()?;
+
     let DevAddresses {
         entry_point_address: entry_point,
         factory_address: factory,
@@ -20,15 +23,15 @@ async fn main() -> anyhow::Result<()> {
     println!("Paymaster address: {paymaster:?}");
     println!();
     println!(
-        "Bundler private key: {}",
+        "Bundler private key: 0x{}",
         hex::encode(dev::test_signing_key_bytes(BUNDLER_ACCOUNT_ID))
     );
     println!(
-        "Wallet owner private key: {}",
+        "Wallet owner private key: 0x{}",
         hex::encode(dev::test_signing_key_bytes(WALLET_OWNER_ACCOUNT_ID))
     );
     println!(
-        "Paymaster private signing key: {}",
+        "Paymaster private signing key: 0x{}",
         hex::encode(dev::test_signing_key_bytes(PAYMASTER_SIGNER_ACCOUNT_ID))
     );
     Ok(())
