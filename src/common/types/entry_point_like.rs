@@ -5,15 +5,18 @@ use ethers::{
     abi::AbiDecode,
     contract::{ContractError, FunctionCall},
     providers::Middleware,
-    types::{Address, H256, U256},
+    types::{Address, Bytes, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
 use tonic::async_trait;
 
-use crate::common::contracts::{
-    i_entry_point::{FailedOp, IEntryPoint, SignatureValidationFailed},
-    shared_types::UserOpsPerAggregator,
+use crate::common::{
+    contracts::{
+        i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
+        shared_types::UserOpsPerAggregator,
+    },
+    types::UserOperation,
 };
 
 #[cfg_attr(test, automock)]
@@ -35,6 +38,12 @@ pub trait EntryPointLike: Send + Sync + 'static {
     ) -> anyhow::Result<H256>;
 
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
+
+    async fn call_simulate_op(
+        &self,
+        op: UserOperation,
+        block_hash: H256,
+    ) -> anyhow::Result<Result<ExecutionResult, String>>;
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +107,30 @@ where
             .await
             .context("entry point should return deposit info")?;
         Ok(deposit_info.deposit.into())
+    }
+
+    async fn call_simulate_op(
+        &self,
+        op: UserOperation,
+        block_hash: H256,
+    ) -> anyhow::Result<Result<ExecutionResult, String>> {
+        let error = self
+            .simulate_handle_op(op, Address::zero(), Bytes::new())
+            .block(block_hash)
+            .call()
+            .await
+            .err()
+            .context("simulateHandleOp should revert")?;
+        let ContractError::Revert(revert_data) = &error else {
+            Err(error).context("simulateHandleOp should revert")?
+        };
+        if let Ok(result) = ExecutionResult::decode(revert_data) {
+            Ok(Ok(result))
+        } else if let Ok(failed_op) = FailedOp::decode(revert_data) {
+            Ok(Err(failed_op.reason))
+        } else {
+            Ok(Err(String::new()))
+        }
     }
 }
 

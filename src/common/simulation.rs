@@ -1,11 +1,11 @@
 use std::{collections::HashSet, mem, sync::Arc};
 
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
     contract::ContractError,
     providers::{JsonRpcClient, Provider},
-    types::{Address, BlockId, BlockNumber, Bytes, Opcode, H256, U256},
+    types::{Address, BlockId, Bytes, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
 #[cfg(test)]
@@ -16,7 +16,7 @@ use super::types::Entity;
 use crate::common::{
     contracts::{
         i_aggregator::IAggregator,
-        i_entry_point::{FailedOp, IEntryPoint, IEntryPointErrors},
+        i_entry_point::{FailedOp, IEntryPoint},
     },
     eth, tracer,
     tracer::{
@@ -61,14 +61,6 @@ pub struct ContractRevertError {
     pub reason: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct GasSimulationSuccess {
-    /// This is the gas used by the entry point in actually executing the user op
-    pub call_gas: U256,
-    /// this is the gas cost of validating the user op. It does NOT include the preOp verification cost
-    pub verification_gas: U256,
-}
-
 pub type SimulationError = ViolationError<SimulationViolation>;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -86,11 +78,6 @@ pub trait Simulator: Send + Sync + 'static {
         block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError>;
-
-    async fn simulate_handle_op(
-        &self,
-        op: UserOperation,
-    ) -> Result<GasSimulationSuccess, GasSimulationError>;
 }
 
 #[derive(Debug)]
@@ -397,78 +384,6 @@ where
             expected_storage_slots,
         })
     }
-
-    async fn simulate_handle_op(
-        &self,
-        op: UserOperation,
-    ) -> Result<GasSimulationSuccess, GasSimulationError> {
-        let tracer_out =
-            tracer::trace_simulate_handle_op(&self.entry_point, op, BlockNumber::Latest.into())
-                .await?;
-
-        let Some(ref revert_data) = tracer_out.revert_data else {
-            return Err(GasSimulationError::DidNotRevert);
-        };
-
-        let ep_error = IEntryPointErrors::decode_hex(revert_data).map_err(|e| {
-            GasSimulationError::Other(anyhow!(
-                "Failed to decode revert data as IEntryPointError (possible OOG): {e:?}"
-            ))
-        })?;
-
-        // we don't use the verification gas returned here because it adds the preVerificationGas passed in from the UserOperation
-        // that value *should* be 0 but might not be, so we won't use it here and just use the gas from tracing
-        // we just want to make sure we completed successfully
-        match ep_error {
-            IEntryPointErrors::ExecutionResult(_) => (),
-            _ => {
-                return Err(GasSimulationError::DidNotRevertWithExecutionResult(
-                    ep_error,
-                ))
-            }
-        };
-
-        // This should be 3 phases (actually there are 5, but we merge the first 3 as one since that's the validation phase)
-        if tracer_out.phases.len() != 3 {
-            return Err(GasSimulationError::IncorrectPhaseCount(
-                tracer_out.phases.len(),
-            ));
-        }
-
-        if let Some(inner_revert) = &tracer_out.phases[1].account_revert_data {
-            match ContractRevertError::decode_hex(inner_revert) {
-                Ok(error) => {
-                    return Err(GasSimulationError::AccountExecutionReverted(error.reason))
-                }
-                // Inner revert was a different type that we don't know know how to decode
-                // just return that body for now
-                _ => {
-                    return Err(GasSimulationError::AccountExecutionReverted(
-                        inner_revert.clone(),
-                    ))
-                }
-            };
-        };
-
-        Ok(GasSimulationSuccess {
-            call_gas: tracer_out.phases[1].gas_used.into(),
-            verification_gas: tracer_out.phases[0].gas_used.into(),
-        })
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum GasSimulationError {
-    #[error("handle op simulation did not revert")]
-    DidNotRevert,
-    #[error("handle op simulation should have reverted with exection result: {0}")]
-    DidNotRevertWithExecutionResult(IEntryPointErrors),
-    #[error("account execution reverted, reason: {0}")]
-    AccountExecutionReverted(String),
-    #[error("handle op simulation should have had 5 phases, but had {0}")]
-    IncorrectPhaseCount(usize),
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
 }
 
 #[derive(Clone, Debug, parse_display::Display, Ord, Eq, PartialOrd, PartialEq)]
@@ -680,7 +595,6 @@ pub struct Settings {
     pub min_unstake_delay: u32,
     pub min_stake_value: u128,
     pub max_simulate_handle_ops_gas: u64,
-    pub max_call_gas: u64,
     pub max_verification_gas: u64,
 }
 
@@ -689,14 +603,12 @@ impl Settings {
         min_unstake_delay: u32,
         min_stake_value: u128,
         max_simulate_handle_ops_gas: u64,
-        max_call_gas: u64,
         max_verification_gas: u64,
     ) -> Self {
         Self {
             min_unstake_delay,
             min_stake_value,
             max_simulate_handle_ops_gas,
-            max_call_gas,
             max_verification_gas,
         }
     }
@@ -711,7 +623,6 @@ impl Default for Settings {
             min_stake_value: 1_000_000_000_000_000_000,
             // 550 million gas: currently the defaults for Alchemy eth_call
             max_simulate_handle_ops_gas: 550_000_000,
-            max_call_gas: 500_000_000,
             max_verification_gas: 5_000_000,
         }
     }

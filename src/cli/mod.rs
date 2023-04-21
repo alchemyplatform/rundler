@@ -15,7 +15,10 @@ use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
 
-use crate::common::{precheck, simulation};
+use crate::{
+    common::{precheck, simulation},
+    rpc::estimation,
+};
 
 /// Main entry point for the CLI
 ///
@@ -176,18 +179,9 @@ pub struct CommonArgs {
     aws_region: String,
 }
 
-impl From<&CommonArgs> for precheck::Settings {
-    fn from(value: &CommonArgs) -> Self {
-        Self {
-            min_priority_fee_per_gas: value.min_priority_fee_per_gas.into(),
-            max_verification_gas: value.max_verification_gas.into(),
-        }
-    }
-}
-
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
 
-impl TryFrom<&CommonArgs> for simulation::Settings {
+impl TryFrom<&CommonArgs> for estimation::Settings {
     type Error = anyhow::Error;
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
@@ -205,19 +199,31 @@ impl TryFrom<&CommonArgs> for simulation::Settings {
         // The max call gas used during simulation is the total gas cap, minus the verification gas, minus
         // some overhead. This is then scaled by 31/32 to account for the EVM 1/64th rule which sets asside
         // gas during each call.
-        let max_call_gas = ((value.max_simulate_handle_ops_gas
-            - value.max_verification_gas
-            - SIMULATION_GAS_OVERHEAD)
-            * 30)
-            / 32;
+        let max_call_gas = value.max_simulate_handle_ops_gas - value.max_verification_gas;
+        Ok(Self {
+            max_verification_gas: value.max_verification_gas,
+            max_call_gas,
+        })
+    }
+}
 
-        Ok(Self::new(
+impl From<&CommonArgs> for precheck::Settings {
+    fn from(value: &CommonArgs) -> Self {
+        Self {
+            min_priority_fee_per_gas: value.min_priority_fee_per_gas.into(),
+            max_verification_gas: value.max_verification_gas.into(),
+        }
+    }
+}
+
+impl From<&CommonArgs> for simulation::Settings {
+    fn from(value: &CommonArgs) -> Self {
+        Self::new(
             value.min_unstake_delay,
             value.min_stake_value,
             value.max_simulate_handle_ops_gas,
-            max_call_gas,
             value.max_verification_gas,
-        ))
+        )
     }
 }
 

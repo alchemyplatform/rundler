@@ -29,12 +29,13 @@ use crate::{
     },
     rpc::{
         debug::{DebugApi, DebugApiServer},
-        eth::{EthApi, EthApiServer},
+        eth::{estimation, EthApi, EthApiServer},
         health::{SystemApi, SystemApiServer},
         metrics::RpcMetricsLogger,
     },
 };
 
+#[derive(Debug)]
 pub struct Args {
     pub port: u16,
     pub host: String,
@@ -46,6 +47,7 @@ pub struct Args {
     pub rpc_url: String,
     pub precheck_settings: precheck::Settings,
     pub sim_settings: simulation::Settings,
+    pub estimation_settings: estimation::Settings,
 }
 
 pub async fn run(
@@ -109,6 +111,7 @@ pub async fn run(
                     op_pool_client.clone(),
                     args.precheck_settings,
                     args.sim_settings,
+                    args.estimation_settings,
                 )
                 .into_rpc(),
             )?,

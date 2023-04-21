@@ -1,4 +1,5 @@
 mod error;
+pub mod estimation;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, bail, Context};
@@ -19,27 +20,29 @@ use tracing::{debug, Level};
 use self::error::{
     EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
 };
-use super::{
-    GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
-    UserOperationReceipt,
-};
-use crate::common::{
-    context::LogWithContext,
-    contracts::i_entry_point::{
-        IEntryPoint, IEntryPointCalls, IEntryPointErrors, UserOperationEventFilter,
-        UserOperationRevertReasonFilter,
+use crate::{
+    common::{
+        context::LogWithContext,
+        contracts::i_entry_point::{
+            IEntryPoint, IEntryPointCalls, UserOperationEventFilter,
+            UserOperationRevertReasonFilter,
+        },
+        eth::log_to_raw_log,
+        precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
+        protos::op_pool::{
+            op_pool_client::OpPoolClient, AddOpRequest, EntityType as ProtoEntityType, ErrorInfo,
+            ErrorReason, MempoolOp,
+        },
+        simulation::{
+            self, SimulationError, SimulationSuccess, SimulationViolation, Simulator, SimulatorImpl,
+        },
+        types::{Entity, EntityType, EntryPointLike, Timestamp, UserOperation},
     },
-    eth::log_to_raw_log,
-    precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
-    protos::op_pool::{
-        op_pool_client::OpPoolClient, AddOpRequest, EntityType as ProtoEntityType, ErrorInfo,
-        ErrorReason, MempoolOp,
+    rpc::{
+        estimation::{GasEstimator, GasEstimatorImpl},
+        GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
+        UserOperationReceipt,
     },
-    simulation::{
-        self, GasSimulationError, SimulationError, SimulationSuccess, SimulationViolation,
-        Simulator, SimulatorImpl,
-    },
-    types::{Entity, EntityType, Timestamp, UserOperation},
 };
 
 /// Eth API
@@ -80,6 +83,7 @@ struct EntryPointContext<Client: JsonRpcClient + 'static> {
     entry_point: IEntryPoint<Provider<Client>>,
     prechecker: PrecheckerImpl<Provider<Client>>,
     simulator: SimulatorImpl<Client>,
+    gas_estimator: GasEstimatorImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
 }
 
 impl<Client> EntryPointContext<Client>
@@ -91,14 +95,18 @@ where
         provider: Arc<Provider<Client>>,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
+        estimator_settings: estimation::Settings,
     ) -> Self {
         let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
         let prechecker = PrecheckerImpl::new(Arc::clone(&provider), address, precheck_settings);
         let simulator = SimulatorImpl::new(Arc::clone(&provider), address, sim_settings);
+        let gas_estimator =
+            GasEstimatorImpl::new(provider, entry_point.clone(), estimator_settings);
         Self {
             entry_point,
             prechecker,
             simulator,
+            gas_estimator,
         }
     }
 }
@@ -122,6 +130,7 @@ where
         op_pool_client: OpPoolClient<Channel>,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
+        estimation_settings: estimation::Settings,
     ) -> Self {
         let contexts_by_entry_point = entry_points
             .iter()
@@ -133,6 +142,7 @@ where
                         Arc::clone(&provider),
                         precheck_settings,
                         sim_settings,
+                        estimation_settings,
                     ),
                 )
             })
@@ -260,6 +270,7 @@ where
 }
 
 const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
+
 #[async_trait]
 impl<C> EthApiServer for EthApi<C>
 where
@@ -282,6 +293,7 @@ where
             entry_point,
             prechecker,
             simulator,
+            ..
         } = self
             .contexts_by_entry_point
             .get(&entry_point)
@@ -350,42 +362,24 @@ where
 
     async fn estimate_user_operation_gas(
         &self,
-        mut op: UserOperationOptionalGas,
+        op: UserOperationOptionalGas,
         entry_point: Address,
     ) -> RpcResult<GasEstimate> {
-        if !self.contexts_by_entry_point.contains_key(&entry_point) {
-            return Err(EthRpcError::InvalidParams(
-                "supplied entry_point addr is not a known entry point".to_string(),
-            ))?;
-        }
-        let simulator = &self
+        let context = self
             .contexts_by_entry_point
             .get(&entry_point)
-            .unwrap()
-            .simulator;
-
-        let pre_verification_gas = op.calc_pre_verification_gas(simulator.settings());
-        op.pre_verification_gas = Some(pre_verification_gas);
-
-        let gas_sim_result = simulator
-            .simulate_handle_op(op.into_user_operation(simulator.settings()))
-            .await
-            .map_err(|err| match err {
-                GasSimulationError::DidNotRevertWithExecutionResult(
-                    IEntryPointErrors::FailedOp(op),
-                ) => EthRpcError::EntryPointValidationRejected(op.reason),
-                GasSimulationError::AccountExecutionReverted(_) => {
-                    EthRpcError::ExecutionReverted(err.to_string())
-                }
-                _ => EthRpcError::Internal(err.into()),
+            .ok_or_else(|| {
+                EthRpcError::InvalidParams(
+                    "supplied entry_point address is not a known entry point".to_string(),
+                )
             })?;
-
-        // TODO - this is a temporary solution, we should have a better way to estimate gas
-        Ok(GasEstimate {
-            call_gas_limit: (gas_sim_result.call_gas * 5) / 4,
-            verification_gas_limit: gas_sim_result.verification_gas * 2,
-            pre_verification_gas,
-        })
+        let estimate = context
+            .gas_estimator
+            .estimate_op_gas(op)
+            .await
+            .context("calls to simulateHandleOp should receive response")?
+            .map_err(EthRpcError::ExecutionReverted)?;
+        Ok(estimate)
     }
 
     async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>> {
