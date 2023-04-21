@@ -4,16 +4,20 @@ use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
     contract::{ContractError, FunctionCall},
-    providers::Middleware,
-    types::{Address, Eip1559TransactionRequest, H256, U256},
+    providers::{spoof, Middleware, RawCall},
+    types::{Address, Bytes, Eip1559TransactionRequest, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
 use tonic::async_trait;
 
-use crate::common::contracts::{
-    i_entry_point::{FailedOp, IEntryPoint, SignatureValidationFailed},
-    shared_types::UserOpsPerAggregator,
+use crate::common::{
+    contracts::{
+        i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
+        shared_types::UserOpsPerAggregator,
+    },
+    eth,
+    types::UserOperation,
 };
 
 #[cfg_attr(test, automock)]
@@ -36,6 +40,33 @@ pub trait EntryPointLike: Send + Sync + 'static {
     ) -> anyhow::Result<H256>;
 
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
+
+    async fn call_spoofed_simulate_op(
+        &self,
+        op: UserOperation,
+        target: Address,
+        target_call_data: Bytes,
+        block_hash: H256,
+        gas: U256,
+        spoofed_state: &spoof::State,
+    ) -> anyhow::Result<Result<ExecutionResult, String>>;
+
+    async fn call_simulate_op(
+        &self,
+        op: UserOperation,
+        block_hash: H256,
+        gas: U256,
+    ) -> anyhow::Result<Result<ExecutionResult, String>> {
+        self.call_spoofed_simulate_op(
+            op,
+            Address::zero(),
+            Bytes::new(),
+            block_hash,
+            gas,
+            &spoof::State::default(),
+        )
+        .await
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -107,6 +138,35 @@ where
             .await
             .context("entry point should return deposit info")?;
         Ok(deposit_info.deposit.into())
+    }
+
+    async fn call_spoofed_simulate_op(
+        &self,
+        op: UserOperation,
+        target: Address,
+        target_call_data: Bytes,
+        block_hash: H256,
+        gas: U256,
+        spoofed_state: &spoof::State,
+    ) -> anyhow::Result<Result<ExecutionResult, String>> {
+        let contract_error = self
+            .simulate_handle_op(op, target, target_call_data)
+            .block(block_hash)
+            .gas(gas)
+            .call_raw()
+            .state(spoofed_state)
+            .await
+            .err()
+            .context("simulateHandleOp succeeded, but should always revert")?;
+        let revert_data = eth::get_revert_bytes(contract_error)
+            .context("simulateHandleOps should return revert data")?;
+        if let Ok(result) = ExecutionResult::decode(&revert_data) {
+            Ok(Ok(result))
+        } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+            Ok(Err(failed_op.reason))
+        } else {
+            Ok(Err(String::new()))
+        }
     }
 }
 

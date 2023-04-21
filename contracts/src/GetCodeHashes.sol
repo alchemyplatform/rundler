@@ -14,7 +14,9 @@ contract GetCodeHashes {
         revert CodeHashesResult(getCodeHashes(addresses));
     }
 
-    function getCodeHashes(address[] memory addresses) public view returns (bytes32) {
+    function getCodeHashes(
+        address[] memory addresses
+    ) public view returns (bytes32) {
         bytes32[] memory hashes = new bytes32[](addresses.length);
         for (uint i = 0; i < addresses.length; i++) {
             hashes[i] = addresses[i].codehash;

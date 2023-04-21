@@ -5,7 +5,9 @@ use ethers::{
     abi::{AbiDecode, AbiEncode, RawLog},
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
     providers::{JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError},
-    types::{Address, BlockId, Bytes, Eip1559TransactionRequest, Log, TransactionReceipt, H256},
+    types::{
+        Address, BlockId, Bytes, Eip1559TransactionRequest, Log, Selector, TransactionReceipt, H256,
+    },
 };
 
 use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
@@ -62,6 +64,17 @@ pub fn compact_call_data<M, D>(address: Address, call: ContractCall<M, D>) -> By
     if let Some(call_data) = call.tx.data() {
         bytes.extend(call_data);
     }
+    bytes.into()
+}
+
+/// Creates call data from a method and its arguments. The arguments should be
+/// passed as a tuple.
+///
+/// Important: if the method takes a single argument, then this function should
+/// be passed a single-element tuple, and not just the argument by itself.
+pub fn call_data_of(selector: Selector, args: impl AbiEncode) -> Bytes {
+    let mut bytes = selector.to_vec();
+    bytes.extend(args.encode());
     bytes.into()
 }
 
@@ -134,4 +147,27 @@ fn get_revert_data<D: AbiDecode>(mut error: ProviderError) -> Result<D, Provider
         Some(ret) => Ok(ret),
         None => Err(error),
     }
+}
+
+/// Gets the revert data from a contract error if it is a revert error,
+/// otherwise returns the original error.
+pub fn get_revert_bytes<M: Middleware>(error: ContractError<M>) -> Result<Bytes, ContractError<M>> {
+    if let ContractError::Revert(bytes) = error {
+        Ok(bytes)
+    } else {
+        Err(error)
+    }
+}
+
+/// This is the abi for what happens when you just revert("message") in a contract
+#[derive(Clone, Debug, Default, Eq, PartialEq, ethers::contract::EthError)]
+#[etherror(name = "Error", abi = "Error(string)")]
+pub struct ContractRevertError {
+    pub reason: String,
+}
+
+pub fn parse_revert_message(revert_data: &[u8]) -> Option<String> {
+    ContractRevertError::decode(revert_data)
+        .ok()
+        .map(|err| err.reason)
 }

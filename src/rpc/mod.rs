@@ -5,6 +5,7 @@ mod metrics;
 mod run;
 
 use anyhow::bail;
+pub use eth::estimation;
 use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
@@ -19,7 +20,6 @@ use crate::common::{
         self,
         op_pool::{Reputation, ReputationStatus},
     },
-    simulation::Settings,
     types::UserOperation,
 };
 
@@ -119,7 +119,7 @@ impl From<RpcUserOperation> for UserOperation {
 }
 
 /// User operation with optional gas fields for gas estimation RPC
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UserOperationOptionalGas {
     sender: Address,
@@ -140,7 +140,7 @@ impl UserOperationOptionalGas {
         self.clone()
     }
 
-    pub fn calc_pre_verification_gas(&self, settings: &Settings) -> U256 {
+    pub fn calc_pre_verification_gas(&self, settings: &estimation::Settings) -> U256 {
         // If someone is asking for pre-verification gas here, it means that
         // they are most likely going to be taking the results and plugging them
         // into their user operation. However, doing so changes the
@@ -148,17 +148,18 @@ impl UserOperationOptionalGas {
         // the packed user operation. To make sure the returned gas is enough to
         // cover the modified user op, calculate the gas needed for the worst
         // case scenario where the gas fields of the user operation are entirely
-        // nonzero bytes.
+        // nonzero bytes. Likewise for the signature field.
         let op = UserOperation {
             call_gas_limit: U256::MAX,
             verification_gas_limit: U256::MAX,
             pre_verification_gas: U256::MAX,
+            signature: [255_u8; 65].to_vec().into(),
             ..self.cheap_clone().into_user_operation(settings)
         };
         gas::calc_pre_verification_gas(&op)
     }
 
-    pub fn into_user_operation(self, settings: &Settings) -> UserOperation {
+    pub fn into_user_operation(self, settings: &estimation::Settings) -> UserOperation {
         UserOperation {
             sender: self.sender,
             nonce: self.nonce,
@@ -170,12 +171,12 @@ impl UserOperationOptionalGas {
             // Cap their values to the gas limits from settings
             verification_gas_limit: self
                 .verification_gas_limit
-                .map(|v| v.min(settings.max_verification_gas.into()))
-                .unwrap_or_else(|| settings.max_verification_gas.into()),
+                .unwrap_or_else(|| settings.max_verification_gas.into())
+                .min(settings.max_verification_gas.into()),
             call_gas_limit: self
                 .call_gas_limit
-                .map(|c| c.min(settings.max_call_gas.into()))
-                .unwrap_or_else(|| settings.max_call_gas.into()),
+                .unwrap_or_else(|| settings.max_call_gas.into())
+                .min(settings.max_call_gas.into()),
             // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
             pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
             max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
@@ -185,7 +186,7 @@ impl UserOperationOptionalGas {
 }
 
 /// Gas estimate for a user operation
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GasEstimate {
     pub pre_verification_gas: U256,
@@ -194,7 +195,7 @@ pub struct GasEstimate {
 }
 
 /// User operation with additional metadata
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RichUserOperation {
     pub user_operation: RpcUserOperation,
@@ -205,7 +206,7 @@ pub struct RichUserOperation {
 }
 
 /// User operation receipt
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserOperationReceipt {
     pub user_op_hash: H256,

@@ -150,7 +150,7 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::PrecheckFailed(_) => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SimulationFailed(_) => rpc_err(INVALID_REQUEST_CODE, msg),
             EthRpcError::Internal(_) => rpc_err(INTERNAL_ERROR_CODE, msg),
-            EthRpcError::ExecutionReverted(msg) => rpc_err(EXECUTION_REVERTED, msg),
+            EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
         }
     }
 }

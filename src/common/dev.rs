@@ -296,6 +296,44 @@ impl DevClients {
         Ok(Self::new(addresses))
     }
 
+    pub async fn add_signature(
+        &self,
+        op: &mut UserOperation,
+        use_paymaster: bool,
+    ) -> anyhow::Result<()> {
+        if use_paymaster {
+            // For the paymaster op hash to work correctly, our paymasterAndData
+            // field must be the correct length, which is space for an address,
+            // ABI-encoding of two ints, and a 65-byte signature.
+            op.paymaster_and_data = [0_u8; 20 + 64 + 65].into();
+            let valid_after = 0;
+            let valid_until = 0;
+            // Yes, the paymaster really takes valid_until before valid_after.
+            let paymaster_op_hash = self
+                .paymaster
+                .get_hash(op.clone(), valid_until, valid_after)
+                .await
+                .context("should call paymaster to get op hash")?;
+            let paymaster_signature = self
+                .paymaster_signer
+                .sign_message(paymaster_op_hash)
+                .await
+                .context("should sign paymaster op hash")?;
+            let mut paymaster_and_data = self.paymaster.address().as_bytes().to_vec();
+            paymaster_and_data.extend(AbiEncode::encode((valid_until, valid_after)));
+            paymaster_and_data.extend(paymaster_signature.to_vec());
+            op.paymaster_and_data = paymaster_and_data.into()
+        }
+        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID);
+        let signature = self
+            .wallet_owner_signer
+            .sign_message(op_hash)
+            .await
+            .context("wallet owner should sign op hash")?;
+        op.signature = signature.to_vec().into();
+        Ok(())
+    }
+
     pub async fn new_wallet_op<M, D>(
         &self,
         call: ContractCall<M, D>,
@@ -344,36 +382,7 @@ impl DevClients {
             nonce,
             ..base_user_op()
         };
-        if use_paymaster {
-            // For the paymaster op hash to work correctly, our paymasterAndData
-            // field must be the correct length, which is space for an address,
-            // ABI-encoding of two ints, and a 65-byte signature.
-            op.paymaster_and_data = [0_u8; 20 + 64 + 65].into();
-            let valid_after = 0;
-            let valid_until = 0;
-            // Yes, the paymaster really takes valid_until before valid_after.
-            let paymaster_op_hash = self
-                .paymaster
-                .get_hash(op.clone(), valid_until, valid_after)
-                .await
-                .context("should call paymaster to get op hash")?;
-            let paymaster_signature = self
-                .paymaster_signer
-                .sign_message(paymaster_op_hash)
-                .await
-                .context("should sign paymaster op hash")?;
-            let mut paymaster_and_data = self.paymaster.address().as_bytes().to_vec();
-            paymaster_and_data.extend(AbiEncode::encode((valid_until, valid_after)));
-            paymaster_and_data.extend(paymaster_signature.to_vec());
-            op.paymaster_and_data = paymaster_and_data.into()
-        }
-        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID);
-        let signature = self
-            .wallet_owner_signer
-            .sign_message(op_hash)
-            .await
-            .context("wallet owner should sign op hash")?;
-        op.signature = signature.to_vec().into();
+        self.add_signature(&mut op, use_paymaster).await?;
         Ok(op)
     }
 }

@@ -26,6 +26,8 @@ pub trait ProviderLike: Send + Sync + 'static {
     ) -> anyhow::Result<Option<Bytes>>;
 
     async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>>;
+
+    async fn get_code(&self, address: Address, block_hash: H256) -> anyhow::Result<Bytes>;
 }
 
 #[async_trait]
@@ -69,5 +71,11 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         PendingTransaction::new(tx_hash, self)
             .await
             .context("should wait for transaction to be mined or dropped")
+    }
+
+    async fn get_code(&self, address: Address, block_hash: H256) -> anyhow::Result<Bytes> {
+        Middleware::get_code(self, address, Some(block_hash.into()))
+            .await
+            .context("provider should get contract code")
     }
 }
