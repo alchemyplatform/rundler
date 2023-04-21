@@ -1,4 +1,4 @@
-import { Address, BigInt, Bytes, LogTracer } from "./types";
+import type { Address, BigInt, Bytes, LogTracer } from "./types";
 
 declare function isPrecompiled(address: Address): boolean;
 declare function toAddress(s: string | Bytes): Address;
@@ -43,14 +43,22 @@ type InternalPhase = Omit<
   Phase,
   "forbiddenOpcodesUsed" | "storageAccesses" | "undeployedContractAccesses"
 > & {
-  forbiddenOpcodesUsed: Set<string>;
-  storageAccesses: Map<string, Set<string>>;
-  undeployedContractAccesses: Set<string>;
+  forbiddenOpcodesUsed: StringSet;
+  storageAccesses: Record<string, StringSet>;
+  undeployedContractAccesses: StringSet;
 };
 
+type StringSet = Record<string, boolean | undefined>;
+
 ((): LogTracer<Output> => {
+  function stringSet(items: string[]): StringSet {
+    const out: StringSet = {};
+    items.forEach((item) => (out[item] = true));
+    return out;
+  }
+
   const DEPOSIT_TO_SELECTOR = "0xb760faf9";
-  const FORBIDDEN_OPCODES = new Set([
+  const FORBIDDEN_OPCODES = stringSet([
     "GASPRICE",
     "GASLIMIT",
     "DIFFICULTY",
@@ -67,7 +75,7 @@ type InternalPhase = Omit<
   ]);
   // If you add any opcodes to this list, make sure they take the contract
   // address as their *second* argument, or modify the handling below.
-  const CALL_OPCODES = new Set([
+  const CALL_OPCODES = stringSet([
     "CALL",
     "CALLCODE",
     "DELEGATECALL",
@@ -75,13 +83,17 @@ type InternalPhase = Omit<
   ]);
   // If you add any opcodes to this list, make sure they take the contract
   // address as their *first* argument, or modify the handling below.
-  const EXT_OPCODES = new Set(["EXTCODECOPY", "EXTCODEHASH", "EXTCODELENGTH"]);
+  const EXT_OPCODES = stringSet([
+    "EXTCODECOPY",
+    "EXTCODEHASH",
+    "EXTCODELENGTH",
+  ]);
 
   const phases: Phase[] = [];
   let revertData: string | null = null;
-  const accessedContractAddresses = new Set<string>();
-  const associatedSlotsByAddressMap = new Map<string, Set<string>>();
-  const allStorageAccesses = new Map<string, Map<string, string | null>>();
+  const accessedContractAddresses: StringSet = {};
+  const associatedSlotsByAddressMap: Record<string, StringSet> = {};
+  const allStorageAccesses: Record<string, Record<string, string | null>> = {};
   let factoryCreate2Count = 0;
   let currentPhase = newInternalPhase();
   let entryPointAddress = "";
@@ -90,13 +102,13 @@ type InternalPhase = Omit<
 
   function newInternalPhase(): InternalPhase {
     return {
-      forbiddenOpcodesUsed: new Set(),
+      forbiddenOpcodesUsed: {},
       usedInvalidGasOpcode: false,
-      storageAccesses: new Map(),
+      storageAccesses: {},
       calledBannedEntryPointMethod: false,
       calledWithValue: false,
       ranOutOfGas: false,
-      undeployedContractAccesses: new Set(),
+      undeployedContractAccesses: {},
     };
   }
 
@@ -107,14 +119,15 @@ type InternalPhase = Omit<
       calledWithValue,
       ranOutOfGas,
     } = currentPhase;
-    const forbiddenOpcodesUsed = [...currentPhase.forbiddenOpcodesUsed];
-    const undeployedContractAccesses = [
-      ...currentPhase.undeployedContractAccesses,
-    ];
+    const forbiddenOpcodesUsed = Object.keys(currentPhase.forbiddenOpcodesUsed);
+    const undeployedContractAccesses = Object.keys(
+      currentPhase.undeployedContractAccesses
+    );
     const storageAccesses: StorageAccess[] = [];
-    for (const [address, slotsSet] of currentPhase.storageAccesses) {
-      storageAccesses.push({ address, slots: [...slotsSet] });
-    }
+    Object.keys(currentPhase.storageAccesses).forEach((address) => {
+      const slotsSet = currentPhase.storageAccesses[address];
+      storageAccesses.push({ address, slots: Object.keys(slotsSet) });
+    });
     const phase: Phase = {
       forbiddenOpcodesUsed,
       usedInvalidGasOpcode,
@@ -132,13 +145,17 @@ type InternalPhase = Omit<
     return parseInt(n.toString());
   }
 
-  function computeIfAbsent<K, V>(map: Map<K, V>, key: K, getValue: () => V): V {
-    const value = map.get(key);
+  function computeIfAbsent<K extends keyof any, V>(
+    map: Record<K, V>,
+    key: K,
+    getValue: () => V
+  ): V {
+    const value = map[key];
     if (value !== undefined) {
       return value;
     }
     const newValue = getValue();
-    map.set(key, newValue);
+    map[key] = newValue;
     return newValue;
   }
 
@@ -146,25 +163,28 @@ type InternalPhase = Omit<
     result(_ctx, _db): Output {
       concludePhase();
       const associatedSlotsByAddress: Record<string, string[]> = {};
-      for (const [address, slots] of associatedSlotsByAddressMap) {
-        associatedSlotsByAddress[address] = [...slots];
-      }
+      Object.keys(associatedSlotsByAddressMap).forEach((address) => {
+        const slots = associatedSlotsByAddressMap[address];
+        associatedSlotsByAddress[address] = Object.keys(slots);
+      });
       const expectedStorage: ExpectedStorage[] = [];
-      for (const [address, slotAccesses] of allStorageAccesses) {
+      Object.keys(allStorageAccesses).forEach((address) => {
+        const slotAccesses = allStorageAccesses[address];
         const slots: ExpectedSlot[] = [];
-        for (const [slot, value] of slotAccesses) {
+        Object.keys(slotAccesses).forEach((slot) => {
+          const value = slotAccesses[slot];
           if (value) {
             slots.push({ slot, value });
           }
-        }
+        });
         if (slots.length > 0) {
           expectedStorage.push({ address, slots });
         }
-      }
+      });
       return {
         phases,
         revertData,
-        accessedContractAddresses: [...accessedContractAddresses],
+        accessedContractAddresses: Object.keys(accessedContractAddresses),
         associatedSlotsByAddress,
         factoryCalledCreate2Twice: factoryCreate2Count > 1,
         expectedStorage,
@@ -188,8 +208,8 @@ type InternalPhase = Omit<
         computeIfAbsent(
           associatedSlotsByAddressMap,
           pendingKeccakAddress,
-          () => new Set()
-        ).add(keccakResult);
+          (): StringSet => ({})
+        )[keccakResult] = true;
         pendingKeccakAddress = "";
       }
       const opcode = log.op.toString();
@@ -205,12 +225,12 @@ type InternalPhase = Omit<
       } else {
         // The entry point is allowed to freely call `GAS`, but otherwise we
         // require that a call opcode comes next.
-        if (justCalledGas && !CALL_OPCODES.has(opcode)) {
+        if (justCalledGas && !CALL_OPCODES[opcode]) {
           currentPhase.usedInvalidGasOpcode = true;
         }
         justCalledGas = opcode === "GAS";
-        if (FORBIDDEN_OPCODES.has(opcode)) {
-          currentPhase.forbiddenOpcodesUsed.add(opcode);
+        if (FORBIDDEN_OPCODES[opcode]) {
+          currentPhase.forbiddenOpcodesUsed[opcode] = true;
         }
       }
       if (opcode === "CREATE2") {
@@ -218,7 +238,7 @@ type InternalPhase = Omit<
           // In factory phase.
           factoryCreate2Count++;
         } else {
-          currentPhase.forbiddenOpcodesUsed.add(opcode);
+          currentPhase.forbiddenOpcodesUsed[opcode] = true;
         }
       } else if (opcode === "KECCAK256") {
         //
@@ -243,29 +263,29 @@ type InternalPhase = Omit<
           computeIfAbsent(
             currentPhase.storageAccesses,
             addressHex,
-            () => new Set<string>()
-          ).add(slotHex);
+            (): StringSet => ({})
+          )[slotHex] = true;
         }
         let initialValuesBySlot = computeIfAbsent(
           allStorageAccesses,
           addressHex,
-          () => new Map<string, string | null>()
+          (): Record<string, string | null> => ({})
         );
-        if (!initialValuesBySlot.has(slotHex)) {
+        if (!initialValuesBySlot[slotHex]) {
           // If the first access to this slot is a load, then whatever value it
           // contains will be an expected value.
           const expectedValue =
             opcode === "SLOAD" ? toHex(db.getState(address, slot)) : null;
-          initialValuesBySlot.set(slotHex, expectedValue);
+          initialValuesBySlot[slotHex] = expectedValue;
         }
-      } else if (EXT_OPCODES.has(opcode) || CALL_OPCODES.has(opcode)) {
-        const index = EXT_OPCODES.has(opcode) ? 0 : 1;
+      } else if (EXT_OPCODES[opcode] || CALL_OPCODES[opcode]) {
+        const index = EXT_OPCODES[opcode] ? 0 : 1;
         const address = toAddress(log.stack.peek(index).toString(16));
         if (!isPrecompiled(address)) {
           const addressHex = toHex(address);
           if (
-            !accessedContractAddresses.has(addressHex) ||
-            currentPhase.undeployedContractAccesses.has(addressHex)
+            !accessedContractAddresses[addressHex] ||
+            currentPhase.undeployedContractAccesses[addressHex]
           ) {
             // The spec says validation must not access code of undeployed
             // contracts, but if the operation is deploying the sender, then
@@ -274,12 +294,12 @@ type InternalPhase = Omit<
             // accessing undeployed code if code is deployed there by the end
             // of the phase.
             if (db.getCode(address).length === 0) {
-              currentPhase.undeployedContractAccesses.add(addressHex);
+              currentPhase.undeployedContractAccesses[addressHex] = true;
             } else {
-              currentPhase.undeployedContractAccesses.delete(addressHex);
+              delete currentPhase.undeployedContractAccesses[addressHex];
             }
           }
-          accessedContractAddresses.add(addressHex);
+          accessedContractAddresses[addressHex] = true;
         }
       }
     },
