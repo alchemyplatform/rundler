@@ -24,7 +24,7 @@ services:
       start_period: 10s
 
   geth:
-    image: ethereum/client-go:v1.10.26
+    image: ethereum/client-go:v1.11.6
     ports:
       - "8545:8545"
       - "8546:8546"
