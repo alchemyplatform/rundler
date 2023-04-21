@@ -5,7 +5,7 @@ use std::{
 
 use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Opcode, U256},
+    types::{transaction::eip2718::TypedTransaction, Address, BlockId, Opcode, U256},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -74,22 +74,6 @@ impl AssociatedSlotsByAddress {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GasTracerOutput {
-    pub phases: Vec<GasPhase>,
-    pub revert_data: Option<String>,
-    pub gas_used: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GasPhase {
-    pub gas_used: u64,
-    pub gas_remaining_at_conclusion: u64,
-    pub account_revert_data: Option<String>,
-}
-
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
 /// method for the provided user operation.
 pub async fn trace_simulate_validation(
@@ -107,27 +91,6 @@ pub async fn trace_simulate_validation(
         tx,
         block_id,
         validation_tracer_js(),
-    )
-    .await
-}
-
-/// Runs the bundler's custom tracer on the entry point's `simulateHandleOp`
-/// method for the provided user operation.
-pub async fn trace_simulate_handle_op(
-    entry_point: &IEntryPoint<impl Middleware>,
-    op: UserOperation,
-    block_id: BlockId,
-) -> anyhow::Result<GasTracerOutput> {
-    let tx = entry_point
-        .simulate_handle_op(op, Address::zero(), Bytes::default())
-        .gas(550_000_000)
-        .tx;
-
-    trace_call(
-        entry_point.client().provider(),
-        tx,
-        block_id,
-        gas_tracer_js(),
     )
     .await
 }
@@ -153,8 +116,4 @@ where
 
 fn validation_tracer_js() -> &'static str {
     include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
-}
-
-fn gas_tracer_js() -> &'static str {
-    include_str!("../../tracer/dist/gasTracer.js").trim_end_matches(";export{};")
 }

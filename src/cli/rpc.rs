@@ -9,7 +9,7 @@ use tracing::{error, info};
 use super::CommonArgs;
 use crate::{
     common::{precheck, simulation},
-    rpc,
+    rpc::{self, estimation},
 };
 
 /// CLI options for the RPC server
@@ -56,6 +56,7 @@ impl RpcArgs {
         builder_url: String,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
+        estimation_settings: estimation::Settings,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
@@ -82,6 +83,7 @@ impl RpcArgs {
             api_namespaces: apis,
             precheck_settings,
             sim_settings,
+            estimation_settings,
         })
     }
 }
@@ -126,6 +128,7 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
             &common_args,
             pool_url,
             builder_url,
+            (&common_args).into(),
             (&common_args).into(),
             (&common_args).try_into()?,
         )?,

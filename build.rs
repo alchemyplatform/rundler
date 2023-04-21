@@ -10,7 +10,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=tracer/package.json");
     println!("cargo:rerun-if-changed=tracer/src/validationTracer.ts");
-    println!("cargo:rerun-if-changed=tracer/src/gasTracer.ts");
     generate_contract_bindings()?;
     generate_protos()?;
     compile_tracer()?;
@@ -24,6 +23,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("EntryPoint")?,
         abigen_of("IAggregator")?,
         abigen_of("GetCodeHashes")?,
+        abigen_of("CallGasEstimationProxy")?,
         abigen_of("SimpleAccount")?,
         abigen_of("SimpleAccountFactory")?,
         abigen_of("VerifyingPaymaster")?,
