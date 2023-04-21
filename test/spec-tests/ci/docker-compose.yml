@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  rundler:
+    image: alchemy-platform/rundler:$TAG
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+    environment:
+      - RUST_LOG=debug
+      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - NODE_HTTP=http://localhost:8545
+      - RPC_API=eth,debug
+      - MIN_UNSTAKE_DELAY=2
+      - BUILDER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+    healthcheck:
+      test: curl --fail http://127.0.0.1:8080/health || exit 1
+      interval: 1s
+      timeout: 1s
+      retries: 60
+      start_period: 10s
