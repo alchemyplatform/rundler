@@ -5,6 +5,8 @@ use ethers::contract::{Abigen, MultiAbigen};
 fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/lib");
     println!("cargo:rerun-if-changed=contracts/src");
+    println!("cargo:rerun-if-changed=contracts/foundry.toml");
+    println!("cargo:rerun-if-changed=contracts/remappings.txt");
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=tracer/package.json");
     println!("cargo:rerun-if-changed=tracer/src/validationTracer.ts");

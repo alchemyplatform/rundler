@@ -1,8 +1,8 @@
 [profile.default]
-src = 'contracts/src'
-out = 'contracts/out'
-libs = ['contracts/lib']
-test = 'contracts/test'
-cache_path = 'contracts/cache'
+src = 'src'
+out = 'out'
+libs = ['lib']
+test = 'test'
+cache_path = 'cache'
 
 # See more config options https://github.com/foundry-rs/foundry/tree/master/config
