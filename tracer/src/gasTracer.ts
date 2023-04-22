@@ -114,7 +114,9 @@ interface InternalPhase {
 
     enter(frame) {
       if (toHex(frame.getTo()) === entryPointAddress) {
-        if (toHex(frame.getInput().slice(0, 4)) === INNER_HANDLE_OPS_SELECTOR) {
+        if (
+          toHex(frame.getInput().subarray(0, 4)) === INNER_HANDLE_OPS_SELECTOR
+        ) {
           currentPhase.calledInnerHandleOps = true;
         }
       }
