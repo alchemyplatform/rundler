@@ -1,4 +1,11 @@
-use std::{env, io::Write, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io::{self, BufRead, Write},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::Context;
 use ethers::{
@@ -8,8 +15,8 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::{Http, Middleware, Provider},
     signers::{LocalWallet, Signer},
-    types::{Address, Bytes, TransactionRequest, U256},
-    utils,
+    types::{Address, Bytes, NameOrAddress, TransactionRequest, H256, U256},
+    utils::{self, hex, keccak256},
 };
 
 use crate::common::{
@@ -117,23 +124,38 @@ pub struct DevAddresses {
 
 impl DevAddresses {
     pub fn write_to_env_file(&self) -> anyhow::Result<()> {
-        let mut env_file = std::fs::File::create(".env")?;
-        writeln!(
-            env_file,
-            "DEV_ENTRY_POINT_ADDRESS={:?}",
-            self.entry_point_address
-        )?;
-        writeln!(
-            env_file,
-            "DEV_WALLET_FACTORY_ADDRESS={:?}",
-            self.factory_address
-        )?;
-        writeln!(env_file, "DEV_WALLET_ADDRESS={:?}", self.wallet_address)?;
-        writeln!(
-            env_file,
-            "DEV_PAYMASTER_ADDRESS={:?}",
-            self.paymaster_address
-        )?;
+        let file = File::open(".env")?;
+        let mut vars = io::BufReader::new(file)
+            .lines()
+            .filter_map(|l| l.ok())
+            .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())))
+            .collect::<HashMap<String, String>>();
+
+        vars.insert(
+            "DEV_ENTRY_POINT_ADDRESS".to_string(),
+            format!("{:?}", self.entry_point_address),
+        );
+        vars.insert(
+            "DEV_WALLET_FACTORY_ADDRESS".to_string(),
+            format!("{:?}", self.factory_address),
+        );
+        vars.insert(
+            "DEV_WALLET_ADDRESS".to_string(),
+            format!("{:?}", self.wallet_address),
+        );
+        vars.insert(
+            "DEV_PAYMASTER_ADDRESS".to_string(),
+            format!("{:?}", self.paymaster_address),
+        );
+
+        let mut vars = vars.into_iter().collect::<Vec<(_, _)>>();
+        vars.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+
+        let mut env_file = File::create(".env")?;
+        for (key, value) in vars.iter() {
+            writeln!(env_file, "{}={}", key, value)?;
+        }
+
         Ok(())
     }
 
@@ -154,7 +176,7 @@ fn address_from_env_var(key: &str) -> anyhow::Result<Address> {
         .with_context(|| format!("should parse address from environment variable {key}"))
 }
 
-pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
+pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<DevAddresses> {
     let provider = new_local_provider();
     let deployer_client = new_test_client(Arc::clone(&provider), DEPLOYER_ACCOUNT_ID);
     let bundler_client = new_test_client(Arc::clone(&provider), BUNDLER_ACCOUNT_ID);
@@ -162,19 +184,30 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
     let paymaster_signer_address = new_test_wallet(PAYMASTER_SIGNER_ACCOUNT_ID).address();
     grant_eth(&provider, deployer_client.address()).await?;
     grant_eth(&provider, bundler_client.address()).await?;
-    let entry_point_deployer = EntryPoint::deploy(Arc::clone(&deployer_client), ());
-    let entry_point = eth::await_contract_deployment(entry_point_deployer, "EntryPoint").await?;
-    let entry_point = eth::connect_contract(&entry_point, Arc::clone(&bundler_client));
+
+    let deterministic_deploy = DeterministicDeployProxy::new(Arc::clone(&deployer_client)).await?;
+
+    // entry point
+    let entry_point_address = deterministic_deploy
+        .deploy_bytecode(entry_point_bytecode, 0)
+        .await?;
+    let entry_point = EntryPoint::new(entry_point_address, Arc::clone(&deployer_client));
+
+    // TODO use deterministic deployment
+    // account factory
     let factory_deployer =
         SimpleAccountFactory::deploy(Arc::clone(&deployer_client), entry_point.address());
     let factory = eth::await_contract_deployment(factory_deployer, "SimpleAccountFactory").await?;
     let factory = eth::connect_contract(&factory, Arc::clone(&bundler_client));
+
+    // paymaster
     let paymaster_deployer = VerifyingPaymaster::deploy(
         Arc::clone(&deployer_client),
         (entry_point.address(), paymaster_signer_address),
     );
     let paymaster =
         eth::await_contract_deployment(paymaster_deployer, "VerifyingPaymaster").await?;
+
     let funder_address = get_funder_address(&provider).await?;
     let call = paymaster
         .deposit()
@@ -192,6 +225,7 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
         factory.address(),
         factory.create_account(wallet_owner_eoa.address(), salt),
     );
+
     let mut op = UserOperation {
         sender: wallet_address,
         init_code,
@@ -205,6 +239,7 @@ pub async fn deploy_dev_contracts() -> anyhow::Result<DevAddresses> {
     op.signature = signature.to_vec().into();
     let call = entry_point.handle_ops(vec![op], bundler_client.address());
     eth::await_mined_tx(call.send(), "deploy wallet using entry point").await?;
+
     Ok(DevAddresses {
         entry_point_address: entry_point.address(),
         factory_address: factory.address(),
@@ -340,5 +375,105 @@ impl DevClients {
             .context("wallet owner should sign op hash")?;
         op.signature = signature.to_vec().into();
         Ok(op)
+    }
+}
+
+// https://github.com/Arachnid/deterministic-deployment-proxy
+struct DeterministicDeployProxy<M, S> {
+    client: Arc<SignerMiddleware<M, S>>,
+}
+
+impl<M: Middleware + 'static, S: Signer + 'static> DeterministicDeployProxy<M, S> {
+    const PROXY_ADDRESS: &str = "0x4e59b44847b379578588920ca78fbf26c0b4956c";
+    const DEPLOYMENT_TRANSACTION: &str = "0xf8a58085174876e800830186a08080b853604580600e600039806000f350fe7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe03601600081602082378035828234f58015156039578182fd5b8082525050506014600cf31ba02222222222222222222222222222222222222222222222222222222222222222a02222222222222222222222222222222222222222222222222222222222222222";
+    const DEPLOYMENT_SIGNER: &str = "0x3fab184622dc19b6109349b94811493bf2a45362";
+    const DEPLOYMENT_GAS_PRICE: u64 = 100_000_000_000;
+    const DEPLOYMENT_GAS_LIMIT: u64 = 100_000;
+
+    pub async fn new(client: Arc<SignerMiddleware<M, S>>) -> anyhow::Result<Self> {
+        let ret = Self { client };
+        ret.deploy_deployer().await?;
+        Ok(ret)
+    }
+
+    pub async fn deploy_bytecode(&self, bytecode: &str, salt: u64) -> anyhow::Result<Address> {
+        let addr = self.deploy_bytecode_address(bytecode, salt)?;
+        if self.is_deployed(addr).await? {
+            return Ok(addr);
+        }
+
+        let data = hex::decode(format!("{}{}", &Self::format_salt(salt), &bytecode[2..]))?;
+        let tx = TransactionRequest::new().to(Self::PROXY_ADDRESS).data(data);
+
+        let _ = self
+            .client
+            .send_transaction(tx, None)
+            .await?
+            .await?
+            .context("should deploy bytecode")?;
+
+        Ok(addr)
+    }
+
+    pub fn deploy_bytecode_address(&self, bytecode: &str, salt: u64) -> anyhow::Result<Address> {
+        let code_hash = hex::encode(keccak256(hex::decode(&bytecode[2..])?));
+        let x = keccak256(hex::decode(format!(
+            "ff{}{}{}",
+            &Self::PROXY_ADDRESS[2..],
+            &Self::format_salt(salt),
+            code_hash
+        ))?);
+        Ok(Address::from_slice(&x[12..]))
+    }
+
+    async fn deploy_deployer(&self) -> anyhow::Result<()> {
+        if self.is_deployed(Self::PROXY_ADDRESS).await? {
+            return Ok(());
+        }
+
+        // fund the proxy
+        let funds = U256::from(Self::DEPLOYMENT_GAS_PRICE * Self::DEPLOYMENT_GAS_LIMIT);
+        let deployment_signer = Self::DEPLOYMENT_SIGNER.parse::<Address>()?;
+        let tx = TransactionRequest::pay(deployment_signer, funds).from(self.client.address());
+        let _ = self
+            .client
+            .send_transaction(tx, None)
+            .await?
+            .await?
+            .context("should send funding transaction")?;
+
+        // deploy the deployer
+        let tx = Bytes::from(
+            hex::decode(&Self::DEPLOYMENT_TRANSACTION[2..])
+                .context("should decode deployment transaction")?,
+        );
+        let _ = self
+            .client
+            .send_raw_transaction(tx)
+            .await?
+            .await?
+            .context("should send deployment transaction")?;
+
+        if self.is_deployed(Self::PROXY_ADDRESS).await? {
+            Ok(())
+        } else {
+            anyhow::bail!("deployer is not deployed")
+        }
+    }
+
+    async fn is_deployed<T>(&self, addr: T) -> anyhow::Result<bool>
+    where
+        T: Into<NameOrAddress> + Send + Sync,
+    {
+        let code = self
+            .client
+            .get_code(addr, None)
+            .await
+            .context("should get proxy code")?;
+        Ok(!code.is_empty())
+    }
+
+    fn format_salt(salt: u64) -> String {
+        format!("{:?}", H256::from_low_u64_be(salt))[2..].to_owned()
     }
 }

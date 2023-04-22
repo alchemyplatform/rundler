@@ -46,7 +46,7 @@ cp test/.env.default .env
     * Deploys a `SimpleAccount`.
     * Funds each of the accounts.
 ```
-cargo run --bin deploy_dev_contracts.rs
+cargo run --bin deploy_dev_contracts
 ```
 
 3. (Optional) Modify the `BUNDLER_PRIVATE_KEY` field if using a different account than was funded in #2.
