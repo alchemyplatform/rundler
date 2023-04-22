@@ -6,10 +6,11 @@ use rundler::common::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addresses = dev::deploy_dev_contracts().await?;
-
-    // TODO fix this not to overwrite, but to append/modify the existing vars
-    // addresses.write_to_env_file()?;
+    let bytecode = include_str!(
+        "../../contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789.txt",
+    );
+    let addresses = dev::deploy_dev_contracts(bytecode).await?;
+    addresses.write_to_env_file()?;
 
     let DevAddresses {
         entry_point_address: entry_point,
