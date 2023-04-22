@@ -129,7 +129,13 @@ where
         let sender_address = op.sender;
         let paymaster_address = op.paymaster();
         let is_wallet_creation = !op.init_code.is_empty();
-        let tracer_out = tracer::trace_simulate_validation(&self.entry_point, op, block_id).await?;
+        let tracer_out = tracer::trace_simulate_validation(
+            &self.entry_point,
+            op,
+            block_id,
+            self.sim_settings.max_verification_gas,
+        )
+        .await?;
         let num_phases = tracer_out.phases.len() as u32;
         // Check if there are too many phases here, then check too few at the
         // end. We are detecting cases where the entry point is broken. Too many

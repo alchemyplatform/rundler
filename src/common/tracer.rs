@@ -95,8 +95,12 @@ pub async fn trace_simulate_validation(
     entry_point: &IEntryPoint<impl Middleware>,
     op: UserOperation,
     block_id: BlockId,
+    max_validation_gas: u64,
 ) -> anyhow::Result<TracerOutput> {
-    let tx = entry_point.simulate_validation(op).tx;
+    let tx = entry_point
+        .simulate_validation(op)
+        .gas(max_validation_gas)
+        .tx;
     trace_call(
         entry_point.client().provider(),
         tx,
