@@ -200,7 +200,7 @@ impl TryFrom<&CommonArgs> for simulation::Settings {
         let max_call_gas = ((value.max_simulate_handle_ops_gas
             - value.max_verification_gas
             - SIMULATION_GAS_OVERHEAD)
-            * 31)
+            * 30)
             / 32;
 
         Ok(Self::new(
