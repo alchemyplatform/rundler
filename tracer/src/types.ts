@@ -9,8 +9,12 @@ export interface BigInt {
   toString(radix?: 16): string;
 }
 
-export type Address = number[]; // Always length 20
-export type Bytes = number[];
+// Only the following properties are available on Matic.
+export type Bytes = Pick<
+  Uint8Array,
+  "length" | "byteLength" | "byteOffset" | "buffer" | "set" | "subarray"
+>;
+export type Address = Bytes; // Always length 20
 
 export interface LogContext {
   type: "CALL" | "CREATE"; // one of the two values CALL and CREATE
