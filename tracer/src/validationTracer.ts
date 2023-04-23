@@ -316,7 +316,7 @@ type StringSet = Record<string, boolean | undefined>;
         // tests fail
         if (
           input.length > 0 &&
-          toHex(input.subarray(0, 4)) !== DEPOSIT_TO_SELECTOR
+          toHex(input).substring(0, 10) !== DEPOSIT_TO_SELECTOR
         ) {
           currentPhase.calledBannedEntryPointMethod = true;
         }

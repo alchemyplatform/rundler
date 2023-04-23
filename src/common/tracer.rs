@@ -118,7 +118,7 @@ pub async fn trace_simulate_handle_op(
     block_id: BlockId,
 ) -> anyhow::Result<GasTracerOutput> {
     let tx = entry_point
-        .simulate_handle_op(op, Address::default(), Bytes::default())
+        .simulate_handle_op(op, Address::zero(), Bytes::default())
         .tx;
 
     trace_call(
