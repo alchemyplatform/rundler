@@ -187,13 +187,18 @@ where
         &self,
         op: UserOperation,
         aggregator_address: Option<Address>,
+        gas_cap: u64,
     ) -> anyhow::Result<AggregatorOut> {
         let Some(aggregator_address) = aggregator_address else {
             return Ok(AggregatorOut::NotNeeded);
         };
         let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
-        // TODO: Add gas limit to prevent DoS?
-        match aggregator.validate_user_op_signature(op).call().await {
+        match aggregator
+            .validate_user_op_signature(op)
+            .gas(gas_cap)
+            .call()
+            .await
+        {
             Ok(sig) => Ok(AggregatorOut::SuccerssWithInfo(AggregatorSimOut {
                 address: aggregator_address,
                 signature: sig,
@@ -317,7 +322,7 @@ where
         if tracer_out.factory_called_create2_twice {
             violations.push(SimulationViolation::FactoryCalledCreate2Twice);
         }
-        // To spare the Geth node, only check code hashes and validate with
+        // To spare the RPC node, only check code hashes and validate with
         // aggregator if there are no other violations.
         if !violations.is_empty() {
             return Err(violations.into());
@@ -328,8 +333,11 @@ where
             mem::take(&mut tracer_out.accessed_contract_addresses),
             Some(block_id),
         );
-        let aggregator_signature_future =
-            self.validate_aggregator_signature(op, aggregator_address);
+        let aggregator_signature_future = self.validate_aggregator_signature(
+            op,
+            aggregator_address,
+            self.sim_settings.max_verification_gas,
+        );
         let (code_hash, aggregator_out) =
             tokio::try_join!(code_hash_future, aggregator_signature_future)?;
         if let Some(expected_code_hash) = expected_code_hash {
