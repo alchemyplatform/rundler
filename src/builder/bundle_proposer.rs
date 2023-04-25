@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    mem,
     sync::Arc,
     time::Duration,
 };
@@ -11,7 +12,7 @@ use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
 use tonic::{async_trait, transport::Channel};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::common::{
     contracts::entry_point::UserOpsPerAggregator,
@@ -86,24 +87,35 @@ where
             .await
             .context("should get ops from op pool to bundle")?
             .into_inner()
-            .ops;
+            .ops
+            .into_iter()
+            .map(OpFromPool::try_from)
+            .collect::<anyhow::Result<Vec<OpFromPool>>>()?;
         let block_hash = self.provider.get_latest_block_hash().await?;
         let simulation_futures = ops
             .iter()
             .cloned()
             .map(|op| self.simulate_validation(op, block_hash));
-        let ops_with_simulations = future::join_all(simulation_futures).await;
+        let ops_with_simulations_future = future::join_all(simulation_futures);
+        let all_paymaster_addresses = ops.iter().filter_map(|op| op.op.paymaster());
+        let balances_by_paymaster_future =
+            self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);
+        let (ops_with_simulations, balances_by_paymaster) =
+            tokio::join!(ops_with_simulations_future, balances_by_paymaster_future);
+        let balances_by_paymaster = balances_by_paymaster?;
         let ops_with_simulations = ops_with_simulations
             .into_iter()
             .filter_map(|result| match result {
                 Ok(success) => Some(success),
                 Err(error) => {
-                    error!("Failed to resimulate op: {error}");
+                    error!("Failed to resimulate op: {error:?}");
                     None
                 }
             })
             .collect::<Vec<_>>();
-        let mut context = self.assemble_context(ops_with_simulations).await;
+        let mut context = self
+            .assemble_context(ops_with_simulations, balances_by_paymaster)
+            .await;
         while !context.is_empty() {
             let gas_estimate = self.estimate_gas_rejecting_failed_ops(&mut context).await?;
             if let Some(gas_estimate) = gas_estimate {
@@ -114,6 +126,7 @@ where
                     rejected_ops: context.rejected_ops,
                 });
             }
+            info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
         Ok(Bundle {
             rejected_ops: context.rejected_ops,
@@ -128,8 +141,6 @@ where
     E: EntryPointLike,
     P: ProviderLike,
 {
-    // TODO: Remove the allow directive after we start using this.
-    #[allow(dead_code)]
     pub fn new(
         max_bundle_size: u64,
         beneficiary: Address,
@@ -150,10 +161,9 @@ where
 
     async fn simulate_validation(
         &self,
-        op: MempoolOp,
+        op: OpFromPool,
         block_hash: H256,
     ) -> anyhow::Result<(UserOperation, Option<SimulationSuccess>)> {
-        let op = OpFromPool::try_from(op)?;
         let result = self
             .simulator
             .simulate_validation(op.op.clone(), Some(block_hash), Some(op.expected_code_hash))
@@ -178,6 +188,7 @@ where
     async fn assemble_context(
         &self,
         ops_with_simulations: Vec<(UserOperation, Option<SimulationSuccess>)>,
+        mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
@@ -185,6 +196,7 @@ where
             .collect();
         let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
         let mut rejected_ops = Vec::<UserOperation>::new();
+        let mut paymasters_to_reject = Vec::<Address>::new();
         for (op, simulation) in ops_with_simulations {
             let Some(simulation) = simulation else {
                 rejected_ops.push(op);
@@ -197,65 +209,73 @@ where
             {
                 // Exclude ops that access the sender of another op in the
                 // batch, but don't reject them (remove them from pool).
+                info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender);
                 continue;
+            }
+            if let Some(paymaster) = op.paymaster() {
+                let Some(balance) = balances_by_paymaster.get_mut(&paymaster) else {
+                    error!("Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle.");
+                    continue;
+                };
+                let max_cost = op.max_gas_cost();
+                if *balance < max_cost {
+                    info!("Rejected paymaster ${paymaster:?} becauase its balance was too low.");
+                    paymasters_to_reject.push(paymaster);
+                    continue;
+                } else {
+                    *balance -= max_cost;
+                }
             }
             groups_by_aggregator
                 .entry(simulation.aggregator_address())
                 .or_default()
                 .ops_with_simulations
                 .push(OpWithSimulation { op, simulation });
-            // TODO: Track paymaster balances
         }
         let mut context = ProposalContext {
             groups_by_aggregator,
             rejected_ops,
         };
-        self.compute_aggregator_signatures(&mut context).await;
+        for paymaster in paymasters_to_reject {
+            // No need to update aggregator signatures because we haven't
+            // computed them yet.
+            let _ = context.reject_paymaster(paymaster);
+        }
+        self.compute_all_aggregator_signatures(&mut context).await;
         context
     }
 
-    async fn compute_aggregator_signatures(&self, context: &mut ProposalContext) {
-        let signature_futures =
+    async fn reject_index(&self, context: &mut ProposalContext, i: usize) {
+        let changed_aggregator = context.reject_index(i);
+        self.compute_aggregator_signatures(context, &changed_aggregator)
+            .await;
+    }
+
+    async fn compute_all_aggregator_signatures(&self, context: &mut ProposalContext) {
+        let aggregators: Vec<_> = context
+            .groups_by_aggregator
+            .keys()
+            .flatten()
+            .copied()
+            .collect();
+        self.compute_aggregator_signatures(context, &aggregators)
+            .await;
+    }
+
+    async fn compute_aggregator_signatures<'a>(
+        &self,
+        context: &mut ProposalContext,
+        aggregators: impl IntoIterator<Item = &'a Address>,
+    ) {
+        let signature_futures = aggregators.into_iter().filter_map(|&aggregator| {
             context
                 .groups_by_aggregator
-                .iter()
-                .filter_map(|(option_address, group)| {
-                    option_address.map(|address| self.aggregate_signatures(address, group))
-                });
+                .get(&Some(aggregator))
+                .map(|group| self.aggregate_signatures(aggregator, group))
+        });
         let signatures = future::join_all(signature_futures).await;
         for (aggregator, result) in signatures {
             context.apply_aggregation_signature_result(aggregator, result);
-        }
-    }
-
-    async fn reject_index(&self, context: &mut ProposalContext, i: usize) {
-        let mut remaining_i = i;
-        let mut found_aggregator: Option<Option<Address>> = None;
-        for (&aggregator, group) in &mut context.groups_by_aggregator {
-            if remaining_i < group.ops_with_simulations.len() {
-                let rejected = group.ops_with_simulations.remove(remaining_i);
-                context.rejected_ops.push(rejected.op);
-                found_aggregator = Some(aggregator);
-                break;
-            }
-            remaining_i -= group.ops_with_simulations.len();
-        }
-        let Some(found_aggregator) = found_aggregator else {
-            error!("The entry point indicated a failed op at index {i}, but the bundle size is only {}", i - remaining_i);
-            return;
-        };
-        // If we just removed the last op from a group, delete that group.
-        // Otherwise, the signature is invalidated and we need to recompute it.
-        if context.groups_by_aggregator[&found_aggregator]
-            .ops_with_simulations
-            .is_empty()
-        {
-            context.groups_by_aggregator.remove(&found_aggregator);
-        } else if let Some(aggregator) = found_aggregator {
-            let (_, sig_result) = self
-                .aggregate_signatures(aggregator, &context.groups_by_aggregator[&found_aggregator])
-                .await;
-            context.apply_aggregation_signature_result(aggregator, sig_result);
         }
     }
 
@@ -281,10 +301,26 @@ where
                 Ok(None)
             }
             HandleOpsOut::SignatureValidationFailed(aggregator) => {
+                info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
                 context.reject_aggregator(aggregator);
                 Ok(None)
             }
         }
+    }
+
+    async fn get_balances_by_paymaster(
+        &self,
+        addreses: impl Iterator<Item = Address>,
+        block_hash: H256,
+    ) -> anyhow::Result<HashMap<Address, U256>> {
+        let futures = addreses.map(|address| async move {
+            let deposit = self.entry_point.get_deposit(address, block_hash).await?;
+            Ok::<_, anyhow::Error>((address, deposit))
+        });
+        let addresses_and_deposits = future::try_join_all(futures)
+            .await
+            .context("entry point should return deposits for paymasters")?;
+        Ok(HashMap::from_iter(addresses_and_deposits))
     }
 
     async fn aggregate_signatures(
@@ -374,6 +410,71 @@ impl ProposalContext {
                 self.groups_by_aggregator.remove(&Some(aggregator));
             }
         }
+    }
+
+    /// Returns the address of the op's aggregator if the aggregator's signature
+    /// may need to be recomputed.
+    #[must_use = "rejected op but did not update aggregator signatures"]
+    fn reject_index(&mut self, i: usize) -> Option<Address> {
+        let mut remaining_i = i;
+        let mut found_aggregator: Option<Option<Address>> = None;
+        for (&aggregator, group) in &mut self.groups_by_aggregator {
+            if remaining_i < group.ops_with_simulations.len() {
+                let rejected = group.ops_with_simulations.remove(remaining_i);
+                self.rejected_ops.push(rejected.op);
+                found_aggregator = Some(aggregator);
+                break;
+            }
+            remaining_i -= group.ops_with_simulations.len();
+        }
+        let Some(found_aggregator) = found_aggregator else {
+            error!("The entry point indicated a failed op at index {i}, but the bundle size is only {}", i - remaining_i);
+            return None;
+        };
+        // If we just removed the last op from a group, delete that group.
+        // Otherwise, the signature is invalidated and we need to recompute it.
+        if self.groups_by_aggregator[&found_aggregator]
+            .ops_with_simulations
+            .is_empty()
+        {
+            self.groups_by_aggregator.remove(&found_aggregator);
+            None
+        } else {
+            found_aggregator
+        }
+    }
+
+    /// Returns the addresses of any aggregators whose signature may need to be
+    /// recomputed.
+    #[must_use = "rejected paymaster but did not update aggregator signatures"]
+    fn reject_paymaster(&mut self, address: Address) -> Vec<Address> {
+        let mut changed_aggregators: Vec<Address> = vec![];
+        let mut aggregators_to_remove: Vec<Option<Address>> = vec![];
+        for (&aggregator, group) in &mut self.groups_by_aggregator {
+            // I sure wish `Vec::drain_filter` were stable.
+            let group_uses_rejected_paymaster = group
+                .ops_with_simulations
+                .iter()
+                .any(|op| op.op.paymaster() == Some(address));
+            if group_uses_rejected_paymaster {
+                for op in mem::take(&mut group.ops_with_simulations) {
+                    if op.op.paymaster() == Some(address) {
+                        self.rejected_ops.push(op.op);
+                    } else {
+                        group.ops_with_simulations.push(op);
+                    }
+                }
+                if group.ops_with_simulations.is_empty() {
+                    aggregators_to_remove.push(aggregator);
+                } else if let Some(aggregator) = aggregator {
+                    changed_aggregators.push(aggregator);
+                }
+            }
+        }
+        for aggregator in aggregators_to_remove {
+            self.groups_by_aggregator.remove(&aggregator);
+        }
+        changed_aggregators
     }
 
     fn reject_aggregator(&mut self, address: Address) {

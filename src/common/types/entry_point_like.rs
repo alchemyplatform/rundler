@@ -33,6 +33,8 @@ pub trait EntryPointLike: Send + Sync + 'static {
         beneficiary: Address,
         gas: U256,
     ) -> anyhow::Result<H256>;
+
+    async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +88,16 @@ where
             .await
             .context("should send bundle transaction")?
             .tx_hash())
+    }
+
+    async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256> {
+        let deposit_info = self
+            .get_deposit_info(address)
+            .block(block_hash)
+            .call()
+            .await
+            .context("entry point should return deposit info")?;
+        Ok(deposit_info.deposit.into())
     }
 }
 
