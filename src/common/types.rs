@@ -90,6 +90,11 @@ impl UserOperation {
         ])
         .into()
     }
+
+    pub fn max_gas_cost(&self) -> U256 {
+        let max_gas = self.call_gas_limit + self.verification_gas_limit + self.pre_verification_gas;
+        max_gas * self.max_fee_per_gas
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

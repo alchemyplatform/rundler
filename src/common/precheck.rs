@@ -170,7 +170,6 @@ where
         let AsyncData {
             paymaster_exists,
             payer_funds,
-            base_fee,
             ..
         } = async_data;
         if !op.paymaster_and_data.is_empty() {
@@ -181,7 +180,7 @@ where
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
             }
         }
-        let max_gas_cost = max_gas_cost_for_op(op, base_fee);
+        let max_gas_cost = op.max_gas_cost();
         if payer_funds < max_gas_cost {
             if op.paymaster_and_data.is_empty() {
                 return Some(PrecheckViolation::SenderFundsTooLow(
@@ -265,14 +264,6 @@ where
             .base_fee_per_gas
             .context("latest block should have a nonempty base fee")
     }
-}
-
-fn max_gas_cost_for_op(op: &UserOperation, base_fee: U256) -> U256 {
-    let max_gas = op.call_gas_limit + op.verification_gas_limit + op.pre_verification_gas;
-    let fee_per_gas = op
-        .max_fee_per_gas
-        .min(op.max_priority_fee_per_gas + base_fee);
-    max_gas * fee_per_gas
 }
 
 #[derive(Clone, Debug, parse_display::Display, Eq, PartialEq)]
