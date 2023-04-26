@@ -147,7 +147,7 @@ pub struct CommonArgs {
         default_value = "1000000000000000000",
         global = true
     )]
-    min_stake_value: u64,
+    min_stake_value: u128,
 
     #[arg(
         long = "min_unstake_delay",
