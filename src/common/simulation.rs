@@ -671,7 +671,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
 #[derive(Debug, Copy, Clone)]
 pub struct Settings {
     pub min_unstake_delay: u32,
-    pub min_stake_value: u64,
+    pub min_stake_value: u128,
     pub max_simulate_handle_ops_gas: u64,
     pub max_call_gas: u64,
     pub max_verification_gas: u64,
@@ -680,7 +680,7 @@ pub struct Settings {
 impl Settings {
     pub fn new(
         min_unstake_delay: u32,
-        min_stake_value: u64,
+        min_stake_value: u128,
         max_simulate_handle_ops_gas: u64,
         max_call_gas: u64,
         max_verification_gas: u64,
