@@ -12,5 +12,5 @@
 	branch = release-v4.8
 [submodule "test/spec-tests/bundler-spec-tests"]
 	path = test/spec-tests/bundler-spec-tests
-	url = https://github.com/OMGWINNING/bundler-spec-tests.git
+	url = https://github.com/alchemyplatform/bundler-spec-tests.git
 	ignore = dirty

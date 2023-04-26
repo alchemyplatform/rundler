@@ -199,7 +199,7 @@ where
             .call()
             .await
         {
-            Ok(sig) => Ok(AggregatorOut::SuccerssWithInfo(AggregatorSimOut {
+            Ok(sig) => Ok(AggregatorOut::SuccessWithInfo(AggregatorSimOut {
                 address: aggregator_address,
                 signature: sig,
             })),
@@ -347,7 +347,7 @@ where
         }
         let aggregator = match aggregator_out {
             AggregatorOut::NotNeeded => None,
-            AggregatorOut::SuccerssWithInfo(info) => Some(info),
+            AggregatorOut::SuccessWithInfo(info) => Some(info),
             AggregatorOut::ValidationReverted => {
                 violations.push(SimulationViolation::AggregatorValidationFailed);
                 None
@@ -545,7 +545,7 @@ struct ValidationContext {
 #[derive(Debug)]
 enum AggregatorOut {
     NotNeeded,
-    SuccerssWithInfo(AggregatorSimOut),
+    SuccessWithInfo(AggregatorSimOut),
     ValidationReverted,
 }
 
