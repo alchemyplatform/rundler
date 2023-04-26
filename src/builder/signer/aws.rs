@@ -30,7 +30,7 @@ impl KmsSigner {
     ) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel::<String>();
         let kms_guard = SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
-            redis_uri, key_ids, ttl_millis, tx,
+            redis_uri, key_ids, chain_id, ttl_millis, tx,
         ));
         let key_id = rx.await.context("should lock key_id")?;
         let client = KmsClient::new(region);
@@ -52,6 +52,7 @@ impl KmsSigner {
     async fn lock_manager_loop(
         redis_url: String,
         key_ids: Vec<String>,
+        chain_id: u64,
         ttl_millis: u64,
         locked_tx: oneshot::Sender<String>,
     ) {
@@ -59,8 +60,13 @@ impl KmsSigner {
 
         let mut lock = None;
         let mut kid = None;
-        for key_id in key_ids.iter() {
-            match lm.lock(key_id.as_bytes(), ttl_millis as usize).await {
+        let lock_context = key_ids
+            .into_iter()
+            .map(|id| (format!("{chain_id}:{id}"), id))
+            .collect::<Vec<_>>();
+
+        for (lock_id, key_id) in lock_context.iter() {
+            match lm.lock(lock_id.as_bytes(), ttl_millis as usize).await {
                 Ok(l) => {
                     lock = Some(l);
                     kid = Some(key_id.clone());
