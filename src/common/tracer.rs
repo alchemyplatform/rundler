@@ -26,6 +26,7 @@ pub struct TracerOutput {
 #[serde(rename_all = "camelCase")]
 pub struct Phase {
     pub forbidden_opcodes_used: Vec<Opcode>,
+    pub forbidden_precompiles_used: Vec<Address>,
     pub used_invalid_gas_opcode: bool,
     pub storage_accesses: Vec<StorageAccess>,
     pub called_banned_entry_point_method: bool,
@@ -119,6 +120,7 @@ pub async fn trace_simulate_handle_op(
 ) -> anyhow::Result<GasTracerOutput> {
     let tx = entry_point
         .simulate_handle_op(op, Address::zero(), Bytes::default())
+        .gas(550_000_000)
         .tx;
 
     trace_call(

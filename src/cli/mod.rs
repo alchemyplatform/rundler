@@ -184,7 +184,7 @@ impl TryFrom<&CommonArgs> for simulation::Settings {
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
         if value.max_verification_gas
-            > (value.max_simulate_handle_ops_gas + SIMULATION_GAS_OVERHEAD)
+            > (value.max_simulate_handle_ops_gas - SIMULATION_GAS_OVERHEAD)
         {
             anyhow::bail!(
                 "max_verification_gas ({}) must be less than max_simulate_handle_ops_gas ({}) by at least {}",

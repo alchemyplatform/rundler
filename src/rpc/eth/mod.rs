@@ -578,6 +578,9 @@ impl From<SimulationError> for EthRpcError {
             SimulationViolation::UsedForbiddenOpcode(entity, op) => {
                 Self::OpcodeViolation(*entity, op.clone().0)
             }
+            SimulationViolation::UsedForbiddenPrecompile(entity, precompile) => {
+                Self::PrecompileViolation(*entity, *precompile)
+            }
             SimulationViolation::InvalidGasOpcode(entity) => {
                 Self::OpcodeViolation(*entity, Opcode::GAS)
             }

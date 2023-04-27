@@ -16,6 +16,7 @@ interface Output {
 
 interface Phase {
   forbiddenOpcodesUsed: string[];
+  forbiddenPrecompilesUsed: string[];
   usedInvalidGasOpcode: boolean;
   storageAccesses: StorageAccess[];
   calledBannedEntryPointMethod: boolean;
@@ -41,9 +42,10 @@ interface ExpectedSlot {
 
 type InternalPhase = Omit<
   Phase,
-  "forbiddenOpcodesUsed" | "storageAccesses" | "undeployedContractAccesses"
+  "forbiddenOpcodesUsed" | "forbiddenPrecompilesUsed" | "storageAccesses" | "undeployedContractAccesses"
 > & {
   forbiddenOpcodesUsed: StringSet;
+  forbiddenPrecompilesUsed: StringSet;
   storageAccesses: Record<string, StringSet>;
   undeployedContractAccesses: StringSet;
 };
@@ -88,6 +90,18 @@ type StringSet = Record<string, boolean | undefined>;
     "EXTCODEHASH",
     "EXTCODELENGTH",
   ]);
+  // Whitelisted precompile addresses.
+  const PRECOMPILE_WHILTELIST = stringSet([
+    "0x0000000000000000000000000000000000000001", // ecRecover
+    "0x0000000000000000000000000000000000000002", // SHA2-256
+    "0x0000000000000000000000000000000000000003", // RIPEMD-160
+    "0x0000000000000000000000000000000000000004", // identity
+    "0x0000000000000000000000000000000000000005", // modexp
+    "0x0000000000000000000000000000000000000006", // ecAdd
+    "0x0000000000000000000000000000000000000007", // ecMul
+    "0x0000000000000000000000000000000000000008", // ecPairing
+    "0x0000000000000000000000000000000000000009", // black2f
+  ]);
 
   const phases: Phase[] = [];
   let revertData: string | null = null;
@@ -103,6 +117,7 @@ type StringSet = Record<string, boolean | undefined>;
   function newInternalPhase(): InternalPhase {
     return {
       forbiddenOpcodesUsed: {},
+      forbiddenPrecompilesUsed: {},
       usedInvalidGasOpcode: false,
       storageAccesses: {},
       calledBannedEntryPointMethod: false,
@@ -120,6 +135,7 @@ type StringSet = Record<string, boolean | undefined>;
       ranOutOfGas,
     } = currentPhase;
     const forbiddenOpcodesUsed = Object.keys(currentPhase.forbiddenOpcodesUsed);
+    const forbiddenPrecompilesUsed = Object.keys(currentPhase.forbiddenPrecompilesUsed);
     const undeployedContractAccesses = Object.keys(
       currentPhase.undeployedContractAccesses
     );
@@ -130,6 +146,7 @@ type StringSet = Record<string, boolean | undefined>;
     });
     const phase: Phase = {
       forbiddenOpcodesUsed,
+      forbiddenPrecompilesUsed,
       usedInvalidGasOpcode,
       storageAccesses,
       calledBannedEntryPointMethod,
@@ -281,8 +298,8 @@ type StringSet = Record<string, boolean | undefined>;
       } else if (EXT_OPCODES[opcode] || CALL_OPCODES[opcode]) {
         const index = EXT_OPCODES[opcode] ? 0 : 1;
         const address = toAddress(log.stack.peek(index).toString(16));
+        const addressHex = toHex(address);
         if (!isPrecompiled(address)) {
-          const addressHex = toHex(address);
           if (
             !accessedContractAddresses[addressHex] ||
             currentPhase.undeployedContractAccesses[addressHex]
@@ -300,6 +317,8 @@ type StringSet = Record<string, boolean | undefined>;
             }
           }
           accessedContractAddresses[addressHex] = true;
+        } else if (!PRECOMPILE_WHILTELIST[addressHex]) {
+          currentPhase.forbiddenPrecompilesUsed[addressHex] = true;
         }
       }
     },
