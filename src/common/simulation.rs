@@ -250,6 +250,12 @@ where
                     ViolationOpCode(*opcode),
                 ));
             }
+            for precompile in &phase.forbidden_precompiles_used {
+                violations.push(SimulationViolation::UsedForbiddenPrecompile(
+                    entity,
+                    *precompile,
+                ));
+            }
             if phase.used_invalid_gas_opcode {
                 violations.push(SimulationViolation::InvalidGasOpcode(entity));
             }
@@ -474,6 +480,8 @@ pub enum SimulationViolation {
     UnintendedRevertWithMessage(Entity, String, Option<Address>),
     #[display("{0} uses banned opcode: {1}")]
     UsedForbiddenOpcode(Entity, ViolationOpCode),
+    #[display("{0} uses banned precompile: {1:?}")]
+    UsedForbiddenPrecompile(Entity, Address),
     #[display("{0} uses banned opcode: GAS")]
     InvalidGasOpcode(Entity),
     #[display("factory may only call CREATE2 once during initialization")]

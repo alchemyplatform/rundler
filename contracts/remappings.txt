@@ -1,2 +1,4 @@
-account-abstraction/=lib/account-abstraction/contracts/
+forge-std/=lib/forge-std/src
+ds-test/=lib/forge-std/lib/ds-test/src/
+@account-abstraction/=lib/account-abstraction/contracts/
 @openzeppelin/=lib/openzeppelin-contracts/
