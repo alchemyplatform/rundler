@@ -8,16 +8,19 @@ use prost::Message;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
 
 use super::mempool::{error::MempoolError, Mempool, OperationOrigin};
-use crate::common::protos::{
-    self,
-    op_pool::{
-        op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
-        DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
-        DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
-        DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
-        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-        RemoveOpsRequest, RemoveOpsResponse,
+use crate::common::{
+    protos::{
+        self,
+        op_pool::{
+            self, op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
+            DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
+            DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
+            DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
+            GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
+            RemoveEntitiesRequest, RemoveEntitiesResponse, RemoveOpsRequest, RemoveOpsResponse,
+        },
     },
+    types::EntityType,
 };
 
 pub struct OpPoolImpl<M: Mempool> {
@@ -120,6 +123,28 @@ where
         mempool.remove_operations(&hashes);
 
         Ok(Response::new(RemoveOpsResponse {}))
+    }
+
+    async fn remove_entities(
+        &self,
+        request: Request<RemoveEntitiesRequest>,
+    ) -> Result<Response<RemoveEntitiesResponse>> {
+        let req = request.into_inner();
+        let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
+
+        for entity in req.entities {
+            let proto_entity = op_pool::EntityType::from_i32(entity.entity).ok_or_else(|| {
+                Status::invalid_argument(format!("Invalid entity: {}", entity.entity))
+            })?;
+            let local_entity = EntityType::try_from(proto_entity)
+                .map_err(|e| Status::invalid_argument(format!("Invalid entity: {e}")))?;
+            let address = protos::from_bytes(&entity.address)
+                .map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))?;
+
+            mempool.remove_entity(local_entity, address);
+        }
+
+        Ok(Response::new(RemoveEntitiesResponse {}))
     }
 
     async fn debug_clear_state(
@@ -347,6 +372,8 @@ mod tests {
         }
 
         fn remove_operations<'a>(&self, _hashes: impl IntoIterator<Item = &'a H256>) {}
+
+        fn remove_entity(&self, _entity: EntityType, _address: Address) {}
 
         fn best_operations(&self, _max: usize) -> Vec<Arc<PoolOperation>> {
             vec![]

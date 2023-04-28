@@ -176,6 +176,10 @@ where
         }
     }
 
+    fn remove_entity(&self, entity: EntityType, address: Address) {
+        self.state.write().pool.remove_entity(entity, address);
+    }
+
     fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
         // get the best operations from the pool
         let ordered_ops = self.state.read().pool.best_operations();
