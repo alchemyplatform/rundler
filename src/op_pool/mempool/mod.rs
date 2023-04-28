@@ -44,6 +44,9 @@ pub trait Mempool: Send + Sync {
     /// Removes a set of operations from the pool.
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>);
 
+    /// Removes all operations assocaited with a given entity from the pool.
+    fn remove_entity(&self, entity: EntityType, address: Address);
+
     /// Returns the best operations from the pool.
     ///
     /// Returns the best operations from the pool based on their gas bids up to

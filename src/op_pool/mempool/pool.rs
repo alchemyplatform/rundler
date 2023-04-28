@@ -12,7 +12,7 @@ use super::{
     size::SizeTracker,
     PoolConfig, PoolOperation,
 };
-use crate::common::types::{UserOperation, UserOperationId};
+use crate::common::types::{EntityType, UserOperation, UserOperationId};
 
 /// Pool of user operations
 #[derive(Debug)]
@@ -159,6 +159,18 @@ impl PoolInner {
         }
 
         None
+    }
+
+    pub fn remove_entity(&mut self, entity: EntityType, address: Address) {
+        let to_remove = self
+            .by_hash
+            .iter()
+            .filter(|(_, uo)| uo.po.entity_address(entity) == Some(address))
+            .map(|(hash, _)| *hash)
+            .collect::<Vec<_>>();
+        for hash in to_remove {
+            self.remove_operation_by_hash(hash);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -338,6 +350,69 @@ mod tests {
         assert!(pool.remove_operation_by_hash(hashes[0]).is_none());
         assert!(pool.remove_operation_by_hash(hashes[1]).is_none());
         assert!(pool.remove_operation_by_hash(hashes[2]).is_none());
+    }
+
+    #[test]
+    fn remove_account() {
+        let mut pool = PoolInner::new(conf());
+        let account = Address::random();
+        let ops = vec![
+            create_op(account, 0, 3),
+            create_op(account, 1, 2),
+            create_op(account, 2, 1),
+        ];
+        for mut op in ops.into_iter() {
+            op.aggregator = Some(account);
+            pool.add_operation(op.clone()).unwrap();
+        }
+        assert_eq!(pool.by_hash.len(), 3);
+
+        pool.remove_entity(EntityType::Account, account);
+        assert!(pool.by_hash.is_empty());
+        assert!(pool.by_id.is_empty());
+        assert!(pool.best.is_empty());
+    }
+
+    #[test]
+    fn remove_aggregator() {
+        let mut pool = PoolInner::new(conf());
+        let agg = Address::random();
+        let ops = vec![
+            create_op(Address::random(), 0, 3),
+            create_op(Address::random(), 0, 2),
+            create_op(Address::random(), 0, 1),
+        ];
+        for mut op in ops.into_iter() {
+            op.aggregator = Some(agg);
+            pool.add_operation(op.clone()).unwrap();
+        }
+        assert_eq!(pool.by_hash.len(), 3);
+
+        pool.remove_entity(EntityType::Aggregator, agg);
+        assert!(pool.by_hash.is_empty());
+        assert!(pool.by_id.is_empty());
+        assert!(pool.best.is_empty());
+    }
+
+    #[test]
+    fn remove_paymaster() {
+        let mut pool = PoolInner::new(conf());
+        let paymaster = Address::random();
+        let ops = vec![
+            create_op(Address::random(), 0, 3),
+            create_op(Address::random(), 0, 2),
+            create_op(Address::random(), 0, 1),
+        ];
+        for mut op in ops.into_iter() {
+            op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+            pool.add_operation(op.clone()).unwrap();
+        }
+        assert_eq!(pool.by_hash.len(), 3);
+
+        pool.remove_entity(EntityType::Paymaster, paymaster);
+        assert!(pool.by_hash.is_empty());
+        assert!(pool.by_id.is_empty());
+        assert!(pool.best.is_empty());
     }
 
     #[test]

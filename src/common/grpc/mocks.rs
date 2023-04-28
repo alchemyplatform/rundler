@@ -23,7 +23,8 @@ use crate::common::protos::{
         DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpReputationRequest,
         DebugDumpReputationResponse, DebugSetReputationRequest, DebugSetReputationResponse,
         GetOpsRequest, GetOpsResponse, GetSupportedEntryPointsRequest,
-        GetSupportedEntryPointsResponse, RemoveOpsRequest, RemoveOpsResponse,
+        GetSupportedEntryPointsResponse, RemoveEntitiesRequest, RemoveEntitiesResponse,
+        RemoveOpsRequest, RemoveOpsResponse,
     },
 };
 
@@ -50,6 +51,11 @@ mock! {
             &self,
             request: Request<RemoveOpsRequest>,
         ) -> tonic::Result<Response<RemoveOpsResponse>>;
+
+        async fn remove_entities(
+            &self,
+            _request: Request<RemoveEntitiesRequest>,
+        ) -> tonic::Result<Response<RemoveEntitiesResponse>>;
 
         async fn debug_clear_state(
             &self,

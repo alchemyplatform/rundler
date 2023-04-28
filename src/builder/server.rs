@@ -27,9 +27,11 @@ use crate::{
                 DebugSendBundleNowResponse, DebugSetBundlingModeRequest,
                 DebugSetBundlingModeResponse,
             },
-            op_pool::{op_pool_client::OpPoolClient, RemoveOpsRequest},
+            op_pool::{
+                self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
+            },
         },
-        types::{EntryPointLike, ProviderLike, UserOperation},
+        types::{EntityType, EntryPointLike, ProviderLike, UserOperation},
     },
 };
 
@@ -142,25 +144,45 @@ where
             .make_bundle()
             .await
             .context("proposer should create bundle for builder")?;
+
         let remove_ops_future = async {
             let result = self.remove_ops_from_pool(&bundle.rejected_ops).await;
             if let Err(error) = result {
                 error!("Failed to remove rejected ops from pool: {error}");
             }
         };
+        let remove_entities_future = async {
+            let result = self
+                .remove_entities_from_pool(&bundle.rejected_entities)
+                .await;
+            if let Err(error) = result {
+                error!("Failed to remove rejected entities from pool: {error}");
+            }
+        };
+
         if bundle.is_empty() {
-            remove_ops_future.await;
+            if !bundle.rejected_ops.is_empty() || !bundle.rejected_entities.is_empty() {
+                info!(
+                    "Empty bundle with {} rejected ops and {} rejected entities. Removing them from pool.",
+                    bundle.rejected_ops.len(),
+                    bundle.rejected_entities.len()
+                );
+                join!(remove_ops_future, remove_entities_future);
+            }
             return Ok(None);
         }
+
         info!(
-            "Selected bundle with {} op(s), with {} rejected op(s)",
+            "Selected bundle with {} op(s), with {} rejected op(s) and {} rejected entities",
             bundle.len(),
-            bundle.rejected_ops.len()
+            bundle.rejected_ops.len(),
+            bundle.rejected_entities.len()
         );
         // Give the estimated gas a 10% overhead to account for inaccuracies.
         let gas = bundle.gas_estimate * 11 / 10;
-        let (_, send_bundle_result) = join!(
+        let (_, _, send_bundle_result) = join!(
             remove_ops_future,
+            remove_entities_future,
             self.entry_point
                 .send_bundle(bundle.ops_per_aggregator, self.beneficiary, gas)
         );
@@ -181,6 +203,27 @@ where
             })
             .await
             .context("builder should remove rejected ops from pool")?;
+        Ok(())
+    }
+
+    async fn remove_entities_from_pool(
+        &self,
+        entities: &[(EntityType, Address)],
+    ) -> anyhow::Result<()> {
+        self.op_pool
+            .clone()
+            .remove_entities(RemoveEntitiesRequest {
+                entry_point: self.entry_point.address().as_bytes().to_vec(),
+                entities: entities
+                    .iter()
+                    .map(|(e, a)| op_pool::Entity {
+                        entity: op_pool::EntityType::from(*e).into(),
+                        address: a.as_bytes().to_vec(),
+                    })
+                    .collect(),
+            })
+            .await
+            .context("builder should remove rejected entities from pool")?;
         Ok(())
     }
 

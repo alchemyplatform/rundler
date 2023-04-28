@@ -21,7 +21,7 @@ use crate::common::{
         op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
     },
     simulation::{SimulationError, SimulationSuccess, Simulator},
-    types::{EntryPointLike, HandleOpsOut, ProviderLike, Timestamp, UserOperation},
+    types::{EntityType, EntryPointLike, HandleOpsOut, ProviderLike, Timestamp, UserOperation},
 };
 
 /// A user op must be valid for at least this long into the future to be included.
@@ -33,6 +33,7 @@ pub struct Bundle {
     pub gas_estimate: U256,
     pub expected_storage_slots: HashMap<Address, HashMap<U256, U256>>,
     pub rejected_ops: Vec<UserOperation>,
+    pub rejected_entities: Vec<(EntityType, Address)>,
 }
 
 impl Bundle {
@@ -124,12 +125,14 @@ where
                     gas_estimate,
                     expected_storage_slots: HashMap::default(), // TODO: actually compute this
                     rejected_ops: context.rejected_ops,
+                    rejected_entities: context.rejected_entities,
                 });
             }
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
         Ok(Bundle {
             rejected_ops: context.rejected_ops,
+            rejected_entities: context.rejected_entities,
             ..Default::default()
         })
     }
@@ -235,11 +238,11 @@ where
         let mut context = ProposalContext {
             groups_by_aggregator,
             rejected_ops,
+            rejected_entities: Vec::new(),
         };
         for paymaster in paymasters_to_reject {
-            // No need to update aggregator signatures because we haven't
-            // computed them yet.
-            let _ = context.reject_paymaster(paymaster);
+            // No need to update aggregator signatures because we haven't computed them yet.
+            let _ = context.reject_entity(EntityType::Paymaster, paymaster);
         }
         self.compute_all_aggregator_signatures(&mut context).await;
         context
@@ -248,6 +251,17 @@ where
     async fn reject_index(&self, context: &mut ProposalContext, i: usize) {
         let changed_aggregator = context.reject_index(i);
         self.compute_aggregator_signatures(context, &changed_aggregator)
+            .await;
+    }
+
+    async fn reject_entity(
+        &self,
+        context: &mut ProposalContext,
+        entity: EntityType,
+        address: Address,
+    ) {
+        let changed_aggregators = context.reject_entity(entity, address);
+        self.compute_aggregator_signatures(context, &changed_aggregators)
             .await;
     }
 
@@ -293,16 +307,14 @@ where
             .context("should estimate gas for proposed bundle")?;
         match handle_ops_out {
             HandleOpsOut::SuccessWithGas(gas) => Ok(Some(gas)),
-            HandleOpsOut::FailedOp(index, _message) => {
-                // TODO: look at message to see if caused by a factory or
-                // paymaster. If so, return something to purge the op pool of
-                // all other ops using that entity.
-                self.reject_index(context, index).await;
+            HandleOpsOut::FailedOp(index, message) => {
+                self.process_failed_op(context, index, message).await?;
                 Ok(None)
             }
             HandleOpsOut::SignatureValidationFailed(aggregator) => {
                 info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
-                context.reject_aggregator(aggregator);
+                self.reject_entity(context, EntityType::Aggregator, aggregator)
+                    .await;
                 Ok(None)
             }
         }
@@ -337,6 +349,45 @@ where
             .aggregate_signatures(aggregator, ops)
             .await;
         (aggregator, result)
+    }
+
+    async fn process_failed_op(
+        &self,
+        context: &mut ProposalContext,
+        index: usize,
+        message: String,
+    ) -> anyhow::Result<()> {
+        match &message[..4] {
+            // Entrypoint error codes that we want to reject the factory for.
+            // AA10 is an internal error and is ignored
+            "AA13" | "AA14" | "AA15" => {
+                let op = context.get_op_at(index)?;
+                let factory = op.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
+                info!("Rejected op because it failed during gas estimation with factory {factory:?} error {message}.");
+                self.reject_entity(context, EntityType::Factory, factory)
+                    .await;
+            }
+            // Entrypoint error codes that we want to reject the paymaster for.
+            // Note: AA32 is not included as this is a time expiry error.
+            "AA30" | "AA31" | "AA33" | "AA34" => {
+                let op = context.get_op_at(index)?;
+                let paymaster = op.paymaster().context(
+                    "op failed during gas estimation with {message}, but had no paymaster",
+                )?;
+                info!("Rejected op because it failed during gas estimation with a paymaster {paymaster:?} error {message}.");
+                self.reject_entity(context, EntityType::Paymaster, paymaster)
+                    .await;
+            }
+            _ => {
+                info!(
+                    "Rejected op because it failed during gas estimation with message {message}."
+                );
+                self.reject_index(context, index).await;
+                return Ok(());
+            }
+        };
+
+        Ok(())
     }
 }
 
@@ -384,6 +435,7 @@ impl OpWithSimulation {
 struct ProposalContext {
     groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
     rejected_ops: Vec<UserOperation>,
+    rejected_entities: Vec<(EntityType, Address)>,
 }
 
 #[derive(Debug, Default)]
@@ -410,6 +462,17 @@ impl ProposalContext {
                 self.groups_by_aggregator.remove(&Some(aggregator));
             }
         }
+    }
+
+    fn get_op_at(&self, index: usize) -> anyhow::Result<&UserOperation> {
+        let mut remaining_i = index;
+        for group in self.groups_by_aggregator.values() {
+            if remaining_i < group.ops_with_simulations.len() {
+                return Ok(&group.ops_with_simulations[remaining_i].op);
+            }
+            remaining_i -= group.ops_with_simulations.len();
+        }
+        anyhow::bail!("op at {index} out of bounds")
     }
 
     /// Returns the address of the op's aggregator if the aggregator's signature
@@ -446,21 +509,44 @@ impl ProposalContext {
 
     /// Returns the addresses of any aggregators whose signature may need to be
     /// recomputed.
-    #[must_use = "rejected paymaster but did not update aggregator signatures"]
+    #[must_use = "rejected entity but did not update aggregator signatures"]
+    fn reject_entity(&mut self, entity: EntityType, address: Address) -> Vec<Address> {
+        self.rejected_entities.push((entity, address));
+        match entity {
+            EntityType::Aggregator => {
+                self.reject_aggregator(address);
+                vec![]
+            }
+            EntityType::Paymaster => self.reject_paymaster(address),
+            EntityType::Factory => self.reject_factory(address),
+            _ => vec![],
+        }
+    }
+
+    fn reject_aggregator(&mut self, address: Address) {
+        self.groups_by_aggregator.remove(&Some(address));
+    }
+
     fn reject_paymaster(&mut self, address: Address) -> Vec<Address> {
+        self.filter_reject(|op| op.paymaster() == Some(address))
+    }
+
+    fn reject_factory(&mut self, address: Address) -> Vec<Address> {
+        self.filter_reject(|op| op.factory() == Some(address))
+    }
+
+    /// Reject all ops that match the filter, and return the addresses of any aggregators
+    /// whose signature may need to be recomputed.
+    fn filter_reject(&mut self, filter: impl Fn(&UserOperation) -> bool) -> Vec<Address> {
         let mut changed_aggregators: Vec<Address> = vec![];
         let mut aggregators_to_remove: Vec<Option<Address>> = vec![];
         for (&aggregator, group) in &mut self.groups_by_aggregator {
             // I sure wish `Vec::drain_filter` were stable.
-            let group_uses_rejected_paymaster = group
-                .ops_with_simulations
-                .iter()
-                .any(|op| op.op.paymaster() == Some(address));
-            if group_uses_rejected_paymaster {
+            let group_uses_rejected_entity =
+                group.ops_with_simulations.iter().any(|op| filter(&op.op));
+            if group_uses_rejected_entity {
                 for op in mem::take(&mut group.ops_with_simulations) {
-                    if op.op.paymaster() == Some(address) {
-                        self.rejected_ops.push(op.op);
-                    } else {
+                    if !filter(&op.op) {
                         group.ops_with_simulations.push(op);
                     }
                 }
@@ -475,16 +561,6 @@ impl ProposalContext {
             self.groups_by_aggregator.remove(&aggregator);
         }
         changed_aggregators
-    }
-
-    fn reject_aggregator(&mut self, address: Address) {
-        let rejected = self.groups_by_aggregator.remove(&Some(address));
-        let Some(rejected) = rejected else {
-            error!("tried to reject ops from aggregator {address}, but no such ops exist in bundle");
-            return;
-        };
-        let rejected_ops = rejected.ops_with_simulations.into_iter().map(|op| op.op);
-        self.rejected_ops.extend(rejected_ops);
     }
 
     fn to_ops_per_aggregator(&self) -> Vec<UserOpsPerAggregator> {
@@ -506,7 +582,7 @@ impl ProposalContext {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use ethers::types::H160;
+    use ethers::{types::H160, utils::parse_units};
     use tonic::Response;
 
     use super::*;
@@ -705,6 +781,7 @@ mod tests {
                 },
             ],
             vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+            vec![],
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -743,6 +820,70 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_reject_entities() {
+        let op1 = op_with_sender_paymaster(address(1), address(1));
+        let op2 = op_with_sender_paymaster(address(2), address(1));
+        let op3 = op_with_sender_paymaster(address(3), address(2));
+        let op4 = op_with_sender_factory(address(4), address(3));
+        let op5 = op_with_sender_factory(address(5), address(3));
+        let op6 = op_with_sender_factory(address(6), address(4));
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let bundle = make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op3.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op4.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op5.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op6.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+            ],
+            vec![],
+            vec![
+                HandleOpsOut::FailedOp(0, "AA30: reject paymaster".to_string()),
+                HandleOpsOut::FailedOp(1, "AA13: reject factory".to_string()),
+                HandleOpsOut::SuccessWithGas(default_estimated_gas()),
+            ],
+            vec![deposit, deposit, deposit],
+        )
+        .await;
+
+        assert_eq!(
+            bundle.rejected_entities,
+            vec![
+                (EntityType::Paymaster, address(1)),
+                (EntityType::Factory, address(3))
+            ]
+        );
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op3, op6],
+                ..Default::default()
+            }]
+        );
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result:
@@ -759,6 +900,7 @@ mod tests {
             mock_ops,
             vec![],
             vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+            vec![],
         )
         .await
     }
@@ -767,6 +909,7 @@ mod tests {
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,
         mock_estimate_gasses: Vec<HandleOpsOut>,
+        mock_paymaster_deposits: Vec<U256>,
     ) -> Bundle {
         let entry_point_address = address(123);
         let beneficiary_address = address(124);
@@ -788,7 +931,7 @@ mod tests {
         let op_pool_handle = mocks::mock_op_pool_client(op_pool).await;
         let simulations_by_op: HashMap<_, _> = mock_ops
             .into_iter()
-            .map(|op| (op.op, op.simulation_result))
+            .map(|op| (op.op.op_hash(entry_point_address, 0), op.simulation_result))
             .collect();
         let mut simulator = MockSimulator::new();
         simulator
@@ -796,7 +939,7 @@ mod tests {
             .withf(move |_, &block_hash, &code_hash| {
                 block_hash == Some(current_block_hash) && code_hash == Some(expected_code_hash)
             })
-            .returning(move |op, _, _| simulations_by_op[&op]());
+            .returning(move |op, _, _| simulations_by_op[&op.op_hash(entry_point_address, 0)]());
         let mut entry_point = MockEntryPointLike::new();
         entry_point
             .expect_address()
@@ -808,6 +951,13 @@ mod tests {
                 .withf(move |_, &beneficiary| beneficiary == beneficiary_address)
                 .return_once(|_, _| Ok(estimated_gas));
         }
+        for deposit in mock_paymaster_deposits {
+            entry_point
+                .expect_get_deposit()
+                .times(..=1)
+                .return_once(move |_, _| Ok(deposit));
+        }
+
         let signatures_by_aggregator: HashMap<_, _> = mock_aggregators
             .into_iter()
             .map(|agg| (agg.address, agg.signature))
@@ -849,6 +999,22 @@ mod tests {
     fn op_with_sender(sender: Address) -> UserOperation {
         UserOperation {
             sender,
+            ..Default::default()
+        }
+    }
+
+    fn op_with_sender_paymaster(sender: Address, paymaster: Address) -> UserOperation {
+        UserOperation {
+            sender,
+            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
+            ..Default::default()
+        }
+    }
+
+    fn op_with_sender_factory(sender: Address, factory: Address) -> UserOperation {
+        UserOperation {
+            sender,
+            init_code: factory.as_bytes().to_vec().into(),
             ..Default::default()
         }
     }

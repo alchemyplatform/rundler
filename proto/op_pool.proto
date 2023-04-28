@@ -23,6 +23,11 @@ enum EntityType {
   ENTITY_TYPE_FACTORY = 4;
 }
 
+message Entity {
+  EntityType entity = 1;
+  bytes address = 2;
+}
+
 message MempoolOp {
   UserOperation uo = 1;
   bytes aggregator = 2;
@@ -39,6 +44,7 @@ service OpPool {
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
+  rpc RemoveEntities(RemoveEntitiesRequest) returns (RemoveEntitiesResponse);
 
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
   rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
@@ -73,6 +79,12 @@ message RemoveOpsRequest {
   repeated bytes hashes = 2;
 }
 message RemoveOpsResponse {}
+
+message RemoveEntitiesRequest {
+  bytes entry_point = 1;
+  repeated Entity entities = 2;
+}
+message RemoveEntitiesResponse {}
 
 message DebugClearStateRequest {}
 message DebugClearStateResponse {}
