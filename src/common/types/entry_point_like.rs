@@ -5,7 +5,7 @@ use ethers::{
     abi::AbiDecode,
     contract::{ContractError, FunctionCall},
     providers::Middleware,
-    types::{Address, H256, U256},
+    types::{Address, Eip1559TransactionRequest, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
@@ -32,6 +32,7 @@ pub trait EntryPointLike: Send + Sync + 'static {
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
         gas: U256,
+        max_priority_fee_per_gas: U256,
     ) -> anyhow::Result<H256>;
 
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
@@ -81,10 +82,18 @@ where
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
         gas: U256,
+        max_priority_fee_per_gas: U256,
     ) -> anyhow::Result<H256> {
-        Ok(get_handle_ops_call(self, ops_per_aggregator, beneficiary)
+        let tx: Eip1559TransactionRequest =
+            get_handle_ops_call(self, ops_per_aggregator, beneficiary)
+                .tx
+                .into();
+        let tx = tx
             .gas(gas)
-            .send()
+            .max_priority_fee_per_gas(max_priority_fee_per_gas);
+        Ok(self
+            .client()
+            .send_transaction(tx, None)
             .await
             .context("should send bundle transaction")?
             .tx_hash())

@@ -11,6 +11,7 @@ use futures::future;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
+use tokio::try_join;
 use tonic::{async_trait, transport::Channel};
 use tracing::{error, info};
 
@@ -33,6 +34,7 @@ const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 pub struct Bundle {
     pub ops_per_aggregator: Vec<UserOpsPerAggregator>,
     pub gas_estimate: U256,
+    pub max_priority_fee_per_gas: U256,
     pub expected_storage_slots: HashMap<Address, HashMap<U256, U256>>,
     pub rejected_ops: Vec<UserOperation>,
     pub rejected_entities: Vec<Entity>,
@@ -64,12 +66,25 @@ where
     E: EntryPointLike,
     P: ProviderLike,
 {
-    max_bundle_size: u64,
-    beneficiary: Address,
     op_pool: OpPoolClient<Channel>,
     simulator: S,
     entry_point: E,
     provider: Arc<P>,
+    settings: Settings,
+}
+
+#[derive(Debug)]
+pub struct Settings {
+    pub max_bundle_size: u64,
+    pub beneficiary: Address,
+    /// If set, uses `eth_maxPriorityFeePerGas` to choose a required priority
+    /// fee for operations. This must be set to false on networks that do not
+    /// support this method, like Optimism.
+    pub use_dynamic_max_priority_fee: bool,
+    /// The percentage of how much bundled ops' `max_priority_fee_per_gas` must
+    /// exceed the value currently returned by `eth_maxPriorityFeePerGas` to be
+    /// included in a bundle. Ignored if `use_dynamic_max_priority_fee` is false.
+    pub max_priority_fee_overhead_percent: u64,
 }
 
 #[async_trait]
@@ -80,23 +95,17 @@ where
     P: ProviderLike,
 {
     async fn make_bundle(&self) -> anyhow::Result<Bundle> {
-        let ops = self
-            .op_pool
-            .clone()
-            .get_ops(GetOpsRequest {
-                entry_point: self.entry_point.address().as_bytes().to_vec(),
-                max_ops: self.max_bundle_size,
-            })
-            .await
-            .context("should get ops from op pool to bundle")?
-            .into_inner()
-            .ops
-            .into_iter()
-            .map(OpFromPool::try_from)
-            .collect::<anyhow::Result<Vec<OpFromPool>>>()?;
+        let (ops, max_priority_fee_per_gas) =
+            try_join!(self.get_ops_from_pool(), self.get_max_priority_fee())?;
         let block_hash = self.provider.get_latest_block_hash().await?;
         let simulation_futures = ops
             .iter()
+            .filter(|op| {
+                op.op.max_priority_fee_per_gas
+                    >= max_priority_fee_per_gas
+                        * (100 + self.settings.max_priority_fee_overhead_percent)
+                        / 100
+            })
             .cloned()
             .map(|op| self.simulate_validation(op, block_hash));
         let ops_with_simulations_future = future::join_all(simulation_futures);
@@ -125,6 +134,7 @@ where
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
+                    max_priority_fee_per_gas,
                     expected_storage_slots: HashMap::default(), // TODO: actually compute this
                     rejected_ops: context.rejected_ops,
                     rejected_entities: context.rejected_entities,
@@ -147,20 +157,18 @@ where
     P: ProviderLike,
 {
     pub fn new(
-        max_bundle_size: u64,
-        beneficiary: Address,
         op_pool: OpPoolClient<Channel>,
         simulator: S,
         entry_point: E,
         provider: Arc<P>,
+        settings: Settings,
     ) -> Self {
         Self {
-            max_bundle_size,
-            beneficiary,
             op_pool,
             simulator,
             entry_point,
             provider,
+            settings,
         }
     }
 
@@ -299,7 +307,7 @@ where
     ) -> anyhow::Result<Option<U256>> {
         let handle_ops_out = self
             .entry_point
-            .estimate_handle_ops_gas(context.to_ops_per_aggregator(), self.beneficiary)
+            .estimate_handle_ops_gas(context.to_ops_per_aggregator(), self.settings.beneficiary)
             .await
             .context("should estimate gas for proposed bundle")?;
         match handle_ops_out {
@@ -314,6 +322,30 @@ where
                     .await;
                 Ok(None)
             }
+        }
+    }
+
+    async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<OpFromPool>> {
+        self.op_pool
+            .clone()
+            .get_ops(GetOpsRequest {
+                entry_point: self.entry_point.address().as_bytes().to_vec(),
+                max_ops: self.settings.max_bundle_size,
+            })
+            .await
+            .context("should get ops from op pool to bundle")?
+            .into_inner()
+            .ops
+            .into_iter()
+            .map(OpFromPool::try_from)
+            .collect()
+    }
+
+    async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {
+        if self.settings.use_dynamic_max_priority_fee {
+            self.provider.get_max_priority_fee().await
+        } else {
+            Ok(0.into())
         }
     }
 
@@ -616,7 +648,7 @@ mod tests {
             simulation_result: Box::new(|| Err(SimulationError::Violations(vec![]))),
         }])
         .await;
-        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert!(bundle.ops_per_aggregator.is_empty());
         assert_eq!(bundle.rejected_ops, vec![op]);
     }
 
@@ -630,8 +662,8 @@ mod tests {
             }),
         }])
         .await;
-        assert_eq!(bundle.ops_per_aggregator, vec![]);
-        assert_eq!(bundle.rejected_ops, vec![]);
+        assert!(bundle.ops_per_aggregator.is_empty());
+        assert!(bundle.rejected_ops.is_empty());
     }
 
     #[tokio::test]
@@ -647,7 +679,7 @@ mod tests {
             }),
         }])
         .await;
-        assert_eq!(bundle.ops_per_aggregator, vec![]);
+        assert!(bundle.ops_per_aggregator.is_empty());
         assert_eq!(bundle.rejected_ops, vec![op]);
     }
 
@@ -669,7 +701,7 @@ mod tests {
                 }),
             }])
             .await;
-            assert_eq!(bundle.ops_per_aggregator, vec![]);
+            assert!(bundle.ops_per_aggregator.is_empty());
             assert_eq!(bundle.rejected_ops, vec![op]);
         }
     }
@@ -706,7 +738,42 @@ mod tests {
                 ..Default::default()
             }]
         );
-        assert_eq!(bundle.rejected_ops, vec![])
+        assert!(bundle.rejected_ops.is_empty())
+    }
+
+    #[tokio::test]
+    async fn test_drops_but_not_rejects_op_with_too_low_priority_fee() {
+        // With 10% required overhead on priority fee, op1 should be excluded
+        // but op2 accepted.
+        let max_priority_fee_per_gas = U256::from(50);
+        let op1 = op_with_sender_and_priority_fee(address(1), 54.into());
+        let op2 = op_with_sender_and_priority_fee(address(2), 55.into());
+        let bundle = make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+            vec![],
+            max_priority_fee_per_gas,
+        )
+        .await;
+        assert_eq!(bundle.max_priority_fee_per_gas, max_priority_fee_per_gas);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op2],
+                ..Default::default()
+            }],
+        );
+        assert!(bundle.rejected_ops.is_empty());
     }
 
     #[tokio::test]
@@ -779,6 +846,7 @@ mod tests {
             ],
             vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
             vec![],
+            U256::zero(),
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -861,6 +929,7 @@ mod tests {
                 HandleOpsOut::SuccessWithGas(default_estimated_gas()),
             ],
             vec![deposit, deposit, deposit],
+            U256::zero(),
         )
         .await;
 
@@ -895,6 +964,7 @@ mod tests {
             vec![],
             vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
             vec![],
+            U256::zero(),
         )
         .await
     }
@@ -904,12 +974,13 @@ mod tests {
         mock_aggregators: Vec<MockAggregator>,
         mock_estimate_gasses: Vec<HandleOpsOut>,
         mock_paymaster_deposits: Vec<U256>,
+        max_priority_fee_per_gas: U256,
     ) -> Bundle {
         let entry_point_address = address(123);
-        let beneficiary_address = address(124);
+        let beneficiary = address(124);
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
-        let bundle_size = mock_ops.len() as u64;
+        let max_bundle_size = mock_ops.len() as u64;
         let mut op_pool = MockOpPool::new();
         let ops: Vec<_> = mock_ops
             .iter()
@@ -942,7 +1013,7 @@ mod tests {
             entry_point
                 .expect_estimate_handle_ops_gas()
                 .times(..=1)
-                .withf(move |_, &beneficiary| beneficiary == beneficiary_address)
+                .withf(move |_, &b| b == beneficiary)
                 .return_once(|_, _| Ok(estimated_gas));
         }
         for deposit in mock_paymaster_deposits {
@@ -961,15 +1032,22 @@ mod tests {
             .expect_get_latest_block_hash()
             .returning(move || Ok(current_block_hash));
         provider
+            .expect_get_max_priority_fee()
+            .returning(move || Ok(max_priority_fee_per_gas));
+        provider
             .expect_aggregate_signatures()
             .returning(move |address, _| signatures_by_aggregator[&address]());
         let proposer = BundleProposerImpl::new(
-            bundle_size,
-            beneficiary_address,
             op_pool_handle.client.clone(),
             simulator,
             entry_point,
             Arc::new(provider),
+            Settings {
+                max_bundle_size,
+                beneficiary,
+                use_dynamic_max_priority_fee: true,
+                max_priority_fee_overhead_percent: 10,
+            },
         );
         proposer.make_bundle().await.expect("should make a bundle")
     }
@@ -1009,6 +1087,17 @@ mod tests {
         UserOperation {
             sender,
             init_code: factory.as_bytes().to_vec().into(),
+            ..Default::default()
+        }
+    }
+
+    fn op_with_sender_and_priority_fee(
+        sender: Address,
+        max_priority_fee_per_gas: U256,
+    ) -> UserOperation {
+        UserOperation {
+            sender,
+            max_priority_fee_per_gas,
             ..Default::default()
         }
     }

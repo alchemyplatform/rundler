@@ -183,8 +183,12 @@ where
         let (_, _, send_bundle_result) = join!(
             remove_ops_future,
             remove_entities_future,
-            self.entry_point
-                .send_bundle(bundle.ops_per_aggregator, self.beneficiary, gas)
+            self.entry_point.send_bundle(
+                bundle.ops_per_aggregator,
+                self.beneficiary,
+                gas,
+                bundle.max_priority_fee_per_gas
+            )
         );
         let tx_hash = send_bundle_result.context("builder should send bundle transaction")?;
         info!("Sent bundle in transaction with hash: {}", tx_hash);

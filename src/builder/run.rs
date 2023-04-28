@@ -19,7 +19,7 @@ use url::Url;
 
 use crate::{
     builder::{
-        bundle_proposer::BundleProposerImpl,
+        bundle_proposer::{self, BundleProposerImpl},
         server::{BuilderImpl, DummyBuilder},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
     },
@@ -49,6 +49,8 @@ pub struct Args {
     pub redis_lock_ttl_millis: u64,
     pub chain_id: u64,
     pub max_bundle_size: u64,
+    pub use_dynamic_max_priority_fee: bool,
+    pub max_priority_fee_overhead_percent: u64,
     pub eth_poll_interval: Duration,
     pub sim_settings: simulation::Settings,
 }
@@ -102,6 +104,12 @@ pub async fn run(
         ret
     };
     let beneficiary = signer.address();
+    let proposer_settings = bundle_proposer::Settings {
+        max_bundle_size: args.max_bundle_size,
+        beneficiary,
+        use_dynamic_max_priority_fee: args.use_dynamic_max_priority_fee,
+        max_priority_fee_overhead_percent: args.max_priority_fee_overhead_percent,
+    };
     let op_pool = connect_client_with_shutdown(&args.pool_url, shutdown_rx.resubscribe()).await?;
     let simulator = SimulatorImpl::new(
         Arc::clone(&provider),
@@ -111,12 +119,11 @@ pub async fn run(
     let signer_middleware = Arc::new(SignerMiddleware::new(Arc::clone(&provider), signer));
     let entry_point = IEntryPoint::new(args.entry_point_address, signer_middleware);
     let proposer = BundleProposerImpl::new(
-        args.max_bundle_size,
-        beneficiary,
         op_pool.clone(),
         simulator,
         entry_point.clone(),
         Arc::clone(&provider),
+        proposer_settings,
     );
     let builder = Arc::new(BuilderImpl::new(
         args.chain_id,
