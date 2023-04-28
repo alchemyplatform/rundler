@@ -894,6 +894,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "520fbf3c07483f94e3e3ca9d0cfd913d7718ef2483d2cfd91c0d9e91474ab913"
 
 [[package]]
+name = "const_format"
+version = "0.2.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7309d9b4d3d2c0641e018d449232f2e28f1b22933c137f157d3dbc14228b8c0e"
+dependencies = [
+ "const_format_proc_macros",
+]
+
+[[package]]
+name = "const_format_proc_macros"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d897f47bf7270cf70d370f8f98c1abb6d2d4cf60a6845d30e05bfb90c6568650"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-xid",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2312,9 +2332,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e7d80c64759234b8f4f134be632f8257ddcbfbba62bb35b43294a2a9773c54"
+checksum = "8b971ce0f6cd1521ede485afc564b95b2c8e7079b9da41d4273bd9b55140a55d"
 dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-proc-macros",
@@ -2325,9 +2345,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-core"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "900104d998256fd50af009da7a496d630588f615435880b1e5da19caf8627164"
+checksum = "b83cca7a5a7899eed8b2935d5f755c8c4052ad66ab5b328bd34ac2b3ffd3515f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2349,9 +2369,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-proc-macros"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d5972c84d14d6280f46dca3abc4ca8487e080a533f8a9f286c4443bed28f9fe"
+checksum = "d814a21d9a819f8de1a41b819a263ffd68e4bb5f043d936db1c49b54684bde0a"
 dependencies = [
  "heck",
  "proc-macro-crate",
@@ -2362,9 +2382,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-server"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175b4db179fff94e56e314d6521158e9fbe1c714786dc7a237c7692bbebbc68c"
+checksum = "4cf8b28bb9b0248d1ece5923c97355a4defc81c06b4b7a0097c61e412c716ca1"
 dependencies = [
  "futures-util",
  "hyper",
@@ -2382,9 +2402,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-types"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c79398a1b916c20ea911eb8fb86488709e6c078b64dbf2d1a9cec14c1677605"
+checksum = "dd301ccc3e08718393432d1961539d78c4580dcca86014dfe6769c308b2c08b2"
 dependencies = [
  "anyhow",
  "beef",
@@ -3708,8 +3728,10 @@ dependencies = [
  "rslock",
  "rusoto_core",
  "rusoto_kms",
+ "rusoto_s3",
  "serde",
  "serde_json",
+ "sscanf",
  "strum",
  "thiserror",
  "tokio",
@@ -3783,6 +3805,19 @@ dependencies = [
  "rusoto_core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rusoto_s3"
+version = "0.48.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7aae4677183411f6b0b412d66194ef5403293917d66e70ab118f07cc24c5b14d"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "xml-rs",
 ]
 
 [[package]]
@@ -4288,6 +4323,32 @@ checksum = "37a5be806ab6f127c3da44b7378837ebf01dadca8510a0e572460216b228bd0e"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sscanf"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "887a5b09bbf30cc01d059ccb4b7a0b508a0cef3028df2f2ee0d745bc9e624c56"
+dependencies = [
+ "const_format",
+ "lazy_static",
+ "regex",
+ "sscanf_macro",
+]
+
+[[package]]
+name = "sscanf_macro"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b124cd4c68600cc3188a26987b1c3bed8cadcfd1be93124026096c668f2c0ee8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex-syntax",
+ "strsim",
+ "syn 1.0.107",
+ "unicode-width",
 ]
 
 [[package]]

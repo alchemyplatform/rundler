@@ -1,8 +1,12 @@
-use std::time::Duration;
+use std::{collections::HashSet, fs::File, io::BufReader, pin::Pin, time::Duration};
 
 use anyhow::{bail, Context};
 use clap::Args;
+use ethers::types::Address;
+use rusoto_core::Region;
+use rusoto_s3::{GetObjectRequest, S3Client, S3};
 use tokio::{
+    io::AsyncReadExt,
     signal,
     sync::{broadcast, mpsc},
 };
@@ -63,16 +67,41 @@ pub struct PoolArgs {
         long = "pool.http_poll_interval_millis",
         name = "pool.http_poll_interval_millis",
         env = "POOL_HTTP_POLL_INTERVAL_MILLIS",
-        default_value = "100",
-        global = true
+        default_value = "100"
     )]
     pub http_poll_interval_millis: u64,
+
+    #[arg(
+        long = "pool.blocklist_path",
+        name = "pool.blocklist_path",
+        env = "POOL_BLOCKLIST_PATH"
+    )]
+    pub blocklist_path: Option<String>,
+
+    #[arg(
+        long = "pool.allowlist_path",
+        name = "pool.allowlist_path",
+        env = "POOL_ALLOWLIST_PATH"
+    )]
+    pub allowlist_path: Option<String>,
 }
 
 impl PoolArgs {
     /// Convert the CLI arguments into the arguments for the OP Pool combining
     /// common and op pool specific arguments.
-    pub fn to_args(&self, common: &CommonArgs) -> anyhow::Result<op_pool::Args> {
+    pub async fn to_args(&self, common: &CommonArgs) -> anyhow::Result<op_pool::Args> {
+        let aws_region: Region = common.aws_region.parse().context("invalid AWS region")?;
+        let blocklist = match &self.blocklist_path {
+            Some(blocklist) => Some(Self::get_list(blocklist, &aws_region).await?),
+            None => None,
+        };
+        let allowlist = match &self.allowlist_path {
+            Some(allowlist) => Some(Self::get_list(allowlist, &aws_region).await?),
+            None => None,
+        };
+        tracing::info!("blocklist: {:?}", blocklist);
+        tracing::info!("allowlist: {:?}", allowlist);
+
         let pool_configs = common
             .entry_points
             .iter()
@@ -85,6 +114,8 @@ impl PoolArgs {
                     min_replacement_fee_increase_percentage: self
                         .min_replacement_fee_increase_percentage,
                     max_size_of_pool_bytes: self.max_size_in_bytes,
+                    blocklist: blocklist.clone(),
+                    allowlist: allowlist.clone(),
                 })
             })
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
@@ -98,6 +129,38 @@ impl PoolArgs {
             http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
             pool_configs,
         })
+    }
+
+    async fn get_list(path: &str, aws_s3_region: &Region) -> anyhow::Result<HashSet<Address>> {
+        if path.starts_with("s3://") {
+            Self::get_s3_list(path, aws_s3_region).await
+        } else {
+            Self::get_local_list(path)
+        }
+    }
+
+    fn get_local_list(path: &str) -> anyhow::Result<HashSet<Address>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        Ok(serde_json::from_reader(reader)?)
+    }
+
+    async fn get_s3_list(path: &str, aws_s3_region: &Region) -> anyhow::Result<HashSet<Address>> {
+        let (bucket, key) = sscanf::sscanf!(path, "s3://{}/{}", String, String)
+            .map_err(|e| anyhow::anyhow!("invalid s3 uri: {e:?}"))?;
+        let request = GetObjectRequest {
+            bucket,
+            key,
+            ..Default::default()
+        };
+        let client = S3Client::new(aws_s3_region.clone());
+        let resp = client.get_object(request).await?;
+        let body = resp.body.context("object should have body")?;
+        let mut buf = String::new();
+        Pin::new(&mut body.into_async_read())
+            .read_to_string(&mut buf)
+            .await?;
+        Ok(serde_json::from_str(&buf)?)
     }
 }
 
@@ -115,7 +178,7 @@ pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Res
     let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
 
     let handle = tokio::spawn(op_pool::run(
-        pool_args.to_args(&common_args)?,
+        pool_args.to_args(&common_args).await?,
         shutdown_rx,
         shutdown_scope,
     ));

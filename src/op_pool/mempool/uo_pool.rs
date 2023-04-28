@@ -134,7 +134,7 @@ where
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
         let mut throttled = false;
-        for (entity, addr) in op.staked_entities() {
+        for (entity, addr) in op.entities() {
             match self.reputation.status(addr) {
                 ReputationStatus::Ok => {}
                 ReputationStatus::Throttled => {
@@ -266,6 +266,8 @@ mod tests {
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 10000,
+            blocklist: None,
+            allowlist: None,
         };
         UoPool::new(args, mock_reputation())
     }

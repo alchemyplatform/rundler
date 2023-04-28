@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use ethers::types::Address;
 use parking_lot::RwLock;
@@ -33,9 +36,17 @@ pub struct HourlyMovingAverageReputation {
 }
 
 impl HourlyMovingAverageReputation {
-    pub fn new(params: ReputationParams) -> Self {
+    pub fn new(
+        params: ReputationParams,
+        blocklist: Option<HashSet<Address>>,
+        allowlist: Option<HashSet<Address>>,
+    ) -> Self {
+        let rep = AddressReputation::new(params)
+            .with_blocklist(blocklist.unwrap_or_default())
+            .with_allowlist(allowlist.unwrap_or_default());
+
         Self {
-            reputation: RwLock::new(AddressReputation::new(params)),
+            reputation: RwLock::new(rep),
         }
     }
 
@@ -111,6 +122,10 @@ impl ReputationParams {
 
 #[derive(Debug)]
 struct AddressReputation {
+    // Addresses that are always banned
+    blocklist: HashSet<Address>,
+    // Addresses that are always exempt from throttling and banning
+    allowlist: HashSet<Address>,
     counts: HashMap<Address, AddressCount>,
     params: ReputationParams,
 }
@@ -118,12 +133,28 @@ struct AddressReputation {
 impl AddressReputation {
     pub fn new(params: ReputationParams) -> Self {
         Self {
+            blocklist: HashSet::new(),
+            allowlist: HashSet::new(),
             counts: HashMap::new(),
             params,
         }
     }
 
+    pub fn with_blocklist(self, blocklist: HashSet<Address>) -> Self {
+        Self { blocklist, ..self }
+    }
+
+    pub fn with_allowlist(self, allowlist: HashSet<Address>) -> Self {
+        Self { allowlist, ..self }
+    }
+
     pub fn status(&self, address: Address) -> ReputationStatus {
+        if self.blocklist.contains(&address) {
+            return ReputationStatus::Banned;
+        } else if self.allowlist.contains(&address) {
+            return ReputationStatus::Ok;
+        }
+
         let count = match self.counts.get(&address) {
             Some(count) => count,
             None => return ReputationStatus::Ok,
@@ -264,11 +295,32 @@ mod tests {
         assert_eq!(counts.ops_included, 1000 - 1000 / 24);
     }
 
+    #[test]
+    fn test_blocklist() {
+        let addr = Address::random();
+        let reputation = AddressReputation::new(ReputationParams::bundler_default())
+            .with_blocklist(HashSet::from([addr]));
+
+        assert_eq!(reputation.status(addr), ReputationStatus::Banned);
+        assert_eq!(reputation.status(Address::random()), ReputationStatus::Ok);
+    }
+
+    #[test]
+    fn test_allowlist() {
+        let addr = Address::random();
+        let mut reputation = AddressReputation::new(ReputationParams::bundler_default())
+            .with_allowlist(HashSet::from([addr]));
+        reputation.set_reputation(addr, 1000000, 0);
+
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
+    }
+
     // Test HourlyMovingAverageReputation
 
     #[test]
     fn manager_seen_included() {
-        let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
+        let manager =
+            HourlyMovingAverageReputation::new(ReputationParams::bundler_default(), None, None);
         let addrs = [Address::random(), Address::random(), Address::random()];
 
         for _ in 0..10 {
@@ -290,7 +342,8 @@ mod tests {
 
     #[test]
     fn manager_set_dump_reputation() {
-        let manager = HourlyMovingAverageReputation::new(ReputationParams::bundler_default());
+        let manager =
+            HourlyMovingAverageReputation::new(ReputationParams::bundler_default(), None, None);
         let addrs = [Address::random(), Address::random(), Address::random()];
 
         for addr in &addrs {

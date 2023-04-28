@@ -133,6 +133,8 @@ async fn create_mempool(
     // Reputation manager
     let reputation = Arc::new(HourlyMovingAverageReputation::new(
         ReputationParams::bundler_default(),
+        pool_config.blocklist.clone(),
+        pool_config.allowlist.clone(),
     ));
     // Start reputation manager
     let reputation_runner = Arc::clone(&reputation);

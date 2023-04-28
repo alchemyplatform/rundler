@@ -37,7 +37,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let builder_url = builder_args.url(false);
 
     let pool_handle = tokio::spawn(op_pool::run(
-        pool_args.to_args(&common_args)?,
+        pool_args.to_args(&common_args).await?,
         shutdown_tx.subscribe(),
         shutdown_scope.clone(),
     ));

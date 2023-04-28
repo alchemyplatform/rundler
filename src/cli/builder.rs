@@ -50,15 +50,6 @@ pub struct BuilderArgs {
     )]
     aws_kms_key_ids: Vec<String>,
 
-    /// AWS KMS region to use for KMS
-    #[arg(
-        long = "builder.aws_region",
-        name = "builder.aws_region",
-        env = "BUILDER_AWS_REGION",
-        default_value = "us-east-1"
-    )]
-    aws_kms_region: String,
-
     /// Redis URI to use for KMS leasing
     #[arg(
         long = "builder.redis_uri",
@@ -117,8 +108,8 @@ impl BuilderArgs {
                 .context("should parse entry point address")?,
             private_key: self.private_key.clone(),
             aws_kms_key_ids: self.aws_kms_key_ids.clone(),
-            aws_kms_region: self
-                .aws_kms_region
+            aws_kms_region: common
+                .aws_region
                 .parse()
                 .context("should be a valid aws region")?,
             redis_uri: self.redis_uri.clone(),

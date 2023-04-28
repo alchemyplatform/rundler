@@ -651,10 +651,10 @@ impl From<ErrorInfo> for EthRpcError {
             };
 
             let data = match entity {
-                Entity::Aggregator => ThrottledOrBannedData::aggregator(address),
-                Entity::Paymaster => ThrottledOrBannedData::paymaster(address),
-                Entity::Factory => ThrottledOrBannedData::factory(address),
-                _ => return anyhow!("unsupported entity {} as throttled reason", entity).into(),
+                Entity::Aggregator => ThrottledOrBannedData::Aggregator(address),
+                Entity::Paymaster => ThrottledOrBannedData::Paymaster(address),
+                Entity::Factory => ThrottledOrBannedData::Factory(address),
+                Entity::Account => ThrottledOrBannedData::Account(address),
             };
 
             return EthRpcError::ThrottledOrBanned(data);
@@ -723,7 +723,7 @@ mod tests {
         assert!(
             matches!(
                 rpc_error,
-                EthRpcError::ThrottledOrBanned(data) if data == ThrottledOrBannedData::paymaster(Address::default())
+                EthRpcError::ThrottledOrBanned(data) if data == ThrottledOrBannedData::Paymaster(Address::default())
             ),
             "{:?}",
             rpc_error

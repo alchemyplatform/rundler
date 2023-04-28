@@ -3,7 +3,7 @@ mod pool;
 mod size;
 pub mod uo_pool;
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use ethers::types::{Address, H256};
 use strum::IntoEnumIterator;
@@ -80,6 +80,10 @@ pub struct PoolConfig {
     pub min_replacement_fee_increase_percentage: usize,
     /// After this threshold is met, we will start to drop the worst userops from the mempool
     pub max_size_of_pool_bytes: usize,
+    /// Operations that are always banned from the mempool
+    pub blocklist: Option<HashSet<Address>>,
+    /// Operations that are allways allowed in the mempool, regardless of reputation
+    pub allowlist: Option<HashSet<Address>>,
 }
 
 /// Origin of an operation.
