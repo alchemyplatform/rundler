@@ -86,12 +86,41 @@ pub struct BuilderArgs {
         default_value = "250"
     )]
     pub eth_poll_interval_millis: u64,
+
+    /// If true, will use the provider's `eth_maxPriorityFeePerGas` method to
+    /// set a priority fee when building bundles. Must not be set on networks
+    /// which do not support this method.
+    ///
+    /// Defaults to false on Arbitrum (which does not use this field) and on
+    /// Optimism mainnet (which currently doesn't support this method), true
+    /// otherwise.
+    #[arg(
+        long = "builder.use_dynamic_max_priority_fee",
+        name = "builder.use_dynamic_max_priority_fee",
+        env = "BUILDER_USE_DYNAMIC_MAX_PRIORITY_FEE"
+    )]
+    use_dynamic_max_priority_fee: Option<bool>,
+
+    /// The percentage of how much bundled ops' `maxPriorityFeePerGas` must
+    /// exceed the value currently returned by `eth_maxPriorityFeePerGas` to be
+    /// included in a bundle. Ignored if `builder.use_dynamic_max_priority_fee`
+    /// is false.
+    #[arg(
+        long = "builder.max_priority_fee_overhead_percent",
+        name = "builder.max_priority_fee_overhead_percent",
+        env = "BUILDER_MAX_PRIORITY_FEE_OVERHEAD_PERCENT",
+        default_value = "0"
+    )]
+    max_priority_fee_overhead_percent: u64,
 }
 
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
     pub fn to_args(&self, common: &CommonArgs, pool_url: String) -> anyhow::Result<builder::Args> {
+        let use_dynamic_max_priority_fee = self
+            .use_dynamic_max_priority_fee
+            .unwrap_or_else(|| !is_known_non_eip_1559_chain(common.chain_id));
         Ok(builder::Args {
             port: self.port,
             host: self.host.clone(),
@@ -116,6 +145,8 @@ impl BuilderArgs {
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             chain_id: common.chain_id,
             max_bundle_size: self.max_bundle_size,
+            use_dynamic_max_priority_fee,
+            max_priority_fee_overhead_percent: self.max_priority_fee_overhead_percent,
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
         })
@@ -124,6 +155,17 @@ impl BuilderArgs {
     pub fn url(&self, secure: bool) -> String {
         format_server_addr(&self.host, self.port, secure)
     }
+}
+
+const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
+    42161,  // Arbitrum One (Mainnet)
+    42170,  // Arbitrum Nova
+    421613, // Arbitrum Goerli
+    10,     // Optimism Mainnet
+];
+
+fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
+    NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
 }
 
 /// CLI options for the Builder server standalone

@@ -30,7 +30,7 @@ use crate::common::protos::{
 
 /// Maximum number of incrementing ports to try when looking for an open port
 /// for a mock server.
-const MAX_PORT_ATTEMPTS: u16 = 10;
+const MAX_PORT_ATTEMPTS: u16 = 32;
 
 mock! {
     #[derive(Debug)]

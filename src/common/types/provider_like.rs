@@ -4,7 +4,7 @@ use anyhow::Context;
 use ethers::{
     contract::ContractError,
     providers::{JsonRpcClient, Middleware, PendingTransaction, Provider},
-    types::{Address, BlockId, BlockNumber, Bytes, TransactionReceipt, H256},
+    types::{Address, BlockId, BlockNumber, Bytes, TransactionReceipt, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
@@ -16,6 +16,8 @@ use crate::common::{contracts::i_aggregator::IAggregator, types::UserOperation};
 #[async_trait]
 pub trait ProviderLike: Send + Sync + 'static {
     async fn get_latest_block_hash(&self) -> anyhow::Result<H256>;
+
+    async fn get_max_priority_fee(&self) -> anyhow::Result<U256>;
 
     async fn aggregate_signatures(
         self: Arc<Self>,
@@ -39,6 +41,13 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             .context("block should exist to get latest hash")?
             .hash
             .context("hash should be present on block")
+    }
+
+    async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {
+        Ok(self
+            .request("eth_maxPriorityFeePerGas", ())
+            .await
+            .context("should get max priority fee from provider")?)
     }
 
     async fn aggregate_signatures(
