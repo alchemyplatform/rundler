@@ -430,6 +430,8 @@ mod tests {
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 20 * size_of_op(),
+            blocklist: None,
+            allowlist: None,
         }
     }
 

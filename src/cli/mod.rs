@@ -166,6 +166,14 @@ pub struct CommonArgs {
         global = true
     )]
     max_simulate_handle_ops_gas: u64,
+
+    #[arg(
+        long = "aws_region",
+        name = "aws_region",
+        env = "AWS_REGION",
+        default_value = "us-east-1"
+    )]
+    aws_region: String,
 }
 
 impl From<&CommonArgs> for precheck::Settings {

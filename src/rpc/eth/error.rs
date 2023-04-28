@@ -96,42 +96,19 @@ pub struct OutOfTimeRangeData {
     pub paymaster: Option<Address>,
 }
 
+// TODO replace this with Entity(Address) enum
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub struct ThrottledOrBannedData {
-    paymaster: Option<Address>,
-    aggregator: Option<Address>,
-    factory: Option<Address>,
-}
-
-impl ThrottledOrBannedData {
-    pub fn paymaster(paymaster: Address) -> Self {
-        Self {
-            paymaster: Some(paymaster),
-            aggregator: None,
-            factory: None,
-        }
-    }
-
-    pub fn aggregator(aggregator: Address) -> Self {
-        Self {
-            paymaster: None,
-            aggregator: Some(aggregator),
-            factory: None,
-        }
-    }
-
-    pub fn factory(factory: Address) -> Self {
-        Self {
-            paymaster: None,
-            aggregator: None,
-            factory: Some(factory),
-        }
-    }
+pub enum ThrottledOrBannedData {
+    Account(Address),
+    Paymaster(Address),
+    Aggregator(Address),
+    Factory(Address),
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StakeTooLowData {
+    // TODO replace these with Entity(Address) enum
     paymaster: Option<Address>,
     aggregator: Option<Address>,
     factory: Option<Address>,
