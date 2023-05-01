@@ -69,7 +69,7 @@ pub enum EthRpcError {
     #[error("operation rejected")]
     ReplacementUnderpriced,
     /// Other internal errors
-    #[error("signature check failed")]
+    #[error("Invalid UserOp signature or paymaster signature")]
     SignatureCheckFailed,
     #[error("precheck failed: {0}")]
     PrecheckFailed(PrecheckError),
