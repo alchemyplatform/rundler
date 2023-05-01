@@ -22,7 +22,7 @@ use crate::common::{
         AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
     },
     types::{
-        Entity, ExpectedStorageSlot, ProviderLike, StakeInfo, UserOperation, ValidTimeRange,
+        EntityType, ExpectedStorageSlot, ProviderLike, StakeInfo, UserOperation, ValidTimeRange,
         ValidationOutput, ValidationReturnInfo, ViolationError,
     },
 };
@@ -35,7 +35,7 @@ pub struct SimulationSuccess {
     pub valid_time_range: ValidTimeRange,
     pub aggregator: Option<AggregatorSimOut>,
     pub code_hash: H256,
-    pub entities_needing_stake: Vec<Entity>,
+    pub entities_needing_stake: Vec<EntityType>,
     pub account_is_staked: bool,
     pub accessed_addresses: HashSet<Address>,
     pub expected_storage_slots: Vec<ExpectedStorageSlot>,
@@ -148,12 +148,12 @@ where
         let Some(ref revert_data) = tracer_out.revert_data else {
             Err(vec![SimulationViolation::DidNotRevert])?
         };
-        let last_entity = Entity::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
+        let last_entity = EntityType::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
             let entity_addr = match last_entity {
-                Entity::Factory => factory_address,
-                Entity::Paymaster => paymaster_address,
-                Entity::Account => Some(sender_address),
+                EntityType::Factory => factory_address,
+                EntityType::Paymaster => paymaster_address,
+                EntityType::Account => Some(sender_address),
                 _ => None,
             };
             Err(vec![SimulationViolation::UnintendedRevertWithMessage(
@@ -240,7 +240,7 @@ where
         let mut entities_needing_stake = vec![];
         let mut accessed_addresses = HashSet::new();
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-            let entity = Entity::from_simulation_phase(index).unwrap();
+            let entity = EntityType::from_simulation_phase(index).unwrap();
             let Some(entity_info) = entity_infos.get(entity) else {
                 continue;
             };
@@ -259,7 +259,7 @@ where
             if phase.used_invalid_gas_opcode {
                 violations.push(SimulationViolation::InvalidGasOpcode(entity));
             }
-            let mut needs_stake = entity == Entity::Paymaster
+            let mut needs_stake = entity == EntityType::Paymaster
                 && !entry_point_out.return_info.paymaster_context.is_empty();
             let mut banned_addresses_accessed = IndexSet::<Address>::new();
             for StorageAccess { address, slots } in &phase.storage_accesses {
@@ -315,10 +315,10 @@ where
             }
         }
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
-            entities_needing_stake.push(Entity::Aggregator);
+            entities_needing_stake.push(EntityType::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
                 violations.push(SimulationViolation::NotStaked(
-                    Entity::Aggregator,
+                    EntityType::Aggregator,
                     aggregator_info.address,
                     self.sim_settings.min_stake_value.into(),
                     self.sim_settings.min_unstake_delay.into(),
@@ -477,35 +477,35 @@ pub enum SimulationViolation {
     // Make sure to maintain the order here based on the importance
     // of the violation for converting to an JRPC error
     #[display("reverted while simulating {0} validation: {1}")]
-    UnintendedRevertWithMessage(Entity, String, Option<Address>),
+    UnintendedRevertWithMessage(EntityType, String, Option<Address>),
     #[display("{0} uses banned opcode: {1}")]
-    UsedForbiddenOpcode(Entity, ViolationOpCode),
+    UsedForbiddenOpcode(EntityType, ViolationOpCode),
     #[display("{0} uses banned precompile: {1:?}")]
-    UsedForbiddenPrecompile(Entity, Address),
+    UsedForbiddenPrecompile(EntityType, Address),
     #[display("{0} uses banned opcode: GAS")]
-    InvalidGasOpcode(Entity),
+    InvalidGasOpcode(EntityType),
     #[display("factory may only call CREATE2 once during initialization")]
     FactoryCalledCreate2Twice,
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
-    InvalidStorageAccess(Entity, Address),
+    InvalidStorageAccess(EntityType, Address),
     #[display("{0} must be staked")]
-    NotStaked(Entity, Address, U256, U256),
+    NotStaked(EntityType, Address, U256, U256),
     #[display("reverted while simulating {0} validation")]
-    UnintendedRevert(Entity),
+    UnintendedRevert(EntityType),
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
     WrongNumberOfPhases(u32),
     #[display("{0} must not send ETH during validation (except to entry point)")]
-    CallHadValue(Entity),
+    CallHadValue(EntityType),
     #[display("ran out of gas during {0} validation")]
-    OutOfGas(Entity),
+    OutOfGas(EntityType),
     #[display(
         "{0} tried to access code at {1} during validation, but that address is not a contract"
     )]
-    AccessedUndeployedContract(Entity, Address),
+    AccessedUndeployedContract(EntityType, Address),
     #[display("{0} called entry point method other than depositTo")]
-    CalledBannedEntryPointMethod(Entity),
+    CalledBannedEntryPointMethod(EntityType),
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     #[display("aggregator signature validation failed")]
@@ -531,7 +531,7 @@ impl Ord for ViolationOpCode {
     }
 }
 
-impl Entity {
+impl EntityType {
     pub fn from_simulation_phase(i: usize) -> Option<Self> {
         match i {
             0 => Some(Self::Factory),
@@ -597,11 +597,11 @@ impl EntityInfos {
         }
     }
 
-    pub fn get(self, entity: Entity) -> Option<EntityInfo> {
+    pub fn get(self, entity: EntityType) -> Option<EntityInfo> {
         match entity {
-            Entity::Factory => self.factory,
-            Entity::Account => Some(self.sender),
-            Entity::Paymaster => self.paymaster,
+            EntityType::Factory => self.factory,
+            EntityType::Account => Some(self.sender),
+            EntityType::Paymaster => self.paymaster,
             _ => None,
         }
     }
@@ -626,7 +626,7 @@ enum StorageRestriction {
 #[derive(Clone, Copy, Debug)]
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
-    entity: Entity,
+    entity: EntityType,
     is_wallet_creation: bool,
     entry_point_address: Address,
     entity_address: Address,
@@ -650,7 +650,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
         StorageRestriction::Allowed
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
         if is_wallet_creation
-            && entity != Entity::Account
+            && entity != EntityType::Account
             && accessed_address != entry_point_address
         {
             // We deviate from the letter of ERC-4337 to allow an unstaked

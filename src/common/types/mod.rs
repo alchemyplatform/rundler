@@ -106,23 +106,23 @@ pub struct ExpectedStorageSlot {
 
 #[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd)]
 #[display(style = "lowercase")]
-pub enum Entity {
+pub enum EntityType {
     Account,
     Paymaster,
     Aggregator,
     Factory,
 }
 
-impl FromStr for Entity {
+impl FromStr for EntityType {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "account" => Ok(Entity::Account),
-            "paymaster" => Ok(Entity::Paymaster),
-            "aggregator" => Ok(Entity::Aggregator),
-            "factory" => Ok(Entity::Factory),
-            _ => bail!("Invalid entity: {s}"),
+            "account" => Ok(EntityType::Account),
+            "paymaster" => Ok(EntityType::Paymaster),
+            "aggregator" => Ok(EntityType::Aggregator),
+            "factory" => Ok(EntityType::Factory),
+            _ => bail!("Invalid entity type: {s}"),
         }
     }
 }

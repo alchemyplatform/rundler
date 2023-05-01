@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::common::{
     precheck::PrecheckError,
     simulation::SimulationError,
-    types::{Entity, Timestamp},
+    types::{EntityType, Timestamp},
 };
 
 // Error codes borrowed from jsonrpsee
@@ -46,13 +46,13 @@ pub enum EthRpcError {
     PaymasterValidationRejected(PaymasterValidationRejectedData),
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
-    OpcodeViolation(Entity, Opcode),
+    OpcodeViolation(EntityType, Opcode),
     /// Precompile violation, maps to Opcode Violation
     #[error("{0} uses banned precompile: {1:?}")]
-    PrecompileViolation(Entity, Address),
+    PrecompileViolation(EntityType, Address),
     /// Invalid storage access, maps to Opcode Violation
     #[error("{0} accesses inaccessible storage at {1:?}")]
-    InvalidStorageAccess(Entity, Address),
+    InvalidStorageAccess(EntityType, Address),
     /// Operation is out of time range
     #[error("operation is out of time range")]
     OutOfTimeRange(OutOfTimeRangeData),

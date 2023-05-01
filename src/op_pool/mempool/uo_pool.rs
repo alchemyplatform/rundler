@@ -17,7 +17,7 @@ use crate::{
     common::{
         contracts::i_entry_point::IEntryPointEvents,
         protos::op_pool::{Reputation, ReputationStatus},
-        types::Entity,
+        types::EntityType,
     },
     op_pool::{event::NewBlockEvent, reputation::ReputationManager},
 };
@@ -98,7 +98,7 @@ where
             if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
                 let op_hash = uo_event.user_op_hash.into();
                 if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
-                    for entity in Entity::iter() {
+                    for entity in EntityType::iter() {
                         if op.is_staked(entity) {
                             match op.entity_address(entity) {
                                 Some(e) => self.reputation.add_included(e),

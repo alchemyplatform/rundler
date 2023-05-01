@@ -1,6 +1,6 @@
 use ethers::{abi::Address, types::U256};
 
-use crate::common::types::Entity;
+use crate::common::types::EntityType;
 
 /// Mempool result type.
 pub type MempoolResult<T> = std::result::Result<T, MempoolError>;
@@ -20,7 +20,7 @@ pub enum MempoolError {
     MaxOperationsReached(usize, Address),
     /// An entity associated with the operation is throttled/banned.
     #[error("Entity {0}:{1} is throttled/banned")]
-    EntityThrottled(Entity, Address),
+    EntityThrottled(EntityType, Address),
     #[error("Operation was discarded on inserting")]
     DiscardedOnInsert,
 }

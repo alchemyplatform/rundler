@@ -1,7 +1,8 @@
 use ethers::types::{Address, H256, U256};
 
 use crate::common::types::{
-    BundlingMode as RpcBundlingMode, Entity as EntityType, UserOperation as RpcUserOperation,
+    BundlingMode as RpcBundlingMode, EntityType as CommonEntityType,
+    UserOperation as RpcUserOperation,
 };
 
 pub mod op_pool {
@@ -50,27 +51,27 @@ pub mod op_pool {
         }
     }
 
-    impl TryFrom<Entity> for EntityType {
+    impl TryFrom<EntityType> for CommonEntityType {
         type Error = ConversionError;
 
-        fn try_from(entity: Entity) -> Result<Self, Self::Error> {
+        fn try_from(entity: EntityType) -> Result<Self, Self::Error> {
             match entity {
-                Entity::Unspecified => Err(ConversionError::InvalidEntity(entity as i32)),
-                Entity::Account => Ok(EntityType::Account),
-                Entity::Paymaster => Ok(EntityType::Paymaster),
-                Entity::Aggregator => Ok(EntityType::Aggregator),
-                Entity::Factory => Ok(EntityType::Factory),
+                EntityType::Unspecified => Err(ConversionError::InvalidEntity(entity as i32)),
+                EntityType::Account => Ok(CommonEntityType::Account),
+                EntityType::Paymaster => Ok(CommonEntityType::Paymaster),
+                EntityType::Aggregator => Ok(CommonEntityType::Aggregator),
+                EntityType::Factory => Ok(CommonEntityType::Factory),
             }
         }
     }
 
-    impl From<EntityType> for Entity {
-        fn from(entity: EntityType) -> Self {
+    impl From<CommonEntityType> for EntityType {
+        fn from(entity: CommonEntityType) -> Self {
             match entity {
-                EntityType::Account => Entity::Account,
-                EntityType::Paymaster => Entity::Paymaster,
-                EntityType::Aggregator => Entity::Aggregator,
-                EntityType::Factory => Entity::Factory,
+                CommonEntityType::Account => EntityType::Account,
+                CommonEntityType::Paymaster => EntityType::Paymaster,
+                CommonEntityType::Aggregator => EntityType::Aggregator,
+                CommonEntityType::Factory => EntityType::Factory,
             }
         }
     }

@@ -5,7 +5,7 @@ use super::mempool::PoolOperation;
 use crate::common::{
     protos::{
         self,
-        op_pool::{Entity as ProtoEntity, MempoolOp, UserOperation},
+        op_pool::{EntityType as ProtoEntityType, MempoolOp, UserOperation},
         ConversionError,
     },
     types::ValidTimeRange,
@@ -25,7 +25,7 @@ impl TryFrom<&PoolOperation> for MempoolOp {
             entities_needing_stake: op
                 .entities_needing_stake
                 .iter()
-                .map(|e| ProtoEntity::from(*e).into())
+                .map(|e| ProtoEntityType::from(*e).into())
                 .collect(),
             account_is_staked: op.account_is_staked,
         })
@@ -53,7 +53,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             .entities_needing_stake
             .into_iter()
             .map(|e| {
-                let pe = ProtoEntity::from_i32(e).ok_or(ConversionError::InvalidEntity(e))?;
+                let pe = ProtoEntityType::from_i32(e).ok_or(ConversionError::InvalidEntity(e))?;
                 pe.try_into()
             })
             .collect::<Result<Vec<_>, ConversionError>>()?;

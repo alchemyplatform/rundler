@@ -12,7 +12,7 @@ use self::error::MempoolResult;
 use super::event::NewBlockEvent;
 use crate::common::{
     protos::op_pool::Reputation,
-    types::{Entity, UserOperation, ValidTimeRange},
+    types::{EntityType, UserOperation, ValidTimeRange},
 };
 
 /// In-memory operation pool
@@ -104,18 +104,18 @@ pub struct PoolOperation {
     pub valid_time_range: ValidTimeRange,
     pub expected_code_hash: H256,
     pub sim_block_hash: H256,
-    pub entities_needing_stake: Vec<Entity>,
+    pub entities_needing_stake: Vec<EntityType>,
     pub account_is_staked: bool,
 }
 
 impl PoolOperation {
     /// Returns the address of the entity that is required to stake for this operation.
-    pub fn entity_address(&self, entity: Entity) -> Option<Address> {
+    pub fn entity_address(&self, entity: EntityType) -> Option<Address> {
         match entity {
-            Entity::Account => Some(self.uo.sender),
-            Entity::Paymaster => self.uo.paymaster(),
-            Entity::Factory => self.uo.factory(),
-            Entity::Aggregator => self.aggregator,
+            EntityType::Account => Some(self.uo.sender),
+            EntityType::Paymaster => self.uo.paymaster(),
+            EntityType::Factory => self.uo.factory(),
+            EntityType::Aggregator => self.aggregator,
         }
     }
 
@@ -129,22 +129,22 @@ impl PoolOperation {
     /// For staked accounts, this function will always return true. Staked accounts
     /// are able to circumvent the mempool operation limits always need their reputation
     /// checked to prevent them from filling the pool.
-    pub fn is_staked(&self, entity: Entity) -> bool {
+    pub fn is_staked(&self, entity: EntityType) -> bool {
         match entity {
-            Entity::Account => self.account_is_staked,
+            EntityType::Account => self.account_is_staked,
             _ => self.entities_needing_stake.contains(&entity),
         }
     }
 
     /// Returns an iterator over all entities that are included in this opearation.
-    pub fn entities(&'_ self) -> impl Iterator<Item = (Entity, Address)> + '_ {
-        Entity::iter()
+    pub fn entities(&'_ self) -> impl Iterator<Item = (EntityType, Address)> + '_ {
+        EntityType::iter()
             .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
     }
 
     /// Returns an iterator over all staked entities that are included in this opearation.
-    pub fn staked_entities(&'_ self) -> impl Iterator<Item = (Entity, Address)> + '_ {
-        Entity::iter()
+    pub fn staked_entities(&'_ self) -> impl Iterator<Item = (EntityType, Address)> + '_ {
+        EntityType::iter()
             .filter(|entity| self.is_staked(*entity))
             .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
     }
@@ -176,28 +176,28 @@ mod tests {
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
-            entities_needing_stake: vec![Entity::Account, Entity::Aggregator],
+            entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
         };
 
-        assert!(po.is_staked(Entity::Account));
-        assert!(!po.is_staked(Entity::Paymaster));
-        assert!(!po.is_staked(Entity::Factory));
-        assert!(po.is_staked(Entity::Aggregator));
+        assert!(po.is_staked(EntityType::Account));
+        assert!(!po.is_staked(EntityType::Paymaster));
+        assert!(!po.is_staked(EntityType::Factory));
+        assert!(po.is_staked(EntityType::Aggregator));
 
-        assert_eq!(po.entity_address(Entity::Account), Some(sender));
-        assert_eq!(po.entity_address(Entity::Paymaster), Some(paymaster));
-        assert_eq!(po.entity_address(Entity::Factory), Some(factory));
-        assert_eq!(po.entity_address(Entity::Aggregator), Some(aggregator));
+        assert_eq!(po.entity_address(EntityType::Account), Some(sender));
+        assert_eq!(po.entity_address(EntityType::Paymaster), Some(paymaster));
+        assert_eq!(po.entity_address(EntityType::Factory), Some(factory));
+        assert_eq!(po.entity_address(EntityType::Aggregator), Some(aggregator));
 
         let entities = po.entities().collect::<Vec<_>>();
         assert_eq!(entities.len(), 4);
         for (entity, address) in entities {
             match entity {
-                Entity::Account => assert_eq!(address, sender),
-                Entity::Paymaster => assert_eq!(address, paymaster),
-                Entity::Factory => assert_eq!(address, factory),
-                Entity::Aggregator => assert_eq!(address, aggregator),
+                EntityType::Account => assert_eq!(address, sender),
+                EntityType::Paymaster => assert_eq!(address, paymaster),
+                EntityType::Factory => assert_eq!(address, factory),
+                EntityType::Aggregator => assert_eq!(address, aggregator),
             }
         }
     }

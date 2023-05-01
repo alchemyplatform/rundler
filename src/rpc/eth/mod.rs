@@ -33,14 +33,14 @@ use crate::common::{
     eth::log_to_raw_log,
     precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
     protos::op_pool::{
-        op_pool_client::OpPoolClient, AddOpRequest, Entity as OpPoolEntity, ErrorInfo, ErrorReason,
-        MempoolOp,
+        op_pool_client::OpPoolClient, AddOpRequest, EntityType as ProtoEntityType, ErrorInfo,
+        ErrorReason, MempoolOp,
     },
     simulation::{
         self, GasSimulationError, SimulationError, SimulationSuccess, SimulationViolation,
         Simulator, SimulatorImpl,
     },
-    types::{Entity, Timestamp, UserOperation},
+    types::{EntityType, Timestamp, UserOperation},
 };
 
 /// Eth API
@@ -336,7 +336,7 @@ where
                     sim_block_hash: block_hash.as_bytes().to_vec(),
                     entities_needing_stake: entities_needing_stake
                         .iter()
-                        .map(|&e| OpPoolEntity::from(e).into())
+                        .map(|&e| ProtoEntityType::from(e).into())
                         .collect(),
                     account_is_staked,
                 }),
@@ -565,7 +565,7 @@ impl From<SimulationError> for EthRpcError {
 
         match violation {
             SimulationViolation::UnintendedRevertWithMessage(
-                Entity::Paymaster,
+                EntityType::Paymaster,
                 reason,
                 Some(paymaster),
             ) => Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
@@ -585,23 +585,23 @@ impl From<SimulationError> for EthRpcError {
                 Self::OpcodeViolation(*entity, Opcode::GAS)
             }
             SimulationViolation::FactoryCalledCreate2Twice => {
-                Self::OpcodeViolation(Entity::Factory, Opcode::CREATE2)
+                Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
             }
             SimulationViolation::InvalidStorageAccess(entity, address) => {
                 Self::InvalidStorageAccess(*entity, *address)
             }
             SimulationViolation::NotStaked(entity, address, min_stake, min_unstake_delay) => {
                 let err_data = match entity {
-                    Entity::Account => {
+                    EntityType::Account => {
                         StakeTooLowData::account(*address, *min_stake, *min_unstake_delay)
                     }
-                    Entity::Paymaster => {
+                    EntityType::Paymaster => {
                         StakeTooLowData::paymaster(*address, *min_stake, *min_unstake_delay)
                     }
-                    Entity::Aggregator => {
+                    EntityType::Aggregator => {
                         StakeTooLowData::aggregator(*address, *min_stake, *min_unstake_delay)
                     }
-                    Entity::Factory => {
+                    EntityType::Factory => {
                         StakeTooLowData::factory(*address, *min_stake, *min_unstake_delay)
                     }
                 };
@@ -646,15 +646,15 @@ impl From<ErrorInfo> for EthRpcError {
                 return anyhow!("should have valid address in ErrorInfo metadata").into()
             };
 
-            let Some(entity) = Entity::from_str(entity).ok() else {
+            let Some(entity) = EntityType::from_str(entity).ok() else {
                 return anyhow!("should be a valid Entity type in ErrorInfo metadata").into()
             };
 
             let data = match entity {
-                Entity::Aggregator => ThrottledOrBannedData::Aggregator(address),
-                Entity::Paymaster => ThrottledOrBannedData::Paymaster(address),
-                Entity::Factory => ThrottledOrBannedData::Factory(address),
-                Entity::Account => ThrottledOrBannedData::Account(address),
+                EntityType::Aggregator => ThrottledOrBannedData::Aggregator(address),
+                EntityType::Paymaster => ThrottledOrBannedData::Paymaster(address),
+                EntityType::Factory => ThrottledOrBannedData::Factory(address),
+                EntityType::Account => ThrottledOrBannedData::Account(address),
             };
 
             return EthRpcError::ThrottledOrBanned(data);
@@ -698,7 +698,7 @@ mod tests {
         let error_info = ErrorInfo {
             reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
             metadata: HashMap::from([(
-                Entity::Paymaster.to_string(),
+                EntityType::Paymaster.to_string(),
                 Address::default().encode_hex(),
             )]),
         };

@@ -15,12 +15,12 @@ message UserOperation {
   bytes signature = 11;
 }
 
-enum Entity {
-  ENTITY_UNSPECIFIED = 0;
-  ENTITY_ACCOUNT = 1;
-  ENTITY_PAYMASTER = 2;
-  ENTITY_AGGREGATOR = 3;
-  ENTITY_FACTORY = 4;
+enum EntityType {
+  ENTITY_TYPE_UNSPECIFIED = 0;
+  ENTITY_TYPE_ACCOUNT = 1;
+  ENTITY_TYPE_PAYMASTER = 2;
+  ENTITY_TYPE_AGGREGATOR = 3;
+  ENTITY_TYPE_FACTORY = 4;
 }
 
 message MempoolOp {
@@ -29,7 +29,7 @@ message MempoolOp {
   uint64 valid_after = 3;
   uint64 valid_until = 4;
   bytes expected_code_hash = 5;
-  repeated Entity entities_needing_stake = 6;
+  repeated EntityType entities_needing_stake = 6;
   bytes sim_block_hash = 7;
   bool account_is_staked = 8;
 }
