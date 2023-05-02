@@ -11,6 +11,7 @@ use rusoto_core::Region;
 use tokio::{
     select,
     sync::{broadcast, mpsc},
+    time::timeout,
 };
 use tonic::transport::{Channel, Server};
 use tracing::info;
@@ -78,7 +79,12 @@ pub async fn run(
         BundlerSigner::Local(LocalSigner::connect(Arc::clone(&provider), args.chain_id, pk).await?)
     } else {
         info!("Using AWS KMS signer");
-        let ret = BundlerSigner::Kms(
+        let signer = timeout(
+            // timeout must be << than the lock TTL to avoid a
+            // bug in the redis lock implementation that panics if connection
+            // takes longer than the TTL. Generally the TLL should be on the order of 10s of seconds
+            // so this should give ample time for the connection to establish.
+            Duration::from_millis(args.redis_lock_ttl_millis / 10),
             KmsSigner::connect(
                 Arc::clone(&provider),
                 args.chain_id,
@@ -86,9 +92,12 @@ pub async fn run(
                 args.aws_kms_key_ids,
                 args.redis_uri,
                 args.redis_lock_ttl_millis,
-            )
-            .await?,
-        );
+            ),
+        )
+        .await
+        .context("timeout connecting to KMS")?
+        .context("failure connecting to KMS")?;
+        let ret = BundlerSigner::Kms(signer);
         info!("Created AWS KMS signer");
         ret
     };

@@ -11,7 +11,12 @@ use ethers::{
     types::{Address, Filter},
 };
 use rand::Rng;
-use tokio::{select, sync::broadcast, task::JoinHandle, time::sleep};
+use tokio::{
+    select,
+    sync::broadcast,
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
 use tokio_stream::StreamExt;
 use tracing::{error, info};
 
@@ -144,24 +149,35 @@ impl<F: BlockProviderFactory> EventListener<F> {
 
         loop {
             self.provider = Some(self.provider_factory.new_provider());
-            // TODO add timeout to this
-            match self
-                .provider
-                .as_mut()
-                .unwrap()
-                .subscribe(self.log_filter_base.clone())
-                .await
+            match timeout(
+                Duration::from_secs(5),
+                self.provider
+                    .as_mut()
+                    .unwrap()
+                    .subscribe(self.log_filter_base.clone()),
+            )
+            .await
             {
-                Ok(block_stream) => {
+                Ok(Ok(block_stream)) => {
                     info!("Connected to event provider");
                     self.last_reconnect = Some(Instant::now());
                     return Ok(block_stream);
+                }
+                Ok(Err(err)) => {
+                    EventListenerMetrics::increment_provider_errors();
+                    let sleep_duration = self.backoff_time();
+                    error!(
+                        "Error connecting to event provider, sleeping {sleep_duration:?}: {err:?}"
+                    );
+                    if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
+                        return Err(anyhow::anyhow!("Shutdown signal received"));
+                    }
                 }
                 Err(err) => {
                     EventListenerMetrics::increment_provider_errors();
                     let sleep_duration = self.backoff_time();
                     error!(
-                        "Error connecting to event provider, sleeping {sleep_duration:?}: {err:?}"
+                        "Timeout connecting to event provider, sleeping {sleep_duration:?}: {err:?}"
                     );
                     if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
                         return Err(anyhow::anyhow!("Shutdown signal received"));
