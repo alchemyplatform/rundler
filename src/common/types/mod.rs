@@ -4,18 +4,18 @@ mod timestamp;
 mod validation_results;
 mod violations;
 
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use anyhow::bail;
 pub use entry_point_like::*;
 use ethers::{
     abi::{encode, Token},
     types::{Address, Bytes, H256, U256},
-    utils::keccak256,
+    utils::{keccak256, to_checksum},
 };
 use parse_display::Display;
 pub use provider_like::*;
-use serde::{Deserialize, Serialize};
+use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use strum::EnumIter;
 pub use timestamp::*;
 pub use validation_results::*;
@@ -113,6 +113,17 @@ pub enum EntityType {
     Factory,
 }
 
+impl EntityType {
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            EntityType::Account => "account",
+            EntityType::Paymaster => "paymaster",
+            EntityType::Aggregator => "aggregator",
+            EntityType::Factory => "factory",
+        }
+    }
+}
+
 impl FromStr for EntityType {
     type Err = anyhow::Error;
 
@@ -124,6 +135,48 @@ impl FromStr for EntityType {
             "factory" => Ok(EntityType::Factory),
             _ => bail!("Invalid entity type: {s}"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Entity {
+    pub kind: EntityType,
+    pub address: Address,
+}
+
+impl Entity {
+    pub fn new(kind: EntityType, address: Address) -> Self {
+        Self { kind, address }
+    }
+
+    pub fn account(address: Address) -> Self {
+        Self::new(EntityType::Account, address)
+    }
+
+    pub fn paymaster(address: Address) -> Self {
+        Self::new(EntityType::Paymaster, address)
+    }
+
+    pub fn aggregator(address: Address) -> Self {
+        Self::new(EntityType::Aggregator, address)
+    }
+
+    pub fn factory(address: Address) -> Self {
+        Self::new(EntityType::Factory, address)
+    }
+}
+
+impl Display for Entity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{:?}", self.kind, to_checksum(&self.address, None))
+    }
+}
+
+impl Serialize for Entity {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut e = serializer.serialize_struct("Entity", 1)?;
+        e.serialize_field(self.kind.to_str(), &to_checksum(&self.address, None))?;
+        e.end()
     }
 }
 

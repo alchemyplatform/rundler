@@ -21,7 +21,9 @@ use crate::common::{
         op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
     },
     simulation::{SimulationError, SimulationSuccess, Simulator},
-    types::{EntityType, EntryPointLike, HandleOpsOut, ProviderLike, Timestamp, UserOperation},
+    types::{
+        Entity, EntityType, EntryPointLike, HandleOpsOut, ProviderLike, Timestamp, UserOperation,
+    },
 };
 
 /// A user op must be valid for at least this long into the future to be included.
@@ -33,7 +35,7 @@ pub struct Bundle {
     pub gas_estimate: U256,
     pub expected_storage_slots: HashMap<Address, HashMap<U256, U256>>,
     pub rejected_ops: Vec<UserOperation>,
-    pub rejected_entities: Vec<(EntityType, Address)>,
+    pub rejected_entities: Vec<Entity>,
 }
 
 impl Bundle {
@@ -242,7 +244,7 @@ where
         };
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
-            let _ = context.reject_entity(EntityType::Paymaster, paymaster);
+            let _ = context.reject_entity(Entity::paymaster(paymaster));
         }
         self.compute_all_aggregator_signatures(&mut context).await;
         context
@@ -254,13 +256,8 @@ where
             .await;
     }
 
-    async fn reject_entity(
-        &self,
-        context: &mut ProposalContext,
-        entity: EntityType,
-        address: Address,
-    ) {
-        let changed_aggregators = context.reject_entity(entity, address);
+    async fn reject_entity(&self, context: &mut ProposalContext, entity: Entity) {
+        let changed_aggregators = context.reject_entity(entity);
         self.compute_aggregator_signatures(context, &changed_aggregators)
             .await;
     }
@@ -313,7 +310,7 @@ where
             }
             HandleOpsOut::SignatureValidationFailed(aggregator) => {
                 info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
-                self.reject_entity(context, EntityType::Aggregator, aggregator)
+                self.reject_entity(context, Entity::aggregator(aggregator))
                     .await;
                 Ok(None)
             }
@@ -364,8 +361,7 @@ where
                 let op = context.get_op_at(index)?;
                 let factory = op.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
                 info!("Rejected op because it failed during gas estimation with factory {factory:?} error {message}.");
-                self.reject_entity(context, EntityType::Factory, factory)
-                    .await;
+                self.reject_entity(context, Entity::factory(factory)).await;
             }
             // Entrypoint error codes that we want to reject the paymaster for.
             // Note: AA32 is not included as this is a time expiry error.
@@ -375,7 +371,7 @@ where
                     "op failed during gas estimation with {message}, but had no paymaster",
                 )?;
                 info!("Rejected op because it failed during gas estimation with a paymaster {paymaster:?} error {message}.");
-                self.reject_entity(context, EntityType::Paymaster, paymaster)
+                self.reject_entity(context, Entity::paymaster(paymaster))
                     .await;
             }
             _ => {
@@ -435,7 +431,7 @@ impl OpWithSimulation {
 struct ProposalContext {
     groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
     rejected_ops: Vec<UserOperation>,
-    rejected_entities: Vec<(EntityType, Address)>,
+    rejected_entities: Vec<Entity>,
 }
 
 #[derive(Debug, Default)]
@@ -510,17 +506,18 @@ impl ProposalContext {
     /// Returns the addresses of any aggregators whose signature may need to be
     /// recomputed.
     #[must_use = "rejected entity but did not update aggregator signatures"]
-    fn reject_entity(&mut self, entity: EntityType, address: Address) -> Vec<Address> {
-        self.rejected_entities.push((entity, address));
-        match entity {
+    fn reject_entity(&mut self, entity: Entity) -> Vec<Address> {
+        let ret = match entity.kind {
             EntityType::Aggregator => {
-                self.reject_aggregator(address);
+                self.reject_aggregator(entity.address);
                 vec![]
             }
-            EntityType::Paymaster => self.reject_paymaster(address),
-            EntityType::Factory => self.reject_factory(address),
+            EntityType::Paymaster => self.reject_paymaster(entity.address),
+            EntityType::Factory => self.reject_factory(entity.address),
             _ => vec![],
-        }
+        };
+        self.rejected_entities.push(entity);
+        ret
     }
 
     fn reject_aggregator(&mut self, address: Address) {
@@ -869,10 +866,7 @@ mod tests {
 
         assert_eq!(
             bundle.rejected_entities,
-            vec![
-                (EntityType::Paymaster, address(1)),
-                (EntityType::Factory, address(3))
-            ]
+            vec![Entity::paymaster(address(1)), Entity::factory(address(3)),]
         );
         assert_eq!(bundle.rejected_ops, vec![]);
         assert_eq!(

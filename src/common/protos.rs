@@ -1,7 +1,7 @@
 use ethers::types::{Address, H256, U256};
 
 use crate::common::types::{
-    BundlingMode as RpcBundlingMode, EntityType as CommonEntityType,
+    BundlingMode as RpcBundlingMode, Entity as CommonEntity, EntityType as CommonEntityType,
     UserOperation as RpcUserOperation,
 };
 
@@ -72,6 +72,28 @@ pub mod op_pool {
                 CommonEntityType::Paymaster => EntityType::Paymaster,
                 CommonEntityType::Aggregator => EntityType::Aggregator,
                 CommonEntityType::Factory => EntityType::Factory,
+            }
+        }
+    }
+
+    impl TryFrom<&Entity> for CommonEntity {
+        type Error = ConversionError;
+
+        fn try_from(entity: &Entity) -> Result<Self, ConversionError> {
+            Ok(CommonEntity {
+                kind: EntityType::from_i32(entity.kind)
+                    .ok_or(ConversionError::InvalidEntity(entity.kind))?
+                    .try_into()?,
+                address: from_bytes(&entity.address)?,
+            })
+        }
+    }
+
+    impl From<&CommonEntity> for Entity {
+        fn from(entity: &CommonEntity) -> Self {
+            Entity {
+                kind: EntityType::from(entity.kind).into(),
+                address: entity.address.as_bytes().to_vec(),
             }
         }
     }

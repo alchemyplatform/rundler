@@ -5,7 +5,6 @@ use std::{
 
 use ethers::types::{Address, H256};
 use parking_lot::RwLock;
-use strum::IntoEnumIterator;
 use tokio::sync::broadcast;
 
 use super::{
@@ -17,7 +16,7 @@ use crate::{
     common::{
         contracts::i_entry_point::IEntryPointEvents,
         protos::op_pool::{Reputation, ReputationStatus},
-        types::EntityType,
+        types::Entity,
     },
     op_pool::{event::NewBlockEvent, reputation::ReputationManager},
 };
@@ -98,15 +97,8 @@ where
             if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
                 let op_hash = uo_event.user_op_hash.into();
                 if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
-                    for entity in EntityType::iter() {
-                        if op.is_staked(entity) {
-                            match op.entity_address(entity) {
-                                Some(e) => self.reputation.add_included(e),
-                                None => {
-                                    tracing::error!("Entity address not found for entity {entity:?} in operation {op:?}");
-                                }
-                            }
-                        }
+                    for e in op.staked_entities() {
+                        self.reputation.add_included(e.address);
                     }
                 }
 
@@ -134,20 +126,23 @@ where
 
     fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
         let mut throttled = false;
-        for (entity, addr) in op.entities() {
-            match self.reputation.status(addr) {
+        for e in op.entities() {
+            match self.reputation.status(e.address) {
                 ReputationStatus::Ok => {}
                 ReputationStatus::Throttled => {
-                    if self.state.read().pool.address_count(addr) > 0 {
-                        return Err(MempoolError::EntityThrottled(entity, addr));
+                    if self.state.read().pool.address_count(e.address) > 0 {
+                        return Err(MempoolError::EntityThrottled(e));
                     }
                     throttled = true;
                 }
                 ReputationStatus::Banned => {
-                    return Err(MempoolError::EntityThrottled(entity, addr));
+                    return Err(MempoolError::EntityThrottled(e));
                 }
             }
-            self.reputation.add_seen(addr);
+
+            if op.is_staked(e.kind) {
+                self.reputation.add_seen(e.address);
+            }
         }
 
         let mut state = self.state.write();
@@ -176,8 +171,8 @@ where
         }
     }
 
-    fn remove_entity(&self, entity: EntityType, address: Address) {
-        self.state.write().pool.remove_entity(entity, address);
+    fn remove_entity(&self, entity: Entity) {
+        self.state.write().pool.remove_entity(entity);
     }
 
     fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {

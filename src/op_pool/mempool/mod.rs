@@ -12,7 +12,7 @@ use self::error::MempoolResult;
 use super::event::NewBlockEvent;
 use crate::common::{
     protos::op_pool::Reputation,
-    types::{EntityType, UserOperation, ValidTimeRange},
+    types::{Entity, EntityType, UserOperation, ValidTimeRange},
 };
 
 /// In-memory operation pool
@@ -45,7 +45,7 @@ pub trait Mempool: Send + Sync {
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>);
 
     /// Removes all operations assocaited with a given entity from the pool.
-    fn remove_entity(&self, entity: EntityType, address: Address);
+    fn remove_entity(&self, entity: Entity);
 
     /// Returns the best operations from the pool.
     ///
@@ -112,14 +112,11 @@ pub struct PoolOperation {
 }
 
 impl PoolOperation {
-    /// Returns the address of the entity that is required to stake for this operation.
-    pub fn entity_address(&self, entity: EntityType) -> Option<Address> {
-        match entity {
-            EntityType::Account => Some(self.uo.sender),
-            EntityType::Paymaster => self.uo.paymaster(),
-            EntityType::Factory => self.uo.factory(),
-            EntityType::Aggregator => self.aggregator,
-        }
+    // Returns true if the operation contains the given entity.
+    pub fn contains_entity(&self, entity: &Entity) -> bool {
+        self.entity_address(entity.kind)
+            .map(|address| address == entity.address)
+            .unwrap_or(false)
     }
 
     /// Returns true if the operation requires the given entity to stake.
@@ -140,20 +137,34 @@ impl PoolOperation {
     }
 
     /// Returns an iterator over all entities that are included in this opearation.
-    pub fn entities(&'_ self) -> impl Iterator<Item = (EntityType, Address)> + '_ {
-        EntityType::iter()
-            .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
+    pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
+        EntityType::iter().filter_map(|entity| {
+            self.entity_address(entity)
+                .map(|address| Entity::new(entity, address))
+        })
     }
 
     /// Returns an iterator over all staked entities that are included in this opearation.
-    pub fn staked_entities(&'_ self) -> impl Iterator<Item = (EntityType, Address)> + '_ {
+    pub fn staked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         EntityType::iter()
             .filter(|entity| self.is_staked(*entity))
-            .filter_map(|entity| self.entity_address(entity).map(|address| (entity, address)))
+            .filter_map(|entity| {
+                self.entity_address(entity)
+                    .map(|address| Entity::new(entity, address))
+            })
     }
 
     pub fn size(&self) -> usize {
         self.uo.pack().len()
+    }
+
+    fn entity_address(&self, entity: EntityType) -> Option<Address> {
+        match entity {
+            EntityType::Account => Some(self.uo.sender),
+            EntityType::Paymaster => self.uo.paymaster(),
+            EntityType::Factory => self.uo.factory(),
+            EntityType::Aggregator => self.aggregator,
+        }
     }
 }
 
@@ -195,12 +206,12 @@ mod tests {
 
         let entities = po.entities().collect::<Vec<_>>();
         assert_eq!(entities.len(), 4);
-        for (entity, address) in entities {
-            match entity {
-                EntityType::Account => assert_eq!(address, sender),
-                EntityType::Paymaster => assert_eq!(address, paymaster),
-                EntityType::Factory => assert_eq!(address, factory),
-                EntityType::Aggregator => assert_eq!(address, aggregator),
+        for e in entities {
+            match e.kind {
+                EntityType::Account => assert_eq!(e.address, sender),
+                EntityType::Paymaster => assert_eq!(e.address, paymaster),
+                EntityType::Factory => assert_eq!(e.address, factory),
+                EntityType::Aggregator => assert_eq!(e.address, aggregator),
             }
         }
     }

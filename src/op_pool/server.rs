@@ -2,25 +2,22 @@ use std::{collections::HashMap, sync::Arc};
 
 use ethers::{
     types::{Address, H256},
-    utils::hex::ToHex,
+    utils::to_checksum,
 };
 use prost::Message;
 use tonic::{async_trait, Code, Request, Response, Result, Status};
 
 use super::mempool::{error::MempoolError, Mempool, OperationOrigin};
-use crate::common::{
-    protos::{
-        self,
-        op_pool::{
-            self, op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
-            DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
-            DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
-            DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
-            GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-            RemoveEntitiesRequest, RemoveEntitiesResponse, RemoveOpsRequest, RemoveOpsResponse,
-        },
+use crate::common::protos::{
+    self,
+    op_pool::{
+        op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
+        DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
+        DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
+        DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
+        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
+        RemoveEntitiesRequest, RemoveEntitiesResponse, RemoveOpsRequest, RemoveOpsResponse,
     },
-    types::EntityType,
 };
 
 pub struct OpPoolImpl<M: Mempool> {
@@ -132,16 +129,12 @@ where
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
-        for entity in req.entities {
-            let proto_entity = op_pool::EntityType::from_i32(entity.entity).ok_or_else(|| {
-                Status::invalid_argument(format!("Invalid entity: {}", entity.entity))
-            })?;
-            let local_entity = EntityType::try_from(proto_entity)
-                .map_err(|e| Status::invalid_argument(format!("Invalid entity: {e}")))?;
-            let address = protos::from_bytes(&entity.address)
-                .map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))?;
-
-            mempool.remove_entity(local_entity, address);
+        for entity in &req.entities {
+            mempool.remove_entity(
+                entity
+                    .try_into()
+                    .map_err(|e| Status::internal(format!("Failed to convert to entity: {e}")))?,
+            );
         }
 
         Ok(Response::new(RemoveEntitiesResponse {}))
@@ -214,10 +207,9 @@ where
 impl From<MempoolError> for Status {
     fn from(e: MempoolError) -> Self {
         let ei = match &e {
-            MempoolError::EntityThrottled(et, addr) => ErrorInfo {
+            MempoolError::EntityThrottled(et) => ErrorInfo {
                 reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
-                // to stringing an address actually shortens it in the style of 0x000...000 -- bad.
-                metadata: HashMap::from([(et.to_string(), (&addr).encode_hex())]),
+                metadata: HashMap::from([(et.kind.to_string(), to_checksum(&et.address, None))]),
             },
             MempoolError::MaxOperationsReached(_, _) => ErrorInfo {
                 reason: ErrorReason::OperationRejected.as_str_name().to_string(),
@@ -270,7 +262,10 @@ mod tests {
     ];
 
     use crate::{
-        common::protos::op_pool::{self, Reputation},
+        common::{
+            protos::op_pool::{self, Reputation},
+            types::Entity,
+        },
         op_pool::{
             event::NewBlockEvent,
             mempool::{error::MempoolResult, PoolOperation},
@@ -373,7 +368,7 @@ mod tests {
 
         fn remove_operations<'a>(&self, _hashes: impl IntoIterator<Item = &'a H256>) {}
 
-        fn remove_entity(&self, _entity: EntityType, _address: Address) {}
+        fn remove_entity(&self, _entity: Entity) {}
 
         fn best_operations(&self, _max: usize) -> Vec<Arc<PoolOperation>> {
             vec![]

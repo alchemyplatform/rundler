@@ -24,7 +24,7 @@ enum EntityType {
 }
 
 message Entity {
-  EntityType entity = 1;
+  EntityType kind = 1;
   bytes address = 2;
 }
 
