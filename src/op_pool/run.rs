@@ -1,8 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
+use futures::future;
 use tokio::{
     sync::{broadcast, mpsc},
+    task::JoinHandle,
     try_join,
 };
 use tonic::transport::Server;
@@ -62,17 +64,29 @@ pub async fn run(
 
     // create mempools
     let mut mempools = Vec::new();
+    let mut mempool_handles = Vec::new();
     for pool_config in args.pool_configs {
-        mempools.push(
-            create_mempool(pool_config, event_provider.as_ref(), &shutdown_rx)
-                .await
-                .context("should have created mempool")?,
-        );
+        let (pool, handle) = create_mempool(pool_config, event_provider.as_ref(), &shutdown_rx)
+            .await
+            .context("should have created mempool")?;
+
+        mempools.push(pool);
+        mempool_handles.push(handle);
     }
     let mempool_map = mempools
         .into_iter()
         .map(|mp| (mp.entry_point(), mp))
         .collect();
+
+    // handle to wait for mempools to terminate
+    let mempool_handle = tokio::spawn(async move {
+        future::join_all(mempool_handles)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map(|_| ())
+            .context("should have joined mempool handles")
+    });
 
     // Start events listener
     let event_provider_shutdown = shutdown_rx.resubscribe();
@@ -110,6 +124,7 @@ pub async fn run(
     tracing::info!("Started op_pool");
 
     match try_join!(
+        flatten_handle(mempool_handle),
         flatten_handle(server_handle),
         flatten_handle(events_provider_handle)
     ) {
@@ -128,7 +143,7 @@ async fn create_mempool(
     pool_config: PoolConfig,
     event_provider: &dyn EventProvider,
     shutdown_rx: &broadcast::Receiver<()>,
-) -> anyhow::Result<Arc<UoPool<HourlyMovingAverageReputation>>> {
+) -> anyhow::Result<(Arc<UoPool<HourlyMovingAverageReputation>>, JoinHandle<()>)> {
     let entry_point = pool_config.entry_point;
     // Reputation manager
     let reputation = Arc::new(HourlyMovingAverageReputation::new(
@@ -148,7 +163,7 @@ async fn create_mempool(
         .subscribe_by_entrypoint(entry_point)
         .context("event listener should have entrypoint subscriber")?;
     let mp_runner = Arc::clone(&mp);
-    tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
+    let handle = tokio::spawn(async move { mp_runner.run(mempool_events, mempool_shutdown).await });
 
-    Ok(mp)
+    Ok((mp, handle))
 }
