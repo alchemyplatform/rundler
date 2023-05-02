@@ -18,7 +18,6 @@ use tracing::{debug, Level};
 
 use self::error::{
     EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
-    ThrottledOrBannedData,
 };
 use super::{
     GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
@@ -40,7 +39,7 @@ use crate::common::{
         self, GasSimulationError, SimulationError, SimulationSuccess, SimulationViolation,
         Simulator, SimulatorImpl,
     },
-    types::{EntityType, Timestamp, UserOperation},
+    types::{Entity, EntityType, Timestamp, UserOperation},
 };
 
 /// Eth API
@@ -590,23 +589,12 @@ impl From<SimulationError> for EthRpcError {
             SimulationViolation::InvalidStorageAccess(entity, address) => {
                 Self::InvalidStorageAccess(*entity, *address)
             }
-            SimulationViolation::NotStaked(entity, address, min_stake, min_unstake_delay) => {
-                let err_data = match entity {
-                    EntityType::Account => {
-                        StakeTooLowData::account(*address, *min_stake, *min_unstake_delay)
-                    }
-                    EntityType::Paymaster => {
-                        StakeTooLowData::paymaster(*address, *min_stake, *min_unstake_delay)
-                    }
-                    EntityType::Aggregator => {
-                        StakeTooLowData::aggregator(*address, *min_stake, *min_unstake_delay)
-                    }
-                    EntityType::Factory => {
-                        StakeTooLowData::factory(*address, *min_stake, *min_unstake_delay)
-                    }
-                };
-
-                Self::StakeTooLow(err_data)
+            SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
+                Self::StakeTooLow(StakeTooLowData::new(
+                    entity.clone(),
+                    *min_stake,
+                    *min_unstake_delay,
+                ))
             }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             _ => Self::SimulationFailed(value),
@@ -645,19 +633,10 @@ impl From<ErrorInfo> for EthRpcError {
             let Some(address) = Address::from_str(address).ok() else {
                 return anyhow!("should have valid address in ErrorInfo metadata").into()
             };
-
             let Some(entity) = EntityType::from_str(entity).ok() else {
                 return anyhow!("should be a valid Entity type in ErrorInfo metadata").into()
             };
-
-            let data = match entity {
-                EntityType::Aggregator => ThrottledOrBannedData::Aggregator(address),
-                EntityType::Paymaster => ThrottledOrBannedData::Paymaster(address),
-                EntityType::Factory => ThrottledOrBannedData::Factory(address),
-                EntityType::Account => ThrottledOrBannedData::Account(address),
-            };
-
-            return EthRpcError::ThrottledOrBanned(data);
+            return EthRpcError::ThrottledOrBanned(Entity::new(entity, address));
         } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
             return EthRpcError::ReplacementUnderpriced;
         } else if reason == ErrorReason::OperationDiscardedOnInsert.as_str_name() {
@@ -689,7 +668,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{common::protos::op_pool::ErrorReason, rpc::eth::error::ThrottledOrBannedData};
+    use crate::common::protos::op_pool::ErrorReason;
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
 
@@ -723,7 +702,7 @@ mod tests {
         assert!(
             matches!(
                 rpc_error,
-                EthRpcError::ThrottledOrBanned(data) if data == ThrottledOrBannedData::Paymaster(Address::default())
+                EthRpcError::ThrottledOrBanned(ref data) if *data == Entity::paymaster(Address::default())
             ),
             "{:?}",
             rpc_error

@@ -12,6 +12,7 @@ use indexmap::IndexSet;
 use mockall::automock;
 use tonic::async_trait;
 
+use super::types::Entity;
 use crate::common::{
     contracts::{
         i_aggregator::IAggregator,
@@ -289,8 +290,7 @@ where
                 entities_needing_stake.push(entity);
                 if !entity_info.is_staked {
                     violations.push(SimulationViolation::NotStaked(
-                        entity,
-                        entity_info.address,
+                        Entity::new(entity, entity_info.address),
                         self.sim_settings.min_stake_value.into(),
                         self.sim_settings.min_unstake_delay.into(),
                     ));
@@ -318,8 +318,7 @@ where
             entities_needing_stake.push(EntityType::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
                 violations.push(SimulationViolation::NotStaked(
-                    EntityType::Aggregator,
-                    aggregator_info.address,
+                    Entity::aggregator(aggregator_info.address),
                     self.sim_settings.min_stake_value.into(),
                     self.sim_settings.min_unstake_delay.into(),
                 ));
@@ -489,7 +488,7 @@ pub enum SimulationViolation {
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(EntityType, Address),
     #[display("{0} must be staked")]
-    NotStaked(EntityType, Address, U256, U256),
+    NotStaked(Entity, U256, U256),
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(EntityType),
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]

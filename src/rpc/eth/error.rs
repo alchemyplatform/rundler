@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::common::{
     precheck::PrecheckError,
     simulation::SimulationError,
-    types::{EntityType, Timestamp},
+    types::{Entity, EntityType, Timestamp},
 };
 
 // Error codes borrowed from jsonrpsee
@@ -58,7 +58,7 @@ pub enum EthRpcError {
     OutOfTimeRange(OutOfTimeRangeData),
     /// Entity throttled or banned
     #[error("entity throttled or banned")]
-    ThrottledOrBanned(ThrottledOrBannedData),
+    ThrottledOrBanned(Entity),
     /// Entity stake/unstake delay too low
     #[error("entity stake/unstake delay too low")]
     StakeTooLow(StakeTooLowData),
@@ -96,71 +96,18 @@ pub struct OutOfTimeRangeData {
     pub paymaster: Option<Address>,
 }
 
-// TODO replace this with Entity(Address) enum
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub enum ThrottledOrBannedData {
-    Account(Address),
-    Paymaster(Address),
-    Aggregator(Address),
-    Factory(Address),
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StakeTooLowData {
-    // TODO replace these with Entity(Address) enum
-    paymaster: Option<Address>,
-    aggregator: Option<Address>,
-    factory: Option<Address>,
-    account: Option<Address>,
+    entity: Entity,
     minimum_stake: U256,
     minimum_unstake_delay: U256,
 }
 
 impl StakeTooLowData {
-    pub fn paymaster(paymaster: Address, minimum_stake: U256, minimum_unstake_delay: U256) -> Self {
+    pub fn new(entity: Entity, minimum_stake: U256, minimum_unstake_delay: U256) -> Self {
         Self {
-            paymaster: Some(paymaster),
-            aggregator: None,
-            factory: None,
-            account: None,
-            minimum_stake,
-            minimum_unstake_delay,
-        }
-    }
-
-    pub fn aggregator(
-        aggregator: Address,
-        minimum_stake: U256,
-        minimum_unstake_delay: U256,
-    ) -> Self {
-        Self {
-            paymaster: None,
-            aggregator: Some(aggregator),
-            factory: None,
-            account: None,
-            minimum_stake,
-            minimum_unstake_delay,
-        }
-    }
-
-    pub fn factory(factory: Address, minimum_stake: U256, minimum_unstake_delay: U256) -> Self {
-        Self {
-            paymaster: None,
-            aggregator: None,
-            factory: Some(factory),
-            account: None,
-            minimum_stake,
-            minimum_unstake_delay,
-        }
-    }
-
-    pub fn account(account: Address, minimum_stake: U256, minimum_unstake_delay: U256) -> Self {
-        Self {
-            paymaster: None,
-            aggregator: None,
-            factory: None,
-            account: Some(account),
+            entity,
             minimum_stake,
             minimum_unstake_delay,
         }

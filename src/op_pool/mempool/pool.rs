@@ -12,7 +12,7 @@ use super::{
     size::SizeTracker,
     PoolConfig, PoolOperation,
 };
-use crate::common::types::{EntityType, UserOperation, UserOperationId};
+use crate::common::types::{Entity, UserOperation, UserOperationId};
 
 /// Pool of user operations
 #[derive(Debug)]
@@ -99,8 +99,8 @@ impl PoolInner {
         };
 
         // update counts
-        for (_, addr) in pool_op.po.entities() {
-            *self.count_by_address.entry(addr).or_insert(0) += 1;
+        for e in pool_op.po.entities() {
+            *self.count_by_address.entry(e.address).or_insert(0) += 1;
         }
 
         // create and insert ordered operation
@@ -148,8 +148,8 @@ impl PoolInner {
             self.by_id.remove(&op.uo().id());
             self.best.remove(&op);
 
-            for (_, addr) in op.po.entities() {
-                self.decrement_address_count(addr);
+            for e in op.po.entities() {
+                self.decrement_address_count(e.address);
             }
 
             self.size -= op.size();
@@ -161,11 +161,11 @@ impl PoolInner {
         None
     }
 
-    pub fn remove_entity(&mut self, entity: EntityType, address: Address) {
+    pub fn remove_entity(&mut self, entity: Entity) {
         let to_remove = self
             .by_hash
             .iter()
-            .filter(|(_, uo)| uo.po.entity_address(entity) == Some(address))
+            .filter(|(_, uo)| uo.po.contains_entity(&entity))
             .map(|(hash, _)| *hash)
             .collect::<Vec<_>>();
         for hash in to_remove {
@@ -367,7 +367,7 @@ mod tests {
         }
         assert_eq!(pool.by_hash.len(), 3);
 
-        pool.remove_entity(EntityType::Account, account);
+        pool.remove_entity(Entity::account(account));
         assert!(pool.by_hash.is_empty());
         assert!(pool.by_id.is_empty());
         assert!(pool.best.is_empty());
@@ -388,7 +388,7 @@ mod tests {
         }
         assert_eq!(pool.by_hash.len(), 3);
 
-        pool.remove_entity(EntityType::Aggregator, agg);
+        pool.remove_entity(Entity::aggregator(agg));
         assert!(pool.by_hash.is_empty());
         assert!(pool.by_id.is_empty());
         assert!(pool.best.is_empty());
@@ -409,7 +409,7 @@ mod tests {
         }
         assert_eq!(pool.by_hash.len(), 3);
 
-        pool.remove_entity(EntityType::Paymaster, paymaster);
+        pool.remove_entity(Entity::paymaster(paymaster));
         assert!(pool.by_hash.is_empty());
         assert!(pool.by_id.is_empty());
         assert!(pool.best.is_empty());

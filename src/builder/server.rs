@@ -31,7 +31,7 @@ use crate::{
                 self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
             },
         },
-        types::{EntityType, EntryPointLike, ProviderLike, UserOperation},
+        types::{Entity, EntryPointLike, ProviderLike, UserOperation},
     },
 };
 
@@ -206,21 +206,12 @@ where
         Ok(())
     }
 
-    async fn remove_entities_from_pool(
-        &self,
-        entities: &[(EntityType, Address)],
-    ) -> anyhow::Result<()> {
+    async fn remove_entities_from_pool(&self, entities: &[Entity]) -> anyhow::Result<()> {
         self.op_pool
             .clone()
             .remove_entities(RemoveEntitiesRequest {
                 entry_point: self.entry_point.address().as_bytes().to_vec(),
-                entities: entities
-                    .iter()
-                    .map(|(e, a)| op_pool::Entity {
-                        entity: op_pool::EntityType::from(*e).into(),
-                        address: a.as_bytes().to_vec(),
-                    })
-                    .collect(),
+                entities: entities.iter().map(op_pool::Entity::from).collect(),
             })
             .await
             .context("builder should remove rejected entities from pool")?;
