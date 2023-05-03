@@ -276,6 +276,7 @@ impl<C> EthApiServer for EthApi<C>
 where
     C: JsonRpcClient + 'static,
 {
+    #[tracing::instrument(skip(self, op))]
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
@@ -360,6 +361,7 @@ where
         Ok(H256::from_slice(&add_op_result.into_inner().hash))
     }
 
+    #[tracing::instrument(skip(self, op))]
     async fn estimate_user_operation_gas(
         &self,
         op: UserOperationOptionalGas,
@@ -389,6 +391,7 @@ where
         }
     }
 
+    #[tracing::instrument(skip(self))]
     async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>> {
         if hash == H256::zero() {
             return Err(EthRpcError::InvalidParams(
@@ -456,6 +459,7 @@ where
         }))
     }
 
+    #[tracing::instrument(skip(self))]
     async fn get_user_operation_receipt(
         &self,
         hash: H256,
@@ -529,6 +533,7 @@ where
         }))
     }
 
+    #[tracing::instrument(skip(self))]
     async fn supported_entry_points(&self) -> RpcResult<Vec<String>> {
         Ok(self
             .contexts_by_entry_point
@@ -537,6 +542,7 @@ where
             .collect())
     }
 
+    #[tracing::instrument(skip(self))]
     async fn chain_id(&self) -> RpcResult<U64> {
         Ok(self.chain_id.into())
     }

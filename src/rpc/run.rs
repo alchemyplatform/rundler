@@ -2,13 +2,15 @@ use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
-    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClientBuilder},
+    providers::{HttpRateLimitRetryPolicy, Provider, RetryClientBuilder},
     types::Address,
 };
 use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
+use reqwest_middleware::ClientBuilder;
+use reqwest_tracing::TracingMiddleware;
 use tokio::{
     select,
     sync::{broadcast, mpsc},
@@ -16,6 +18,7 @@ use tokio::{
 };
 use tonic::transport::{Channel, Uri};
 use tonic_health::pb::health_client::HealthClient;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::info;
 use url::Url;
 
@@ -32,6 +35,7 @@ use crate::{
         eth::{estimation, EthApi, EthApiServer},
         health::{SystemApi, SystemApiServer},
         metrics::RpcMetricsLogger,
+        provider::MiddlewareProvider,
     },
 };
 
@@ -61,7 +65,11 @@ pub async fn run(
     let mut module = RpcModule::new(());
 
     let parsed_url = Url::parse(&args.rpc_url).context("Invalid RPC URL")?;
-    let http = Http::new(parsed_url);
+    let reqwest_client = reqwest::Client::builder().build()?;
+    let client = ClientBuilder::new(reqwest_client)
+        .with(TracingMiddleware::default())
+        .build();
+    let http = MiddlewareProvider::new_with_client(parsed_url, client);
 
     // right now this retry policy will retry only on 429ish errors OR connectivity errors
     let client = RetryClientBuilder::default()
@@ -120,12 +128,12 @@ pub async fn run(
         }
     }
 
-    // Set up health check endpoint via GET /health
-    // registers the jsonrpc handler
-    // NOTE: I couldn't use module.register_async_method because it requires async move
-    // and neither the clients or the args.*_url are copyable
+    // Set up health check endpoint via GET /health and add a tracing layer
     module.merge(SystemApi::new(op_pool_health_client, builder_health_client).into_rpc())?;
     let service_builder = tower::ServiceBuilder::new()
+        .layer(
+            TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::new().include_headers(true)),
+        )
         // Proxy `GET /health` requests to internal `system_health` method.
         .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
         .timeout(Duration::from_secs(2));

@@ -1,14 +1,12 @@
-use std::io;
-
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod builder;
 mod node;
 mod pool;
 mod prometheus_exporter;
 mod rpc;
+mod tracing;
 
 use builder::BuilderCliArgs;
 use node::NodeCliArgs;
@@ -27,25 +25,18 @@ use crate::{
 pub async fn run() -> anyhow::Result<()> {
     let opt = Cli::parse();
 
-    let (appender, _guard) = if let Some(log_file) = &opt.logs.file {
-        tracing_appender::non_blocking(tracing_appender::rolling::never(".", log_file))
-    } else {
-        tracing_appender::non_blocking(io::stdout())
-    };
-
-    let subscriber_builder = FmtSubscriber::builder()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_writer(appender);
-    if opt.logs.json {
-        tracing::subscriber::set_global_default(subscriber_builder.json().finish())?;
-    } else {
-        tracing::subscriber::set_global_default(subscriber_builder.pretty().finish())?;
+    let mut layers = vec![];
+    let (fmt_layer, _guard) = tracing::fmt_layer(&opt.logs.file, opt.logs.json);
+    layers.push(fmt_layer);
+    if opt.metrics.enable_otel_export {
+        layers.push(tracing::otel_layer()?);
     }
+    tracing::init(layers);
 
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
-    prometheus_exporter::initialize(metrics_addr, &opt.metrics.tags)
+    prometheus_exporter::init(metrics_addr, &opt.metrics.tags)
         .context("metrics server should start")?;
 
     match opt.command {
@@ -264,6 +255,17 @@ struct MetricsArgs {
         global = true
     )]
     tags: Vec<String>,
+
+    /// Flag to enable OpenTelemetry trace export
+    #[arg(
+        long = "metrics.enable_otel_export",
+        name = "metrics.enable_otel_export",
+        env = "METRICS_ENABLE_OTEL_EXPORT",
+        required = false,
+        num_args = 0,
+        global = true
+    )]
+    enable_otel_export: bool,
 }
 
 /// CLI options for logging

@@ -2,6 +2,7 @@ mod debug;
 mod eth;
 mod health;
 mod metrics;
+mod provider;
 mod run;
 
 use anyhow::bail;

@@ -5,7 +5,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_process::Collector;
 use metrics_util::layers::{PrefixLayer, Stack};
 
-pub fn initialize<'a>(
+pub fn init<'a>(
     listen_addr: SocketAddr,
     tags: impl IntoIterator<Item = &'a String>,
 ) -> anyhow::Result<()> {
