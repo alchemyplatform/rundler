@@ -15,7 +15,7 @@ use crate::common::{
 };
 
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
-const MIN_CALL_GAS_LIMIT: U256 = U256([9000, 0, 0, 0]);
+pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
 
 #[async_trait]
 pub trait Prechecker {

@@ -16,7 +16,10 @@ use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
 
 use crate::{
-    common::{precheck, simulation},
+    common::{
+        precheck::{self, MIN_CALL_GAS_LIMIT},
+        simulation,
+    },
     rpc::estimation,
 };
 
@@ -195,11 +198,14 @@ impl TryFrom<&CommonArgs> for estimation::Settings {
                 SIMULATION_GAS_OVERHEAD
             );
         }
-
-        // The max call gas used during simulation is the total gas cap, minus the verification gas, minus
-        // some overhead. This is then scaled by 31/32 to account for the EVM 1/64th rule which sets asside
-        // gas during each call.
         let max_call_gas = value.max_simulate_handle_ops_gas - value.max_verification_gas;
+        if max_call_gas < MIN_CALL_GAS_LIMIT.as_u64() {
+            anyhow::bail!(
+                "max_simulate_handle_ops_gas ({}) must be greater than max_verification_gas ({}) by at least {MIN_CALL_GAS_LIMIT}",
+                value.max_verification_gas,
+                value.max_simulate_handle_ops_gas,
+            );
+        }
         Ok(Self {
             max_verification_gas: value.max_verification_gas,
             max_call_gas,
