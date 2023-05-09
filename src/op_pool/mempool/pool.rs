@@ -5,7 +5,10 @@ use std::{
 };
 
 use anyhow::Context;
-use ethers::{abi::Address, types::H256};
+use ethers::{
+    abi::Address,
+    types::{H256, U256},
+};
 
 use super::{
     error::{MempoolError, MempoolResult},
@@ -49,7 +52,6 @@ impl PoolInner {
     pub fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
         // Check for replacement by ID
         if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
-            let mult = 1.0 + self.config.min_replacement_fee_increase_percentage as f64 / 100.0;
             if op.uo.max_fee_per_gas > u128::MAX.into()
                 || op.uo.max_priority_fee_per_gas > u128::MAX.into()
             {
@@ -62,11 +64,12 @@ impl PoolInner {
                 ))?;
             }
 
+            let (replacement_priority_fee, replacement_fee) =
+                self.get_min_replacement_fees(pool_op.uo());
+
             // replace only if higher gas
-            if pool_op.uo().max_priority_fee_per_gas.as_u128() as f64 * mult
-                <= op.uo.max_priority_fee_per_gas.as_u128() as f64
-                && pool_op.uo().max_fee_per_gas.as_u128() as f64 * mult
-                    <= op.uo.max_fee_per_gas.as_u128() as f64
+            if op.uo.max_priority_fee_per_gas >= replacement_priority_fee
+                && op.uo.max_fee_per_gas >= replacement_fee
             {
                 self.best.remove(pool_op);
                 self.by_hash.remove(
@@ -213,6 +216,22 @@ impl PoolInner {
         let id = self.submission_id;
         self.submission_id += 1;
         id
+    }
+
+    fn get_min_replacement_fees(&self, op: &UserOperation) -> (U256, U256) {
+        let replacement_priority_fee = Self::fee_multiply_percent(
+            op.max_priority_fee_per_gas,
+            self.config.min_replacement_fee_increase_percentage,
+        );
+        let replacement_fee = Self::fee_multiply_percent(
+            op.max_fee_per_gas,
+            self.config.min_replacement_fee_increase_percentage,
+        );
+        (replacement_priority_fee, replacement_fee)
+    }
+
+    fn fee_multiply_percent(fee: U256, percent: usize) -> U256 {
+        fee * (100 + percent) / 100
     }
 }
 
