@@ -12,19 +12,16 @@ use indexmap::IndexSet;
 use mockall::automock;
 use tonic::async_trait;
 
-use super::types::Entity;
 use crate::common::{
     contracts::{
         i_aggregator::IAggregator,
         i_entry_point::{FailedOp, IEntryPoint},
     },
     eth, tracer,
-    tracer::{
-        AssociatedSlotsByAddress, ExpectedSlot, ExpectedStorage, StorageAccess, TracerOutput,
-    },
+    tracer::{AssociatedSlotsByAddress, StorageAccess, TracerOutput},
     types::{
-        EntityType, ExpectedStorageSlot, ProviderLike, StakeInfo, UserOperation, ValidTimeRange,
-        ValidationOutput, ValidationReturnInfo, ViolationError,
+        Entity, EntityType, ExpectedStorage, ProviderLike, StakeInfo, UserOperation,
+        ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationError,
     },
 };
 
@@ -40,7 +37,7 @@ pub struct SimulationSuccess {
     pub entities_needing_stake: Vec<EntityType>,
     pub account_is_staked: bool,
     pub accessed_addresses: HashSet<Address>,
-    pub expected_storage_slots: Vec<ExpectedStorageSlot>,
+    pub expected_storage: ExpectedStorage,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -430,16 +427,6 @@ where
             accessed_addresses,
             ..
         } = context;
-        let mut expected_storage_slots = vec![];
-        for ExpectedStorage { address, slots } in &tracer_out.expected_storage {
-            for &ExpectedSlot { slot, value } in slots {
-                expected_storage_slots.push(ExpectedStorageSlot {
-                    address: *address,
-                    slot,
-                    value,
-                });
-            }
-        }
         let ValidationOutput {
             return_info,
             sender_info,
@@ -464,7 +451,7 @@ where
             entities_needing_stake,
             account_is_staked,
             accessed_addresses,
-            expected_storage_slots,
+            expected_storage: tracer_out.expected_storage,
         })
     }
 }

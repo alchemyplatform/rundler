@@ -9,7 +9,11 @@ use ethers::{
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use super::{context::LogWithContext, contracts::i_entry_point::IEntryPoint, types::UserOperation};
+use crate::common::{
+    context::LogWithContext,
+    contracts::i_entry_point::IEntryPoint,
+    types::{ExpectedStorage, UserOperation},
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +23,7 @@ pub struct TracerOutput {
     pub accessed_contract_addresses: Vec<Address>,
     pub associated_slots_by_address: AssociatedSlotsByAddress,
     pub factory_called_create2_twice: bool,
-    pub expected_storage: Vec<ExpectedStorage>,
+    pub expected_storage: ExpectedStorage,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -41,20 +45,6 @@ pub struct Phase {
 pub struct StorageAccess {
     pub address: Address,
     pub slots: Vec<U256>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExpectedStorage {
-    pub address: Address,
-    pub slots: Vec<ExpectedSlot>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExpectedSlot {
-    pub slot: U256,
-    pub value: U256,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

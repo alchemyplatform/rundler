@@ -23,7 +23,8 @@ use crate::common::{
     },
     simulation::{SimulationError, SimulationSuccess, Simulator},
     types::{
-        Entity, EntityType, EntryPointLike, HandleOpsOut, ProviderLike, Timestamp, UserOperation,
+        Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike, Timestamp,
+        UserOperation,
     },
 };
 
@@ -37,7 +38,7 @@ pub struct Bundle {
     pub ops_per_aggregator: Vec<UserOpsPerAggregator>,
     pub gas_estimate: U256,
     pub max_priority_fee_per_gas: U256,
-    pub expected_storage_slots: HashMap<Address, HashMap<U256, U256>>,
+    pub expected_storage: ExpectedStorage,
     pub rejected_ops: Vec<UserOperation>,
     pub rejected_entities: Vec<Entity>,
 }
@@ -132,12 +133,16 @@ where
             .await;
         while !context.is_empty() {
             let gas_estimate = self.estimate_gas_rejecting_failed_ops(&mut context).await?;
+            let mut expected_storage = ExpectedStorage::default();
+            for op in context.iter_ops_with_simulations() {
+                expected_storage.merge(&op.simulation.expected_storage)?;
+            }
             if let Some(gas_estimate) = gas_estimate {
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
                     max_priority_fee_per_gas,
-                    expected_storage_slots: HashMap::default(), // TODO: actually compute this
+                    expected_storage,
                     rejected_ops: context.rejected_ops,
                     rejected_entities: context.rejected_entities,
                 });
@@ -309,12 +314,7 @@ where
     ) -> anyhow::Result<Option<U256>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
-        let gas = context
-            .get_total_gas()
-            .context("should have at least one op in bundle")?
-            * (100 + BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT)
-            / 100;
-
+        let gas = context.get_total_gas() * (100 + BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT) / 100;
         let handle_ops_out = self
             .entry_point
             .call_handle_ops(
@@ -621,16 +621,20 @@ impl ProposalContext {
             .collect()
     }
 
-    fn get_total_gas(&self) -> Option<U256> {
-        self.all_ops_iter()
+    fn get_total_gas(&self) -> U256 {
+        self.iter_ops()
             .map(|op| op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit)
-            .reduce(|acc, c| acc + c)
+            .fold(U256::zero(), |acc, c| acc + c)
     }
 
-    fn all_ops_iter(&self) -> impl Iterator<Item = &UserOperation> + '_ {
+    fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
         self.groups_by_aggregator
             .values()
-            .flat_map(|group| group.ops_with_simulations.iter().map(|op| &op.op))
+            .flat_map(|group| &group.ops_with_simulations)
+    }
+
+    fn iter_ops(&self) -> impl Iterator<Item = &UserOperation> + '_ {
+        self.iter_ops_with_simulations().map(|op| &op.op)
     }
 }
 

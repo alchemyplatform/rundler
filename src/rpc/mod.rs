@@ -123,17 +123,17 @@ impl From<RpcUserOperation> for UserOperation {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct UserOperationOptionalGas {
-    sender: Address,
-    nonce: U256,
-    init_code: Bytes,
-    call_data: Bytes,
-    call_gas_limit: Option<U256>,
-    verification_gas_limit: Option<U256>,
-    pre_verification_gas: Option<U256>,
-    max_fee_per_gas: Option<U256>,
-    max_priority_fee_per_gas: Option<U256>,
-    paymaster_and_data: Bytes,
-    signature: Bytes,
+    pub sender: Address,
+    pub nonce: U256,
+    pub init_code: Bytes,
+    pub call_data: Bytes,
+    pub call_gas_limit: Option<U256>,
+    pub verification_gas_limit: Option<U256>,
+    pub pre_verification_gas: Option<U256>,
+    pub max_fee_per_gas: Option<U256>,
+    pub max_priority_fee_per_gas: Option<U256>,
+    pub paymaster_and_data: Bytes,
+    pub signature: Bytes,
 }
 
 impl UserOperationOptionalGas {
@@ -187,10 +187,51 @@ impl UserOperationOptionalGas {
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
         }
     }
+
+    pub fn into_user_operation_with_estimates(self, estimates: GasEstimate) -> UserOperation {
+        UserOperation {
+            sender: self.sender,
+            nonce: self.nonce,
+            init_code: self.init_code,
+            call_data: self.call_data,
+            paymaster_and_data: self.paymaster_and_data,
+            signature: self.signature,
+            verification_gas_limit: estimates.verification_gas_limit,
+            call_gas_limit: estimates.call_gas_limit,
+            pre_verification_gas: estimates.pre_verification_gas,
+            max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
+        }
+    }
+
+    pub fn from_user_operation_keeping_gas(op: UserOperation) -> Self {
+        Self::from_user_operation(op, true)
+    }
+
+    pub fn from_user_operation_without_gas(op: UserOperation) -> Self {
+        Self::from_user_operation(op, false)
+    }
+
+    fn from_user_operation(op: UserOperation, keep_gas: bool) -> Self {
+        let if_keep_gas = |x: U256| Some(x).filter(|_| keep_gas);
+        Self {
+            sender: op.sender,
+            nonce: op.nonce,
+            init_code: op.init_code,
+            call_data: op.call_data,
+            call_gas_limit: if_keep_gas(op.call_gas_limit),
+            verification_gas_limit: if_keep_gas(op.verification_gas_limit),
+            pre_verification_gas: if_keep_gas(op.pre_verification_gas),
+            max_fee_per_gas: if_keep_gas(op.max_fee_per_gas),
+            max_priority_fee_per_gas: if_keep_gas(op.max_priority_fee_per_gas),
+            paymaster_and_data: op.paymaster_and_data,
+            signature: op.signature,
+        }
+    }
 }
 
 /// Gas estimate for a user operation
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Copy, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GasEstimate {
     pub pre_verification_gas: U256,
