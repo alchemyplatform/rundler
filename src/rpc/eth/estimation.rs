@@ -21,6 +21,7 @@ use crate::{
             CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
         },
         eth,
+        precheck::MIN_CALL_GAS_LIMIT,
         types::{EntryPointLike, ProviderLike, UserOperation},
     },
     rpc::{GasEstimate, UserOperationOptionalGas},
@@ -109,7 +110,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
                 * (100 + VERIFICATION_GAS_BUFFER_PERCENT)
                 / 100)
                 .min(settings.max_verification_gas.into()),
-            call_gas_limit: call_gas_limit.min(settings.max_call_gas.into()),
+            call_gas_limit: call_gas_limit.clamp(MIN_CALL_GAS_LIMIT, settings.max_call_gas.into()),
         })
     }
 }
