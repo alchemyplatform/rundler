@@ -1,15 +1,10 @@
-use anyhow::{bail, Context};
+use anyhow::Context;
 use clap::Args;
-use tokio::{
-    signal,
-    sync::{broadcast, mpsc},
-};
-use tracing::{error, info};
 
 use super::CommonArgs;
 use crate::{
-    common::{precheck, simulation},
-    rpc::{self, estimation},
+    common::{handle::spawn_tasks_with_shutdown, precheck, simulation},
+    rpc::{self, estimation, RpcTask},
 };
 
 /// CLI options for the RPC server
@@ -120,40 +115,15 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
         builder_url,
     } = rpc_args;
 
-    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-    let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
+    let task_args = rpc_args.to_args(
+        &common_args,
+        pool_url,
+        builder_url,
+        (&common_args).into(),
+        (&common_args).into(),
+        (&common_args).try_into()?,
+    )?;
 
-    let handle = tokio::spawn(rpc::run(
-        rpc_args.to_args(
-            &common_args,
-            pool_url,
-            builder_url,
-            (&common_args).into(),
-            (&common_args).into(),
-            (&common_args).try_into()?,
-        )?,
-        shutdown_rx,
-        shutdown_scope,
-    ));
-
-    tokio::select! {
-        res = handle => {
-            error!("Rpc server exited unexpectedly: {res:?}");
-        }
-        res = signal::ctrl_c() => {
-            match res {
-                Ok(_) => {
-                    info!("Received SIGINT, shutting down");
-                    shutdown_tx.send(())?;
-                    shutdown_wait.recv().await;
-                }
-                Err(err) => {
-                    bail!("Error while waiting for SIGINT: {err:?}");
-                }
-            }
-        }
-    }
-
-    shutdown_wait.recv().await;
+    spawn_tasks_with_shutdown([RpcTask::new(task_args).boxed()], tokio::signal::ctrl_c()).await;
     Ok(())
 }

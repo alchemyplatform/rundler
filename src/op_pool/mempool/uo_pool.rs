@@ -6,6 +6,7 @@ use std::{
 use ethers::types::{Address, H256};
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use super::{
     error::{MempoolError, MempoolResult},
@@ -60,11 +61,11 @@ where
     pub async fn run(
         self: Arc<Self>,
         mut new_block_events: broadcast::Receiver<Arc<NewBlockEvent>>,
-        mut shutdown: broadcast::Receiver<()>,
+        shutdown_token: CancellationToken,
     ) {
         loop {
             tokio::select! {
-                _ = shutdown.recv() => {
+                _ = shutdown_token.cancelled() => {
                     tracing::info!("Shutting down UoPool");
                     break;
                 }

@@ -1,19 +1,17 @@
 use std::{collections::HashSet, fs::File, io::BufReader, pin::Pin, time::Duration};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use clap::Args;
 use ethers::types::Address;
 use rusoto_core::Region;
 use rusoto_s3::{GetObjectRequest, S3Client, S3};
-use tokio::{
-    io::AsyncReadExt,
-    signal,
-    sync::{broadcast, mpsc},
-};
-use tracing::{error, info};
+use tokio::io::AsyncReadExt;
 
 use super::CommonArgs;
-use crate::op_pool::{self, PoolConfig};
+use crate::{
+    common::handle::spawn_tasks_with_shutdown,
+    op_pool::{self, PoolConfig, PoolTask},
+};
 
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]
@@ -173,33 +171,8 @@ pub struct PoolCliArgs {
 
 pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
+    let task_args = pool_args.to_args(&common_args).await?;
 
-    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-    let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
-
-    let handle = tokio::spawn(op_pool::run(
-        pool_args.to_args(&common_args).await?,
-        shutdown_rx,
-        shutdown_scope,
-    ));
-
-    tokio::select! {
-        res = handle => {
-            error!("Pool server exited unexpectedly: {res:?}");
-        }
-        res = signal::ctrl_c() => {
-            match res {
-                Ok(_) => {
-                    info!("Received SIGINT, shutting down");
-                    shutdown_tx.send(())?;
-                    shutdown_wait.recv().await;
-                }
-                Err(err) => {
-                    bail!("Error while waiting for SIGINT: {err:?}");
-                }
-            }
-        }
-    }
-
+    spawn_tasks_with_shutdown([PoolTask::new(task_args).boxed()], tokio::signal::ctrl_c()).await;
     Ok(())
 }
