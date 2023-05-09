@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Context;
 use clap::Args;
 
@@ -39,6 +41,15 @@ pub struct RpcArgs {
         value_parser = ["eth", "debug"]
     )]
     api: Vec<String>,
+
+    /// Timeout for RPC requests
+    #[arg(
+        long = "rpc.timeout_seconds",
+        name = "rpc.timeout_seconds",
+        env = "RPC_TIMEOUT_SECONDS",
+        default_value = "20"
+    )]
+    timeout_seconds: String,
 }
 
 impl RpcArgs {
@@ -79,6 +90,7 @@ impl RpcArgs {
             precheck_settings,
             sim_settings,
             estimation_settings,
+            rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
         })
     }
 }
