@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ethers::types::{Address, Block, Filter, Log, H256, U64};
 use tokio::{sync::broadcast, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 
 use crate::common::contracts::i_entry_point::IEntryPointEvents;
@@ -51,7 +52,7 @@ pub trait EventProvider: Send + Sync {
     /// Spawn the event provider
     fn spawn(
         self: Box<Self>,
-        shutdown_rx: broadcast::Receiver<()>,
+        shutdown_token: CancellationToken,
     ) -> JoinHandle<Result<(), anyhow::Error>>;
 }
 

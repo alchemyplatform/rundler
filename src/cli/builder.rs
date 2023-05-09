@@ -1,15 +1,13 @@
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use clap::Args;
-use tokio::{
-    signal,
-    sync::{broadcast, mpsc},
-};
-use tracing::{error, info};
 
 use super::CommonArgs;
-use crate::{builder, common::server::format_server_addr};
+use crate::{
+    builder::{self, BuilderTask},
+    common::{handle::spawn_tasks_with_shutdown, server::format_server_addr},
+};
 
 /// CLI options for the builder
 #[derive(Args, Debug)]
@@ -189,34 +187,12 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
         builder: builder_args,
         pool_url,
     } = builder_args;
+    let task_args = builder_args.to_args(&common_args, pool_url)?;
 
-    let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
-    let (shutdown_scope, mut shutdown_wait) = mpsc::channel(1);
-
-    let handle = tokio::spawn(builder::run(
-        builder_args.to_args(&common_args, pool_url)?,
-        shutdown_rx,
-        shutdown_scope,
-    ));
-
-    tokio::select! {
-        res = handle => {
-            error!("Builder server exited unexpectedly: {res:?}");
-        }
-        res = signal::ctrl_c() => {
-            match res {
-                Ok(_) => {
-                    info!("Received SIGINT, shutting down");
-                    shutdown_tx.send(())?;
-                    shutdown_wait.recv().await;
-                }
-                Err(err) => {
-                    bail!("Error while waiting for SIGINT: {err:?}");
-                }
-            }
-        }
-    }
-
-    shutdown_wait.recv().await;
+    spawn_tasks_with_shutdown(
+        [BuilderTask::new(task_args).boxed()],
+        tokio::signal::ctrl_c(),
+    )
+    .await;
     Ok(())
 }

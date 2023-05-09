@@ -18,6 +18,7 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use super::{
@@ -50,9 +51,9 @@ impl<F: BlockProviderFactory> EventProvider for EventListener<F> {
 
     fn spawn(
         self: Box<Self>,
-        shutdown_rx: broadcast::Receiver<()>,
+        shutdown_token: CancellationToken,
     ) -> JoinHandle<Result<(), anyhow::Error>> {
-        tokio::spawn(async move { self.listen_with_shutdown(shutdown_rx).await })
+        tokio::spawn(async move { self.listen_with_shutdown(shutdown_token).await })
     }
 }
 
@@ -86,9 +87,9 @@ impl<F: BlockProviderFactory> EventListener<F> {
     /// until the shutdown signal is received
     pub async fn listen_with_shutdown(
         mut self,
-        mut shutdown_rx: broadcast::Receiver<()>,
+        shutdown_token: CancellationToken,
     ) -> anyhow::Result<()> {
-        let mut block_stream = self.reconnect(&mut shutdown_rx).await?;
+        let mut block_stream = self.reconnect(shutdown_token.clone()).await?;
         loop {
             select! {
                 block_with_logs = block_stream.next() => {
@@ -102,16 +103,16 @@ impl<F: BlockProviderFactory> EventListener<F> {
                         Some(Err(err)) => {
                             error!("Error getting block: {:?}", err);
                             EventListenerMetrics::increment_provider_errors();
-                            block_stream = self.reconnect(&mut shutdown_rx).await?;
+                            block_stream = self.reconnect(shutdown_token.clone()).await?;
                         }
                         None => {
                             error!("Block stream ended unexpectedly");
                             EventListenerMetrics::increment_provider_errors();
-                            block_stream = self.reconnect(&mut shutdown_rx).await?;
+                            block_stream = self.reconnect(shutdown_token.clone()).await?;
                         }
                     }
                 }
-                _ = shutdown_rx.recv() => {
+                _ = shutdown_token.cancelled() => {
                     info!("Shutting down event listener");
                     break;
                 }
@@ -123,7 +124,7 @@ impl<F: BlockProviderFactory> EventListener<F> {
 
     async fn reconnect(
         &mut self,
-        shutdown_rx: &mut broadcast::Receiver<()>,
+        shutdown_token: CancellationToken,
     ) -> anyhow::Result<<F::Provider as BlockProvider>::BlockStream> {
         if let Some(mut provider) = self.provider.take() {
             provider.unsubscribe().await;
@@ -138,7 +139,10 @@ impl<F: BlockProviderFactory> EventListener<F> {
                     "Reconnecting too quickly, sleeping {:?} before reconnecting",
                     sleep_duration
                 );
-                if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
+                if self
+                    .sleep_or_shutdown(shutdown_token.clone(), sleep_duration)
+                    .await
+                {
                     return Err(anyhow::anyhow!("Shutdown signal received"));
                 }
             } else {
@@ -169,7 +173,10 @@ impl<F: BlockProviderFactory> EventListener<F> {
                     error!(
                         "Error connecting to event provider, sleeping {sleep_duration:?}: {err:?}"
                     );
-                    if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
+                    if self
+                        .sleep_or_shutdown(shutdown_token.clone(), sleep_duration)
+                        .await
+                    {
                         return Err(anyhow::anyhow!("Shutdown signal received"));
                     }
                 }
@@ -179,7 +186,10 @@ impl<F: BlockProviderFactory> EventListener<F> {
                     error!(
                         "Timeout connecting to event provider, sleeping {sleep_duration:?}: {err:?}"
                     );
-                    if self.sleep_or_shutdown(shutdown_rx, sleep_duration).await {
+                    if self
+                        .sleep_or_shutdown(shutdown_token.clone(), sleep_duration)
+                        .await
+                    {
                         return Err(anyhow::anyhow!("Shutdown signal received"));
                     }
                 }
@@ -266,7 +276,7 @@ impl<F: BlockProviderFactory> EventListener<F> {
 
     async fn sleep_or_shutdown(
         &mut self,
-        shutdown_rx: &mut broadcast::Receiver<()>,
+        shutdown_token: CancellationToken,
         duration: Duration,
     ) -> bool {
         select! {
@@ -274,7 +284,7 @@ impl<F: BlockProviderFactory> EventListener<F> {
                 self.backoff_idx += 1;
                 false
             },
-            _ = shutdown_rx.recv() => {
+            _ = shutdown_token.cancelled() => {
                 info!("Shutting down event listener");
                 true
             }
@@ -508,7 +518,7 @@ mod tests {
     struct TestState {
         ep: Address,
         tx: broadcast::Sender<Result<BlockWithLogs, BlockProviderError>>,
-        shutdown_tx: broadcast::Sender<()>,
+        shutdown_token: CancellationToken,
         handle: JoinHandle<Result<(), anyhow::Error>>,
         events: broadcast::Receiver<Arc<NewBlockEvent>>,
         connection_event_rx: mpsc::Receiver<()>,
@@ -527,7 +537,7 @@ mod tests {
 
     async fn setup() -> TestState {
         let (tx, rx) = broadcast::channel(100);
-        let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
+        let shutdown_token = CancellationToken::new();
         let (connection_event_tx, mut connection_event_rx) = mpsc::channel(100);
         let should_fail_connection = Arc::new(AtomicBool::new(false));
         let factory =
@@ -535,7 +545,9 @@ mod tests {
         let ep = Address::random();
         let listener = EventListener::new(factory, vec![&ep]);
         let events = listener.subscribe_by_entrypoint(ep).unwrap();
-        let handle = tokio::spawn(async move { listener.listen_with_shutdown(shutdown_rx).await });
+        let listener_shutdown = shutdown_token.clone();
+        let handle =
+            tokio::spawn(async move { listener.listen_with_shutdown(listener_shutdown).await });
 
         // wait for the listener to connect
         connection_event_rx.recv().await.unwrap();
@@ -543,7 +555,7 @@ mod tests {
         TestState {
             ep,
             tx,
-            shutdown_tx,
+            shutdown_token,
             handle,
             events,
             connection_event_rx,
@@ -553,7 +565,7 @@ mod tests {
 
     async fn teardown(state: TestState) {
         // send a shutdown signal
-        state.shutdown_tx.send(()).unwrap();
+        state.shutdown_token.cancel();
         // wait for the listener to shutdown
         join!(state.handle).0.unwrap().unwrap();
     }

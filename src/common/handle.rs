@@ -1,6 +1,12 @@
 use anyhow::Context;
-use futures::Future;
-use tokio::task::{AbortHandle, JoinHandle};
+use futures::{future::try_join_all, Future};
+use tokio::{
+    sync::mpsc,
+    task::{AbortHandle, JoinHandle},
+};
+use tokio_util::sync::CancellationToken;
+use tonic::async_trait;
+use tracing::{error, info};
 
 /// Flatten a JoinHandle result.
 ///
@@ -34,4 +40,49 @@ impl Drop for SpawnGuard {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+#[async_trait]
+pub trait Task: Sync + Send + 'static {
+    async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()>;
+}
+
+pub async fn spawn_tasks_with_shutdown<T, R, E>(
+    tasks: impl IntoIterator<Item = Box<dyn Task>>,
+    signal: T,
+) where
+    T: Future<Output = Result<R, E>> + Send + 'static,
+    E: std::fmt::Debug,
+{
+    let (shutdown_scope, mut shutdown_wait) = mpsc::channel::<()>(1);
+    let shutdown_token = CancellationToken::new();
+    let mut shutdown_scope = Some(shutdown_scope);
+
+    let handles = tasks.into_iter().map(|task| {
+        let token = shutdown_token.clone();
+        let scope = shutdown_scope.clone();
+        tokio::spawn(async move {
+            let _ss = scope;
+            task.run(token).await
+        })
+    });
+    tokio::select! {
+        res = try_join_all(handles) => {
+            error!("Task exited unexpectedly: {res:?}");
+        }
+        res = signal => {
+            match res {
+                Ok(_) => {
+                    info!("Received signal, shutting down");
+                }
+                Err(err) => {
+                    error!("Error while waiting for signal: {err:?}");
+                }
+            }
+        }
+    }
+
+    shutdown_token.cancel();
+    shutdown_scope.take();
+    shutdown_wait.recv().await;
 }
