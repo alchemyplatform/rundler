@@ -49,6 +49,7 @@ pub struct Args {
     pub precheck_settings: precheck::Settings,
     pub sim_settings: simulation::Settings,
     pub estimation_settings: estimation::Settings,
+    pub rpc_timeout: Duration,
 }
 
 #[derive(Debug)]
@@ -137,7 +138,7 @@ impl Task for RpcTask {
         let service_builder = tower::ServiceBuilder::new()
             // Proxy `GET /health` requests to internal `system_health` method.
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
-            .timeout(Duration::from_secs(2));
+            .timeout(self.args.rpc_timeout);
 
         let server = ServerBuilder::default()
             .set_logger(RpcMetricsLogger)
