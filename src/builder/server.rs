@@ -31,15 +31,17 @@ use crate::{
                 self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
             },
         },
-        types::{Entity, EntryPointLike, ProviderLike, UserOperation},
+        transaction_sender::TransactionSender,
+        types::{Entity, EntryPointLike, UserOperation},
     },
 };
 
 #[derive(Debug)]
-pub struct BuilderImpl<P, E>
+pub struct BuilderImpl<P, E, T>
 where
     P: BundleProposer,
     E: EntryPointLike,
+    T: TransactionSender,
 {
     is_manual_bundling_mode: AtomicBool,
     chain_id: u64,
@@ -48,15 +50,18 @@ where
     op_pool: OpPoolClient<Channel>,
     proposer: P,
     entry_point: E,
+    transaction_sender: T,
     // TODO: Figure out what we really want to do for detecting new blocks.
     provider: Arc<Provider<RetryClient<Http>>>,
 }
 
-impl<P, E> BuilderImpl<P, E>
+impl<P, E, T> BuilderImpl<P, E, T>
 where
     P: BundleProposer,
     E: EntryPointLike,
+    T: TransactionSender,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: u64,
         beneficiary: Address,
@@ -64,6 +69,7 @@ where
         op_pool: OpPoolClient<Channel>,
         proposer: P,
         entry_point: E,
+        transaction_sender: T,
         provider: Arc<Provider<RetryClient<Http>>>,
     ) -> Self {
         Self {
@@ -74,6 +80,7 @@ where
             op_pool,
             proposer,
             entry_point,
+            transaction_sender,
             provider,
         }
     }
@@ -129,7 +136,7 @@ where
             return Ok(None);
         };
         let receipt = self
-            .provider
+            .transaction_sender
             .wait_until_mined(tx_hash)
             .await
             .context("builder should wait for bundle to mine")?
@@ -180,16 +187,17 @@ where
         );
         // Give the estimated gas a 10% overhead to account for inaccuracies.
         let gas = bundle.gas_estimate * 11 / 10;
-        let (_, _, send_bundle_result) = join!(
-            remove_ops_future,
-            remove_entities_future,
-            self.entry_point.send_bundle(
-                bundle.ops_per_aggregator,
-                self.beneficiary,
-                gas,
-                bundle.max_priority_fee_per_gas
-            )
+        let tx = self.entry_point.get_send_bundle_transaction(
+            bundle.ops_per_aggregator,
+            self.beneficiary,
+            gas,
+            bundle.max_priority_fee_per_gas,
         );
+        let send_future = self
+            .transaction_sender
+            .send_transaction(tx, &bundle.expected_storage);
+        let (_, _, send_bundle_result) =
+            join!(remove_ops_future, remove_entities_future, send_future);
         let tx_hash = send_bundle_result.context("builder should send bundle transaction")?;
         info!("Sent bundle in transaction with hash: {}", tx_hash);
         Ok(Some(tx_hash))
@@ -228,10 +236,11 @@ where
 }
 
 #[async_trait]
-impl<P, E> Builder for Arc<BuilderImpl<P, E>>
+impl<P, E, T> Builder for Arc<BuilderImpl<P, E, T>>
 where
     P: BundleProposer,
     E: EntryPointLike,
+    T: TransactionSender,
 {
     async fn debug_send_bundle_now(
         &self,

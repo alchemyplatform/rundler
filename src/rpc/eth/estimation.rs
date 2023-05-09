@@ -244,19 +244,19 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                     is_continuation,
                 },),
             );
-            let target_revert_data =  self
-            .entry_point
-            .call_spoofed_simulate_op(
-                callless_op.clone(),
-                self.entry_point.address(),
-                target_call_data,
-                block_hash,
-                self.settings.max_simulate_handle_ops_gas.into(),
-                &spoofed_state,
-            )
-            .await?
-            .map_err(|_| anyhow!("estimateHandleOps call while estimating call gas should only revert with ExecutionResult"))?
-            .target_result;
+            let target_revert_data = self
+                .entry_point
+                .call_spoofed_simulate_op(
+                    callless_op.clone(),
+                    self.entry_point.address(),
+                    target_call_data,
+                    block_hash,
+                    self.settings.max_simulate_handle_ops_gas.into(),
+                    &spoofed_state,
+                )
+                .await?
+                .map_err(GasEstimationError::RevertInCallWithMessage)?
+                .target_result;
             if let Ok(result) = EstimateCallGasResult::decode(&target_revert_data) {
                 return Ok(result.gas_estimate);
             } else if let Ok(revert) = EstimateCallGasRevertAtMax::decode(&target_revert_data) {

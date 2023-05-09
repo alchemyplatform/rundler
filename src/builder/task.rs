@@ -2,8 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
-    prelude::SignerMiddleware,
-    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClientBuilder},
+    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClient, RetryClientBuilder},
     types::Address,
 };
 use ethers_signers::Signer;
@@ -32,6 +31,7 @@ use crate::{
         },
         server::{self, format_socket_addr},
         simulation::{self, SimulatorImpl},
+        transaction_sender::TransactionSenderImpl,
     },
 };
 
@@ -49,8 +49,10 @@ pub struct Args {
     pub redis_lock_ttl_millis: u64,
     pub chain_id: u64,
     pub max_bundle_size: u64,
+    pub submit_url: String,
     pub use_dynamic_max_priority_fee: bool,
     pub max_priority_fee_overhead_percent: u64,
+    pub use_conditional_send_transaction: bool,
     pub eth_poll_interval: Duration,
     pub sim_settings: simulation::Settings,
 }
@@ -66,19 +68,7 @@ impl Task for BuilderTask {
         let addr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         info!("Starting builder server on {}", addr);
 
-        let provider = {
-            let parsed_url = Url::parse(&self.args.rpc_url).context("Invalid RPC URL")?;
-            let http = Http::new(parsed_url);
-            let client = RetryClientBuilder::default()
-                // these retries are if the server returns a 429
-                .rate_limit_retries(10)
-                // these retries are if the connection is dubious
-                .timeout_retries(3)
-                .initial_backoff(Duration::from_millis(500))
-                .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-            Arc::new(Provider::new(client).interval(self.args.eth_poll_interval))
-        };
-
+        let provider = new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
         let signer = if let Some(pk) = &self.args.private_key {
             info!("Using local signer");
             BundlerSigner::Local(
@@ -123,14 +113,19 @@ impl Task for BuilderTask {
             self.args.entry_point_address,
             self.args.sim_settings,
         );
-        let signer_middleware = Arc::new(SignerMiddleware::new(Arc::clone(&provider), signer));
-        let entry_point = IEntryPoint::new(self.args.entry_point_address, signer_middleware);
+        let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
         let proposer = BundleProposerImpl::new(
             op_pool.clone(),
             simulator,
             entry_point.clone(),
             Arc::clone(&provider),
             proposer_settings,
+        );
+        let submit_provider = new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
+        let transaction_sender = TransactionSenderImpl::new(
+            submit_provider,
+            signer,
+            self.args.use_conditional_send_transaction,
         );
         let builder = Arc::new(BuilderImpl::new(
             self.args.chain_id,
@@ -139,6 +134,7 @@ impl Task for BuilderTask {
             op_pool,
             proposer,
             entry_point,
+            transaction_sender,
             provider,
         ));
 
@@ -204,4 +200,20 @@ impl BuilderTask {
             }
         }
     }
+}
+
+fn new_provider(
+    url: &str,
+    poll_interval: Duration,
+) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
+    let parsed_url = Url::parse(url).context("provider url should be a valid")?;
+    let http = Http::new(parsed_url);
+    let client = RetryClientBuilder::default()
+        // these retries are if the server returns a 429
+        .rate_limit_retries(10)
+        // these retries are if the connection is dubious
+        .timeout_retries(3)
+        .initial_backoff(Duration::from_millis(500))
+        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
+    Ok(Arc::new(Provider::new(client).interval(poll_interval)))
 }

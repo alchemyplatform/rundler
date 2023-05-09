@@ -85,6 +85,15 @@ pub struct BuilderArgs {
     )]
     pub eth_poll_interval_millis: u64,
 
+    /// If present, the url of the ETH provider that will be used to send
+    /// transactions. Defaults to the value of `node_http`.
+    #[arg(
+        long = "builder.submit_url",
+        name = "builder.submit_url",
+        env = "BUILDER_SUBMIT_URL"
+    )]
+    pub submit_url: Option<String>,
+
     /// If true, will use the provider's `eth_maxPriorityFeePerGas` method to
     /// set a priority fee when building bundles. Must not be set on networks
     /// which do not support this method.
@@ -110,6 +119,18 @@ pub struct BuilderArgs {
         default_value = "0"
     )]
     max_priority_fee_overhead_percent: u64,
+
+    /// If true, will use the provider's `eth_sendRawTransactionConditional`
+    /// method instead `eth_sendRawTransaction`, passing in expected storage
+    /// values determined through simulation. Must not be set on networks
+    /// which do not support this method.
+    #[arg(
+        long = "builder.use_conditional_send_transaction",
+        name = "builder.use_conditional_send_transaction",
+        env = "BUILDER_USE_CONDITIONAL_SEND_TRANSACTION",
+        default_value = "false"
+    )]
+    use_conditional_send_transaction: bool,
 }
 
 impl BuilderArgs {
@@ -119,13 +140,15 @@ impl BuilderArgs {
         let use_dynamic_max_priority_fee = self
             .use_dynamic_max_priority_fee
             .unwrap_or_else(|| !is_known_non_eip_1559_chain(common.chain_id));
+        let rpc_url = common
+            .node_http
+            .clone()
+            .context("should have a node HTTP URL")?;
+        let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
         Ok(builder::Args {
             port: self.port,
             host: self.host.clone(),
-            rpc_url: common
-                .node_http
-                .clone()
-                .context("should have a node HTTP URL")?,
+            rpc_url,
             pool_url,
             entry_point_address: common
                 .entry_points
@@ -143,8 +166,10 @@ impl BuilderArgs {
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             chain_id: common.chain_id,
             max_bundle_size: self.max_bundle_size,
+            submit_url,
             use_dynamic_max_priority_fee,
             max_priority_fee_overhead_percent: self.max_priority_fee_overhead_percent,
+            use_conditional_send_transaction: self.use_conditional_send_transaction,
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
         })

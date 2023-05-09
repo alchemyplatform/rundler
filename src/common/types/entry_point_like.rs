@@ -5,7 +5,10 @@ use ethers::{
     abi::AbiDecode,
     contract::{ContractError, FunctionCall},
     providers::{spoof, Middleware, RawCall},
-    types::{Address, Bytes, Eip1559TransactionRequest, H256, U256},
+    types::{
+        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, H256,
+        U256,
+    },
 };
 #[cfg(test)]
 use mockall::automock;
@@ -32,14 +35,6 @@ pub trait EntryPointLike: Send + Sync + 'static {
         gas: U256,
     ) -> anyhow::Result<HandleOpsOut>;
 
-    async fn send_bundle(
-        &self,
-        ops_per_aggregator: Vec<UserOpsPerAggregator>,
-        beneficiary: Address,
-        gas: U256,
-        max_priority_fee_per_gas: U256,
-    ) -> anyhow::Result<H256>;
-
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
 
     async fn call_spoofed_simulate_op(
@@ -51,6 +46,14 @@ pub trait EntryPointLike: Send + Sync + 'static {
         gas: U256,
         spoofed_state: &spoof::State,
     ) -> anyhow::Result<Result<ExecutionResult, String>>;
+
+    fn get_send_bundle_transaction(
+        &self,
+        ops_per_aggregator: Vec<UserOpsPerAggregator>,
+        beneficiary: Address,
+        gas: U256,
+        max_priority_fee_per_gas: U256,
+    ) -> TypedTransaction;
 }
 
 #[derive(Clone, Debug)]
@@ -75,8 +78,7 @@ where
         beneficiary: Address,
         gas: U256,
     ) -> anyhow::Result<HandleOpsOut> {
-        let result = get_handle_ops_call(self, ops_per_aggregator, beneficiary)
-            .gas(gas)
+        let result = get_handle_ops_call(self, ops_per_aggregator, beneficiary, gas)
             .call()
             .await;
         let error = match result {
@@ -95,28 +97,6 @@ where
             }
         }
         Err(error)?
-    }
-
-    async fn send_bundle(
-        &self,
-        ops_per_aggregator: Vec<UserOpsPerAggregator>,
-        beneficiary: Address,
-        gas: U256,
-        max_priority_fee_per_gas: U256,
-    ) -> anyhow::Result<H256> {
-        let tx: Eip1559TransactionRequest =
-            get_handle_ops_call(self, ops_per_aggregator, beneficiary)
-                .tx
-                .into();
-        let tx = tx
-            .gas(gas)
-            .max_priority_fee_per_gas(max_priority_fee_per_gas);
-        Ok(self
-            .client()
-            .send_transaction(tx, None)
-            .await
-            .context("should send bundle transaction")?
-            .tx_hash())
     }
 
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256> {
@@ -157,16 +137,33 @@ where
             Ok(Err(String::new()))
         }
     }
+
+    fn get_send_bundle_transaction(
+        &self,
+        ops_per_aggregator: Vec<UserOpsPerAggregator>,
+        beneficiary: Address,
+        gas: U256,
+        max_priority_fee_per_gas: U256,
+    ) -> TypedTransaction {
+        let tx: Eip1559TransactionRequest =
+            get_handle_ops_call(self, ops_per_aggregator, beneficiary, gas)
+                .tx
+                .into();
+        tx.max_priority_fee_per_gas(max_priority_fee_per_gas).into()
+    }
 }
 
 fn get_handle_ops_call<M: Middleware>(
     entry_point: &IEntryPoint<M>,
     mut ops_per_aggregator: Vec<UserOpsPerAggregator>,
     beneficiary: Address,
+    gas: U256,
 ) -> FunctionCall<Arc<M>, M, ()> {
-    if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::zero() {
-        entry_point.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)
-    } else {
-        entry_point.handle_aggregated_ops(ops_per_aggregator, beneficiary)
-    }
+    let call =
+        if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::zero() {
+            entry_point.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)
+        } else {
+            entry_point.handle_aggregated_ops(ops_per_aggregator, beneficiary)
+        };
+    call.gas(gas)
 }

@@ -11,7 +11,7 @@ interface Output {
   accessedContractAddresses: string[];
   associatedSlotsByAddress: Record<string, string[]>;
   factoryCalledCreate2Twice: boolean;
-  expectedStorage: ExpectedStorage[];
+  expectedStorage: Record<string, Record<string, string>>;
 }
 
 interface Phase {
@@ -29,16 +29,6 @@ interface Phase {
 interface StorageAccess {
   address: string;
   slots: string[];
-}
-
-interface ExpectedStorage {
-  address: string;
-  slots: ExpectedSlot[];
-}
-
-interface ExpectedSlot {
-  slot: string;
-  value: string;
 }
 
 type InternalPhase = Omit<
@@ -197,18 +187,20 @@ type StringSet = Record<string, boolean | undefined>;
         const slots = associatedSlotsByAddressMap[address];
         associatedSlotsByAddress[address] = Object.keys(slots);
       });
-      const expectedStorage: ExpectedStorage[] = [];
+      const expectedStorage: Record<string, Record<string, string>> = {};
       Object.keys(allStorageAccesses).forEach((address) => {
         const slotAccesses = allStorageAccesses[address];
-        const slots: ExpectedSlot[] = [];
+        const valuesBySlot: Record<string, string> = {};
+        let hasValues = false;
         Object.keys(slotAccesses).forEach((slot) => {
           const value = slotAccesses[slot];
           if (value) {
-            slots.push({ slot, value });
+            valuesBySlot[slot] = value;
+            hasValues = true;
           }
         });
-        if (slots.length > 0) {
-          expectedStorage.push({ address, slots });
+        if (hasValues) {
+          expectedStorage[address] = valuesBySlot;
         }
       });
       return {
@@ -301,9 +293,11 @@ type StringSet = Record<string, boolean | undefined>;
           addressHex,
           (): Record<string, string | null> => ({})
         );
-        if (!initialValuesBySlot[slotHex]) {
+        if (!(slotHex in initialValuesBySlot)) {
           // If the first access to this slot is a load, then whatever value it
-          // contains will be an expected value.
+          // contains will be an expected value. If it's a read, mark it in the
+          // map with `null` so we know not to treat its value as expected if we
+          // later load from it.
           const expectedValue =
             opcode === "SLOAD" ? toHex(db.getState(address, slot)) : null;
           initialValuesBySlot[slotHex] = expectedValue;

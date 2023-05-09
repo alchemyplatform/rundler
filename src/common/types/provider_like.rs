@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     contract::ContractError,
-    providers::{JsonRpcClient, Middleware, PendingTransaction, Provider},
-    types::{Address, BlockId, BlockNumber, Bytes, TransactionReceipt, H256, U256},
+    providers::{JsonRpcClient, Middleware, Provider},
+    types::{Address, BlockId, BlockNumber, Bytes, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
@@ -24,8 +24,6 @@ pub trait ProviderLike: Send + Sync + 'static {
         aggregator_address: Address,
         ops: Vec<UserOperation>,
     ) -> anyhow::Result<Option<Bytes>>;
-
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>>;
 
     async fn get_code(&self, address: Address, block_hash: H256) -> anyhow::Result<Bytes>;
 }
@@ -65,12 +63,6 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             Err(ContractError::Revert(_)) => Ok(None),
             Err(error) => Err(error).context("aggregator contract should aggregate signatures")?,
         }
-    }
-
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
-        PendingTransaction::new(tx_hash, self)
-            .await
-            .context("should wait for transaction to be mined or dropped")
     }
 
     async fn get_code(&self, address: Address, block_hash: H256) -> anyhow::Result<Bytes> {
