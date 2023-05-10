@@ -30,6 +30,8 @@ use crate::common::{
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
+const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 25;
+
 #[derive(Debug, Default)]
 pub struct Bundle {
     pub ops_per_aggregator: Vec<UserOpsPerAggregator>,
@@ -305,13 +307,25 @@ where
         &self,
         context: &mut ProposalContext,
     ) -> anyhow::Result<Option<U256>> {
+        // sum up the gas needed for all the ops in the bundle
+        // and apply an overhead multiplier
+        let gas = context
+            .get_total_gas()
+            .context("should have at least one op in bundle")?
+            * (100 + BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT)
+            / 100;
+
         let handle_ops_out = self
             .entry_point
-            .estimate_handle_ops_gas(context.to_ops_per_aggregator(), self.settings.beneficiary)
+            .call_handle_ops(
+                context.to_ops_per_aggregator(),
+                self.settings.beneficiary,
+                gas,
+            )
             .await
             .context("should estimate gas for proposed bundle")?;
         match handle_ops_out {
-            HandleOpsOut::SuccessWithGas(gas) => Ok(Some(gas)),
+            HandleOpsOut::Success => Ok(Some(gas)),
             HandleOpsOut::FailedOp(index, message) => {
                 self.process_failed_op(context, index, message).await?;
                 Ok(None)
@@ -606,6 +620,18 @@ impl ProposalContext {
             })
             .collect()
     }
+
+    fn get_total_gas(&self) -> Option<U256> {
+        self.all_ops_iter()
+            .map(|op| op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit)
+            .reduce(|acc, c| acc + c)
+    }
+
+    fn all_ops_iter(&self) -> impl Iterator<Item = &UserOperation> + '_ {
+        self.groups_by_aggregator
+            .values()
+            .flat_map(|group| group.ops_with_simulations.iter().map(|op| &op.op))
+    }
 }
 
 #[cfg(test)]
@@ -624,12 +650,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_singleton_valid_bundle() {
-        let op = UserOperation::default();
+        let op = UserOperation {
+            pre_verification_gas: 1000.into(),
+            verification_gas_limit: 10000.into(),
+            call_gas_limit: 100000.into(),
+            ..Default::default()
+        };
+
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
         }])
         .await;
+
+        let expected_gas =
+            (op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit)
+                * (100 + BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT)
+                / 100;
+
         assert_eq!(
             bundle.ops_per_aggregator,
             vec![UserOpsPerAggregator {
@@ -637,7 +675,8 @@ mod tests {
                 ..Default::default()
             }]
         );
-        assert_eq!(bundle.gas_estimate, default_estimated_gas());
+
+        assert_eq!(bundle.gas_estimate, expected_gas);
     }
 
     #[tokio::test]
@@ -760,7 +799,7 @@ mod tests {
                 },
             ],
             vec![],
-            vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+            vec![HandleOpsOut::Success],
             vec![],
             max_priority_fee_per_gas,
         )
@@ -844,7 +883,7 @@ mod tests {
                     signature: Box::new(move || Ok(Some(bytes(aggregator_b_signature)))),
                 },
             ],
-            vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+            vec![HandleOpsOut::Success],
             vec![],
             U256::zero(),
         )
@@ -926,7 +965,7 @@ mod tests {
             vec![
                 HandleOpsOut::FailedOp(0, "AA30: reject paymaster".to_string()),
                 HandleOpsOut::FailedOp(1, "AA13: reject factory".to_string()),
-                HandleOpsOut::SuccessWithGas(default_estimated_gas()),
+                HandleOpsOut::Success,
             ],
             vec![deposit, deposit, deposit],
             U256::zero(),
@@ -962,7 +1001,7 @@ mod tests {
         make_bundle(
             mock_ops,
             vec![],
-            vec![HandleOpsOut::SuccessWithGas(default_estimated_gas())],
+            vec![HandleOpsOut::Success],
             vec![],
             U256::zero(),
         )
@@ -972,7 +1011,7 @@ mod tests {
     async fn make_bundle(
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,
-        mock_estimate_gasses: Vec<HandleOpsOut>,
+        mock_handle_ops_call_results: Vec<HandleOpsOut>,
         mock_paymaster_deposits: Vec<U256>,
         max_priority_fee_per_gas: U256,
     ) -> Bundle {
@@ -1009,12 +1048,12 @@ mod tests {
         entry_point
             .expect_address()
             .return_const(entry_point_address);
-        for estimated_gas in mock_estimate_gasses {
+        for call_res in mock_handle_ops_call_results {
             entry_point
-                .expect_estimate_handle_ops_gas()
+                .expect_call_handle_ops()
                 .times(..=1)
-                .withf(move |_, &b| b == beneficiary)
-                .return_once(|_, _| Ok(estimated_gas));
+                .withf(move |_, &b, _| b == beneficiary)
+                .return_once(|_, _, _| Ok(call_res));
         }
         for deposit in mock_paymaster_deposits {
             entry_point
@@ -1100,9 +1139,5 @@ mod tests {
             max_priority_fee_per_gas,
             ..Default::default()
         }
-    }
-
-    fn default_estimated_gas() -> U256 {
-        20000.into()
     }
 }
