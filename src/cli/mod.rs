@@ -1,14 +1,12 @@
-use std::io;
-
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 mod builder;
 mod node;
 mod pool;
 mod prometheus_exporter;
 mod rpc;
+mod tracing;
 
 use builder::BuilderCliArgs;
 use node::NodeCliArgs;
@@ -29,22 +27,7 @@ use crate::{
 /// Listens for a ctrl-c signal and shuts down all components when received.
 pub async fn run() -> anyhow::Result<()> {
     let opt = Cli::parse();
-
-    let (appender, _guard) = if let Some(log_file) = &opt.logs.file {
-        tracing_appender::non_blocking(tracing_appender::rolling::never(".", log_file))
-    } else {
-        tracing_appender::non_blocking(io::stdout())
-    };
-
-    let subscriber_builder = FmtSubscriber::builder()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_writer(appender);
-    if opt.logs.json {
-        tracing::subscriber::set_global_default(subscriber_builder.json().finish())?;
-    } else {
-        tracing::subscriber::set_global_default(subscriber_builder.pretty().finish())?;
-    }
-
+    let _guard = tracing::configure_logging(&opt.logs)?;
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
@@ -237,7 +220,7 @@ impl From<&CommonArgs> for simulation::Settings {
 /// CLI options for the metrics server
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Metrics")]
-struct MetricsArgs {
+pub struct MetricsArgs {
     /// Port to listen on for metrics requests
     #[arg(
         long = "metrics.port",
@@ -275,7 +258,7 @@ struct MetricsArgs {
 /// CLI options for logging
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Logging")]
-struct LogsArgs {
+pub struct LogsArgs {
     /// Log file
     ///
     /// If not provided, logs will be written to stdout
@@ -304,7 +287,7 @@ struct LogsArgs {
 
 /// CLI options
 #[derive(Debug, Parser)]
-struct Cli {
+pub struct Cli {
     #[clap(subcommand)]
     command: Command,
 
