@@ -153,7 +153,10 @@ impl UserOperationOptionalGas {
             call_gas_limit: U256::MAX,
             verification_gas_limit: U256::MAX,
             pre_verification_gas: U256::MAX,
-            signature: [255_u8; 65].to_vec().into(),
+            max_fee_per_gas: U256::MAX,
+            max_priority_fee_per_gas: U256::MAX,
+            signature: vec![255_u8; self.signature.len()].into(),
+            paymaster_and_data: vec![255_u8; self.paymaster_and_data.len()].into(),
             ..self.cheap_clone().into_user_operation(settings)
         };
         gas::calc_pre_verification_gas(&op)
