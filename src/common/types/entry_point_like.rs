@@ -25,10 +25,11 @@ use crate::common::{
 pub trait EntryPointLike: Send + Sync + 'static {
     fn address(&self) -> Address;
 
-    async fn estimate_handle_ops_gas(
+    async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
+        gas: U256,
     ) -> anyhow::Result<HandleOpsOut>;
 
     async fn send_bundle(
@@ -71,7 +72,7 @@ pub trait EntryPointLike: Send + Sync + 'static {
 
 #[derive(Clone, Debug)]
 pub enum HandleOpsOut {
-    SuccessWithGas(U256),
+    Success,
     FailedOp(usize, String),
     SignatureValidationFailed(Address),
 }
@@ -85,21 +86,26 @@ where
         self.deref().address()
     }
 
-    async fn estimate_handle_ops_gas(
+    async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
+        gas: U256,
     ) -> anyhow::Result<HandleOpsOut> {
         let result = get_handle_ops_call(self, ops_per_aggregator, beneficiary)
-            .estimate_gas()
+            .gas(gas)
+            .call()
             .await;
         let error = match result {
-            Ok(gas) => return Ok(HandleOpsOut::SuccessWithGas(gas)),
+            Ok(()) => return Ok(HandleOpsOut::Success),
             Err(error) => error,
         };
         if let ContractError::Revert(revert_data) = &error {
             if let Ok(FailedOp { op_index, reason }) = FailedOp::decode(revert_data) {
-                return Ok(HandleOpsOut::FailedOp(op_index.as_usize(), reason));
+                match &reason[..4] {
+                    "AA95" => anyhow::bail!("Handle ops called with insufficent gas"),
+                    _ => return Ok(HandleOpsOut::FailedOp(op_index.as_usize(), reason)),
+                }
             }
             if let Ok(failure) = SignatureValidationFailed::decode(revert_data) {
                 return Ok(HandleOpsOut::SignatureValidationFailed(failure.aggregator));
