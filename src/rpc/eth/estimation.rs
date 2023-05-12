@@ -129,18 +129,39 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         op: &UserOperation,
         block_hash: H256,
     ) -> Result<U256, GasEstimationError> {
+        // Make sure to have a nonzero gas fee, because otherwise the required
+        // prefund is zero and so the account skips making a call to transfer
+        // eth to the entry point, which causes our estimate to come up short.
+        let max_fee_per_gas = op.max_fee_per_gas.max(1.into());
+        let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
+        // Also spoof the sender to have high balance if they don't use a
+        // paymaster, so estimation won't fail because their balance is too low.
+        // This accommodates the use case of estimating gas on an account with
+        // low balance and then funding it afterwards based on the estimate.
+        let mut spoofed_state = spoof::state();
+        if op.paymaster().is_some() {
+            spoofed_state
+                .account(op.sender)
+                .balance(U256::from(1) << 128);
+        }
+        // Don't move spoofed_state into the closure, only a reference.
+        let spoofed_state = &spoofed_state;
         let run_attempt_returning_error = |gas: u64| async move {
             let op = UserOperation {
                 verification_gas_limit: gas.into(),
-                call_gas_limit: 0.into(),
+                call_gas_limit: U256::zero(),
+                max_fee_per_gas,
                 ..op.clone()
             };
             let error_message = self
                 .entry_point
-                .call_simulate_op(
+                .call_spoofed_simulate_op(
                     op,
+                    Address::zero(),
+                    Bytes::new(),
                     block_hash,
-                    self.settings.max_simulate_handle_ops_gas.into(),
+                    simulation_gas,
+                    spoofed_state,
                 )
                 .await?
                 .err();

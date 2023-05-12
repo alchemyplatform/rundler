@@ -50,23 +50,6 @@ pub trait EntryPointLike: Send + Sync + 'static {
         gas: U256,
         spoofed_state: &spoof::State,
     ) -> anyhow::Result<Result<ExecutionResult, String>>;
-
-    async fn call_simulate_op(
-        &self,
-        op: UserOperation,
-        block_hash: H256,
-        gas: U256,
-    ) -> anyhow::Result<Result<ExecutionResult, String>> {
-        self.call_spoofed_simulate_op(
-            op,
-            Address::zero(),
-            Bytes::new(),
-            block_hash,
-            gas,
-            &spoof::State::default(),
-        )
-        .await
-    }
 }
 
 #[derive(Clone, Debug)]
