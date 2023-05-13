@@ -20,7 +20,8 @@ interface Phase {
   usedInvalidGasOpcode: boolean;
   storageAccesses: StorageAccess[];
   calledBannedEntryPointMethod: boolean;
-  calledWithValue: boolean;
+  addressesCallingWithValue: string[];
+  calledNonEntryPointWithValue: boolean;
   ranOutOfGas: boolean;
   undeployedContractAccesses: string[];
 }
@@ -42,11 +43,16 @@ interface ExpectedSlot {
 
 type InternalPhase = Omit<
   Phase,
-  "forbiddenOpcodesUsed" | "forbiddenPrecompilesUsed" | "storageAccesses" | "undeployedContractAccesses"
+  | "forbiddenOpcodesUsed"
+  | "forbiddenPrecompilesUsed"
+  | "storageAccesses"
+  | "addressesCallingWithValue"
+  | "undeployedContractAccesses"
 > & {
   forbiddenOpcodesUsed: StringSet;
   forbiddenPrecompilesUsed: StringSet;
   storageAccesses: Record<string, StringSet>;
+  addressesCallingWithValue: StringSet;
   undeployedContractAccesses: StringSet;
 };
 
@@ -121,7 +127,8 @@ type StringSet = Record<string, boolean | undefined>;
       usedInvalidGasOpcode: false,
       storageAccesses: {},
       calledBannedEntryPointMethod: false,
-      calledWithValue: false,
+      addressesCallingWithValue: {},
+      calledNonEntryPointWithValue: false,
       ranOutOfGas: false,
       undeployedContractAccesses: {},
     };
@@ -131,11 +138,16 @@ type StringSet = Record<string, boolean | undefined>;
     const {
       usedInvalidGasOpcode,
       calledBannedEntryPointMethod,
-      calledWithValue,
+      calledNonEntryPointWithValue,
       ranOutOfGas,
     } = currentPhase;
     const forbiddenOpcodesUsed = Object.keys(currentPhase.forbiddenOpcodesUsed);
-    const forbiddenPrecompilesUsed = Object.keys(currentPhase.forbiddenPrecompilesUsed);
+    const forbiddenPrecompilesUsed = Object.keys(
+      currentPhase.forbiddenPrecompilesUsed
+    );
+    const addressesCallingWithValue = Object.keys(
+      currentPhase.addressesCallingWithValue
+    );
     const undeployedContractAccesses = Object.keys(
       currentPhase.undeployedContractAccesses
     );
@@ -150,7 +162,8 @@ type StringSet = Record<string, boolean | undefined>;
       usedInvalidGasOpcode,
       storageAccesses,
       calledBannedEntryPointMethod,
-      calledWithValue,
+      addressesCallingWithValue,
+      calledNonEntryPointWithValue,
       ranOutOfGas,
       undeployedContractAccesses,
     };
@@ -324,25 +337,30 @@ type StringSet = Record<string, boolean | undefined>;
     },
 
     enter(frame) {
-      if (
-        toHex(frame.getFrom()) !== entryPointAddress &&
-        toHex(frame.getTo()) === entryPointAddress
-      ) {
+      const from = toHex(frame.getFrom());
+      if (from === entryPointAddress) {
+        return;
+      }
+      const isToEntryPoint = toHex(frame.getTo()) === entryPointAddress;
+      if (isToEntryPoint) {
         const input = frame.getInput();
-        // The spec says that calling methods other than `depositTo` is banned.
-        // We deviate and also allow calling the entrypoint with no calldata, as
-        // this is equivalent to calling `depositTo` and without it many spec
-        // tests fail
+        // The spec says that calling entry point methods other than `depositTo`
+        // is banned. We deviate and also allow calling the entrypoint with no
+        // calldata, as this is equivalent to calling `depositTo` and without it
+        // many spec tests fail.
         if (
           input.length > 0 &&
           toHex(input).substring(0, 10) !== DEPOSIT_TO_SELECTOR
         ) {
           currentPhase.calledBannedEntryPointMethod = true;
         }
-      } else {
-        const value = frame.getValue();
-        if (value != null && value.toString() !== "0") {
-          currentPhase.calledWithValue = true;
+      }
+      const value = frame.getValue();
+      if (value != null && value.toString() != "0") {
+        if (isToEntryPoint) {
+          currentPhase.addressesCallingWithValue[from] = true;
+        } else {
+          currentPhase.calledNonEntryPointWithValue = true;
         }
       }
     },
