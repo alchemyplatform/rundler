@@ -30,7 +30,8 @@ pub struct Phase {
     pub used_invalid_gas_opcode: bool,
     pub storage_accesses: Vec<StorageAccess>,
     pub called_banned_entry_point_method: bool,
-    pub called_with_value: bool,
+    pub addresses_calling_with_value: Vec<Address>,
+    pub called_non_entry_point_with_value: bool,
     pub ran_out_of_gas: bool,
     pub undeployed_contract_accesses: Vec<Address>,
 }

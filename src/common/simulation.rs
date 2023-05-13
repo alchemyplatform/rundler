@@ -279,7 +279,11 @@ where
             for address in banned_addresses_accessed {
                 violations.push(SimulationViolation::InvalidStorageAccess(entity, address));
             }
-            if phase.called_with_value {
+            let non_sender_called_with_value = phase
+                .addresses_calling_with_value
+                .iter()
+                .any(|address| address != &sender_address);
+            if non_sender_called_with_value || phase.called_non_entry_point_with_value {
                 violations.push(SimulationViolation::CallHadValue(entity));
             }
             if phase.ran_out_of_gas {
@@ -403,7 +407,7 @@ pub enum SimulationViolation {
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
     WrongNumberOfPhases(u32),
-    #[display("{0} must not send ETH during validation (except to entry point)")]
+    #[display("{0} must not send ETH during validation (except from account to entry point)")]
     CallHadValue(EntityType),
     #[display("ran out of gas during {0} validation")]
     OutOfGas(EntityType),
