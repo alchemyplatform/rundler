@@ -19,6 +19,7 @@ use tracing::{debug, Level};
 
 use self::error::{
     EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
+    UnsupportedAggregatorData,
 };
 use crate::{
     common::{
@@ -319,6 +320,13 @@ where
 
         if signature_failed {
             Err(EthRpcError::SignatureCheckFailed)?
+        } else if let Some(agg) = &aggregator {
+            // TODO(danc): all aggregators are currently unsupported
+            Err(EthRpcError::UnsupportedAggregator(
+                UnsupportedAggregatorData {
+                    aggregator: agg.address,
+                },
+            ))?
         }
 
         let now = Timestamp::now();

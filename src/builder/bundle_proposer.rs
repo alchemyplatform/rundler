@@ -30,7 +30,7 @@ use crate::common::{
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
-const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 25;
+const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 50;
 
 #[derive(Debug, Default)]
 pub struct Bundle {
