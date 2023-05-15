@@ -35,6 +35,8 @@ const GAS_ROUNDING: u64 = 1024;
 
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 
+const ESTIMATION_MAX_FEE_PER_GAS: U256 = U256([1_000_000_000_000_000_000u64, 0, 0, 0]); // 1 eth
+
 /// Offset at which the proxy target address appears in the proxy bytecode. Must
 /// be updated whenever `CallGasEstimationProxy.sol` changes.
 ///
@@ -129,17 +131,22 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         op: &UserOperation,
         block_hash: H256,
     ) -> Result<U256, GasEstimationError> {
-        // Make sure to have a nonzero gas fee, because otherwise the required
-        // prefund is zero and so the account skips making a call to transfer
-        // eth to the entry point, which causes our estimate to come up short.
-        let max_fee_per_gas = op.max_fee_per_gas.max(1.into());
         let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
         // Also spoof the sender to have high balance if they don't use a
         // paymaster, so estimation won't fail because their balance is too low.
         // This accommodates the use case of estimating gas on an account with
         // low balance and then funding it afterwards based on the estimate.
+        // Make sure to have a high gas fee, because otherwise the required
+        // prefund is small and the account skips making a call to transfer
+        // eth to the entry point, which causes our estimate to come up short.
+        let mut max_fee_per_gas = op.max_fee_per_gas;
         let mut spoofed_state = spoof::state();
-        if op.paymaster().is_some() {
+        if op.paymaster().is_none() {
+            max_fee_per_gas = if max_fee_per_gas.is_zero() {
+                ESTIMATION_MAX_FEE_PER_GAS
+            } else {
+                max_fee_per_gas
+            };
             spoofed_state
                 .account(op.sender)
                 .balance(U256::from(1) << 128);
