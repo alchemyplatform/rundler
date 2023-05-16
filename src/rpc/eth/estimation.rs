@@ -225,8 +225,13 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         spoofed_state
             .account(self.entry_point.address())
             .code(estimation_proxy_bytecode);
-        let callless_op = UserOperation {
-            call_gas_limit: 0.into(),
+        // During simulation, set `call_gas_limit` to zero so it doesn't try to
+        // perfrom the call normally (only in our post-call callbacks). Also set
+        // gas fees to zero so validation won't fail from lack of prefund.
+        let op_for_estimation = UserOperation {
+            call_gas_limit: U256::zero(),
+            max_fee_per_gas: U256::zero(),
+            max_priority_fee_per_gas: U256::zero(),
             ..op.clone()
         };
         let mut min_gas = U256::zero();
@@ -244,19 +249,19 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                     is_continuation,
                 },),
             );
-            let target_revert_data =  self
-            .entry_point
-            .call_spoofed_simulate_op(
-                callless_op.clone(),
-                self.entry_point.address(),
-                target_call_data,
-                block_hash,
-                self.settings.max_simulate_handle_ops_gas.into(),
-                &spoofed_state,
-            )
-            .await?
-            .map_err(|_| anyhow!("estimateHandleOps call while estimating call gas should only revert with ExecutionResult"))?
-            .target_result;
+            let target_revert_data = self
+                .entry_point
+                .call_spoofed_simulate_op(
+                    op_for_estimation.clone(),
+                    self.entry_point.address(),
+                    target_call_data,
+                    block_hash,
+                    self.settings.max_simulate_handle_ops_gas.into(),
+                    &spoofed_state,
+                )
+                .await?
+                .map_err(|_| anyhow!("estimateHandleOps call while estimating call gas should only revert with ExecutionResult"))?
+                .target_result;
             if let Ok(result) = EstimateCallGasResult::decode(&target_revert_data) {
                 return Ok(result.gas_estimate);
             } else if let Ok(revert) = EstimateCallGasRevertAtMax::decode(&target_revert_data) {
