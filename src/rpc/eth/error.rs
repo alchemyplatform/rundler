@@ -51,8 +51,8 @@ pub enum EthRpcError {
     #[error("{0} uses banned precompile: {1:?}")]
     PrecompileViolation(EntityType, Address),
     /// Invalid storage access, maps to Opcode Violation
-    #[error("{0} accesses inaccessible storage at {1:?}")]
-    InvalidStorageAccess(EntityType, Address),
+    #[error("{0} accesses inaccessible storage at address: {1:?} slot: {2:?}")]
+    InvalidStorageAccess(EntityType, Address, U256),
     /// Operation is out of time range
     #[error("operation is out of time range")]
     OutOfTimeRange(OutOfTimeRangeData),
@@ -133,7 +133,7 @@ impl From<EthRpcError> for RpcError {
             }
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::PrecompileViolation(_, _)
-            | EthRpcError::InvalidStorageAccess(_, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
+            | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)
             }

@@ -30,6 +30,7 @@ use crate::common::{
 
 #[derive(Clone, Debug, Default)]
 pub struct SimulationSuccess {
+    pub mempools: Vec<H256>,
     pub block_hash: H256,
     pub pre_op_gas: U256,
     pub signature_failed: bool,
@@ -56,8 +57,8 @@ impl SimulationSuccess {
 
 pub type SimulationError = ViolationError<SimulationViolation>;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct StorageSlot {
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub struct StorageSlot {
     pub address: Address,
     pub slot: U256,
 }
@@ -101,6 +102,8 @@ where
         &self.sim_settings
     }
 
+    // Run the tracer and transform the output.
+    // Any violations during this stage are errors.
     async fn create_context(
         &self,
         op: UserOperation,
@@ -112,7 +115,7 @@ where
         let is_wallet_creation = !op.init_code.is_empty();
         let tracer_out = tracer::trace_simulate_validation(
             &self.entry_point,
-            op,
+            op.clone(),
             block_id,
             self.sim_settings.max_verification_gas,
         )
@@ -157,10 +160,13 @@ where
             Err(vec![SimulationViolation::WrongNumberOfPhases(num_phases)])?
         };
         Ok(ValidationContext {
+            block_id,
             entity_infos,
             tracer_out,
             entry_point_out,
             is_wallet_creation,
+            entities_needing_stake: vec![],
+            accessed_addresses: HashSet::new(),
         })
     }
 
@@ -188,38 +194,28 @@ where
             Err(error) => Err(error).context("should call aggregator to validate signature")?,
         }
     }
-}
 
-#[async_trait]
-impl<T> Simulator for SimulatorImpl<T>
-where
-    T: JsonRpcClient + 'static,
-{
-    async fn simulate_validation(
+    // Parse the output from tracing and return a list of violations.
+    // Most violations found during this stage are whitelistable and can be added
+    // to the list of whitelisted violations on a given mempool.
+    fn gather_context_violations(
         &self,
-        op: UserOperation,
-        block_hash: Option<H256>,
-        expected_code_hash: Option<H256>,
-    ) -> Result<SimulationSuccess, SimulationError> {
-        let block_hash = match block_hash {
-            Some(block_hash) => block_hash,
-            None => self.provider.get_latest_block_hash().await?,
-        };
-        let block_id = block_hash.into();
-        let context = match self.create_context(op.clone(), block_id).await {
-            Ok(context) => context,
-            error @ Err(_) => error?,
-        };
-        let ValidationContext {
-            entity_infos,
-            mut tracer_out,
-            entry_point_out,
-            is_wallet_creation,
+        context: &mut ValidationContext,
+    ) -> Vec<SimulationViolation> {
+        let &mut ValidationContext {
+            ref entity_infos,
+            ref tracer_out,
+            ref entry_point_out,
+            ref is_wallet_creation,
+            ref mut entities_needing_stake,
+            ref mut accessed_addresses,
+            ..
         } = context;
+
+        let mut violations = vec![];
+
         let sender_address = entity_infos.sender_address();
-        let mut violations: Vec<SimulationViolation> = vec![];
-        let mut entities_needing_stake = vec![];
-        let mut accessed_addresses = HashSet::new();
+
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let entity = EntityType::from_simulation_phase(index).unwrap();
             let Some(entity_info) = entity_infos.get(entity) else {
@@ -242,7 +238,7 @@ where
             }
             let mut needs_stake = entity == EntityType::Paymaster
                 && !entry_point_out.return_info.paymaster_context.is_empty();
-            let mut banned_addresses_accessed = IndexSet::<Address>::new();
+            let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
             for StorageAccess { address, slots } in &phase.storage_accesses {
                 let address = *address;
                 accessed_addresses.insert(address);
@@ -250,7 +246,7 @@ where
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         entity,
-                        is_wallet_creation,
+                        is_wallet_creation: *is_wallet_creation,
                         entry_point_address: self.entry_point.address(),
                         entity_address: entity_info.address,
                         sender_address,
@@ -261,7 +257,7 @@ where
                         StorageRestriction::Allowed => {}
                         StorageRestriction::NeedsStake => needs_stake = true,
                         StorageRestriction::Banned => {
-                            banned_addresses_accessed.insert(address);
+                            banned_slots_accessed.insert(StorageSlot { address, slot });
                         }
                     }
                 }
@@ -276,8 +272,8 @@ where
                     ));
                 }
             }
-            for address in banned_addresses_accessed {
-                violations.push(SimulationViolation::InvalidStorageAccess(entity, address));
+            for slot in banned_slots_accessed {
+                violations.push(SimulationViolation::InvalidStorageAccess(entity, slot));
             }
             let non_sender_called_with_value = phase
                 .addresses_calling_with_value
@@ -286,6 +282,11 @@ where
             if non_sender_called_with_value || phase.called_non_entry_point_with_value {
                 violations.push(SimulationViolation::CallHadValue(entity));
             }
+            if phase.called_banned_entry_point_method {
+                violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
+            }
+
+            // These violations are not whitelistable but we need to collect them here
             if phase.ran_out_of_gas {
                 violations.push(SimulationViolation::OutOfGas(entity));
             }
@@ -294,10 +295,8 @@ where
                     entity, address,
                 ))
             }
-            if phase.called_banned_entry_point_method {
-                violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
-            }
         }
+
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             entities_needing_stake.push(EntityType::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
@@ -311,24 +310,56 @@ where
         if tracer_out.factory_called_create2_twice {
             violations.push(SimulationViolation::FactoryCalledCreate2Twice);
         }
-        // To spare the RPC node, only check code hashes and validate with
-        // aggregator if there are no other violations.
-        if !violations.is_empty() {
-            return Err(violations.into());
+
+        violations
+    }
+
+    // Match mempools based on violations. Operations are matched to each of the
+    // mempools in which all of their violations are whitelisted. If zero violations,
+    // an operation will match all mempools.
+    fn match_mempools(&self, violations: &[SimulationViolation]) -> Vec<H256> {
+        // TODO(danc): Match mempools based on violations
+        if violations.is_empty() {
+            vec![H256::zero()]
+        } else {
+            vec![]
         }
+    }
+
+    // Check the code hash of the entities associated with the user operation
+    // if needed, validate that the signature is valid for the aggregator.
+    // Violations during this stage are always errors.
+    async fn check_contracts(
+        &self,
+        op: UserOperation,
+        context: &mut ValidationContext,
+        expected_code_hash: Option<H256>,
+    ) -> Result<(H256, Option<AggregatorSimOut>), SimulationError> {
+        let &mut ValidationContext {
+            ref block_id,
+            ref mut tracer_out,
+            ref entry_point_out,
+            ..
+        } = context;
+
+        // collect a vector of violations to ensure a deterministic error message
+        let mut violations = vec![];
+
         let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
         let code_hash_future = eth::get_code_hash(
             &self.provider,
             mem::take(&mut tracer_out.accessed_contract_addresses),
-            Some(block_id),
+            Some(*block_id),
         );
         let aggregator_signature_future = self.validate_aggregator_signature(
             op,
             aggregator_address,
             self.sim_settings.max_verification_gas,
         );
+
         let (code_hash, aggregator_out) =
             tokio::try_join!(code_hash_future, aggregator_signature_future)?;
+
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
                 violations.push(SimulationViolation::CodeHashChanged)
@@ -342,9 +373,63 @@ where
                 None
             }
         };
+
         if !violations.is_empty() {
             return Err(violations.into());
         }
+
+        Ok((code_hash, aggregator))
+    }
+}
+
+#[async_trait]
+impl<T> Simulator for SimulatorImpl<T>
+where
+    T: JsonRpcClient + 'static,
+{
+    async fn simulate_validation(
+        &self,
+        op: UserOperation,
+        block_hash: Option<H256>,
+        expected_code_hash: Option<H256>,
+    ) -> Result<SimulationSuccess, SimulationError> {
+        let block_hash = match block_hash {
+            Some(block_hash) => block_hash,
+            None => self.provider.get_latest_block_hash().await?,
+        };
+        let block_id = block_hash.into();
+        let mut context = match self.create_context(op.clone(), block_id).await {
+            Ok(context) => context,
+            error @ Err(_) => error?,
+        };
+
+        // Gather all violations from the tracer
+        let mut violations = self.gather_context_violations(&mut context);
+
+        // Check violations against mempool rules, find supporting mempools
+        let mempools = self.match_mempools(&violations);
+        if mempools.is_empty() {
+            // No mempools found, short circuit to save RPC work
+            return Err(violations.into());
+        };
+
+        // If a matching mempool was found, clear violations and continue
+        violations.clear();
+
+        // Check code hash and aggregator signature, these can't fail
+        let (code_hash, aggregator) = self
+            .check_contracts(op, &mut context, expected_code_hash)
+            .await?;
+
+        // Transform outputs into success struct
+        let ValidationContext {
+            tracer_out,
+            entry_point_out,
+            is_wallet_creation: _,
+            entities_needing_stake,
+            accessed_addresses,
+            ..
+        } = context;
         let mut expected_storage_slots = vec![];
         for ExpectedStorage { address, slots } in &tracer_out.expected_storage {
             for &ExpectedSlot { slot, value } in slots {
@@ -369,6 +454,7 @@ where
             ..
         } = return_info;
         Ok(SimulationSuccess {
+            mempools,
             block_hash,
             pre_op_gas,
             signature_failed: sig_failed,
@@ -398,7 +484,7 @@ pub enum SimulationViolation {
     #[display("factory may only call CREATE2 once during initialization")]
     FactoryCalledCreate2Twice,
     #[display("{0} accessed forbidden storage at address {1:?} during validation")]
-    InvalidStorageAccess(EntityType, Address),
+    InvalidStorageAccess(EntityType, StorageSlot),
     #[display("{0} must be staked")]
     NotStaked(Entity, U256, U256),
     #[display("reverted while simulating {0} validation")]
@@ -455,10 +541,13 @@ impl EntityType {
 
 #[derive(Debug)]
 struct ValidationContext {
+    block_id: BlockId,
     entity_infos: EntityInfos,
     tracer_out: TracerOutput,
     entry_point_out: ValidationOutput,
     is_wallet_creation: bool,
+    entities_needing_stake: Vec<EntityType>,
+    accessed_addresses: HashSet<Address>,
 }
 
 #[derive(Debug)]
