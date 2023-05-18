@@ -595,8 +595,8 @@ impl From<SimulationError> for EthRpcError {
             SimulationViolation::FactoryCalledCreate2Twice => {
                 Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
             }
-            SimulationViolation::InvalidStorageAccess(entity, address) => {
-                Self::InvalidStorageAccess(*entity, *address)
+            SimulationViolation::InvalidStorageAccess(entity, slot) => {
+                Self::InvalidStorageAccess(*entity, slot.address, slot.slot)
             }
             SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
                 Self::StakeTooLow(StakeTooLowData::new(
