@@ -21,7 +21,7 @@ use crate::common::{
 };
 
 /// Debug API
-#[rpc(server, namespace = "debug")]
+#[rpc(client, server, namespace = "debug")]
 pub trait DebugApi {
     #[method(name = "bundler_clearState")]
     async fn bundler_clear_state(&self) -> RpcResult<String>;

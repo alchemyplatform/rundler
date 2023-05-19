@@ -47,7 +47,7 @@ use crate::{
 };
 
 /// Eth API
-#[rpc(server, namespace = "eth")]
+#[rpc(client, server, namespace = "eth")]
 pub trait EthApi {
     #[method(name = "sendUserOperation")]
     async fn send_user_operation(
