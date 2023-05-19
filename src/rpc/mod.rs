@@ -5,7 +5,8 @@ mod metrics;
 mod task;
 
 use anyhow::bail;
-pub use eth::estimation;
+pub use debug::DebugApiClient;
+pub use eth::{estimation, EthApiClient};
 use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
