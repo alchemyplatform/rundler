@@ -1,9 +1,9 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
     providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClient, RetryClientBuilder},
-    types::Address,
+    types::{Address, H256},
 };
 use ethers_signers::Signer;
 use rusoto_core::Region;
@@ -25,6 +25,7 @@ use crate::{
     common::{
         contracts::i_entry_point::IEntryPoint,
         handle::{SpawnGuard, Task},
+        mempool::MempoolConfig,
         protos::{
             builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
             op_pool::op_pool_client::OpPoolClient,
@@ -55,6 +56,7 @@ pub struct Args {
     pub use_conditional_send_transaction: bool,
     pub eth_poll_interval: Duration,
     pub sim_settings: simulation::Settings,
+    pub mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
 #[derive(Debug)]
@@ -67,6 +69,7 @@ impl Task for BuilderTask {
     async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         info!("Starting builder server on {}", addr);
+        tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
         let signer = if let Some(pk) = &self.args.private_key {
@@ -112,6 +115,7 @@ impl Task for BuilderTask {
             Arc::clone(&provider),
             self.args.entry_point_address,
             self.args.sim_settings,
+            self.args.mempool_configs.clone(),
         );
         let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
         let proposer = BundleProposerImpl::new(

@@ -1,4 +1,8 @@
-use std::{collections::HashSet, mem, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    mem,
+    sync::Arc,
+};
 
 use anyhow::Context;
 use ethers::{
@@ -12,12 +16,18 @@ use indexmap::IndexSet;
 use mockall::automock;
 use tonic::async_trait;
 
+use super::{
+    mempool::{match_mempools, MempoolMatchResult},
+    tracer::parse_combined_tracer_str,
+};
 use crate::common::{
     contracts::{
         i_aggregator::IAggregator,
         i_entry_point::{FailedOp, IEntryPoint},
     },
-    eth, tracer,
+    eth,
+    mempool::MempoolConfig,
+    tracer,
     tracer::{AssociatedSlotsByAddress, StorageAccess, TracerOutput},
     types::{
         Entity, EntityType, ExpectedStorage, ProviderLike, StakeInfo, UserOperation,
@@ -76,6 +86,7 @@ pub struct SimulatorImpl<T: JsonRpcClient> {
     provider: Arc<Provider<T>>,
     entry_point: IEntryPoint<Provider<T>>,
     sim_settings: Settings,
+    mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
 impl<T> SimulatorImpl<T>
@@ -86,12 +97,14 @@ where
         provider: Arc<Provider<T>>,
         entry_point_address: Address,
         sim_settings: Settings,
+        mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
         let entry_point = IEntryPoint::new(entry_point_address, provider.clone());
         Self {
             provider,
             entry_point,
             sim_settings,
+            mempool_configs,
         }
     }
 
@@ -130,6 +143,7 @@ where
             Err(vec![SimulationViolation::DidNotRevert])?
         };
         let last_entity = EntityType::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
+
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
             let entity_addr = match last_entity {
                 EntityType::Factory => factory_address,
@@ -193,17 +207,17 @@ where
     }
 
     // Parse the output from tracing and return a list of violations.
-    // Most violations found during this stage are whitelistable and can be added
-    // to the list of whitelisted violations on a given mempool.
+    // Most violations found during this stage are allowlistable and can be added
+    // to the list of allowlisted violations on a given mempool.
     fn gather_context_violations(
         &self,
         context: &mut ValidationContext,
-    ) -> Vec<SimulationViolation> {
+    ) -> anyhow::Result<Vec<SimulationViolation>> {
         let &mut ValidationContext {
             ref entity_infos,
             ref tracer_out,
             ref entry_point_out,
-            ref is_wallet_creation,
+            is_wallet_creation,
             ref mut entities_needing_stake,
             ref mut accessed_addresses,
             ..
@@ -214,26 +228,29 @@ where
         let sender_address = entity_infos.sender_address();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-            let entity = EntityType::from_simulation_phase(index).unwrap();
-            let Some(entity_info) = entity_infos.get(entity) else {
+            let kind = EntityType::from_simulation_phase(index).unwrap();
+            let Some(entity_info) = entity_infos.get(kind) else {
                 continue;
             };
+            let entity = Entity {
+                kind,
+                address: entity_info.address,
+            };
             for opcode in &phase.forbidden_opcodes_used {
+                let (contract, opcode) = parse_combined_tracer_str(opcode)?;
                 violations.push(SimulationViolation::UsedForbiddenOpcode(
                     entity,
-                    ViolationOpCode(*opcode),
+                    contract,
+                    ViolationOpCode(opcode),
                 ));
             }
             for precompile in &phase.forbidden_precompiles_used {
+                let (contract, precompile) = parse_combined_tracer_str(precompile)?;
                 violations.push(SimulationViolation::UsedForbiddenPrecompile(
-                    entity,
-                    *precompile,
+                    entity, contract, precompile,
                 ));
             }
-            if phase.used_invalid_gas_opcode {
-                violations.push(SimulationViolation::InvalidGasOpcode(entity));
-            }
-            let mut needs_stake = entity == EntityType::Paymaster
+            let mut needs_stake = entity.kind == EntityType::Paymaster
                 && !entry_point_out.return_info.paymaster_context.is_empty();
             let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
             for StorageAccess { address, slots } in &phase.storage_accesses {
@@ -243,7 +260,7 @@ where
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         entity,
-                        is_wallet_creation: *is_wallet_creation,
+                        is_wallet_creation,
                         entry_point_address: self.entry_point.address(),
                         entity_address: entity_info.address,
                         sender_address,
@@ -260,10 +277,10 @@ where
                 }
             }
             if needs_stake {
-                entities_needing_stake.push(entity);
+                entities_needing_stake.push(entity.kind);
                 if !entity_info.is_staked {
                     violations.push(SimulationViolation::NotStaked(
-                        Entity::new(entity, entity_info.address),
+                        entity,
                         self.sim_settings.min_stake_value.into(),
                         self.sim_settings.min_unstake_delay.into(),
                     ));
@@ -283,7 +300,7 @@ where
                 violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
             }
 
-            // These violations are not whitelistable but we need to collect them here
+            // These violations are not allowlistable but we need to collect them here
             if phase.ran_out_of_gas {
                 violations.push(SimulationViolation::OutOfGas(entity));
             }
@@ -305,22 +322,24 @@ where
             }
         }
         if tracer_out.factory_called_create2_twice {
-            violations.push(SimulationViolation::FactoryCalledCreate2Twice);
+            let factory = entity_infos.get(EntityType::Factory);
+            match factory {
+                Some(factory) => {
+                    violations.push(SimulationViolation::FactoryCalledCreate2Twice(
+                        factory.address,
+                    ));
+                }
+                None => {
+                    // weird case where CREATE2 is called > 1, but there isn't a factory
+                    // defined. This should never happen, blame the violation on the entry point.
+                    violations.push(SimulationViolation::FactoryCalledCreate2Twice(
+                        self.entry_point.address(),
+                    ));
+                }
+            }
         }
 
-        violations
-    }
-
-    // Match mempools based on violations. Operations are matched to each of the
-    // mempools in which all of their violations are whitelisted. If zero violations,
-    // an operation will match all mempools.
-    fn match_mempools(&self, violations: &[SimulationViolation]) -> Vec<H256> {
-        // TODO(danc): Match mempools based on violations
-        if violations.is_empty() {
-            vec![H256::zero()]
-        } else {
-            vec![]
-        }
+        Ok(violations)
     }
 
     // Check the code hash of the entities associated with the user operation
@@ -333,7 +352,7 @@ where
         expected_code_hash: Option<H256>,
     ) -> Result<(H256, Option<AggregatorSimOut>), SimulationError> {
         let &mut ValidationContext {
-            ref block_id,
+            block_id,
             ref mut tracer_out,
             ref entry_point_out,
             ..
@@ -346,7 +365,7 @@ where
         let code_hash_future = eth::get_code_hash(
             &self.provider,
             mem::take(&mut tracer_out.accessed_contract_addresses),
-            Some(*block_id),
+            Some(block_id),
         );
         let aggregator_signature_future = self.validate_aggregator_signature(
             op,
@@ -401,17 +420,14 @@ where
         };
 
         // Gather all violations from the tracer
-        let mut violations = self.gather_context_violations(&mut context);
-
-        // Check violations against mempool rules, find supporting mempools
-        let mempools = self.match_mempools(&violations);
-        if mempools.is_empty() {
-            // No mempools found, short circuit to save RPC work
-            return Err(violations.into());
+        let mut violations = self.gather_context_violations(&mut context)?;
+        // Sort violations so that the final error message is deterministic
+        violations.sort();
+        // Check violations against mempool rules, find supporting mempools, error if none found
+        let mempools = match match_mempools(&self.mempool_configs, &violations) {
+            MempoolMatchResult::Matches(pools) => pools,
+            MempoolMatchResult::NoMatch(i) => return Err(vec![violations[i].clone()].into()),
         };
-
-        // If a matching mempool was found, clear violations and continue
-        violations.clear();
 
         // Check code hash and aggregator signature, these can't fail
         let (code_hash, aggregator) = self
@@ -462,17 +478,15 @@ pub enum SimulationViolation {
     // of the violation for converting to an JRPC error
     #[display("reverted while simulating {0} validation: {1}")]
     UnintendedRevertWithMessage(EntityType, String, Option<Address>),
-    #[display("{0} uses banned opcode: {1}")]
-    UsedForbiddenOpcode(EntityType, ViolationOpCode),
-    #[display("{0} uses banned precompile: {1:?}")]
-    UsedForbiddenPrecompile(EntityType, Address),
-    #[display("{0} uses banned opcode: GAS")]
-    InvalidGasOpcode(EntityType),
+    #[display("{0.kind} uses banned opcode: {2} in contract {1:?}")]
+    UsedForbiddenOpcode(Entity, Address, ViolationOpCode),
+    #[display("{0.kind} uses banned precompile: {2:?} in contract {1:?}")]
+    UsedForbiddenPrecompile(Entity, Address, Address),
     #[display("factory may only call CREATE2 once during initialization")]
-    FactoryCalledCreate2Twice,
-    #[display("{0} accessed forbidden storage at address {1:?} during validation")]
-    InvalidStorageAccess(EntityType, StorageSlot),
-    #[display("{0} must be staked")]
+    FactoryCalledCreate2Twice(Address),
+    #[display("{0.kind} accessed forbidden storage at address {1:?} during validation")]
+    InvalidStorageAccess(Entity, StorageSlot),
+    #[display("{0.kind} must be staked")]
     NotStaked(Entity, U256, U256),
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(EntityType),
@@ -480,16 +494,16 @@ pub enum SimulationViolation {
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
     WrongNumberOfPhases(u32),
-    #[display("{0} must not send ETH during validation (except from account to entry point)")]
-    CallHadValue(EntityType),
-    #[display("ran out of gas during {0} validation")]
-    OutOfGas(EntityType),
+    #[display("{0.kind} must not send ETH during validation (except from account to entry point)")]
+    CallHadValue(Entity),
+    #[display("ran out of gas during {0.kind} validation")]
+    OutOfGas(Entity),
     #[display(
-        "{0} tried to access code at {1} during validation, but that address is not a contract"
+        "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
     )]
-    AccessedUndeployedContract(EntityType, Address),
-    #[display("{0} called entry point method other than depositTo")]
-    CalledBannedEntryPointMethod(EntityType),
+    AccessedUndeployedContract(Entity, Address),
+    #[display("{0.kind} called entry point method other than depositTo")]
+    CalledBannedEntryPointMethod(Entity),
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     #[display("aggregator signature validation failed")]
@@ -613,7 +627,7 @@ enum StorageRestriction {
 #[derive(Clone, Copy, Debug)]
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
-    entity: EntityType,
+    entity: Entity,
     is_wallet_creation: bool,
     entry_point_address: Address,
     entity_address: Address,
@@ -637,7 +651,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
         StorageRestriction::Allowed
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
         if is_wallet_creation
-            && entity != EntityType::Account
+            && entity.kind != EntityType::Account
             && accessed_address != entry_point_address
         {
             // We deviate from the letter of ERC-4337 to allow an unstaked

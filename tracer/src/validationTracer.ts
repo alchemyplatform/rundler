@@ -1,4 +1,4 @@
-import type { Address, BigInt, Bytes, LogTracer } from "./types";
+import type { Address, BigInt, Bytes, LogStep, LogTracer } from "./types";
 
 declare function isPrecompiled(address: Address): boolean;
 declare function toAddress(s: string | Bytes): Address;
@@ -17,7 +17,6 @@ interface Output {
 interface Phase {
   forbiddenOpcodesUsed: string[];
   forbiddenPrecompilesUsed: string[];
-  usedInvalidGasOpcode: boolean;
   storageAccesses: StorageAccess[];
   calledBannedEntryPointMethod: boolean;
   addressesCallingWithValue: string[];
@@ -114,7 +113,6 @@ type StringSet = Record<string, boolean | undefined>;
     return {
       forbiddenOpcodesUsed: {},
       forbiddenPrecompilesUsed: {},
-      usedInvalidGasOpcode: false,
       storageAccesses: {},
       calledBannedEntryPointMethod: false,
       addressesCallingWithValue: {},
@@ -126,7 +124,6 @@ type StringSet = Record<string, boolean | undefined>;
 
   function concludePhase(): void {
     const {
-      usedInvalidGasOpcode,
       calledBannedEntryPointMethod,
       calledNonEntryPointWithValue,
       ranOutOfGas,
@@ -149,7 +146,6 @@ type StringSet = Record<string, boolean | undefined>;
     const phase: Phase = {
       forbiddenOpcodesUsed,
       forbiddenPrecompilesUsed,
-      usedInvalidGasOpcode,
       storageAccesses,
       calledBannedEntryPointMethod,
       addressesCallingWithValue,
@@ -178,6 +174,10 @@ type StringSet = Record<string, boolean | undefined>;
     map[key] = newValue;
     return newValue;
   }
+
+  function getContractCombinedKey(log: LogStep, key: string): string {
+    return [toHex(log.contract.getAddress()), key].join(":");
+  } 
 
   return {
     result(_ctx, _db): Output {
@@ -248,11 +248,11 @@ type StringSet = Record<string, boolean | undefined>;
         // The entry point is allowed to freely call `GAS`, but otherwise we
         // require that a call opcode comes next.
         if (justCalledGas && !CALL_OPCODES[opcode]) {
-          currentPhase.usedInvalidGasOpcode = true;
+          currentPhase.forbiddenOpcodesUsed[getContractCombinedKey(log, "GAS")] = true;
         }
         justCalledGas = opcode === "GAS";
         if (FORBIDDEN_OPCODES[opcode]) {
-          currentPhase.forbiddenOpcodesUsed[opcode] = true;
+          currentPhase.forbiddenOpcodesUsed[getContractCombinedKey(log, opcode)] = true;
         }
       }
       if (opcode === "CREATE2") {
@@ -260,7 +260,7 @@ type StringSet = Record<string, boolean | undefined>;
           // In factory phase.
           factoryCreate2Count++;
         } else {
-          currentPhase.forbiddenOpcodesUsed[opcode] = true;
+          currentPhase.forbiddenOpcodesUsed[getContractCombinedKey(log, opcode)] = true;
         }
       } else if (opcode === "KECCAK256") {
         //
@@ -325,7 +325,7 @@ type StringSet = Record<string, boolean | undefined>;
           }
           accessedContractAddresses[addressHex] = true;
         } else if (!PRECOMPILE_WHILTELIST[addressHex]) {
-          currentPhase.forbiddenPrecompilesUsed[addressHex] = true;
+          currentPhase.forbiddenPrecompilesUsed[getContractCombinedKey(log, addressHex)] = true;
         }
       }
     },

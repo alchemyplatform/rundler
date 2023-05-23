@@ -3,9 +3,10 @@ use std::{
     fmt::Debug,
 };
 
+use anyhow::Context;
 use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, BlockId, Opcode, U256},
+    types::{transaction::eip2718::TypedTransaction, Address, BlockId, U256},
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
@@ -29,9 +30,8 @@ pub struct TracerOutput {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Phase {
-    pub forbidden_opcodes_used: Vec<Opcode>,
-    pub forbidden_precompiles_used: Vec<Address>,
-    pub used_invalid_gas_opcode: bool,
+    pub forbidden_opcodes_used: Vec<String>,
+    pub forbidden_precompiles_used: Vec<String>,
     pub storage_accesses: Vec<StorageAccess>,
     pub called_banned_entry_point_method: bool,
     pub addresses_calling_with_value: Vec<Address>,
@@ -107,4 +107,17 @@ where
 
 fn validation_tracer_js() -> &'static str {
     include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
+}
+
+pub fn parse_combined_tracer_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>
+where
+    A: std::str::FromStr,
+    B: std::str::FromStr,
+    <A as std::str::FromStr>::Err: std::error::Error + Send + Sync + 'static,
+    <B as std::str::FromStr>::Err: std::error::Error + Send + Sync + 'static,
+{
+    let (a, b) = combined
+        .split_once(':')
+        .context("tracer combined should contain two parts")?;
+    Ok((a.parse()?, b.parse()?))
 }

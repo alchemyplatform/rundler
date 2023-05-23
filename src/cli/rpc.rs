@@ -1,11 +1,12 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
+use ethers::types::H256;
 
-use super::CommonArgs;
+use super::{json::get_json_config, CommonArgs};
 use crate::{
-    common::{handle::spawn_tasks_with_shutdown, precheck, simulation},
+    common::{handle::spawn_tasks_with_shutdown, mempool::MempoolConfig, precheck, simulation},
     rpc::{self, estimation, RpcTask},
 };
 
@@ -55,7 +56,7 @@ pub struct RpcArgs {
 impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
-    pub fn to_args(
+    pub async fn to_args(
         &self,
         common: &CommonArgs,
         pool_url: String,
@@ -69,6 +70,13 @@ impl RpcArgs {
             .iter()
             .map(|api| api.parse())
             .collect::<Result<Vec<_>, _>>()?;
+
+        let mempool_configs = match &common.mempool_config_path {
+            Some(path) => {
+                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
+            }
+            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
+        };
 
         Ok(rpc::Args {
             port: self.port,
@@ -91,6 +99,7 @@ impl RpcArgs {
             sim_settings,
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
+            mempool_configs,
         })
     }
 }
@@ -127,14 +136,16 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
         builder_url,
     } = rpc_args;
 
-    let task_args = rpc_args.to_args(
-        &common_args,
-        pool_url,
-        builder_url,
-        (&common_args).into(),
-        (&common_args).into(),
-        (&common_args).try_into()?,
-    )?;
+    let task_args = rpc_args
+        .to_args(
+            &common_args,
+            pool_url,
+            builder_url,
+            (&common_args).into(),
+            (&common_args).into(),
+            (&common_args).try_into()?,
+        )
+        .await?;
 
     spawn_tasks_with_shutdown([RpcTask::new(task_args).boxed()], tokio::signal::ctrl_c()).await;
     Ok(())

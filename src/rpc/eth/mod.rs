@@ -29,6 +29,7 @@ use crate::{
             UserOperationRevertReasonFilter,
         },
         eth::log_to_raw_log,
+        mempool::MempoolConfig,
         precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
         protos::op_pool::{
             op_pool_client::OpPoolClient, AddOpRequest, EntityType as ProtoEntityType, ErrorInfo,
@@ -97,10 +98,16 @@ where
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
         estimator_settings: estimation::Settings,
+        mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
         let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
         let prechecker = PrecheckerImpl::new(Arc::clone(&provider), address, precheck_settings);
-        let simulator = SimulatorImpl::new(Arc::clone(&provider), address, sim_settings);
+        let simulator = SimulatorImpl::new(
+            Arc::clone(&provider),
+            address,
+            sim_settings,
+            mempool_configs,
+        );
         let gas_estimator =
             GasEstimatorImpl::new(provider, entry_point.clone(), estimator_settings);
         Self {
@@ -124,6 +131,7 @@ impl<C> EthApi<C>
 where
     C: JsonRpcClient + 'static,
 {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<Provider<C>>,
         entry_points: Vec<Address>,
@@ -132,6 +140,7 @@ where
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
         estimation_settings: estimation::Settings,
+        mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
         let contexts_by_entry_point = entry_points
             .iter()
@@ -144,6 +153,7 @@ where
                         precheck_settings,
                         sim_settings,
                         estimation_settings,
+                        mempool_configs.clone(),
                     ),
                 )
             })
@@ -583,24 +593,21 @@ impl From<SimulationError> for EthRpcError {
             SimulationViolation::UnintendedRevertWithMessage(_, reason, _) => {
                 Self::EntryPointValidationRejected(reason.clone())
             }
-            SimulationViolation::UsedForbiddenOpcode(entity, op) => {
-                Self::OpcodeViolation(*entity, op.clone().0)
+            SimulationViolation::UsedForbiddenOpcode(entity, _, op) => {
+                Self::OpcodeViolation(entity.kind, op.clone().0)
             }
-            SimulationViolation::UsedForbiddenPrecompile(entity, precompile) => {
-                Self::PrecompileViolation(*entity, *precompile)
+            SimulationViolation::UsedForbiddenPrecompile(entity, _, precompile) => {
+                Self::PrecompileViolation(entity.kind, *precompile)
             }
-            SimulationViolation::InvalidGasOpcode(entity) => {
-                Self::OpcodeViolation(*entity, Opcode::GAS)
-            }
-            SimulationViolation::FactoryCalledCreate2Twice => {
+            SimulationViolation::FactoryCalledCreate2Twice(_) => {
                 Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
             }
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
-                Self::InvalidStorageAccess(*entity, slot.address, slot.slot)
+                Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
             }
             SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
                 Self::StakeTooLow(StakeTooLowData::new(
-                    entity.clone(),
+                    *entity,
                     *min_stake,
                     *min_unstake_delay,
                 ))
