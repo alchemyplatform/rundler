@@ -1,12 +1,15 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
+use ethers::types::H256;
 
-use super::CommonArgs;
+use super::{json::get_json_config, CommonArgs};
 use crate::{
     builder::{self, BuilderTask},
-    common::{handle::spawn_tasks_with_shutdown, server::format_server_addr},
+    common::{
+        handle::spawn_tasks_with_shutdown, mempool::MempoolConfig, server::format_server_addr,
+    },
 };
 
 /// CLI options for the builder
@@ -136,7 +139,11 @@ pub struct BuilderArgs {
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
-    pub fn to_args(&self, common: &CommonArgs, pool_url: String) -> anyhow::Result<builder::Args> {
+    pub async fn to_args(
+        &self,
+        common: &CommonArgs,
+        pool_url: String,
+    ) -> anyhow::Result<builder::Args> {
         let use_dynamic_max_priority_fee = self
             .use_dynamic_max_priority_fee
             .unwrap_or_else(|| !is_known_non_eip_1559_chain(common.chain_id));
@@ -145,6 +152,14 @@ impl BuilderArgs {
             .clone()
             .context("should have a node HTTP URL")?;
         let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
+
+        let mempool_configs = match &common.mempool_config_path {
+            Some(path) => {
+                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
+            }
+            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
+        };
+
         Ok(builder::Args {
             port: self.port,
             host: self.host.clone(),
@@ -172,6 +187,7 @@ impl BuilderArgs {
             use_conditional_send_transaction: self.use_conditional_send_transaction,
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
+            mempool_configs,
         })
     }
 
@@ -212,7 +228,7 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
         builder: builder_args,
         pool_url,
     } = builder_args;
-    let task_args = builder_args.to_args(&common_args, pool_url)?;
+    let task_args = builder_args.to_args(&common_args, pool_url).await?;
 
     spawn_tasks_with_shutdown(
         [BuilderTask::new(task_args).boxed()],

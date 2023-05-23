@@ -31,15 +31,17 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let builder_url = builder_args.url(false);
 
     let pool_task_args = pool_args.to_args(&common_args).await?;
-    let builder_task_args = builder_args.to_args(&common_args, pool_url.clone())?;
-    let rpc_task_args = rpc_args.to_args(
-        &common_args,
-        pool_url,
-        builder_url,
-        (&common_args).into(),
-        (&common_args).into(),
-        (&common_args).try_into()?,
-    )?;
+    let builder_task_args = builder_args.to_args(&common_args, pool_url.clone()).await?;
+    let rpc_task_args = rpc_args
+        .to_args(
+            &common_args,
+            pool_url,
+            builder_url,
+            (&common_args).into(),
+            (&common_args).into(),
+            (&common_args).try_into()?,
+        )
+        .await?;
 
     spawn_tasks_with_shutdown(
         [

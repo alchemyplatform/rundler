@@ -2,6 +2,7 @@ use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 
 mod builder;
+mod json;
 mod node;
 mod pool;
 mod prometheus_exporter;
@@ -163,6 +164,13 @@ pub struct CommonArgs {
         default_value = "us-east-1"
     )]
     aws_region: String,
+
+    #[arg(
+        long = "mempool_config_path",
+        name = "mempool_config_path",
+        env = "MEMPOOL_CONFIG_PATH"
+    )]
+    pub mempool_config_path: Option<String>,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;

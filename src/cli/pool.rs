@@ -1,14 +1,11 @@
-use std::{collections::HashSet, fs::File, io::BufReader, pin::Pin, time::Duration};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
-use ethers::types::Address;
-use rusoto_core::Region;
-use rusoto_s3::{GetObjectRequest, S3Client, S3};
-use tokio::io::AsyncReadExt;
 
 use super::CommonArgs;
 use crate::{
+    cli::json::get_json_config,
     common::handle::spawn_tasks_with_shutdown,
     op_pool::{self, PoolConfig, PoolTask},
 };
@@ -88,13 +85,12 @@ impl PoolArgs {
     /// Convert the CLI arguments into the arguments for the OP Pool combining
     /// common and op pool specific arguments.
     pub async fn to_args(&self, common: &CommonArgs) -> anyhow::Result<op_pool::Args> {
-        let aws_region: Region = common.aws_region.parse().context("invalid AWS region")?;
         let blocklist = match &self.blocklist_path {
-            Some(blocklist) => Some(Self::get_list(blocklist, &aws_region).await?),
+            Some(blocklist) => Some(get_json_config(blocklist, &common.aws_region).await?),
             None => None,
         };
         let allowlist = match &self.allowlist_path {
-            Some(allowlist) => Some(Self::get_list(allowlist, &aws_region).await?),
+            Some(allowlist) => Some(get_json_config(allowlist, &common.aws_region).await?),
             None => None,
         };
         tracing::info!("blocklist: {:?}", blocklist);
@@ -127,38 +123,6 @@ impl PoolArgs {
             http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
             pool_configs,
         })
-    }
-
-    async fn get_list(path: &str, aws_s3_region: &Region) -> anyhow::Result<HashSet<Address>> {
-        if path.starts_with("s3://") {
-            Self::get_s3_list(path, aws_s3_region).await
-        } else {
-            Self::get_local_list(path)
-        }
-    }
-
-    fn get_local_list(path: &str) -> anyhow::Result<HashSet<Address>> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-        Ok(serde_json::from_reader(reader)?)
-    }
-
-    async fn get_s3_list(path: &str, aws_s3_region: &Region) -> anyhow::Result<HashSet<Address>> {
-        let (bucket, key) = sscanf::sscanf!(path, "s3://{}/{}", String, String)
-            .map_err(|e| anyhow::anyhow!("invalid s3 uri: {e:?}"))?;
-        let request = GetObjectRequest {
-            bucket,
-            key,
-            ..Default::default()
-        };
-        let client = S3Client::new(aws_s3_region.clone());
-        let resp = client.get_object(request).await?;
-        let body = resp.body.context("object should have body")?;
-        let mut buf = String::new();
-        Pin::new(&mut body.into_async_read())
-            .read_to_string(&mut buf)
-            .await?;
-        Ok(serde_json::from_str(&buf)?)
     }
 }
 

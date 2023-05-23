@@ -51,7 +51,7 @@ pub enum EthRpcError {
     #[error("{0} uses banned precompile: {1:?}")]
     PrecompileViolation(EntityType, Address),
     /// Invalid storage access, maps to Opcode Violation
-    #[error("{0} accesses inaccessible storage at address: {1:?} slot: {2:?}")]
+    #[error("{0} accesses inaccessible storage at address: {1:?} slot: {2:#032x}")]
     InvalidStorageAccess(EntityType, Address, U256),
     /// Operation is out of time range
     #[error("operation is out of time range")]

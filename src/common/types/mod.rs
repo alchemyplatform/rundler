@@ -101,8 +101,9 @@ impl UserOperation {
     }
 }
 
-#[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd)]
-#[display(style = "lowercase")]
+#[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
+#[display(style = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub enum EntityType {
     Account,
     Paymaster,
@@ -135,7 +136,7 @@ impl FromStr for EntityType {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Entity {
     pub kind: EntityType,
     pub address: Address,
