@@ -20,6 +20,7 @@ use crate::{
     builder::{
         self,
         bundle_proposer::{self, BundleProposerImpl},
+        sender::get_sender,
         server::{BuilderImpl, DummyBuilder},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
     },
@@ -34,7 +35,6 @@ use crate::{
         },
         server::{self, format_socket_addr},
         simulation::{self, SimulatorImpl},
-        transaction_sender::TransactionSenderImpl,
     },
 };
 
@@ -54,6 +54,7 @@ pub struct Args {
     pub max_bundle_size: u64,
     pub submit_url: String,
     pub use_bundle_priority_fee: Option<bool>,
+    pub bundle_priority_fee_overhead_percent: u64,
     pub priority_fee_mode: PriorityFeeMode,
     pub use_conditional_send_transaction: bool,
     pub eth_poll_interval: Duration,
@@ -113,6 +114,7 @@ impl Task for BuilderTask {
             beneficiary,
             use_bundle_priority_fee: self.args.use_bundle_priority_fee,
             priority_fee_mode: self.args.priority_fee_mode,
+            bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
         let op_pool =
             Self::connect_client_with_shutdown(&self.args.pool_url, shutdown_token.clone()).await?;
@@ -132,10 +134,11 @@ impl Task for BuilderTask {
             proposer_settings,
         );
         let submit_provider = new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
-        let transaction_sender = TransactionSenderImpl::new(
+        let transaction_sender = get_sender(
             submit_provider,
             signer,
             self.args.use_conditional_send_transaction,
+            &self.args.submit_url,
         );
         let builder_settings = builder::server::Settings {
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,

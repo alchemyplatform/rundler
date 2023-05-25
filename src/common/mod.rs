@@ -12,5 +12,4 @@ pub mod protos;
 pub mod server;
 pub mod simulation;
 pub mod tracer;
-pub mod transaction_sender;
 pub mod types;

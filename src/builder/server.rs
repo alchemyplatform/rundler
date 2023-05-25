@@ -13,13 +13,11 @@ use ethers::{
 };
 use tokio::{join, time};
 use tonic::{async_trait, transport::Channel, Request, Response, Status};
-use tracing::{
-    error,
-    log::{debug, info, trace, warn},
-};
+use tracing::{debug, error, info, trace, warn};
 
+use super::sender::TransactionSender;
 use crate::{
-    builder::bundle_proposer::BundleProposer,
+    builder::{bundle_proposer::BundleProposer, sender::SentTxInfo},
     common::{
         gas::GasFees,
         math,
@@ -33,7 +31,6 @@ use crate::{
                 self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
             },
         },
-        transaction_sender::{SentTxInfo, TransactionSender},
         types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
     },
 };

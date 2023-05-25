@@ -86,6 +86,7 @@ pub struct Settings {
     pub max_bundle_size: u64,
     pub beneficiary: Address,
     pub use_bundle_priority_fee: Option<bool>,
+    pub bundle_priority_fee_overhead_percent: u64,
     pub priority_fee_mode: PriorityFeeMode,
 }
 
@@ -187,6 +188,7 @@ where
                 chain_id,
                 settings.priority_fee_mode,
                 settings.use_bundle_priority_fee,
+                settings.bundle_priority_fee_overhead_percent,
             ),
             settings,
         }
@@ -1163,6 +1165,7 @@ mod tests {
                 beneficiary,
                 use_bundle_priority_fee: Some(true),
                 priority_fee_mode: PriorityFeeMode::PriorityFeePercent(10),
+                bundle_priority_fee_overhead_percent: 0,
             },
         );
         proposer

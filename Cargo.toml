@@ -12,9 +12,12 @@ arrayvec = "0.7.2"
 chrono = "0.4.24"
 clap = { version = "4.2.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
+enum_dispatch = "0.3.11"
 ethers = { version = "2.0.3", features = ["ws"] }
 ethers-signers = {version = "2.0.3", features = ["aws"] }
 futures = "0.3.28"
+futures-timer = "3.0.2"
+futures-util = "0.3.28"
 indexmap = "1.9.3"
 itertools = "0.10.5"
 jsonrpsee = { version = "0.17.0", features = ["client", "macros", "server"] }
@@ -29,6 +32,7 @@ pin-project = "1.0.12"
 prost = "0.11.9"
 prost-types = "0.11.9"
 rand = "0.8.5"
+reqwest = { version = "0.11.18", default-features = false, features = ["rustls-tls"] }
 rslock = "0.1.0"
 rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
 rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }

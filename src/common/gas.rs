@@ -162,6 +162,7 @@ pub struct FeeEstimator<P: ProviderLike> {
     provider: Arc<P>,
     priority_fee_mode: PriorityFeeMode,
     use_bundle_priority_fee: bool,
+    bundle_priority_fee_overhead_percent: u64,
 }
 
 impl<P: ProviderLike> FeeEstimator<P> {
@@ -170,12 +171,14 @@ impl<P: ProviderLike> FeeEstimator<P> {
         chain_id: u64,
         priority_fee_mode: PriorityFeeMode,
         use_bundle_priority_fee: Option<bool>,
+        bundle_priority_fee_overhead_percent: u64,
     ) -> Self {
         Self {
             provider,
             priority_fee_mode,
             use_bundle_priority_fee: use_bundle_priority_fee
                 .unwrap_or_else(|| !is_known_non_eip_1559_chain(chain_id)),
+            bundle_priority_fee_overhead_percent,
         }
     }
 
@@ -183,7 +186,15 @@ impl<P: ProviderLike> FeeEstimator<P> {
         let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
 
         let required_fees = min_fees.unwrap_or_default();
-        let max_priority_fee_per_gas = required_fees.max_priority_fee_per_gas.max(priority_fee);
+
+        let max_priority_fee_per_gas =
+            required_fees
+                .max_priority_fee_per_gas
+                .max(math::increase_by_percent(
+                    priority_fee,
+                    self.bundle_priority_fee_overhead_percent,
+                ));
+
         // Give enough leeway for the base fee to increase by the maximum
         // possible amount for a single block (12.5%).
         let max_fee_per_gas = required_fees

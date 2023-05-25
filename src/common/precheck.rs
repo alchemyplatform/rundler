@@ -37,6 +37,7 @@ pub struct PrecheckerImpl<P: ProviderLike, E: EntryPointLike> {
 pub struct Settings {
     pub max_verification_gas: U256,
     pub use_bundle_priority_fee: Option<bool>,
+    pub bundle_priority_fee_overhead_percent: u64,
     pub priority_fee_mode: gas::PriorityFeeMode,
 }
 
@@ -77,6 +78,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
                 chain_id,
                 settings.priority_fee_mode,
                 settings.use_bundle_priority_fee,
+                settings.bundle_priority_fee_overhead_percent,
             ),
         }
     }

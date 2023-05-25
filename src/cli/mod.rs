@@ -157,6 +157,14 @@ pub struct CommonArgs {
     use_bundle_priority_fee: Option<bool>,
 
     #[arg(
+        long = "bundle_priority_fee_overhead_percent",
+        name = "bundle_priority_fee_overhead_percent",
+        env = "BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT",
+        default_value = "0"
+    )]
+    bundle_priority_fee_overhead_percent: u64,
+
+    #[arg(
         long = "priority_fee_mode_kind",
         name = "priority_fee_mode_kind",
         env = "PRIORITY_FEE_MODE_KIND",
@@ -228,6 +236,7 @@ impl TryFrom<&CommonArgs> for precheck::Settings {
         Ok(Self {
             max_verification_gas: value.max_verification_gas.into(),
             use_bundle_priority_fee: value.use_bundle_priority_fee,
+            bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),
                 value.priority_fee_mode_value,
