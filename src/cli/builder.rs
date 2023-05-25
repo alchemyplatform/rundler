@@ -191,6 +191,7 @@ impl BuilderArgs {
             max_bundle_size: self.max_bundle_size,
             submit_url,
             use_bundle_priority_fee: common.use_bundle_priority_fee,
+            bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
             use_conditional_send_transaction: self.use_conditional_send_transaction,
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
