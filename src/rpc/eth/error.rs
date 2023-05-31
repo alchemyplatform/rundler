@@ -66,8 +66,8 @@ pub enum EthRpcError {
     #[error("unsupported aggregator")]
     UnsupportedAggregator(UnsupportedAggregatorData),
     /// Replacement underpriced
-    #[error("operation rejected")]
-    ReplacementUnderpriced,
+    #[error("replacement underpriced")]
+    ReplacementUnderpriced(ReplacementUnderpricedData),
     /// Other internal errors
     #[error("Invalid UserOp signature or paymaster signature")]
     SignatureCheckFailed,
@@ -114,6 +114,22 @@ impl StakeTooLowData {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacementUnderpricedData {
+    pub current_max_priority_fee: U256,
+    pub current_max_fee: U256,
+}
+
+impl ReplacementUnderpricedData {
+    pub fn new(current_max_priority_fee: U256, current_max_fee: U256) -> Self {
+        Self {
+            current_max_priority_fee,
+            current_max_fee,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct UnsupportedAggregatorData {
     pub aggregator: Address,
@@ -145,7 +161,9 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::UnsupportedAggregator(data) => {
                 rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, msg, data)
             }
-            EthRpcError::ReplacementUnderpriced => rpc_err(INVALID_PARAMS_CODE, msg),
+            EthRpcError::ReplacementUnderpriced(data) => {
+                rpc_err_with_data(INVALID_PARAMS_CODE, msg, data)
+            }
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SimulationFailed(_) => rpc_err(INVALID_REQUEST_CODE, msg),
