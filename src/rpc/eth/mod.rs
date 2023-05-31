@@ -18,8 +18,8 @@ use tonic::{async_trait, transport::Channel, Status};
 use tracing::{debug, Level};
 
 use self::error::{
-    EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, StakeTooLowData,
-    UnsupportedAggregatorData,
+    EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, ReplacementUnderpricedData,
+    StakeTooLowData, UnsupportedAggregatorData,
 };
 use crate::{
     common::{
@@ -33,7 +33,7 @@ use crate::{
         precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
         protos::op_pool::{
             op_pool_client::OpPoolClient, AddOpRequest, EntityType as ProtoEntityType, ErrorInfo,
-            ErrorReason, MempoolOp,
+            ErrorMetadataKey, ErrorReason, MempoolOp,
         },
         simulation::{
             self, SimulationError, SimulationSuccess, SimulationViolation, Simulator, SimulatorImpl,
@@ -654,7 +654,19 @@ impl From<ErrorInfo> for EthRpcError {
             };
             return EthRpcError::ThrottledOrBanned(Entity::new(entity, address));
         } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
-            return EthRpcError::ReplacementUnderpriced;
+            let prio_fee = metadata
+                .get(ErrorMetadataKey::CurrentMaxPriorityFeePerGas.as_str_name())
+                .map_or(U256::zero(), |fee| {
+                    fee.parse::<U256>().unwrap_or(U256::zero())
+                });
+            let fee = metadata
+                .get(ErrorMetadataKey::CurrentMaxFeePerGas.as_str_name())
+                .map_or(U256::zero(), |fee| {
+                    fee.parse::<U256>().unwrap_or(U256::zero())
+                });
+            return EthRpcError::ReplacementUnderpriced(ReplacementUnderpricedData::new(
+                prio_fee, fee,
+            ));
         } else if reason == ErrorReason::OperationDiscardedOnInsert.as_str_name() {
             return anyhow!("operation rejected: mempool full try again with higher gas price")
                 .into();

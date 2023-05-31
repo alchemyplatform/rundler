@@ -14,8 +14,8 @@ use crate::common::protos::{
         op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
         DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
         DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
-        DebugSetReputationResponse, ErrorInfo, ErrorReason, GetOpsRequest, GetOpsResponse,
-        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
+        DebugSetReputationResponse, ErrorInfo, ErrorMetadataKey, ErrorReason, GetOpsRequest,
+        GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
         RemoveEntitiesRequest, RemoveEntitiesResponse, RemoveOpsRequest, RemoveOpsResponse,
     },
 };
@@ -215,11 +215,24 @@ impl From<MempoolError> for Status {
                 reason: ErrorReason::OperationRejected.as_str_name().to_string(),
                 metadata: HashMap::new(),
             },
-            MempoolError::ReplacementUnderpriced(_, _) => ErrorInfo {
+            MempoolError::ReplacementUnderpriced(prio_fee, fee) => ErrorInfo {
                 reason: ErrorReason::ReplacementUnderpriced
                     .as_str_name()
                     .to_string(),
-                metadata: HashMap::new(),
+                metadata: HashMap::from([
+                    (
+                        ErrorMetadataKey::CurrentMaxPriorityFeePerGas
+                            .as_str_name()
+                            .to_string(),
+                        prio_fee.to_string(),
+                    ),
+                    (
+                        ErrorMetadataKey::CurrentMaxFeePerGas
+                            .as_str_name()
+                            .to_string(),
+                        fee.to_string(),
+                    ),
+                ]),
             },
             MempoolError::DiscardedOnInsert => ErrorInfo {
                 reason: ErrorReason::OperationDiscardedOnInsert
