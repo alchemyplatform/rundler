@@ -11,12 +11,12 @@ use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
+use rand::{Rng, RngCore};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 pub use task::*;
 
 use crate::common::{
-    gas,
     protos::{
         self,
         op_pool::{Reputation, ReputationStatus},
@@ -141,16 +141,16 @@ impl UserOperationOptionalGas {
         self.clone()
     }
 
-    pub fn calc_pre_verification_gas(&self, settings: &estimation::Settings) -> U256 {
-        // If someone is asking for pre-verification gas here, it means that
-        // they are most likely going to be taking the results and plugging them
-        // into their user operation. However, doing so changes the
-        // pre-verification gas, which depends on the number of nonzero bytes in
-        // the packed user operation. To make sure the returned gas is enough to
-        // cover the modified user op, calculate the gas needed for the worst
-        // case scenario where the gas fields of the user operation are entirely
-        // nonzero bytes. Likewise for the signature field.
-        let op = UserOperation {
+    // If someone is estimating pre-verification gas, it means that
+    // they are most likely going to be taking the results and plugging them
+    // into their user operation. However, doing so changes the
+    // pre-verification gas, which depends on the number of nonzero bytes in
+    // the packed user operation. To make sure the returned gas is enough to
+    // cover the modified user op, calculate the gas needed for the worst
+    // case scenario where the gas fields of the user operation are entirely
+    // nonzero bytes. Likewise for the signature field.
+    pub fn max_fill(&self, settings: &estimation::Settings) -> UserOperation {
+        UserOperation {
             call_gas_limit: U256::MAX,
             verification_gas_limit: U256::MAX,
             pre_verification_gas: U256::MAX,
@@ -159,8 +159,24 @@ impl UserOperationOptionalGas {
             signature: vec![255_u8; self.signature.len()].into(),
             paymaster_and_data: vec![255_u8; self.paymaster_and_data.len()].into(),
             ..self.cheap_clone().into_user_operation(settings)
-        };
-        gas::calc_pre_verification_gas(&op)
+        }
+    }
+
+    // For estimating pre-verification gas, specifically on networks that use
+    // compression algorithms on their data that they post to their data availability
+    // layer (like Arbitrum), it is important to make sure that the data that is
+    // random such that it compresses to a representative size.
+    pub fn random_fill(&self, settings: &estimation::Settings) -> UserOperation {
+        UserOperation {
+            call_gas_limit: Self::random_u256(),
+            verification_gas_limit: Self::random_u256(),
+            pre_verification_gas: Self::random_u256(),
+            max_fee_per_gas: Self::random_u256(),
+            max_priority_fee_per_gas: Self::random_u256(),
+            signature: Self::random_bytes(self.signature.len()),
+            paymaster_and_data: Self::random_bytes(self.paymaster_and_data.len()),
+            ..self.cheap_clone().into_user_operation(settings)
+        }
     }
 
     pub fn into_user_operation(self, settings: &estimation::Settings) -> UserOperation {
@@ -227,6 +243,16 @@ impl UserOperationOptionalGas {
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
         }
+    }
+
+    fn random_bytes(len: usize) -> Bytes {
+        let mut bytes = vec![0_u8; len];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        bytes.into()
+    }
+
+    fn random_u256() -> U256 {
+        U256::from_big_endian(&rand::thread_rng().gen::<[u8; 32]>())
     }
 }
 

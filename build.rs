@@ -27,6 +27,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("SimpleAccount")?,
         abigen_of("SimpleAccountFactory")?,
         abigen_of("VerifyingPaymaster")?,
+        abigen_of("NodeInterface")?,
     ])
     .build()?
     .write_to_module("src/common/contracts", false)?;

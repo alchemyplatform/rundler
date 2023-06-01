@@ -1,5 +1,8 @@
-use ethers::types::U256;
+use std::sync::Arc;
 
+use ethers::types::{Address, U256};
+
+use super::types::ProviderLike;
 use crate::common::types::UserOperation;
 
 /// Gas overheads for user operations
@@ -28,7 +31,29 @@ impl Default for GasOverheads {
     }
 }
 
-pub fn calc_pre_verification_gas(op: &UserOperation) -> U256 {
+pub async fn calc_pre_verification_gas<P: ProviderLike>(
+    full_op: UserOperation,
+    random_op: UserOperation,
+    entry_point: Address,
+    provider: Arc<P>,
+    chain_id: u64,
+    dynamic_gas_percent_buffer: u64,
+) -> anyhow::Result<U256> {
+    let static_gas = calc_static_pre_verification_gas(&full_op);
+    let dynamic_gas = match chain_id {
+        42161 | 421613 => {
+            provider
+                .clone()
+                .calc_arbitrum_l1_gas(entry_point, random_op)
+                .await?
+        }
+        _ => U256::zero(),
+    };
+
+    Ok(static_gas + dynamic_gas * (100 + dynamic_gas_percent_buffer) / 100)
+}
+
+fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
     let ov = GasOverheads::default();
     let packed = op.pack();
     let length_in_words = (packed.len() + 31) / 32;

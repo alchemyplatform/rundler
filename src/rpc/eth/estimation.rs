@@ -20,7 +20,7 @@ use crate::{
             EstimateCallGasResult, EstimateCallGasRevertAtMax,
             CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
         },
-        eth,
+        eth, gas,
         precheck::MIN_CALL_GAS_LIMIT,
         types::{EntryPointLike, ProviderLike, UserOperation},
     },
@@ -69,6 +69,7 @@ pub trait GasEstimator: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub struct GasEstimatorImpl<P: ProviderLike, E: EntryPointLike> {
+    chain_id: u64,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
@@ -90,7 +91,12 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
         let Self {
             provider, settings, ..
         } = self;
-        let pre_verification_gas = op.calc_pre_verification_gas(settings);
+
+        let block_hash = provider.get_latest_block_hash().await?;
+
+        // Estimate pre verification gas
+        let pre_verification_gas = self.calc_pre_verification_gas(&op).await?;
+
         // Try once with max gas to make sure it's possible to succeed.
         let op = UserOperation {
             pre_verification_gas,
@@ -98,7 +104,6 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
             call_gas_limit: settings.max_call_gas.into(),
             ..op.into_user_operation(settings)
         };
-        let block_hash = provider.get_latest_block_hash().await?;
         let verification_future = self.binary_search_verification_gas(&op, block_hash);
         let call_future = self.estimate_call_gas(&op, block_hash);
         // Not try_join! because then the output is nondeterministic if both
@@ -118,8 +123,9 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
 }
 
 impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
-    pub fn new(provider: Arc<P>, entry_point: E, settings: Settings) -> Self {
+    pub fn new(chain_id: u64, provider: Arc<P>, entry_point: E, settings: Settings) -> Self {
         Self {
+            chain_id,
             provider,
             entry_point,
             settings,
@@ -222,7 +228,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         // top of `CallGasEstimationProxy.sol`.
         let entry_point_code = self
             .provider
-            .get_code(self.entry_point.address(), block_hash)
+            .get_code(self.entry_point.address(), Some(block_hash))
             .await?;
         // Use a random address for the moved entry point so that users can't
         // intentionally get bad estimates by interacting with the hardcoded
@@ -300,6 +306,21 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                 ))?;
             }
         }
+    }
+
+    async fn calc_pre_verification_gas(
+        &self,
+        op: &UserOperationOptionalGas,
+    ) -> Result<U256, GasEstimationError> {
+        Ok(gas::calc_pre_verification_gas(
+            op.max_fill(&self.settings),
+            op.random_fill(&self.settings),
+            self.entry_point.address(),
+            self.provider.clone(),
+            self.chain_id,
+            10,
+        )
+        .await?)
     }
 }
 

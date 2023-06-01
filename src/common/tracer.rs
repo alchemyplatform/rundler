@@ -73,9 +73,10 @@ pub async fn trace_simulate_validation(
     block_id: BlockId,
     max_validation_gas: u64,
 ) -> anyhow::Result<TracerOutput> {
+    let pvg = op.pre_verification_gas;
     let tx = entry_point
         .simulate_validation(op)
-        .gas(max_validation_gas)
+        .gas(U256::from(max_validation_gas) + pvg)
         .tx;
     trace_call(
         entry_point.client().provider(),

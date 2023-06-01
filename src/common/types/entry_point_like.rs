@@ -35,6 +35,8 @@ pub trait EntryPointLike: Send + Sync + 'static {
         gas: U256,
     ) -> anyhow::Result<HandleOpsOut>;
 
+    async fn balance_of(&self, address: Address) -> anyhow::Result<U256>;
+
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
 
     async fn call_spoofed_simulate_op(
@@ -97,6 +99,13 @@ where
             }
         }
         Err(error)?
+    }
+
+    async fn balance_of(&self, address: Address) -> anyhow::Result<U256> {
+        self.balance_of(address)
+            .call()
+            .await
+            .context("entry point should return balance")
     }
 
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256> {
