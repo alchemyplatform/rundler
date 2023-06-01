@@ -656,14 +656,12 @@ impl From<ErrorInfo> for EthRpcError {
         } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
             let prio_fee = metadata
                 .get(ErrorMetadataKey::CurrentMaxPriorityFeePerGas.as_str_name())
-                .map_or(U256::zero(), |fee| {
-                    fee.parse::<U256>().unwrap_or(U256::zero())
-                });
+                .and_then(|fee| fee.parse::<U256>().ok())
+                .unwrap_or_default();
             let fee = metadata
                 .get(ErrorMetadataKey::CurrentMaxFeePerGas.as_str_name())
-                .map_or(U256::zero(), |fee| {
-                    fee.parse::<U256>().unwrap_or(U256::zero())
-                });
+                .and_then(|fee| fee.parse::<U256>().ok())
+                .unwrap_or_default();
             return EthRpcError::ReplacementUnderpriced(ReplacementUnderpricedData::new(
                 prio_fee, fee,
             ));
