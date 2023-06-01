@@ -219,19 +219,12 @@ impl PoolInner {
     }
 
     fn get_min_replacement_fees(&self, op: &UserOperation) -> (U256, U256) {
-        let replacement_priority_fee = Self::fee_multiply_percent(
-            op.max_priority_fee_per_gas,
-            self.config.min_replacement_fee_increase_percentage,
-        );
-        let replacement_fee = Self::fee_multiply_percent(
-            op.max_fee_per_gas,
-            self.config.min_replacement_fee_increase_percentage,
-        );
+        let prev_max_base_fee = op.max_fee_per_gas - op.max_priority_fee_per_gas;
+        let replacement_priority_fee = op.max_priority_fee_per_gas
+            * (100 + self.config.min_replacement_fee_increase_percentage)
+            / 100;
+        let replacement_fee = prev_max_base_fee + replacement_priority_fee;
         (replacement_priority_fee, replacement_fee)
-    }
-
-    fn fee_multiply_percent(fee: U256, percent: usize) -> U256 {
-        fee * (100 + percent) / 100
     }
 }
 
