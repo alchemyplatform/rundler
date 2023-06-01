@@ -127,7 +127,7 @@ impl DevAddresses {
         let file = File::open(".env")?;
         let mut vars = io::BufReader::new(file)
             .lines()
-            .filter_map(|l| l.ok())
+            .map_while(Result::ok)
             .filter_map(|l| l.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())))
             .collect::<HashMap<String, String>>();
 

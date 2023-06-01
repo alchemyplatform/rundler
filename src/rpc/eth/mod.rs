@@ -80,10 +80,11 @@ pub trait EthApi {
     async fn chain_id(&self) -> RpcResult<U64>;
 }
 
+// TODO: use ProviderLike and EntrypointLike
 #[derive(Debug)]
 struct EntryPointContext<Client: JsonRpcClient + 'static> {
     entry_point: IEntryPoint<Provider<Client>>,
-    prechecker: PrecheckerImpl<Provider<Client>>,
+    prechecker: PrecheckerImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
     simulator: SimulatorImpl<Client>,
     gas_estimator: GasEstimatorImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
 }
@@ -94,6 +95,7 @@ where
 {
     pub fn new(
         address: Address,
+        chain_id: u64,
         provider: Arc<Provider<Client>>,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
@@ -101,7 +103,12 @@ where
         mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
         let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
-        let prechecker = PrecheckerImpl::new(Arc::clone(&provider), address, precheck_settings);
+        let prechecker = PrecheckerImpl::new(
+            Arc::clone(&provider),
+            chain_id,
+            entry_point.clone(),
+            precheck_settings,
+        );
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
             address,
@@ -109,7 +116,7 @@ where
             mempool_configs,
         );
         let gas_estimator =
-            GasEstimatorImpl::new(provider, entry_point.clone(), estimator_settings);
+            GasEstimatorImpl::new(chain_id, provider, entry_point.clone(), estimator_settings);
         Self {
             entry_point,
             prechecker,
@@ -149,6 +156,7 @@ where
                     a,
                     EntryPointContext::new(
                         a,
+                        chain_id,
                         Arc::clone(&provider),
                         precheck_settings,
                         sim_settings,
