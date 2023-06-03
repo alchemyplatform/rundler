@@ -11,7 +11,7 @@ use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
-use rand::{Rng, RngCore};
+use rand::RngCore;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 pub use task::*;
@@ -166,13 +166,16 @@ impl UserOperationOptionalGas {
     // compression algorithms on their data that they post to their data availability
     // layer (like Arbitrum), it is important to make sure that the data that is
     // random such that it compresses to a representative size.
+    //
+    // Note that this will slightly overestimate the calldata gas needed as it uses
+    // the worst case scenario for the unknown gas values and paymaster_and_data.
     pub fn random_fill(&self, settings: &estimation::Settings) -> UserOperation {
         UserOperation {
-            call_gas_limit: Self::random_u256(),
-            verification_gas_limit: Self::random_u256(),
-            pre_verification_gas: Self::random_u256(),
-            max_fee_per_gas: Self::random_u256(),
-            max_priority_fee_per_gas: Self::random_u256(),
+            call_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
+            verification_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
+            pre_verification_gas: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
+            max_fee_per_gas: U256::from_big_endian(&Self::random_bytes(8)), // 2^64 max
+            max_priority_fee_per_gas: U256::from_big_endian(&Self::random_bytes(8)), // 2^64 max
             signature: Self::random_bytes(self.signature.len()),
             paymaster_and_data: Self::random_bytes(self.paymaster_and_data.len()),
             ..self.cheap_clone().into_user_operation(settings)
@@ -249,10 +252,6 @@ impl UserOperationOptionalGas {
         let mut bytes = vec![0_u8; len];
         rand::thread_rng().fill_bytes(&mut bytes);
         bytes.into()
-    }
-
-    fn random_u256() -> U256 {
-        U256::from_big_endian(&rand::thread_rng().gen::<[u8; 32]>())
     }
 }
 
