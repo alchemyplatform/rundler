@@ -266,7 +266,6 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
             self.entry_point.address(),
             self.provider.clone(),
             self.chain_id,
-            0,
         )
         .await
         .context("should calculate pre-verification gas")

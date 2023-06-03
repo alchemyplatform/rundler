@@ -37,7 +37,6 @@ pub async fn calc_pre_verification_gas<P: ProviderLike>(
     entry_point: Address,
     provider: Arc<P>,
     chain_id: u64,
-    dynamic_gas_percent_buffer: u64,
 ) -> anyhow::Result<U256> {
     let static_gas = calc_static_pre_verification_gas(&full_op);
     let dynamic_gas = match chain_id {
@@ -50,7 +49,7 @@ pub async fn calc_pre_verification_gas<P: ProviderLike>(
         _ => U256::zero(),
     };
 
-    Ok(static_gas + dynamic_gas * (100 + dynamic_gas_percent_buffer) / 100)
+    Ok(static_gas + dynamic_gas)
 }
 
 fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {

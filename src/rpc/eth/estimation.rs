@@ -318,7 +318,6 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
             self.entry_point.address(),
             self.provider.clone(),
             self.chain_id,
-            10,
         )
         .await?)
     }
