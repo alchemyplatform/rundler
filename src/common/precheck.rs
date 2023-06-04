@@ -129,8 +129,9 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
         // The entry point calculates the user's fee per gas as
         // min(maxFeePerGas, maxPriorityFeePerGas + block.basefee), so we need
         // each term to be at least the current base fee plus the amount we want
-        // as tip.
-        let min_max_fee_per_gas = base_fee + min_priority_fee_per_gas;
+        // as tip. Give enough leeway for the base fee to increase by the
+        // maximum amount for a single block (12.5%).
+        let min_max_fee_per_gas = base_fee * 9 / 8 + min_priority_fee_per_gas;
         if op.max_fee_per_gas < min_max_fee_per_gas {
             violations.push(PrecheckViolation::MaxFeePerGasTooLow(
                 op.max_fee_per_gas,

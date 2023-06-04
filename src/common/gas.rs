@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
-use ethers::types::{Address, U256};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, U256};
 
-use super::types::ProviderLike;
-use crate::common::types::UserOperation;
+use crate::common::{
+    math,
+    types::{ProviderLike, UserOperation},
+};
 
 /// Gas overheads for user operations
 /// used in calculating the pre-verification gas
@@ -72,4 +74,34 @@ fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
         + call_data_cost
         + ov.per_user_op
         + ov.per_user_op_word * length_in_words
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct GasFees {
+    pub max_fee_per_gas: U256,
+    pub max_priority_fee_per_gas: U256,
+}
+
+impl From<&TypedTransaction> for GasFees {
+    fn from(tx: &TypedTransaction) -> Self {
+        match tx {
+            TypedTransaction::Eip1559(tx) => Self {
+                max_fee_per_gas: tx.max_fee_per_gas.unwrap_or_default(),
+                max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or_default(),
+            },
+            _ => Self::default(),
+        }
+    }
+}
+
+impl GasFees {
+    pub fn increase_by_percent(self, percent: u64) -> Self {
+        Self {
+            max_fee_per_gas: math::increase_by_percent(self.max_fee_per_gas, percent),
+            max_priority_fee_per_gas: math::increase_by_percent(
+                self.max_priority_fee_per_gas,
+                percent,
+            ),
+        }
+    }
 }

@@ -41,7 +41,7 @@ pub struct EntryPointEvent {
     pub txn_index: U64,
 }
 
-/// A trait that provides a stream of new blocks with thier events by entrypoint
+/// A trait that provides a stream of new blocks with their events by entrypoint
 pub trait EventProvider: Send + Sync {
     /// Subscribe to new blocks by entrypoint
     fn subscribe_by_entrypoint(

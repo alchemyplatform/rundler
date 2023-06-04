@@ -134,6 +134,37 @@ pub struct BuilderArgs {
         default_value = "false"
     )]
     use_conditional_send_transaction: bool,
+
+    /// After submitting a bundle transaction, the maximum number of blocks to
+    /// wait for that transaction to mine before we try resending with higher
+    /// gas fees.
+    #[arg(
+        long = "builder.max_blocks_to_wait_for_mine",
+        name = "builder.max_blocks_to_wait_for_mine",
+        env = "BUILDER_MAX_BLOCKS_TO_WAIT_FOR_MINE",
+        default_value = "2"
+    )]
+    max_blocks_to_wait_for_mine: u64,
+
+    /// Percentage amount to increase gas fees when retrying a transaction after
+    /// it failed to mine.
+    #[arg(
+        long = "builder.replacement_fee_percent_increase",
+        name = "builder.replacement_fee_percent_increase",
+        env = "BUILDER_REPLACEMENT_FEE_PERCENT_INCREASE",
+        default_value = "10"
+    )]
+    replacement_fee_percent_increase: u64,
+
+    ///
+    #[arg(
+        long = "builder.max_fee_increases",
+        name = "builder.max_fee_increases",
+        env = "BUILDER_MAX_FEE_INCREASES",
+        // Seven increases of 10% is roughly 2x the initial fees.
+        default_value = "7"
+    )]
+    max_fee_increases: u64,
 }
 
 impl BuilderArgs {
@@ -188,6 +219,9 @@ impl BuilderArgs {
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
             mempool_configs,
+            max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
+            replacement_fee_percent_increase: self.replacement_fee_percent_increase,
+            max_fee_increases: self.max_fee_increases,
         })
     }
 

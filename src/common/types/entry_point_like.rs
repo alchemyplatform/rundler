@@ -20,6 +20,7 @@ use crate::common::{
         shared_types::UserOpsPerAggregator,
     },
     eth,
+    gas::GasFees,
     types::UserOperation,
 };
 
@@ -54,7 +55,7 @@ pub trait EntryPointLike: Send + Sync + 'static {
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
         gas: U256,
-        max_priority_fee_per_gas: U256,
+        gas_fees: GasFees,
     ) -> TypedTransaction;
 }
 
@@ -152,13 +153,15 @@ where
         ops_per_aggregator: Vec<UserOpsPerAggregator>,
         beneficiary: Address,
         gas: U256,
-        max_priority_fee_per_gas: U256,
+        gas_fees: GasFees,
     ) -> TypedTransaction {
         let tx: Eip1559TransactionRequest =
             get_handle_ops_call(self, ops_per_aggregator, beneficiary, gas)
                 .tx
                 .into();
-        tx.max_priority_fee_per_gas(max_priority_fee_per_gas).into()
+        tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
+            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+            .into()
     }
 }
 

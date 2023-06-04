@@ -18,6 +18,7 @@ use url::Url;
 
 use crate::{
     builder::{
+        self,
         bundle_proposer::{self, BundleProposerImpl},
         server::{BuilderImpl, DummyBuilder},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
@@ -57,6 +58,9 @@ pub struct Args {
     pub eth_poll_interval: Duration,
     pub sim_settings: simulation::Settings,
     pub mempool_configs: HashMap<H256, MempoolConfig>,
+    pub max_blocks_to_wait_for_mine: u64,
+    pub replacement_fee_percent_increase: u64,
+    pub max_fee_increases: u64,
 }
 
 #[derive(Debug)]
@@ -131,6 +135,11 @@ impl Task for BuilderTask {
             signer,
             self.args.use_conditional_send_transaction,
         );
+        let builder_settings = builder::server::Settings {
+            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
+            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
+            max_fee_increases: self.args.max_fee_increases,
+        };
         let builder = Arc::new(BuilderImpl::new(
             self.args.chain_id,
             beneficiary,
@@ -140,6 +149,7 @@ impl Task for BuilderTask {
             entry_point,
             transaction_sender,
             provider,
+            builder_settings,
         ));
 
         let _builder_loop_guard = {

@@ -4,7 +4,7 @@ use anyhow::Context;
 use ethers::{
     middleware::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, PendingTransaction, Provider},
-    types::{transaction::eip2718::TypedTransaction, TransactionReceipt, H256},
+    types::{transaction::eip2718::TypedTransaction, Address, TransactionReceipt, H256, U256},
 };
 use ethers_signers::Signer;
 #[cfg(test)]
@@ -21,9 +21,17 @@ pub trait TransactionSender: Send + Sync + 'static {
         &self,
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<H256>;
+    ) -> anyhow::Result<SentTxInfo>;
 
     async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>>;
+
+    fn address(&self) -> Address;
+}
+
+#[derive(Debug)]
+pub struct SentTxInfo {
+    pub nonce: U256,
+    pub tx_hash: H256,
 }
 
 #[derive(Debug)]
@@ -49,11 +57,14 @@ where
         &self,
         mut tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<H256> {
+    ) -> anyhow::Result<SentTxInfo> {
         self.provider
             .fill_transaction(&mut tx, None)
             .await
             .context("should fill transaction before signing it")?;
+        let nonce = *tx
+            .nonce()
+            .context("nonce should be set when transaction is filled")?;
         let signature = self
             .provider
             .signer()
@@ -61,7 +72,7 @@ where
             .await
             .context("should sign transaction before sending")?;
         let raw_tx = tx.rlp_signed(&signature);
-        if self.use_conditional_endpoint {
+        let tx_hash: H256 = if self.use_conditional_endpoint {
             self.provider
                 .provider()
                 .request(
@@ -76,13 +87,18 @@ where
                 .request("eth_sendRawTransaction", (raw_tx,))
                 .await
                 .context("should send raw transaction to node")
-        }
+        }?;
+        Ok(SentTxInfo { nonce, tx_hash })
     }
 
     async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
         PendingTransaction::new(tx_hash, self.provider.inner())
             .await
             .context("should wait for transaction to be mined or dropped")
+    }
+
+    fn address(&self) -> Address {
+        self.provider.address()
     }
 }
 
