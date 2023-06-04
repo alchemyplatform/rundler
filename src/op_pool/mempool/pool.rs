@@ -15,7 +15,10 @@ use super::{
     size::SizeTracker,
     PoolConfig, PoolOperation,
 };
-use crate::common::types::{Entity, UserOperation, UserOperationId};
+use crate::common::{
+    math,
+    types::{Entity, UserOperation, UserOperationId},
+};
 
 /// Pool of user operations
 #[derive(Debug)]
@@ -219,19 +222,15 @@ impl PoolInner {
     }
 
     fn get_min_replacement_fees(&self, op: &UserOperation) -> (U256, U256) {
-        let replacement_priority_fee = Self::fee_multiply_percent(
+        let replacement_priority_fee = math::increase_by_percent(
             op.max_priority_fee_per_gas,
             self.config.min_replacement_fee_increase_percentage,
         );
-        let replacement_fee = Self::fee_multiply_percent(
+        let replacement_fee = math::increase_by_percent(
             op.max_fee_per_gas,
             self.config.min_replacement_fee_increase_percentage,
         );
         (replacement_priority_fee, replacement_fee)
-    }
-
-    fn fee_multiply_percent(fee: U256, percent: usize) -> U256 {
-        fee * (100 + percent) / 100
     }
 }
 

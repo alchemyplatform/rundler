@@ -33,6 +33,8 @@ pub trait ProviderLike: Send + Sync + 'static {
 
     async fn get_latest_block_hash(&self) -> anyhow::Result<H256>;
 
+    async fn get_base_fee(&self) -> anyhow::Result<U256>;
+
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256>;
 
     async fn get_code(&self, address: Address, block_hash: Option<H256>) -> anyhow::Result<Bytes>;
@@ -78,6 +80,15 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             .context("block should exist to get latest hash")?
             .hash
             .context("hash should be present on block")
+    }
+
+    async fn get_base_fee(&self) -> anyhow::Result<U256> {
+        Middleware::get_block(self, BlockNumber::Latest)
+            .await
+            .context("should load latest block to get base fee")?
+            .context("latest block should exist")?
+            .base_fee_per_gas
+            .context("latest block should have a nonempty base fee")
     }
 
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {

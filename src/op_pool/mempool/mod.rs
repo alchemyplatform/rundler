@@ -80,7 +80,7 @@ pub struct PoolConfig {
     pub max_userops_per_sender: usize,
     /// The minimum fee bump required to replace an operation in the mempool
     /// Applies to both priority fee and fee. Expressed as an integer percentage value
-    pub min_replacement_fee_increase_percentage: usize,
+    pub min_replacement_fee_increase_percentage: u64,
     /// After this threshold is met, we will start to drop the worst userops from the mempool
     pub max_size_of_pool_bytes: usize,
     /// Operations that are always banned from the mempool

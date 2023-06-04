@@ -17,6 +17,8 @@ use tracing::{error, info};
 
 use crate::common::{
     contracts::entry_point::UserOpsPerAggregator,
+    gas::GasFees,
+    math,
     protos::{
         self,
         op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
@@ -37,7 +39,7 @@ const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 100;
 pub struct Bundle {
     pub ops_per_aggregator: Vec<UserOpsPerAggregator>,
     pub gas_estimate: U256,
-    pub max_priority_fee_per_gas: U256,
+    pub gas_fees: GasFees,
     pub expected_storage: ExpectedStorage,
     pub rejected_ops: Vec<UserOperation>,
     pub rejected_entities: Vec<Entity>,
@@ -59,7 +61,7 @@ impl Bundle {
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait BundleProposer: Send + Sync + 'static {
-    async fn make_bundle(&self) -> anyhow::Result<Bundle>;
+    async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle>;
 }
 
 #[derive(Debug)]
@@ -97,17 +99,22 @@ where
     E: EntryPointLike,
     P: ProviderLike,
 {
-    async fn make_bundle(&self) -> anyhow::Result<Bundle> {
-        let (ops, max_priority_fee_per_gas) =
-            try_join!(self.get_ops_from_pool(), self.get_max_priority_fee())?;
-        let block_hash = self.provider.get_latest_block_hash().await?;
+    async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
+        let (ops, base_fee, max_priority_fee_from_provider, block_hash) = try_join!(
+            self.get_ops_from_pool(),
+            self.provider.get_base_fee(),
+            self.get_max_priority_fee(),
+            self.provider.get_latest_block_hash(),
+        )?;
+        let gas_fees @ GasFees {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        } = self.get_required_fees(base_fee, max_priority_fee_from_provider, required_fees);
         let simulation_futures = ops
             .iter()
             .filter(|op| {
-                op.op.max_priority_fee_per_gas
-                    >= max_priority_fee_per_gas
-                        * (100 + self.settings.max_priority_fee_overhead_percent)
-                        / 100
+                op.op.max_fee_per_gas >= max_fee_per_gas
+                    && op.op.max_priority_fee_per_gas >= max_priority_fee_per_gas
             })
             .cloned()
             .map(|op| self.simulate_validation(op, block_hash));
@@ -141,7 +148,7 @@ where
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
-                    max_priority_fee_per_gas,
+                    gas_fees,
                     expected_storage,
                     rejected_ops: context.rejected_ops,
                     rejected_entities: context.rejected_entities,
@@ -152,6 +159,7 @@ where
         Ok(Bundle {
             rejected_ops: context.rejected_ops,
             rejected_entities: context.rejected_entities,
+            gas_fees,
             ..Default::default()
         })
     }
@@ -314,7 +322,10 @@ where
     ) -> anyhow::Result<Option<U256>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
-        let gas = context.get_total_gas() * (100 + BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT) / 100;
+        let gas = math::increase_by_percent(
+            context.get_total_gas(),
+            BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
+        );
         let handle_ops_out = self
             .entry_point
             .call_handle_ops(
@@ -430,6 +441,31 @@ where
         };
 
         Ok(())
+    }
+
+    fn get_required_fees(
+        &self,
+        base_fee: U256,
+        max_priority_fee_from_provider: U256,
+        required_fees: Option<GasFees>,
+    ) -> GasFees {
+        let required_fees = required_fees.unwrap_or_default();
+        let max_priority_fee_per_gas =
+            required_fees
+                .max_priority_fee_per_gas
+                .max(math::increase_by_percent(
+                    max_priority_fee_from_provider,
+                    self.settings.max_priority_fee_overhead_percent,
+                ));
+        // Give enough leeway for the base fee to increase by the maximum
+        // possible amount for a single block (12.5%).
+        let max_fee_per_gas = required_fees
+            .max_fee_per_gas
+            .max((base_fee * 9 / 8) + max_priority_fee_per_gas);
+        GasFees {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        }
     }
 }
 
@@ -667,10 +703,10 @@ mod tests {
         }])
         .await;
 
-        let expected_gas =
-            (op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit)
-                * (100 + BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT)
-                / 100;
+        let expected_gas = math::increase_by_percent(
+            op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit,
+            BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
+        );
 
         assert_eq!(
             bundle.ops_per_aggregator,
@@ -785,12 +821,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drops_but_not_rejects_op_with_too_low_priority_fee() {
+    async fn test_drops_but_not_rejects_op_with_too_low_max_priority_fee() {
         // With 10% required overhead on priority fee, op1 should be excluded
         // but op2 accepted.
+        let base_fee = U256::from(1000);
         let max_priority_fee_per_gas = U256::from(50);
-        let op1 = op_with_sender_and_priority_fee(address(1), 54.into());
-        let op2 = op_with_sender_and_priority_fee(address(2), 55.into());
+        let op1 = op_with_sender_and_fees(address(1), 2054.into(), 54.into());
+        let op2 = op_with_sender_and_fees(address(2), 2055.into(), 55.into());
         let bundle = make_bundle(
             vec![
                 MockOp {
@@ -805,10 +842,54 @@ mod tests {
             vec![],
             vec![HandleOpsOut::Success],
             vec![],
+            base_fee,
             max_priority_fee_per_gas,
         )
         .await;
-        assert_eq!(bundle.max_priority_fee_per_gas, max_priority_fee_per_gas);
+        assert_eq!(bundle.gas_fees.max_priority_fee_per_gas, 55.into());
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op2],
+                ..Default::default()
+            }],
+        );
+        assert!(bundle.rejected_ops.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_drops_but_not_rejects_op_with_too_low_max_fee_per_gas() {
+        // Required max_fee_per_gas is the base fee increased by 12.5% plus the
+        // required priority fee.
+        let base_fee = U256::from(1000);
+        let max_priority_fee_per_gas = U256::from(50);
+        let op1 = op_with_sender_and_fees(address(1), 1179.into(), 55.into());
+        let op2 = op_with_sender_and_fees(address(2), 1180.into(), 55.into());
+        let bundle = make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            base_fee,
+            max_priority_fee_per_gas,
+        )
+        .await;
+        assert_eq!(
+            bundle.gas_fees,
+            GasFees {
+                max_fee_per_gas: 1180.into(),
+                max_priority_fee_per_gas: 55.into(),
+            }
+        );
         assert_eq!(
             bundle.ops_per_aggregator,
             vec![UserOpsPerAggregator {
@@ -889,6 +970,7 @@ mod tests {
             ],
             vec![HandleOpsOut::Success],
             vec![],
+            U256::zero(),
             U256::zero(),
         )
         .await;
@@ -973,6 +1055,7 @@ mod tests {
             ],
             vec![deposit, deposit, deposit],
             U256::zero(),
+            U256::zero(),
         )
         .await;
 
@@ -1008,6 +1091,7 @@ mod tests {
             vec![HandleOpsOut::Success],
             vec![],
             U256::zero(),
+            U256::zero(),
         )
         .await
     }
@@ -1017,6 +1101,7 @@ mod tests {
         mock_aggregators: Vec<MockAggregator>,
         mock_handle_ops_call_results: Vec<HandleOpsOut>,
         mock_paymaster_deposits: Vec<U256>,
+        base_fee: U256,
         max_priority_fee_per_gas: U256,
     ) -> Bundle {
         let entry_point_address = address(123);
@@ -1075,6 +1160,9 @@ mod tests {
             .expect_get_latest_block_hash()
             .returning(move || Ok(current_block_hash));
         provider
+            .expect_get_base_fee()
+            .returning(move || Ok(base_fee));
+        provider
             .expect_get_max_priority_fee()
             .returning(move || Ok(max_priority_fee_per_gas));
         provider
@@ -1092,7 +1180,10 @@ mod tests {
                 max_priority_fee_overhead_percent: 10,
             },
         );
-        proposer.make_bundle().await.expect("should make a bundle")
+        proposer
+            .make_bundle(None)
+            .await
+            .expect("should make a bundle")
     }
 
     fn address(n: u8) -> Address {
@@ -1134,12 +1225,14 @@ mod tests {
         }
     }
 
-    fn op_with_sender_and_priority_fee(
+    fn op_with_sender_and_fees(
         sender: Address,
+        max_fee_per_gas: U256,
         max_priority_fee_per_gas: U256,
     ) -> UserOperation {
         UserOperation {
             sender,
+            max_fee_per_gas,
             max_priority_fee_per_gas,
             ..Default::default()
         }

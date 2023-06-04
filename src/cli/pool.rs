@@ -54,7 +54,7 @@ pub struct PoolArgs {
         env = "POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE",
         default_value = "10"
     )]
-    pub min_replacement_fee_increase_percentage: usize,
+    pub min_replacement_fee_increase_percentage: u64,
 
     /// ETH Node HTTP polling interval in milliseconds
     /// (only used if node_http is set)

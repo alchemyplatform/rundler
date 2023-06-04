@@ -20,7 +20,7 @@ use crate::{
             EstimateCallGasResult, EstimateCallGasRevertAtMax,
             CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
         },
-        eth, gas,
+        eth, gas, math,
         precheck::MIN_CALL_GAS_LIMIT,
         types::{EntryPointLike, ProviderLike, UserOperation},
     },
@@ -113,10 +113,11 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
         let call_gas_limit = call_gas_limit?;
         Ok(GasEstimate {
             pre_verification_gas,
-            verification_gas_limit: (verification_gas_limit
-                * (100 + VERIFICATION_GAS_BUFFER_PERCENT)
-                / 100)
-                .min(settings.max_verification_gas.into()),
+            verification_gas_limit: math::increase_by_percent(
+                verification_gas_limit,
+                VERIFICATION_GAS_BUFFER_PERCENT,
+            )
+            .min(settings.max_verification_gas.into()),
             call_gas_limit: call_gas_limit.clamp(MIN_CALL_GAS_LIMIT, settings.max_call_gas.into()),
         })
     }
