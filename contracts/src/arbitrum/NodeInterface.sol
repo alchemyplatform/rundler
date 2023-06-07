@@ -4,6 +4,8 @@
 
 pragma solidity >=0.4.21 <0.9.0;
 
+// From https://github.com/OffchainLabs/nitro-contracts/blob/f48ce451e4bc2dbea9024cdc08fd0eb410fa61b5/src/node-interface/NodeInterface.sol
+
 /** @title Interface for providing gas estimation for retryable auto-redeems and constructing outbox proofs
  *  @notice This contract doesn't exist on-chain. Instead it is a virtual interface accessible at
  *  0x00000000000000000000000000000000000000C8

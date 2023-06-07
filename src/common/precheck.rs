@@ -2,10 +2,13 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
-use ethers::types::{Address, BlockNumber, U256};
+use ethers::types::{Address, U256};
 use tonic::async_trait;
 
-use super::types::{EntryPointLike, ProviderLike};
+use super::{
+    gas::GasFees,
+    types::{EntryPointLike, ProviderLike},
+};
 use crate::common::{
     gas,
     types::{UserOperation, ViolationError},
@@ -27,12 +30,14 @@ pub struct PrecheckerImpl<P: ProviderLike, E: EntryPointLike> {
     chain_id: u64,
     entry_point: E,
     settings: Settings,
+    fee_estimator: gas::FeeEstimator<P>,
 }
 
 #[derive(Copy, Clone, Debug)]
 pub struct Settings {
-    pub min_priority_fee_per_gas: U256,
     pub max_verification_gas: U256,
+    pub use_bundle_priority_fee: Option<bool>,
+    pub priority_fee_mode: gas::PriorityFeeMode,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -41,7 +46,7 @@ struct AsyncData {
     sender_exists: bool,
     paymaster_exists: bool,
     payer_funds: U256,
-    base_fee: U256,
+    bundle_fees: GasFees,
     min_pre_verification_gas: U256,
 }
 
@@ -63,10 +68,16 @@ impl<P: ProviderLike, E: EntryPointLike> Prechecker for PrecheckerImpl<P, E> {
 impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
     pub fn new(provider: Arc<P>, chain_id: u64, entry_point: E, settings: Settings) -> Self {
         Self {
-            provider,
+            provider: provider.clone(),
             chain_id,
             entry_point,
             settings,
+            fee_estimator: gas::FeeEstimator::new(
+                provider,
+                chain_id,
+                settings.priority_fee_mode,
+                settings.use_bundle_priority_fee,
+            ),
         }
     }
 
@@ -109,10 +120,15 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
         async_data: AsyncData,
     ) -> ArrayVec<PrecheckViolation, 5> {
         let Settings {
-            min_priority_fee_per_gas,
             max_verification_gas,
+            ..
         } = self.settings;
-        let AsyncData { base_fee, .. } = async_data;
+        let AsyncData {
+            bundle_fees,
+            min_pre_verification_gas,
+            ..
+        } = async_data;
+
         let mut violations = ArrayVec::new();
         if op.verification_gas_limit > max_verification_gas {
             violations.push(PrecheckViolation::VerificationGasTooHigh(
@@ -120,30 +136,28 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
                 max_verification_gas,
             ));
         }
-        if op.pre_verification_gas < async_data.min_pre_verification_gas {
+        if op.pre_verification_gas < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas,
-                async_data.min_pre_verification_gas,
+                min_pre_verification_gas,
             ));
         }
-        // The entry point calculates the user's fee per gas as
-        // min(maxFeePerGas, maxPriorityFeePerGas + block.basefee), so we need
-        // each term to be at least the current base fee plus the amount we want
-        // as tip. Give enough leeway for the base fee to increase by the
-        // maximum amount for a single block (12.5%).
-        let min_max_fee_per_gas = base_fee * 9 / 8 + min_priority_fee_per_gas;
-        if op.max_fee_per_gas < min_max_fee_per_gas {
+
+        let required_fees = self.fee_estimator.required_op_fees(bundle_fees);
+
+        if op.max_fee_per_gas < required_fees.max_fee_per_gas {
             violations.push(PrecheckViolation::MaxFeePerGasTooLow(
                 op.max_fee_per_gas,
-                min_max_fee_per_gas,
+                required_fees.max_fee_per_gas,
             ));
         }
-        if op.max_priority_fee_per_gas < min_priority_fee_per_gas {
+        if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas {
             violations.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
                 op.max_priority_fee_per_gas,
-                min_priority_fee_per_gas,
+                required_fees.max_priority_fee_per_gas,
             ));
         }
+
         if op.call_gas_limit < MIN_CALL_GAS_LIMIT {
             violations.push(PrecheckViolation::CallGasLimitTooLow(
                 op.call_gas_limit,
@@ -190,14 +204,14 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
             sender_exists,
             paymaster_exists,
             payer_funds,
-            base_fee,
+            bundle_fees,
             min_pre_verification_gas,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.is_contract(Some(op.sender)),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
-            self.get_base_fee(),
+            self.get_bundle_fees(),
             self.get_pre_verification_gas(op.clone())
         )?;
         Ok(AsyncData {
@@ -205,7 +219,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
             sender_exists,
             paymaster_exists,
             payer_funds,
-            base_fee,
+            bundle_fees,
             min_pre_verification_gas,
         })
     }
@@ -250,14 +264,11 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
             .context("precheck should get sender balance")
     }
 
-    async fn get_base_fee(&self) -> anyhow::Result<U256> {
-        self.provider
-            .get_block(BlockNumber::Latest)
+    async fn get_bundle_fees(&self) -> anyhow::Result<GasFees> {
+        self.fee_estimator
+            .required_bundle_fees(None)
             .await
-            .context("should load latest block to get base fee")?
-            .context("latest block should exist")?
-            .base_fee_per_gas
-            .context("latest block should have a nonempty base fee")
+            .context("should get bundle fees")
     }
 
     async fn get_pre_verification_gas(&self, op: UserOperation) -> anyhow::Result<U256> {

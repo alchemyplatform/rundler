@@ -8,7 +8,8 @@ use super::{json::get_json_config, CommonArgs};
 use crate::{
     builder::{self, BuilderTask},
     common::{
-        handle::spawn_tasks_with_shutdown, mempool::MempoolConfig, server::format_server_addr,
+        gas::PriorityFeeMode, handle::spawn_tasks_with_shutdown, mempool::MempoolConfig,
+        server::format_server_addr,
     },
 };
 
@@ -97,32 +98,6 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// If true, will use the provider's `eth_maxPriorityFeePerGas` method to
-    /// set a priority fee when building bundles. Must not be set on networks
-    /// which do not support this method.
-    ///
-    /// Defaults to false on Arbitrum (which does not use this field) and on
-    /// Optimism mainnet (which currently doesn't support this method), true
-    /// otherwise.
-    #[arg(
-        long = "builder.use_dynamic_max_priority_fee",
-        name = "builder.use_dynamic_max_priority_fee",
-        env = "BUILDER_USE_DYNAMIC_MAX_PRIORITY_FEE"
-    )]
-    use_dynamic_max_priority_fee: Option<bool>,
-
-    /// The percentage of how much bundled ops' `maxPriorityFeePerGas` must
-    /// exceed the value currently returned by `eth_maxPriorityFeePerGas` to be
-    /// included in a bundle. Ignored if `builder.use_dynamic_max_priority_fee`
-    /// is false.
-    #[arg(
-        long = "builder.max_priority_fee_overhead_percent",
-        name = "builder.max_priority_fee_overhead_percent",
-        env = "BUILDER_MAX_PRIORITY_FEE_OVERHEAD_PERCENT",
-        default_value = "0"
-    )]
-    max_priority_fee_overhead_percent: u64,
-
     /// If true, will use the provider's `eth_sendRawTransactionConditional`
     /// method instead `eth_sendRawTransaction`, passing in expected storage
     /// values determined through simulation. Must not be set on networks
@@ -175,9 +150,11 @@ impl BuilderArgs {
         common: &CommonArgs,
         pool_url: String,
     ) -> anyhow::Result<builder::Args> {
-        let use_dynamic_max_priority_fee = self
-            .use_dynamic_max_priority_fee
-            .unwrap_or_else(|| !is_known_non_eip_1559_chain(common.chain_id));
+        let priority_fee_mode = PriorityFeeMode::try_from(
+            common.priority_fee_mode_kind.as_str(),
+            common.priority_fee_mode_value,
+        )?;
+
         let rpc_url = common
             .node_http
             .clone()
@@ -213,8 +190,8 @@ impl BuilderArgs {
             chain_id: common.chain_id,
             max_bundle_size: self.max_bundle_size,
             submit_url,
-            use_dynamic_max_priority_fee,
-            max_priority_fee_overhead_percent: self.max_priority_fee_overhead_percent,
+            use_bundle_priority_fee: common.use_bundle_priority_fee,
+            priority_fee_mode,
             use_conditional_send_transaction: self.use_conditional_send_transaction,
             eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
@@ -228,17 +205,6 @@ impl BuilderArgs {
     pub fn url(&self, secure: bool) -> String {
         format_server_addr(&self.host, self.port, secure)
     }
-}
-
-const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
-    42161,  // Arbitrum One (Mainnet)
-    42170,  // Arbitrum Nova
-    421613, // Arbitrum Goerli
-    10,     // Optimism Mainnet
-];
-
-fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
-    NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
 }
 
 /// CLI options for the Builder server standalone

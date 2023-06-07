@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, U256};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, Chain, U256};
+use tokio::try_join;
 
 use crate::common::{
     math,
@@ -46,6 +47,12 @@ pub async fn calc_pre_verification_gas<P: ProviderLike>(
             provider
                 .clone()
                 .calc_arbitrum_l1_gas(entry_point, random_op)
+                .await?
+        }
+        10 | 420 => {
+            provider
+                .clone()
+                .calc_optimism_l1_gas(entry_point, random_op)
                 .await?
         }
         _ => U256::zero(),
@@ -103,4 +110,114 @@ impl GasFees {
             ),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PriorityFeeMode {
+    Fixed(u64),
+    BaseFeePercent(u64),
+    PriorityFeePercent(u64),
+}
+
+impl PriorityFeeMode {
+    pub fn try_from(kind: &str, value: u64) -> anyhow::Result<Self> {
+        match kind {
+            "fixed" => Ok(Self::Fixed(value)),
+            "base_fee_percent" => Ok(Self::BaseFeePercent(value)),
+            "priority_fee_percent" => Ok(Self::PriorityFeePercent(value)),
+            _ => anyhow::bail!("Invalid priority fee mode: {}", kind),
+        }
+    }
+
+    pub fn required_fees(&self, bundle_fees: GasFees) -> GasFees {
+        let base_fee = bundle_fees.max_fee_per_gas - bundle_fees.max_priority_fee_per_gas;
+
+        let max_priority_fee_per_gas = match *self {
+            PriorityFeeMode::Fixed(value) => {
+                bundle_fees.max_priority_fee_per_gas.max(U256::from(value))
+            }
+            PriorityFeeMode::BaseFeePercent(percent) => math::percent(base_fee, percent),
+            PriorityFeeMode::PriorityFeePercent(percent) => {
+                let ret = math::increase_by_percent(bundle_fees.max_priority_fee_per_gas, percent);
+                tracing::info!(
+                    "bundle_fees {:?} max_priority_fee_per_gas {:?} percent {:?}",
+                    bundle_fees,
+                    ret,
+                    percent
+                );
+                ret
+            }
+        };
+
+        let max_fee_per_gas = base_fee + max_priority_fee_per_gas;
+        GasFees {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FeeEstimator<P: ProviderLike> {
+    provider: Arc<P>,
+    priority_fee_mode: PriorityFeeMode,
+    use_bundle_priority_fee: bool,
+}
+
+impl<P: ProviderLike> FeeEstimator<P> {
+    pub fn new(
+        provider: Arc<P>,
+        chain_id: u64,
+        priority_fee_mode: PriorityFeeMode,
+        use_bundle_priority_fee: Option<bool>,
+    ) -> Self {
+        Self {
+            provider,
+            priority_fee_mode,
+            use_bundle_priority_fee: use_bundle_priority_fee
+                .unwrap_or_else(|| !is_known_non_eip_1559_chain(chain_id)),
+        }
+    }
+
+    pub async fn required_bundle_fees(&self, min_fees: Option<GasFees>) -> anyhow::Result<GasFees> {
+        let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
+
+        let required_fees = min_fees.unwrap_or_default();
+        let max_priority_fee_per_gas = required_fees.max_priority_fee_per_gas.max(priority_fee);
+        // Give enough leeway for the base fee to increase by the maximum
+        // possible amount for a single block (12.5%).
+        let max_fee_per_gas = required_fees
+            .max_fee_per_gas
+            .max((base_fee * 9 / 8) + max_priority_fee_per_gas);
+        Ok(GasFees {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        })
+    }
+
+    pub fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees {
+        self.priority_fee_mode.required_fees(bundle_fees)
+    }
+
+    async fn get_base_fee(&self) -> anyhow::Result<U256> {
+        self.provider.get_base_fee().await
+    }
+
+    async fn get_priority_fee(&self) -> anyhow::Result<U256> {
+        if self.use_bundle_priority_fee {
+            self.provider.get_max_priority_fee().await
+        } else {
+            Ok(U256::zero())
+        }
+    }
+}
+
+const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
+    Chain::Arbitrum as u64,
+    Chain::ArbitrumNova as u64,
+    Chain::ArbitrumGoerli as u64,
+];
+
+fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
+    NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
 }

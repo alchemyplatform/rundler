@@ -1,5 +1,5 @@
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand};
+use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
 mod builder;
 mod json;
@@ -16,6 +16,7 @@ use rpc::RpcCliArgs;
 
 use crate::{
     common::{
+        gas::PriorityFeeMode,
         precheck::{self, MIN_CALL_GAS_LIMIT},
         simulation,
     },
@@ -113,15 +114,6 @@ pub struct CommonArgs {
     node_http: Option<String>,
 
     #[arg(
-        long = "min_priority_fee_per_gas",
-        name = "min_priority_fee_per_gas",
-        default_value = "100000000",
-        env = "MIN_PRIORITY_FEE_PER_GAS",
-        global = true
-    )]
-    min_priority_fee_per_gas: u64,
-
-    #[arg(
         long = "max_verification_gas",
         name = "max_verification_gas",
         default_value = "5000000",
@@ -156,6 +148,30 @@ pub struct CommonArgs {
         global = true
     )]
     max_simulate_handle_ops_gas: u64,
+
+    #[arg(
+        long = "use_bundle_priority_fee",
+        name = "use_bundle_priority_fee",
+        env = "USE_BUNDLE_PRIORITY_FEE"
+    )]
+    use_bundle_priority_fee: Option<bool>,
+
+    #[arg(
+        long = "priority_fee_mode_kind",
+        name = "priority_fee_mode_kind",
+        env = "PRIORITY_FEE_MODE_KIND",
+        value_parser = PossibleValuesParser::new(["fixed", "base_fee_percent", "priority_fee_percent"]),
+        default_value = "fixed"
+    )]
+    priority_fee_mode_kind: String,
+
+    #[arg(
+        long = "priority_fee_mode_value",
+        name = "priority_fee_mode_value",
+        env = "PRIORITY_FEE_MODE_VALUE",
+        default_value = "0"
+    )]
+    priority_fee_mode_value: u64,
 
     #[arg(
         long = "aws_region",
@@ -205,12 +221,18 @@ impl TryFrom<&CommonArgs> for estimation::Settings {
     }
 }
 
-impl From<&CommonArgs> for precheck::Settings {
-    fn from(value: &CommonArgs) -> Self {
-        Self {
-            min_priority_fee_per_gas: value.min_priority_fee_per_gas.into(),
+impl TryFrom<&CommonArgs> for precheck::Settings {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &CommonArgs) -> anyhow::Result<Self> {
+        Ok(Self {
             max_verification_gas: value.max_verification_gas.into(),
-        }
+            use_bundle_priority_fee: value.use_bundle_priority_fee,
+            priority_fee_mode: PriorityFeeMode::try_from(
+                value.priority_fee_mode_kind.as_str(),
+                value.priority_fee_mode_value,
+            )?,
+        })
     }
 }
 

@@ -6,3 +6,10 @@ where
 {
     n * (100 + percent) / 100
 }
+
+pub fn percent<T>(n: T, percent: u64) -> T
+where
+    T: Mul<u64, Output = T> + Div<u64, Output = T>,
+{
+    n * percent / 100
+}
