@@ -13,12 +13,17 @@ use tonic::async_trait;
 use crate::common::{
     contracts::{
         i_aggregator::IAggregator, i_entry_point::IEntryPoint, node_interface::NodeInterface,
+        ovm_gas_price_oracle::OVM_GasPriceOracle,
     },
     types::UserOperation,
 };
 
 const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc8,
+]);
+
+const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
+    0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0F,
 ]);
 
 #[cfg_attr(test, automock)]
@@ -46,6 +51,12 @@ pub trait ProviderLike: Send + Sync + 'static {
     ) -> anyhow::Result<Option<Bytes>>;
 
     async fn calc_arbitrum_l1_gas(
+        self: Arc<Self>,
+        entry_point_address: Address,
+        op: UserOperation,
+    ) -> anyhow::Result<U256>;
+
+    async fn calc_optimism_l1_gas(
         self: Arc<Self>,
         entry_point_address: Address,
         op: UserOperation,
@@ -136,5 +147,30 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             .call()
             .await?;
         Ok(U256::from(gas.0))
+    }
+
+    async fn calc_optimism_l1_gas(
+        self: Arc<Self>,
+        entry_point_address: Address,
+        op: UserOperation,
+    ) -> anyhow::Result<U256> {
+        let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&self));
+        let data = entry_point
+            .handle_ops(vec![op], Address::random())
+            .calldata()
+            .context("should get calldata for entry point handle ops")?;
+
+        let gas_oracle =
+            OVM_GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, Arc::clone(&self));
+
+        let (l1_gas, l2_gas_fee) = tokio::try_join!(
+            async {
+                let l1_gas = gas_oracle.get_l1_fee(data).call().await?;
+                Ok(l1_gas)
+            },
+            self.get_base_fee()
+        )?;
+
+        Ok(l1_gas / l2_gas_fee)
     }
 }

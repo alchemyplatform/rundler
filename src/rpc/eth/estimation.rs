@@ -35,7 +35,7 @@ const GAS_ROUNDING: u64 = 1024;
 
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 
-const ESTIMATION_MAX_FEE_PER_GAS: U256 = U256([1_000_000_000_000_000_000u64, 0, 0, 0]); // 1 eth
+const GAS_FEE_TRANSFER_COST: u64 = 10000;
 
 /// Offset at which the proxy target address appears in the proxy bytecode. Must
 /// be updated whenever `CallGasEstimationProxy.sol` changes.
@@ -139,44 +139,16 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         block_hash: H256,
     ) -> Result<U256, GasEstimationError> {
         let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
-        let mut max_fee_per_gas = op.max_fee_per_gas;
-        let mut spoofed_state = spoof::state();
-        if op.paymaster().is_none() {
-            // Also spoof the sender to have high balance if they don't use a
-            // paymaster, so estimation won't fail because their balance is too low.
-            // This accommodates the use case of estimating gas on an account with
-            // low balance and then funding it afterwards based on the estimate.
-            // Make sure to have a high gas fee, because otherwise the required
-            // prefund is small and the account skips making a call to transfer
-            // eth to the entry point, which causes our estimate to come up short.
-            max_fee_per_gas = if max_fee_per_gas.is_zero() {
-                ESTIMATION_MAX_FEE_PER_GAS
-            } else {
-                max_fee_per_gas
-            };
-            spoofed_state
-                .account(op.sender)
-                .balance(U256::from(1) << 128);
-        } else {
-            // If a paymaster is used, set a small, but not too small, gas fee
-            // that would trigger any transfers during the paymaster's validation step.
-            // This is typically useful for token-based paymasters.
-            // NOTE: this cannot cover the case where the paymaster uses some sort of buffering
-            // that could cause a transfer based on the user's balance. In that case, the user
-            // would need to ensure to add a static amount of gas to their estimate.
-            max_fee_per_gas = if max_fee_per_gas.is_zero() {
-                100_000_000.into() // 0.1 GWEI
-            } else {
-                max_fee_per_gas
-            };
-        }
-        // Don't move spoofed_state into the closure, only a reference.
-        let spoofed_state = &spoofed_state;
+
+        // We deviate from the spec here always ignoring `max_fee_per_gas` and setting to zero.
+        // If not using a paymaster, the bundler will automatically add 21K to the verification
+        // gas limit to account for the gas fee transfer.
+        // If using a paymaster, the transfer gas will need to be added by the client to the returned limit.
         let run_attempt_returning_error = |gas: u64| async move {
             let op = UserOperation {
                 verification_gas_limit: gas.into(),
                 call_gas_limit: U256::zero(),
-                max_fee_per_gas,
+                max_fee_per_gas: U256::zero(),
                 ..op.clone()
             };
             let error_message = self
@@ -187,13 +159,14 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                     Bytes::new(),
                     block_hash,
                     simulation_gas,
-                    spoofed_state,
+                    &spoof::state(),
                 )
                 .await?
                 .err();
             Result::<_, anyhow::Error>::Ok(error_message)
         };
-        // Make one attempt at max gas to see if success is possible.
+
+        // Make one attempt at max gas, but zero fees, to see if success is possible.
         if let Some(message) =
             run_attempt_returning_error(self.settings.max_verification_gas).await?
         {
@@ -215,9 +188,14 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                 scaled_min_success_gas = scaled_guess;
             }
         }
-        Ok((scaled_min_success_gas * GAS_ROUNDING)
-            .min(self.settings.max_verification_gas)
-            .into())
+
+        let mut min_success_gas = scaled_min_success_gas * GAS_ROUNDING;
+        if op.paymaster().is_none() {
+            // If not using a paymaster, add the gas for the gas fee transfer.
+            min_success_gas += GAS_FEE_TRANSFER_COST;
+        }
+
+        Ok(min_success_gas.into())
     }
 
     async fn estimate_call_gas(

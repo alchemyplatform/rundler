@@ -25,6 +25,7 @@ use crate::{
     },
     common::{
         contracts::i_entry_point::IEntryPoint,
+        gas::PriorityFeeMode,
         handle::{SpawnGuard, Task},
         mempool::MempoolConfig,
         protos::{
@@ -52,8 +53,8 @@ pub struct Args {
     pub chain_id: u64,
     pub max_bundle_size: u64,
     pub submit_url: String,
-    pub use_dynamic_max_priority_fee: bool,
-    pub max_priority_fee_overhead_percent: u64,
+    pub use_bundle_priority_fee: Option<bool>,
+    pub priority_fee_mode: PriorityFeeMode,
     pub use_conditional_send_transaction: bool,
     pub eth_poll_interval: Duration,
     pub sim_settings: simulation::Settings,
@@ -110,8 +111,8 @@ impl Task for BuilderTask {
         let proposer_settings = bundle_proposer::Settings {
             max_bundle_size: self.args.max_bundle_size,
             beneficiary,
-            use_dynamic_max_priority_fee: self.args.use_dynamic_max_priority_fee,
-            max_priority_fee_overhead_percent: self.args.max_priority_fee_overhead_percent,
+            use_bundle_priority_fee: self.args.use_bundle_priority_fee,
+            priority_fee_mode: self.args.priority_fee_mode,
         };
         let op_pool =
             Self::connect_client_with_shutdown(&self.args.pool_url, shutdown_token.clone()).await?;
@@ -127,6 +128,7 @@ impl Task for BuilderTask {
             simulator,
             entry_point.clone(),
             Arc::clone(&provider),
+            self.args.chain_id,
             proposer_settings,
         );
         let submit_provider = new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;

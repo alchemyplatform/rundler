@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     collections::{HashMap, HashSet},
     mem,
     sync::Arc,
@@ -17,7 +18,7 @@ use tracing::{error, info};
 
 use crate::common::{
     contracts::entry_point::UserOpsPerAggregator,
-    gas::GasFees,
+    gas::{FeeEstimator, GasFees, PriorityFeeMode},
     math,
     protos::{
         self,
@@ -75,21 +76,17 @@ where
     simulator: S,
     entry_point: E,
     provider: Arc<P>,
+    chain_id: u64,
     settings: Settings,
+    fee_estimator: FeeEstimator<P>,
 }
 
 #[derive(Debug)]
 pub struct Settings {
     pub max_bundle_size: u64,
     pub beneficiary: Address,
-    /// If set, uses `eth_maxPriorityFeePerGas` to choose a required priority
-    /// fee for operations. This must be set to false on networks that do not
-    /// support this method, like Optimism.
-    pub use_dynamic_max_priority_fee: bool,
-    /// The percentage of how much bundled ops' `max_priority_fee_per_gas` must
-    /// exceed the value currently returned by `eth_maxPriorityFeePerGas` to be
-    /// included in a bundle. Ignored if `use_dynamic_max_priority_fee` is false.
-    pub max_priority_fee_overhead_percent: u64,
+    pub use_bundle_priority_fee: Option<bool>,
+    pub priority_fee_mode: PriorityFeeMode,
 }
 
 #[async_trait]
@@ -100,24 +97,24 @@ where
     P: ProviderLike,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
-        let (ops, base_fee, max_priority_fee_from_provider, block_hash) = try_join!(
+        let (ops, block_hash, bundle_fees) = try_join!(
             self.get_ops_from_pool(),
-            self.provider.get_base_fee(),
-            self.get_max_priority_fee(),
             self.provider.get_latest_block_hash(),
+            self.fee_estimator.required_bundle_fees(required_fees)
         )?;
-        let gas_fees @ GasFees {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-        } = self.get_required_fees(base_fee, max_priority_fee_from_provider, required_fees);
+
+        // Determine fees required for ops to be included in a bundle, and filter out ops that don't
+        // meet the requirements.
+        let required_op_fees = self.fee_estimator.required_op_fees(bundle_fees);
         let simulation_futures = ops
             .iter()
             .filter(|op| {
-                op.op.max_fee_per_gas >= max_fee_per_gas
-                    && op.op.max_priority_fee_per_gas >= max_priority_fee_per_gas
+                op.op.max_fee_per_gas >= required_op_fees.max_fee_per_gas
+                    && op.op.max_priority_fee_per_gas >= required_op_fees.max_priority_fee_per_gas
             })
             .cloned()
             .map(|op| self.simulate_validation(op, block_hash));
+
         let ops_with_simulations_future = future::join_all(simulation_futures);
         let all_paymaster_addresses = ops.iter().filter_map(|op| op.op.paymaster());
         let balances_by_paymaster_future =
@@ -148,7 +145,7 @@ where
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
-                    gas_fees,
+                    gas_fees: bundle_fees,
                     expected_storage,
                     rejected_ops: context.rejected_ops,
                     rejected_entities: context.rejected_entities,
@@ -159,7 +156,7 @@ where
         Ok(Bundle {
             rejected_ops: context.rejected_ops,
             rejected_entities: context.rejected_entities,
-            gas_fees,
+            gas_fees: bundle_fees,
             ..Default::default()
         })
     }
@@ -176,13 +173,21 @@ where
         simulator: S,
         entry_point: E,
         provider: Arc<P>,
+        chain_id: u64,
         settings: Settings,
     ) -> Self {
         Self {
             op_pool,
             simulator,
             entry_point,
-            provider,
+            provider: provider.clone(),
+            chain_id,
+            fee_estimator: FeeEstimator::new(
+                provider,
+                chain_id,
+                settings.priority_fee_mode,
+                settings.use_bundle_priority_fee,
+            ),
             settings,
         }
     }
@@ -323,7 +328,7 @@ where
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
-            context.get_total_gas(),
+            context.get_total_gas(self.chain_id),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
         let handle_ops_out = self
@@ -364,14 +369,6 @@ where
             .into_iter()
             .map(OpFromPool::try_from)
             .collect()
-    }
-
-    async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {
-        if self.settings.use_dynamic_max_priority_fee {
-            self.provider.get_max_priority_fee().await
-        } else {
-            Ok(0.into())
-        }
     }
 
     async fn get_balances_by_paymaster(
@@ -441,31 +438,6 @@ where
         };
 
         Ok(())
-    }
-
-    fn get_required_fees(
-        &self,
-        base_fee: U256,
-        max_priority_fee_from_provider: U256,
-        required_fees: Option<GasFees>,
-    ) -> GasFees {
-        let required_fees = required_fees.unwrap_or_default();
-        let max_priority_fee_per_gas =
-            required_fees
-                .max_priority_fee_per_gas
-                .max(math::increase_by_percent(
-                    max_priority_fee_from_provider,
-                    self.settings.max_priority_fee_overhead_percent,
-                ));
-        // Give enough leeway for the base fee to increase by the maximum
-        // possible amount for a single block (12.5%).
-        let max_fee_per_gas = required_fees
-            .max_fee_per_gas
-            .max((base_fee * 9 / 8) + max_priority_fee_per_gas);
-        GasFees {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-        }
     }
 }
 
@@ -657,9 +629,22 @@ impl ProposalContext {
             .collect()
     }
 
-    fn get_total_gas(&self) -> U256 {
+    fn get_total_gas(&self, chain_id: u64) -> U256 {
+        // On optimism chains the L1 gas fee is charged via pre_verification_gas
+        // in the bundle, but is not part of the gas limit of the transaction.
+        // Thus, including it can cause the transaction to exceed the maximum limit
+        // of a block. This workaround caps the pre_verification_gas at 100k during
+        // bundle gas estimation.
+        let max_pre_verification_gas = match chain_id {
+            10 | 420 => U256::from(100_000),
+            _ => U256::MAX,
+        };
         self.iter_ops()
-            .map(|op| op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit)
+            .map(|op| {
+                cmp::min(op.pre_verification_gas, max_pre_verification_gas)
+                    + op.verification_gas_limit
+                    + op.call_gas_limit
+            })
             .fold(U256::zero(), |acc, c| acc + c)
     }
 
@@ -846,7 +831,6 @@ mod tests {
             max_priority_fee_per_gas,
         )
         .await;
-        assert_eq!(bundle.gas_fees.max_priority_fee_per_gas, 55.into());
         assert_eq!(
             bundle.ops_per_aggregator,
             vec![UserOpsPerAggregator {
@@ -886,8 +870,8 @@ mod tests {
         assert_eq!(
             bundle.gas_fees,
             GasFees {
-                max_fee_per_gas: 1180.into(),
-                max_priority_fee_per_gas: 55.into(),
+                max_fee_per_gas: 1175.into(),
+                max_priority_fee_per_gas: 50.into(),
             }
         );
         assert_eq!(
@@ -1173,11 +1157,12 @@ mod tests {
             simulator,
             entry_point,
             Arc::new(provider),
+            0,
             Settings {
                 max_bundle_size,
                 beneficiary,
-                use_dynamic_max_priority_fee: true,
-                max_priority_fee_overhead_percent: 10,
+                use_bundle_priority_fee: Some(true),
+                priority_fee_mode: PriorityFeeMode::PriorityFeePercent(10),
             },
         );
         proposer
