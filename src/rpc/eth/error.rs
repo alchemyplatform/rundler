@@ -25,8 +25,7 @@ const PAYMASTER_VALIDATION_REJECTED_CODE: i32 = -32501;
 const OPCODE_VIOLATION_CODE: i32 = -32502;
 const OUT_OF_TIME_RANGE_CODE: i32 = -32503;
 const THROTTLED_OR_BANNED_CODE: i32 = -32504;
-// not used right now because of issue in the test specs
-// const STAKE_TOO_LOW_CODE: i32 = -32505;
+const STAKE_TOO_LOW_CODE: i32 = -32505;
 const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
 const EXECUTION_REVERTED: i32 = -32521;
@@ -156,8 +155,7 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::ThrottledOrBanned(data) => {
                 rpc_err_with_data(THROTTLED_OR_BANNED_CODE, msg, data)
             }
-            // TODO: the below code error code doesn't match the ERC, but it does match the expected results for the test suite
-            EthRpcError::StakeTooLow(data) => rpc_err_with_data(OPCODE_VIOLATION_CODE, msg, data),
+            EthRpcError::StakeTooLow(data) => rpc_err_with_data(STAKE_TOO_LOW_CODE, msg, data),
             EthRpcError::UnsupportedAggregator(data) => {
                 rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, msg, data)
             }
