@@ -8,7 +8,7 @@ use std::{
     task::{Context as TaskContext, Poll},
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use ethers::{
     middleware::SignerMiddleware,
     providers::{interval, JsonRpcClient, Middleware, Provider},
@@ -22,8 +22,10 @@ use serde::{de, Deserialize};
 use serde_json::Value;
 use tonic::async_trait;
 
-use super::{fill_and_sign, SentTxInfo, TransactionSender};
-use crate::common::types::ExpectedStorage;
+use crate::{
+    builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus},
+    common::types::ExpectedStorage,
+};
 
 #[derive(Debug)]
 pub struct FlashbotsTransactionSender<C, S>
@@ -56,6 +58,38 @@ where
             .context("should send raw transaction to node")?;
 
         Ok(SentTxInfo { nonce, tx_hash })
+    }
+
+    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus> {
+        let status = self.client.status(tx_hash).await?;
+        Ok(match status.status {
+            FlashbotsAPITransactionStatus::Pending => TxStatus::Pending,
+            FlashbotsAPITransactionStatus::Included => {
+                // Even if Flashbots says the transaction is included, we still
+                // need to wait for the provider to see it. Until it does, we're
+                // still pending.
+                let tx = self
+                    .provider
+                    .get_transaction(tx_hash)
+                    .await
+                    .context("provider should look up transaction included by Flashbots")?;
+                if let Some(tx) = tx {
+                    if let Some(block_number) = tx.block_number {
+                        return Ok(TxStatus::Mined {
+                            block_number: block_number.as_u64(),
+                        });
+                    }
+                }
+                TxStatus::Pending
+            }
+            FlashbotsAPITransactionStatus::Failed | FlashbotsAPITransactionStatus::Unknown => {
+                bail!(
+                    "Transaction {tx_hash:?} failed in Flashbots with status {:?}",
+                    status.status,
+                );
+            }
+            FlashbotsAPITransactionStatus::Cancelled => TxStatus::Dropped,
+        })
     }
 
     async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
@@ -100,7 +134,7 @@ struct FlashbotsAPITransaction {
     value: Option<U256>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 enum FlashbotsAPITransactionStatus {
     Pending,

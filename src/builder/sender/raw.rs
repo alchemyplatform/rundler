@@ -9,8 +9,10 @@ use ethers::{
 use ethers_signers::Signer;
 use tonic::async_trait;
 
-use super::{fill_and_sign, SentTxInfo, TransactionSender};
-use crate::common::types::ExpectedStorage;
+use crate::{
+    builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus},
+    common::types::ExpectedStorage,
+};
 
 #[derive(Debug)]
 pub struct RawTransactionSender<C, S>
@@ -44,6 +46,23 @@ where
             .await
             .context("should send raw transaction to node")?;
         Ok(SentTxInfo { nonce, tx_hash })
+    }
+
+    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus> {
+        let tx = self
+            .provider
+            .get_transaction(tx_hash)
+            .await
+            .context("provider should return transaction status")?;
+        Ok(match tx {
+            None => TxStatus::Dropped,
+            Some(tx) => match tx.block_number {
+                None => TxStatus::Pending,
+                Some(block_number) => TxStatus::Mined {
+                    block_number: block_number.as_u64(),
+                },
+            },
+        })
     }
 
     async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
