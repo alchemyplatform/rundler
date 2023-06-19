@@ -29,6 +29,8 @@ const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait ProviderLike: Send + Sync + 'static {
+    async fn get_block_number(&self) -> anyhow::Result<u64>;
+
     async fn get_block<T: Into<BlockId> + Send + Sync + 'static>(
         &self,
         block_hash_or_number: T,
@@ -43,6 +45,8 @@ pub trait ProviderLike: Send + Sync + 'static {
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256>;
 
     async fn get_code(&self, address: Address, block_hash: Option<H256>) -> anyhow::Result<Bytes>;
+
+    async fn get_transaction_count(&self, address: Address) -> anyhow::Result<U256>;
 
     async fn aggregate_signatures(
         self: Arc<Self>,
@@ -68,6 +72,13 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
     // We implement `ProviderLike` for `Provider` rather than for all
     // `Middleware` because forming a `PendingTransaction` specifically requires
     // a `Provider`.
+
+    async fn get_block_number(&self) -> anyhow::Result<u64> {
+        Ok(Middleware::get_block_number(self)
+            .await
+            .context("should get block number from provider")?
+            .as_u64())
+    }
 
     async fn get_block<T: Into<BlockId> + Send + Sync + 'static>(
         &self,
@@ -128,6 +139,12 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         Middleware::get_code(self, address, block_hash.map(|b| b.into()))
             .await
             .context("provider should get contract code")
+    }
+
+    async fn get_transaction_count(&self, address: Address) -> anyhow::Result<U256> {
+        Middleware::get_transaction_count(self, address, None)
+            .await
+            .context("provider should get transaction count")
     }
 
     async fn calc_arbitrum_l1_gas(

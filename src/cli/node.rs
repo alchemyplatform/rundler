@@ -3,7 +3,7 @@ use clap::Args;
 use super::{builder::BuilderArgs, pool::PoolArgs, rpc::RpcArgs, CommonArgs};
 use crate::{
     builder::BuilderTask,
-    common::{handle::spawn_tasks_with_shutdown, server::format_server_addr},
+    common::{handle, server::format_server_addr},
     op_pool::PoolTask,
     rpc::RpcTask,
 };
@@ -43,7 +43,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
         )
         .await?;
 
-    spawn_tasks_with_shutdown(
+    handle::spawn_tasks_with_shutdown(
         [
             PoolTask::new(pool_task_args).boxed(),
             BuilderTask::new(builder_task_args).boxed(),

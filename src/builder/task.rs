@@ -7,7 +7,7 @@ use ethers::{
 };
 use ethers_signers::Signer;
 use rusoto_core::Region;
-use tokio::{select, time::timeout};
+use tokio::{select, time};
 use tokio_util::sync::CancellationToken;
 use tonic::{
     async_trait,
@@ -23,6 +23,7 @@ use crate::{
         sender::get_sender,
         server::{BuilderImpl, DummyBuilder},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
+        transaction_tracker::{self, TransactionTrackerImpl},
     },
     common::{
         contracts::i_entry_point::IEntryPoint,
@@ -86,7 +87,7 @@ impl Task for BuilderTask {
             )
         } else {
             info!("Using AWS KMS signer");
-            let signer = timeout(
+            let signer = time::timeout(
                 // timeout must be << than the lock TTL to avoid a
                 // bug in the redis lock implementation that panics if connection
                 // takes longer than the TTL. Generally the TLL should be on the order of 10s of seconds
@@ -140,8 +141,18 @@ impl Task for BuilderTask {
             self.args.use_conditional_send_transaction,
             &self.args.submit_url,
         );
-        let builder_settings = builder::server::Settings {
+        let tracker_settings = transaction_tracker::Settings {
+            poll_interval: self.args.eth_poll_interval,
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
+            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
+        };
+        let transaction_tracker = TransactionTrackerImpl::new(
+            Arc::clone(&provider),
+            transaction_sender,
+            tracker_settings,
+        )
+        .await?;
+        let builder_settings = builder::server::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
             max_fee_increases: self.args.max_fee_increases,
         };
@@ -152,7 +163,7 @@ impl Task for BuilderTask {
             op_pool,
             proposer,
             entry_point,
-            transaction_sender,
+            transaction_tracker,
             provider,
             builder_settings,
         ));
@@ -214,7 +225,7 @@ impl BuilderTask {
                 tracing::error!("bailing from connecting client, server shutting down");
                 bail!("Server shutting down")
             }
-            res = server::connect_with_retries(op_pool_url, OpPoolClient::connect) => {
+            res = server::connect_with_retries("op pool from builder", op_pool_url, OpPoolClient::connect) => {
                 res
             }
         }

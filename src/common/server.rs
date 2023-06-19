@@ -15,7 +15,11 @@ pub fn format_socket_addr(host: &String, port: u16) -> String {
     format!("{}:{}", host, port)
 }
 
-pub async fn connect_with_retries<F, C, FutF>(url: &str, func: F) -> anyhow::Result<C>
+pub async fn connect_with_retries<F, C, FutF>(
+    server_name: &str,
+    url: &str,
+    func: F,
+) -> anyhow::Result<C>
 where
     F: Fn(String) -> FutF,
     FutF: Future<Output = Result<C, tonic::transport::Error>> + Send + 'static,
@@ -23,7 +27,10 @@ where
     for i in 0..10 {
         match func(url.to_owned()).await {
             Ok(client) => return Ok(client),
-            Err(e) => tracing::warn!("Failed to connect to server {e:?} (attempt {})", i),
+            Err(e) => tracing::warn!(
+                "Failed to connect to {server_name} at {url} {e:?} (attempt {})",
+                i
+            ),
         }
         let sleep_dur = {
             let mut rng = rand::thread_rng();
@@ -33,5 +40,5 @@ where
         };
         tokio::time::sleep(sleep_dur).await;
     }
-    bail!("Failed to connect to server after 10 attempts");
+    bail!("Failed to connect to {server_name} at {url} after 10 attempts");
 }

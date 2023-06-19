@@ -28,6 +28,14 @@ pub struct SentTxInfo {
     pub nonce: U256,
     pub tx_hash: H256,
 }
+
+#[derive(Debug)]
+pub enum TxStatus {
+    Pending,
+    Mined { block_number: u64 },
+    Dropped,
+}
+
 #[async_trait]
 #[enum_dispatch(TransactionSenderEnum<_C,_S>)]
 #[cfg_attr(test, automock)]
@@ -37,6 +45,8 @@ pub trait TransactionSender: Send + Sync + 'static {
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
     ) -> anyhow::Result<SentTxInfo>;
+
+    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus>;
 
     async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>>;
 

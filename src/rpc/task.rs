@@ -187,8 +187,8 @@ impl RpcTask {
             }
             res = async {
                 try_join!(
-                    server::connect_with_retries(op_pool_url, OpPoolClient::connect),
-                    server::connect_with_retries(builder_url, BuilderClient::connect)
+                    server::connect_with_retries("op pool from common", op_pool_url, OpPoolClient::connect),
+                    server::connect_with_retries("builder from common", builder_url, BuilderClient::connect)
                 )
                 .context("should connect to op pool and builder")
             } => {
