@@ -59,12 +59,13 @@ pub async fn spawn_tasks_with_shutdown<T, R, E>(
     let mut shutdown_scope = Some(shutdown_scope);
 
     let handles = tasks.into_iter().map(|task| {
-        let token = shutdown_token.clone();
-        let scope = shutdown_scope.clone();
-        tokio::spawn(async move {
-            let _ss = scope;
-            task.run(token).await
-        })
+        let st = shutdown_token.clone();
+        let ss = shutdown_scope.clone();
+        async move {
+            let ret = task.run(st).await;
+            drop(ss);
+            ret
+        }
     });
     tokio::select! {
         res = try_join_all(handles) => {
