@@ -151,7 +151,10 @@ where
                     attempt_number,
                 } => info!("Bundle initially had {initial_op_count} operations, but after increasing gas fees {attempt_number} time(s) it was empty"),
                 SendBundleResult::StalledAtMaxFeeIncreases => warn!("Bundle failed to mine after {} fee increases", self.settings.max_fee_increases),
-                SendBundleResult::Error(error) => error!("Failed to send bundle. Will retry next block: {error:#?}"),
+                SendBundleResult::Error(error) => {
+                    BuilderMetrics::increment_bundle_txns_failed();
+                    error!("Failed to send bundle. Will retry next block: {error:#?}");
+                }
             }
         }
     }
@@ -175,6 +178,7 @@ where
                 attempt_number,
                 ..
             } => {
+                BuilderMetrics::increment_bundle_txns_success();
                 if attempt_number == 0 {
                     info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
                 } else {
@@ -182,8 +186,14 @@ where
                 }
             }
             TrackerUpdate::StillPendingAfterWait => (),
-            TrackerUpdate::LatestTxDropped => info!("Previous transaction dropped by sender"),
-            TrackerUpdate::NonceUsedForOtherTx => info!("Nonce used by external transaction"),
+            TrackerUpdate::LatestTxDropped => {
+                BuilderMetrics::increment_bundle_txns_dropped();
+                info!("Previous transaction dropped by sender");
+            }
+            TrackerUpdate::NonceUsedForOtherTx => {
+                BuilderMetrics::increment_bundle_txns_nonce_used();
+                info!("Nonce used by external transaction")
+            }
         };
     }
 
@@ -210,11 +220,15 @@ where
     /// Helper function returning `Result` to be able to use `?`.
     async fn send_bundle_with_increasing_gas_fees_inner(&self) -> anyhow::Result<SendBundleResult> {
         let (nonce, mut required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
+        BuilderMetrics::set_nonce(nonce);
         let mut initial_op_count: Option<usize> = None;
         for num_increases in 0..=self.settings.max_fee_increases {
             let Some(bundle_tx) = self.get_bundle_tx(nonce, required_fees).await? else {
                 return Ok(match initial_op_count {
-                    Some(initial_op_count) => SendBundleResult::NoOperationsAfterFeeIncreases { initial_op_count, attempt_number: num_increases },
+                    Some(initial_op_count) => {
+                        BuilderMetrics::increment_bundle_txns_abandoned();
+                        SendBundleResult::NoOperationsAfterFeeIncreases { initial_op_count, attempt_number: num_increases }
+                    },
                     None => SendBundleResult::NoOperationsInitially,
                 });
             };
@@ -227,6 +241,10 @@ where
                 initial_op_count = Some(op_count);
             }
             let current_fees = GasFees::from(&tx);
+
+            BuilderMetrics::increment_bundle_txns_sent();
+            BuilderMetrics::set_current_fees(&current_fees);
+
             let update = self
                 .transaction_tracker
                 .send_transaction_and_wait(tx, &expected_storage)
@@ -238,27 +256,36 @@ where
                     block_number,
                     attempt_number,
                 } => {
+                    BuilderMetrics::increment_bundle_txns_success();
                     return Ok(SendBundleResult::Success {
                         block_number,
                         attempt_number,
                         tx_hash,
-                    })
+                    });
                 }
                 TrackerUpdate::StillPendingAfterWait => {
                     info!("Transaction not mined for several blocks")
                 }
-                TrackerUpdate::LatestTxDropped => info!("Previous transaction dropped by sender"),
-                TrackerUpdate::NonceUsedForOtherTx => bail!("nonce used by external transaction"),
+                TrackerUpdate::LatestTxDropped => {
+                    BuilderMetrics::increment_bundle_txns_dropped();
+                    info!("Previous transaction dropped by sender");
+                }
+                TrackerUpdate::NonceUsedForOtherTx => {
+                    BuilderMetrics::increment_bundle_txns_nonce_used();
+                    bail!("nonce used by external transaction")
+                }
             };
             info!(
                 "Bundle transaction failed to mine after {num_increases} fee increases (maxFeePerGas: {}, maxPriorityFeePerGas: {}).",
                 current_fees.max_fee_per_gas,
                 current_fees.max_priority_fee_per_gas,
             );
+            BuilderMetrics::increment_bundle_txn_fee_increases();
             required_fees = Some(
                 current_fees.increase_by_percent(self.settings.replacement_fee_percent_increase),
             );
         }
+        BuilderMetrics::increment_bundle_txns_abandoned();
         Ok(SendBundleResult::StalledAtMaxFeeIncreases)
     }
 
@@ -419,6 +446,55 @@ where
         self.is_manual_bundling_mode
             .store(is_manual_bundling, Ordering::Relaxed);
         Ok(Response::new(DebugSetBundlingModeResponse {}))
+    }
+}
+
+struct BuilderMetrics {}
+
+impl BuilderMetrics {
+    fn increment_bundle_txns_sent() {
+        metrics::increment_counter!("builder_bundle_txns_sent");
+    }
+
+    fn increment_bundle_txns_success() {
+        metrics::increment_counter!("builder_bundle_txns_success");
+    }
+
+    fn increment_bundle_txns_dropped() {
+        metrics::increment_counter!("builder_bundle_txns_dropped");
+    }
+
+    // used when we decide to stop trying a transaction
+    fn increment_bundle_txns_abandoned() {
+        metrics::increment_counter!("builder_bundle_txns_abandoned");
+    }
+
+    // used when sending a transaction fails
+    fn increment_bundle_txns_failed() {
+        metrics::increment_counter!("builder_bundle_txns_failed");
+    }
+
+    fn increment_bundle_txns_nonce_used() {
+        metrics::increment_counter!("builder_bundle_txns_nonce_used");
+    }
+
+    fn increment_bundle_txn_fee_increases() {
+        metrics::increment_counter!("builder_bundle_fee_increases");
+    }
+
+    fn set_nonce(nonce: U256) {
+        metrics::gauge!("builder_nonce", nonce.as_u64() as f64);
+    }
+
+    fn set_current_fees(fees: &GasFees) {
+        metrics::gauge!(
+            "builder_current_max_fee",
+            fees.max_fee_per_gas.as_u128() as f64
+        );
+        metrics::gauge!(
+            "builder_current_max_priority_fee",
+            fees.max_priority_fee_per_gas.as_u128() as f64
+        );
     }
 }
 
