@@ -3,12 +3,16 @@ use std::{collections::HashMap, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use ethers::types::H256;
+use tokio::sync::broadcast;
 
 use super::{json::get_json_config, CommonArgs};
 use crate::{
-    builder::{self, BuilderTask},
+    builder::{self, emit::BuilderEvent, BuilderTask},
     common::{
-        gas::PriorityFeeMode, handle::spawn_tasks_with_shutdown, mempool::MempoolConfig,
+        emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
+        gas::PriorityFeeMode,
+        handle::spawn_tasks_with_shutdown,
+        mempool::MempoolConfig,
         server::format_server_addr,
     },
 };
@@ -230,11 +234,28 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
         pool_url,
     } = builder_args;
     let task_args = builder_args.to_args(&common_args, pool_url).await?;
+    let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
+
+    emit::receive_and_log_events_with_filter(event_rx, is_nonspammy_event);
 
     spawn_tasks_with_shutdown(
-        [BuilderTask::new(task_args).boxed()],
+        [BuilderTask::new(task_args, event_sender).boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;
     Ok(())
+}
+
+pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
+    if let BuilderEvent::FormedBundle {
+        tx_details,
+        fee_increase_count,
+        ..
+    } = &event.event
+    {
+        if tx_details.is_none() && *fee_increase_count == 0 {
+            return false;
+        }
+    }
+    true
 }

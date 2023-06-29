@@ -1,6 +1,7 @@
 pub mod context;
 pub mod contracts;
 pub mod dev;
+pub mod emit;
 pub mod eth;
 pub mod gas;
 pub mod grpc;
@@ -11,5 +12,6 @@ pub mod precheck;
 pub mod protos;
 pub mod server;
 pub mod simulation;
+pub mod strs;
 pub mod tracer;
 pub mod types;

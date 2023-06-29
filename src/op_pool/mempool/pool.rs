@@ -166,16 +166,19 @@ impl PoolInner {
         None
     }
 
-    pub fn remove_entity(&mut self, entity: Entity) {
+    /// Removes all operations using the given entity, returning the hashes of
+    /// the removed operations.
+    pub fn remove_entity(&mut self, entity: Entity) -> Vec<H256> {
         let to_remove = self
             .by_hash
             .iter()
             .filter(|(_, uo)| uo.po.contains_entity(&entity))
             .map(|(hash, _)| *hash)
             .collect::<Vec<_>>();
-        for hash in to_remove {
+        for &hash in &to_remove {
             self.remove_operation_by_hash(hash);
         }
+        to_remove
     }
 
     pub fn clear(&mut self) {

@@ -2,23 +2,21 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use futures::future;
-use tokio::{task::JoinHandle, try_join};
+use tokio::{sync::broadcast, task::JoinHandle, try_join};
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Server};
 
-use super::{
-    event::EventProvider,
-    mempool::{Mempool, PoolConfig},
-};
 use crate::{
     common::{
+        emit::WithEntryPoint,
         grpc::metrics::GrpcMetricsLayer,
         handle::{flatten_handle, Task},
         protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
     },
     op_pool::{
-        event::{EventListener, HttpBlockProviderFactory, WsBlockProviderFactory},
-        mempool::uo_pool::UoPool,
+        emit::OpPoolEvent,
+        event::{EventListener, EventProvider, HttpBlockProviderFactory, WsBlockProviderFactory},
+        mempool::{uo_pool::UoPool, Mempool, PoolConfig},
         reputation::{HourlyMovingAverageReputation, ReputationParams},
         server::OpPoolImpl,
     },
@@ -38,6 +36,7 @@ pub struct Args {
 #[derive(Debug)]
 pub struct PoolTask {
     args: Args,
+    event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
 }
 
 #[async_trait]
@@ -73,6 +72,7 @@ impl Task for PoolTask {
             let (pool, handle) = PoolTask::create_mempool(
                 pool_config,
                 event_provider.as_ref(),
+                self.event_sender.clone(),
                 shutdown_token.clone(),
             )
             .await
@@ -143,8 +143,11 @@ impl Task for PoolTask {
 }
 
 impl PoolTask {
-    pub fn new(args: Args) -> PoolTask {
-        Self { args }
+    pub fn new(
+        args: Args,
+        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+    ) -> PoolTask {
+        Self { args, event_sender }
     }
 
     pub fn boxed(self) -> Box<dyn Task> {
@@ -154,6 +157,7 @@ impl PoolTask {
     async fn create_mempool(
         pool_config: &PoolConfig,
         event_provider: &dyn EventProvider,
+        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         shutdown_token: CancellationToken,
     ) -> anyhow::Result<(Arc<UoPool<HourlyMovingAverageReputation>>, JoinHandle<()>)> {
         let entry_point = pool_config.entry_point;
@@ -168,7 +172,11 @@ impl PoolTask {
         tokio::spawn(async move { reputation_runner.run().await });
 
         // Mempool
-        let mp = Arc::new(UoPool::new(pool_config.clone(), Arc::clone(&reputation)));
+        let mp = Arc::new(UoPool::new(
+            pool_config.clone(),
+            Arc::clone(&reputation),
+            event_sender,
+        ));
         // Start mempool
         let mempool_events = event_provider
             .subscribe_by_entrypoint(entry_point)

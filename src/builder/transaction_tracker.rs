@@ -27,34 +27,52 @@ use crate::{
 pub trait TransactionTracker: Send + Sync + 'static {
     fn get_nonce_and_required_fees(&self) -> anyhow::Result<(U256, Option<GasFees>)>;
 
-    async fn check_for_update_now(&self) -> anyhow::Result<Option<TrackerUpdate>>;
+    /// Sends the provided transaction and typically returns its transaction
+    /// hash, but if the transaction failed to send because another transaction
+    /// with the same nonce mined first, then returns information about that
+    /// transaction instead.
+    async fn send_transaction(
+        &self,
+        tx: TypedTransaction,
+        expected_stroage: &ExpectedStorage,
+    ) -> anyhow::Result<SendResult>;
 
-    /// Sends a transaction then waits until one of the following occurs:
+    /// Waits until one of the following occurs:
     ///
-    /// 1. One of our transactions mines (not necessarily the most recent one).
+    /// 1. One of our transactions mines (not necessarily the one just sent).
     /// 2. All our send transactions have dropped.
     /// 3. Our nonce has changed but none of our transactions mined. This means
     ///    that a transaction from our account other than one of the ones we are
     ///    tracking has mined. This should not normally happen.
     /// 4. Several new blocks have passed.
-    async fn send_transaction_and_wait(
-        &self,
-        tx: TypedTransaction,
-        expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<TrackerUpdate>;
+    async fn wait_for_update(&self) -> anyhow::Result<TrackerUpdate>;
+
+    /// Like `wait_for_update`, except it returns immediately if there is no
+    /// update rather than waiting for several new blocks.
+    async fn check_for_update_now(&self) -> anyhow::Result<Option<TrackerUpdate>>;
+}
+
+pub enum SendResult {
+    TxHash(H256),
+    TrackerUpdate(TrackerUpdate),
 }
 
 #[derive(Debug)]
 pub enum TrackerUpdate {
     Mined {
         tx_hash: H256,
+        nonce: U256,
         gas_fees: GasFees,
         block_number: u64,
         attempt_number: u64,
     },
     StillPendingAfterWait,
-    LatestTxDropped,
-    NonceUsedForOtherTx,
+    LatestTxDropped {
+        nonce: U256,
+    },
+    NonceUsedForOtherTx {
+        nonce: U256,
+    },
 }
 
 #[derive(Debug)]
@@ -102,18 +120,20 @@ where
         Ok(self.inner()?.get_nonce_and_required_fees())
     }
 
-    async fn check_for_update_now(&self) -> anyhow::Result<Option<TrackerUpdate>> {
-        self.inner()?.check_for_update_now().await
-    }
-
-    async fn send_transaction_and_wait(
+    async fn send_transaction(
         &self,
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<TrackerUpdate> {
-        self.inner()?
-            .send_transaction_and_wait(tx, expected_storage)
-            .await
+    ) -> anyhow::Result<SendResult> {
+        self.inner()?.send_transaction(tx, expected_storage).await
+    }
+
+    async fn wait_for_update(&self) -> anyhow::Result<TrackerUpdate> {
+        self.inner()?.wait_for_update().await
+    }
+
+    async fn check_for_update_now(&self) -> anyhow::Result<Option<TrackerUpdate>> {
+        self.inner()?.check_for_update_now().await
     }
 }
 
@@ -169,17 +189,20 @@ where
         (self.nonce, gas_fees)
     }
 
-    async fn send_transaction_and_wait(
+    async fn send_transaction(
         &mut self,
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<TrackerUpdate> {
+    ) -> anyhow::Result<SendResult> {
         self.validate_transaction(&tx)?;
         let gas_fees = GasFees::from(&tx);
         let send_result = self.sender.send_transaction(tx, expected_storage).await;
         let sent_tx = match send_result {
             Ok(sent_tx) => sent_tx,
-            Err(error) => return self.handle_send_error(error).await,
+            Err(error) => {
+                let tracker_update = self.handle_send_error(error).await?;
+                return Ok(SendResult::TrackerUpdate(tracker_update));
+            }
         };
         info!("Sent transaction {:?}", sent_tx.tx_hash);
         self.transactions.push(PendingTransaction {
@@ -189,7 +212,7 @@ where
         });
         self.has_dropped = false;
         self.attempt_count += 1;
-        self.wait_for_update_or_new_blocks().await
+        Ok(SendResult::TxHash(sent_tx.tx_hash))
     }
 
     /// When we fail to send a transaction, it may be because another
@@ -201,12 +224,14 @@ where
             return Err(error);
         };
         match &update {
-            TrackerUpdate::Mined { .. } | TrackerUpdate::NonceUsedForOtherTx => Ok(update),
-            TrackerUpdate::StillPendingAfterWait | TrackerUpdate::LatestTxDropped => Err(error),
+            TrackerUpdate::Mined { .. } | TrackerUpdate::NonceUsedForOtherTx { .. } => Ok(update),
+            TrackerUpdate::StillPendingAfterWait | TrackerUpdate::LatestTxDropped { .. } => {
+                Err(error)
+            }
         }
     }
 
-    async fn wait_for_update_or_new_blocks(&mut self) -> anyhow::Result<TrackerUpdate> {
+    async fn wait_for_update(&mut self) -> anyhow::Result<TrackerUpdate> {
         let start_block_number = self
             .provider
             .get_block_number()
@@ -235,7 +260,7 @@ where
         if self.nonce < external_nonce {
             // The nonce has changed. Check to see which of our transactions has
             // mined, if any.
-            let mut out = TrackerUpdate::NonceUsedForOtherTx;
+            let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
             for tx in self.transactions.iter().rev() {
                 let status = self
                     .sender
@@ -245,6 +270,7 @@ where
                 if let TxStatus::Mined { block_number } = status {
                     out = TrackerUpdate::Mined {
                         tx_hash: tx.tx_hash,
+                        nonce: self.nonce,
                         gas_fees: tx.gas_fees,
                         block_number,
                         attempt_number: tx.attempt_number,
@@ -274,9 +300,11 @@ where
         Ok(match status {
             TxStatus::Pending => None,
             TxStatus::Mined { block_number } => {
-                self.set_nonce_and_clear_state(self.nonce + 1);
+                let nonce = self.nonce;
+                self.set_nonce_and_clear_state(nonce + 1);
                 Some(TrackerUpdate::Mined {
                     tx_hash: last_tx.tx_hash,
+                    nonce,
                     gas_fees: last_tx.gas_fees,
                     block_number,
                     attempt_number: last_tx.attempt_number,
@@ -284,7 +312,7 @@ where
             }
             TxStatus::Dropped => {
                 self.has_dropped = true;
-                Some(TrackerUpdate::LatestTxDropped)
+                Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce })
             }
         })
     }

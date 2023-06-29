@@ -14,8 +14,9 @@ use super::{
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
-    common::{contracts::i_entry_point::IEntryPointEvents, types::Entity},
+    common::{contracts::i_entry_point::IEntryPointEvents, emit::WithEntryPoint, types::Entity},
     op_pool::{
+        emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
         event::NewBlockEvent,
         reputation::{Reputation, ReputationManager, ReputationStatus},
     },
@@ -31,8 +32,10 @@ const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
 /// block on write locks.
 pub struct UoPool<R: ReputationManager> {
     entry_point: Address,
+    chain_id: u64,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
+    event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
 }
 
 struct UoPoolState {
@@ -45,15 +48,21 @@ impl<R> UoPool<R>
 where
     R: ReputationManager,
 {
-    pub fn new(args: PoolConfig, reputation: Arc<R>) -> Self {
+    pub fn new(
+        args: PoolConfig,
+        reputation: Arc<R>,
+        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+    ) -> Self {
         Self {
             entry_point: args.entry_point,
+            chain_id: args.chain_id,
             reputation,
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(args),
                 throttled_ops: HashMap::new(),
                 block_number: 0,
             }),
+            event_sender,
         }
     }
 
@@ -75,6 +84,13 @@ where
                 }
             }
         }
+    }
+
+    fn emit(&self, event: OpPoolEvent) {
+        let _ = self.event_sender.send(WithEntryPoint {
+            entry_point: self.entry_point,
+            event,
+        });
     }
 }
 
@@ -124,34 +140,79 @@ where
         state.block_number = new_block_number;
     }
 
-    fn add_operation(&self, _origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
+    fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
         let mut throttled = false;
-        for e in op.entities() {
-            match self.reputation.status(e.address) {
-                ReputationStatus::Ok => {}
+        let mut rejected_entity: Option<Entity> = None;
+        let mut entity_summary = EntitySummary::default();
+        for entity in op.entities() {
+            let address = entity.address;
+            let reputation = match self.reputation.status(address) {
+                ReputationStatus::Ok => EntityReputation::Ok,
                 ReputationStatus::Throttled => {
-                    if self.state.read().pool.address_count(e.address) > 0 {
-                        return Err(MempoolError::EntityThrottled(e));
+                    if self.state.read().pool.address_count(address) > 0 {
+                        rejected_entity = Some(entity);
+                        EntityReputation::ThrottledAndRejected
+                    } else {
+                        throttled = true;
+                        EntityReputation::ThrottledButOk
                     }
-                    throttled = true;
                 }
                 ReputationStatus::Banned => {
-                    return Err(MempoolError::EntityThrottled(e));
+                    rejected_entity = Some(entity);
+                    EntityReputation::Banned
                 }
+            };
+            let needs_stake = op.is_staked(entity.kind);
+            if needs_stake {
+                self.reputation.add_seen(address);
             }
-
-            if op.is_staked(e.kind) {
-                self.reputation.add_seen(e.address);
-            }
+            entity_summary.set_status(
+                entity.kind,
+                EntityStatus {
+                    address,
+                    needs_stake,
+                    reputation,
+                },
+            );
         }
 
+        let emit_event = {
+            let op_hash = op.uo.op_hash(self.entry_point, self.chain_id);
+            let valid_after = op.valid_time_range.valid_after;
+            let valid_until = op.valid_time_range.valid_until;
+            let op = op.uo.clone();
+            move |block_number: u64, error: Option<String>| {
+                self.emit(OpPoolEvent::ReceivedOp {
+                    op_hash,
+                    op,
+                    block_number,
+                    origin,
+                    valid_after,
+                    valid_until,
+                    entities: entity_summary,
+                    error: error.map(Arc::new),
+                })
+            }
+        };
+
+        if let Some(entity) = rejected_entity {
+            let error = MempoolError::EntityThrottled(entity);
+            emit_event(self.state.read().block_number, Some(error.to_string()));
+            return Err(MempoolError::EntityThrottled(entity));
+        }
         let mut state = self.state.write();
-        let hash = state.pool.add_operation(op)?;
         let bn = state.block_number;
+        let hash = match state.pool.add_operation(op) {
+            Ok(hash) => hash,
+            Err(error) => {
+                emit_event(bn, Some(error.to_string()));
+                return Err(error);
+            }
+        };
         if throttled {
             state.throttled_ops.insert(hash, bn);
         }
-
+        emit_event(bn, None);
         Ok(hash)
     }
 
@@ -172,7 +233,14 @@ where
     }
 
     fn remove_entity(&self, entity: Entity) {
-        self.state.write().pool.remove_entity(entity);
+        let removed_op_hashes = self.state.write().pool.remove_entity(entity);
+        self.emit(OpPoolEvent::RemovedEntity { entity });
+        for op_hash in removed_op_hashes {
+            self.emit(OpPoolEvent::RemovedOp {
+                op_hash,
+                reason: OpRemovalReason::EntityRemoved { entity },
+            })
+        }
     }
 
     fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
@@ -265,7 +333,8 @@ mod tests {
             blocklist: None,
             allowlist: None,
         };
-        UoPool::new(args, mock_reputation())
+        let (event_sender, _) = broadcast::channel(4);
+        UoPool::new(args, mock_reputation(), event_sender)
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {

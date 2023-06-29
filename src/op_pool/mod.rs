@@ -1,3 +1,4 @@
+pub mod emit;
 mod event;
 mod mempool;
 mod reputation;
