@@ -119,7 +119,7 @@ impl PoolOperation {
     /// Returns true if the operation requires the given entity to stake.
     ///
     /// For non-accounts, its possible that the entity is staked, but doesn't
-    /// ~need~ to take for this operation. For example, if the operation does not
+    /// _need_ to stake for this operation. For example, if the operation does not
     /// access any storage slots that require staking. In that case this function
     /// will return false.
     ///

@@ -11,16 +11,18 @@ use ethers::{
     providers::{Http, Middleware, Provider, RetryClient},
     types::{transaction::eip2718::TypedTransaction, Address, H256, U256},
 };
-use tokio::{join, time};
+use tokio::{join, sync::broadcast, time};
 use tonic::{async_trait, transport::Channel, Request, Response, Status};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     builder::{
         bundle_proposer::BundleProposer,
-        transaction_tracker::{TrackerUpdate, TransactionTracker},
+        emit::{BuilderEvent, BundleTxDetails},
+        transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
     },
     common::{
+        emit::WithEntryPoint,
         gas::GasFees,
         math,
         protos::{
@@ -64,13 +66,14 @@ where
     // TODO: Figure out what we really want to do for detecting new blocks.
     provider: Arc<Provider<RetryClient<Http>>>,
     settings: Settings,
+    event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
 }
 
 #[derive(Debug)]
 struct BundleTx {
     tx: TypedTransaction,
     expected_storage: ExpectedStorage,
-    op_count: usize,
+    op_hashes: Vec<H256>,
 }
 
 #[derive(Debug)]
@@ -106,6 +109,7 @@ where
         transaction_tracker: T,
         provider: Arc<Provider<RetryClient<Http>>>,
         settings: Settings,
+        event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
             is_manual_bundling_mode: AtomicBool::new(false),
@@ -118,6 +122,7 @@ where
             transaction_tracker,
             provider,
             settings,
+            event_sender,
         }
     }
 
@@ -186,11 +191,17 @@ where
                 }
             }
             TrackerUpdate::StillPendingAfterWait => (),
-            TrackerUpdate::LatestTxDropped => {
+            TrackerUpdate::LatestTxDropped { nonce } => {
+                self.emit(BuilderEvent::LatestTransactionDropped {
+                    nonce: nonce.low_u64(),
+                });
                 BuilderMetrics::increment_bundle_txns_dropped();
                 info!("Previous transaction dropped by sender");
             }
-            TrackerUpdate::NonceUsedForOtherTx => {
+            TrackerUpdate::NonceUsedForOtherTx { nonce } => {
+                self.emit(BuilderEvent::NonceUsedForOtherTransaction {
+                    nonce: nonce.low_u64(),
+                });
                 BuilderMetrics::increment_bundle_txns_nonce_used();
                 info!("Nonce used by external transaction")
             }
@@ -222,14 +233,20 @@ where
         let (nonce, mut required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
         BuilderMetrics::set_nonce(nonce);
         let mut initial_op_count: Option<usize> = None;
-        for num_increases in 0..=self.settings.max_fee_increases {
+        for fee_increase_count in 0..=self.settings.max_fee_increases {
             let Some(bundle_tx) = self.get_bundle_tx(nonce, required_fees).await? else {
+                self.emit(BuilderEvent::FormedBundle {
+                    tx_details: None,
+                    nonce: nonce.low_u64(),
+                    fee_increase_count,
+                    required_fees,
+                });
                 return Ok(match initial_op_count {
                     Some(initial_op_count) => {
                         BuilderMetrics::increment_bundle_txns_abandoned();
                         SendBundleResult::NoOperationsAfterFeeIncreases {
                             initial_op_count,
-                            attempt_number: num_increases,
+                            attempt_number: fee_increase_count,
                         }
                     }
                     None => SendBundleResult::NoOperationsInitially,
@@ -238,27 +255,49 @@ where
             let BundleTx {
                 tx,
                 expected_storage,
-                op_count,
+                op_hashes,
             } = bundle_tx;
             if initial_op_count.is_none() {
-                initial_op_count = Some(op_count);
+                initial_op_count = Some(op_hashes.len());
             }
             let current_fees = GasFees::from(&tx);
 
             BuilderMetrics::increment_bundle_txns_sent();
             BuilderMetrics::set_current_fees(&current_fees);
 
-            let update = self
+            let send_result = self
                 .transaction_tracker
-                .send_transaction_and_wait(tx, &expected_storage)
+                .send_transaction(tx.clone(), &expected_storage)
                 .await?;
+            let update = match send_result {
+                SendResult::TrackerUpdate(update) => update,
+                SendResult::TxHash(tx_hash) => {
+                    self.emit(BuilderEvent::FormedBundle {
+                        tx_details: Some(BundleTxDetails {
+                            tx_hash,
+                            tx,
+                            op_hashes: Arc::new(op_hashes),
+                        }),
+                        nonce: nonce.low_u64(),
+                        fee_increase_count,
+                        required_fees,
+                    });
+                    self.transaction_tracker.wait_for_update().await?
+                }
+            };
             match update {
                 TrackerUpdate::Mined {
                     tx_hash,
+                    nonce,
                     gas_fees: _,
                     block_number,
                     attempt_number,
                 } => {
+                    self.emit(BuilderEvent::TransactionMined {
+                        tx_hash,
+                        nonce: nonce.low_u64(),
+                        block_number,
+                    });
                     BuilderMetrics::increment_bundle_txns_success();
                     return Ok(SendBundleResult::Success {
                         block_number,
@@ -269,17 +308,23 @@ where
                 TrackerUpdate::StillPendingAfterWait => {
                     info!("Transaction not mined for several blocks")
                 }
-                TrackerUpdate::LatestTxDropped => {
+                TrackerUpdate::LatestTxDropped { nonce } => {
+                    self.emit(BuilderEvent::LatestTransactionDropped {
+                        nonce: nonce.low_u64(),
+                    });
                     BuilderMetrics::increment_bundle_txns_dropped();
                     info!("Previous transaction dropped by sender");
                 }
-                TrackerUpdate::NonceUsedForOtherTx => {
+                TrackerUpdate::NonceUsedForOtherTx { nonce } => {
+                    self.emit(BuilderEvent::NonceUsedForOtherTransaction {
+                        nonce: nonce.low_u64(),
+                    });
                     BuilderMetrics::increment_bundle_txns_nonce_used();
                     bail!("nonce used by external transaction")
                 }
             };
             info!(
-                "Bundle transaction failed to mine after {num_increases} fee increases (maxFeePerGas: {}, maxPriorityFeePerGas: {}).",
+                "Bundle transaction failed to mine after {fee_increase_count} fee increases (maxFeePerGas: {}, maxPriorityFeePerGas: {}).",
                 current_fees.max_fee_per_gas,
                 current_fees.max_priority_fee_per_gas,
             );
@@ -356,7 +401,7 @@ where
             bundle.rejected_entities.len()
         );
         let gas = math::increase_by_percent(bundle.gas_estimate, GAS_ESTIMATE_OVERHEAD_PERCENT);
-        let op_count = bundle.len();
+        let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
             self.beneficiary,
@@ -367,7 +412,7 @@ where
         Ok(Some(BundleTx {
             tx,
             expected_storage: bundle.expected_storage,
-            op_count,
+            op_hashes,
         }))
     }
 
@@ -400,6 +445,13 @@ where
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
         op.op_hash(self.entry_point.address(), self.chain_id)
+    }
+
+    fn emit(&self, event: BuilderEvent) {
+        let _ = self.event_sender.send(WithEntryPoint {
+            entry_point: self.entry_point.address(),
+            event,
+        });
     }
 }
 

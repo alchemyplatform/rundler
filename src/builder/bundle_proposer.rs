@@ -12,22 +12,26 @@ use futures::future;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
-use tokio::try_join;
+use tokio::{sync::broadcast, try_join};
 use tonic::{async_trait, transport::Channel};
 use tracing::{error, info};
 
-use crate::common::{
-    contracts::entry_point::UserOpsPerAggregator,
-    gas::{FeeEstimator, GasFees, PriorityFeeMode},
-    math,
-    protos::{
-        self,
-        op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
-    },
-    simulation::{SimulationError, SimulationSuccess, Simulator},
-    types::{
-        Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike, Timestamp,
-        UserOperation,
+use crate::{
+    builder::emit::{BuilderEvent, OpRejectionReason, SkipReason},
+    common::{
+        contracts::entry_point::UserOpsPerAggregator,
+        emit::WithEntryPoint,
+        gas::{FeeEstimator, GasFees, PriorityFeeMode},
+        math,
+        protos::{
+            self,
+            op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
+        },
+        simulation::{SimulationError, SimulationSuccess, Simulator},
+        types::{
+            Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike,
+            Timestamp, UserOperation,
+        },
     },
 };
 
@@ -57,6 +61,10 @@ impl Bundle {
     pub fn is_empty(&self) -> bool {
         self.ops_per_aggregator.is_empty()
     }
+
+    pub fn iter_ops(&self) -> impl Iterator<Item = &UserOperation> + '_ {
+        self.ops_per_aggregator.iter().flat_map(|ops| &ops.user_ops)
+    }
 }
 
 #[cfg_attr(test, automock)]
@@ -79,10 +87,12 @@ where
     chain_id: u64,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
+    event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
 }
 
 #[derive(Debug)]
 pub struct Settings {
+    pub chain_id: u64,
     pub max_bundle_size: u64,
     pub beneficiary: Address,
     pub use_bundle_priority_fee: Option<bool>,
@@ -176,6 +186,7 @@ where
         provider: Arc<P>,
         chain_id: u64,
         settings: Settings,
+        event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
             op_pool,
@@ -191,6 +202,7 @@ where
                 settings.bundle_priority_fee_overhead_percent,
             ),
             settings,
+            event_sender,
         }
     }
 
@@ -233,17 +245,25 @@ where
         let mut paymasters_to_reject = Vec::<Address>::new();
         for (op, simulation) in ops_with_simulations {
             let Some(simulation) = simulation else {
+                self.emit(BuilderEvent::RejectedOp {
+                    op_hash: self.op_hash(&op),
+                    reason: OpRejectionReason::FailedRevalidation,
+                });
                 rejected_ops.push(op);
                 continue;
             };
-            if simulation
+            if let Some(&other_sender) = simulation
                 .accessed_addresses
                 .iter()
-                .any(|&address| address != op.sender && all_sender_addresses.contains(&address))
+                .find(|&address| *address != op.sender && all_sender_addresses.contains(address))
             {
                 // Exclude ops that access the sender of another op in the
                 // batch, but don't reject them (remove them from pool).
                 info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender);
+                self.emit(BuilderEvent::SkippedOp {
+                    op_hash: self.op_hash(&op),
+                    reason: SkipReason::AccessedOtherSender { other_sender },
+                });
                 continue;
             }
             if let Some(paymaster) = op.paymaster() {
@@ -344,6 +364,12 @@ where
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas)),
             HandleOpsOut::FailedOp(index, message) => {
+                self.emit(BuilderEvent::RejectedOp {
+                    op_hash: self.op_hash(context.get_op_at(index)?),
+                    reason: OpRejectionReason::FailedInBundle {
+                        message: Arc::new(message.clone()),
+                    },
+                });
                 self.process_failed_op(context, index, message).await?;
                 Ok(None)
             }
@@ -439,6 +465,17 @@ where
         };
 
         Ok(())
+    }
+
+    fn emit(&self, event: BuilderEvent) {
+        let _ = self.event_sender.send(WithEntryPoint {
+            entry_point: self.entry_point.address(),
+            event,
+        });
+    }
+
+    fn op_hash(&self, op: &UserOperation) -> H256 {
+        op.op_hash(self.entry_point.address(), self.settings.chain_id)
     }
 }
 
@@ -1155,6 +1192,7 @@ mod tests {
         provider
             .expect_aggregate_signatures()
             .returning(move |address, _| signatures_by_aggregator[&address]());
+        let (event_sender, _) = broadcast::channel(16);
         let proposer = BundleProposerImpl::new(
             op_pool_handle.client.clone(),
             simulator,
@@ -1162,12 +1200,14 @@ mod tests {
             Arc::new(provider),
             0,
             Settings {
+                chain_id: 0,
                 max_bundle_size,
                 beneficiary,
                 use_bundle_priority_fee: Some(true),
                 priority_fee_mode: PriorityFeeMode::PriorityFeePercent(10),
                 bundle_priority_fee_overhead_percent: 0,
             },
+            event_sender,
         );
         proposer
             .make_bundle(None)

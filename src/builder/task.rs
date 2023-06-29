@@ -7,7 +7,7 @@ use ethers::{
 };
 use ethers_signers::Signer;
 use rusoto_core::Region;
-use tokio::{select, time};
+use tokio::{select, sync::broadcast, time};
 use tokio_util::sync::CancellationToken;
 use tonic::{
     async_trait,
@@ -20,6 +20,7 @@ use crate::{
     builder::{
         self,
         bundle_proposer::{self, BundleProposerImpl},
+        emit::BuilderEvent,
         sender::get_sender,
         server::{BuilderImpl, DummyBuilder},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
@@ -27,6 +28,7 @@ use crate::{
     },
     common::{
         contracts::i_entry_point::IEntryPoint,
+        emit::WithEntryPoint,
         gas::PriorityFeeMode,
         handle::{SpawnGuard, Task},
         mempool::MempoolConfig,
@@ -69,6 +71,7 @@ pub struct Args {
 #[derive(Debug)]
 pub struct BuilderTask {
     args: Args,
+    event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
 }
 
 #[async_trait]
@@ -111,6 +114,7 @@ impl Task for BuilderTask {
         };
         let beneficiary = signer.address();
         let proposer_settings = bundle_proposer::Settings {
+            chain_id: self.args.chain_id,
             max_bundle_size: self.args.max_bundle_size,
             beneficiary,
             use_bundle_priority_fee: self.args.use_bundle_priority_fee,
@@ -133,6 +137,7 @@ impl Task for BuilderTask {
             Arc::clone(&provider),
             self.args.chain_id,
             proposer_settings,
+            self.event_sender.clone(),
         );
         let submit_provider = new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
         let transaction_sender = get_sender(
@@ -166,6 +171,7 @@ impl Task for BuilderTask {
             transaction_tracker,
             provider,
             builder_settings,
+            self.event_sender.clone(),
         ));
 
         let _builder_loop_guard = {
@@ -208,8 +214,11 @@ impl Task for BuilderTask {
 }
 
 impl BuilderTask {
-    pub fn new(args: Args) -> BuilderTask {
-        Self { args }
+    pub fn new(
+        args: Args,
+        event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    ) -> BuilderTask {
+        Self { args, event_sender }
     }
 
     pub fn boxed(self) -> Box<dyn Task> {

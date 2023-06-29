@@ -2,11 +2,15 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
+use tokio::sync::broadcast;
 
 use super::CommonArgs;
 use crate::{
     cli::json::get_json_config,
-    common::handle::spawn_tasks_with_shutdown,
+    common::{
+        emit::{self, EVENT_CHANNEL_CAPACITY},
+        handle::spawn_tasks_with_shutdown,
+    },
     op_pool::{self, PoolConfig, PoolTask},
 };
 
@@ -136,7 +140,14 @@ pub struct PoolCliArgs {
 pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
     let task_args = pool_args.to_args(&common_args).await?;
+    let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
 
-    spawn_tasks_with_shutdown([PoolTask::new(task_args).boxed()], tokio::signal::ctrl_c()).await;
+    emit::receive_and_log_events_with_filter(event_rx, |_| true);
+
+    spawn_tasks_with_shutdown(
+        [PoolTask::new(task_args, event_sender).boxed()],
+        tokio::signal::ctrl_c(),
+    )
+    .await;
     Ok(())
 }
