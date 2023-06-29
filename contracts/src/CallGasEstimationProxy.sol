@@ -112,7 +112,7 @@ contract CallGasEstimationProxy is Proxy {
             uint256 guess = scaledGuess * args.rounding;
             if (!isEnoughGasForGuess(guess)) {
                 uint256 nextMin = scaledMaxFailureGas * args.rounding;
-                uint256 nextMax = scaledMaxFailureGas * args.rounding;
+                uint256 nextMax = scaledMinSuccessGas * args.rounding;
                 revert EstimateCallGasContinuation(nextMin, nextMax);
             }
             (bool success, uint256 gasUsed, ) = innerCall(
