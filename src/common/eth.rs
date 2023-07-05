@@ -138,7 +138,7 @@ fn get_revert_data<D: AbiDecode>(mut error: ProviderError) -> Result<D, Provider
         return Err(error);
     };
     let Some(jsonrpc_error) = dyn_error.as_error_response() else {
-        return Err(error)
+        return Err(error);
     };
     if !jsonrpc_error.is_revert() {
         return Err(error);

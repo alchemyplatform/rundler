@@ -428,9 +428,7 @@ where
             .await
             .context("should have successfully queried for user op events by hash")?;
 
-        let Some(event) = event else {
-            return Ok(None)
-        };
+        let Some(event) = event else { return Ok(None) };
 
         // 2. If the event is found, get the TX
         let transaction_hash = event
@@ -498,9 +496,7 @@ where
             .await
             .context("should have fetched user ops by hash")?;
 
-        let Some(log) = log else {
-            return Ok(None)
-        };
+        let Some(log) = log else { return Ok(None) };
 
         // 2. If the event is found, get the TX receipt
         let tx_hash = log.transaction_hash.context("tx_hash should be present")?;
@@ -582,11 +578,11 @@ impl From<SimulationError> for EthRpcError {
         debug!("Simulation error: {value:?}");
 
         let SimulationError::Violations(violations) = &mut value else {
-            return Self::Internal(value.into())
+            return Self::Internal(value.into());
         };
 
         let Some(violation) = violations.iter().min() else {
-            return Self::Internal(value.into())
+            return Self::Internal(value.into());
         };
 
         match violation {
@@ -655,10 +651,10 @@ impl From<ErrorInfo> for EthRpcError {
         if reason == ErrorReason::EntityThrottled.as_str_name() {
             let (entity, address) = metadata.iter().next().unwrap();
             let Some(address) = Address::from_str(address).ok() else {
-                return anyhow!("should have valid address in ErrorInfo metadata").into()
+                return anyhow!("should have valid address in ErrorInfo metadata").into();
             };
             let Some(entity) = EntityType::from_str(entity).ok() else {
-                return anyhow!("should be a valid Entity type in ErrorInfo metadata").into()
+                return anyhow!("should be a valid Entity type in ErrorInfo metadata").into();
             };
             return EthRpcError::ThrottledOrBanned(Entity::new(entity, address));
         } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
@@ -686,7 +682,7 @@ impl From<Status> for EthRpcError {
     fn from(status: Status) -> Self {
         let status_details: anyhow::Result<ErrorInfo> = status.try_into();
         let Ok(error_info) = status_details else {
-            return EthRpcError::Internal(status_details.unwrap_err())
+            return EthRpcError::Internal(status_details.unwrap_err());
         };
 
         EthRpcError::from(error_info)
