@@ -122,7 +122,6 @@ where
         let factory_address = op.factory();
         let sender_address = op.sender;
         let paymaster_address = op.paymaster();
-        let is_wallet_creation = !op.init_code.is_empty();
         let tracer_out = tracer::trace_simulate_validation(
             &self.entry_point,
             op.clone(),
@@ -167,6 +166,10 @@ where
             &entry_point_out,
             self.sim_settings,
         );
+        let is_unstaked_wallet_creation = entity_infos
+            .get(EntityType::Factory)
+            .filter(|factory| !factory.is_staked)
+            .is_some();
         if num_phases < 3 {
             Err(vec![SimulationViolation::WrongNumberOfPhases(num_phases)])?
         };
@@ -175,7 +178,7 @@ where
             entity_infos,
             tracer_out,
             entry_point_out,
-            is_wallet_creation,
+            is_unstaked_wallet_creation,
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
         })
@@ -217,7 +220,7 @@ where
             ref entity_infos,
             ref tracer_out,
             ref entry_point_out,
-            is_wallet_creation,
+            is_unstaked_wallet_creation,
             ref mut entities_needing_stake,
             ref mut accessed_addresses,
             ..
@@ -260,7 +263,7 @@ where
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         entity,
-                        is_wallet_creation,
+                        is_unstaked_wallet_creation,
                         entry_point_address: self.entry_point.address(),
                         entity_address: entity_info.address,
                         sender_address,
@@ -438,7 +441,7 @@ where
         let ValidationContext {
             tracer_out,
             entry_point_out,
-            is_wallet_creation: _,
+            is_unstaked_wallet_creation: _,
             entities_needing_stake,
             accessed_addresses,
             ..
@@ -546,7 +549,7 @@ struct ValidationContext {
     entity_infos: EntityInfos,
     tracer_out: TracerOutput,
     entry_point_out: ValidationOutput,
-    is_wallet_creation: bool,
+    is_unstaked_wallet_creation: bool,
     entities_needing_stake: Vec<EntityType>,
     accessed_addresses: HashSet<Address>,
 }
@@ -628,7 +631,7 @@ enum StorageRestriction {
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
     entity: Entity,
-    is_wallet_creation: bool,
+    is_unstaked_wallet_creation: bool,
     entry_point_address: Address,
     entity_address: Address,
     sender_address: Address,
@@ -640,7 +643,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
     let GetStorageRestrictionArgs {
         slots_by_address,
         entity,
-        is_wallet_creation,
+        is_unstaked_wallet_creation,
         entry_point_address,
         entity_address,
         sender_address,
@@ -650,7 +653,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestrictio
     if accessed_address == sender_address {
         StorageRestriction::Allowed
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
-        if is_wallet_creation
+        if is_unstaked_wallet_creation
             && entity.kind != EntityType::Account
             && accessed_address != entry_point_address
         {

@@ -227,8 +227,11 @@ where
                 return Ok(match initial_op_count {
                     Some(initial_op_count) => {
                         BuilderMetrics::increment_bundle_txns_abandoned();
-                        SendBundleResult::NoOperationsAfterFeeIncreases { initial_op_count, attempt_number: num_increases }
-                    },
+                        SendBundleResult::NoOperationsAfterFeeIncreases {
+                            initial_op_count,
+                            attempt_number: num_increases,
+                        }
+                    }
                     None => SendBundleResult::NoOperationsInitially,
                 });
             };

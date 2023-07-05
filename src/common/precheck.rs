@@ -177,7 +177,9 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
         } = async_data;
         if !op.paymaster_and_data.is_empty() {
             let Some(paymaster) = op.paymaster() else {
-                return Some(PrecheckViolation::PaymasterTooShort(op.paymaster_and_data.len()));
+                return Some(PrecheckViolation::PaymasterTooShort(
+                    op.paymaster_and_data.len(),
+                ));
             };
             if !paymaster_exists {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
@@ -228,7 +230,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
 
     async fn is_contract(&self, address: Option<Address>) -> anyhow::Result<bool> {
         let Some(address) = address else {
-            return Ok(false)
+            return Ok(false);
         };
         let bytecode = self
             .provider
