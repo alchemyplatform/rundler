@@ -490,17 +490,17 @@ where
             ))?;
         }
 
-        // 1. Get event associated with hash (need to check all entry point addresses associated with this API)
+        // Get event associated with hash (need to check all entry point addresses associated with this API)
         let log = self
             .get_user_operation_event_by_hash(hash)
             .await
             .context("should have fetched user ops by hash")?;
 
         let Some(log) = log else { return Ok(None) };
+        let entry_point = log.address;
 
-        // 2. If the event is found, get the TX receipt
+        // If the event is found, get the TX receipt
         let tx_hash = log.transaction_hash.context("tx_hash should be present")?;
-
         let tx_receipt = self
             .provider
             .get_transaction_receipt(tx_hash)
@@ -508,26 +508,20 @@ where
             .context("should have fetched tx receipt")?
             .context("Failed to fetch tx receipt")?;
 
-        // We should return null if the tx isn't included in the block yet
+        // Return null if the tx isn't included in the block yet
         if tx_receipt.block_hash.is_none() && tx_receipt.block_number.is_none() {
             return Ok(None);
         }
 
-        let to = tx_receipt
-            .to
-            .filter(|to| self.contexts_by_entry_point.contains_key(to))
-            .context("Failed to parse tx or tx doesn't belong to entry point")?;
-
-        // 3. filter receipt logs to match just those belonging to the user op
+        // Filter receipt logs to match just those belonging to the user op
         let filtered_logs = EthApi::<C>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
             .context("should have found receipt logs matching user op")?;
 
-        // 4. decode log and find failure reason if not success
-        let log = self
+        // Decode log and find failure reason if not success
+        let uo_event = self
             .decode_user_operation_event(log)
             .context("should have decoded user operation event")?;
-
-        let reason: String = if log.success {
+        let reason: String = if uo_event.success {
             "".to_owned()
         } else {
             EthApi::<C>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
@@ -535,16 +529,15 @@ where
                 .unwrap_or_default()
         };
 
-        // 5. Return the result
         Ok(Some(UserOperationReceipt {
             user_op_hash: hash,
-            entry_point: to.into(),
-            sender: log.sender.into(),
-            nonce: log.nonce,
-            paymaster: log.paymaster.into(),
-            actual_gas_cost: log.actual_gas_cost,
-            actual_gas_used: log.actual_gas_used,
-            success: log.success,
+            entry_point: entry_point.into(),
+            sender: uo_event.sender.into(),
+            nonce: uo_event.nonce,
+            paymaster: uo_event.paymaster.into(),
+            actual_gas_cost: uo_event.actual_gas_cost,
+            actual_gas_used: uo_event.actual_gas_used,
+            success: uo_event.success,
             logs: filtered_logs,
             receipt: tx_receipt,
             reason,
