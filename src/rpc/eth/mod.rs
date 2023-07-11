@@ -422,7 +422,7 @@ where
             ))?;
         }
 
-        // 1. Get event associated with hash (need to check all entry point addresses associated with this API)
+        // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
             .get_user_operation_event_by_hash(hash)
             .await
@@ -430,10 +430,11 @@ where
 
         let Some(event) = event else { return Ok(None) };
 
-        // 2. If the event is found, get the TX
+        // If the event is found, get the TX and entry point
         let transaction_hash = event
             .transaction_hash
             .context("tx_hash should be present")?;
+        let entry_point = event.address;
 
         let tx = self
             .provider
@@ -447,17 +448,12 @@ where
             return Ok(None);
         }
 
-        let to = tx
-            .to
-            .filter(|to| self.contexts_by_entry_point.contains_key(to))
-            .context("Failed to parse tx or tx doesn't belong to entry point")?;
-
-        // 3. parse the tx data using the EntryPoint interface and extract UserOperation[] from it
+        // Parse the tx data using the EntryPoint interface and extract UserOperation[] from it
         let user_ops = self
             .get_user_operations_from_tx_data(tx.input)
             .context("should have parsed tx data as user operations")?;
 
-        // 4. find first op matching sender + nonce with the event
+        // Find first op matching sender + nonce with the event
         let event = self
             .decode_user_operation_event(event)
             .context("should have decoded log event as user operation event")?;
@@ -467,10 +463,9 @@ where
             .find(|op| op.sender == event.sender && op.nonce == event.nonce)
             .context("matching user operation should be found in tx data")?;
 
-        // 5. return the result
         Ok(Some(RichUserOperation {
             user_operation: user_operation.into(),
-            entry_point: to.into(),
+            entry_point: entry_point.into(),
             block_number: tx
                 .block_number
                 .map(|n| U256::from(n.as_u64()))
