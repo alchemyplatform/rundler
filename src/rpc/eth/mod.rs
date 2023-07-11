@@ -1,6 +1,11 @@
 mod error;
 pub mod estimation;
-use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{anyhow, bail, Context};
 use ethers::{
@@ -8,7 +13,9 @@ use ethers::{
     prelude::EthEvent,
     providers::{JsonRpcClient, Middleware, Provider},
     types::{
-        Address, BlockNumber, Bytes, Filter, Log, Opcode, TransactionReceipt, H256, U256, U64,
+        Address, BlockNumber, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
+        GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, Opcode, TransactionReceipt, H256,
+        U256, U64,
     },
     utils::to_checksum,
 };
@@ -192,23 +199,22 @@ where
         Ok(logs.into_iter().next())
     }
 
-    fn get_user_operations_from_tx_data(
-        &self,
-        tx_data: Bytes,
-    ) -> anyhow::Result<Vec<UserOperation>> {
-        let entry_point_calls = IEntryPointCalls::decode(tx_data)
-            .context("should parse tx data as calls to the entry point")?;
+    fn get_user_operations_from_tx_data(&self, tx_data: Bytes) -> Vec<UserOperation> {
+        let entry_point_calls = match IEntryPointCalls::decode(tx_data) {
+            Ok(entry_point_calls) => entry_point_calls,
+            Err(_) => return vec![],
+        };
 
         match entry_point_calls {
-            IEntryPointCalls::HandleOps(handle_ops_call) => Ok(handle_ops_call.ops),
+            IEntryPointCalls::HandleOps(handle_ops_call) => handle_ops_call.ops,
             IEntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
-                Ok(handle_aggregated_ops_call
+                handle_aggregated_ops_call
                     .ops_per_aggregator
                     .into_iter()
                     .flat_map(|ops| ops.user_ops)
-                    .collect())
+                    .collect()
             }
-            _ => bail!("tx should contain a user operations"),
+            _ => vec![],
         }
     }
 
@@ -285,6 +291,59 @@ where
                 .map(Some)
                 .context("should have parsed revert reason as string")
         })
+    }
+
+    /// This method takes a transaction hash and a user operation hash and returns the full user operation if it exists.
+    /// This is meant to be used when a user operation event is found in the logs of a transaction, but the top level call
+    /// wasn't to an entrypoint, so we need to trace the transaction to find the user operation by inspecting each call frame
+    /// and returning the user operation that matches the hash.
+    async fn trace_find_user_operation(
+        &self,
+        tx_hash: H256,
+        user_op_hash: H256,
+    ) -> Result<Option<UserOperation>, anyhow::Error> {
+        // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
+        let trace_options = GethDebugTracingOptions {
+            tracer: Some(GethDebugTracerType::BuiltInTracer(
+                GethDebugBuiltInTracerType::CallTracer,
+            )),
+            ..Default::default()
+        };
+        let trace = self
+            .provider
+            .debug_trace_transaction(tx_hash, trace_options)
+            .await
+            .context("should have fetched trace from provider")?;
+
+        // breadth first search for the user operation in the trace
+        let mut frame_queue = VecDeque::new();
+
+        if let GethTrace::Known(GethTraceFrame::CallTracer(call_frame)) = trace {
+            frame_queue.push_back(call_frame);
+        }
+
+        while let Some(call_frame) = frame_queue.pop_front() {
+            // check if the call is to an entrypoint, if not enqueue the child calls if any
+            if let Some(to) = call_frame
+                .to
+                .as_ref()
+                .and_then(|to| to.as_address())
+                .filter(|to| self.contexts_by_entry_point.contains_key(to))
+            {
+                // check if the user operation is in the call frame
+                if let Some(uo) = self
+                    .get_user_operations_from_tx_data(call_frame.input)
+                    .into_iter()
+                    .find(|op| op.op_hash(*to, self.chain_id) == user_op_hash)
+                {
+                    return Ok(Some(uo));
+                }
+            } else if let Some(calls) = call_frame.calls {
+                frame_queue.extend(calls)
+            }
+        }
+
+        Ok(None)
     }
 }
 
@@ -422,7 +481,7 @@ where
             ))?;
         }
 
-        // 1. Get event associated with hash (need to check all entry point addresses associated with this API)
+        // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
             .get_user_operation_event_by_hash(hash)
             .await
@@ -430,7 +489,7 @@ where
 
         let Some(event) = event else { return Ok(None) };
 
-        // 2. If the event is found, get the TX
+        // If the event is found, get the TX and entry point
         let transaction_hash = event
             .transaction_hash
             .context("tx_hash should be present")?;
@@ -446,31 +505,26 @@ where
         if tx.block_hash.is_none() && tx.block_number.is_none() {
             return Ok(None);
         }
-
         let to = tx
             .to
-            .filter(|to| self.contexts_by_entry_point.contains_key(to))
-            .context("Failed to parse tx or tx doesn't belong to entry point")?;
+            .context("tx.to should be present on transaction containing user operation event")?;
 
-        // 3. parse the tx data using the EntryPoint interface and extract UserOperation[] from it
-        let user_ops = self
-            .get_user_operations_from_tx_data(tx.input)
-            .context("should have parsed tx data as user operations")?;
+        // Find first op matching the hash
+        let user_operation = if self.contexts_by_entry_point.contains_key(&to) {
+            self.get_user_operations_from_tx_data(tx.input)
+                .into_iter()
+                .find(|op| op.op_hash(to, self.chain_id) == hash)
+                .context("matching user operation should be found in tx data")?
+        } else {
+            self.trace_find_user_operation(transaction_hash, hash)
+                .await
+                .context("error running trace")?
+                .context("should have found user operation in trace")?
+        };
 
-        // 4. find first op matching sender + nonce with the event
-        let event = self
-            .decode_user_operation_event(event)
-            .context("should have decoded log event as user operation event")?;
-
-        let user_operation = user_ops
-            .into_iter()
-            .find(|op| op.sender == event.sender && op.nonce == event.nonce)
-            .context("matching user operation should be found in tx data")?;
-
-        // 5. return the result
         Ok(Some(RichUserOperation {
             user_operation: user_operation.into(),
-            entry_point: to.into(),
+            entry_point: event.address.into(),
             block_number: tx
                 .block_number
                 .map(|n| U256::from(n.as_u64()))
