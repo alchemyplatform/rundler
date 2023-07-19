@@ -199,7 +199,7 @@ where
 
         let reps = mempool.dump_reputation();
         Ok(Response::new(DebugDumpReputationResponse {
-            reputations: reps,
+            reputations: reps.into_iter().map(Into::into).collect(),
         }))
     }
 }
@@ -275,13 +275,11 @@ mod tests {
     ];
 
     use crate::{
-        common::{
-            protos::op_pool::{self, Reputation},
-            types::Entity,
-        },
+        common::types::Entity,
         op_pool::{
             event::NewBlockEvent,
             mempool::{error::MempoolResult, PoolOperation},
+            reputation::Reputation,
         },
     };
 
@@ -327,7 +325,7 @@ mod tests {
         let oppool = given_oppool();
         let request = Request::new(AddOpRequest {
             entry_point: TEST_ADDRESS_ARR.to_vec(),
-            op: Some(op_pool::MempoolOp::default()),
+            op: Some(MempoolOp::default()),
         });
 
         let result = oppool.add_op(request).await;

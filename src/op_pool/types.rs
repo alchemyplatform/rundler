@@ -1,11 +1,17 @@
 use anyhow::Context;
 use ethers::types::{Address, H256};
 
-use super::mempool::PoolOperation;
+use super::{
+    mempool::PoolOperation,
+    reputation::{Reputation, ReputationStatus},
+};
 use crate::common::{
     protos::{
         self,
-        op_pool::{EntityType as ProtoEntityType, MempoolOp, UserOperation},
+        op_pool::{
+            EntityType as ProtoEntityType, MempoolOp, Reputation as ProtoReputation,
+            ReputationStatus as ProtoReputationStatus, UserOperation,
+        },
         ConversionError,
     },
     types::ValidTimeRange,
@@ -67,6 +73,27 @@ impl TryFrom<MempoolOp> for PoolOperation {
             sim_block_hash,
             account_is_staked: op.account_is_staked,
         })
+    }
+}
+
+impl From<ReputationStatus> for ProtoReputationStatus {
+    fn from(status: ReputationStatus) -> Self {
+        match status {
+            ReputationStatus::Ok => ProtoReputationStatus::Ok,
+            ReputationStatus::Throttled => ProtoReputationStatus::Throttled,
+            ReputationStatus::Banned => ProtoReputationStatus::Banned,
+        }
+    }
+}
+
+impl From<Reputation> for ProtoReputation {
+    fn from(rep: Reputation) -> Self {
+        ProtoReputation {
+            address: rep.address.as_bytes().to_vec(),
+            status: ProtoReputationStatus::from(rep.status).into(),
+            ops_seen: rep.ops_seen,
+            ops_included: rep.ops_included,
+        }
     }
 }
 
