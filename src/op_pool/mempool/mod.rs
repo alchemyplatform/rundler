@@ -9,11 +9,8 @@ use ethers::types::{Address, H256};
 use strum::IntoEnumIterator;
 
 use self::error::MempoolResult;
-use super::event::NewBlockEvent;
-use crate::common::{
-    protos::op_pool::Reputation,
-    types::{Entity, EntityType, UserOperation, ValidTimeRange},
-};
+use super::{event::NewBlockEvent, reputation::Reputation};
+use crate::common::types::{Entity, EntityType, UserOperation, ValidTimeRange};
 
 /// In-memory operation pool
 pub trait Mempool: Send + Sync {

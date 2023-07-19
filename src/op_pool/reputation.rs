@@ -7,7 +7,20 @@ use ethers::types::Address;
 use parking_lot::RwLock;
 use tokio::time::interval;
 
-use crate::common::protos::op_pool::{Reputation, ReputationStatus};
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ReputationStatus {
+    Ok,
+    Throttled,
+    Banned,
+}
+
+#[derive(Debug, Clone)]
+pub struct Reputation {
+    pub address: Address,
+    pub status: ReputationStatus,
+    pub ops_seen: u64,
+    pub ops_included: u64,
+}
 
 /// Reputation manager trait
 ///
@@ -79,8 +92,8 @@ impl ReputationManager for HourlyMovingAverageReputation {
             .counts
             .iter()
             .map(|(address, count)| Reputation {
-                address: address.as_bytes().to_vec(),
-                status: reputation.status(*address).into(),
+                address: *address,
+                status: reputation.status(*address),
                 ops_seen: count.ops_seen,
                 ops_included: count.ops_included,
             })
@@ -354,8 +367,7 @@ mod tests {
         for rep in reps {
             assert_eq!(rep.ops_seen, 1000);
             assert_eq!(rep.ops_included, 1000);
-            let a = Address::from_slice(&rep.address);
-            assert!(addrs.contains(&a));
+            assert!(addrs.contains(&rep.address));
         }
     }
 }

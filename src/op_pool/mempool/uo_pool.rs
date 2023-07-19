@@ -14,12 +14,11 @@ use super::{
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
-    common::{
-        contracts::i_entry_point::IEntryPointEvents,
-        protos::op_pool::{Reputation, ReputationStatus},
-        types::Entity,
+    common::{contracts::i_entry_point::IEntryPointEvents, types::Entity},
+    op_pool::{
+        event::NewBlockEvent,
+        reputation::{Reputation, ReputationManager, ReputationStatus},
     },
-    op_pool::{event::NewBlockEvent, reputation::ReputationManager},
 };
 
 /// The number of blocks that a throttled operation is allowed to be in the mempool
@@ -213,10 +212,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{
-        protos::op_pool::{Reputation, ReputationStatus},
-        types::UserOperation,
-    };
+    use crate::common::types::UserOperation;
 
     #[test]
     fn add_single_op() {
