@@ -1,5 +1,6 @@
 pub mod error;
 mod pool;
+mod reputation;
 mod size;
 pub mod uo_pool;
 
@@ -9,17 +10,23 @@ use std::{
 };
 
 use ethers::types::{Address, H256};
+#[cfg(test)]
+use mockall::automock;
+pub use reputation::{
+    HourlyMovingAverageReputation, Reputation, ReputationParams, ReputationStatus,
+};
 use strum::IntoEnumIterator;
 use tonic::async_trait;
 
 use self::error::MempoolResult;
-use super::reputation::Reputation;
+use super::MempoolError;
 use crate::common::{
     mempool::MempoolConfig,
     precheck, simulation,
     types::{Entity, EntityType, UserOperation, ValidTimeRange},
 };
 
+#[cfg_attr(test, automock)]
 #[async_trait]
 /// In-memory operation pool
 pub trait Mempool: Send + Sync + 'static {
@@ -34,7 +41,7 @@ pub trait Mempool: Send + Sync + 'static {
     ) -> MempoolResult<H256>;
 
     /// Removes a set of operations from the pool.
-    fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>);
+    fn remove_operations(&self, hashes: &[H256]);
 
     /// Removes all operations assocaited with a given entity from the pool.
     fn remove_entity(&self, entity: Entity);
@@ -167,6 +174,103 @@ impl PoolOperation {
             EntityType::Factory => self.uo.factory(),
             EntityType::Aggregator => self.aggregator,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct MempoolGroup<M> {
+    mempools: HashMap<Address, Arc<M>>,
+}
+
+impl<M> MempoolGroup<M>
+where
+    M: Mempool,
+{
+    pub fn new(mempools: Vec<Arc<M>>) -> Self {
+        Self {
+            mempools: mempools.into_iter().map(|m| (m.entry_point(), m)).collect(),
+        }
+    }
+
+    pub fn get_supported_entry_points(&self) -> Vec<Address> {
+        self.mempools.keys().copied().collect()
+    }
+
+    pub async fn add_op(
+        &self,
+        entry_point: Address,
+        op: UserOperation,
+        origin: OperationOrigin,
+    ) -> MempoolResult<H256> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.add_operation(origin, op).await
+    }
+
+    pub fn get_ops(&self, entry_point: Address, max_ops: u64) -> MempoolResult<Vec<PoolOperation>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool
+            .best_operations(max_ops as usize)
+            .iter()
+            .map(|op| (**op).clone())
+            .collect())
+    }
+
+    pub fn remove_ops(&self, entry_point: Address, ops: &[H256]) -> MempoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.remove_operations(ops);
+        Ok(())
+    }
+
+    pub fn remove_entities<'a>(
+        &self,
+        entry_point: Address,
+        entities: impl IntoIterator<Item = &'a Entity>,
+    ) -> MempoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        for entity in entities {
+            mempool.remove_entity(*entity);
+        }
+        Ok(())
+    }
+
+    pub fn debug_clear_state(&self) -> MempoolResult<()> {
+        for mempool in self.mempools.values() {
+            mempool.clear();
+        }
+        Ok(())
+    }
+
+    pub fn debug_dump_mempool(&self, entry_point: Address) -> MempoolResult<Vec<PoolOperation>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool
+            .all_operations(usize::MAX)
+            .iter()
+            .map(|op| (**op).clone())
+            .collect())
+    }
+
+    pub fn debug_set_reputations<'a>(
+        &self,
+        entry_point: Address,
+        reputations: impl IntoIterator<Item = &'a Reputation>,
+    ) -> MempoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        for rep in reputations {
+            mempool.set_reputation(rep.address, rep.ops_seen, rep.ops_included);
+        }
+        Ok(())
+    }
+
+    pub fn debug_dump_reputation(&self, entry_point: Address) -> MempoolResult<Vec<Reputation>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool.dump_reputation())
+    }
+
+    pub fn get_pool(&self, entry_point: Address) -> MempoolResult<Arc<M>> {
+        self.mempools
+            .get(&entry_point)
+            .cloned()
+            .ok_or_else(|| MempoolError::UnknownEntryPoint(entry_point))
     }
 }
 

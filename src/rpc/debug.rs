@@ -6,18 +6,15 @@ use jsonrpsee::{
 use tonic::{async_trait, transport::Channel};
 
 use super::{RpcReputation, RpcUserOperation};
-use crate::common::{
-    protos::{
-        builder::{
+use crate::{
+    common::{
+        protos::builder::{
             builder_client, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
             DebugSetBundlingModeRequest,
         },
-        op_pool::{
-            op_pool_client, DebugClearStateRequest, DebugDumpMempoolRequest,
-            DebugDumpReputationRequest, DebugSetReputationRequest,
-        },
+        types::BundlingMode,
     },
-    types::{BundlingMode, UserOperation},
+    op_pool::PoolClient,
 };
 
 /// Debug API
@@ -46,16 +43,13 @@ pub trait DebugApi {
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>>;
 }
 
-pub struct DebugApi {
-    op_pool_client: op_pool_client::OpPoolClient<Channel>,
+pub struct DebugApi<P> {
+    op_pool_client: P,
     builder_client: builder_client::BuilderClient<Channel>,
 }
 
-impl DebugApi {
-    pub fn new(
-        op_pool_client: op_pool_client::OpPoolClient<Channel>,
-        builder_client: builder_client::BuilderClient<Channel>,
-    ) -> Self {
+impl<P> DebugApi<P> {
+    pub fn new(op_pool_client: P, builder_client: builder_client::BuilderClient<Channel>) -> Self {
         Self {
             op_pool_client,
             builder_client,
@@ -64,12 +58,14 @@ impl DebugApi {
 }
 
 #[async_trait]
-impl DebugApiServer for DebugApi {
+impl<P> DebugApiServer for DebugApi<P>
+where
+    P: PoolClient,
+{
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
             .op_pool_client
-            .clone()
-            .debug_clear_state(DebugClearStateRequest {})
+            .debug_clear_state()
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
 
@@ -77,25 +73,14 @@ impl DebugApiServer for DebugApi {
     }
 
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
-        let response = self
+        Ok(self
             .op_pool_client
-            .clone()
-            .debug_dump_mempool(DebugDumpMempoolRequest {
-                entry_point: entry_point.to_fixed_bytes().into(),
-            })
+            .debug_dump_mempool(entry_point)
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))?;
-
-        let ops = response
-            .into_inner()
-            .ops
+            .map_err(|e| RpcError::Custom(e.to_string()))?
             .into_iter()
-            .filter_map(|mop| mop.uo)
-            .map(|uo| uo.try_into())
-            .collect::<Result<Vec<UserOperation>, _>>()
-            .map_err(|e| RpcError::Custom(e.to_string()))?;
-
-        Ok(ops.into_iter().map(|uo| uo.into()).collect())
+            .map(|pop| pop.uo.into())
+            .collect::<Vec<RpcUserOperation>>())
     }
 
     async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
@@ -128,11 +113,10 @@ impl DebugApiServer for DebugApi {
     ) -> RpcResult<String> {
         let _ = self
             .op_pool_client
-            .clone()
-            .debug_set_reputation(DebugSetReputationRequest {
-                entry_point: entry_point.to_fixed_bytes().into(),
-                reputations: reputations.into_iter().map(Into::into).collect(),
-            })
+            .debug_set_reputations(
+                entry_point,
+                reputations.into_iter().map(Into::into).collect(),
+            )
             .await;
 
         Ok("ok".to_string())
@@ -141,16 +125,11 @@ impl DebugApiServer for DebugApi {
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>> {
         let result = self
             .op_pool_client
-            .clone()
-            .debug_dump_reputation(DebugDumpReputationRequest {
-                entry_point: entry_point.to_fixed_bytes().into(),
-            })
+            .debug_dump_reputation(entry_point)
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
 
         result
-            .into_inner()
-            .reputations
             .into_iter()
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, anyhow::Error>>()

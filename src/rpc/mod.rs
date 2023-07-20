@@ -5,7 +5,6 @@ mod metrics;
 mod rundler;
 mod task;
 
-use anyhow::bail;
 pub use debug::DebugApiClient;
 pub use eth::{estimation, EthApiClient};
 use ethers::{
@@ -17,12 +16,9 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 pub use task::*;
 
-use crate::common::{
-    protos::{
-        self,
-        op_pool::{Reputation, ReputationStatus},
-    },
-    types::UserOperation,
+use crate::{
+    common::types::UserOperation,
+    op_pool::{Reputation, ReputationStatus},
 };
 
 /// API namespace
@@ -300,7 +296,6 @@ impl Serialize for ReputationStatus {
         S: Serializer,
     {
         match self {
-            ReputationStatus::Unspecified => serializer.serialize_str("unspecified"),
             ReputationStatus::Ok => serializer.serialize_str("ok"),
             ReputationStatus::Throttled => serializer.serialize_str("throttled"),
             ReputationStatus::Banned => serializer.serialize_str("banned"),
@@ -315,24 +310,10 @@ impl<'de> Deserialize<'de> for ReputationStatus {
     {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
-            "unspecified" => Ok(ReputationStatus::Unspecified),
             "ok" => Ok(ReputationStatus::Ok),
             "throttled" => Ok(ReputationStatus::Throttled),
             "banned" => Ok(ReputationStatus::Banned),
             _ => Err(de::Error::custom(format!("Invalid reputation status {s}"))),
-        }
-    }
-}
-
-impl TryFrom<i32> for ReputationStatus {
-    type Error = anyhow::Error;
-
-    fn try_from(status: i32) -> Result<Self, Self::Error> {
-        match status {
-            1 => Ok(ReputationStatus::Ok),
-            2 => Ok(ReputationStatus::Throttled),
-            3 => Ok(ReputationStatus::Banned),
-            _ => bail!("Invalid reputation status {status}"),
         }
     }
 }
@@ -348,10 +329,10 @@ pub struct RpcReputation {
 impl From<RpcReputation> for Reputation {
     fn from(rpc_reputation: RpcReputation) -> Self {
         Reputation {
-            address: rpc_reputation.address.as_bytes().to_vec(),
+            address: rpc_reputation.address,
             ops_seen: rpc_reputation.ops_seen.as_u64(),
             ops_included: rpc_reputation.ops_included.as_u64(),
-            status: rpc_reputation.status.into(),
+            status: rpc_reputation.status,
         }
     }
 }
@@ -361,10 +342,10 @@ impl TryFrom<Reputation> for RpcReputation {
 
     fn try_from(reputation: Reputation) -> Result<Self, Self::Error> {
         Ok(RpcReputation {
-            address: protos::from_bytes(&reputation.address)?,
+            address: reputation.address,
             ops_seen: reputation.ops_seen.into(),
             ops_included: reputation.ops_included.into(),
-            status: reputation.status.try_into()?,
+            status: reputation.status,
         })
     }
 }

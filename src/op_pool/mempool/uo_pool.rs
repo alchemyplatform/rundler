@@ -14,6 +14,7 @@ use tracing::info;
 use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
+    reputation::{Reputation, ReputationManager, ReputationStatus},
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
@@ -26,7 +27,6 @@ use crate::{
     op_pool::{
         chain::ChainUpdate,
         emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
-        reputation::{Reputation, ReputationManager, ReputationStatus},
     },
 };
 
@@ -305,7 +305,7 @@ where
         Ok(hash)
     }
 
-    fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>) {
+    fn remove_operations(&self, hashes: &[H256]) {
         let mut count = 0;
         let mut removed_hashes = vec![];
         {
@@ -317,6 +317,7 @@ where
                 }
             }
         }
+
         for hash in removed_hashes {
             self.emit(OpPoolEvent::RemovedOp {
                 op_hash: hash,
@@ -423,7 +424,7 @@ mod tests {
             .await
             .unwrap();
         check_ops(pool.best_operations(1), uos);
-        pool.remove_operations(&vec![hash]);
+        pool.remove_operations(&[hash]);
         assert_eq!(pool.best_operations(1), vec![]);
     }
 

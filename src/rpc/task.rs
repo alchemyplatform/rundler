@@ -2,14 +2,14 @@ use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
-    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClientBuilder},
+    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClient, RetryClientBuilder},
     types::Address,
 };
 use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use tokio::{select, try_join};
+use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tonic::{
     async_trait,
@@ -19,20 +19,22 @@ use tonic_health::pb::health_client::HealthClient;
 use tracing::info;
 use url::Url;
 
-use super::ApiNamespace;
+use super::{eth::EthApiServer, ApiNamespace};
 use crate::{
     common::{
         contracts::i_entry_point::IEntryPoint,
         eth,
         handle::Task,
         precheck,
-        protos::{builder::builder_client::BuilderClient, op_pool::op_pool_client::OpPoolClient},
+        protos::builder::builder_client::BuilderClient,
         server::{self, format_socket_addr},
+        types::EntryPointLike,
     },
+    op_pool::{connect_remote_pool_client, LocalPoolClient, PoolClient, PoolClientMode},
     rpc::{
         debug::{DebugApi, DebugApiServer},
-        eth::{estimation, EthApi, EthApiServer},
-        health::{SystemApi, SystemApiServer},
+        eth::{estimation, EthApi},
+        health::{LocalHealthCheck, RemoteHealthCheck, SystemApiServer},
         metrics::RpcMetricsLogger,
         rundler::{RundlerApi, RundlerApiServer},
     },
@@ -42,7 +44,6 @@ use crate::{
 pub struct Args {
     pub port: u16,
     pub host: String,
-    pub pool_url: String,
     pub builder_url: String,
     pub entry_points: Vec<Address>,
     pub chain_id: u64,
@@ -53,6 +54,7 @@ pub struct Args {
     pub estimation_settings: estimation::Settings,
     pub rpc_timeout: Duration,
     pub max_connections: u32,
+    pub pool_client_mode: PoolClientMode,
 }
 
 #[derive(Debug)]
@@ -62,11 +64,13 @@ pub struct RpcTask {
 
 #[async_trait]
 impl Task for RpcTask {
-    async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
 
-        let mut module = RpcModule::new(());
+        if self.args.entry_points.is_empty() {
+            bail!("No entry points provided");
+        }
 
         let parsed_url = Url::parse(&self.args.rpc_url).context("Invalid RPC URL")?;
         let http = Http::new(parsed_url);
@@ -81,77 +85,68 @@ impl Task for RpcTask {
             .build(http, Box::<HttpRateLimitRetryPolicy>::default());
 
         let provider = Arc::new(Provider::new(client));
+        let entry_points = self
+            .args
+            .entry_points
+            .iter()
+            .map(|addr| IEntryPoint::new(*addr, provider.clone()))
+            .collect();
 
-        let op_pool_uri =
-            Uri::from_str(&self.args.pool_url).context("should be a valid URI for op_pool")?;
-        let builder_uri =
-            Uri::from_str(&self.args.builder_url).context("should be a valid URI for op_pool")?;
-        let (op_pool_client, builder_client) = Self::connect_clients_with_shutdown(
-            &self.args.pool_url,
-            &self.args.builder_url,
-            shutdown_token.clone(),
-        )
-        .await?;
-
-        let op_pool_health_client = HealthClient::new(
-            Channel::builder(op_pool_uri)
-                .connect()
-                .await
-                .context("should have connected to op_pool health service channel")?,
-        );
-        let builder_health_client = HealthClient::new(
-            Channel::builder(builder_uri)
-                .connect()
-                .await
-                .context("should have connected to builder health service channel")?,
-        );
-        info!("Connected to op_pool service at {}", self.args.pool_url);
+        // TODO(danc) local builder client
+        let builder_client =
+            Self::connect_remote_builder_client(&self.args.builder_url, shutdown_token.clone())
+                .await?;
         info!("Connected to builder service at {}", self.args.builder_url);
 
-        if self.args.entry_points.is_empty() {
-            bail!("No entry points provided");
-        }
+        let mut module = RpcModule::new(());
+        match &self.args.pool_client_mode {
+            PoolClientMode::Local { sender } => {
+                let pool_client = LocalPoolClient::new(sender.clone());
+                self.attach_namespaces(
+                    provider,
+                    entry_points,
+                    pool_client.clone(),
+                    builder_client,
+                    &mut module,
+                )?;
 
-        let entry_point_addrs = &self.args.entry_points;
-        let mut entry_points = vec![];
+                module.merge(LocalHealthCheck::new(pool_client).into_rpc())?;
+            }
+            PoolClientMode::Remote { url } => {
+                let pool_client = connect_remote_pool_client(url, shutdown_token.clone()).await?;
+                info!("Connected to op_pool service at {}", url);
+                self.attach_namespaces(
+                    provider,
+                    entry_points,
+                    pool_client,
+                    builder_client,
+                    &mut module,
+                )?;
 
-        for entry in entry_point_addrs {
-            let entry = IEntryPoint::new(*entry, provider.clone());
-            entry_points.push(entry);
-        }
+                let builder_uri = Uri::from_str(&self.args.builder_url)
+                    .context("should be a valid URI for op_pool")?;
+                let op_pool_uri =
+                    Uri::from_str(url).context("should be a valid URI for op_pool")?;
 
-        for api in &self.args.api_namespaces {
-            match api {
-                ApiNamespace::Eth => module.merge(
-                    EthApi::new(
-                        provider.clone(),
-                        entry_points.clone(),
-                        self.args.chain_id,
-                        op_pool_client.clone(),
-                        self.args.eth_api_settings,
-                        self.args.estimation_settings,
-                    )
-                    .into_rpc(),
-                )?,
-                ApiNamespace::Debug => module.merge(
-                    DebugApi::new(op_pool_client.clone(), builder_client.clone()).into_rpc(),
-                )?,
-                ApiNamespace::Rundler => module.merge(
-                    RundlerApi::new(
-                        provider.clone(),
-                        self.args.chain_id,
-                        self.args.precheck_settings,
-                    )
-                    .into_rpc(),
-                )?,
+                let op_pool_health_client = HealthClient::new(
+                    Channel::builder(op_pool_uri)
+                        .connect()
+                        .await
+                        .context("should have connected to op_pool health service channel")?,
+                );
+                let builder_health_client = HealthClient::new(
+                    Channel::builder(builder_uri)
+                        .connect()
+                        .await
+                        .context("should have connected to builder health service channel")?,
+                );
+                module.merge(
+                    RemoteHealthCheck::new(op_pool_health_client, builder_health_client).into_rpc(),
+                )?;
             }
         }
 
-        // Set up health check endpoint via GET /health
-        // registers the jsonrpc handler
-        // NOTE: I couldn't use module.register_async_method because it requires async move
-        // and neither the clients or the args.*_url are copyable
-        module.merge(SystemApi::new(op_pool_health_client, builder_health_client).into_rpc())?;
+        // Set up health check endpoint via GET /health registers the jsonrpc handler
         let service_builder = tower::ServiceBuilder::new()
             // Proxy `GET /health` requests to internal `system_health` method.
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
@@ -190,25 +185,55 @@ impl RpcTask {
         Box::new(self)
     }
 
-    async fn connect_clients_with_shutdown(
-        op_pool_url: &str,
-        builder_url: &str,
+    async fn connect_remote_builder_client(
+        url: &str,
         shutdown_token: CancellationToken,
-    ) -> anyhow::Result<(OpPoolClient<Channel>, BuilderClient<Channel>)> {
+    ) -> anyhow::Result<BuilderClient<Channel>> {
         select! {
             _ = shutdown_token.cancelled() => {
                 tracing::error!("bailing from conneting client, server shutting down");
                 bail!("Server shutting down")
             }
-            res = async {
-                try_join!(
-                    server::connect_with_retries("op pool from common", op_pool_url, OpPoolClient::connect),
-                    server::connect_with_retries("builder from common", builder_url, BuilderClient::connect)
-                )
-                .context("should connect to op pool and builder")
-            } => {
-                res
+            res = server::connect_with_retries("builder from common", url, BuilderClient::connect) => {
+                res.context("should connect to builder")
             }
         }
+    }
+
+    fn attach_namespaces<C: PoolClient + Clone, E: EntryPointLike + Clone>(
+        &self,
+        provider: Arc<Provider<RetryClient<Http>>>,
+        entry_points: Vec<E>,
+        pool_client: C,
+        builder_client: BuilderClient<Channel>,
+        module: &mut RpcModule<()>,
+    ) -> anyhow::Result<()> {
+        for api in &self.args.api_namespaces {
+            match api {
+                ApiNamespace::Eth => module.merge(
+                    EthApi::new(
+                        provider.clone(),
+                        entry_points.clone(),
+                        self.args.chain_id,
+                        pool_client.clone(),
+                        self.args.eth_api_settings,
+                        self.args.estimation_settings,
+                    )
+                    .into_rpc(),
+                )?,
+                ApiNamespace::Debug => module
+                    .merge(DebugApi::new(pool_client.clone(), builder_client.clone()).into_rpc())?,
+                ApiNamespace::Rundler => module.merge(
+                    RundlerApi::new(
+                        provider.clone(),
+                        self.args.chain_id,
+                        self.args.precheck_settings,
+                    )
+                    .into_rpc(),
+                )?,
+            }
+        }
+
+        Ok(())
     }
 }
