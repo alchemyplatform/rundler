@@ -147,6 +147,9 @@ message AddOpSuccess {
   // The serialized UserOperation hash
   bytes hash = 1;
 }
+message AddOpFailure {
+  MempoolError error = 1;
+}
 
 message GetOpsRequest {
   // The serialized entry point address

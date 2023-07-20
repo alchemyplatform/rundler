@@ -407,6 +407,7 @@ impl PoolMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::{precheck, simulation};
 
     #[test]
     fn add_single_op() {

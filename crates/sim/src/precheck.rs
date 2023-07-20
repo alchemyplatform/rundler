@@ -239,6 +239,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     }
 
     async fn load_async_data(&self, op: &UserOperation) -> anyhow::Result<AsyncData> {
+        tracing::info!("precheck loading async data {:?}", op);
         let (
             factory_exists,
             sender_exists,
