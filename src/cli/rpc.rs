@@ -6,6 +6,7 @@ use clap::Args;
 use super::CommonArgs;
 use crate::{
     common::{eth, handle::spawn_tasks_with_shutdown, precheck},
+    op_pool::PoolClientMode,
     rpc::{self, estimation, RpcTask},
 };
 
@@ -68,11 +69,11 @@ impl RpcArgs {
     pub async fn to_args(
         &self,
         common: &CommonArgs,
-        pool_url: String,
         builder_url: String,
         precheck_settings: precheck::Settings,
         eth_api_settings: eth::Settings,
         estimation_settings: estimation::Settings,
+        pool_client_mode: PoolClientMode,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
@@ -83,7 +84,6 @@ impl RpcArgs {
         Ok(rpc::Args {
             port: self.port,
             host: self.host.clone(),
-            pool_url,
             builder_url,
             entry_points: common
                 .entry_points
@@ -102,6 +102,7 @@ impl RpcArgs {
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
+            pool_client_mode,
         })
     }
 }
@@ -141,11 +142,11 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     let task_args = rpc_args
         .to_args(
             &common_args,
-            pool_url,
             builder_url,
             (&common_args).try_into()?,
             (&common_args).into(),
             (&common_args).try_into()?,
+            PoolClientMode::Remote { url: pool_url },
         )
         .await?;
 

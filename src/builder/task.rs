@@ -1,41 +1,43 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use ethers::types::{Address, H256};
 use ethers_signers::Signer;
 use rusoto_core::Region;
-use tokio::{select, sync::broadcast, time};
-use tokio_util::sync::CancellationToken;
-use tonic::{
-    async_trait,
-    transport::{Channel, Server},
+use tokio::{
+    sync::{broadcast, mpsc},
+    time,
 };
+use tokio_util::sync::CancellationToken;
+use tonic::{async_trait, transport::Server};
 use tracing::info;
 
+use super::emit::BuilderEvent;
 use crate::{
     builder::{
-        self,
         bundle_proposer::{self, BundleProposerImpl},
-        emit::BuilderEvent,
+        bundle_sender::{self, BundleSender, BundleSenderImpl},
         sender::get_sender,
-        server::{BuilderImpl, DummyBuilder},
+        server::BuilderImpl,
         signer::{BundlerSigner, KmsSigner, LocalSigner},
         transaction_tracker::{self, TransactionTrackerImpl},
     },
     common::{
         contracts::i_entry_point::IEntryPoint,
         emit::WithEntryPoint,
-        eth,
+        eth::{self},
         gas::PriorityFeeMode,
         handle::{SpawnGuard, Task},
         mempool::MempoolConfig,
-        protos::{
-            builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
-            op_pool::op_pool_client::OpPoolClient,
-        },
-        server::{self, format_socket_addr},
+        protos::builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
+        server::format_socket_addr,
         simulation::{self, SimulatorImpl},
     },
+    op_pool::{connect_remote_pool_client, LocalPoolClient, PoolClientMode},
 };
 
 #[derive(Debug)]
@@ -43,7 +45,6 @@ pub struct Args {
     pub port: u16,
     pub host: String,
     pub rpc_url: String,
-    pub pool_url: String,
     pub entry_point_address: Address,
     pub private_key: Option<String>,
     pub aws_kms_key_ids: Vec<String>,
@@ -64,6 +65,7 @@ pub struct Args {
     pub max_blocks_to_wait_for_mine: u64,
     pub replacement_fee_percent_increase: u64,
     pub max_fee_increases: u64,
+    pub pool_client_mode: PoolClientMode,
 }
 
 #[derive(Debug)]
@@ -74,7 +76,7 @@ pub struct BuilderTask {
 
 #[async_trait]
 impl Task for BuilderTask {
-    async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         info!("Starting builder server on {}", addr);
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
@@ -120,8 +122,6 @@ impl Task for BuilderTask {
             priority_fee_mode: self.args.priority_fee_mode,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
-        let op_pool =
-            Self::connect_client_with_shutdown(&self.args.pool_url, shutdown_token.clone()).await?;
 
         let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
         let simulator = SimulatorImpl::new(
@@ -131,14 +131,6 @@ impl Task for BuilderTask {
             self.args.mempool_configs.clone(),
         );
 
-        let proposer = BundleProposerImpl::new(
-            op_pool.clone(),
-            simulator,
-            entry_point.clone(),
-            Arc::clone(&provider),
-            proposer_settings,
-            self.event_sender.clone(),
-        );
         let submit_provider =
             eth::new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
         let transaction_sender = get_sender(
@@ -158,30 +150,73 @@ impl Task for BuilderTask {
             tracker_settings,
         )
         .await?;
-        let builder_settings = builder::server::Settings {
+
+        let builder_settings = bundle_sender::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
             max_fee_increases: self.args.max_fee_increases,
         };
-        let builder = Arc::new(BuilderImpl::new(
-            self.args.chain_id,
-            beneficiary,
-            self.args.eth_poll_interval,
-            op_pool,
-            proposer,
-            entry_point,
-            transaction_tracker,
-            provider,
-            builder_settings,
-            self.event_sender.clone(),
-        ));
+        let manual_bundling_mode = Arc::new(AtomicBool::new(false));
+        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
-        let _builder_loop_guard = {
-            let builder = Arc::clone(&builder);
-            SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await })
+        let mut builder: Box<dyn BundleSender> = match &self.args.pool_client_mode {
+            PoolClientMode::Local { sender } => {
+                let pool_client = LocalPoolClient::new(sender.clone());
+                let proposer = BundleProposerImpl::new(
+                    pool_client.clone(),
+                    simulator,
+                    entry_point.clone(),
+                    Arc::clone(&provider),
+                    proposer_settings,
+                    self.event_sender.clone(),
+                );
+                Box::new(BundleSenderImpl::new(
+                    manual_bundling_mode.clone(),
+                    send_bundle_rx,
+                    self.args.chain_id,
+                    beneficiary,
+                    self.args.eth_poll_interval,
+                    proposer,
+                    entry_point,
+                    transaction_tracker,
+                    pool_client,
+                    provider,
+                    builder_settings,
+                    self.event_sender.clone(),
+                ))
+            }
+            PoolClientMode::Remote { url } => {
+                let pool_client = connect_remote_pool_client(url, shutdown_token.clone()).await?;
+                let proposer = BundleProposerImpl::new(
+                    pool_client.clone(),
+                    simulator,
+                    entry_point.clone(),
+                    Arc::clone(&provider),
+                    proposer_settings,
+                    self.event_sender.clone(),
+                );
+                Box::new(BundleSenderImpl::new(
+                    manual_bundling_mode.clone(),
+                    send_bundle_rx,
+                    self.args.chain_id,
+                    beneficiary,
+                    self.args.eth_poll_interval,
+                    proposer,
+                    entry_point,
+                    transaction_tracker,
+                    pool_client,
+                    provider,
+                    builder_settings,
+                    self.event_sender.clone(),
+                ))
+            }
         };
 
+        let _builder_loop_guard =
+            { SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await }) };
+
         // gRPC server
-        let builder_server = BuilderServer::new(builder);
+        let builder_server = BuilderImpl::new(manual_bundling_mode, send_bundle_tx);
+        let builder_server = BuilderServer::new(builder_server);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
@@ -190,7 +225,7 @@ impl Task for BuilderTask {
         // health service
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
-            .set_serving::<BuilderServer<DummyBuilder>>()
+            .set_serving::<BuilderServer<BuilderImpl>>()
             .await;
 
         let server_handle = Server::builder()
@@ -224,20 +259,5 @@ impl BuilderTask {
 
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
-    }
-
-    async fn connect_client_with_shutdown(
-        op_pool_url: &str,
-        shutdown_token: CancellationToken,
-    ) -> anyhow::Result<OpPoolClient<Channel>> {
-        select! {
-            _ = shutdown_token.cancelled() => {
-                tracing::error!("bailing from connecting client, server shutting down");
-                bail!("Server shutting down")
-            }
-            res = server::connect_with_retries("op pool from builder", op_pool_url, OpPoolClient::connect) => {
-                res
-            }
-        }
     }
 }

@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::EthEvent,
@@ -17,7 +17,7 @@ use ethers::{
     utils::to_checksum,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use tonic::{async_trait, transport::Channel};
+use tonic::async_trait;
 use tracing::Level;
 
 use self::{error::EthRpcError, estimation::GasEstimator};
@@ -30,10 +30,9 @@ use crate::{
         eth::{log_to_raw_log, Settings},
         types::{EntryPointLike, ProviderLike, UserOperation},
     },
-    op_pool::MempoolError,
+    op_pool::PoolClient,
     rpc::{
         estimation::{GasEstimationError, GasEstimatorImpl},
-        protos::op_pool::{add_op_response, op_pool_client::OpPoolClient, AddOpRequest},
         GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
         UserOperationReceipt,
     },
@@ -99,25 +98,26 @@ where
 }
 
 #[derive(Debug)]
-pub struct EthApi<P: ProviderLike, E: EntryPointLike> {
+pub struct EthApi<P: ProviderLike, E: EntryPointLike, PS: PoolClient> {
     contexts_by_entry_point: HashMap<Address, EntryPointContext<P, E>>,
     provider: Arc<P>,
     chain_id: u64,
-    op_pool_client: OpPoolClient<Channel>,
+    pool: PS,
     settings: Settings,
 }
 
-impl<P, E> EthApi<P, E>
+impl<P, E, PS> EthApi<P, E, PS>
 where
     P: ProviderLike,
     E: EntryPointLike,
+    PS: PoolClient,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<P>,
         entry_points: Vec<E>,
         chain_id: u64,
-        op_pool_client: OpPoolClient<Channel>,
+        pool: PS,
         settings: Settings,
         estimation_settings: estimation::Settings,
     ) -> Self
@@ -144,7 +144,7 @@ where
             contexts_by_entry_point,
             provider,
             chain_id,
-            op_pool_client,
+            pool,
         }
     }
 
@@ -317,10 +317,11 @@ where
 }
 
 #[async_trait]
-impl<P, E> EthApiServer for EthApi<P, E>
+impl<P, E, PS> EthApiServer for EthApi<P, E, PS>
 where
     P: ProviderLike,
     E: EntryPointLike,
+    PS: PoolClient,
 {
     async fn send_user_operation(
         &self,
@@ -332,32 +333,12 @@ where
                 "supplied entry point addr is not a known entry point".to_string(),
             ))?;
         }
-
-        let op: UserOperation = op.into();
-
-        let add_op_result = self
-            .op_pool_client
-            .clone()
-            .add_op(AddOpRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-                op: Some((&op).into()),
-            })
+        Ok(self
+            .pool
+            .add_op(entry_point, op.into())
             .await
             .map_err(EthRpcError::from)
-            .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?;
-
-        match add_op_result.into_inner().result {
-            Some(add_op_response::Result::Success(s)) => Ok(H256::from_slice(&s.hash)),
-            Some(add_op_response::Result::Failure(f)) => {
-                Err(EthRpcError::from(MempoolError::try_from(
-                    f.error.context("should have received error from op pool")?,
-                )?))
-                .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?
-            }
-            None => Err(EthRpcError::Internal(anyhow!(
-                "should have received result from op pool"
-            )))?,
-        }
+            .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?)
     }
 
     async fn estimate_user_operation_gas(
@@ -484,8 +465,9 @@ where
         }
 
         // Filter receipt logs to match just those belonging to the user op
-        let filtered_logs = EthApi::<P, E>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
-            .context("should have found receipt logs matching user op")?;
+        let filtered_logs =
+            EthApi::<P, E, PS>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
+                .context("should have found receipt logs matching user op")?;
 
         // Decode log and find failure reason if not success
         let uo_event = self
@@ -494,7 +476,7 @@ where
         let reason: String = if uo_event.success {
             "".to_owned()
         } else {
-            EthApi::<P, E>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
+            EthApi::<P, E, PS>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
                 .context("should have found revert reason if tx wasn't successful")?
                 .unwrap_or_default()
         };
@@ -535,25 +517,12 @@ mod tests {
     };
 
     use super::*;
-    use crate::common::types::{MockEntryPointLike, MockProviderLike};
+    use crate::{
+        common::types::{MockEntryPointLike, MockProviderLike},
+        op_pool::MockPoolClient,
+    };
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
-
-    // NOTE: Will use base config and mockall once new grpc mocking is enabled
-
-    // fn base_config() -> EthApi {
-    //     let provider = MockProviderLike::new();
-    //     let entrypoints = vec![MockEntryPointLike::new()];
-
-    //     let precheck_settings = precheck::Settings {
-    //         max_verification_gas: U256::from(100000),
-    //         use_bundle_priority_fee: Some(true),
-    //         bundle_priority_fee_overhead_percent: 5,
-    //         priority_fee_mode: PriorityFeeMode::BaseFeePercent(5),
-    //     };
-
-    //     let eth_api = EthApi::new(provider, entrypoints, 0, precheck_settings);
-    // }
 
     #[test]
     fn test_filter_receipt_logs_when_at_begining_of_list() {
@@ -566,7 +535,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -589,7 +558,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -612,7 +581,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -639,7 +608,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -665,7 +634,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -687,7 +656,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
