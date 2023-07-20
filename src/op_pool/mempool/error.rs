@@ -1,6 +1,10 @@
 use ethers::{abi::Address, types::U256};
 
-use crate::common::types::Entity;
+use crate::common::{
+    precheck::{PrecheckError, PrecheckViolation},
+    simulation::{SimulationError, SimulationViolation},
+    types::Entity,
+};
 
 /// Mempool result type.
 pub type MempoolResult<T> = std::result::Result<T, MempoolError>;
@@ -23,4 +27,40 @@ pub enum MempoolError {
     EntityThrottled(Entity),
     #[error("Operation was discarded on inserting")]
     DiscardedOnInsert,
+    #[error("Operation violation during precheck {0}")]
+    PrecheckViolation(PrecheckViolation),
+    #[error("Operation violation during simulation {0}")]
+    SimulationViolation(SimulationViolation),
+    #[error("Invalid signature")]
+    InvalidSignature,
+    #[error("Unsupported aggregator {0}")]
+    UnsupportedAggregator(Address),
+}
+
+impl From<SimulationError> for MempoolError {
+    fn from(mut error: SimulationError) -> Self {
+        let SimulationError::Violations(violations) = &mut error else {
+            return Self::Other(error.into());
+        };
+
+        let Some(violation) = violations.iter().min() else {
+            return Self::Other(error.into());
+        };
+
+        Self::SimulationViolation(violation.clone())
+    }
+}
+
+impl From<PrecheckError> for MempoolError {
+    fn from(mut error: PrecheckError) -> Self {
+        let PrecheckError::Violations(violations) = &mut error else {
+            return Self::Other(error.into());
+        };
+
+        let Some(violation) = violations.iter().min() else {
+            return Self::Other(error.into());
+        };
+
+        Self::PrecheckViolation(violation.clone())
+    }
 }

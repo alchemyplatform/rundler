@@ -26,7 +26,7 @@ pub struct Reputation {
 ///
 /// Interior mutability pattern used as ReputationManagers may
 /// need to be thread-safe.
-pub trait ReputationManager: Send + Sync {
+pub trait ReputationManager: Send + Sync + 'static {
     /// Called by mempool before returning operations to bundler
     fn status(&self, address: Address) -> ReputationStatus;
 

@@ -18,7 +18,7 @@ use crate::common::{
 pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
 
 #[async_trait]
-pub trait Prechecker {
+pub trait Prechecker: Send + Sync + 'static {
     async fn check(&self, op: &UserOperation) -> Result<(), PrecheckError>;
 }
 
@@ -39,6 +39,17 @@ pub struct Settings {
     pub use_bundle_priority_fee: Option<bool>,
     pub bundle_priority_fee_overhead_percent: u64,
     pub priority_fee_mode: gas::PriorityFeeMode,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            max_verification_gas: 5_000_000.into(),
+            use_bundle_priority_fee: None,
+            bundle_priority_fee_overhead_percent: 0,
+            priority_fee_mode: gas::PriorityFeeMode::Fixed(0),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -133,7 +144,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
 
         let mut violations = ArrayVec::new();
         if op.verification_gas_limit > max_verification_gas {
-            violations.push(PrecheckViolation::VerificationGasTooHigh(
+            violations.push(PrecheckViolation::VerificationGasLimitTooHigh(
                 op.verification_gas_limit,
                 max_verification_gas,
             ));
@@ -288,7 +299,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
     }
 }
 
-#[derive(Clone, Debug, parse_display::Display, Eq, PartialEq)]
+#[derive(Clone, Debug, parse_display::Display, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PrecheckViolation {
     #[display("initCode must start with a 20-byte factory address, but was only {0} bytes")]
     InitCodeTooShort(usize),
@@ -299,7 +310,7 @@ pub enum PrecheckViolation {
     #[display("initCode indicates factory with no code: {0:?}")]
     FactoryIsNotContract(Address),
     #[display("verificationGasLimit is {0} but must be at most {1}")]
-    VerificationGasTooHigh(U256, U256),
+    VerificationGasLimitTooHigh(U256, U256),
     #[display("preVerificationGas is {0} but must be at least {1}")]
     PreVerificationGasTooLow(U256, U256),
     #[display("paymasterAndData must start a 20-byte paymaster address, but was only {0} bytes")]

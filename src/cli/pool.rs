@@ -1,12 +1,13 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
+use ethers::types::H256;
 
 use super::CommonArgs;
 use crate::{
     cli::json::get_json_config,
-    common::handle::spawn_tasks_with_shutdown,
+    common::{handle::spawn_tasks_with_shutdown, mempool::MempoolConfig},
     op_pool::{self, PoolConfig, PoolTask},
 };
 
@@ -96,6 +97,14 @@ impl PoolArgs {
         tracing::info!("blocklist: {:?}", blocklist);
         tracing::info!("allowlist: {:?}", allowlist);
 
+        let mempool_channel_configs = match &common.mempool_config_path {
+            Some(path) => {
+                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
+            }
+            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
+        };
+        tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
+
         let pool_configs = common
             .entry_points
             .iter()
@@ -110,16 +119,24 @@ impl PoolArgs {
                     max_size_of_pool_bytes: self.max_size_in_bytes,
                     blocklist: blocklist.clone(),
                     allowlist: allowlist.clone(),
+                    precheck_settings: common.try_into()?,
+                    sim_settings: common.try_into()?,
+                    mempool_channel_configs: mempool_channel_configs.clone(),
                 })
             })
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
+
+        let http_url = common
+            .node_http
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("node_http is required"))?;
 
         Ok(op_pool::Args {
             port: self.port,
             host: self.host.clone(),
             chain_id: common.chain_id,
             ws_url: common.node_ws.clone(),
-            http_url: common.node_http.clone(),
+            http_url: http_url.to_owned(),
             http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
             pool_configs,
         })

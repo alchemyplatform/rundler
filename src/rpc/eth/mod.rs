@@ -2,9 +2,7 @@ mod error;
 pub mod estimation;
 use std::{
     collections::{HashMap, VecDeque},
-    str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context};
@@ -14,20 +12,16 @@ use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
     types::{
         Address, BlockNumber, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
-        GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, Opcode, TransactionReceipt, H256,
-        U256, U64,
+        GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, TransactionReceipt, H256, U256,
+        U64,
     },
     utils::to_checksum,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use prost::Message;
-use tonic::{async_trait, transport::Channel, Status};
-use tracing::{debug, Level};
+use tonic::{async_trait, transport::Channel};
+use tracing::Level;
 
-use self::error::{
-    EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, ReplacementUnderpricedData,
-    StakeTooLowData, UnsupportedAggregatorData,
-};
+use self::error::EthRpcError;
 use crate::{
     common::{
         context::LogWithContext,
@@ -36,17 +30,10 @@ use crate::{
             UserOperationRevertReasonFilter,
         },
         eth::log_to_raw_log,
-        mempool::MempoolConfig,
-        precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
-        protos::op_pool::{
-            op_pool_client::OpPoolClient, AddOpRequest, EntityType as ProtoEntityType, ErrorInfo,
-            ErrorMetadataKey, ErrorReason, MempoolOp,
-        },
-        simulation::{
-            self, SimulationError, SimulationSuccess, SimulationViolation, Simulator, SimulatorImpl,
-        },
-        types::{Entity, EntityType, EntryPointLike, Timestamp, UserOperation},
+        protos::op_pool::{add_op_response, op_pool_client::OpPoolClient, AddOpRequest},
+        types::UserOperation,
     },
+    op_pool::MempoolError,
     rpc::{
         estimation::{GasEstimationError, GasEstimator, GasEstimatorImpl},
         GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
@@ -87,12 +74,9 @@ pub trait EthApi {
     async fn chain_id(&self) -> RpcResult<U64>;
 }
 
-// TODO: use ProviderLike and EntrypointLike
+// TODO: use ProviderLike
 #[derive(Debug)]
 struct EntryPointContext<Client: JsonRpcClient + 'static> {
-    entry_point: IEntryPoint<Provider<Client>>,
-    prechecker: PrecheckerImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
-    simulator: SimulatorImpl<Client>,
     gas_estimator: GasEstimatorImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
 }
 
@@ -104,32 +88,12 @@ where
         address: Address,
         chain_id: u64,
         provider: Arc<Provider<Client>>,
-        precheck_settings: precheck::Settings,
-        sim_settings: simulation::Settings,
         estimator_settings: estimation::Settings,
-        mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
         let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
-        let prechecker = PrecheckerImpl::new(
-            Arc::clone(&provider),
-            chain_id,
-            entry_point.clone(),
-            precheck_settings,
-        );
-        let simulator = SimulatorImpl::new(
-            Arc::clone(&provider),
-            address,
-            sim_settings,
-            mempool_configs,
-        );
         let gas_estimator =
-            GasEstimatorImpl::new(chain_id, provider, entry_point.clone(), estimator_settings);
-        Self {
-            entry_point,
-            prechecker,
-            simulator,
-            gas_estimator,
-        }
+            GasEstimatorImpl::new(chain_id, provider, entry_point, estimator_settings);
+        Self { gas_estimator }
     }
 }
 
@@ -151,25 +115,14 @@ where
         entry_points: Vec<Address>,
         chain_id: u64,
         op_pool_client: OpPoolClient<Channel>,
-        precheck_settings: precheck::Settings,
-        sim_settings: simulation::Settings,
         estimation_settings: estimation::Settings,
-        mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
         let contexts_by_entry_point = entry_points
             .iter()
             .map(|&a| {
                 (
                     a,
-                    EntryPointContext::new(
-                        a,
-                        chain_id,
-                        Arc::clone(&provider),
-                        precheck_settings,
-                        sim_settings,
-                        estimation_settings,
-                        mempool_configs.clone(),
-                    ),
+                    EntryPointContext::new(a, chain_id, Arc::clone(&provider), estimation_settings),
                 )
             })
             .collect();
@@ -347,8 +300,6 @@ where
     }
 }
 
-const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
-
 #[async_trait]
 impl<C> EthApiServer for EthApi<C>
 where
@@ -367,82 +318,29 @@ where
 
         let op: UserOperation = op.into();
 
-        let EntryPointContext {
-            entry_point,
-            prechecker,
-            simulator,
-            ..
-        } = self
-            .contexts_by_entry_point
-            .get(&entry_point)
-            .context("entry point should exist in the map")?;
-
-        // 1. Validate op with simple prechecks
-        prechecker.check(&op).await.map_err(EthRpcError::from)?;
-
-        // 2. Validate op with simulation
-        let SimulationSuccess {
-            valid_time_range,
-            code_hash,
-            aggregator,
-            signature_failed,
-            entities_needing_stake,
-            block_hash,
-            account_is_staked,
-            ..
-        } = simulator
-            .simulate_validation(op.clone(), None, None)
-            .await
-            .map_err(EthRpcError::from)?;
-
-        if signature_failed {
-            Err(EthRpcError::SignatureCheckFailed)?
-        } else if let Some(agg) = &aggregator {
-            // TODO(danc): all aggregators are currently unsupported
-            Err(EthRpcError::UnsupportedAggregator(
-                UnsupportedAggregatorData {
-                    aggregator: agg.address,
-                },
-            ))?
-        }
-
-        let now = Timestamp::now();
-        let valid_after = valid_time_range.valid_after;
-        let valid_until = valid_time_range.valid_until;
-        if !valid_time_range.contains(now, EXPIRATION_BUFFER) {
-            Err(EthRpcError::OutOfTimeRange(OutOfTimeRangeData {
-                valid_after,
-                valid_until,
-                paymaster: op.paymaster(),
-            }))?
-        }
-
-        // 3. send op the mempool
         let add_op_result = self
             .op_pool_client
             .clone()
             .add_op(AddOpRequest {
-                entry_point: entry_point.address().as_bytes().to_vec(),
-                op: Some(MempoolOp {
-                    uo: Some((&op).into()),
-                    aggregator: aggregator.unwrap_or_default().address.as_bytes().to_vec(),
-                    valid_after: valid_after.seconds_since_epoch(),
-                    valid_until: valid_until.seconds_since_epoch(),
-                    expected_code_hash: code_hash.as_bytes().to_vec(),
-                    sim_block_hash: block_hash.as_bytes().to_vec(),
-                    entities_needing_stake: entities_needing_stake
-                        .iter()
-                        .map(|&e| ProtoEntityType::from(e).into())
-                        .collect(),
-                    account_is_staked,
-                }),
+                entry_point: entry_point.as_bytes().to_vec(),
+                op: Some((&op).into()),
             })
             .await
             .map_err(EthRpcError::from)
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?;
 
-        // 4. return the op hash
-        Ok(H256::from_slice(&add_op_result.into_inner().hash))
+        match add_op_result.into_inner().result {
+            Some(add_op_response::Result::Success(s)) => Ok(H256::from_slice(&s.hash)),
+            Some(add_op_response::Result::Failure(f)) => {
+                Err(EthRpcError::from(MempoolError::try_from(
+                    f.error.context("should have received error from op pool")?,
+                )?))
+                .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")?
+            }
+            None => Err(EthRpcError::Internal(anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
     }
 
     async fn estimate_user_operation_gas(
@@ -611,180 +509,17 @@ where
     }
 }
 
-impl From<PrecheckError> for EthRpcError {
-    fn from(value: PrecheckError) -> Self {
-        match &value {
-            PrecheckError::Violations(_) => Self::PrecheckFailed(value),
-            PrecheckError::Other(_) => Self::Internal(value.into()),
-        }
-    }
-}
-
-impl From<SimulationError> for EthRpcError {
-    fn from(mut value: SimulationError) -> Self {
-        debug!("Simulation error: {value:?}");
-
-        let SimulationError::Violations(violations) = &mut value else {
-            return Self::Internal(value.into());
-        };
-
-        let Some(violation) = violations.iter().min() else {
-            return Self::Internal(value.into());
-        };
-
-        match violation {
-            SimulationViolation::UnintendedRevertWithMessage(
-                EntityType::Paymaster,
-                reason,
-                Some(paymaster),
-            ) => Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
-                paymaster: *paymaster,
-                reason: reason.to_string(),
-            }),
-            SimulationViolation::UnintendedRevertWithMessage(_, reason, _) => {
-                Self::EntryPointValidationRejected(reason.clone())
-            }
-            SimulationViolation::UsedForbiddenOpcode(entity, _, op) => {
-                Self::OpcodeViolation(entity.kind, op.clone().0)
-            }
-            SimulationViolation::UsedForbiddenPrecompile(entity, _, precompile) => {
-                Self::PrecompileViolation(entity.kind, *precompile)
-            }
-            SimulationViolation::FactoryCalledCreate2Twice(_) => {
-                Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
-            }
-            SimulationViolation::InvalidStorageAccess(entity, slot) => {
-                Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
-            }
-            SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
-                Self::StakeTooLow(StakeTooLowData::new(
-                    *entity,
-                    *min_stake,
-                    *min_unstake_delay,
-                ))
-            }
-            SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
-            _ => Self::SimulationFailed(value),
-        }
-    }
-}
-
-impl TryFrom<Status> for ErrorInfo {
-    type Error = anyhow::Error;
-
-    fn try_from(value: Status) -> Result<Self, Self::Error> {
-        let decoded_status =
-            tonic_types::Status::decode(value.details()).context("should have decoded status")?;
-
-        // This could actually contain more error details, but we only use the first right now
-        let any = decoded_status
-            .details
-            .first()
-            .context("should have details")?;
-
-        if any.type_url == "type.alchemy.com/op_pool.ErrorInfo" {
-            ErrorInfo::decode(&any.value[..])
-                .context("should have decoded successfully into ErrorInfo")
-        } else {
-            bail!("Unknown type_url: {}", any.type_url);
-        }
-    }
-}
-
-impl From<ErrorInfo> for EthRpcError {
-    fn from(value: ErrorInfo) -> Self {
-        let ErrorInfo { reason, metadata } = value;
-
-        if reason == ErrorReason::EntityThrottled.as_str_name() {
-            let (entity, address) = metadata.iter().next().unwrap();
-            let Some(address) = Address::from_str(address).ok() else {
-                return anyhow!("should have valid address in ErrorInfo metadata").into();
-            };
-            let Some(entity) = EntityType::from_str(entity).ok() else {
-                return anyhow!("should be a valid Entity type in ErrorInfo metadata").into();
-            };
-            return EthRpcError::ThrottledOrBanned(Entity::new(entity, address));
-        } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
-            let prio_fee = metadata
-                .get(ErrorMetadataKey::CurrentMaxPriorityFeePerGas.as_str_name())
-                .and_then(|fee| fee.parse::<U256>().ok())
-                .unwrap_or_default();
-            let fee = metadata
-                .get(ErrorMetadataKey::CurrentMaxFeePerGas.as_str_name())
-                .and_then(|fee| fee.parse::<U256>().ok())
-                .unwrap_or_default();
-            return EthRpcError::ReplacementUnderpriced(ReplacementUnderpricedData::new(
-                prio_fee, fee,
-            ));
-        } else if reason == ErrorReason::OperationDiscardedOnInsert.as_str_name() {
-            return anyhow!("operation rejected: mempool full try again with higher gas price")
-                .into();
-        }
-
-        anyhow!("operation rejected").into()
-    }
-}
-
-impl From<Status> for EthRpcError {
-    fn from(status: Status) -> Self {
-        let status_details: anyhow::Result<ErrorInfo> = status.try_into();
-        let Ok(error_info) = status_details else {
-            return EthRpcError::Internal(status_details.unwrap_err());
-        };
-
-        EthRpcError::from(error_info)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use ethers::{
         providers::Http,
         types::{Log, TransactionReceipt},
-        utils::{hex::ToHex, keccak256},
+        utils::keccak256,
     };
 
     use super::*;
-    use crate::common::protos::op_pool::ErrorReason;
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
-
-    #[test]
-    fn test_throttled_or_banned_decode() {
-        let error_info = ErrorInfo {
-            reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
-            metadata: HashMap::from([(
-                EntityType::Paymaster.to_string(),
-                Address::default().encode_hex(),
-            )]),
-        };
-
-        let details = tonic_types::Status {
-            code: 0,
-            message: "".to_string(),
-            details: vec![prost_types::Any {
-                type_url: "type.alchemy.com/op_pool.ErrorInfo".to_string(),
-                value: error_info.encode_to_vec(),
-            }],
-        };
-
-        let status = Status::with_details(
-            tonic::Code::Internal,
-            "error_message".to_string(),
-            details.encode_to_vec().into(),
-        );
-
-        let rpc_error: EthRpcError = status.into();
-
-        assert!(
-            matches!(
-                rpc_error,
-                EthRpcError::ThrottledOrBanned(ref data) if *data == Entity::paymaster(Address::default())
-            ),
-            "{:?}",
-            rpc_error
-        );
-    }
 
     #[test]
     fn test_filter_receipt_logs_when_at_begining_of_list() {
