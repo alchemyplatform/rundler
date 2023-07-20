@@ -3,6 +3,8 @@ use std::sync::Arc;
 use anyhow::Context;
 use arrayvec::ArrayVec;
 use ethers::types::{Address, U256};
+#[cfg(test)]
+use mockall::automock;
 use tonic::async_trait;
 
 use super::{
@@ -17,8 +19,9 @@ use crate::common::{
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
 pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
 
+#[cfg_attr(test, automock)]
 #[async_trait]
-pub trait Prechecker {
+pub trait Prechecker: Send + Sync + 'static {
     async fn check(&self, op: &UserOperation) -> Result<(), PrecheckError>;
 }
 
@@ -41,6 +44,19 @@ pub struct Settings {
     pub use_bundle_priority_fee: Option<bool>,
     pub bundle_priority_fee_overhead_percent: u64,
     pub priority_fee_mode: gas::PriorityFeeMode,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            max_verification_gas: 5_000_000.into(),
+            use_bundle_priority_fee: None,
+            bundle_priority_fee_overhead_percent: 0,
+            priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(0),
+            max_total_execution_gas: 10_000_000.into(),
+            chain_id: 1,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -137,14 +153,14 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
 
         let mut violations = ArrayVec::new();
         if op.verification_gas_limit > max_verification_gas {
-            violations.push(PrecheckViolation::VerificationGasTooHigh(
+            violations.push(PrecheckViolation::VerificationGasLimitTooHigh(
                 op.verification_gas_limit,
                 max_verification_gas,
             ));
         }
         let total_gas_limit = op.execution_gas_limit(chain_id);
         if total_gas_limit > max_total_execution_gas {
-            violations.push(PrecheckViolation::TotalGasTooHigh(
+            violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 total_gas_limit,
                 max_total_execution_gas,
             ))
@@ -214,6 +230,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
     }
 
     async fn load_async_data(&self, op: &UserOperation) -> anyhow::Result<AsyncData> {
+        tracing::info!("precheck loading async data {:?}", op);
         let (
             factory_exists,
             sender_exists,
@@ -262,10 +279,15 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
             Some(paymaster) => paymaster,
             None => op.sender,
         };
-        self.entry_point
+        let ret = self
+            .entry_point
             .balance_of(payer)
             .await
-            .context("precheck should get payer balance")
+            .context("precheck should get payer balance");
+        if ret.is_err() {
+            tracing::error!("precheck failed to get payer deposit: {:?}", ret);
+        }
+        ret
     }
 
     async fn get_payer_balance(&self, op: &UserOperation) -> anyhow::Result<U256> {
@@ -299,7 +321,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
     }
 }
 
-#[derive(Clone, Debug, parse_display::Display, Eq, PartialEq)]
+#[derive(Clone, Debug, parse_display::Display, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PrecheckViolation {
     #[display("initCode must start with a 20-byte factory address, but was only {0} bytes")]
     InitCodeTooShort(usize),
@@ -309,10 +331,10 @@ pub enum PrecheckViolation {
     ExistingSenderWithInitCode(Address),
     #[display("initCode indicates factory with no code: {0:?}")]
     FactoryIsNotContract(Address),
+    #[display("total gas limit is {0} but must be at most {1}")]
+    TotalGasLimitTooHigh(U256, U256),
     #[display("verificationGasLimit is {0} but must be at most {1}")]
-    VerificationGasTooHigh(U256, U256),
-    #[display("total execution gas is {0} but must be at most {1}")]
-    TotalGasTooHigh(U256, U256),
+    VerificationGasLimitTooHigh(U256, U256),
     #[display("preVerificationGas is {0} but must be at least {1}")]
     PreVerificationGasTooLow(U256, U256),
     #[display("paymasterAndData must start a 20-byte paymaster address, but was only {0} bytes")]

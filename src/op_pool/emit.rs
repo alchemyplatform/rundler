@@ -42,7 +42,6 @@ pub struct EntitySummary {
 #[derive(Clone, Debug, Default)]
 pub struct EntityStatus {
     pub address: Address,
-    pub needs_stake: bool,
     pub reputation: EntityReputation,
 }
 
