@@ -1,4 +1,5 @@
 mod bundle_proposer;
+mod bundle_sender;
 mod sender;
 mod server;
 mod signer;
