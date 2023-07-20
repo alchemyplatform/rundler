@@ -1,8 +1,8 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
-use ethers::types::Chain;
+use ethers::types::{Chain, H256};
 use tokio::sync::broadcast;
 
 use super::CommonArgs;
@@ -11,10 +11,10 @@ use crate::{
     common::{
         emit::{self, EVENT_CHANNEL_CAPACITY},
         handle::spawn_tasks_with_shutdown,
+        mempool::MempoolConfig,
     },
     op_pool::{self, PoolConfig, PoolTask},
 };
-
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]
 #[command(next_help_heading = "POOL")]
@@ -108,6 +108,14 @@ impl PoolArgs {
         tracing::info!("blocklist: {:?}", blocklist);
         tracing::info!("allowlist: {:?}", allowlist);
 
+        let mempool_channel_configs = match &common.mempool_config_path {
+            Some(path) => {
+                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
+            }
+            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
+        };
+        tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
+
         let pool_configs = common
             .entry_points
             .iter()
@@ -122,6 +130,9 @@ impl PoolArgs {
                     max_size_of_pool_bytes: self.max_size_in_bytes,
                     blocklist: blocklist.clone(),
                     allowlist: allowlist.clone(),
+                    precheck_settings: common.try_into()?,
+                    sim_settings: common.try_into()?,
+                    mempool_channel_configs: mempool_channel_configs.clone(),
                 })
             })
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;

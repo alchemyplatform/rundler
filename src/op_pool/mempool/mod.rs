@@ -3,37 +3,35 @@ mod pool;
 mod size;
 pub mod uo_pool;
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use ethers::types::{Address, H256};
 use strum::IntoEnumIterator;
+use tonic::async_trait;
 
 use self::error::MempoolResult;
-use crate::{
-    common::types::{Entity, EntityType, UserOperation, ValidTimeRange},
-    op_pool::reputation::Reputation,
+use super::reputation::Reputation;
+use crate::common::{
+    mempool::MempoolConfig,
+    precheck, simulation,
+    types::{Entity, EntityType, UserOperation, ValidTimeRange},
 };
 
+#[async_trait]
 /// In-memory operation pool
-pub trait Mempool: Send + Sync {
+pub trait Mempool: Send + Sync + 'static {
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
 
-    /// Adds a validated user operation to the pool.
-    ///
-    /// Adds a user operation to the pool that was submitted via a local
-    /// RPC call and was validated before submission.
-    fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256>;
-
-    /// Adds multiple validated user operations to the pool.
-    ///
-    /// Adds multiple user operations to the pool that were discovered
-    /// via the P2P gossip protocol.
-    fn add_operations(
+    /// Adds a user operation to the pool
+    async fn add_operation(
         &self,
         origin: OperationOrigin,
-        operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<MempoolResult<H256>>;
+        op: UserOperation,
+    ) -> MempoolResult<H256>;
 
     /// Removes a set of operations from the pool.
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>);
@@ -81,6 +79,12 @@ pub struct PoolConfig {
     pub blocklist: Option<HashSet<Address>>,
     /// Operations that are allways allowed in the mempool, regardless of reputation
     pub allowlist: Option<HashSet<Address>>,
+    /// Settings for precheck validation
+    pub precheck_settings: precheck::Settings,
+    /// Settings for simulation validation
+    pub sim_settings: simulation::Settings,
+    /// Configuration for the mempool channels, by channel ID
+    pub mempool_channel_configs: HashMap<H256, MempoolConfig>,
 }
 
 /// Origin of an operation.

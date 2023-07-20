@@ -22,7 +22,7 @@ use ethers::{
 use parse_display::Display;
 pub use provider_like::*;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
-use strum::EnumIter;
+use strum::{EnumIter, IntoEnumIterator};
 pub use timestamp::*;
 pub use validation_results::*;
 pub use violations::*;
@@ -116,6 +116,22 @@ impl UserOperation {
         std::cmp::min(max, self.pre_verification_gas)
             + self.call_gas_limit
             + self.verification_gas_limit
+    }
+
+    pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
+        EntityType::iter().filter_map(|entity| {
+            self.entity_address(entity)
+                .map(|address| Entity::new(entity, address))
+        })
+    }
+
+    fn entity_address(&self, entity: EntityType) -> Option<Address> {
+        match entity {
+            EntityType::Account => Some(self.sender),
+            EntityType::Paymaster => self.paymaster(),
+            EntityType::Factory => self.factory(),
+            EntityType::Aggregator => None,
+        }
     }
 }
 

@@ -11,6 +11,7 @@ pub mod handle;
 pub mod math;
 pub mod mempool;
 pub mod precheck;
+#[allow(non_snake_case)]
 pub mod protos;
 pub mod retry;
 pub mod server;

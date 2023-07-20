@@ -1,12 +1,11 @@
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
-use ethers::types::H256;
 
-use super::{json::get_json_config, CommonArgs};
+use super::CommonArgs;
 use crate::{
-    common::{handle::spawn_tasks_with_shutdown, mempool::MempoolConfig, precheck, simulation},
+    common::{handle::spawn_tasks_with_shutdown, precheck},
     rpc::{self, estimation, RpcTask},
 };
 
@@ -71,7 +70,6 @@ impl RpcArgs {
         pool_url: String,
         builder_url: String,
         precheck_settings: precheck::Settings,
-        sim_settings: simulation::Settings,
         estimation_settings: estimation::Settings,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
@@ -79,13 +77,6 @@ impl RpcArgs {
             .iter()
             .map(|api| api.parse())
             .collect::<Result<Vec<_>, _>>()?;
-
-        let mempool_configs = match &common.mempool_config_path {
-            Some(path) => {
-                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
-            }
-            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
-        };
 
         Ok(rpc::Args {
             port: self.port,
@@ -105,11 +96,9 @@ impl RpcArgs {
             chain_id: common.chain_id,
             api_namespaces: apis,
             precheck_settings,
-            sim_settings,
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
-            mempool_configs,
         })
     }
 }
@@ -152,7 +141,6 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
             pool_url,
             builder_url,
             (&common_args).try_into()?,
-            (&common_args).into(),
             (&common_args).try_into()?,
         )
         .await?;

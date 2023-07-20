@@ -130,12 +130,21 @@ message GetSupportedEntryPointsResponse {
 message AddOpRequest {
   // The serialized entry point address via which the UserOperation is being submitted
   bytes entry_point = 1;
-  // The UserOperation with mempool metadata to add to the mempool
-  MempoolOp op = 2;
+  // The UserOperation to add to the mempool
+  UserOperation op = 2;
 }
 message AddOpResponse {
+  oneof result {
+    AddOpSuccess success = 1;
+    AddOpFailure failure = 2;
+  }
+}
+message AddOpSuccess {
   // The serialized UserOperation hash
   bytes hash = 1;
+}
+message AddOpFailure {
+  MempoolError error = 1;
 }
 
 message GetOpsRequest {
@@ -209,22 +218,203 @@ enum ReputationStatus {
   REPUTATION_STATUS_BANNED = 3;
 }
 
-message ErrorInfo {
-  string reason = 1;
-  map<string, string> metadata = 2;
+// MEMPOOL ERRORS
+message MempoolError {
+  oneof error {
+    string internal = 1;
+    ReplacementUnderpricedError replacement_underpriced = 2;
+    MaxOperationsReachedError max_operations_reached = 3;
+    EntityThrottledError entity_throttled = 4;
+    DiscardedOnInsertError discarded_on_insert = 5;
+    PrecheckViolationError precheck_violation = 6;
+    SimulationViolationError simulation_violation = 7;
+    UnsupportedAggregatorError unsupported_aggregator = 8;
+  }
 }
 
-enum ErrorReason {
-  ERROR_REASON_UNSPECIFIED = 0;
-  ERROR_REASON_INTERNAL = 1;
-  ERROR_REASON_ENTITY_THROTTLED = 2;
-  ERROR_REASON_OPERATION_REJECTED = 3;
-  ERROR_REASON_REPLACEMENT_UNDERPRICED = 4;
-  ERROR_REASON_OPERATION_DISCARDED_ON_INSERT = 5;
+message ReplacementUnderpricedError {
+  bytes current_fee = 1;
+  bytes current_priority_fee = 2;
 }
 
-enum ErrorMetadataKey {
-  ERROR_METADATA_KEY_UNSPECIFIED = 0;
-  ERROR_METADATA_KEY_CURRENT_MAX_PRIORITY_FEE_PER_GAS = 1;
-  ERROR_METADATA_KEY_CURRENT_MAX_FEE_PER_GAS = 2;
+message MaxOperationsReachedError {
+  uint64 num_ops = 1;
+  bytes sender_address = 2;
 }
+
+message EntityThrottledError {
+  Entity entity = 1;
+}
+
+message DiscardedOnInsertError {}
+
+message UnsupportedAggregatorError {
+  bytes aggregator_address = 1;
+}
+
+// PRECHECK VIOLATIONS
+message PrecheckViolationError {
+  oneof violation {
+    InitCodeTooShort init_code_too_short = 1;
+    SenderIsNotContractAndNoInitCode sender_is_not_contract_and_no_init_code = 2;
+    ExistingSenderWithInitCode existing_sender_with_init_code = 3;
+    FactoryIsNotContract factory_is_not_contract = 4;
+    VerificationGasLimitTooHigh verification_gas_limit_too_high = 5;
+    PreVerificationGasTooLow pre_verification_gas_too_low = 6;
+    PaymasterTooShort paymaster_too_short = 7;
+    PaymasterIsNotContract paymaster_is_not_contract = 8;
+    PaymasterDepositTooLow paymaster_deposit_too_low = 9;
+    SenderFundsTooLow sender_funds_too_low = 10;
+    MaxFeePerGasTooLow max_fee_per_gas_too_low = 11;
+    MaxPriorityFeePerGasTooLow max_priority_fee_per_gas_too_low = 12;
+    CallGasLimitTooLow call_gas_limit_too_low = 13;
+  }
+}
+
+message InitCodeTooShort {
+  uint64 length = 1;
+}
+
+message SenderIsNotContractAndNoInitCode {
+  bytes sender_address = 1;
+}
+
+message ExistingSenderWithInitCode {
+  bytes sender_address = 1;
+}
+
+message FactoryIsNotContract {
+  bytes factory_address = 1;
+}
+
+message VerificationGasLimitTooHigh {
+  bytes actual_gas = 1;
+  bytes max_gas = 2;
+}
+
+message PreVerificationGasTooLow {
+  bytes actual_gas = 1;
+  bytes min_gas = 2;
+}
+
+message PaymasterTooShort {
+  uint64 length = 1;
+}
+
+message PaymasterIsNotContract {
+  bytes paymaster_address = 1;
+}
+
+message PaymasterDepositTooLow {
+  bytes actual_deposit = 1;
+  bytes min_deposit = 2;
+}
+
+message SenderFundsTooLow {
+  bytes actual_funds = 1;
+  bytes min_funds = 2;
+}
+
+message MaxFeePerGasTooLow {
+  bytes actual_fee = 1;
+  bytes min_fee = 2;
+}
+
+message MaxPriorityFeePerGasTooLow {
+  bytes actual_fee = 1;
+  bytes min_fee = 2;
+}
+
+message CallGasLimitTooLow {
+  bytes actual_gas_limit = 1;
+  bytes min_gas_limit = 2;
+}
+
+// SIMULATION VIOLATIONS
+message SimulationViolationError {
+  oneof violation {
+    InvalidSignature invalid_signature = 1;
+    UnintendedRevertWithMessage unintended_revert_with_message = 2;
+    UsedForbiddenOpcode used_forbidden_opcode = 3;
+    UsedForbiddenPrecompile used_forbidden_precompile = 4;
+    FactoryCalledCreate2Twice factory_called_create2_twice = 5;
+    InvalidStorageAccess invalid_storage_access = 6;
+    NotStaked not_staked = 7;
+    UnintendedRevert unintended_revert = 8;
+    DidNotRevert did_not_revert = 9;
+    WrongNumberOfPhases wrong_number_of_phases = 10;
+    CallHadValue call_had_value = 11;
+    OutOfGas out_of_gas = 12;
+    AccessedUndeployedContract accessed_undeployed_contract = 13;
+    CalledBannedEntryPointMethod called_banned_entry_point_method = 14;
+    CodeHashChanged code_hash_changed = 15;
+    AggregatorValidationFailed aggregator_validation_failed = 16;
+  }
+}
+
+message InvalidSignature {}
+
+message UnintendedRevertWithMessage {
+  Entity entity = 1;
+  string reason = 2;
+}
+
+message UsedForbiddenOpcode {
+  Entity entity = 1;
+  bytes contract_address = 2;
+  uint32 opcode = 3;
+}
+
+message UsedForbiddenPrecompile {
+  Entity entity = 1;
+  bytes contract_address = 2;
+  bytes precompile_address = 3;
+}
+
+message FactoryCalledCreate2Twice {
+  bytes factory_address = 1;
+}
+
+message InvalidStorageAccess {
+  Entity entity = 1;
+  bytes contract_address = 2;
+  bytes slot = 3;
+}
+
+message NotStaked {
+  Entity entity = 1;
+  bytes min_stake = 2;
+  bytes min_unstake_delay = 3;
+}
+
+message UnintendedRevert {
+  EntityType entity_type = 1;
+}
+
+message DidNotRevert {}
+
+message WrongNumberOfPhases {
+  uint32 num_phases = 1;
+}
+
+message CallHadValue {
+  Entity entity = 1;
+}
+
+message OutOfGas {
+  Entity entity = 1;
+}
+
+message AccessedUndeployedContract {
+  Entity entity = 1;
+  bytes contract_address = 2;
+}
+
+message CalledBannedEntryPointMethod {
+  Entity entity = 1;
+}
+
+message CodeHashChanged {}
+
+message AggregatorValidationFailed {}
+

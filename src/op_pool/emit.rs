@@ -17,8 +17,8 @@ pub enum OpPoolEvent {
         op: UserOperation,
         block_number: u64,
         origin: OperationOrigin,
-        valid_after: Timestamp,
-        valid_until: Timestamp,
+        valid_after: Option<Timestamp>,
+        valid_until: Option<Timestamp>,
         entities: EntitySummary,
         error: Option<Arc<String>>,
     },
@@ -42,7 +42,6 @@ pub struct EntitySummary {
 #[derive(Clone, Debug, Default)]
 pub struct EntityStatus {
     pub address: Address,
-    pub needs_stake: bool,
     pub reputation: EntityReputation,
 }
 

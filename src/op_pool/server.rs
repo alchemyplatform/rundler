@@ -1,21 +1,17 @@
 use std::{collections::HashMap, sync::Arc};
 
-use ethers::{
-    types::{Address, H256},
-    utils::to_checksum,
-};
-use prost::Message;
-use tonic::{async_trait, Code, Request, Response, Result, Status};
+use ethers::types::{Address, H256};
+use tonic::{async_trait, Request, Response, Result, Status};
 
-use super::mempool::{error::MempoolError, Mempool, OperationOrigin};
+use super::mempool::{Mempool, OperationOrigin};
 use crate::common::protos::{
     self,
     op_pool::{
-        op_pool_server::OpPool, AddOpRequest, AddOpResponse, DebugClearStateRequest,
-        DebugClearStateResponse, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
-        DebugDumpReputationRequest, DebugDumpReputationResponse, DebugSetReputationRequest,
-        DebugSetReputationResponse, ErrorInfo, ErrorMetadataKey, ErrorReason, GetOpsRequest,
-        GetOpsResponse, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
+        add_op_response, op_pool_server::OpPool, AddOpFailure, AddOpRequest, AddOpResponse,
+        AddOpSuccess, DebugClearStateRequest, DebugClearStateResponse, DebugDumpMempoolRequest,
+        DebugDumpMempoolResponse, DebugDumpReputationRequest, DebugDumpReputationResponse,
+        DebugSetReputationRequest, DebugSetReputationResponse, GetOpsRequest, GetOpsResponse,
+        GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
         RemoveEntitiesRequest, RemoveEntitiesResponse, RemoveOpsRequest, RemoveOpsResponse,
     },
 };
@@ -70,19 +66,26 @@ where
         let req = request.into_inner();
         let mempool = self.get_mempool_for_entry_point(&req.entry_point)?;
 
-        let proto_op = req
+        let op = req
             .op
-            .ok_or_else(|| Status::invalid_argument("Operation is required in AddOpRequest"))?;
-
-        let pool_op = proto_op
+            .ok_or_else(|| Status::invalid_argument("op is required in AddOpRequest"))?
             .try_into()
-            .map_err(|e| Status::invalid_argument(format!("Failed to parse operation: {e}")))?;
+            .map_err(|e| Status::invalid_argument(format!("Invalid operation: {e}")))?;
 
-        let hash = mempool.add_operation(OperationOrigin::Local, pool_op)?;
+        let resp = match mempool.add_operation(OperationOrigin::Local, op).await {
+            Ok(hash) => AddOpResponse {
+                result: Some(add_op_response::Result::Success(AddOpSuccess {
+                    hash: hash.as_bytes().to_vec(),
+                })),
+            },
+            Err(error) => AddOpResponse {
+                result: Some(add_op_response::Result::Failure(AddOpFailure {
+                    error: Some(error.into()),
+                })),
+            },
+        };
 
-        Ok(Response::new(AddOpResponse {
-            hash: hash.as_bytes().to_vec(),
-        }))
+        Ok(Response::new(resp))
     }
 
     async fn get_ops(&self, request: Request<GetOpsRequest>) -> Result<Response<GetOpsResponse>> {
@@ -204,69 +207,10 @@ where
     }
 }
 
-impl From<MempoolError> for Status {
-    fn from(e: MempoolError) -> Self {
-        let ei = match &e {
-            MempoolError::EntityThrottled(et) => ErrorInfo {
-                reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
-                metadata: HashMap::from([(et.kind.to_string(), to_checksum(&et.address, None))]),
-            },
-            MempoolError::MaxOperationsReached(_, _) => ErrorInfo {
-                reason: ErrorReason::OperationRejected.as_str_name().to_string(),
-                metadata: HashMap::new(),
-            },
-            MempoolError::ReplacementUnderpriced(prio_fee, fee) => ErrorInfo {
-                reason: ErrorReason::ReplacementUnderpriced
-                    .as_str_name()
-                    .to_string(),
-                metadata: HashMap::from([
-                    (
-                        ErrorMetadataKey::CurrentMaxPriorityFeePerGas
-                            .as_str_name()
-                            .to_string(),
-                        prio_fee.to_string(),
-                    ),
-                    (
-                        ErrorMetadataKey::CurrentMaxFeePerGas
-                            .as_str_name()
-                            .to_string(),
-                        fee.to_string(),
-                    ),
-                ]),
-            },
-            MempoolError::DiscardedOnInsert => ErrorInfo {
-                reason: ErrorReason::OperationDiscardedOnInsert
-                    .as_str_name()
-                    .to_string(),
-                metadata: HashMap::new(),
-            },
-            MempoolError::Other(_) => ErrorInfo {
-                reason: ErrorReason::Unspecified.as_str_name().to_string(),
-                metadata: HashMap::new(),
-            },
-        };
-
-        let msg = e.to_string();
-        let details = tonic_types::Status {
-            // code and message are not used by the client
-            code: 0,
-            message: "".into(),
-            details: vec![prost_types::Any {
-                type_url: "type.alchemy.com/op_pool.ErrorInfo".to_string(),
-                value: ei.encode_to_vec(),
-            }],
-        };
-
-        Status::with_details(
-            Code::FailedPrecondition,
-            msg,
-            details.encode_to_vec().into(),
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use tonic::Code;
+
     use super::*;
 
     const TEST_ADDRESS_ARR: [u8; 20] = [
@@ -275,7 +219,7 @@ mod tests {
     ];
 
     use crate::{
-        common::types::Entity,
+        common::{protos::op_pool::UserOperation, types, types::Entity},
         op_pool::{
             mempool::{error::MempoolResult, PoolOperation},
             reputation::Reputation,
@@ -324,7 +268,7 @@ mod tests {
         let oppool = given_oppool();
         let request = Request::new(AddOpRequest {
             entry_point: TEST_ADDRESS_ARR.to_vec(),
-            op: Some(MempoolOp::default()),
+            op: Some(UserOperation::default()),
         });
 
         let result = oppool.add_op(request).await;
@@ -353,25 +297,18 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl Mempool for MockMempool {
         fn entry_point(&self) -> Address {
             self.entry_point
         }
 
-        fn add_operation(
+        async fn add_operation(
             &self,
             _origin: OperationOrigin,
-            _opp: PoolOperation,
+            _opp: types::UserOperation,
         ) -> MempoolResult<H256> {
             Ok(H256::zero())
-        }
-
-        fn add_operations(
-            &self,
-            _origin: OperationOrigin,
-            _operations: impl IntoIterator<Item = PoolOperation>,
-        ) -> Vec<MempoolResult<H256>> {
-            vec![]
         }
 
         fn remove_operations<'a>(&self, _hashes: impl IntoIterator<Item = &'a H256>) {}
