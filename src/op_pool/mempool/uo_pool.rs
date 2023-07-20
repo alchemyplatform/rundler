@@ -8,6 +8,7 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+use tonic::async_trait;
 use tracing::info;
 
 use super::{
@@ -16,7 +17,12 @@ use super::{
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
-    common::{emit::WithEntryPoint, types::Entity},
+    common::{
+        emit::WithEntryPoint,
+        precheck::Prechecker,
+        simulation::Simulator,
+        types::{Entity, UserOperation},
+    },
     op_pool::{
         chain::ChainUpdate,
         emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
@@ -32,12 +38,14 @@ const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub struct UoPool<R: ReputationManager> {
+pub struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator> {
     entry_point: Address,
     chain_id: u64,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+    prechecker: P,
+    simulator: S,
 }
 
 struct UoPoolState {
@@ -46,14 +54,18 @@ struct UoPoolState {
     block_number: u64,
 }
 
-impl<R> UoPool<R>
+impl<R, P, S> UoPool<R, P, S>
 where
     R: ReputationManager,
+    P: Prechecker,
+    S: Simulator,
 {
     pub fn new(
         args: PoolConfig,
         reputation: Arc<R>,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        prechecker: P,
+        simulator: S,
     ) -> Self {
         Self {
             entry_point: args.entry_point,
@@ -65,6 +77,8 @@ where
                 block_number: 0,
             }),
             event_sender,
+            prechecker,
+            simulator,
         }
     }
 
@@ -179,89 +193,107 @@ where
     }
 }
 
-impl<R> Mempool for UoPool<R>
+#[async_trait]
+impl<R, P, S> Mempool for UoPool<R, P, S>
 where
     R: ReputationManager,
+    P: Prechecker,
+    S: Simulator,
 {
     fn entry_point(&self) -> Address {
         self.entry_point
     }
 
-    fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
-        let mut throttled = false;
-        let mut rejected_entity: Option<Entity> = None;
-        let mut entity_summary = EntitySummary::default();
-        let mut staked_entities = HashSet::new();
+    async fn add_operation(
+        &self,
+        origin: OperationOrigin,
+        op: UserOperation,
+    ) -> MempoolResult<H256> {
+        // TODO(danc) aggregator reputation is not implemented
+        // TODO(danc) catch ops with aggregators prior to simulation and reject
 
         // Check reputation of entities in involved in the operation
         // If throttled, entity can have 1 inflight operation at a time, else reject
         // If banned, reject
+        let mut entity_summary = EntitySummary::default();
+        let mut throttled = false;
         for entity in op.entities() {
             let address = entity.address;
             let reputation = match self.reputation.status(address) {
                 ReputationStatus::Ok => EntityReputation::Ok,
                 ReputationStatus::Throttled => {
                     if self.state.read().pool.address_count(address) > 0 {
-                        rejected_entity = Some(entity);
-                        EntityReputation::ThrottledAndRejected
+                        return Err(MempoolError::EntityThrottled(entity));
                     } else {
                         throttled = true;
                         EntityReputation::ThrottledButOk
                     }
                 }
                 ReputationStatus::Banned => {
-                    rejected_entity = Some(entity);
-                    EntityReputation::Banned
+                    return Err(MempoolError::EntityThrottled(entity));
                 }
-            };
-
-            let needs_stake = if op.is_staked(entity.kind) {
-                staked_entities.insert(entity.address);
-                true
-            } else {
-                false
             };
 
             entity_summary.set_status(
                 entity.kind,
                 EntityStatus {
                     address,
-                    needs_stake,
                     reputation,
                 },
             );
         }
 
-        // If throttled/banned return error
-        if let Some(entity) = rejected_entity {
-            return Err(MempoolError::EntityThrottled(entity));
-        }
+        // Check if op is replacing another op, and if so, ensure its fees are high enough
+        self.state.read().pool.check_replacement_fees(&op)?;
 
-        // Else, add operation to pool
-        let mut state = self.state.write();
-        let bn = state.block_number;
-        let hash = match state.pool.add_operation(op.clone()) {
-            Ok(hash) => hash,
-            Err(error) => {
-                return Err(error);
-            }
+        // Prechecks
+        self.prechecker.check(&op).await?;
+
+        // Simulation
+        let sim_result = self
+            .simulator
+            .simulate_validation(op.clone(), None, None)
+            .await?;
+        if let Some(agg) = &sim_result.aggregator {
+            return Err(MempoolError::UnsupportedAggregator(agg.address));
+        }
+        let valid_time_range = sim_result.valid_time_range;
+        let pool_op = PoolOperation {
+            uo: op,
+            aggregator: None,
+            valid_time_range,
+            expected_code_hash: sim_result.code_hash,
+            sim_block_hash: sim_result.block_hash,
+            entities_needing_stake: sim_result.entities_needing_stake,
+            account_is_staked: sim_result.account_is_staked,
         };
 
-        // If successfully added, update reputation of each entity
-        staked_entities
-            .into_iter()
-            .for_each(|e| self.reputation.add_seen(e));
+        // Add op to pool
+        let mut state = self.state.write();
+        let hash = state.pool.add_operation(pool_op.clone())?;
+        let bn = state.block_number;
+        if throttled {
+            state.throttled_ops.insert(hash, bn);
+        }
+
+        // Update reputation
+        pool_op
+            .staked_entities()
+            .map(|e| e.address)
+            .unique()
+            .for_each(|a| self.reputation.add_seen(a));
+
         // If an entity was throttled, track with throttled ops
         if throttled {
             state.throttled_ops.insert(hash, bn);
         }
 
-        let op_hash = op.uo.op_hash(self.entry_point, self.chain_id);
-        let valid_after = op.valid_time_range.valid_after;
-        let valid_until = op.valid_time_range.valid_until;
+        let op_hash = pool_op.uo.op_hash(self.entry_point, self.chain_id);
+        let valid_after = pool_op.valid_time_range.valid_after;
+        let valid_until = pool_op.valid_time_range.valid_until;
         self.emit(OpPoolEvent::ReceivedOp {
             op_hash,
-            op: op.uo,
+            op: pool_op.uo,
             block_number: bn,
             origin,
             valid_after,
@@ -271,17 +303,6 @@ where
         });
 
         Ok(hash)
-    }
-
-    fn add_operations(
-        &self,
-        origin: OperationOrigin,
-        operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<MempoolResult<H256>> {
-        operations
-            .into_iter()
-            .map(|op| self.add_operation(origin, op))
-            .collect()
     }
 
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>) {
@@ -377,64 +398,88 @@ impl UoPoolMetrics {
 mod tests {
     use super::*;
     use crate::{
-        common::types::{EntityType, UserOperation},
+        common::{
+            precheck::{self, MockPrechecker, PrecheckError, PrecheckViolation},
+            simulation::{
+                self, MockSimulator, SimulationError, SimulationSuccess, SimulationViolation,
+            },
+            types::{EntityType, UserOperation},
+        },
         op_pool::chain::MinedOp,
     };
 
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
 
-    #[test]
-    fn add_single_op() {
-        let pool = create_pool();
+    #[tokio::test]
+    async fn add_single_op() {
         let op = create_op(Address::random(), 0, 0);
+        let ops = vec![op.clone()];
+        let uos = vec![op.op.clone()];
+        let pool = create_pool(ops);
+
         let hash = pool
-            .add_operation(OperationOrigin::Local, op.clone())
+            .add_operation(OperationOrigin::Local, op.op)
+            .await
             .unwrap();
-        check_ops(pool.best_operations(1), vec![op]);
+        check_ops(pool.best_operations(1), uos);
         pool.remove_operations(&vec![hash]);
         assert_eq!(pool.best_operations(1), vec![]);
     }
 
-    #[test]
-    fn add_multiple_ops() {
-        let pool = create_pool();
+    #[tokio::test]
+    async fn add_multiple_ops() {
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),
         ];
-        let res = pool.add_operations(OperationOrigin::Local, ops.clone());
-        let hashes: Vec<H256> = res.into_iter().map(|r| r.unwrap()).collect();
-        check_ops(pool.best_operations(3), ops);
+        let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
+        let pool = create_pool(ops);
+
+        let mut hashes = vec![];
+        for op in &uos {
+            let hash = pool
+                .add_operation(OperationOrigin::Local, op.clone())
+                .await
+                .unwrap();
+            hashes.push(hash);
+        }
+        check_ops(pool.best_operations(3), uos);
         pool.remove_operations(&hashes);
         assert_eq!(pool.best_operations(3), vec![]);
     }
 
-    #[test]
-    fn clear() {
-        let pool = create_pool();
+    #[tokio::test]
+    async fn clear() {
         let ops = vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),
         ];
-        pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops);
+        let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
+        let pool = create_pool(ops);
+
+        for op in &uos {
+            let _ = pool
+                .add_operation(OperationOrigin::Local, op.clone())
+                .await
+                .unwrap();
+        }
+        check_ops(pool.best_operations(3), uos);
         pool.clear();
         assert_eq!(pool.best_operations(3), vec![]);
     }
 
-    #[test]
-    fn chain_update_mine() {
-        let pool = create_pool();
-        let ops = vec![
+    #[tokio::test]
+    async fn chain_update_mine() {
+        let (pool, uos) = create_pool_insert_ops(vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),
-        ];
-        pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops.clone());
+        ])
+        .await;
+        check_ops(pool.best_operations(3), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -443,26 +488,25 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.entry_point,
-                hash: ops[0].uo.op_hash(pool.entry_point, 1),
-                sender: ops[0].uo.sender,
-                nonce: ops[0].uo.nonce,
+                hash: uos[0].op_hash(pool.entry_point, 1),
+                sender: uos[0].sender,
+                nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
         });
 
-        check_ops(pool.best_operations(3), ops[1..].to_vec());
+        check_ops(pool.best_operations(3), uos[1..].to_vec());
     }
 
-    #[test]
-    fn chain_update_mine_unmine() {
-        let pool = create_pool();
-        let ops = vec![
+    #[tokio::test]
+    async fn chain_update_mine_unmine() {
+        let (pool, uos) = create_pool_insert_ops(vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),
-        ];
-        pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops.clone());
+        ])
+        .await;
+        check_ops(pool.best_operations(3), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -471,13 +515,13 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.entry_point,
-                hash: ops[0].uo.op_hash(pool.entry_point, 1),
-                sender: ops[0].uo.sender,
-                nonce: ops[0].uo.nonce,
+                hash: uos[0].op_hash(pool.entry_point, 1),
+                sender: uos[0].sender,
+                nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
         });
-        check_ops(pool.best_operations(3), ops.clone()[1..].to_vec());
+        check_ops(pool.best_operations(3), uos.clone()[1..].to_vec());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -487,24 +531,23 @@ mod tests {
             mined_ops: vec![],
             unmined_ops: vec![MinedOp {
                 entry_point: pool.entry_point,
-                hash: ops[0].uo.op_hash(pool.entry_point, 1),
-                sender: ops[0].uo.sender,
-                nonce: ops[0].uo.nonce,
+                hash: uos[0].op_hash(pool.entry_point, 1),
+                sender: uos[0].sender,
+                nonce: uos[0].nonce,
             }],
         });
-        check_ops(pool.best_operations(3), ops);
+        check_ops(pool.best_operations(3), uos);
     }
 
-    #[test]
-    fn chain_update_wrong_ep() {
-        let pool = create_pool();
-        let ops = vec![
+    #[tokio::test]
+    async fn chain_update_wrong_ep() {
+        let (pool, uos) = create_pool_insert_ops(vec![
             create_op(Address::random(), 0, 3),
             create_op(Address::random(), 0, 2),
             create_op(Address::random(), 0, 1),
-        ];
-        pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops.clone());
+        ])
+        .await;
+        check_ops(pool.best_operations(3), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -513,28 +556,27 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: Address::random(),
-                hash: ops[0].uo.op_hash(pool.entry_point, 1),
-                sender: ops[0].uo.sender,
-                nonce: ops[0].uo.nonce,
+                hash: uos[0].op_hash(pool.entry_point, 1),
+                sender: uos[0].sender,
+                nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
         });
 
-        check_ops(pool.best_operations(3), ops);
+        check_ops(pool.best_operations(3), uos);
     }
 
-    #[test]
-    fn test_account_reputation() {
-        let pool = create_pool();
+    #[tokio::test]
+    async fn test_account_reputation() {
         let address = Address::random();
-        let ops = vec![
-            create_staked_account_op(address, 0, 2),
-            create_staked_account_op(address, 1, 2),
-            create_staked_account_op(address, 1, 2),
-        ];
-        pool.add_operations(OperationOrigin::Local, ops.clone());
+        let (pool, uos) = create_pool_insert_ops(vec![
+            create_op_with_errors(address, 0, 2, None, None, true),
+            create_op_with_errors(address, 1, 2, None, None, true),
+            create_op_with_errors(address, 1, 2, None, None, true),
+        ])
+        .await;
         // Only return 1 op per sender
-        check_ops(pool.best_operations(3), vec![ops[0].clone()]);
+        check_ops(pool.best_operations(3), vec![uos[0].clone()]);
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -549,9 +591,9 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.entry_point,
-                hash: ops[0].uo.op_hash(pool.entry_point, 1),
-                sender: ops[0].uo.sender,
-                nonce: ops[0].uo.nonce,
+                hash: uos[0].op_hash(pool.entry_point, 1),
+                sender: uos[0].sender,
+                nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
         });
@@ -563,26 +605,29 @@ mod tests {
         assert_eq!(rep[0].ops_included, 1); // 1 op included
     }
 
-    #[test]
-    fn test_throttled_account() {
-        let pool = create_pool();
+    #[tokio::test]
+    async fn test_throttled_account() {
         let address = Address::random();
 
+        let ops = vec![
+            create_op_with_errors(address, 0, 2, None, None, true),
+            create_op_with_errors(address, 1, 2, None, None, true),
+        ];
+        let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
+        let pool = create_pool(ops);
         // Past throttle slack
         pool.set_reputation(address, 1 + THROTTLE_SLACK, 0);
 
-        let ops = vec![
-            create_staked_account_op(address, 0, 2),
-            create_staked_account_op(address, 1, 2),
-        ];
-
         // First op should be included
-        pool.add_operation(OperationOrigin::Local, ops[0].clone())
+        pool.add_operation(OperationOrigin::Local, uos[0].clone())
+            .await
             .unwrap();
-        check_ops(pool.best_operations(1), vec![ops[0].clone()]);
+        check_ops(pool.best_operations(1), vec![uos[0].clone()]);
 
         // Second op should be thorottled
-        let ret = pool.add_operation(OperationOrigin::Local, ops[1].clone());
+        let ret = pool
+            .add_operation(OperationOrigin::Local, uos[1].clone())
+            .await;
         assert!(ret.is_err());
         match ret.unwrap_err() {
             MempoolError::EntityThrottled(entity) => {
@@ -600,31 +645,32 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.entry_point,
-                hash: ops[0].uo.op_hash(pool.entry_point, 1),
-                sender: ops[0].uo.sender,
-                nonce: ops[0].uo.nonce,
+                hash: uos[0].op_hash(pool.entry_point, 1),
+                sender: uos[0].sender,
+                nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
         });
 
         // Second op should be included
-        pool.add_operation(OperationOrigin::Local, ops[1].clone())
+        pool.add_operation(OperationOrigin::Local, uos[1].clone())
+            .await
             .unwrap();
-        check_ops(pool.best_operations(1), vec![ops[1].clone()]);
+        check_ops(pool.best_operations(1), vec![uos[1].clone()]);
     }
 
-    #[test]
-    fn test_banned_account() {
-        let pool = create_pool();
+    #[tokio::test]
+    async fn test_banned_account() {
         let address = Address::random();
 
+        let op = create_op_with_errors(address, 0, 2, None, None, true);
+        let uo = op.op.clone();
+        let pool = create_pool(vec![op]);
         // Past ban slack
         pool.set_reputation(address, 1 + BAN_SLACK, 0);
 
-        let op = create_staked_account_op(address, 0, 2);
-
         // First op should be banned
-        let ret = pool.add_operation(OperationOrigin::Local, op.clone());
+        let ret = pool.add_operation(OperationOrigin::Local, uo.clone()).await;
         assert!(ret.is_err());
         match ret.unwrap_err() {
             MempoolError::EntityThrottled(entity) => {
@@ -635,7 +681,82 @@ mod tests {
         }
     }
 
-    fn create_pool() -> UoPool<MockReputationManager> {
+    #[tokio::test]
+    async fn precheck_error() {
+        let op = create_op_with_errors(
+            Address::random(),
+            0,
+            0,
+            Some(PrecheckViolation::InitCodeTooShort(0)),
+            None,
+            false,
+        );
+        let ops = vec![op.clone()];
+        let pool = create_pool(ops);
+
+        match pool.add_operation(OperationOrigin::Local, op.op).await {
+            Err(MempoolError::PrecheckViolation(PrecheckViolation::InitCodeTooShort(_))) => {}
+            _ => panic!("Expected InitCodeTooShort error"),
+        }
+        assert_eq!(pool.best_operations(1), vec![]);
+    }
+
+    #[tokio::test]
+    async fn simulation_error() {
+        let op = create_op_with_errors(
+            Address::random(),
+            0,
+            0,
+            None,
+            Some(SimulationViolation::DidNotRevert),
+            false,
+        );
+        let ops = vec![op.clone()];
+        let pool = create_pool(ops);
+
+        match pool.add_operation(OperationOrigin::Local, op.op).await {
+            Err(MempoolError::SimulationViolation(SimulationViolation::DidNotRevert)) => {}
+            _ => panic!("Expected DidNotRevert error"),
+        }
+        assert_eq!(pool.best_operations(1), vec![]);
+    }
+
+    #[derive(Clone, Debug)]
+    struct OpWithErrors {
+        op: UserOperation,
+        precheck_error: Option<PrecheckViolation>,
+        simulation_error: Option<SimulationViolation>,
+        staked: bool,
+    }
+
+    fn create_pool(
+        ops: Vec<OpWithErrors>,
+    ) -> UoPool<impl ReputationManager, impl Prechecker, impl Simulator> {
+        let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
+        let mut simulator = MockSimulator::new();
+        let mut prechecker = MockPrechecker::new();
+        for op in ops {
+            prechecker.expect_check().returning(move |_| {
+                if let Some(error) = &op.precheck_error {
+                    Err(PrecheckError::Violations(vec![error.clone()]))
+                } else {
+                    Ok(())
+                }
+            });
+            simulator
+                .expect_simulate_validation()
+                .returning(move |_, _, _| {
+                    if let Some(error) = &op.simulation_error {
+                        Err(SimulationError::Violations(vec![error.clone()]))
+                    } else {
+                        Ok(SimulationSuccess {
+                            account_is_staked: op.staked,
+                            ..SimulationSuccess::default()
+                        })
+                    }
+                });
+        }
+
         let args = PoolConfig {
             entry_point: Address::random(),
             chain_id: 1,
@@ -644,53 +765,68 @@ mod tests {
             max_size_of_pool_bytes: 10000,
             blocklist: None,
             allowlist: None,
+            precheck_settings: precheck::Settings::default(),
+            sim_settings: simulation::Settings::default(),
+            mempool_channel_configs: HashMap::new(),
         };
         let (event_sender, _) = broadcast::channel(4);
-        UoPool::new(
-            args,
-            mock_reputation(THROTTLE_SLACK, BAN_SLACK),
-            event_sender,
-        )
+        UoPool::new(args, reputation, event_sender, prechecker, simulator)
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
-        PoolOperation {
-            uo: UserOperation {
+    async fn create_pool_insert_ops(
+        ops: Vec<OpWithErrors>,
+    ) -> (
+        UoPool<impl ReputationManager, impl Prechecker, impl Simulator>,
+        Vec<UserOperation>,
+    ) {
+        let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
+        let pool = create_pool(ops);
+        for op in &uos {
+            let _ = pool.add_operation(OperationOrigin::Local, op.clone()).await;
+        }
+        (pool, uos)
+    }
+
+    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> OpWithErrors {
+        OpWithErrors {
+            op: UserOperation {
                 sender,
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
-            ..PoolOperation::default()
+            precheck_error: None,
+            simulation_error: None,
+            staked: false,
         }
     }
 
-    fn create_staked_account_op(
+    fn create_op_with_errors(
         sender: Address,
         nonce: usize,
         max_fee_per_gas: usize,
-    ) -> PoolOperation {
-        PoolOperation {
-            uo: UserOperation {
+        precheck_error: Option<PrecheckViolation>,
+        simulation_error: Option<SimulationViolation>,
+        staked: bool,
+    ) -> OpWithErrors {
+        OpWithErrors {
+            op: UserOperation {
                 sender,
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
-            account_is_staked: true,
-            ..PoolOperation::default()
+            precheck_error,
+            simulation_error,
+            staked,
         }
     }
 
-    fn check_ops(ops: Vec<Arc<PoolOperation>>, expected: Vec<PoolOperation>) {
+    fn check_ops(ops: Vec<Arc<PoolOperation>>, expected: Vec<UserOperation>) {
         assert_eq!(ops.len(), expected.len());
         for (actual, expected) in ops.into_iter().zip(expected) {
-            assert_eq!(actual.uo, expected.uo);
+            assert_eq!(actual.uo, expected);
         }
-    }
-
-    fn mock_reputation(throttling_slack: u64, ban_slack: u64) -> Arc<MockReputationManager> {
-        Arc::new(MockReputationManager::new(throttling_slack, ban_slack))
     }
 
     #[derive(Default, Clone)]

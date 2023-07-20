@@ -4,6 +4,8 @@ use std::{
 };
 
 use ethers::types::Address;
+#[cfg(test)]
+use mockall::automock;
 use parking_lot::RwLock;
 use tokio::time::interval;
 
@@ -26,7 +28,8 @@ pub struct Reputation {
 ///
 /// Interior mutability pattern used as ReputationManagers may
 /// need to be thread-safe.
-pub trait ReputationManager: Send + Sync {
+#[cfg_attr(test, automock)]
+pub trait ReputationManager: Send + Sync + 'static {
     /// Called by mempool before returning operations to bundler
     fn status(&self, address: Address) -> ReputationStatus;
 
