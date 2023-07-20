@@ -52,21 +52,26 @@ impl PoolInner {
         }
     }
 
+    pub fn check_replacement_fees(&self, op: &UserOperation) -> MempoolResult<()> {
+        if let Some(pool_op) = self.by_id.get(&op.id()) {
+            let (replacement_priority_fee, replacement_fee) =
+                self.get_min_replacement_fees(pool_op.uo());
+
+            if op.max_priority_fee_per_gas < replacement_priority_fee
+                || op.max_fee_per_gas < replacement_fee
+            {
+                return Err(MempoolError::ReplacementUnderpriced(
+                    replacement_priority_fee,
+                    replacement_fee,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
         // Check for replacement by ID
         if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
-            if op.uo.max_fee_per_gas > u128::MAX.into()
-                || op.uo.max_priority_fee_per_gas > u128::MAX.into()
-            {
-                // TODO(danc): we can likely filter out operations with much smaller fees
-                // based on the maximum gas limit of the block. Using this for now.
-                return Err(anyhow::anyhow!(
-                    "Fee is too high: max_fee_per_gas={}, max_priority_fee_per_gas={}",
-                    op.uo.max_fee_per_gas,
-                    op.uo.max_priority_fee_per_gas
-                ))?;
-            }
-
             let (replacement_priority_fee, replacement_fee) =
                 self.get_min_replacement_fees(pool_op.uo());
 
@@ -128,16 +133,6 @@ impl PoolInner {
         metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
         metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
         Ok(hash)
-    }
-
-    pub fn add_operations(
-        &mut self,
-        operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<MempoolResult<H256>> {
-        operations
-            .into_iter()
-            .map(|op| self.add_operation(op))
-            .collect()
     }
 
     pub fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
@@ -280,6 +275,7 @@ impl PartialEq for OrderedPoolOperation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::{precheck, simulation};
 
     #[test]
     fn add_single_op() {
@@ -572,6 +568,9 @@ mod tests {
             max_size_of_pool_bytes: 20 * size_of_op(),
             blocklist: None,
             allowlist: None,
+            precheck_settings: precheck::Settings::default(),
+            sim_settings: simulation::Settings::default(),
+            mempool_channel_configs: HashMap::new(),
         }
     }
 

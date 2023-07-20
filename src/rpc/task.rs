@@ -1,9 +1,9 @@
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::{
     providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClientBuilder},
-    types::{Address, H256},
+    types::Address,
 };
 use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
@@ -23,11 +23,8 @@ use super::ApiNamespace;
 use crate::{
     common::{
         handle::Task,
-        mempool::MempoolConfig,
-        precheck,
         protos::{builder::builder_client::BuilderClient, op_pool::op_pool_client::OpPoolClient},
         server::{self, format_socket_addr},
-        simulation,
     },
     rpc::{
         debug::{DebugApi, DebugApiServer},
@@ -47,11 +44,8 @@ pub struct Args {
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
-    pub precheck_settings: precheck::Settings,
-    pub sim_settings: simulation::Settings,
     pub estimation_settings: estimation::Settings,
     pub rpc_timeout: Duration,
-    pub mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
 #[derive(Debug)]
@@ -64,7 +58,6 @@ impl Task for RpcTask {
     async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
-        tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let mut module = RpcModule::new(());
 
@@ -120,10 +113,7 @@ impl Task for RpcTask {
                         self.args.entry_points.clone(),
                         self.args.chain_id,
                         op_pool_client.clone(),
-                        self.args.precheck_settings,
-                        self.args.sim_settings,
                         self.args.estimation_settings,
-                        self.args.mempool_configs.clone(),
                     )
                     .into_rpc(),
                 )?,
