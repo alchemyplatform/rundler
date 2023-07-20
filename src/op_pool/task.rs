@@ -1,10 +1,18 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
+use ethers::providers::{
+    Http, HttpRateLimitRetryPolicy, JsonRpcClient, Provider, RetryClientBuilder,
+};
 use futures::future;
 use tokio::{task::JoinHandle, try_join};
 use tokio_util::sync::CancellationToken;
-use tonic::{async_trait, transport::Server};
+use tonic::{
+    async_trait,
+    transport::{NamedService, Server},
+};
+use tonic_health::server::HealthReporter;
+use url::Url;
 
 use super::{
     event::EventProvider,
@@ -12,9 +20,12 @@ use super::{
 };
 use crate::{
     common::{
+        contracts::i_entry_point::IEntryPoint,
         grpc::metrics::GrpcMetricsLayer,
         handle::{flatten_handle, Task},
+        precheck::{Prechecker, PrecheckerImpl},
         protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
+        simulation::{Simulator, SimulatorImpl},
     },
     op_pool::{
         event::{EventListener, HttpBlockProviderFactory, WsBlockProviderFactory},
@@ -29,7 +40,7 @@ pub struct Args {
     pub port: u16,
     pub host: String,
     pub ws_url: Option<String>,
-    pub http_url: Option<String>,
+    pub http_url: String,
     pub http_poll_interval: Duration,
     pub chain_id: u64,
     pub pool_configs: Vec<PoolConfig>,
@@ -55,25 +66,36 @@ impl Task for PoolTask {
         let event_provider: Box<dyn EventProvider> = if let Some(ws_url) = &self.args.ws_url {
             let connection_factory = WsBlockProviderFactory::new(ws_url.to_owned(), 10);
             Box::new(EventListener::new(connection_factory, entry_points))
-        } else if let Some(http_url) = &self.args.http_url {
+        } else {
             let connection_factory = HttpBlockProviderFactory::new(
-                http_url.to_owned(),
+                self.args.http_url.clone(),
                 self.args.http_poll_interval,
                 10,
             );
             Box::new(EventListener::new(connection_factory, entry_points))
-        } else {
-            bail!("Either ws_url or http_url must be provided");
         };
 
+        let parsed_url = Url::parse(&self.args.http_url).context("Invalid RPC URL")?;
+        let http = Http::new(parsed_url);
+        // this retry policy will retry on 429ish errors OR connectivity errors
+        let client = RetryClientBuilder::default()
+            // these retries are if the server returns a 429
+            .rate_limit_retries(10)
+            // these retries are if the connection is dubious
+            .timeout_retries(3)
+            .initial_backoff(Duration::from_millis(500))
+            .build(http, Box::<HttpRateLimitRetryPolicy>::default());
+        let provider = Arc::new(Provider::new(client));
+
         // create mempools
-        let mut mempools = Vec::new();
+        let mut mempools = vec![];
         let mut mempool_handles = Vec::new();
         for pool_config in &self.args.pool_configs {
             let (pool, handle) = PoolTask::create_mempool(
                 pool_config,
                 event_provider.as_ref(),
                 shutdown_token.clone(),
+                provider.clone(),
             )
             .await
             .context("should have created mempool")?;
@@ -107,9 +129,7 @@ impl Task for PoolTask {
 
         // health service
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_serving::<OpPoolServer<OpPoolImpl<UoPool<HourlyMovingAverageReputation>>>>()
-            .await;
+        Self::set_serving(&mut health_reporter, &op_pool_server).await;
 
         let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
         let server_handle = tokio::spawn(async move {
@@ -151,11 +171,15 @@ impl PoolTask {
         Box::new(self)
     }
 
-    async fn create_mempool(
+    async fn create_mempool<C: JsonRpcClient + 'static>(
         pool_config: &PoolConfig,
         event_provider: &dyn EventProvider,
         shutdown_token: CancellationToken,
-    ) -> anyhow::Result<(Arc<UoPool<HourlyMovingAverageReputation>>, JoinHandle<()>)> {
+        provider: Arc<Provider<C>>,
+    ) -> anyhow::Result<(
+        Arc<UoPool<HourlyMovingAverageReputation, impl Prechecker, impl Simulator>>,
+        JoinHandle<()>,
+    )> {
         let entry_point = pool_config.entry_point;
         // Reputation manager
         let reputation = Arc::new(HourlyMovingAverageReputation::new(
@@ -167,8 +191,27 @@ impl PoolTask {
         let reputation_runner = Arc::clone(&reputation);
         tokio::spawn(async move { reputation_runner.run().await });
 
+        let i_entry_point = IEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
+        let prechecker = PrecheckerImpl::new(
+            Arc::clone(&provider),
+            pool_config.chain_id,
+            i_entry_point,
+            pool_config.precheck_settings,
+        );
+        let simulator = SimulatorImpl::new(
+            Arc::clone(&provider),
+            pool_config.entry_point,
+            pool_config.sim_settings,
+            pool_config.mempool_channel_configs.clone(),
+        );
+
         // Mempool
-        let mp = Arc::new(UoPool::new(pool_config.clone(), Arc::clone(&reputation)));
+        let mp = Arc::new(UoPool::new(
+            pool_config.clone(),
+            Arc::clone(&reputation),
+            prechecker,
+            simulator,
+        ));
         // Start mempool
         let mempool_events = event_provider
             .subscribe_by_entrypoint(entry_point)
@@ -180,5 +223,9 @@ impl PoolTask {
             );
 
         Ok((mp, handle))
+    }
+
+    async fn set_serving<S: NamedService>(reporter: &mut HealthReporter, _service: &S) {
+        reporter.set_serving::<S>().await;
     }
 }
