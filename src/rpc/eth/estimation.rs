@@ -102,6 +102,8 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
             pre_verification_gas,
             verification_gas_limit: settings.max_verification_gas.into(),
             call_gas_limit: settings.max_call_gas.into(),
+            max_fee_per_gas: 0.into(),
+            max_priority_fee_per_gas: 0.into(),
             ..op.into_user_operation(settings)
         };
         let verification_future = self.binary_search_verification_gas(&op, block_hash);
@@ -147,8 +149,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         let run_attempt_returning_error = |gas: u64| async move {
             let op = UserOperation {
                 verification_gas_limit: gas.into(),
-                call_gas_limit: U256::zero(),
-                max_fee_per_gas: U256::zero(),
+                call_gas_limit: 0.into(),
                 ..op.clone()
             };
             let error_message = self

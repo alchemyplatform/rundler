@@ -19,7 +19,7 @@ use crate::common::{
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
         shared_types::UserOpsPerAggregator,
     },
-    eth,
+    eth::{self, ContractRevertError},
     gas::GasFees,
     types::UserOperation,
 };
@@ -143,6 +143,8 @@ where
             Ok(Ok(result))
         } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
             Ok(Err(failed_op.reason))
+        } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
+            Ok(Err(err.reason))
         } else {
             Ok(Err(String::new()))
         }
