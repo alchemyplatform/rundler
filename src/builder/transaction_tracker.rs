@@ -498,7 +498,7 @@ mod test {
         let exp = ExpectedStorage::default();
         let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
 
-        assert_eq!(sent_transaction.is_err(), true);
+        assert!(sent_transaction.is_err());
     }
 
     #[tokio::test]
@@ -525,7 +525,7 @@ mod test {
         let exp = ExpectedStorage::default();
         let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
 
-        assert_eq!(sent_transaction.is_err(), true);
+        assert!(sent_transaction.is_err());
     }
 
     #[tokio::test]

@@ -1,10 +1,18 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
 use anyhow::{bail, Context};
 use ethers::types::{Address, H256};
 use ethers_signers::Signer;
 use rusoto_core::Region;
-use tokio::{select, sync::broadcast, time};
+use tokio::{
+    select,
+    sync::{broadcast, mpsc},
+    time,
+};
 use tokio_util::sync::CancellationToken;
 use tonic::{
     async_trait,
@@ -14,11 +22,11 @@ use tracing::info;
 
 use crate::{
     builder::{
-        self,
         bundle_proposer::{self, BundleProposerImpl},
+        bundle_sender::{self, BundleSender},
         emit::BuilderEvent,
         sender::get_sender,
-        server::{BuilderImpl, DummyBuilder},
+        server::BuilderImpl,
         signer::{BundlerSigner, KmsSigner, LocalSigner},
         transaction_tracker::{self, TransactionTrackerImpl},
     },
@@ -155,11 +163,17 @@ impl Task for BuilderTask {
             tracker_settings,
         )
         .await?;
-        let builder_settings = builder::server::Settings {
+
+        let builder_settings = bundle_sender::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
             max_fee_increases: self.args.max_fee_increases,
         };
-        let builder = Arc::new(BuilderImpl::new(
+        let manual_bundling_mode = Arc::new(AtomicBool::new(false));
+        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
+
+        let mut bundle_sender = BundleSender::new(
+            manual_bundling_mode.clone(),
+            send_bundle_rx,
             self.args.chain_id,
             beneficiary,
             self.args.eth_poll_interval,
@@ -170,15 +184,16 @@ impl Task for BuilderTask {
             provider,
             builder_settings,
             self.event_sender.clone(),
-        ));
+        );
 
         let _builder_loop_guard = {
-            let builder = Arc::clone(&builder);
-            SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await })
+            SpawnGuard::spawn_with_guard(async move { bundle_sender.send_bundles_in_loop().await })
         };
 
+        let builder_server = BuilderImpl::new(manual_bundling_mode, send_bundle_tx);
+
         // gRPC server
-        let builder_server = BuilderServer::new(builder);
+        let builder_server = BuilderServer::new(builder_server);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
@@ -187,7 +202,7 @@ impl Task for BuilderTask {
         // health service
         let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
-            .set_serving::<BuilderServer<DummyBuilder>>()
+            .set_serving::<BuilderServer<BuilderImpl>>()
             .await;
 
         let server_handle = Server::builder()
