@@ -37,6 +37,8 @@ pub enum MempoolError {
     InvalidSignature,
     #[error("Unsupported aggregator {0}")]
     UnsupportedAggregator(Address),
+    #[error("Unknown entry point {0}")]
+    UnknownEntryPoint(Address),
 }
 
 impl From<SimulationError> for MempoolError {

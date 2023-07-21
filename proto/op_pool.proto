@@ -65,16 +65,11 @@ message AddOpRequest {
 message AddOpResponse {
   oneof result {
     AddOpSuccess success = 1;
-    AddOpFailure failure = 2;
+    MempoolError failure = 2;
   }
 }
-
 message AddOpSuccess {
   bytes hash = 1;
-}
-
-message AddOpFailure {
-  MempoolError error = 1;
 }
 
 message GetOpsRequest {
@@ -82,6 +77,12 @@ message GetOpsRequest {
   uint64 max_ops = 2;
 }
 message GetOpsResponse {
+  oneof result {
+    GetOpsSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetOpsSuccess {
   repeated MempoolOp ops = 1;
 }
 
@@ -89,21 +90,45 @@ message RemoveOpsRequest {
   bytes entry_point = 1;
   repeated bytes hashes = 2;
 }
-message RemoveOpsResponse {}
+message RemoveOpsResponse {
+  oneof result {
+    RemoveOpsSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message RemoveOpsSuccess {}
 
 message RemoveEntitiesRequest {
   bytes entry_point = 1;
   repeated Entity entities = 2;
 }
-message RemoveEntitiesResponse {}
+message RemoveEntitiesResponse {
+  oneof result {
+    RemoveEntitiesSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message RemoveEntitiesSuccess {}
 
 message DebugClearStateRequest {}
-message DebugClearStateResponse {}
+message DebugClearStateResponse {
+  oneof result {
+    DebugClearStateSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message DebugClearStateSuccess {}
 
 message DebugDumpMempoolRequest {
   bytes entry_point = 1;
 }
 message DebugDumpMempoolResponse {
+  oneof result {
+    DebugDumpMempoolSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message DebugDumpMempoolSuccess {
   repeated MempoolOp ops = 1;
 }
 
@@ -111,12 +136,24 @@ message DebugSetReputationRequest {
   bytes entry_point = 1;
   repeated Reputation reputations = 2;
 }
-message DebugSetReputationResponse {}
+message DebugSetReputationResponse {
+  oneof result {
+    DebugSetReputationSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message DebugSetReputationSuccess {}
 
 message DebugDumpReputationRequest {
   bytes entry_point = 1;
 }
 message DebugDumpReputationResponse {
+  oneof result {
+    DebugDumpReputationSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message DebugDumpReputationSuccess {
   repeated Reputation reputations = 1;
 }
 
@@ -145,7 +182,12 @@ message MempoolError {
     SimulationViolationError simulation_violation = 7;
     InvalidSignatureError invalid_signature = 8;
     UnsupportedAggregatorError unsupported_aggregator = 9;
+    UnknownEntryPointError unknown_entry_point = 10;
   }
+}
+
+message UnknownEntryPointError {
+  bytes entry_point = 1;
 }
 
 message ReplacementUnderpricedError {

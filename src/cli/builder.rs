@@ -11,6 +11,7 @@ use crate::{
         gas::PriorityFeeMode, handle::spawn_tasks_with_shutdown, mempool::MempoolConfig,
         server::format_server_addr,
     },
+    op_pool::PoolClientMode,
 };
 
 /// CLI options for the builder
@@ -148,7 +149,7 @@ impl BuilderArgs {
     pub async fn to_args(
         &self,
         common: &CommonArgs,
-        pool_url: String,
+        pool_client_mode: PoolClientMode,
     ) -> anyhow::Result<builder::Args> {
         let priority_fee_mode = PriorityFeeMode::try_from(
             common.priority_fee_mode_kind.as_str(),
@@ -172,7 +173,6 @@ impl BuilderArgs {
             port: self.port,
             host: self.host.clone(),
             rpc_url,
-            pool_url,
             entry_point_address: common
                 .entry_points
                 .get(0)
@@ -200,6 +200,7 @@ impl BuilderArgs {
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
+            pool_client_mode,
         })
     }
 
@@ -229,7 +230,9 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
         builder: builder_args,
         pool_url,
     } = builder_args;
-    let task_args = builder_args.to_args(&common_args, pool_url).await?;
+    let task_args = builder_args
+        .to_args(&common_args, PoolClientMode::Remote { url: pool_url })
+        .await?;
 
     spawn_tasks_with_shutdown(
         [BuilderTask::new(task_args).boxed()],

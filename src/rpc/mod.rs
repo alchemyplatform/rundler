@@ -4,7 +4,6 @@ mod health;
 mod metrics;
 mod task;
 
-use anyhow::bail;
 pub use debug::DebugApiClient;
 pub use eth::{estimation, EthApiClient};
 use ethers::{
@@ -16,12 +15,9 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 pub use task::*;
 
-use crate::common::{
-    protos::{
-        self,
-        op_pool::{Reputation, ReputationStatus},
-    },
-    types::UserOperation,
+use crate::{
+    common::types::UserOperation,
+    op_pool::{Reputation, ReputationStatus},
 };
 
 /// API namespace
@@ -320,19 +316,6 @@ impl<'de> Deserialize<'de> for ReputationStatus {
     }
 }
 
-impl TryFrom<i32> for ReputationStatus {
-    type Error = anyhow::Error;
-
-    fn try_from(status: i32) -> Result<Self, Self::Error> {
-        match status {
-            0 => Ok(ReputationStatus::Ok),
-            1 => Ok(ReputationStatus::Throttled),
-            2 => Ok(ReputationStatus::Banned),
-            _ => bail!("Invalid reputation status {status}"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RpcReputation {
     pub address: Address,
@@ -344,10 +327,10 @@ pub struct RpcReputation {
 impl From<RpcReputation> for Reputation {
     fn from(rpc_reputation: RpcReputation) -> Self {
         Reputation {
-            address: rpc_reputation.address.as_bytes().to_vec(),
+            address: rpc_reputation.address,
             ops_seen: rpc_reputation.ops_seen.as_u64(),
             ops_included: rpc_reputation.ops_included.as_u64(),
-            status: rpc_reputation.status.into(),
+            status: rpc_reputation.status,
         }
     }
 }
@@ -357,10 +340,10 @@ impl TryFrom<Reputation> for RpcReputation {
 
     fn try_from(reputation: Reputation) -> Result<Self, Self::Error> {
         Ok(RpcReputation {
-            address: protos::from_bytes(&reputation.address)?,
+            address: reputation.address,
             ops_seen: reputation.ops_seen.into(),
             ops_included: reputation.ops_included.into(),
-            status: reputation.status.try_into()?,
+            status: reputation.status,
         })
     }
 }

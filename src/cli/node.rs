@@ -1,10 +1,11 @@
 use clap::Args;
+use tokio::sync::mpsc;
 
 use super::{builder::BuilderArgs, pool::PoolArgs, rpc::RpcArgs, CommonArgs};
 use crate::{
     builder::BuilderTask,
-    common::{handle, server::format_server_addr},
-    op_pool::PoolTask,
+    common::handle,
+    op_pool::{PoolClientMode, PoolServerMode, PoolTask},
     rpc::RpcTask,
 };
 
@@ -27,17 +28,22 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
         rpc: rpc_args,
     } = bundler_args;
 
-    let pool_url = format_server_addr(&pool_args.host, pool_args.port, false);
     let builder_url = builder_args.url(false);
 
-    let pool_task_args = pool_args.to_args(&common_args).await?;
-    let builder_task_args = builder_args.to_args(&common_args, pool_url.clone()).await?;
+    let (tx, rx) = mpsc::channel(1024);
+
+    let pool_task_args = pool_args
+        .to_args(&common_args, PoolServerMode::Local { receiver: Some(rx) })
+        .await?;
+    let builder_task_args = builder_args
+        .to_args(&common_args, PoolClientMode::Local { sender: tx.clone() })
+        .await?;
     let rpc_task_args = rpc_args
         .to_args(
             &common_args,
-            pool_url,
             builder_url,
             (&common_args).try_into()?,
+            PoolClientMode::Local { sender: tx.clone() },
         )
         .await?;
 

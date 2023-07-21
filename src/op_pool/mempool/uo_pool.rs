@@ -12,6 +12,7 @@ use tonic::async_trait;
 use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
+    reputation::{Reputation, ReputationManager, ReputationStatus},
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
@@ -21,10 +22,7 @@ use crate::{
         simulation::Simulator,
         types::{Entity, UserOperation},
     },
-    op_pool::{
-        event::NewBlockEvent,
-        reputation::{Reputation, ReputationManager, ReputationStatus},
-    },
+    op_pool::event::NewBlockEvent,
 };
 
 /// The number of blocks that a throttled operation is allowed to be in the mempool
@@ -209,7 +207,7 @@ where
         Ok(hash)
     }
 
-    fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>) {
+    fn remove_operations(&self, hashes: &[H256]) {
         // hold the lock for the duration of the operation
         let mut state = self.state.write();
         for hash in hashes {
@@ -266,7 +264,7 @@ mod tests {
             },
             types::UserOperation,
         },
-        op_pool::reputation::MockReputationManager,
+        op_pool::mempool::reputation::MockReputationManager,
     };
 
     #[tokio::test]
@@ -281,7 +279,7 @@ mod tests {
             .await
             .unwrap();
         check_ops(pool.best_operations(1), uos);
-        pool.remove_operations(&vec![hash]);
+        pool.remove_operations(&[hash]);
         assert_eq!(pool.best_operations(1), vec![]);
     }
 

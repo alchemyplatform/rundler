@@ -1,31 +1,65 @@
 use anyhow::{bail, Context};
 use ethers::types::Opcode;
 
-use super::mempool::error::MempoolError;
-use crate::common::{
-    precheck::PrecheckViolation,
-    protos::{
-        from_bytes,
-        op_pool::{
-            mempool_error, precheck_violation_error, simulation_violation_error,
-            AccessedUndeployedContract, AggregatorValidationFailed, CallGasLimitTooLow,
-            CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-            DiscardedOnInsertError, Entity, EntityThrottledError, EntityType,
-            ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
-            InitCodeTooShort, InvalidSignatureError, InvalidStorageAccess, MaxFeePerGasTooLow,
-            MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-            MempoolError as ProtoMempoolError, NotStaked, OutOfGas, PaymasterDepositTooLow,
-            PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
-            PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-            SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-            SimulationViolationError as ProtoSimulationViolationError, UnintendedRevert,
-            UnintendedRevertWithMessage, UnsupportedAggregatorError, UsedForbiddenOpcode,
-            UsedForbiddenPrecompile, VerificationGasLimitTooHigh, WrongNumberOfPhases,
-        },
-        to_le_bytes,
-    },
-    simulation::{SimulationViolation, StorageSlot},
+use super::protos::{
+    mempool_error, precheck_violation_error, simulation_violation_error,
+    AccessedUndeployedContract, AggregatorValidationFailed, CallGasLimitTooLow, CallHadValue,
+    CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
+    EntityThrottledError, EntityType, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
+    FactoryIsNotContract, InitCodeTooShort, InvalidSignatureError, InvalidStorageAccess,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    MempoolError as ProtoMempoolError, NotStaked, OutOfGas, PaymasterDepositTooLow,
+    PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
+    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
+    SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SimulationViolationError as ProtoSimulationViolationError, UnintendedRevert,
+    UnintendedRevertWithMessage, UnknownEntryPointError, UnsupportedAggregatorError,
+    UsedForbiddenOpcode, UsedForbiddenPrecompile, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
+use crate::{
+    common::{
+        precheck::PrecheckViolation,
+        protos::{from_bytes, to_le_bytes, ConversionError},
+        simulation::{SimulationViolation, StorageSlot},
+    },
+    op_pool::{mempool::error::MempoolError, server::error::PoolServerError},
+};
+
+impl From<tonic::Status> for PoolServerError {
+    fn from(value: tonic::Status) -> Self {
+        PoolServerError::Other(anyhow::anyhow!(value.to_string()))
+    }
+}
+
+impl From<ConversionError> for PoolServerError {
+    fn from(value: ConversionError) -> Self {
+        PoolServerError::Other(anyhow::anyhow!(value.to_string()))
+    }
+}
+
+impl TryFrom<ProtoMempoolError> for PoolServerError {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ProtoMempoolError) -> Result<Self, Self::Error> {
+        Ok(PoolServerError::MempoolError(value.try_into()?))
+    }
+}
+
+impl From<PoolServerError> for ProtoMempoolError {
+    fn from(value: PoolServerError) -> Self {
+        match value {
+            PoolServerError::MempoolError(e) => e.into(),
+            PoolServerError::UnexpectedResponse => ProtoMempoolError {
+                error: Some(mempool_error::Error::Internal(
+                    "unexpected response from pool server".to_string(),
+                )),
+            },
+            PoolServerError::Other(e) => ProtoMempoolError {
+                error: Some(mempool_error::Error::Internal(e.to_string())),
+            },
+        }
+    }
+}
 
 impl TryFrom<ProtoMempoolError> for MempoolError {
     type Error = anyhow::Error;
@@ -59,7 +93,10 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::UnsupportedAggregator(e)) => {
                 MempoolError::UnsupportedAggregator(from_bytes(&e.aggregator_address)?)
             }
-            None => bail!("unknown proto mempool error"),
+            Some(mempool_error::Error::UnknownEntryPoint(e)) => {
+                MempoolError::UnknownEntryPoint(from_bytes(&e.entry_point)?)
+            }
+            _ => bail!("unknown proto mempool error"),
         })
     }
 }
@@ -113,6 +150,13 @@ impl From<MempoolError> for ProtoMempoolError {
                 error: Some(mempool_error::Error::UnsupportedAggregator(
                     UnsupportedAggregatorError {
                         aggregator_address: agg.as_bytes().to_vec(),
+                    },
+                )),
+            },
+            MempoolError::UnknownEntryPoint(entry_point) => ProtoMempoolError {
+                error: Some(mempool_error::Error::UnknownEntryPoint(
+                    UnknownEntryPointError {
+                        entry_point: entry_point.as_bytes().to_vec(),
                     },
                 )),
             },

@@ -8,7 +8,7 @@ use super::CommonArgs;
 use crate::{
     cli::json::get_json_config,
     common::{handle::spawn_tasks_with_shutdown, mempool::MempoolConfig},
-    op_pool::{self, PoolConfig, PoolTask},
+    op_pool::{self, PoolConfig, PoolServerMode, PoolTask},
 };
 
 /// CLI options for the OP Pool
@@ -85,7 +85,11 @@ pub struct PoolArgs {
 impl PoolArgs {
     /// Convert the CLI arguments into the arguments for the OP Pool combining
     /// common and op pool specific arguments.
-    pub async fn to_args(&self, common: &CommonArgs) -> anyhow::Result<op_pool::Args> {
+    pub async fn to_args(
+        &self,
+        common: &CommonArgs,
+        server_mode: PoolServerMode,
+    ) -> anyhow::Result<op_pool::Args> {
         let blocklist = match &self.blocklist_path {
             Some(blocklist) => Some(get_json_config(blocklist, &common.aws_region).await?),
             None => None,
@@ -127,8 +131,6 @@ impl PoolArgs {
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
 
         Ok(op_pool::Args {
-            port: self.port,
-            host: self.host.clone(),
             chain_id: common.chain_id,
             ws_url: common.node_ws.clone(),
             http_url: common
@@ -138,6 +140,7 @@ impl PoolArgs {
                 .clone(),
             http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
             pool_configs,
+            server_mode,
         })
     }
 }
@@ -151,7 +154,14 @@ pub struct PoolCliArgs {
 
 pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
-    let task_args = pool_args.to_args(&common_args).await?;
+    let task_args = pool_args
+        .to_args(
+            &common_args,
+            PoolServerMode::Remote {
+                addr: format!("{}:{}", pool_args.host, pool_args.port).parse()?,
+            },
+        )
+        .await?;
 
     spawn_tasks_with_shutdown([PoolTask::new(task_args).boxed()], tokio::signal::ctrl_c()).await;
     Ok(())

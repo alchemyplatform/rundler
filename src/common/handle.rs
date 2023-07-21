@@ -44,7 +44,7 @@ impl Drop for SpawnGuard {
 
 #[async_trait]
 pub trait Task: Sync + Send + 'static {
-    async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()>;
+    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()>;
 }
 
 pub async fn spawn_tasks_with_shutdown<T, R, E>(
@@ -58,7 +58,7 @@ pub async fn spawn_tasks_with_shutdown<T, R, E>(
     let shutdown_token = CancellationToken::new();
     let mut shutdown_scope = Some(shutdown_scope);
 
-    let handles = tasks.into_iter().map(|task| {
+    let handles = tasks.into_iter().map(|mut task| {
         let st = shutdown_token.clone();
         let ss = shutdown_scope.clone();
         async move {
