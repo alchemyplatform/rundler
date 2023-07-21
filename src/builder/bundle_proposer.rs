@@ -12,7 +12,7 @@ use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
 use tokio::{sync::broadcast, try_join};
-use tonic::{async_trait, transport::Channel};
+use tonic::async_trait;
 use tracing::{error, info};
 
 use crate::{
@@ -22,16 +22,13 @@ use crate::{
         emit::WithEntryPoint,
         gas::{FeeEstimator, GasFees, PriorityFeeMode},
         math,
-        protos::{
-            self,
-            op_pool::{op_pool_client::OpPoolClient, GetOpsRequest, MempoolOp},
-        },
         simulation::{SimulationError, SimulationSuccess, Simulator},
         types::{
             Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike,
             Timestamp, UserOperation,
         },
     },
+    op_pool::{PoolClient, PoolOperation},
 };
 
 /// A user op must be valid for at least this long into the future to be included.
@@ -74,13 +71,14 @@ pub trait BundleProposer: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub struct BundleProposerImpl<S, E, P>
+pub struct BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
     E: EntryPointLike,
     P: ProviderLike,
+    C: PoolClient,
 {
-    op_pool: OpPoolClient<Channel>,
+    op_pool: C,
     simulator: S,
     entry_point: E,
     provider: Arc<P>,
@@ -101,11 +99,12 @@ pub struct Settings {
 }
 
 #[async_trait]
-impl<S, E, P> BundleProposer for BundleProposerImpl<S, E, P>
+impl<S, E, P, C> BundleProposer for BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
     E: EntryPointLike,
     P: ProviderLike,
+    C: PoolClient,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
         let (ops, block_hash, bundle_fees) = try_join!(
@@ -123,14 +122,14 @@ where
         let simulation_futures = ops
             .iter()
             .filter(|op| {
-                op.op.max_fee_per_gas >= required_op_fees.max_fee_per_gas
-                    && op.op.max_priority_fee_per_gas >= required_op_fees.max_priority_fee_per_gas
+                op.uo.max_fee_per_gas >= required_op_fees.max_fee_per_gas
+                    && op.uo.max_priority_fee_per_gas >= required_op_fees.max_priority_fee_per_gas
             })
             .cloned()
             .map(|op| self.simulate_validation(op, block_hash));
 
         let ops_with_simulations_future = future::join_all(simulation_futures);
-        let all_paymaster_addresses = ops.iter().filter_map(|op| op.op.paymaster());
+        let all_paymaster_addresses = ops.iter().filter_map(|op| op.uo.paymaster());
         let balances_by_paymaster_future =
             self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);
         let (ops_with_simulations, balances_by_paymaster) =
@@ -176,14 +175,15 @@ where
     }
 }
 
-impl<S, E, P> BundleProposerImpl<S, E, P>
+impl<S, E, P, C> BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
     E: EntryPointLike,
     P: ProviderLike,
+    C: PoolClient,
 {
     pub fn new(
-        op_pool: OpPoolClient<Channel>,
+        op_pool: C,
         simulator: S,
         entry_point: E,
         provider: Arc<P>,
@@ -211,17 +211,17 @@ where
 
     async fn simulate_validation(
         &self,
-        op: OpFromPool,
+        op: PoolOperation,
         block_hash: H256,
     ) -> anyhow::Result<(UserOperation, Result<SimulationSuccess, SimulationError>)> {
         let result = self
             .simulator
-            .simulate_validation(op.op.clone(), Some(block_hash), Some(op.expected_code_hash))
+            .simulate_validation(op.uo.clone(), Some(block_hash), Some(op.expected_code_hash))
             .await;
         match result {
-            Ok(success) => Ok((op.op, Ok(success))),
+            Ok(success) => Ok((op.uo, Ok(success))),
             Err(error) => match error {
-                SimulationError::Violations(_) => Ok((op.op, Err(error))),
+                SimulationError::Violations(_) => Ok((op.uo, Err(error))),
                 SimulationError::Other(error) => Err(error),
             },
         }
@@ -397,20 +397,11 @@ where
         }
     }
 
-    async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<OpFromPool>> {
+    async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<PoolOperation>> {
         self.op_pool
-            .clone()
-            .get_ops(GetOpsRequest {
-                entry_point: self.entry_point.address().as_bytes().to_vec(),
-                max_ops: self.settings.max_bundle_size,
-            })
+            .get_ops(self.entry_point.address(), self.settings.max_bundle_size)
             .await
-            .context("should get ops from op pool to bundle")?
-            .into_inner()
-            .ops
-            .into_iter()
-            .map(OpFromPool::try_from)
-            .collect()
+            .context("should get ops from pool")
     }
 
     async fn get_balances_by_paymaster(
@@ -482,11 +473,11 @@ where
         Ok(())
     }
 
-    fn limit_gas_in_bundle(&self, ops: Vec<OpFromPool>) -> Vec<OpFromPool> {
+    fn limit_gas_in_bundle(&self, ops: Vec<PoolOperation>) -> Vec<PoolOperation> {
         let mut gas_left = U256::from(MAX_BUNDLE_GAS_LIMIT);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = op.op.total_execution_gas_limit(self.chain_id);
+            let gas = op.uo.total_execution_gas_limit(self.chain_id);
             if gas_left < gas {
                 break;
             }
@@ -505,26 +496,6 @@ where
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
         op.op_hash(self.entry_point.address(), self.settings.chain_id)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct OpFromPool {
-    op: UserOperation,
-    expected_code_hash: H256,
-}
-
-impl TryFrom<MempoolOp> for OpFromPool {
-    type Error = anyhow::Error;
-
-    fn try_from(value: MempoolOp) -> Result<Self, Self::Error> {
-        Ok(Self {
-            op: value
-                .uo
-                .context("mempool op should contain user operation")?
-                .try_into()?,
-            expected_code_hash: protos::from_bytes(&value.expected_code_hash)?,
-        })
     }
 }
 
@@ -717,17 +688,17 @@ impl ProposalContext {
 mod tests {
     use anyhow::anyhow;
     use ethers::{types::H160, utils::parse_units};
-    use tonic::Response;
 
     use super::*;
-    use crate::common::{
-        grpc::mocks::{self, MockOpPool},
-        protos::op_pool::GetOpsResponse,
-        simulation::{
-            AggregatorSimOut, MockSimulator, SimulationError, SimulationSuccess,
-            SimulationViolation,
+    use crate::{
+        common::{
+            simulation::{
+                AggregatorSimOut, MockSimulator, SimulationError, SimulationSuccess,
+                SimulationViolation,
+            },
+            types::{MockEntryPointLike, MockProviderLike, ValidTimeRange},
         },
-        types::{MockEntryPointLike, MockProviderLike, ValidTimeRange},
+        op_pool::MockPoolClient,
     };
 
     #[tokio::test]
@@ -1194,19 +1165,20 @@ mod tests {
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
         let max_bundle_size = mock_ops.len() as u64;
-        let mut op_pool = MockOpPool::new();
         let ops: Vec<_> = mock_ops
             .iter()
-            .map(|MockOp { op, .. }| MempoolOp {
-                uo: Some(op.into()),
-                expected_code_hash: expected_code_hash.as_bytes().to_vec(),
+            .map(|MockOp { op, .. }| PoolOperation {
+                uo: op.clone(),
+                expected_code_hash,
                 ..Default::default()
             })
             .collect();
-        op_pool
+
+        let mut pool_client = MockPoolClient::new();
+        pool_client
             .expect_get_ops()
-            .return_once(|_| Ok(Response::new(GetOpsResponse { ops })));
-        let op_pool_handle = mocks::mock_op_pool_client(op_pool).await;
+            .returning(move |_, _| Ok(ops.clone()));
+
         let simulations_by_op: HashMap<_, _> = mock_ops
             .into_iter()
             .map(|op| (op.op.op_hash(entry_point_address, 0), op.simulation_result))
@@ -1255,7 +1227,7 @@ mod tests {
             .returning(move |address, _| signatures_by_aggregator[&address]());
         let (event_sender, _) = broadcast::channel(16);
         let proposer = BundleProposerImpl::new(
-            op_pool_handle.client.clone(),
+            pool_client,
             simulator,
             entry_point,
             Arc::new(provider),

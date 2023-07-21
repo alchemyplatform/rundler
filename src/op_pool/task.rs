@@ -1,49 +1,58 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::providers::{
     Http, HttpRateLimitRetryPolicy, JsonRpcClient, Provider, RetryClientBuilder,
 };
 use futures::future;
-use tokio::{sync::broadcast, task::JoinHandle, try_join};
-use tokio_util::sync::CancellationToken;
-use tonic::{
-    async_trait,
-    transport::{NamedService, Server},
+use tokio::{
+    sync::{broadcast, mpsc},
+    task::JoinHandle,
+    try_join,
 };
-use tonic_health::server::HealthReporter;
+use tokio_util::sync::CancellationToken;
+use tonic::async_trait;
 use url::Url;
 
+use super::{
+    mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams},
+    server::ServerRequest,
+};
 use crate::{
     common::{
         contracts::i_entry_point::IEntryPoint,
         emit::WithEntryPoint,
-        eth,
-        grpc::metrics::GrpcMetricsLayer,
-        handle,
+        eth, handle,
         handle::Task,
         precheck::{Prechecker, PrecheckerImpl},
-        protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
         simulation::{Simulator, SimulatorImpl},
     },
     op_pool::{
         chain::{self, Chain, ChainUpdate},
         emit::OpPoolEvent,
-        mempool::{uo_pool::UoPool, Mempool, PoolConfig},
-        reputation::{HourlyMovingAverageReputation, ReputationParams},
-        server::OpPoolImpl,
+        mempool::{uo_pool::UoPool, MempoolGroup},
+        server::{spawn_local_mempool_server, spawn_remote_mempool_server},
     },
 };
 
 #[derive(Debug)]
+pub enum PoolServerMode {
+    Local {
+        receiver: Option<mpsc::Receiver<ServerRequest>>,
+    },
+    Remote {
+        addr: SocketAddr,
+    },
+}
+
+#[derive(Debug)]
 pub struct Args {
-    pub port: u16,
-    pub host: String,
     pub http_url: String,
     pub http_poll_interval: Duration,
     pub chain_id: u64,
     pub chain_history_size: u64,
     pub pool_configs: Vec<PoolConfig>,
+    pub server_mode: PoolServerMode,
 }
 
 #[derive(Debug)]
@@ -54,10 +63,8 @@ pub struct PoolTask {
 
 #[async_trait]
 impl Task for PoolTask {
-    async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let addr = format!("{}:{}", self.args.host, self.args.port).parse()?;
+    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let chain_id = self.args.chain_id;
-        tracing::info!("Starting server on {addr}");
         tracing::info!("Chain id: {chain_id}");
         tracing::info!("Http url: {:?}", self.args.http_url);
 
@@ -106,10 +113,6 @@ impl Task for PoolTask {
             mempools.push(pool);
             mempool_handles.push(handle);
         }
-        let mempool_map = mempools
-            .into_iter()
-            .map(|mp| (mp.entry_point(), mp))
-            .collect();
 
         // handle to wait for mempools to terminate
         let mempool_handle = tokio::spawn(async move {
@@ -121,27 +124,24 @@ impl Task for PoolTask {
                 .context("should have joined mempool handles")
         });
 
-        // gRPC server
-        let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_map));
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
-            .build()?;
-
-        // health service
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-        Self::set_serving(&mut health_reporter, &op_pool_server).await;
-
-        let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
-        let server_handle = tokio::spawn(async move {
-            Server::builder()
-                .layer(metrics_layer)
-                .add_service(op_pool_server)
-                .add_service(reflection_service)
-                .add_service(health_service)
-                .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await })
-                .await
-                .map_err(|err| anyhow::anyhow!("Server error: {err:?}"))
-        });
+        let mempool_group = MempoolGroup::new(mempools);
+        let server_handle = match &mut self.args.server_mode {
+            PoolServerMode::Local { ref mut receiver } => {
+                let recv = receiver
+                    .take()
+                    .context("should have local server message receiver")?;
+                spawn_local_mempool_server(mempool_group, recv, shutdown_token.clone())?
+            }
+            PoolServerMode::Remote { addr } => {
+                spawn_remote_mempool_server(
+                    self.args.chain_id,
+                    mempool_group,
+                    *addr,
+                    shutdown_token.clone(),
+                )
+                .await?
+            }
+        };
 
         tracing::info!("Started op_pool");
 
@@ -221,9 +221,5 @@ impl PoolTask {
             tokio::spawn(async move { mp_runner.run(update_rx, shutdown_token.clone()).await });
 
         Ok((mp, handle))
-    }
-
-    async fn set_serving<S: NamedService>(reporter: &mut HealthReporter, _service: &S) {
-        reporter.set_serving::<S>().await;
     }
 }

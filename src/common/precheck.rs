@@ -217,7 +217,6 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
     }
 
     async fn load_async_data(&self, op: &UserOperation) -> anyhow::Result<AsyncData> {
-        tracing::info!("precheck loading async data {:?}", op);
         let (
             factory_exists,
             sender_exists,
@@ -266,15 +265,10 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
             Some(paymaster) => paymaster,
             None => op.sender,
         };
-        let ret = self
-            .entry_point
+        self.entry_point
             .balance_of(payer)
             .await
-            .context("precheck should get payer balance");
-        if ret.is_err() {
-            tracing::error!("precheck failed to get payer deposit: {:?}", ret);
-        }
-        ret
+            .context("precheck should get payer balance")
     }
 
     async fn get_payer_balance(&self, op: &UserOperation) -> anyhow::Result<U256> {

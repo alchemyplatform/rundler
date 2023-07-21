@@ -506,7 +506,7 @@ pub enum SimulationViolation {
     #[display("ran out of gas during {0.kind} validation")]
     OutOfGas(Entity),
     #[display(
-        "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
+        "{0.kind} tried to access code at {1:?} during validation, but that address is not a contract"
     )]
     AccessedUndeployedContract(Entity, Address),
     #[display("{0.kind} called entry point method other than depositTo")]

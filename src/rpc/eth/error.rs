@@ -14,7 +14,7 @@ use crate::{
         simulation::SimulationViolation,
         types::{Entity, EntityType, Timestamp},
     },
-    op_pool::MempoolError,
+    op_pool::{MempoolError, PoolServerError},
 };
 
 // Error codes borrowed from jsonrpsee
@@ -139,6 +139,18 @@ pub struct UnsupportedAggregatorData {
     pub aggregator: Address,
 }
 
+impl From<PoolServerError> for EthRpcError {
+    fn from(value: PoolServerError) -> Self {
+        match value {
+            PoolServerError::MempoolError(e) => e.into(),
+            PoolServerError::UnexpectedResponse => {
+                EthRpcError::Internal(anyhow::anyhow!("unexpected response from pool server"))
+            }
+            PoolServerError::Other(e) => EthRpcError::Internal(e),
+        }
+    }
+}
+
 impl From<MempoolError> for EthRpcError {
     fn from(value: MempoolError) -> Self {
         match value {
@@ -160,6 +172,9 @@ impl From<MempoolError> for EthRpcError {
             MempoolError::SimulationViolation(violation) => violation.into(),
             MempoolError::UnsupportedAggregator(a) => {
                 EthRpcError::UnsupportedAggregator(UnsupportedAggregatorData { aggregator: a })
+            }
+            MempoolError::UnknownEntryPoint(a) => {
+                EthRpcError::EntryPointValidationRejected(format!("unknown entry point: {}", a))
             }
         }
     }
