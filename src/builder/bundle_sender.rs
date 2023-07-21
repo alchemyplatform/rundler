@@ -16,7 +16,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     time,
 };
-use tonic::transport::Channel;
+use tonic::async_trait;
 use tracing::{error, info, trace, warn};
 
 use crate::{
@@ -27,15 +27,18 @@ use crate::{
     common::{
         gas::GasFees,
         math,
-        protos::op_pool::{
-            self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
-        },
         types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
     },
+    op_pool::PoolClient,
 };
 
 // Overhead on gas estimates to account for inaccuracies.
 const GAS_ESTIMATE_OVERHEAD_PERCENT: u64 = 10;
+
+#[async_trait]
+pub trait BundleSender: Send + Sync + 'static {
+    async fn send_bundles_in_loop(&mut self);
+}
 
 #[derive(Debug)]
 pub struct Settings {
@@ -44,21 +47,22 @@ pub struct Settings {
 }
 
 #[derive(Debug)]
-pub struct BundleSender<P, E, T>
+pub struct BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
     E: EntryPointLike,
     T: TransactionTracker,
+    C: PoolClient,
 {
     manual_bundling_mode: Arc<AtomicBool>,
     send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
     chain_id: u64,
     beneficiary: Address,
     eth_poll_interval: Duration,
-    op_pool: OpPoolClient<Channel>,
     proposer: P,
     entry_point: E,
     transaction_tracker: T,
+    pool_client: C,
     // TODO: Figure out what we really want to do for detecting new blocks.
     provider: Arc<Provider<RetryClient<Http>>>,
     settings: Settings,
@@ -91,45 +95,18 @@ pub enum SendBundleResult {
     Error(anyhow::Error),
 }
 
-impl<P, E, T> BundleSender<P, E, T>
+#[async_trait]
+impl<P, E, T, C> BundleSender for BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
     E: EntryPointLike,
     T: TransactionTracker,
+    C: PoolClient,
 {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        manual_bundling_mode: Arc<AtomicBool>,
-        send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
-        chain_id: u64,
-        beneficiary: Address,
-        eth_poll_interval: Duration,
-        op_pool: OpPoolClient<Channel>,
-        proposer: P,
-        entry_point: E,
-        transaction_tracker: T,
-        provider: Arc<Provider<RetryClient<Http>>>,
-        settings: Settings,
-    ) -> Self {
-        Self {
-            manual_bundling_mode,
-            send_bundle_receiver,
-            chain_id,
-            beneficiary,
-            eth_poll_interval,
-            op_pool,
-            proposer,
-            entry_point,
-            transaction_tracker,
-            provider,
-            settings,
-        }
-    }
-
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
-    pub async fn send_bundles_in_loop(&mut self) -> ! {
+    async fn send_bundles_in_loop(&mut self) {
         let mut last_block_number = 0;
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
@@ -176,6 +153,43 @@ where
                     error!("Failed to send bundle result to manual caller");
                 }
             }
+        }
+    }
+}
+
+impl<P, E, T, C> BundleSenderImpl<P, E, T, C>
+where
+    P: BundleProposer,
+    E: EntryPointLike,
+    T: TransactionTracker,
+    C: PoolClient,
+{
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        manual_bundling_mode: Arc<AtomicBool>,
+        send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
+        chain_id: u64,
+        beneficiary: Address,
+        eth_poll_interval: Duration,
+        proposer: P,
+        entry_point: E,
+        transaction_tracker: T,
+        pool_client: C,
+        provider: Arc<Provider<RetryClient<Http>>>,
+        settings: Settings,
+    ) -> Self {
+        Self {
+            manual_bundling_mode,
+            send_bundle_receiver,
+            chain_id,
+            beneficiary,
+            eth_poll_interval,
+            proposer,
+            entry_point,
+            transaction_tracker,
+            pool_client,
+            provider,
+            settings,
         }
     }
 
@@ -392,34 +406,22 @@ where
     }
 
     async fn remove_ops_from_pool(&self, ops: &[UserOperation]) -> anyhow::Result<()> {
-        self.op_pool
-            .clone()
-            .remove_ops(RemoveOpsRequest {
-                entry_point: self.entry_point.address().as_bytes().to_vec(),
-                hashes: ops
-                    .iter()
-                    .map(|op| self.op_hash(op).as_bytes().to_vec())
+        self.pool_client
+            .remove_ops(
+                self.entry_point.address(),
+                ops.iter()
+                    .map(|op| op.op_hash(self.entry_point.address(), self.chain_id))
                     .collect(),
-            })
+            )
             .await
-            .context("builder should remove rejected ops from pool")?;
-        Ok(())
+            .context("builder should remove rejected ops from pool")
     }
 
     async fn remove_entities_from_pool(&self, entities: &[Entity]) -> anyhow::Result<()> {
-        self.op_pool
-            .clone()
-            .remove_entities(RemoveEntitiesRequest {
-                entry_point: self.entry_point.address().as_bytes().to_vec(),
-                entities: entities.iter().map(op_pool::Entity::from).collect(),
-            })
+        self.pool_client
+            .remove_entities(self.entry_point.address(), entities.to_vec())
             .await
-            .context("builder should remove rejected entities from pool")?;
-        Ok(())
-    }
-
-    fn op_hash(&self, op: &UserOperation) -> H256 {
-        op.op_hash(self.entry_point.address(), self.chain_id)
+            .context("builder should remove rejected entities from pool")
     }
 }
 
