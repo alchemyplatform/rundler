@@ -10,7 +10,7 @@ pub use local::{spawn_local_mempool_server, LocalPoolClient, ServerRequest};
 #[cfg(test)]
 use mockall::automock;
 pub use remote::{connect_remote_pool_client, spawn_remote_mempool_server, RemotePoolClient};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tonic::async_trait;
 
 use super::{mempool::PoolOperation, Reputation};
@@ -46,12 +46,21 @@ pub trait PoolClient: Send + Sync + 'static {
     ) -> PoolResult<()>;
 
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;
+
+    async fn subscribe_new_blocks(&self) -> PoolResult<broadcast::Receiver<NewBlock>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct NewBlock {
+    pub hash: H256,
+    pub number: u64,
 }
 
 #[derive(Debug)]
 pub enum PoolClientMode {
     Local {
         sender: mpsc::Sender<LocalPoolServerRequest>,
+        block_receiver: broadcast::Receiver<NewBlock>,
     },
     Remote {
         url: String,

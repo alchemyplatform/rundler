@@ -34,19 +34,14 @@ pub struct EventListener<F: BlockProviderFactory> {
     provider_factory: F,
     provider: Option<F::Provider>,
     log_filter_base: Filter,
-    entrypoint_event_broadcasts: HashMap<Address, broadcast::Sender<Arc<NewBlockEvent>>>,
+    event_broadcast: broadcast::Sender<Arc<NewBlockEvent>>,
     last_reconnect: Option<Instant>,
     backoff_idx: u32,
 }
 
 impl<F: BlockProviderFactory> EventProvider for EventListener<F> {
-    fn subscribe_by_entrypoint(
-        &self,
-        entry_point: Address,
-    ) -> Option<broadcast::Receiver<Arc<NewBlockEvent>>> {
-        self.entrypoint_event_broadcasts
-            .get(&entry_point)
-            .map(|b| b.subscribe())
+    fn subscribe(&self) -> broadcast::Receiver<Arc<NewBlockEvent>> {
+        self.event_broadcast.subscribe()
     }
 
     fn spawn(
@@ -60,24 +55,12 @@ impl<F: BlockProviderFactory> EventProvider for EventListener<F> {
 impl<F: BlockProviderFactory> EventListener<F> {
     /// Create a new event listener from a block provider factory and list entry points
     /// Must call listen_with_shutdown to start listening
-    pub fn new<'a>(
-        provider_factory: F,
-        entry_points: impl IntoIterator<Item = &'a Address>,
-    ) -> Self {
-        let mut entry_point_addresses = vec![];
-        let mut entrypoint_event_broadcasts = HashMap::new();
-        for ep in entry_points {
-            entry_point_addresses.push(*ep);
-            entrypoint_event_broadcasts.insert(*ep, broadcast::channel(1000).0);
-        }
-
-        let log_filter_base = Filter::new().address(entry_point_addresses);
-
+    pub fn new(provider_factory: F, entry_points: Vec<Address>) -> Self {
         Self {
             provider_factory,
             provider: None,
-            log_filter_base,
-            entrypoint_event_broadcasts,
+            log_filter_base: Filter::new().address(entry_points),
+            event_broadcast: broadcast::channel(1024).0,
             last_reconnect: None,
             backoff_idx: 0,
         }
@@ -209,30 +192,18 @@ impl<F: BlockProviderFactory> EventListener<F> {
             .block
             .number
             .context("block should have number")?;
-        let mut block_events = HashMap::new();
 
         EventListenerMetrics::increment_blocks_seen();
         EventListenerMetrics::set_block_height(block_number.as_u64());
 
-        for ep in self.entrypoint_event_broadcasts.keys() {
-            block_events.insert(
-                *ep,
-                NewBlockEvent {
-                    address: *ep,
-                    hash: block_hash,
-                    number: block_number,
-                    events: vec![],
-                },
-            );
-        }
+        let mut block_event = NewBlockEvent {
+            hash: block_hash,
+            number: block_number,
+            events: HashMap::new(),
+        };
 
         for log in block_with_logs.logs {
             let ep_address = log.address;
-            if !block_events.contains_key(&ep_address) {
-                error!("Received log for unknown entrypoint {ep_address:?}");
-                continue;
-            }
-
             let txn_hash = log
                 .transaction_hash
                 .context("log should have transaction hash")?;
@@ -246,24 +217,17 @@ impl<F: BlockProviderFactory> EventListener<F> {
                 txn_index,
             };
 
-            block_events.entry(ep_address).and_modify(|e| {
-                e.events.push(event);
-            });
+            block_event
+                .events
+                .entry(ep_address)
+                .or_insert_with(Vec::new)
+                .push(event);
             EventListenerMetrics::increment_events_seen();
         }
 
-        for (ep, block_event) in block_events {
-            match self.entrypoint_event_broadcasts.get(&ep) {
-                Some(broadcast) => {
-                    // ignore sender errors, which can only happen if there are no receivers
-                    let _ = broadcast.send(Arc::new(block_event));
-                }
-                None => {
-                    error!("No broadcast channel for entry point: {:?}", ep);
-                }
-            }
+        if let Err(e) = self.event_broadcast.send(Arc::new(block_event)) {
+            error!("Error broadcasting block event: {:?}", e);
         }
-
         Ok(())
     }
 
@@ -391,7 +355,7 @@ mod tests {
         assert_eq!(block_event.events.len(), 1);
 
         if let IEntryPointEvents::UserOperationEventFilter(block_event) =
-            &block_event.events[0].contract_event
+            &block_event.events.get(&state.ep).unwrap()[0].contract_event
         {
             assert_eq!(block_event, &event);
         } else {
@@ -427,7 +391,7 @@ mod tests {
             assert_eq!(block_event.events.len(), 1);
 
             if let IEntryPointEvents::UserOperationEventFilter(block_event) =
-                &block_event.events[0].contract_event
+                &block_event.events.get(&state.ep).unwrap()[0].contract_event
             {
                 assert_eq!(block_event, &event);
             } else {
@@ -543,8 +507,8 @@ mod tests {
         let factory =
             MockBlockProviderFactory::new(rx, connection_event_tx, should_fail_connection.clone());
         let ep = Address::random();
-        let listener = EventListener::new(factory, vec![&ep]);
-        let events = listener.subscribe_by_entrypoint(ep).unwrap();
+        let listener = EventListener::new(factory, vec![ep]);
+        let events = listener.subscribe();
         let listener_shutdown = shutdown_token.clone();
         let handle =
             tokio::spawn(async move { listener.listen_with_shutdown(listener_shutdown).await });

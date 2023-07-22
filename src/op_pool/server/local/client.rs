@@ -1,5 +1,5 @@
 use ethers::types::{Address, H256};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tonic::async_trait;
 
 use super::server::{ServerRequest, ServerRequestKind, ServerResponse};
@@ -7,19 +7,26 @@ use crate::{
     common::types::{Entity, UserOperation},
     op_pool::{
         mempool::PoolOperation,
-        server::{error::PoolServerError, PoolClient, Reputation},
+        server::{error::PoolServerError, NewBlock, PoolClient, Reputation},
         PoolResult,
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LocalPoolClient {
     sender: mpsc::Sender<ServerRequest>,
+    block_receiver: broadcast::Receiver<NewBlock>,
 }
 
 impl LocalPoolClient {
-    pub fn new(sender: mpsc::Sender<ServerRequest>) -> Self {
-        Self { sender }
+    pub fn new(
+        sender: mpsc::Sender<ServerRequest>,
+        block_receiver: broadcast::Receiver<NewBlock>,
+    ) -> Self {
+        Self {
+            sender,
+            block_receiver,
+        }
     }
 
     async fn send(&self, request: ServerRequestKind) -> PoolResult<ServerResponse> {
@@ -129,6 +136,19 @@ impl PoolClient for LocalPoolClient {
         match resp {
             ServerResponse::DebugDumpReputation { reputations } => Ok(reputations),
             _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    async fn subscribe_new_blocks(&self) -> PoolResult<broadcast::Receiver<NewBlock>> {
+        Ok(self.block_receiver.resubscribe())
+    }
+}
+
+impl Clone for LocalPoolClient {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            block_receiver: self.block_receiver.resubscribe(),
         }
     }
 }
