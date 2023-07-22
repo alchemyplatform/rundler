@@ -385,7 +385,6 @@ where
             valid_time_range,
             code_hash,
             aggregator,
-            signature_failed,
             entities_needing_stake,
             block_hash,
             account_is_staked,
@@ -395,9 +394,7 @@ where
             .await
             .map_err(EthRpcError::from)?;
 
-        if signature_failed {
-            Err(EthRpcError::SignatureCheckFailed)?
-        } else if let Some(agg) = &aggregator {
+        if let Some(agg) = &aggregator {
             // TODO(danc): all aggregators are currently unsupported
             Err(EthRpcError::UnsupportedAggregator(
                 UnsupportedAggregatorData {
@@ -633,6 +630,7 @@ impl From<SimulationError> for EthRpcError {
         };
 
         match violation {
+            SimulationViolation::InvalidSignature => Self::SignatureCheckFailed,
             SimulationViolation::UnintendedRevertWithMessage(
                 EntityType::Paymaster,
                 reason,
