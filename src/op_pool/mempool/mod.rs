@@ -16,6 +16,8 @@ pub use reputation::{
     HourlyMovingAverageReputation, Reputation, ReputationParams, ReputationStatus,
 };
 use strum::IntoEnumIterator;
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 
 use self::error::MempoolResult;
@@ -179,16 +181,45 @@ impl PoolOperation {
 }
 
 pub struct MempoolGroup<M> {
-    mempools: HashMap<Address, Arc<M>>,
+    mempools: HashMap<Address, M>,
+    block_broadcast: broadcast::Sender<Arc<NewBlockEvent>>,
 }
 
 impl<M> MempoolGroup<M>
 where
     M: Mempool,
 {
-    pub fn new(mempools: Vec<Arc<M>>) -> Self {
+    pub fn new(mempools: Vec<M>) -> Self {
         Self {
             mempools: mempools.into_iter().map(|m| (m.entry_point(), m)).collect(),
+            block_broadcast: broadcast::channel(1024).0,
+        }
+    }
+
+    pub fn subscribe_new_blocks(self: Arc<Self>) -> broadcast::Receiver<Arc<NewBlockEvent>> {
+        self.block_broadcast.subscribe()
+    }
+
+    pub async fn run(
+        self: Arc<Self>,
+        mut new_block_events: broadcast::Receiver<Arc<NewBlockEvent>>,
+        shutdown_token: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    tracing::info!("Shutting down UoPool");
+                    break;
+                }
+                new_block = new_block_events.recv() => {
+                    if let Ok(new_block) = new_block {
+                        for mempool in self.mempools.values() {
+                            mempool.on_new_block(&new_block);
+                        }
+                        let _ = self.block_broadcast.send(new_block);
+                    }
+                }
+            }
         }
     }
 
@@ -266,10 +297,9 @@ where
         Ok(mempool.dump_reputation())
     }
 
-    fn get_pool(&self, entry_point: Address) -> MempoolResult<Arc<M>> {
+    fn get_pool(&self, entry_point: Address) -> MempoolResult<&M> {
         self.mempools
             .get(&entry_point)
-            .cloned()
             .ok_or_else(|| MempoolError::UnknownEntryPoint(entry_point))
     }
 }

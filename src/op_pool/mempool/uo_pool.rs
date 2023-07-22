@@ -5,8 +5,6 @@ use std::{
 
 use ethers::types::{Address, H256};
 use parking_lot::RwLock;
-use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 
 use super::{
@@ -66,26 +64,6 @@ where
             simulator,
         }
     }
-
-    pub async fn run(
-        self: Arc<Self>,
-        mut new_block_events: broadcast::Receiver<Arc<NewBlockEvent>>,
-        shutdown_token: CancellationToken,
-    ) {
-        loop {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    tracing::info!("Shutting down UoPool");
-                    break;
-                }
-                new_block = new_block_events.recv() => {
-                    if let Ok(new_block) = new_block {
-                        self.on_new_block(&new_block);
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -106,17 +84,21 @@ where
             new_block.number,
             new_block.events.len()
         );
-        for event in &new_block.events {
-            if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
-                let op_hash = uo_event.user_op_hash.into();
-                if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
-                    for e in op.staked_entities() {
-                        self.reputation.add_included(e.address);
-                    }
-                }
 
-                // Remove throttled ops that were included in the block
-                state.throttled_ops.remove(&op_hash);
+        if let Some(events) = new_block.events.get(&self.entry_point) {
+            for event in events {
+                if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event
+                {
+                    let op_hash = uo_event.user_op_hash.into();
+                    if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
+                        for e in op.staked_entities() {
+                            self.reputation.add_included(e.address);
+                        }
+                    }
+
+                    // Remove throttled ops that were included in the block
+                    state.throttled_ops.remove(&op_hash);
+                }
             }
         }
 

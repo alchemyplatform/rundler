@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use ethers::types::{Address, Block, Filter, Log, H256, U64};
 use tokio::{sync::broadcast, task::JoinHandle};
@@ -20,14 +20,12 @@ pub use http::HttpBlockProviderFactory;
 /// Events correspond to a single entry point
 #[derive(Debug)]
 pub struct NewBlockEvent {
-    /// The entry point address
-    pub address: Address,
     /// The block hash
     pub hash: H256,
     /// The block number
     pub number: U64,
-    /// Ordered EntryPoint events
-    pub events: Vec<EntryPointEvent>,
+    /// Ordered EntryPoint events by address
+    pub events: HashMap<Address, Vec<EntryPointEvent>>,
 }
 
 /// An event emitted by an entry point with metadata
@@ -43,11 +41,8 @@ pub struct EntryPointEvent {
 
 /// A trait that provides a stream of new blocks with their events by entrypoint
 pub trait EventProvider: Send + Sync {
-    /// Subscribe to new blocks by entrypoint
-    fn subscribe_by_entrypoint(
-        &self,
-        entry_point: Address,
-    ) -> Option<broadcast::Receiver<Arc<NewBlockEvent>>>;
+    /// Subscribe to a new block stream
+    fn subscribe(&self) -> broadcast::Receiver<Arc<NewBlockEvent>>;
 
     /// Spawn the event provider
     fn spawn(

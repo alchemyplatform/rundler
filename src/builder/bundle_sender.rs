@@ -7,13 +7,10 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use ethers::{
-    providers::{Http, Middleware, Provider, RetryClient},
-    types::{transaction::eip2718::TypedTransaction, Address, H256, U256},
-};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use tokio::{
     join,
-    sync::{mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot},
     time,
 };
 use tonic::async_trait;
@@ -29,7 +26,7 @@ use crate::{
         math,
         types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
     },
-    op_pool::PoolClient,
+    op_pool::{NewBlock, PoolClient},
 };
 
 // Overhead on gas estimates to account for inaccuracies.
@@ -63,8 +60,6 @@ where
     entry_point: E,
     transaction_tracker: T,
     pool_client: C,
-    // TODO: Figure out what we really want to do for detecting new blocks.
-    provider: Arc<Provider<RetryClient<Http>>>,
     settings: Settings,
 }
 
@@ -108,6 +103,13 @@ where
     /// next one.
     async fn send_bundles_in_loop(&mut self) {
         let mut last_block_number = 0;
+        let mut new_blocks = if let Ok(new_blocks) = self.pool_client.subscribe_new_blocks().await {
+            new_blocks
+        } else {
+            error!("Failed to subscribe to new blocks");
+            return;
+        };
+
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
 
@@ -122,7 +124,9 @@ where
                 }
             }
 
-            last_block_number = self.wait_for_new_block_number(last_block_number).await;
+            last_block_number = self
+                .wait_for_new_block_number(last_block_number, &mut new_blocks)
+                .await;
             self.check_for_and_log_transaction_update().await;
             let result = self.send_bundle_with_increasing_gas_fees().await;
             match &result {
@@ -175,7 +179,6 @@ where
         entry_point: E,
         transaction_tracker: T,
         pool_client: C,
-        provider: Arc<Provider<RetryClient<Http>>>,
         settings: Settings,
     ) -> Self {
         Self {
@@ -188,7 +191,6 @@ where
             entry_point,
             transaction_tracker,
             pool_client,
-            provider,
             settings,
         }
     }
@@ -326,23 +328,17 @@ where
         Ok(SendBundleResult::StalledAtMaxFeeIncreases)
     }
 
-    async fn wait_for_new_block_number(&self, prev_block_number: u64) -> u64 {
+    async fn wait_for_new_block_number(
+        &self,
+        prev_block_number: u64,
+        new_blocks: &mut broadcast::Receiver<NewBlock>,
+    ) -> u64 {
         loop {
-            let block_number = self.provider.get_block_number().await;
-            match block_number {
-                Ok(n) => {
-                    let n = n.as_u64();
-                    if n > prev_block_number {
-                        return n;
-                    }
-                }
-                Err(error) => {
-                    error!(
-                        "Failed to load latest block number in builder. Will keep trying: {error}"
-                    );
-                }
+            // TODO(danc) unwrap
+            let block = new_blocks.recv().await.unwrap();
+            if block.number > prev_block_number {
+                return block.number;
             }
-            time::sleep(self.eth_poll_interval).await;
         }
     }
 

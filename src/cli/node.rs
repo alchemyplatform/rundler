@@ -1,5 +1,5 @@
 use clap::Args;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use super::{builder::BuilderArgs, pool::PoolArgs, rpc::RpcArgs, CommonArgs};
 use crate::{
@@ -31,19 +31,35 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let builder_url = builder_args.url(false);
 
     let (tx, rx) = mpsc::channel(1024);
+    let (block_sender, block_receiver) = broadcast::channel(1024);
 
     let pool_task_args = pool_args
-        .to_args(&common_args, PoolServerMode::Local { receiver: Some(rx) })
+        .to_args(
+            &common_args,
+            PoolServerMode::Local {
+                req_receiver: Some(rx),
+                block_sender: Some(block_sender),
+            },
+        )
         .await?;
     let builder_task_args = builder_args
-        .to_args(&common_args, PoolClientMode::Local { sender: tx.clone() })
+        .to_args(
+            &common_args,
+            PoolClientMode::Local {
+                sender: tx.clone(),
+                block_receiver: block_receiver.resubscribe(),
+            },
+        )
         .await?;
     let rpc_task_args = rpc_args
         .to_args(
             &common_args,
             builder_url,
             (&common_args).try_into()?,
-            PoolClientMode::Local { sender: tx.clone() },
+            PoolClientMode::Local {
+                sender: tx.clone(),
+                block_receiver,
+            },
         )
         .await?;
 

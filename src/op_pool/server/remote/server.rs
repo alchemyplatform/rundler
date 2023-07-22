@@ -5,7 +5,8 @@ use ethers::{
     utils::to_checksum,
 };
 use prost::Message;
-use tokio::task::JoinHandle;
+use tokio::{sync::mpsc, task::JoinHandle};
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Server, Code, Request, Response, Result, Status};
 
@@ -19,9 +20,9 @@ use super::protos::{
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
     DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
     GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveEntitiesRequest, RemoveEntitiesResponse,
-    RemoveEntitiesSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess,
-    OP_POOL_FILE_DESCRIPTOR_SET,
+    GetSupportedEntryPointsResponse, MempoolOp, NewBlock, RemoveEntitiesRequest,
+    RemoveEntitiesResponse, RemoveEntitiesSuccess, RemoveOpsRequest, RemoveOpsResponse,
+    RemoveOpsSuccess, SubscribeNewBlocksRequest, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
     common::{grpc::metrics::GrpcMetricsLayer, protos::from_bytes, types::Entity},
@@ -32,12 +33,12 @@ use crate::{
 
 pub async fn spawn_remote_mempool_server<M: Mempool>(
     chain_id: u64,
-    mempool_runner: MempoolGroup<M>,
+    mempool_group: Arc<MempoolGroup<M>>,
     addr: SocketAddr,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     // gRPC server
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_runner));
+    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_group));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
@@ -64,18 +65,15 @@ pub async fn spawn_remote_mempool_server<M: Mempool>(
 
 struct OpPoolImpl<M: Mempool> {
     chain_id: u64,
-    mempool_runner: MempoolGroup<M>,
+    mempools: Arc<MempoolGroup<M>>,
 }
 
 impl<M> OpPoolImpl<M>
 where
     M: Mempool,
 {
-    pub fn new(chain_id: u64, mempool_runner: MempoolGroup<M>) -> Self {
-        Self {
-            chain_id,
-            mempool_runner,
-        }
+    pub fn new(chain_id: u64, mempools: Arc<MempoolGroup<M>>) -> Self {
+        Self { chain_id, mempools }
     }
 
     fn get_entry_point(&self, req_entry_point: &[u8]) -> Result<Address> {
@@ -96,7 +94,7 @@ where
         Ok(Response::new(GetSupportedEntryPointsResponse {
             chain_id: self.chain_id,
             entry_points: self
-                .mempool_runner
+                .mempools
                 .get_supported_entry_points()
                 .into_iter()
                 .map(|ep| ep.as_bytes().to_vec())
@@ -115,11 +113,7 @@ where
             Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
         })?;
 
-        let resp = match self
-            .mempool_runner
-            .add_op(ep, uo, OperationOrigin::Local)
-            .await
-        {
+        let resp = match self.mempools.add_op(ep, uo, OperationOrigin::Local).await {
             Ok(hash) => AddOpResponse {
                 result: Some(add_op_response::Result::Success(AddOpSuccess {
                     hash: hash.as_bytes().to_vec(),
@@ -137,7 +131,7 @@ where
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.mempool_runner.get_ops(ep, req.max_ops) {
+        let resp = match self.mempools.get_ops(ep, req.max_ops) {
             Ok(ops) => GetOpsResponse {
                 result: Some(get_ops_response::Result::Success(GetOpsSuccess {
                     ops: ops.iter().map(MempoolOp::from).collect(),
@@ -169,7 +163,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let resp = match self.mempool_runner.remove_ops(ep, &hashes) {
+        let resp = match self.mempools.remove_ops(ep, &hashes) {
             Ok(_) => RemoveOpsResponse {
                 result: Some(remove_ops_response::Result::Success(RemoveOpsSuccess {})),
             },
@@ -194,11 +188,11 @@ where
             .collect::<Result<Vec<Entity>, _>>()
             .map_err(|e| Status::internal(format!("Failed to convert to proto entity: {e}")))?;
 
-        self.mempool_runner
+        self.mempools
             .remove_entities(ep, &entities)
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let resp = match self.mempool_runner.remove_entities(ep, &entities) {
+        let resp = match self.mempools.remove_entities(ep, &entities) {
             Ok(_) => RemoveEntitiesResponse {
                 result: Some(remove_entities_response::Result::Success(
                     RemoveEntitiesSuccess {},
@@ -216,7 +210,7 @@ where
         &self,
         _request: Request<DebugClearStateRequest>,
     ) -> Result<Response<DebugClearStateResponse>> {
-        let resp = match self.mempool_runner.debug_clear_state() {
+        let resp = match self.mempools.debug_clear_state() {
             Ok(_) => DebugClearStateResponse {
                 result: Some(debug_clear_state_response::Result::Success(
                     DebugClearStateSuccess {},
@@ -237,7 +231,7 @@ where
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.mempool_runner.debug_dump_mempool(ep) {
+        let resp = match self.mempools.debug_dump_mempool(ep) {
             Ok(ops) => DebugDumpMempoolResponse {
                 result: Some(debug_dump_mempool_response::Result::Success(
                     DebugDumpMempoolSuccess {
@@ -276,7 +270,7 @@ where
                 Status::internal(format!("Failed to convert from proto reputation {e}"))
             })?;
 
-        let resp = match self.mempool_runner.debug_set_reputations(ep, &reps) {
+        let resp = match self.mempools.debug_set_reputations(ep, &reps) {
             Ok(_) => DebugSetReputationResponse {
                 result: Some(debug_set_reputation_response::Result::Success(
                     DebugSetReputationSuccess {},
@@ -297,7 +291,7 @@ where
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.mempool_runner.debug_dump_reputation(ep) {
+        let resp = match self.mempools.debug_dump_reputation(ep) {
             Ok(reps) => DebugDumpReputationResponse {
                 result: Some(debug_dump_reputation_response::Result::Success(
                     DebugDumpReputationSuccess {
@@ -313,5 +307,29 @@ where
         };
 
         Ok(Response::new(resp))
+    }
+
+    type SubscribeNewBlocksStream = ReceiverStream<Result<NewBlock>>;
+
+    async fn subscribe_new_blocks(
+        &self,
+        _request: Request<SubscribeNewBlocksRequest>,
+    ) -> Result<Response<Self::SubscribeNewBlocksStream>> {
+        // TODO(danc): we should only have one subscription to the new blocks and
+        // an atomic list of streams to populate from a single thread
+        let mut rx_blocks = self.mempools.clone().subscribe_new_blocks();
+        let (tx, rx) = mpsc::channel(1024);
+        tokio::spawn(async move {
+            loop {
+                let block = rx_blocks.recv().await.unwrap();
+                tx.send(Ok(NewBlock {
+                    hash: block.hash.as_bytes().to_vec(),
+                    number: block.number.as_u64(),
+                }))
+                .await
+                .unwrap();
+            }
+        });
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }

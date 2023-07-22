@@ -50,6 +50,7 @@ service OpPool {
   rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
   rpc DebugSetReputation (DebugSetReputationRequest) returns (DebugSetReputationResponse);
   rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
+  rpc SubscribeNewBlocks(SubscribeNewBlocksRequest) returns (stream NewBlock);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -155,6 +156,12 @@ message DebugDumpReputationResponse {
 }
 message DebugDumpReputationSuccess {
   repeated Reputation reputations = 1;
+}
+
+message SubscribeNewBlocksRequest {}
+message NewBlock {
+  bytes hash = 1;
+  uint64 number = 2;
 }
 
 message Reputation {

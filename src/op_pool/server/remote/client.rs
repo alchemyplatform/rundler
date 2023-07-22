@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::{bail, Context};
 use ethers::types::{Address, H256};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Channel};
 
@@ -9,35 +12,60 @@ use super::protos::{
     op_pool_client::OpPoolClient, remove_entities_response, remove_ops_response, AddOpRequest,
     DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
     DebugSetReputationRequest, GetOpsRequest, RemoveEntitiesRequest, RemoveOpsRequest,
+    SubscribeNewBlocksRequest,
 };
 use crate::{
     common::{
+        handle::SpawnGuard,
         protos::{from_bytes, ConversionError, FromProtoBytes},
         server::connect_with_retries,
         types::{Entity, UserOperation},
     },
     op_pool::{
         mempool::{PoolOperation, Reputation},
-        server::{error::PoolServerError, PoolClient},
+        server::{error::PoolServerError, NewBlock, PoolClient},
         PoolResult,
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RemotePoolClient {
     op_pool_client: OpPoolClient<Channel>,
+    rx: broadcast::Receiver<NewBlock>,
+    _guard: SpawnGuard,
 }
 
 impl RemotePoolClient {
     pub fn new(client: OpPoolClient<Channel>) -> Self {
+        let (tx, rx) = broadcast::channel(1024);
+        let _guard = SpawnGuard::spawn_with_guard(Self::run(client.clone(), tx));
         Self {
             op_pool_client: client,
+            rx,
+            _guard,
+        }
+    }
+
+    async fn run(mut client: OpPoolClient<Channel>, tx: broadcast::Sender<NewBlock>) {
+        // TODO(danc) unwraps
+        let mut stream = client
+            .subscribe_new_blocks(SubscribeNewBlocksRequest {})
+            .await
+            .unwrap()
+            .into_inner();
+
+        while let Some(new_block) = stream.message().await.unwrap() {
+            let new_block = NewBlock {
+                hash: from_bytes(&new_block.hash).unwrap(),
+                number: new_block.number,
+            };
+            tx.send(new_block).unwrap();
         }
     }
 }
 
 #[async_trait]
-impl PoolClient for RemotePoolClient {
+impl PoolClient for Arc<RemotePoolClient> {
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>> {
         Ok(self
             .op_pool_client
@@ -235,19 +263,23 @@ impl PoolClient for RemotePoolClient {
             )))?,
         }
     }
+
+    async fn subscribe_new_blocks(&self) -> PoolResult<broadcast::Receiver<NewBlock>> {
+        Ok(self.rx.resubscribe())
+    }
 }
 
 pub async fn connect_remote_pool_client(
     op_pool_url: &str,
     shutdown_token: CancellationToken,
-) -> anyhow::Result<RemotePoolClient> {
+) -> anyhow::Result<Arc<RemotePoolClient>> {
     tokio::select! {
         _ = shutdown_token.cancelled() => {
             tracing::error!("bailing from connecting client, server shutting down");
             bail!("Server shutting down")
         }
         res = connect_with_retries("op pool from builder", op_pool_url, OpPoolClient::connect) => {
-            Ok(RemotePoolClient::new(res?))
+            Ok(Arc::new(RemotePoolClient::new(res?)))
         }
     }
 }
