@@ -6,12 +6,12 @@ use crate::{
         protos::{from_bytes, to_le_bytes, ConversionError},
         types::{
             Entity as CommonEntity, EntityType as CommonEntityType,
-            UserOperation as RpcUserOperation, ValidTimeRange,
+            UserOperation as PoolUserOperation, ValidTimeRange,
         },
     },
     op_pool::{
         mempool::{Reputation as PoolReputation, ReputationStatus as PoolReputationStatus},
-        PoolOperation,
+        NewHead as PoolNewHead, PoolOperation,
     },
 };
 
@@ -20,8 +20,8 @@ tonic::include_proto!("op_pool");
 pub const OP_POOL_FILE_DESCRIPTOR_SET: &[u8] =
     tonic::include_file_descriptor_set!("op_pool_descriptor");
 
-impl From<&RpcUserOperation> for UserOperation {
-    fn from(op: &RpcUserOperation) -> Self {
+impl From<&PoolUserOperation> for UserOperation {
+    fn from(op: &PoolUserOperation) -> Self {
         UserOperation {
             sender: op.sender.0.to_vec(),
             nonce: to_le_bytes(op.nonce),
@@ -38,11 +38,11 @@ impl From<&RpcUserOperation> for UserOperation {
     }
 }
 
-impl TryFrom<UserOperation> for RpcUserOperation {
+impl TryFrom<UserOperation> for PoolUserOperation {
     type Error = ConversionError;
 
     fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
-        Ok(RpcUserOperation {
+        Ok(PoolUserOperation {
             sender: from_bytes(&op.sender)?,
             nonce: from_bytes(&op.nonce)?,
             init_code: op.init_code.into(),
@@ -205,6 +205,17 @@ impl TryFrom<MempoolOp> for PoolOperation {
             entities_needing_stake,
             sim_block_hash,
             account_is_staked: op.account_is_staked,
+        })
+    }
+}
+
+impl TryFrom<NewHead> for PoolNewHead {
+    type Error = ConversionError;
+
+    fn try_from(new_head: NewHead) -> Result<Self, Self::Error> {
+        Ok(Self {
+            block_hash: from_bytes(&new_head.block_hash)?,
+            block_number: new_head.block_number,
         })
     }
 }

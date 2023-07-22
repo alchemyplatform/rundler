@@ -2,13 +2,16 @@ mod error;
 mod local;
 mod remote;
 
+use std::pin::Pin;
+
 pub use error::PoolServerError;
 use ethers::types::{Address, H256};
+use futures_util::Stream;
 pub use local::{spawn_local_mempool_server, LocalPoolClient, ServerRequest};
 #[cfg(test)]
 use mockall::automock;
 pub use remote::{connect_remote_pool_client, spawn_remote_mempool_server, RemotePoolClient};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tonic::async_trait;
 
 use super::{mempool::PoolOperation, Reputation};
@@ -44,12 +47,21 @@ pub trait PoolClient: Send + Sync + 'static {
     ) -> PoolResult<()>;
 
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;
+
+    fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
+}
+
+#[derive(Clone, Debug)]
+pub struct NewHead {
+    pub block_hash: H256,
+    pub block_number: u64,
 }
 
 #[derive(Debug)]
 pub enum PoolClientMode {
     Local {
-        sender: mpsc::Sender<LocalPoolServerRequest>,
+        req_sender: mpsc::Sender<LocalPoolServerRequest>,
+        new_heads_receiver: broadcast::Receiver<NewHead>,
     },
     Remote {
         url: String,

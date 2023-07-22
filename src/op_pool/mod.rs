@@ -8,7 +8,7 @@ pub use mempool::{error::MempoolError, PoolConfig, PoolOperation, Reputation, Re
 #[cfg(test)]
 pub use server::MockPoolClient;
 pub use server::{
-    connect_remote_pool_client, LocalPoolClient, PoolClient, PoolClientMode, PoolResult,
+    connect_remote_pool_client, LocalPoolClient, NewHead, PoolClient, PoolClientMode, PoolResult,
     PoolServerError, RemotePoolClient, ServerRequest as LocalPoolServerRequest,
 };
 pub use task::*;

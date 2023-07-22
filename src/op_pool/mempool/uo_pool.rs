@@ -6,7 +6,6 @@ use std::{
 use ethers::types::{Address, H256};
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 use tracing::info;
 
@@ -81,33 +80,21 @@ where
         }
     }
 
-    pub async fn run(
-        self: Arc<Self>,
-        mut chain_events: broadcast::Receiver<Arc<ChainUpdate>>,
-        shutdown_token: CancellationToken,
-    ) {
-        loop {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    tracing::info!("Shutting down UoPool");
-                    break;
-                }
-                update = chain_events.recv() => {
-                    if let Ok(update) = update {
-                        self.on_chain_update(&update);
-                    }
-                }
-            }
-        }
-    }
-
     fn emit(&self, event: OpPoolEvent) {
         let _ = self.event_sender.send(WithEntryPoint {
             entry_point: self.entry_point,
             event,
         });
     }
+}
 
+#[async_trait]
+impl<R, P, S> Mempool for UoPool<R, P, S>
+where
+    R: ReputationManager,
+    P: Prechecker,
+    S: Simulator,
+{
     fn on_chain_update(&self, update: &ChainUpdate) {
         let mut state = self.state.write();
         let deduped_ops = update.deduped_ops();
@@ -188,15 +175,7 @@ where
         }
         state.block_number = update.latest_block_number;
     }
-}
 
-#[async_trait]
-impl<R, P, S> Mempool for UoPool<R, P, S>
-where
-    R: ReputationManager,
-    P: Prechecker,
-    S: Simulator,
-{
     fn entry_point(&self) -> Address {
         self.entry_point
     }

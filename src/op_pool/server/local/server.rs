@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use ethers::types::{Address, H256};
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
@@ -9,41 +11,61 @@ use crate::{
     common::types::{Entity, UserOperation},
     op_pool::{
         mempool::{Mempool, MempoolGroup, OperationOrigin, PoolOperation},
-        server::Reputation,
+        server::{NewHead, Reputation},
         PoolResult,
     },
 };
 
 pub fn spawn_local_mempool_server<M: Mempool>(
-    mempool_runner: MempoolGroup<M>,
-    receiver: mpsc::Receiver<ServerRequest>,
+    mempool_runner: Arc<MempoolGroup<M>>,
+    req_receiver: mpsc::Receiver<ServerRequest>,
+    new_heads_sender: broadcast::Sender<NewHead>,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
-    let mut server = LocalPoolServer::new(receiver, mempool_runner);
+    let mut server = LocalPoolServer::new(req_receiver, new_heads_sender, mempool_runner);
     let handle = tokio::spawn(async move { server.run(shutdown_token).await });
     Ok(handle)
 }
 
 pub struct LocalPoolServer<M> {
-    receiver: mpsc::Receiver<ServerRequest>,
-    mempools: MempoolGroup<M>,
+    req_receiver: mpsc::Receiver<ServerRequest>,
+    new_heads_sender: broadcast::Sender<NewHead>,
+    mempools: Arc<MempoolGroup<M>>,
 }
 
 impl<M> LocalPoolServer<M>
 where
     M: Mempool,
 {
-    pub fn new(receiver: mpsc::Receiver<ServerRequest>, mempools: MempoolGroup<M>) -> Self {
-        Self { receiver, mempools }
+    pub fn new(
+        req_receiver: mpsc::Receiver<ServerRequest>,
+        new_heads_sender: broadcast::Sender<NewHead>,
+        mempools: Arc<MempoolGroup<M>>,
+    ) -> Self {
+        Self {
+            req_receiver,
+            new_heads_sender,
+            mempools,
+        }
     }
 
     pub async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+        let mut chain_updates = self.mempools.clone().subscribe_chain_update();
+
         loop {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {
                     break;
                 }
-                Some(req) = self.receiver.recv() => {
+                chain_update = chain_updates.recv() => {
+                    if let Ok(chain_update) = chain_update {
+                        let _ = self.new_heads_sender.send(NewHead {
+                            block_hash: chain_update.latest_block_hash,
+                            block_number: chain_update.latest_block_number,
+                        });
+                    }
+                }
+                Some(req) = self.req_receiver.recv() => {
                     let resp = match req.request {
                         ServerRequestKind::GetSupportedEntryPoints => {
                             Ok(ServerResponse::GetSupportedEntryPoints {
@@ -51,15 +73,13 @@ where
                             })
                         },
                         ServerRequestKind::AddOp { entry_point, op } => {
-                            let pool = self.mempools.get_pool(entry_point)?;
+                            let mempools = self.mempools.clone();
                             tokio::spawn(async move {
-                                let resp = match pool.add_operation(OperationOrigin::Local, op).await {
+                                let resp = match mempools.add_op(entry_point, op, OperationOrigin::Local).await {
                                     Ok(hash) => Ok(ServerResponse::AddOp { hash }),
                                     Err(e) => Err(e.into()),
                                 };
-                                if let Err(e) = req.response.send(resp) {
-                                    tracing::error!("Failed to send response: {:?}", e);
-                                }
+                                req.response.send(resp).unwrap();
                             });
                             continue;
                         },
@@ -172,8 +192,10 @@ pub enum ServerResponse {
 mod tests {
     use std::sync::Arc;
 
+    use tokio_stream::StreamExt;
+
     use super::*;
-    use crate::op_pool::{mempool::MockMempool, LocalPoolClient, PoolClient};
+    use crate::op_pool::{chain::ChainUpdate, mempool::MockMempool, LocalPoolClient, PoolClient};
 
     #[tokio::test]
     async fn send_receive() {
@@ -181,12 +203,15 @@ mod tests {
         let mut mock_pool = MockMempool::new();
         mock_pool.expect_entry_point().returning(move || ep);
 
-        let mempool_group = MempoolGroup::new(vec![Arc::new(mock_pool)]);
+        let mempool_group = Arc::new(MempoolGroup::new(vec![mock_pool]));
         let (tx, rx) = mpsc::channel(1);
         let shutdown_token = CancellationToken::new();
-        let handle = spawn_local_mempool_server(mempool_group, rx, shutdown_token.clone()).unwrap();
+        let (block_tx, block_rx) = broadcast::channel(1);
+        let handle =
+            spawn_local_mempool_server(mempool_group, rx, block_tx, shutdown_token.clone())
+                .unwrap();
+        let client = LocalPoolClient::new(tx, block_rx);
 
-        let client = LocalPoolClient::new(tx);
         let ret = client.get_supported_entry_points().await.unwrap();
         assert_eq!(ret, vec![ep]);
 
@@ -200,15 +225,18 @@ mod tests {
         let mut mock_pool = MockMempool::new();
         mock_pool.expect_entry_point().returning(move || ep);
 
-        let mempool_group = MempoolGroup::new(vec![Arc::new(mock_pool)]);
+        let mempool_group = Arc::new(MempoolGroup::new(vec![mock_pool]));
         let (tx, rx) = mpsc::channel(1);
         let shutdown_token = CancellationToken::new();
-        let handle = spawn_local_mempool_server(mempool_group, rx, shutdown_token.clone()).unwrap();
+        let (block_tx, block_rx) = broadcast::channel(1);
+        let handle =
+            spawn_local_mempool_server(mempool_group, rx, block_tx, shutdown_token.clone())
+                .unwrap();
 
         shutdown_token.cancel();
         handle.await.unwrap().unwrap();
 
-        let client = LocalPoolClient::new(tx);
+        let client = LocalPoolClient::new(tx, block_rx);
         let ret = client.get_supported_entry_points().await;
         assert!(ret.is_err());
     }
@@ -225,16 +253,73 @@ mod tests {
             .expect_add_operation()
             .returning(move |_, _| Ok(uo_hash));
 
-        let mempool_group = MempoolGroup::new(vec![Arc::new(mock_pool)]);
+        let mempool_group = Arc::new(MempoolGroup::new(vec![mock_pool]));
         let (tx, rx) = mpsc::channel(1);
         let shutdown_token = CancellationToken::new();
-        let handle = spawn_local_mempool_server(mempool_group, rx, shutdown_token.clone()).unwrap();
+        let (block_tx, block_rx) = broadcast::channel(1);
+        let handle =
+            spawn_local_mempool_server(mempool_group, rx, block_tx, shutdown_token.clone())
+                .unwrap();
+        let client = LocalPoolClient::new(tx, block_rx);
 
-        let client = LocalPoolClient::new(tx);
         let ret = client.add_op(ep, uo).await.unwrap();
         assert_eq!(ret, uo_hash);
 
         shutdown_token.cancel();
         handle.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_blocks() {
+        let ep = Address::random();
+        let mut mock_pool = MockMempool::new();
+        let uo = UserOperation::default();
+        let uo_hash = uo.op_hash(ep, 0);
+
+        mock_pool.expect_entry_point().return_const(ep);
+        mock_pool
+            .expect_add_operation()
+            .returning(move |_, _| Ok(uo_hash));
+        mock_pool
+            .expect_on_chain_update()
+            .times(..11)
+            .return_const(());
+
+        let mempool_group = Arc::new(MempoolGroup::new(vec![mock_pool]));
+        let (tx, rx) = mpsc::channel(1);
+        let shutdown_token = CancellationToken::new();
+        let (block_tx, block_rx) = broadcast::channel(10);
+        let handle =
+            spawn_local_mempool_server(mempool_group.clone(), rx, block_tx, shutdown_token.clone())
+                .unwrap();
+        let client = LocalPoolClient::new(tx, block_rx);
+
+        let (new_blocks_tx, new_blocks_rx) = broadcast::channel(10);
+
+        let mempool_shutdown = shutdown_token.clone();
+        let mempool_handle = tokio::spawn(async move {
+            mempool_group.run(new_blocks_rx, mempool_shutdown).await;
+        });
+
+        let mut recv = client.subscribe_new_heads().unwrap();
+
+        for i in 0..10 {
+            new_blocks_tx
+                .send(Arc::new(ChainUpdate {
+                    latest_block_hash: H256::random(),
+                    latest_block_number: i,
+                    ..Default::default()
+                }))
+                .unwrap();
+        }
+
+        for i in 0..10 {
+            let ret = recv.next().await.unwrap();
+            assert_eq!(ret.block_number, i);
+        }
+
+        shutdown_token.cancel();
+        handle.await.unwrap().unwrap();
+        mempool_handle.await.unwrap();
     }
 }

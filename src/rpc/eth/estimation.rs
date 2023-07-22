@@ -430,7 +430,7 @@ mod tests {
         };
 
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
-            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings.clone());
+            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
 
         (estimator, settings)
     }
@@ -524,12 +524,7 @@ mod tests {
 
         // Chose arbitrum
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
-            GasEstimatorImpl::new(
-                Chain::Arbitrum as u64,
-                Arc::new(provider),
-                entry,
-                settings.clone(),
-            );
+            GasEstimatorImpl::new(Chain::Arbitrum as u64, Arc::new(provider), entry, settings);
 
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
@@ -572,12 +567,7 @@ mod tests {
 
         // Chose OP
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
-            GasEstimatorImpl::new(
-                Chain::Optimism as u64,
-                Arc::new(provider),
-                entry,
-                settings.clone(),
-            );
+            GasEstimatorImpl::new(Chain::Optimism as u64, Arc::new(provider), entry, settings);
 
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
@@ -706,7 +696,7 @@ mod tests {
         // check for this overlflow
         provider.expect_call().returning(|_a, _b| {
             let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(18446744073709551616 as u128),
+                gas_used: U256::from(18446744073709551616_u128),
                 success: false,
                 result: Bytes::new(),
             }
@@ -797,7 +787,7 @@ mod tests {
             .binary_search_verification_gas(&user_op, H256::zero())
             .await;
 
-        assert_eq!(estimation.is_err(), true);
+        assert!(estimation.is_err());
     }
 
     #[tokio::test]
@@ -850,7 +840,7 @@ mod tests {
             .binary_search_verification_gas(&user_op, H256::zero())
             .await;
 
-        assert_eq!(estimation.is_err(), true);
+        assert!(estimation.is_err());
     }
 
     #[tokio::test]
@@ -902,7 +892,7 @@ mod tests {
             .binary_search_verification_gas(&user_op, H256::zero())
             .await;
 
-        assert_eq!(estimation.is_err(), true);
+        assert!(estimation.is_err());
     }
 
     #[tokio::test]
@@ -947,7 +937,7 @@ mod tests {
             .binary_search_verification_gas(&user_op, H256::zero())
             .await;
 
-        assert_eq!(estimation.is_err(), true);
+        assert!(estimation.is_err());
     }
 
     #[tokio::test]
@@ -1020,10 +1010,10 @@ mod tests {
             .err()
             .unwrap();
 
-        assert_eq!(
-            matches!(estimation, GasEstimationError::RevertInCallWithBytes(_)),
-            true
-        );
+        assert!(matches!(
+            estimation,
+            GasEstimationError::RevertInCallWithBytes(_)
+        ));
     }
 
     #[tokio::test]

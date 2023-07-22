@@ -41,7 +41,7 @@ pub struct Chain<P: ProviderLike> {
     load_ops_semaphore: Semaphore,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Default, Debug, Eq, PartialEq)]
 pub struct ChainUpdate {
     pub latest_block_number: u64,
     pub latest_block_hash: H256,
