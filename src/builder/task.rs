@@ -154,8 +154,12 @@ impl Task for BuilderTask {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
         let mut builder: Box<dyn BundleSender> = match &self.args.pool_client_mode {
-            PoolClientMode::Local { sender } => {
-                let pool_client = LocalPoolClient::new(sender.clone());
+            PoolClientMode::Local {
+                req_sender,
+                new_heads_receiver,
+            } => {
+                let pool_client =
+                    LocalPoolClient::new(req_sender.clone(), new_heads_receiver.resubscribe());
                 let proposer = BundleProposerImpl::new(
                     pool_client.clone(),
                     simulator,
@@ -175,7 +179,6 @@ impl Task for BuilderTask {
                     entry_point,
                     transaction_tracker,
                     pool_client,
-                    provider,
                     builder_settings,
                     self.event_sender.clone(),
                 ))
@@ -201,7 +204,6 @@ impl Task for BuilderTask {
                     entry_point,
                     transaction_tracker,
                     pool_client,
-                    provider,
                     builder_settings,
                     self.event_sender.clone(),
                 ))

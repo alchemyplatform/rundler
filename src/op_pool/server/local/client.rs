@@ -1,25 +1,37 @@
+use std::pin::Pin;
+
+use async_stream::stream;
 use ethers::types::{Address, H256};
-use tokio::sync::{mpsc, oneshot};
+use futures_util::Stream;
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tonic::async_trait;
+use tracing::error;
 
 use super::server::{ServerRequest, ServerRequestKind, ServerResponse};
 use crate::{
     common::types::{Entity, UserOperation},
     op_pool::{
         mempool::PoolOperation,
-        server::{error::PoolServerError, PoolClient, Reputation},
+        server::{error::PoolServerError, NewHead, PoolClient, Reputation},
         PoolResult,
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct LocalPoolClient {
     sender: mpsc::Sender<ServerRequest>,
+    new_heads_receiver: broadcast::Receiver<NewHead>,
 }
 
 impl LocalPoolClient {
-    pub fn new(sender: mpsc::Sender<ServerRequest>) -> Self {
-        Self { sender }
+    pub fn new(
+        sender: mpsc::Sender<ServerRequest>,
+        new_heads_receiver: broadcast::Receiver<NewHead>,
+    ) -> Self {
+        Self {
+            sender,
+            new_heads_receiver,
+        }
     }
 
     async fn send(&self, request: ServerRequestKind) -> PoolResult<ServerResponse> {
@@ -129,6 +141,33 @@ impl PoolClient for LocalPoolClient {
         match resp {
             ServerResponse::DebugDumpReputation { reputations } => Ok(reputations),
             _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
+        let mut rx = self.new_heads_receiver.resubscribe();
+        Ok(Box::pin(stream! {
+            loop {
+                match rx.recv().await {
+                    Ok(block) => yield block,
+                    Err(broadcast::error::RecvError::Lagged(c)) => {
+                        error!("new_heads_receiver lagged {c} blocks");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        error!("new_heads_receiver closed");
+                        break;
+                    }
+                }
+            }
+        }))
+    }
+}
+
+impl Clone for LocalPoolClient {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            new_heads_receiver: self.new_heads_receiver.resubscribe(),
         }
     }
 }

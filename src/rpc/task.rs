@@ -90,8 +90,12 @@ impl Task for RpcTask {
 
         let mut module = RpcModule::new(());
         match &self.args.pool_client_mode {
-            PoolClientMode::Local { sender } => {
-                let pool_client = LocalPoolClient::new(sender.clone());
+            PoolClientMode::Local {
+                req_sender,
+                new_heads_receiver,
+            } => {
+                let pool_client =
+                    LocalPoolClient::new(req_sender.clone(), new_heads_receiver.resubscribe());
                 self.attach_namespaces(provider, pool_client.clone(), builder_client, &mut module)?;
 
                 module.merge(LocalHealthCheck::new(pool_client).into_rpc())?;

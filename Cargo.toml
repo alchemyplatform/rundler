@@ -9,6 +9,7 @@ default-run = "rundler"
 [dependencies]
 anyhow = "1.0.70"
 arrayvec = "0.7.2"
+async-stream = "0.3.5"
 chrono = "0.4.24"
 clap = { version = "4.2.4", features = ["derive", "env"] }
 dotenv = "0.15.0"

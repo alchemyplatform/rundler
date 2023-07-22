@@ -41,12 +41,25 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let builder_url = builder_args.url(false);
 
     let (tx, rx) = mpsc::channel(1024);
+    let (new_heads_sender, _) = broadcast::channel(1024);
 
     let pool_task_args = pool_args
-        .to_args(&common_args, PoolServerMode::Local { receiver: Some(rx) })
+        .to_args(
+            &common_args,
+            PoolServerMode::Local {
+                req_receiver: Some(rx),
+                new_heads_sender: Some(new_heads_sender.clone()),
+            },
+        )
         .await?;
     let builder_task_args = builder_args
-        .to_args(&common_args, PoolClientMode::Local { sender: tx.clone() })
+        .to_args(
+            &common_args,
+            PoolClientMode::Local {
+                req_sender: tx.clone(),
+                new_heads_receiver: new_heads_sender.subscribe(),
+            },
+        )
         .await?;
     let rpc_task_args = rpc_args
         .to_args(
@@ -54,7 +67,10 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
             builder_url,
             (&common_args).try_into()?,
             (&common_args).try_into()?,
-            PoolClientMode::Local { sender: tx },
+            PoolClientMode::Local {
+                req_sender: tx,
+                new_heads_receiver: new_heads_sender.subscribe(),
+            },
         )
         .await?;
 
