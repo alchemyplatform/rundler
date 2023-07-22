@@ -40,7 +40,6 @@ pub struct SimulationSuccess {
     pub mempools: Vec<H256>,
     pub block_hash: H256,
     pub pre_op_gas: U256,
-    pub signature_failed: bool,
     pub valid_time_range: ValidTimeRange,
     pub aggregator: Option<AggregatorSimOut>,
     pub code_hash: H256,
@@ -227,6 +226,10 @@ where
         } = context;
 
         let mut violations = vec![];
+
+        if entry_point_out.return_info.sig_failed {
+            violations.push(SimulationViolation::InvalidSignature);
+        }
 
         let sender_address = entity_infos.sender_address();
 
@@ -454,7 +457,6 @@ where
         let account_is_staked = is_staked(sender_info, self.sim_settings);
         let ValidationReturnInfo {
             pre_op_gas,
-            sig_failed,
             valid_after,
             valid_until,
             ..
@@ -463,7 +465,6 @@ where
             mempools,
             block_hash,
             pre_op_gas,
-            signature_failed: sig_failed,
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
             aggregator,
             code_hash,
@@ -479,6 +480,8 @@ where
 pub enum SimulationViolation {
     // Make sure to maintain the order here based on the importance
     // of the violation for converting to an JRPC error
+    #[display("invalid signature")]
+    InvalidSignature,
     #[display("reverted while simulating {0} validation: {1}")]
     UnintendedRevertWithMessage(EntityType, String, Option<Address>),
     #[display("{0.kind} uses banned opcode: {2} in contract {1:?}")]

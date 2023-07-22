@@ -207,10 +207,9 @@ where
             Ok(success) => Ok((
                 op.op,
                 Some(success).filter(|success| {
-                    !success.signature_failed
-                        && success
-                            .valid_time_range
-                            .contains(Timestamp::now(), TIME_RANGE_BUFFER)
+                    success
+                        .valid_time_range
+                        .contains(Timestamp::now(), TIME_RANGE_BUFFER)
                 }),
             )),
             Err(error) => match error {
@@ -671,7 +670,10 @@ mod tests {
     use crate::common::{
         grpc::mocks::{self, MockOpPool},
         protos::op_pool::GetOpsResponse,
-        simulation::{AggregatorSimOut, MockSimulator, SimulationError, SimulationSuccess},
+        simulation::{
+            AggregatorSimOut, MockSimulator, SimulationError, SimulationSuccess,
+            SimulationViolation,
+        },
         types::{MockEntryPointLike, MockProviderLike, ValidTimeRange},
     };
 
@@ -738,10 +740,9 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
-                Ok(SimulationSuccess {
-                    signature_failed: true,
-                    ..Default::default()
-                })
+                Err(SimulationError::Violations(vec![
+                    SimulationViolation::InvalidSignature,
+                ]))
             }),
         }])
         .await;
