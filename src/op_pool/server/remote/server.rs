@@ -1,7 +1,14 @@
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use ethers::types::{Address, H256};
-use tokio::task::JoinHandle;
+use tokio::{sync::mpsc, task::JoinHandle};
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Server, Request, Response, Result, Status};
 
@@ -15,8 +22,9 @@ use super::protos::{
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
     DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
     GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveEntitiesRequest, RemoveEntitiesResponse,
-    RemoveEntitiesSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess,
+    GetSupportedEntryPointsResponse, MempoolOp, NewHead, RemoveEntitiesRequest,
+    RemoveEntitiesResponse, RemoveEntitiesSuccess, RemoveOpsRequest, RemoveOpsResponse,
+    RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
     OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
@@ -24,14 +32,17 @@ use crate::{
     op_pool::mempool::{Mempool, MempoolGroup, OperationOrigin, Reputation},
 };
 
+const MAX_REMOTE_BLOCK_SUBSCRIPTIONS: usize = 32;
+
 pub async fn spawn_remote_mempool_server<M: Mempool>(
     chain_id: u64,
-    mempool_group: MempoolGroup<M>,
+    mempool_group: Arc<MempoolGroup<M>>,
     addr: SocketAddr,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     // gRPC server
-    let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_group));
+    let pool_impl = Arc::new(OpPoolImpl::new(chain_id, mempool_group));
+    let op_pool_server = OpPoolServer::new(Arc::clone(&pool_impl));
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
         .build()?;
@@ -39,7 +50,7 @@ pub async fn spawn_remote_mempool_server<M: Mempool>(
     // health service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
-        .set_serving::<OpPoolServer<OpPoolImpl<M>>>()
+        .set_serving::<OpPoolServer<Arc<OpPoolImpl<M>>>>()
         .await;
 
     let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
@@ -51,24 +62,27 @@ pub async fn spawn_remote_mempool_server<M: Mempool>(
             .add_service(health_service)
             .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await })
             .await
-            .map_err(|err| anyhow::anyhow!("Server error: {err:?}"))
+            .map_err(|e| anyhow::anyhow!(format!("pool server failed: {e:?}")))
     });
+
     Ok(handle)
 }
 
 struct OpPoolImpl<M: Mempool> {
     chain_id: u64,
-    mempool_group: MempoolGroup<M>,
+    mempools: Arc<MempoolGroup<M>>,
+    num_block_subscriptions: Arc<AtomicUsize>,
 }
 
 impl<M> OpPoolImpl<M>
 where
     M: Mempool,
 {
-    pub fn new(chain_id: u64, mempool_group: MempoolGroup<M>) -> Self {
+    pub fn new(chain_id: u64, mempools: Arc<MempoolGroup<M>>) -> Self {
         Self {
             chain_id,
-            mempool_group,
+            mempools,
+            num_block_subscriptions: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -79,7 +93,7 @@ where
 }
 
 #[async_trait]
-impl<M> OpPool for OpPoolImpl<M>
+impl<M> OpPool for Arc<OpPoolImpl<M>>
 where
     M: Mempool + 'static,
 {
@@ -90,7 +104,7 @@ where
         Ok(Response::new(GetSupportedEntryPointsResponse {
             chain_id: self.chain_id,
             entry_points: self
-                .mempool_group
+                .mempools
                 .get_supported_entry_points()
                 .into_iter()
                 .map(|ep| ep.as_bytes().to_vec())
@@ -109,11 +123,7 @@ where
             Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
         })?;
 
-        let resp = match self
-            .mempool_group
-            .add_op(ep, uo, OperationOrigin::Local)
-            .await
-        {
+        let resp = match self.mempools.add_op(ep, uo, OperationOrigin::Local).await {
             Ok(hash) => AddOpResponse {
                 result: Some(add_op_response::Result::Success(AddOpSuccess {
                     hash: hash.as_bytes().to_vec(),
@@ -131,7 +141,7 @@ where
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.mempool_group.get_ops(ep, req.max_ops) {
+        let resp = match self.mempools.get_ops(ep, req.max_ops) {
             Ok(ops) => GetOpsResponse {
                 result: Some(get_ops_response::Result::Success(GetOpsSuccess {
                     ops: ops.iter().map(MempoolOp::from).collect(),
@@ -163,7 +173,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let resp = match self.mempool_group.remove_ops(ep, &hashes) {
+        let resp = match self.mempools.remove_ops(ep, &hashes) {
             Ok(_) => RemoveOpsResponse {
                 result: Some(remove_ops_response::Result::Success(RemoveOpsSuccess {})),
             },
@@ -188,11 +198,11 @@ where
             .collect::<Result<Vec<Entity>, _>>()
             .map_err(|e| Status::internal(format!("Failed to convert to proto entity: {e}")))?;
 
-        self.mempool_group
+        self.mempools
             .remove_entities(ep, &entities)
             .map_err(|e| Status::internal(e.to_string()))?;
 
-        let resp = match self.mempool_group.remove_entities(ep, &entities) {
+        let resp = match self.mempools.remove_entities(ep, &entities) {
             Ok(_) => RemoveEntitiesResponse {
                 result: Some(remove_entities_response::Result::Success(
                     RemoveEntitiesSuccess {},
@@ -210,7 +220,7 @@ where
         &self,
         _request: Request<DebugClearStateRequest>,
     ) -> Result<Response<DebugClearStateResponse>> {
-        let resp = match self.mempool_group.debug_clear_state() {
+        let resp = match self.mempools.debug_clear_state() {
             Ok(_) => DebugClearStateResponse {
                 result: Some(debug_clear_state_response::Result::Success(
                     DebugClearStateSuccess {},
@@ -231,7 +241,7 @@ where
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.mempool_group.debug_dump_mempool(ep) {
+        let resp = match self.mempools.debug_dump_mempool(ep) {
             Ok(ops) => DebugDumpMempoolResponse {
                 result: Some(debug_dump_mempool_response::Result::Success(
                     DebugDumpMempoolSuccess {
@@ -270,7 +280,7 @@ where
                 Status::internal(format!("Failed to convert from proto reputation {e}"))
             })?;
 
-        let resp = match self.mempool_group.debug_set_reputations(ep, &reps) {
+        let resp = match self.mempools.debug_set_reputations(ep, &reps) {
             Ok(_) => DebugSetReputationResponse {
                 result: Some(debug_set_reputation_response::Result::Success(
                     DebugSetReputationSuccess {},
@@ -291,7 +301,7 @@ where
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.mempool_group.debug_dump_reputation(ep) {
+        let resp = match self.mempools.debug_dump_reputation(ep) {
             Ok(reps) => DebugDumpReputationResponse {
                 result: Some(debug_dump_reputation_response::Result::Success(
                     DebugDumpReputationSuccess {
@@ -307,5 +317,51 @@ where
         };
 
         Ok(Response::new(resp))
+    }
+
+    type SubscribeNewHeadsStream = ReceiverStream<Result<SubscribeNewHeadsResponse>>;
+
+    async fn subscribe_new_heads(
+        &self,
+        _request: Request<SubscribeNewHeadsRequest>,
+    ) -> Result<Response<Self::SubscribeNewHeadsStream>> {
+        let (tx, rx) = mpsc::channel(1024);
+
+        if self.num_block_subscriptions.fetch_add(1, Ordering::Relaxed)
+            >= MAX_REMOTE_BLOCK_SUBSCRIPTIONS
+        {
+            self.num_block_subscriptions.fetch_sub(1, Ordering::Relaxed);
+            return Err(Status::resource_exhausted("Too many block subscriptions"));
+        }
+
+        let num_block_subscriptions = Arc::clone(&self.num_block_subscriptions);
+        let mut chain_updates = self.mempools.clone().subscribe_chain_update();
+        tokio::spawn(async move {
+            loop {
+                match chain_updates.recv().await {
+                    Ok(chain_update) => {
+                        if tx
+                            .send(Ok(SubscribeNewHeadsResponse {
+                                new_head: Some(NewHead {
+                                    block_hash: chain_update.latest_block_hash.as_bytes().to_vec(),
+                                    block_number: chain_update.latest_block_number,
+                                }),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!("chain update channel closed");
+                        break;
+                    }
+                }
+            }
+            num_block_subscriptions.fetch_sub(1, Ordering::Relaxed);
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }

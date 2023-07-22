@@ -116,6 +116,10 @@ service OpPool {
   // reputation objects, each with the fields described above in
   // debug_bundler_setReputation
   rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
+
+  // Streaming API to subscribe to be updated upon a new block being added to (or reorged onto)
+  // the chain. 
+  rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -237,6 +241,18 @@ message DebugDumpReputationResponse {
 }
 message DebugDumpReputationSuccess {
   repeated Reputation reputations = 1;
+}
+
+message SubscribeNewHeadsRequest {}
+message SubscribeNewHeadsResponse {
+  // The new chain head
+  NewHead new_head = 1;
+}
+message NewHead {
+  // The block hash
+  bytes block_hash = 1;
+  // The block number
+  uint64 block_number = 2;
 }
 
 message Reputation {

@@ -13,6 +13,7 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
     time,
 };
+use tokio_stream::StreamExt;
 use tonic::async_trait;
 use tracing::{error, info, trace, warn};
 
@@ -23,11 +24,10 @@ use crate::{
         transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
     },
     common::{
-        block_watcher,
         emit::WithEntryPoint,
         gas::GasFees,
         math,
-        types::{Entity, EntryPointLike, ExpectedStorage, ProviderLike, UserOperation},
+        types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
     },
     op_pool::PoolClient,
 };
@@ -47,10 +47,9 @@ pub struct Settings {
 }
 
 #[derive(Debug)]
-pub struct BundleSenderImpl<P, PL, E, T, C>
+pub struct BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
-    PL: ProviderLike,
     E: EntryPointLike,
     T: TransactionTracker,
     C: PoolClient,
@@ -64,8 +63,6 @@ where
     entry_point: E,
     transaction_tracker: T,
     pool_client: C,
-    // TODO: Figure out what we really want to do for detecting new blocks.
-    provider: Arc<PL>,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
 }
@@ -98,10 +95,9 @@ pub enum SendBundleResult {
 }
 
 #[async_trait]
-impl<P, PL, E, T, C> BundleSender for BundleSenderImpl<P, PL, E, T, C>
+impl<P, E, T, C> BundleSender for BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
-    PL: ProviderLike,
     E: EntryPointLike,
     T: TransactionTracker,
     C: PoolClient,
@@ -110,7 +106,34 @@ where
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
     async fn send_bundles_in_loop(&mut self) {
-        let mut last_block_number = 0;
+        let mut new_heads = if let Ok(new_blocks) = self.pool_client.subscribe_new_heads() {
+            new_blocks
+        } else {
+            error!("Failed to subscribe to new blocks");
+            return;
+        };
+
+        // The new_heads stream can buffer up multiple blocks, but we only want to consume the latest one.
+        // This task is used to consume the new heads and place them onto a channel that can be syncronously
+        // consumed until the latest block is reached.
+        let (tx, mut rx) = mpsc::channel(1024);
+        tokio::spawn(async move {
+            loop {
+                match new_heads.next().await {
+                    Some(b) => {
+                        if tx.send(b).await.is_err() {
+                            error!("Failed to buffer new block for bundle sender");
+                            return;
+                        }
+                    }
+                    None => {
+                        error!("Block stream ended");
+                        return;
+                    }
+                }
+            }
+        });
+
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
 
@@ -125,12 +148,32 @@ where
                 }
             }
 
-            last_block_number = block_watcher::wait_for_new_block_number(
-                &*self.provider,
-                last_block_number,
-                self.eth_poll_interval,
-            )
-            .await;
+            // Wait for new block. Block number doesn't matter as the pool will only notify of new blocks
+            // after the pool has updated its state. The bundle will be formed using the latest pool state
+            // and can land in the next block
+            let mut last_block = match rx.recv().await {
+                Some(b) => b,
+                None => {
+                    error!("Block stream closed");
+                    return;
+                }
+            };
+            // Consume any other blocks that may have been buffered up
+            loop {
+                match rx.try_recv() {
+                    Ok(b) => {
+                        last_block = b;
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        error!("Block stream closed");
+                        return;
+                    }
+                }
+            }
+
             self.check_for_and_log_transaction_update().await;
             let result = self.send_bundle_with_increasing_gas_fees().await;
             match &result {
@@ -144,7 +187,7 @@ where
                     } else {
                         info!("Bundle with hash {tx_hash:?} landed in block {block_number} after increasing gas fees {attempt_number} time(s)");
                     }
-                SendBundleResult::NoOperationsInitially => trace!("No ops to send at block {last_block_number}"),
+                SendBundleResult::NoOperationsInitially => trace!("No ops to send at block {}", last_block.block_number),
                 SendBundleResult::NoOperationsAfterFeeIncreases {
                     initial_op_count,
                     attempt_number,
@@ -165,10 +208,9 @@ where
     }
 }
 
-impl<P, PL, E, T, C> BundleSenderImpl<P, PL, E, T, C>
+impl<P, E, T, C> BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
-    PL: ProviderLike,
     E: EntryPointLike,
     T: TransactionTracker,
     C: PoolClient,
@@ -184,7 +226,6 @@ where
         entry_point: E,
         transaction_tracker: T,
         pool_client: C,
-        provider: Arc<PL>,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
@@ -198,7 +239,6 @@ where
             entry_point,
             transaction_tracker,
             pool_client,
-            provider,
             settings,
             event_sender,
         }

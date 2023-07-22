@@ -1,5 +1,10 @@
+use std::pin::Pin;
+
 use anyhow::bail;
 use ethers::types::{Address, H256};
+use futures_util::Stream;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Channel};
 
@@ -9,21 +14,23 @@ use super::protos::{
     op_pool_client::OpPoolClient, remove_entities_response, remove_ops_response, AddOpRequest,
     DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
     DebugSetReputationRequest, GetOpsRequest, RemoveEntitiesRequest, RemoveOpsRequest,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
 };
 use crate::{
     common::{
         protos::{from_bytes, ConversionError},
+        retry::{self, UnlimitedRetryOpts},
         server::connect_with_retries,
         types::{Entity, UserOperation},
     },
     op_pool::{
         mempool::{PoolOperation, Reputation},
-        server::{error::PoolServerError, PoolClient},
+        server::{error::PoolServerError, NewHead, PoolClient},
         PoolResult,
     },
 };
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct RemotePoolClient {
     op_pool_client: OpPoolClient<Channel>,
 }
@@ -32,6 +39,57 @@ impl RemotePoolClient {
     pub fn new(client: OpPoolClient<Channel>) -> Self {
         Self {
             op_pool_client: client,
+        }
+    }
+
+    // Handler for the new block subscription. This will attempt to resubscribe if the gRPC
+    // connection disconnects using expenential backoff.
+    async fn new_heads_subscription_handler(
+        client: OpPoolClient<Channel>,
+        tx: mpsc::Sender<NewHead>,
+    ) {
+        let mut stream = None;
+
+        loop {
+            if stream.is_none() {
+                stream = Some(
+                    retry::with_unlimited_retries(
+                        "subscribe new heads",
+                        || {
+                            let mut c = client.clone();
+                            async move { c.subscribe_new_heads(SubscribeNewHeadsRequest {}).await }
+                        },
+                        UnlimitedRetryOpts::default(),
+                    )
+                    .await
+                    .into_inner(),
+                );
+            }
+
+            match stream.as_mut().unwrap().message().await {
+                Ok(Some(SubscribeNewHeadsResponse { new_head: Some(b) })) => match b.try_into() {
+                    Ok(new_head) => {
+                        if tx.send(new_head).await.is_err() {
+                            // recv handle dropped
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("error parsing new block: {:?}", e);
+                        break;
+                    }
+                },
+                Ok(Some(SubscribeNewHeadsResponse { new_head: None })) | Ok(None) => {
+                    tracing::debug!("block subscription closed");
+                    stream.take();
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("error in new block subscription: {:?}", e);
+                    stream.take();
+                    break;
+                }
+            }
         }
     }
 }
@@ -234,6 +292,14 @@ impl PoolClient for RemotePoolClient {
                 "should have received result from op pool"
             )))?,
         }
+    }
+
+    fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
+        let (tx, rx) = mpsc::channel(1024);
+        let client = self.op_pool_client.clone();
+
+        tokio::spawn(Self::new_heads_subscription_handler(client, tx));
+        Ok(Box::pin(ReceiverStream::new(rx)))
     }
 }
 
