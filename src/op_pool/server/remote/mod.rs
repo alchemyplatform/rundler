@@ -1,5 +1,6 @@
 mod client;
 mod error;
+#[allow(non_snake_case)]
 mod protos;
 mod server;
 

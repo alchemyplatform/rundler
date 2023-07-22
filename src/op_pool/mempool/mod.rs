@@ -16,10 +16,12 @@ pub use reputation::{
     HourlyMovingAverageReputation, Reputation, ReputationParams, ReputationStatus,
 };
 use strum::IntoEnumIterator;
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 
 use self::error::MempoolResult;
-use super::MempoolError;
+use super::{chain::ChainUpdate, MempoolError};
 use crate::common::{
     mempool::MempoolConfig,
     precheck, simulation,
@@ -30,6 +32,9 @@ use crate::common::{
 #[async_trait]
 /// In-memory operation pool
 pub trait Mempool: Send + Sync + 'static {
+    /// Call to update the mempool with a new chain update
+    fn on_chain_update(&self, update: &ChainUpdate);
+
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
 
@@ -179,16 +184,51 @@ impl PoolOperation {
 
 #[derive(Debug)]
 pub struct MempoolGroup<M> {
-    mempools: HashMap<Address, Arc<M>>,
+    mempools: HashMap<Address, M>,
+    chain_update_sender: broadcast::Sender<Arc<ChainUpdate>>,
 }
 
 impl<M> MempoolGroup<M>
 where
     M: Mempool,
 {
-    pub fn new(mempools: Vec<Arc<M>>) -> Self {
+    pub fn new(mempools: Vec<M>) -> Self {
         Self {
             mempools: mempools.into_iter().map(|m| (m.entry_point(), m)).collect(),
+            chain_update_sender: broadcast::channel(1024).0,
+        }
+    }
+
+    pub fn subscribe_chain_update(self: Arc<Self>) -> broadcast::Receiver<Arc<ChainUpdate>> {
+        self.chain_update_sender.subscribe()
+    }
+
+    pub async fn run(
+        self: Arc<Self>,
+        mut chain_update_receiver: broadcast::Receiver<Arc<ChainUpdate>>,
+        shutdown_token: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {
+                    tracing::info!("Shutting down UoPool");
+                    break;
+                }
+                chain_update = chain_update_receiver.recv() => {
+                    if let Ok(chain_update) = chain_update {
+                        // Update each mempool before notifying listeners of the chain update
+                        // This allows the mempools to update their state before the listeners
+                        // pull information from the mempool.
+                        // For example, a bundle builder listening for a new block to kick off
+                        // its bundle building process will want to be able to query the mempool
+                        // and only receive operations that have not yet been mined.
+                        for mempool in self.mempools.values() {
+                            mempool.on_chain_update(&chain_update);
+                        }
+                        let _ = self.chain_update_sender.send(chain_update);
+                    }
+                }
+            }
         }
     }
 
@@ -266,10 +306,9 @@ where
         Ok(mempool.dump_reputation())
     }
 
-    pub fn get_pool(&self, entry_point: Address) -> MempoolResult<Arc<M>> {
+    fn get_pool(&self, entry_point: Address) -> MempoolResult<&M> {
         self.mempools
             .get(&entry_point)
-            .cloned()
             .ok_or_else(|| MempoolError::UnknownEntryPoint(entry_point))
     }
 }
