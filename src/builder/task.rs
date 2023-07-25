@@ -1,10 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
-use ethers::{
-    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClient, RetryClientBuilder},
-    types::{Address, H256},
-};
+use ethers::types::{Address, H256};
 use ethers_signers::Signer;
 use rusoto_core::Region;
 use tokio::{select, sync::broadcast, time};
@@ -14,7 +11,6 @@ use tonic::{
     transport::{Channel, Server},
 };
 use tracing::info;
-use url::Url;
 
 use crate::{
     builder::{
@@ -29,6 +25,7 @@ use crate::{
     common::{
         contracts::i_entry_point::IEntryPoint,
         emit::WithEntryPoint,
+        eth,
         gas::PriorityFeeMode,
         handle::{SpawnGuard, Task},
         mempool::MempoolConfig,
@@ -81,7 +78,7 @@ impl Task for BuilderTask {
         info!("Starting builder server on {}", addr);
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
-        let provider = new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
+        let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
         let signer = if let Some(pk) = &self.args.private_key {
             info!("Using local signer");
             BundlerSigner::Local(
@@ -139,7 +136,8 @@ impl Task for BuilderTask {
             proposer_settings,
             self.event_sender.clone(),
         );
-        let submit_provider = new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
+        let submit_provider =
+            eth::new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
         let transaction_sender = get_sender(
             submit_provider,
             signer,
@@ -239,20 +237,4 @@ impl BuilderTask {
             }
         }
     }
-}
-
-fn new_provider(
-    url: &str,
-    poll_interval: Duration,
-) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
-    let parsed_url = Url::parse(url).context("provider url should be a valid")?;
-    let http = Http::new(parsed_url);
-    let client = RetryClientBuilder::default()
-        // these retries are if the server returns a 429
-        .rate_limit_retries(10)
-        // these retries are if the connection is dubious
-        .timeout_retries(3)
-        .initial_backoff(Duration::from_millis(500))
-        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-    Ok(Arc::new(Provider::new(client).interval(poll_interval)))
 }

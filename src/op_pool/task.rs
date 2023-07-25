@@ -9,13 +9,15 @@ use tonic::{async_trait, transport::Server};
 use crate::{
     common::{
         emit::WithEntryPoint,
+        eth,
         grpc::metrics::GrpcMetricsLayer,
-        handle::{flatten_handle, Task},
+        handle,
+        handle::Task,
         protos::op_pool::{op_pool_server::OpPoolServer, OP_POOL_FILE_DESCRIPTOR_SET},
     },
     op_pool::{
+        chain::{self, Chain, ChainUpdate},
         emit::OpPoolEvent,
-        event::{EventListener, EventProvider, HttpBlockProviderFactory, WsBlockProviderFactory},
         mempool::{uo_pool::UoPool, Mempool, PoolConfig},
         reputation::{HourlyMovingAverageReputation, ReputationParams},
         server::OpPoolImpl,
@@ -26,10 +28,10 @@ use crate::{
 pub struct Args {
     pub port: u16,
     pub host: String,
-    pub ws_url: Option<String>,
-    pub http_url: Option<String>,
+    pub http_url: String,
     pub http_poll_interval: Duration,
     pub chain_id: u64,
+    pub chain_history_size: u64,
     pub pool_configs: Vec<PoolConfig>,
 }
 
@@ -44,26 +46,25 @@ impl Task for PoolTask {
     async fn run(&self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr = format!("{}:{}", self.args.host, self.args.port).parse()?;
         let chain_id = self.args.chain_id;
-        let entry_points = self.args.pool_configs.iter().map(|pc| &pc.entry_point);
         tracing::info!("Starting server on {addr}");
         tracing::info!("Chain id: {chain_id}");
-        tracing::info!("Websocket url: {:?}", self.args.ws_url);
         tracing::info!("Http url: {:?}", self.args.http_url);
 
-        // Events listener
-        let event_provider: Box<dyn EventProvider> = if let Some(ws_url) = &self.args.ws_url {
-            let connection_factory = WsBlockProviderFactory::new(ws_url.to_owned(), 10);
-            Box::new(EventListener::new(connection_factory, entry_points))
-        } else if let Some(http_url) = &self.args.http_url {
-            let connection_factory = HttpBlockProviderFactory::new(
-                http_url.to_owned(),
-                self.args.http_poll_interval,
-                10,
-            );
-            Box::new(EventListener::new(connection_factory, entry_points))
-        } else {
-            bail!("Either ws_url or http_url must be provided");
+        // create chain
+        let chain_settings = chain::Settings {
+            history_size: self.args.chain_history_size,
+            poll_interval: self.args.http_poll_interval,
+            entry_point_addresses: self
+                .args
+                .pool_configs
+                .iter()
+                .map(|config| config.entry_point)
+                .collect(),
         };
+        let provider = eth::new_provider(&self.args.http_url, self.args.http_poll_interval)?;
+        let chain = Chain::new(provider, chain_settings);
+        let (update_sender, _) = broadcast::channel(1000);
+        let chain_handle = chain.spawn_watcher(update_sender.clone(), shutdown_token.clone());
 
         // create mempools
         let mut mempools = Vec::new();
@@ -71,7 +72,7 @@ impl Task for PoolTask {
         for pool_config in &self.args.pool_configs {
             let (pool, handle) = PoolTask::create_mempool(
                 pool_config,
-                event_provider.as_ref(),
+                update_sender.subscribe(),
                 self.event_sender.clone(),
                 shutdown_token.clone(),
             )
@@ -95,9 +96,6 @@ impl Task for PoolTask {
                 .map(|_| ())
                 .context("should have joined mempool handles")
         });
-
-        // Start events listener
-        let events_provider_handle = event_provider.spawn(shutdown_token.clone());
 
         // gRPC server
         let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_map));
@@ -126,9 +124,9 @@ impl Task for PoolTask {
         tracing::info!("Started op_pool");
 
         match try_join!(
-            flatten_handle(mempool_handle),
-            flatten_handle(server_handle),
-            flatten_handle(events_provider_handle)
+            handle::flatten_handle(mempool_handle),
+            handle::flatten_handle(server_handle),
+            handle::as_anyhow_handle(chain_handle),
         ) {
             Ok(_) => {
                 tracing::info!("Pool server shutdown");
@@ -156,11 +154,10 @@ impl PoolTask {
 
     async fn create_mempool(
         pool_config: &PoolConfig,
-        event_provider: &dyn EventProvider,
+        update_rx: broadcast::Receiver<Arc<ChainUpdate>>,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         shutdown_token: CancellationToken,
     ) -> anyhow::Result<(Arc<UoPool<HourlyMovingAverageReputation>>, JoinHandle<()>)> {
-        let entry_point = pool_config.entry_point;
         // Reputation manager
         let reputation = Arc::new(HourlyMovingAverageReputation::new(
             ReputationParams::bundler_default(),
@@ -177,15 +174,9 @@ impl PoolTask {
             Arc::clone(&reputation),
             event_sender,
         ));
-        // Start mempool
-        let mempool_events = event_provider
-            .subscribe_by_entrypoint(entry_point)
-            .context("event listener should have entrypoint subscriber")?;
         let mp_runner = Arc::clone(&mp);
         let handle =
-            tokio::spawn(
-                async move { mp_runner.run(mempool_events, shutdown_token.clone()).await },
-            );
+            tokio::spawn(async move { mp_runner.run(update_rx, shutdown_token.clone()).await });
 
         Ok((mp, handle))
     }

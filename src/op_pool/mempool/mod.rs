@@ -9,8 +9,10 @@ use ethers::types::{Address, H256};
 use strum::IntoEnumIterator;
 
 use self::error::MempoolResult;
-use super::{event::NewBlockEvent, reputation::Reputation};
-use crate::common::types::{Entity, EntityType, UserOperation, ValidTimeRange};
+use crate::{
+    common::types::{Entity, EntityType, UserOperation, ValidTimeRange},
+    op_pool::{chain::ChainUpdate, reputation::Reputation},
+};
 
 /// In-memory operation pool
 pub trait Mempool: Send + Sync {
@@ -19,8 +21,8 @@ pub trait Mempool: Send + Sync {
 
     /// Event listener for when a new block is mined.
     ///
-    /// Pool is updated according to the new blocks events.
-    fn on_new_block(&self, event: &NewBlockEvent);
+    /// Pool is updated according to the chain update event.
+    fn on_chain_update(&self, update: &ChainUpdate);
 
     /// Adds a validated user operation to the pool.
     ///
@@ -94,6 +96,9 @@ pub enum OperationOrigin {
     Local,
     /// The operation was discovered via the P2P gossip protocol.
     External,
+    /// The operation was returned to the pool when the block it was in was
+    /// reorged away.
+    ReturnedAfterReorg,
 }
 
 /// A user operation with additional metadata from validation.

@@ -9,6 +9,7 @@ use ethers::{
     abi::Address,
     types::{H256, U256},
 };
+use tracing::info;
 
 use super::{
     error::{MempoolError, MempoolResult},
@@ -23,19 +24,26 @@ use crate::common::{
 /// Pool of user operations
 #[derive(Debug)]
 pub struct PoolInner {
-    // Pool settings
+    /// Pool settings
     config: PoolConfig,
-    // Operations by hash
+    /// Operations by hash
     by_hash: HashMap<H256, OrderedPoolOperation>,
-    // Operations by operation ID
+    /// Operations by operation ID
     by_id: HashMap<UserOperationId, OrderedPoolOperation>,
-    // Best operations, sorted by gas price
+    /// Best operations, sorted by gas price
     best: BTreeSet<OrderedPoolOperation>,
-    // Count of operations by sender
+    /// Removed operations, temporarily kept around in case their blocks are
+    /// reorged away. Stored along with the block number at which it was
+    /// removed.
+    mined_at_block_number_by_hash: HashMap<H256, (OrderedPoolOperation, u64)>,
+    /// Removed operation hashes sorted by block number, so we can forget them
+    /// when enough new blocks have passed.
+    mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
+    /// Count of operations by sender
     count_by_address: HashMap<Address, usize>,
-    // Submission ID counter
+    /// Submission ID counter
     submission_id: u64,
-    // keeps track of the size of the pool in bytes
+    /// keeps track of the size of the pool in bytes
     size: SizeTracker,
 }
 
@@ -46,6 +54,8 @@ impl PoolInner {
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
+            mined_at_block_number_by_hash: HashMap::new(),
+            mined_hashes_with_block_numbers: BTreeSet::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             size: SizeTracker::default(),
@@ -53,6 +63,110 @@ impl PoolInner {
     }
 
     pub fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
+        self.add_operation_internal(Arc::new(op), None)
+    }
+
+    pub fn add_operations(
+        &mut self,
+        operations: impl IntoIterator<Item = PoolOperation>,
+    ) -> Vec<MempoolResult<H256>> {
+        operations
+            .into_iter()
+            .map(|op| self.add_operation(op))
+            .collect()
+    }
+
+    pub fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
+        self.best.clone().into_iter().map(|v| v.po)
+    }
+
+    pub fn address_count(&self, address: Address) -> usize {
+        self.count_by_address.get(&address).copied().unwrap_or(0)
+    }
+
+    pub fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+        self.remove_operation_internal(hash, None)
+    }
+
+    pub fn mine_operation(&mut self, hash: H256, block_number: u64) -> Option<Arc<PoolOperation>> {
+        self.remove_operation_internal(hash, Some(block_number))
+    }
+
+    pub fn unmine_operation(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+        let (op, block_number) = self.mined_at_block_number_by_hash.remove(&hash)?;
+        self.mined_hashes_with_block_numbers
+            .remove(&(block_number, hash));
+        if let Err(error) = self.put_back_unmined_operation(op.clone()) {
+            info!("Could not put back unmined operation: {error}");
+        };
+        Some(op.po)
+    }
+
+    /// Removes all operations using the given entity, returning the hashes of
+    /// the removed operations.
+    pub fn remove_entity(&mut self, entity: Entity) -> Vec<H256> {
+        let to_remove = self
+            .by_hash
+            .iter()
+            .filter(|(_, uo)| uo.po.contains_entity(&entity))
+            .map(|(hash, _)| *hash)
+            .collect::<Vec<_>>();
+        for &hash in &to_remove {
+            self.remove_operation_by_hash(hash);
+        }
+        to_remove
+    }
+
+    pub fn forget_mined_operations_before_block(&mut self, block_number: u64) {
+        while let Some(&(bn, hash)) = self
+            .mined_hashes_with_block_numbers
+            .first()
+            .filter(|(bn, _)| *bn < block_number)
+        {
+            self.mined_at_block_number_by_hash.remove(&hash);
+            self.mined_hashes_with_block_numbers.remove(&(bn, hash));
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.by_hash.clear();
+        self.by_id.clear();
+        self.best.clear();
+        self.mined_at_block_number_by_hash.clear();
+        self.mined_hashes_with_block_numbers.clear();
+        self.count_by_address.clear();
+        self.size = SizeTracker::default();
+    }
+
+    fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
+        let mut removed = Vec::new();
+
+        while self.size > self.config.max_size_of_pool_bytes {
+            if let Some(worst) = self.best.pop_last() {
+                let hash = worst
+                    .uo()
+                    .op_hash(self.config.entry_point, self.config.chain_id);
+
+                let _ = self
+                    .remove_operation_by_hash(hash)
+                    .context("should have removed the worst operation")?;
+
+                removed.push(hash);
+            }
+        }
+
+        Ok(removed)
+    }
+
+    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<H256> {
+        self.add_operation_internal(op.po, Some(op.submission_id))
+    }
+
+    fn add_operation_internal(
+        &mut self,
+        op: Arc<PoolOperation>,
+        submission_id: Option<u64>,
+    ) -> MempoolResult<H256> {
         // Check for replacement by ID
         if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
             if op.uo.max_fee_per_gas > u128::MAX.into()
@@ -99,8 +213,8 @@ impl PoolInner {
         }
 
         let pool_op = OrderedPoolOperation {
-            po: Arc::new(op),
-            submission_id: self.next_submission_id(),
+            po: op,
+            submission_id: submission_id.unwrap_or_else(|| self.next_submission_id()),
         };
 
         // update counts
@@ -130,83 +244,28 @@ impl PoolInner {
         Ok(hash)
     }
 
-    pub fn add_operations(
+    fn remove_operation_internal(
         &mut self,
-        operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<MempoolResult<H256>> {
-        operations
-            .into_iter()
-            .map(|op| self.add_operation(op))
-            .collect()
-    }
-
-    pub fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
-        self.best.clone().into_iter().map(|v| v.po)
-    }
-
-    pub fn address_count(&self, address: Address) -> usize {
-        self.count_by_address.get(&address).copied().unwrap_or(0)
-    }
-
-    pub fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
-        if let Some(op) = self.by_hash.remove(&hash) {
-            self.by_id.remove(&op.uo().id());
-            self.best.remove(&op);
-
-            for e in op.po.entities() {
-                self.decrement_address_count(e.address);
-            }
-
-            self.size -= op.size();
-            metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
-            metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
-            return Some(op.po);
+        hash: H256,
+        block_number: Option<u64>,
+    ) -> Option<Arc<PoolOperation>> {
+        let op = self.by_hash.remove(&hash)?;
+        self.by_id.remove(&op.uo().id());
+        self.best.remove(&op);
+        if let Some(block_number) = block_number {
+            self.mined_at_block_number_by_hash
+                .insert(hash, (op.clone(), block_number));
+            self.mined_hashes_with_block_numbers
+                .insert((block_number, hash));
+        }
+        for e in op.po.entities() {
+            self.decrement_address_count(e.address);
         }
 
-        None
-    }
-
-    /// Removes all operations using the given entity, returning the hashes of
-    /// the removed operations.
-    pub fn remove_entity(&mut self, entity: Entity) -> Vec<H256> {
-        let to_remove = self
-            .by_hash
-            .iter()
-            .filter(|(_, uo)| uo.po.contains_entity(&entity))
-            .map(|(hash, _)| *hash)
-            .collect::<Vec<_>>();
-        for &hash in &to_remove {
-            self.remove_operation_by_hash(hash);
-        }
-        to_remove
-    }
-
-    pub fn clear(&mut self) {
-        self.by_hash.clear();
-        self.by_id.clear();
-        self.best.clear();
-        self.count_by_address.clear();
-        self.size = SizeTracker::default();
-    }
-
-    fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
-        let mut removed = Vec::new();
-
-        while self.size > self.config.max_size_of_pool_bytes {
-            if let Some(worst) = self.best.pop_last() {
-                let hash = worst
-                    .uo()
-                    .op_hash(self.config.entry_point, self.config.chain_id);
-
-                let _ = self
-                    .remove_operation_by_hash(hash)
-                    .context("should have removed the worst operation")?;
-
-                removed.push(hash);
-            }
-        }
-
-        Ok(removed)
+        self.size -= op.size();
+        metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
+        metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
+        Some(op.po)
     }
 
     fn decrement_address_count(&mut self, address: Address) {

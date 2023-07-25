@@ -1,16 +1,36 @@
-use std::{error, future::Future, ops::Deref, sync::Arc};
+use std::{error, future::Future, ops::Deref, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, AbiEncode, RawLog},
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
-    providers::{JsonRpcClient, Middleware, PendingTransaction, Provider, ProviderError},
+    providers::{
+        Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, PendingTransaction, Provider,
+        ProviderError, RetryClient, RetryClientBuilder,
+    },
     types::{
         Address, BlockId, Bytes, Eip1559TransactionRequest, Log, Selector, TransactionReceipt, H256,
     },
 };
+use url::Url;
 
 use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
+
+pub fn new_provider(
+    url: &str,
+    poll_interval: Duration,
+) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
+    let parsed_url = Url::parse(url).context("provider url should be valid")?;
+    let http = Http::new(parsed_url);
+    let client = RetryClientBuilder::default()
+        // these retries are if the server returns a 429
+        .rate_limit_retries(10)
+        // these retries are if the connection is dubious
+        .timeout_retries(3)
+        .initial_backoff(Duration::from_millis(500))
+        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
+    Ok(Arc::new(Provider::new(client).interval(poll_interval)))
+}
 
 /// Waits for a pending transaction to be mined, providing appropriate error
 /// messages for each point of failure.

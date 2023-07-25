@@ -30,11 +30,17 @@ pub trait ReputationManager: Send + Sync {
     /// Called by mempool before returning operations to bundler
     fn status(&self, address: Address) -> ReputationStatus;
 
-    /// Called by mempool when an operation that requires stake is added to the pool
+    /// Called by mempool when an operation that requires stake is added to the
+    /// pool
     fn add_seen(&self, address: Address);
 
-    /// Called by the mempool when an operation that requires stake is removed from the pool
+    /// Called by the mempool when an operation that requires stake is removed
+    /// from the pool
     fn add_included(&self, address: Address);
+
+    /// Called by the mempool when a previously mined operation that requires
+    /// stake is returned to the pool.
+    fn remove_included(&self, address: Address);
 
     /// Called by debug API
     fn dump_reputation(&self) -> Vec<Reputation>;
@@ -78,12 +84,16 @@ impl ReputationManager for HourlyMovingAverageReputation {
         self.reputation.read().status(address)
     }
 
-    fn add_seen<'a>(&self, address: Address) {
+    fn add_seen(&self, address: Address) {
         self.reputation.write().add_seen(address);
     }
 
-    fn add_included<'a>(&self, address: Address) {
+    fn add_included(&self, address: Address) {
         self.reputation.write().add_included(address);
+    }
+
+    fn remove_included(&self, address: Address) {
+        self.reputation.write().remove_included(address);
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -191,6 +201,11 @@ impl AddressReputation {
     pub fn add_included(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_included += 1;
+    }
+
+    pub fn remove_included(&mut self, address: Address) {
+        let count = self.counts.entry(address).or_default();
+        count.ops_included = count.ops_included.saturating_sub(1)
     }
 
     pub fn set_reputation(&mut self, address: Address, ops_seen: u64, ops_included: u64) {

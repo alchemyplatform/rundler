@@ -4,7 +4,7 @@ use anyhow::Context;
 use ethers::{
     contract::ContractError,
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{Address, Block, BlockId, BlockNumber, Bytes, H160, H256, U256},
+    types::{Address, Block, BlockId, BlockNumber, Bytes, Filter, Log, H160, H256, U256},
 };
 #[cfg(test)]
 use mockall::automock;
@@ -47,6 +47,8 @@ pub trait ProviderLike: Send + Sync + 'static {
     async fn get_code(&self, address: Address, block_hash: Option<H256>) -> anyhow::Result<Bytes>;
 
     async fn get_transaction_count(&self, address: Address) -> anyhow::Result<U256>;
+
+    async fn get_logs(&self, filter: &Filter) -> anyhow::Result<Vec<Log>>;
 
     async fn aggregate_signatures(
         self: Arc<Self>,
@@ -114,10 +116,15 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
     }
 
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {
-        Ok(self
-            .request("eth_maxPriorityFeePerGas", ())
+        self.request("eth_maxPriorityFeePerGas", ())
             .await
-            .context("should get max priority fee from provider")?)
+            .context("should get max priority fee from provider")
+    }
+
+    async fn get_logs(&self, filter: &Filter) -> anyhow::Result<Vec<Log>> {
+        Middleware::get_logs(self, filter)
+            .await
+            .context("provider should get logs")
     }
 
     async fn aggregate_signatures(
