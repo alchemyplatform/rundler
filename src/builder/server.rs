@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{bail, Context};
 use ethers::{
-    providers::{Http, Middleware, Provider, RetryClient},
+    providers::{Http, Provider, RetryClient},
     types::{transaction::eip2718::TypedTransaction, Address, H256, U256},
 };
 use tokio::{join, sync::broadcast, time};
@@ -22,6 +22,7 @@ use crate::{
         transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
     },
     common::{
+        block_watcher,
         emit::WithEntryPoint,
         gas::GasFees,
         math,
@@ -136,7 +137,12 @@ where
                 time::sleep(self.eth_poll_interval).await;
                 continue;
             }
-            last_block_number = self.wait_for_new_block_number(last_block_number).await;
+            last_block_number = block_watcher::wait_for_new_block_number(
+                &*self.provider,
+                last_block_number,
+                self.eth_poll_interval,
+            )
+            .await;
             self.check_for_and_log_transaction_update().await;
             let result = self.send_bundle_with_increasing_gas_fees().await;
             match result {
@@ -335,26 +341,6 @@ where
         }
         BuilderMetrics::increment_bundle_txns_abandoned();
         Ok(SendBundleResult::StalledAtMaxFeeIncreases)
-    }
-
-    async fn wait_for_new_block_number(&self, prev_block_number: u64) -> u64 {
-        loop {
-            let block_number = self.provider.get_block_number().await;
-            match block_number {
-                Ok(n) => {
-                    let n = n.as_u64();
-                    if n > prev_block_number {
-                        return n;
-                    }
-                }
-                Err(error) => {
-                    error!(
-                        "Failed to load latest block number in builder. Will keep trying: {error}"
-                    );
-                }
-            }
-            time::sleep(self.eth_poll_interval).await;
-        }
     }
 
     /// Builds a bundle and returns some metadata and the transaction to send

@@ -277,7 +277,7 @@ mod tests {
     use crate::{
         common::types::Entity,
         op_pool::{
-            event::NewBlockEvent,
+            chain::ChainUpdate,
             mempool::{error::MempoolResult, PoolOperation},
             reputation::Reputation,
         },
@@ -359,7 +359,7 @@ mod tests {
             self.entry_point
         }
 
-        fn on_new_block(&self, _event: &NewBlockEvent) {}
+        fn on_chain_update(&self, _update: &ChainUpdate) {}
 
         fn add_operation(
             &self,

@@ -7,6 +7,7 @@ use ethers::types::{Address, H256};
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 use super::{
     error::{MempoolError, MempoolResult},
@@ -14,10 +15,10 @@ use super::{
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
-    common::{contracts::i_entry_point::IEntryPointEvents, emit::WithEntryPoint, types::Entity},
+    common::{emit::WithEntryPoint, types::Entity},
     op_pool::{
+        chain::ChainUpdate,
         emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
-        event::NewBlockEvent,
         reputation::{Reputation, ReputationManager, ReputationStatus},
     },
 };
@@ -68,7 +69,7 @@ where
 
     pub async fn run(
         self: Arc<Self>,
-        mut new_block_events: broadcast::Receiver<Arc<NewBlockEvent>>,
+        mut chain_events: broadcast::Receiver<Arc<ChainUpdate>>,
         shutdown_token: CancellationToken,
     ) {
         loop {
@@ -77,9 +78,9 @@ where
                     tracing::info!("Shutting down UoPool");
                     break;
                 }
-                new_block = new_block_events.recv() => {
-                    if let Ok(new_block) = new_block {
-                        self.on_new_block(&new_block);
+                update = chain_events.recv() => {
+                    if let Ok(update) = update {
+                        self.on_chain_update(&update);
                     }
                 }
             }
@@ -102,42 +103,71 @@ where
         self.entry_point
     }
 
-    fn on_new_block(&self, new_block: &NewBlockEvent) {
+    fn on_chain_update(&self, update: &ChainUpdate) {
         let mut state = self.state.write();
-        tracing::info!(
-            "New block: {:?} with {} entrypoint events",
-            new_block.number,
-            new_block.events.len()
-        );
-        for event in &new_block.events {
-            if let IEntryPointEvents::UserOperationEventFilter(uo_event) = &event.contract_event {
-                let op_hash = uo_event.user_op_hash.into();
-                if let Some(op) = state.pool.remove_operation_by_hash(op_hash) {
-                    for e in op.staked_entities() {
-                        self.reputation.add_included(e.address);
-                    }
+        let deduped_ops = update.deduped_ops();
+        let mined_ops = deduped_ops
+            .mined_ops
+            .iter()
+            .filter(|op| op.entry_point == self.entry_point);
+        let unmined_ops = deduped_ops
+            .unmined_ops
+            .iter()
+            .filter(|op| op.entry_point == self.entry_point);
+        let mut mined_op_count = 0;
+        let mut unmined_op_count = 0;
+        for op in mined_ops {
+            mined_op_count += 1;
+            // Remove throttled ops that were included in the block
+            state.throttled_ops.remove(&op.hash);
+            if let Some(op) = state
+                .pool
+                .mine_operation(op.hash, update.latest_block_number)
+            {
+                for entity in op.staked_entities() {
+                    self.reputation.add_included(entity.address);
                 }
-
-                // Remove throttled ops that were included in the block
-                state.throttled_ops.remove(&op_hash);
             }
         }
-
+        for op in unmined_ops {
+            unmined_op_count += 1;
+            if let Some(op) = state.pool.unmine_operation(op.hash) {
+                for entity in op.staked_entities() {
+                    self.reputation.remove_included(entity.address);
+                }
+            }
+        }
+        if mined_op_count > 0 {
+            info!(
+                "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                self.entry_point,
+                update.latest_block_number,
+                update.latest_block_hash,
+            );
+        }
+        if unmined_op_count > 0 {
+            info!(
+                "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                self.entry_point,
+                update.latest_block_number,
+                update.latest_block_hash,
+            );
+        }
+        state
+            .pool
+            .forget_mined_operations_before_block(update.earliest_remembered_block_number);
         // Remove throttled ops that are too old
-        let new_block_number = new_block.number.as_u64();
         let mut to_remove = HashSet::new();
         for (hash, block) in state.throttled_ops.iter() {
-            if new_block_number - block > THROTTLED_OPS_BLOCK_LIMIT {
+            if update.latest_block_number - block > THROTTLED_OPS_BLOCK_LIMIT {
                 to_remove.insert(*hash);
             }
         }
-
         for hash in to_remove {
             state.pool.remove_operation_by_hash(hash);
             state.throttled_ops.remove(&hash);
         }
-
-        state.block_number = new_block_number;
+        state.block_number = update.latest_block_number;
     }
 
     fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
@@ -371,6 +401,8 @@ mod tests {
         fn add_seen(&self, _address: Address) {}
 
         fn add_included(&self, _address: Address) {}
+
+        fn remove_included(&self, _address: Address) {}
 
         fn dump_reputation(&self) -> Vec<Reputation> {
             vec![]

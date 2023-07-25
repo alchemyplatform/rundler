@@ -100,10 +100,6 @@ pub struct CommonArgs {
     )]
     chain_id: u64,
 
-    /// ETH Node websocket URL to connect to
-    #[arg(long = "node_ws", name = "node_ws", env = "NODE_WS", global = true)]
-    node_ws: Option<String>,
-
     /// ETH Node HTTP URL to connect to
     #[arg(
         long = "node_http",
