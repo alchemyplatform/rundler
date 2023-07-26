@@ -51,6 +51,15 @@ pub struct RpcArgs {
         default_value = "20"
     )]
     timeout_seconds: String,
+
+    /// Maximum number of concurrent connections
+    #[arg(
+        long = "rpc.max_connections",
+        name = "rpc.max_connections",
+        env = "RPC_MAX_CONNECTIONS",
+        default_value = "100"
+    )]
+    max_connections: u32,
 }
 
 impl RpcArgs {
@@ -99,6 +108,7 @@ impl RpcArgs {
             sim_settings,
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
+            max_connections: self.max_connections,
             mempool_configs,
         })
     }

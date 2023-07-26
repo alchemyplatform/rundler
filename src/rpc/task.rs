@@ -51,6 +51,7 @@ pub struct Args {
     pub sim_settings: simulation::Settings,
     pub estimation_settings: estimation::Settings,
     pub rpc_timeout: Duration,
+    pub max_connections: u32,
     pub mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
@@ -146,6 +147,7 @@ impl Task for RpcTask {
         let server = ServerBuilder::default()
             .set_logger(RpcMetricsLogger)
             .set_middleware(service_builder)
+            .max_connections(self.args.max_connections)
             .http_only()
             .build(addr)
             .await?;
