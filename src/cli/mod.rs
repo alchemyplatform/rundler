@@ -168,8 +168,8 @@ pub struct CommonArgs {
         long = "priority_fee_mode_kind",
         name = "priority_fee_mode_kind",
         env = "PRIORITY_FEE_MODE_KIND",
-        value_parser = PossibleValuesParser::new(["fixed", "base_fee_percent", "priority_fee_percent"]),
-        default_value = "fixed"
+        value_parser = PossibleValuesParser::new(["base_fee_percent", "priority_fee_increase_percent"]),
+        default_value = "priority_fee_increase_percent"
     )]
     priority_fee_mode_kind: String,
 
