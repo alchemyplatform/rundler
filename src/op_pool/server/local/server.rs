@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use ethers::{
-    prelude::k256::elliptic_curve::rand_core::block,
-    types::{Address, H256},
-};
+use ethers::types::{Address, H256};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -58,7 +55,7 @@ where
         loop {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {
-                    break;
+                    return Ok(());
                 }
                 new_block = new_blocks.recv() => {
                     if let Ok(new_block) = new_block {
@@ -130,8 +127,6 @@ where
                 }
             }
         }
-
-        Ok(())
     }
 }
 

@@ -3,17 +3,11 @@ use jsonrpsee::{
     core::{Error as RpcError, RpcResult},
     proc_macros::rpc,
 };
-use tonic::{async_trait, transport::Channel};
+use tonic::async_trait;
 
 use super::{RpcReputation, RpcUserOperation};
 use crate::{
-    common::{
-        protos::builder::{
-            builder_client, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
-            DebugSetBundlingModeRequest,
-        },
-        types::BundlingMode,
-    },
+    builder::{BuilderClient, BundlingMode},
     op_pool::PoolClient,
 };
 
@@ -43,13 +37,13 @@ pub trait DebugApi {
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>>;
 }
 
-pub struct DebugApi<P> {
+pub struct DebugApi<P, B> {
     op_pool_client: P,
-    builder_client: builder_client::BuilderClient<Channel>,
+    builder_client: B,
 }
 
-impl<P> DebugApi<P> {
-    pub fn new(op_pool_client: P, builder_client: builder_client::BuilderClient<Channel>) -> Self {
+impl<P, B> DebugApi<P, B> {
+    pub fn new(op_pool_client: P, builder_client: B) -> Self {
         Self {
             op_pool_client,
             builder_client,
@@ -58,9 +52,10 @@ impl<P> DebugApi<P> {
 }
 
 #[async_trait]
-impl<P> DebugApiServer for DebugApi<P>
+impl<P, B> DebugApiServer for DebugApi<P, B>
 where
     P: PoolClient,
+    B: BuilderClient,
 {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
@@ -84,22 +79,15 @@ where
     }
 
     async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
-        let response = self
-            .builder_client
-            .clone()
-            .debug_send_bundle_now(DebugSendBundleNowRequest {})
+        self.builder_client
+            .debug_send_bundle_now()
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))?;
-
-        Ok(H256::from_slice(&response.into_inner().transaction_hash))
+            .map_err(|e| RpcError::Custom(e.to_string()))
     }
 
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
-        let mode: ProtoBundlingMode = mode.into();
-
         self.builder_client
-            .clone()
-            .debug_set_bundling_mode(DebugSetBundlingModeRequest { mode: mode.into() })
+            .debug_set_bundling_mode(mode)
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
 

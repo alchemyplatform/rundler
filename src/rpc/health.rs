@@ -3,7 +3,10 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use tonic::{async_trait, transport::Channel};
 use tonic_health::pb::{health_client::HealthClient, HealthCheckRequest};
 
-use crate::op_pool::{LocalPoolClient, PoolClient};
+use crate::{
+    builder::{BuilderClient, LocalBuilderClient},
+    op_pool::{LocalPoolClient, PoolClient},
+};
 
 #[rpc(server, namespace = "system")]
 pub trait SystemApi {
@@ -49,11 +52,15 @@ impl SystemApiServer for RemoteHealthCheck {
 
 pub struct LocalHealthCheck {
     pool_client: LocalPoolClient,
+    builder_client: LocalBuilderClient,
 }
 
 impl LocalHealthCheck {
-    pub fn new(pool_client: LocalPoolClient) -> Self {
-        Self { pool_client }
+    pub fn new(pool_client: LocalPoolClient, builder_client: LocalBuilderClient) -> Self {
+        Self {
+            pool_client,
+            builder_client,
+        }
     }
 }
 
@@ -64,6 +71,10 @@ impl SystemApiServer for LocalHealthCheck {
             .get_supported_entry_points()
             .await
             .context("Op pool server should be live")?;
+        self.builder_client
+            .get_supported_entry_points()
+            .await
+            .context("Builder server should be live")?;
 
         Ok("ok".to_string())
     }

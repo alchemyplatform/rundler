@@ -6,11 +6,8 @@ use ethers::types::H256;
 
 use super::{json::get_json_config, CommonArgs};
 use crate::{
-    builder::{self, BuilderTask},
-    common::{
-        gas::PriorityFeeMode, handle::spawn_tasks_with_shutdown, mempool::MempoolConfig,
-        server::format_server_addr,
-    },
+    builder::{self, BuilderServerMode, BuilderTask},
+    common::{gas::PriorityFeeMode, handle::spawn_tasks_with_shutdown, mempool::MempoolConfig},
     op_pool::PoolClientMode,
 };
 
@@ -150,6 +147,7 @@ impl BuilderArgs {
         &self,
         common: &CommonArgs,
         pool_client_mode: PoolClientMode,
+        server_mode: BuilderServerMode,
     ) -> anyhow::Result<builder::Args> {
         let priority_fee_mode = PriorityFeeMode::try_from(
             common.priority_fee_mode_kind.as_str(),
@@ -170,8 +168,6 @@ impl BuilderArgs {
         };
 
         Ok(builder::Args {
-            port: self.port,
-            host: self.host.clone(),
             rpc_url,
             entry_point_address: common
                 .entry_points
@@ -201,11 +197,8 @@ impl BuilderArgs {
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
             pool_client_mode,
+            server_mode,
         })
-    }
-
-    pub fn url(&self, secure: bool) -> String {
-        format_server_addr(&self.host, self.port, secure)
     }
 }
 
@@ -231,7 +224,13 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
         pool_url,
     } = builder_args;
     let task_args = builder_args
-        .to_args(&common_args, PoolClientMode::Remote { url: pool_url })
+        .to_args(
+            &common_args,
+            PoolClientMode::Remote { url: pool_url },
+            BuilderServerMode::Remote {
+                addr: format!("{}:{}", builder_args.host, builder_args.port).parse()?,
+            },
+        )
         .await?;
 
     spawn_tasks_with_shutdown(

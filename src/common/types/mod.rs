@@ -194,14 +194,6 @@ impl Serialize for Entity {
     }
 }
 
-#[derive(Display, Debug, Clone, Copy, Eq, PartialEq, EnumIter, Serialize, Deserialize)]
-#[display(style = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum BundlingMode {
-    Manual,
-    Auto,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ExpectedStorage(BTreeMap<Address, BTreeMap<H256, H256>>);
 

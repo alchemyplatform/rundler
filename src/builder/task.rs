@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
@@ -13,7 +14,7 @@ use ethers_signers::Signer;
 use rusoto_core::Region;
 use tokio::{sync::mpsc, time};
 use tokio_util::sync::CancellationToken;
-use tonic::{async_trait, transport::Server};
+use tonic::async_trait;
 use tracing::info;
 use url::Url;
 
@@ -22,26 +23,33 @@ use crate::{
         bundle_proposer::{self, BundleProposerImpl},
         bundle_sender::{self, BundleSender, BundleSenderImpl},
         sender::get_sender,
-        server::BuilderImpl,
+        server::{spawn_local_builder_server, spawn_remote_builder_server},
         signer::{BundlerSigner, KmsSigner, LocalSigner},
         transaction_tracker::{self, TransactionTrackerImpl},
+        LocalBuilderServerRequest,
     },
     common::{
         contracts::i_entry_point::IEntryPoint,
         gas::PriorityFeeMode,
         handle::{SpawnGuard, Task},
         mempool::MempoolConfig,
-        protos::builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
-        server::format_socket_addr,
         simulation::{self, SimulatorImpl},
     },
     op_pool::{connect_remote_pool_client, LocalPoolClient, PoolClientMode},
 };
 
 #[derive(Debug)]
+pub enum BuilderServerMode {
+    Local {
+        req_receiver: Option<mpsc::Receiver<LocalBuilderServerRequest>>,
+    },
+    Remote {
+        addr: SocketAddr,
+    },
+}
+
+#[derive(Debug)]
 pub struct Args {
-    pub port: u16,
-    pub host: String,
     pub rpc_url: String,
     pub entry_point_address: Address,
     pub private_key: Option<String>,
@@ -63,6 +71,7 @@ pub struct Args {
     pub replacement_fee_percent_increase: u64,
     pub max_fee_increases: u64,
     pub pool_client_mode: PoolClientMode,
+    pub server_mode: BuilderServerMode,
 }
 
 #[derive(Debug)]
@@ -73,8 +82,6 @@ pub struct BuilderTask {
 #[async_trait]
 impl Task for BuilderTask {
     async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let addr = format_socket_addr(&self.args.host, self.args.port).parse()?;
-        info!("Starting builder server on {}", addr);
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
@@ -205,26 +212,35 @@ impl Task for BuilderTask {
         let _builder_loop_guard =
             { SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await }) };
 
-        // gRPC server
-        let builder_server = BuilderImpl::new(manual_bundling_mode, send_bundle_tx);
-        let builder_server = BuilderServer::new(builder_server);
-
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
-            .build()?;
-
-        // health service
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_serving::<BuilderServer<BuilderImpl>>()
-            .await;
-
-        let server_handle = Server::builder()
-            .add_service(builder_server)
-            .add_service(reflection_service)
-            .add_service(health_service)
-            .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await });
-
+        let server_handle = match &mut self.args.server_mode {
+            BuilderServerMode::Local {
+                ref mut req_receiver,
+            } => {
+                let req_receiver = req_receiver
+                    .take()
+                    .context("should have local server message receiver")?;
+                spawn_local_builder_server(
+                    req_receiver,
+                    manual_bundling_mode,
+                    send_bundle_tx,
+                    vec![self.args.entry_point_address.clone()],
+                    self.args.chain_id,
+                    shutdown_token.clone(),
+                )
+                .await?
+            }
+            BuilderServerMode::Remote { addr } => {
+                spawn_remote_builder_server(
+                    *addr,
+                    manual_bundling_mode,
+                    send_bundle_tx,
+                    vec![self.args.entry_point_address.clone()],
+                    self.args.chain_id,
+                    shutdown_token.clone(),
+                )
+                .await?
+            }
+        };
         info!("Started bundle builder");
 
         match server_handle.await {

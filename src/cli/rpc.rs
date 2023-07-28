@@ -7,7 +7,7 @@ use super::CommonArgs;
 use crate::{
     common::handle::spawn_tasks_with_shutdown,
     op_pool::PoolClientMode,
-    rpc::{self, estimation, RpcTask},
+    rpc::{self, estimation, ClientMode, RpcTask},
 };
 
 /// CLI options for the RPC server
@@ -59,9 +59,8 @@ impl RpcArgs {
     pub async fn to_args(
         &self,
         common: &CommonArgs,
-        builder_url: String,
         estimation_settings: estimation::Settings,
-        pool_client_mode: PoolClientMode,
+        client_mode: ClientMode,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
@@ -72,7 +71,6 @@ impl RpcArgs {
         Ok(rpc::Args {
             port: self.port,
             host: self.host.clone(),
-            builder_url,
             entry_points: common
                 .entry_points
                 .iter()
@@ -87,7 +85,7 @@ impl RpcArgs {
             api_namespaces: apis,
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
-            pool_client_mode,
+            client_mode,
         })
     }
 }
@@ -127,9 +125,11 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     let task_args = rpc_args
         .to_args(
             &common_args,
-            builder_url,
             (&common_args).try_into()?,
-            PoolClientMode::Remote { url: pool_url },
+            ClientMode::Remote {
+                pool_url,
+                builder_url,
+            },
         )
         .await?;
 

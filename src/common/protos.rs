@@ -1,43 +1,5 @@
 use ethers::types::{Address, H256, U256};
 
-use crate::common::types::BundlingMode as RpcBundlingMode;
-
-pub mod builder {
-    use super::*;
-
-    tonic::include_proto!("builder");
-
-    pub const BUILDER_FILE_DESCRIPTOR_SET: &[u8] =
-        tonic::include_file_descriptor_set!("builder_descriptor");
-
-    impl From<RpcBundlingMode> for BundlingMode {
-        fn from(mode: RpcBundlingMode) -> Self {
-            match mode {
-                RpcBundlingMode::Auto => BundlingMode::Auto,
-                RpcBundlingMode::Manual => BundlingMode::Manual,
-            }
-        }
-    }
-
-    impl TryFrom<BundlingMode> for RpcBundlingMode {
-        type Error = ConversionError;
-
-        fn try_from(value: BundlingMode) -> Result<Self, Self::Error> {
-            match value {
-                BundlingMode::Auto => Ok(RpcBundlingMode::Auto),
-                BundlingMode::Manual => Ok(RpcBundlingMode::Manual),
-                _ => Err(ConversionError::InvalidEnumValue(value as i32)),
-            }
-        }
-    }
-}
-
-pub fn to_le_bytes(n: U256) -> Vec<u8> {
-    let mut vec = vec![0_u8; 32];
-    n.to_little_endian(&mut vec);
-    vec
-}
-
 /// Error type for conversions from protobuf types to Ethers/local types.
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
@@ -47,6 +9,12 @@ pub enum ConversionError {
     InvalidTimestamp(u64),
     #[error("Invalid enum value {0}")]
     InvalidEnumValue(i32),
+}
+
+pub fn to_le_bytes(n: U256) -> Vec<u8> {
+    let mut vec = vec![0_u8; 32];
+    n.to_little_endian(&mut vec);
+    vec
 }
 
 pub fn from_bytes<T: FromProtoBytes>(bytes: &[u8]) -> Result<T, ConversionError> {

@@ -8,13 +8,32 @@ enum BundlingMode {
 }
 
 service Builder {
+    rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
     rpc DebugSendBundleNow(DebugSendBundleNowRequest) returns (DebugSendBundleNowResponse);
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
+}
+
+message GetSupportedEntryPointsRequest {}
+message GetSupportedEntryPointsResponse {
+    oneof result {
+        GetSupportedEntryPointsSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+message GetSupportedEntryPointsSuccess {
+    uint64 chain_id = 1;
+    repeated bytes entry_points = 2;
 }
 
 message DebugSendBundleNowRequest {}
 
 message DebugSendBundleNowResponse {
+    oneof result {
+        DebugSendBundleNowSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+message DebugSendBundleNowSuccess {
     bytes transaction_hash = 1;
 }
 
@@ -22,4 +41,16 @@ message DebugSetBundlingModeRequest {
     BundlingMode mode = 1;
 }
 
-message DebugSetBundlingModeResponse {}
+message DebugSetBundlingModeResponse {
+    oneof result {
+        DebugSetBundlingModeSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+message DebugSetBundlingModeSuccess {}
+
+message BuilderError {
+    oneof error {
+        string internal = 1;
+    }
+}

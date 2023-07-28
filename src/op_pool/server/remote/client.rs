@@ -279,7 +279,7 @@ pub async fn connect_remote_pool_client(
             tracing::error!("bailing from connecting client, server shutting down");
             bail!("Server shutting down")
         }
-        res = connect_with_retries("op pool from builder", op_pool_url, OpPoolClient::connect) => {
+        res = connect_with_retries("op pool", op_pool_url, OpPoolClient::connect) => {
             Ok(Arc::new(RemotePoolClient::new(res?)))
         }
     }

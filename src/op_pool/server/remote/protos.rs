@@ -5,8 +5,8 @@ use crate::{
     common::{
         protos::{from_bytes, to_le_bytes, ConversionError},
         types::{
-            BundlingMode as RpcBundlingMode, Entity as CommonEntity,
-            EntityType as CommonEntityType, UserOperation as RpcUserOperation, ValidTimeRange,
+            Entity as CommonEntity, EntityType as CommonEntityType,
+            UserOperation as RpcUserOperation, ValidTimeRange,
         },
     },
     op_pool::{

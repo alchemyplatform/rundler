@@ -9,7 +9,7 @@ use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use tokio::select;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tonic::{
     async_trait,
@@ -21,12 +21,13 @@ use url::Url;
 
 use super::ApiNamespace;
 use crate::{
-    common::{
-        handle::Task,
-        protos::builder::builder_client::BuilderClient,
-        server::{self, format_socket_addr},
+    builder::{
+        connect_remote_builder_client, BuilderClient, LocalBuilderClient, LocalBuilderServerRequest,
     },
-    op_pool::{connect_remote_pool_client, LocalPoolClient, PoolClient, PoolClientMode},
+    common::{handle::Task, server::format_socket_addr},
+    op_pool::{
+        connect_remote_pool_client, LocalPoolClient, LocalPoolServerRequest, NewBlock, PoolClient,
+    },
     rpc::{
         debug::{DebugApi, DebugApiServer},
         eth::{estimation, EthApi, EthApiServer},
@@ -39,14 +40,26 @@ use crate::{
 pub struct Args {
     pub port: u16,
     pub host: String,
-    pub builder_url: String,
     pub entry_points: Vec<Address>,
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
     pub estimation_settings: estimation::Settings,
     pub rpc_timeout: Duration,
-    pub pool_client_mode: PoolClientMode,
+    pub client_mode: ClientMode,
+}
+
+#[derive(Debug)]
+pub enum ClientMode {
+    Local {
+        pool_sender: mpsc::Sender<LocalPoolServerRequest>,
+        pool_block_receiver: broadcast::Receiver<NewBlock>,
+        builder_sender: mpsc::Sender<LocalBuilderServerRequest>,
+    },
+    Remote {
+        pool_url: String,
+        builder_url: String,
+    },
 }
 
 #[derive(Debug)]
@@ -78,33 +91,41 @@ impl Task for RpcTask {
 
         let provider = Arc::new(Provider::new(client));
 
-        // TODO(danc) local builder client
-        let builder_client =
-            Self::connect_remote_builder_client(&self.args.builder_url, shutdown_token.clone())
-                .await?;
-        info!("Connected to builder service at {}", self.args.builder_url);
-
         let mut module = RpcModule::new(());
-        match &self.args.pool_client_mode {
-            PoolClientMode::Local {
-                sender,
-                block_receiver,
+        match &self.args.client_mode {
+            ClientMode::Local {
+                pool_sender,
+                pool_block_receiver,
+                builder_sender,
             } => {
                 let pool_client =
-                    LocalPoolClient::new(sender.clone(), block_receiver.resubscribe());
-                self.attach_namespaces(provider, pool_client.clone(), builder_client, &mut module)?;
+                    LocalPoolClient::new(pool_sender.clone(), pool_block_receiver.resubscribe());
+                let builder_client = LocalBuilderClient::new(builder_sender.clone());
 
-                module.merge(LocalHealthCheck::new(pool_client).into_rpc())?;
+                self.attach_namespaces(
+                    provider,
+                    pool_client.clone(),
+                    builder_client.clone(),
+                    &mut module,
+                )?;
+
+                module.merge(LocalHealthCheck::new(pool_client, builder_client).into_rpc())?;
             }
-            PoolClientMode::Remote { url } => {
-                let pool_client = connect_remote_pool_client(url, shutdown_token.clone()).await?;
-                info!("Connected to op_pool service at {}", url);
+            ClientMode::Remote {
+                pool_url,
+                builder_url,
+            } => {
+                let pool_client =
+                    connect_remote_pool_client(pool_url, shutdown_token.clone()).await?;
+                let builder_client =
+                    connect_remote_builder_client(builder_url, shutdown_token.clone()).await?;
+
                 self.attach_namespaces(provider, pool_client, builder_client, &mut module)?;
 
-                let builder_uri = Uri::from_str(&self.args.builder_url)
-                    .context("should be a valid URI for op_pool")?;
+                let builder_uri =
+                    Uri::from_str(builder_url).context("should be a valid URI for builder")?;
                 let op_pool_uri =
-                    Uri::from_str(url).context("should be a valid URI for op_pool")?;
+                    Uri::from_str(pool_url).context("should be a valid URI for op_pool")?;
 
                 let op_pool_health_client = HealthClient::new(
                     Channel::builder(op_pool_uri)
@@ -162,26 +183,11 @@ impl RpcTask {
         Box::new(self)
     }
 
-    async fn connect_remote_builder_client(
-        url: &str,
-        shutdown_token: CancellationToken,
-    ) -> anyhow::Result<BuilderClient<Channel>> {
-        select! {
-            _ = shutdown_token.cancelled() => {
-                tracing::error!("bailing from conneting client, server shutting down");
-                bail!("Server shutting down")
-            }
-            res = server::connect_with_retries("builder from common", url, BuilderClient::connect) => {
-                res.context("should connect to builder")
-            }
-        }
-    }
-
-    fn attach_namespaces<C: PoolClient + Clone>(
+    fn attach_namespaces<P: PoolClient + Clone, B: BuilderClient + Clone>(
         &self,
         provider: Arc<Provider<RetryClient<Http>>>,
-        pool_client: C,
-        builder_client: BuilderClient<Channel>,
+        pool_client: P,
+        builder_client: B,
         module: &mut RpcModule<()>,
     ) -> anyhow::Result<()> {
         for api in &self.args.api_namespaces {
