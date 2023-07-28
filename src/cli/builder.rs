@@ -20,7 +20,7 @@ pub struct BuilderArgs {
         long = "builder.port",
         name = "builder.port",
         env = "BUILDER_PORT",
-        default_value = "50052"
+        default_value = "50051"
     )]
     port: u16,
 

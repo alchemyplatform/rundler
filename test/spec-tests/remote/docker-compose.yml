@@ -1,0 +1,76 @@
+version: "3.8"
+
+services:
+  geth:
+    image: ethereum/client-go:v1.10.26
+    ports:
+      - "8545:8545"
+      - "8546:8546"
+    command:
+      - --miner.gaslimit=12000000
+      - --http
+      - --http.api=personal,eth,net,web3,debug
+      - --http.vhosts=*
+      - --http.addr=0.0.0.0
+      - --ws
+      - --ws.api=personal,eth,net,web3,debug
+      - --ws.addr=0.0.0.0
+      - --ignore-legacy-receipts
+      - --allow-insecure-unlock
+      - --rpc.allow-unprotected-txs
+      - --dev
+      - --verbosity=2
+      - --nodiscover
+      - --maxpeers=0
+      - --mine
+      - --miner.threads=1
+      - --networkid=1337
+
+  rundler-pool:
+    image: alchemy-platform/rundler:latest
+    depends_on:
+      - geth
+    command: /usr/local/bin/rundler pool
+    environment:
+      - RUST_LOG=debug
+      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - NODE_HTTP=http://geth:8545
+      - MIN_UNSTAKE_DELAY=2
+      - POOL_HOST=0.0.0.0
+
+  rundler-builder:
+    image: alchemy-platform/rundler:latest
+    depends_on:
+      - rundler-pool
+    command: /usr/local/bin/rundler builder
+    environment:
+      - RUST_LOG=debug
+      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - NODE_HTTP=http://geth:8545
+      - MIN_UNSTAKE_DELAY=2
+      - BUILDER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - BUILDER_POOL_URL=https://rundler-pool:50051
+      - BUILDER_HOST=0.0.0.0
+      - BUILDER_PORT=50051
+
+  rundler-rpc:
+    image: alchemy-platform/rundler:latest
+    depends_on:
+      - rundler-builder
+    ports:
+      - "8080:8080"
+      - "3000:3000"
+    command: /usr/local/bin/rundler rpc
+    environment:
+      - RUST_LOG=debug
+      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - NODE_HTTP=http://geth:8545
+      - RPC_API=eth,debug
+      - RPC_POOL_URL=https://rundler-pool:50051
+      - RPC_BUILDER_URL=https://rundler-builder:50051
+    healthcheck:
+      test: curl --fail http://localhost:3000/health || exit 1
+      interval: 1s
+      timeout: 1s
+      retries: 60
+      start_period: 10s

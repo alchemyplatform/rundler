@@ -107,6 +107,7 @@ pub async fn connect_remote_builder_client(
             bail!("Server shutting down")
         }
         res = connect_with_retries("builder", builder_url, GrpcBuilderClient::connect) => {
+            tracing::info!("connected to builder");
             Ok(Arc::new(RemoteBuilderClient::new(res?)))
         }
     }
