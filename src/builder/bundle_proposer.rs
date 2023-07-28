@@ -1204,7 +1204,7 @@ mod tests {
                 max_bundle_size,
                 beneficiary,
                 use_bundle_priority_fee: Some(true),
-                priority_fee_mode: PriorityFeeMode::PriorityFeePercent(10),
+                priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(10),
                 bundle_priority_fee_overhead_percent: 0,
             },
             event_sender,

@@ -114,17 +114,15 @@ impl GasFees {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PriorityFeeMode {
-    Fixed(u64),
     BaseFeePercent(u64),
-    PriorityFeePercent(u64),
+    PriorityFeeIncreasePercent(u64),
 }
 
 impl PriorityFeeMode {
     pub fn try_from(kind: &str, value: u64) -> anyhow::Result<Self> {
         match kind {
-            "fixed" => Ok(Self::Fixed(value)),
             "base_fee_percent" => Ok(Self::BaseFeePercent(value)),
-            "priority_fee_percent" => Ok(Self::PriorityFeePercent(value)),
+            "priority_fee_increase_percent" => Ok(Self::PriorityFeeIncreasePercent(value)),
             _ => anyhow::bail!("Invalid priority fee mode: {}", kind),
         }
     }
@@ -133,19 +131,9 @@ impl PriorityFeeMode {
         let base_fee = bundle_fees.max_fee_per_gas - bundle_fees.max_priority_fee_per_gas;
 
         let max_priority_fee_per_gas = match *self {
-            PriorityFeeMode::Fixed(value) => {
-                bundle_fees.max_priority_fee_per_gas.max(U256::from(value))
-            }
             PriorityFeeMode::BaseFeePercent(percent) => math::percent(base_fee, percent),
-            PriorityFeeMode::PriorityFeePercent(percent) => {
-                let ret = math::increase_by_percent(bundle_fees.max_priority_fee_per_gas, percent);
-                tracing::info!(
-                    "bundle_fees {:?} max_priority_fee_per_gas {:?} percent {:?}",
-                    bundle_fees,
-                    ret,
-                    percent
-                );
-                ret
+            PriorityFeeMode::PriorityFeeIncreasePercent(percent) => {
+                math::increase_by_percent(bundle_fees.max_priority_fee_per_gas, percent)
             }
         };
 
