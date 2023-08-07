@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{cmp::min, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use ethers::{
     contract::ContractError,
     providers::{JsonRpcClient, Middleware, Provider},
@@ -178,6 +178,13 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         entry_point_address: Address,
         op: UserOperation,
     ) -> anyhow::Result<U256> {
+        ensure!(
+            op.max_fee_per_gas != U256::zero(),
+            "max fee per gas must be nonzero for gas estimation on optimism"
+        );
+        let max_fee = op.max_fee_per_gas;
+        let max_prio_fee = op.max_priority_fee_per_gas;
+
         let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&self));
         let data = entry_point
             .handle_ops(vec![op], Address::random())
@@ -187,7 +194,7 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         let gas_oracle =
             OVM_GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, Arc::clone(&self));
 
-        let (l1_gas, l2_gas_fee) = tokio::try_join!(
+        let (l1_gas, l2_base_fee) = tokio::try_join!(
             async {
                 let l1_gas = gas_oracle.get_l1_fee(data).call().await?;
                 Ok(l1_gas)
@@ -195,6 +202,7 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             self.get_base_fee()
         )?;
 
-        Ok(l1_gas / l2_gas_fee)
+        let l2_price = min(max_fee, l2_base_fee + max_prio_fee);
+        Ok(l1_gas / l2_price)
     }
 }
