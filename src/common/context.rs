@@ -1,9 +1,9 @@
-use std::{convert::Infallible, fmt::Display};
+use std::fmt::{Debug, Display};
 
 use anyhow::{bail, Context};
 use tracing::Level;
 
-pub trait LogWithContext<T, E> {
+pub trait LogWithContext<T> {
     /// Used to log the original error and then wrap it in an anyhow::Error
     fn log_context<C>(self, context: C) -> Result<T, anyhow::Error>
     where
@@ -15,7 +15,9 @@ pub trait LogWithContext<T, E> {
     where
         C: Display + Send + Sync + 'static,
         F: FnOnce() -> C;
+}
 
+pub trait LogOnError {
     /// This will log an error if there is one, but will preserve the original error type
     fn log_on_error<C>(self, context: C) -> Self
     where
@@ -27,7 +29,7 @@ pub trait LogWithContext<T, E> {
         C: Display + Send + Sync + 'static;
 }
 
-impl<T, E> LogWithContext<T, E> for Result<T, E>
+impl<T, E> LogWithContext<T> for Result<T, E>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
@@ -60,7 +62,12 @@ where
             }
         }
     }
+}
 
+impl<T, E> LogOnError for Result<T, E>
+where
+    E: Debug,
+{
     fn log_on_error<C>(self, context: C) -> Result<T, E>
     where
         C: Display + Send + Sync + 'static,
@@ -82,7 +89,7 @@ where
     }
 }
 
-impl<T> LogWithContext<T, Infallible> for Option<T> {
+impl<T> LogWithContext<T> for Option<T> {
     fn log_context<C>(self, context: C) -> Result<T, anyhow::Error>
     where
         C: Display + Send + Sync + 'static,
@@ -110,7 +117,9 @@ impl<T> LogWithContext<T, Infallible> for Option<T> {
             }
         }
     }
+}
 
+impl<T> LogOnError for Option<T> {
     fn log_on_error<C>(self, context: C) -> Self
     where
         C: Display + Send + Sync + 'static,

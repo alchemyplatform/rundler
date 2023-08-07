@@ -30,7 +30,7 @@ use self::error::{
 };
 use crate::{
     common::{
-        context::LogWithContext,
+        context::LogOnError,
         contracts::i_entry_point::{
             IEntryPoint, IEntryPointCalls, UserOperationEventFilter,
             UserOperationRevertReasonFilter,
@@ -482,7 +482,7 @@ where
         let event = self
             .get_user_operation_event_by_hash(hash)
             .await
-            .context("should have successfully queried for user op events by hash")?;
+            .log_on_error("should have successfully queried for user op events by hash")?;
 
         let Some(event) = event else { return Ok(None) };
 
