@@ -4,7 +4,7 @@ use anyhow::Context;
 use ethers::{
     contract::ContractError,
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{Address, Block, BlockId, BlockNumber, Bytes, Filter, Log, H160, H256, U256},
+    types::{Address, Block, BlockId, BlockNumber, Bytes, Filter, Log, H160, H256, U256, U64},
 };
 #[cfg(test)]
 use mockall::automock;
@@ -40,7 +40,8 @@ pub trait ProviderLike: Send + Sync + 'static {
 
     async fn get_latest_block_hash(&self) -> anyhow::Result<H256>;
 
-    async fn get_base_fee(&self) -> anyhow::Result<U256>;
+    /// Returns (block_number, base_fee_per_gas)
+    async fn get_base_fee(&self) -> anyhow::Result<(U64, U256)>;
 
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256>;
 
@@ -106,13 +107,17 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             .context("hash should be present on block")
     }
 
-    async fn get_base_fee(&self) -> anyhow::Result<U256> {
-        Middleware::get_block(self, BlockNumber::Latest)
+    async fn get_base_fee(&self) -> anyhow::Result<(U64, U256)> {
+        let block = Middleware::get_block(self, BlockNumber::Latest)
             .await
             .context("should load latest block to get base fee")?
-            .context("latest block should exist")?
+            .context("latest block should exist")?;
+
+        let number = block.number.context("latest block should have a number")?;
+        let base = block
             .base_fee_per_gas
-            .context("latest block should have a nonempty base fee")
+            .context("latest block should have a nonempty base fee")?;
+        Ok((number, base))
     }
 
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {
@@ -195,6 +200,6 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             self.get_base_fee()
         )?;
 
-        Ok(l1_gas / l2_gas_fee)
+        Ok(l1_gas / l2_gas_fee.1)
     }
 }

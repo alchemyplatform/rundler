@@ -108,7 +108,7 @@ where
     P: ProviderLike,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
-        let (ops, block_hash, bundle_fees) = try_join!(
+        let (ops, block_hash, (_, _, bundle_fees)) = try_join!(
             self.get_ops_from_pool(),
             self.provider.get_latest_block_hash(),
             self.fee_estimator.required_bundle_fees(required_fees)
@@ -700,7 +700,10 @@ impl ProposalContext {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use ethers::{types::H160, utils::parse_units};
+    use ethers::{
+        types::{H160, U64},
+        utils::parse_units,
+    };
     use tonic::Response;
 
     use super::*;
@@ -1130,6 +1133,7 @@ mod tests {
     ) -> Bundle {
         let entry_point_address = address(123);
         let beneficiary = address(124);
+        let current_block_number: U64 = 10.into();
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
         let max_bundle_size = mock_ops.len() as u64;
@@ -1185,7 +1189,7 @@ mod tests {
             .returning(move || Ok(current_block_hash));
         provider
             .expect_get_base_fee()
-            .returning(move || Ok(base_fee));
+            .returning(move || Ok((current_block_number, base_fee)));
         provider
             .expect_get_max_priority_fee()
             .returning(move || Ok(max_priority_fee_per_gas));

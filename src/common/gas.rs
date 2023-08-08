@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, Chain, U256};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, Chain, U256, U64};
+use serde::{Deserialize, Serialize};
 use tokio::try_join;
 
 use crate::common::{
@@ -82,7 +83,8 @@ fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
         + ov.per_user_op_word * length_in_words
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GasFees {
     pub max_fee_per_gas: U256,
     pub max_priority_fee_per_gas: U256,
@@ -170,8 +172,13 @@ impl<P: ProviderLike> FeeEstimator<P> {
         }
     }
 
-    pub async fn required_bundle_fees(&self, min_fees: Option<GasFees>) -> anyhow::Result<GasFees> {
-        let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
+    /// Returns (block_number, base_fee_per_gas, required_fees)
+    pub async fn required_bundle_fees(
+        &self,
+        min_fees: Option<GasFees>,
+    ) -> anyhow::Result<(U64, U256, GasFees)> {
+        let ((block_number, base_fee), priority_fee) =
+            try_join!(self.provider.get_base_fee(), self.get_priority_fee())?;
 
         let required_fees = min_fees.unwrap_or_default();
 
@@ -183,23 +190,23 @@ impl<P: ProviderLike> FeeEstimator<P> {
                     self.bundle_priority_fee_overhead_percent,
                 ));
 
-        // Give enough leeway for the base fee to increase by the maximum
+        // Require enough for the base fee to increase by the maximum
         // possible amount for a single block (12.5%).
         let max_fee_per_gas = required_fees
             .max_fee_per_gas
             .max((base_fee * 9 / 8) + max_priority_fee_per_gas);
-        Ok(GasFees {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-        })
+        Ok((
+            block_number,
+            base_fee,
+            GasFees {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+            },
+        ))
     }
 
     pub fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees {
         self.priority_fee_mode.required_fees(bundle_fees)
-    }
-
-    async fn get_base_fee(&self) -> anyhow::Result<U256> {
-        self.provider.get_base_fee().await
     }
 
     async fn get_priority_fee(&self) -> anyhow::Result<U256> {

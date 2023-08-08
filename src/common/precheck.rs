@@ -269,10 +269,12 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
     }
 
     async fn get_bundle_fees(&self) -> anyhow::Result<GasFees> {
-        self.fee_estimator
+        Ok(self
+            .fee_estimator
             .required_bundle_fees(None)
             .await
-            .context("should get bundle fees")
+            .context("should get bundle fees")?
+            .2)
     }
 
     async fn get_pre_verification_gas(&self, op: UserOperation) -> anyhow::Result<U256> {
