@@ -35,7 +35,10 @@ const GAS_ROUNDING: u64 = 1024;
 
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 
-const GAS_FEE_TRANSFER_COST: u64 = 10000;
+/// This accounts for the gas used during a transfer to the entrypoint contract
+/// As well as the cost to initialize a previously 0 storage slot for an account
+/// that has yet to deposit.
+const GAS_FEE_TRANSFER_COST: u64 = 30000;
 
 /// Offset at which the proxy target address appears in the proxy bytecode. Must
 /// be updated whenever `CallGasEstimationProxy.sol` changes.
