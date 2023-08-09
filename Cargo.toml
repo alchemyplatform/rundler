@@ -13,8 +13,8 @@ chrono = "0.4.24"
 clap = { version = "4.2.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
 enum_dispatch = "0.3.11"
-ethers = { version = "2.0.3", features = ["ws"] }
-ethers-signers = {version = "2.0.3", features = ["aws"] }
+ethers = { version = "2.0.8", features = ["ws"] }
+ethers-signers = {version = "2.0.8", features = ["aws"] }
 futures = "0.3.28"
 futures-timer = "3.0.2"
 futures-util = "0.3.28"
