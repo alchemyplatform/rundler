@@ -34,6 +34,7 @@ use crate::{
         eth::{estimation, EthApi, EthApiServer},
         health::{SystemApi, SystemApiServer},
         metrics::RpcMetricsLogger,
+        rundler::{RundlerApi, RundlerApiServer},
     },
 };
 
@@ -130,6 +131,14 @@ impl Task for RpcTask {
                 )?,
                 ApiNamespace::Debug => module.merge(
                     DebugApi::new(op_pool_client.clone(), builder_client.clone()).into_rpc(),
+                )?,
+                ApiNamespace::Rundler => module.merge(
+                    RundlerApi::new(
+                        provider.clone(),
+                        self.args.chain_id,
+                        self.args.precheck_settings,
+                    )
+                    .into_rpc(),
                 )?,
             }
         }

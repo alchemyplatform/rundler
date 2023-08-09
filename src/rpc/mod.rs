@@ -2,6 +2,7 @@ mod debug;
 mod eth;
 mod health;
 mod metrics;
+mod rundler;
 mod task;
 
 use anyhow::bail;
@@ -30,6 +31,7 @@ use crate::common::{
 pub enum ApiNamespace {
     Eth,
     Debug,
+    Rundler,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
