@@ -3,6 +3,7 @@ use std::sync::Arc;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, Chain, U256};
 use tokio::try_join;
 
+use super::types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS};
 use crate::common::{
     math,
     types::{ProviderLike, UserOperation},
@@ -43,13 +44,13 @@ pub async fn calc_pre_verification_gas<P: ProviderLike>(
 ) -> anyhow::Result<U256> {
     let static_gas = calc_static_pre_verification_gas(&full_op);
     let dynamic_gas = match chain_id {
-        42161 | 421613 => {
+        _ if ARBITRUM_CHAIN_IDS.contains(&chain_id) => {
             provider
                 .clone()
                 .calc_arbitrum_l1_gas(entry_point, random_op)
                 .await?
         }
-        10 | 420 => {
+        _ if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) => {
             provider
                 .clone()
                 .calc_optimism_l1_gas(entry_point, random_op)

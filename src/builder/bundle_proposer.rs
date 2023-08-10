@@ -30,7 +30,7 @@ use crate::{
         simulation::{SimulationError, SimulationSuccess, Simulator},
         types::{
             Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike,
-            Timestamp, UserOperation,
+            Timestamp, UserOperation, OP_BEDROCK_CHAIN_IDS,
         },
     },
 };
@@ -680,14 +680,15 @@ impl ProposalContext {
     }
 
     fn get_total_gas(&self, chain_id: u64) -> U256 {
-        // On optimism chains the L1 gas fee is charged via pre_verification_gas
+        // On some chains the L1 gas fee is charged via pre_verification_gas
         // in the bundle, but is not part of the gas limit of the transaction.
         // Thus, including it can cause the transaction to exceed the maximum limit
         // of a block. This workaround caps the pre_verification_gas at 100k during
         // bundle gas estimation.
-        let max_pre_verification_gas = match chain_id {
-            10 | 420 => U256::from(100_000),
-            _ => U256::MAX,
+        let max_pre_verification_gas = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+            U256::from(100_000)
+        } else {
+            U256::MAX
         };
         self.iter_ops()
             .map(|op| {

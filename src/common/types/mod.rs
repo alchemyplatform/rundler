@@ -1,3 +1,4 @@
+mod chain;
 mod entry_point_like;
 mod provider_like;
 mod timestamp;
@@ -11,6 +12,7 @@ use std::{
 };
 
 use anyhow::bail;
+pub use chain::*;
 pub use entry_point_like::*;
 use ethers::{
     abi::{encode, Token},
