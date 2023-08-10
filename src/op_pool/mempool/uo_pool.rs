@@ -93,15 +93,6 @@ where
             event,
         });
     }
-}
-
-impl<R> Mempool for UoPool<R>
-where
-    R: ReputationManager,
-{
-    fn entry_point(&self) -> Address {
-        self.entry_point
-    }
 
     fn on_chain_update(&self, update: &ChainUpdate) {
         let mut state = self.state.write();
@@ -117,7 +108,10 @@ where
         let mut mined_op_count = 0;
         let mut unmined_op_count = 0;
         for op in mined_ops {
-            mined_op_count += 1;
+            if op.entry_point != self.entry_point {
+                continue;
+            }
+
             // Remove throttled ops that were included in the block
             state.throttled_ops.remove(&op.hash);
             if let Some(op) = state
@@ -127,14 +121,19 @@ where
                 for entity in op.staked_entities() {
                     self.reputation.add_included(entity.address);
                 }
+                mined_op_count += 1;
             }
         }
         for op in unmined_ops {
-            unmined_op_count += 1;
+            if op.entry_point != self.entry_point {
+                continue;
+            }
+
             if let Some(op) = state.pool.unmine_operation(op.hash) {
                 for entity in op.staked_entities() {
                     self.reputation.remove_included(entity.address);
                 }
+                unmined_op_count += 1;
             }
         }
         if mined_op_count > 0 {
@@ -153,6 +152,12 @@ where
                 update.latest_block_hash,
             );
         }
+        UoPoolMetrics::update_ops_seen(
+            mined_op_count as isize - unmined_op_count as isize,
+            self.entry_point,
+        );
+        UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.entry_point);
+
         state
             .pool
             .forget_mined_operations_before_block(update.earliest_remembered_block_number);
@@ -168,6 +173,15 @@ where
             state.throttled_ops.remove(&hash);
         }
         state.block_number = update.latest_block_number;
+    }
+}
+
+impl<R> Mempool for UoPool<R>
+where
+    R: ReputationManager,
+{
+    fn entry_point(&self) -> Address {
+        self.entry_point
     }
 
     fn add_operation(&self, origin: OperationOrigin, op: PoolOperation) -> MempoolResult<H256> {
@@ -255,15 +269,29 @@ where
     }
 
     fn remove_operations<'a>(&self, hashes: impl IntoIterator<Item = &'a H256>) {
-        // hold the lock for the duration of the operation
-        let mut state = self.state.write();
-        for hash in hashes {
-            state.pool.remove_operation_by_hash(*hash);
+        let mut count = 0;
+        let mut removed_hashes = vec![];
+        {
+            let mut state = self.state.write();
+            for hash in hashes {
+                if state.pool.remove_operation_by_hash(*hash).is_some() {
+                    count += 1;
+                    removed_hashes.push(*hash);
+                }
+            }
         }
+        for hash in removed_hashes {
+            self.emit(OpPoolEvent::RemovedOp {
+                op_hash: hash,
+                reason: OpRemovalReason::Requested,
+            })
+        }
+        UoPoolMetrics::increment_removed_operations(count, self.entry_point);
     }
 
     fn remove_entity(&self, entity: Entity) {
         let removed_op_hashes = self.state.write().pool.remove_entity(entity);
+        let count = removed_op_hashes.len();
         self.emit(OpPoolEvent::RemovedEntity { entity });
         for op_hash in removed_op_hashes {
             self.emit(OpPoolEvent::RemovedOp {
@@ -271,6 +299,8 @@ where
                 reason: OpRemovalReason::EntityRemoved { entity },
             })
         }
+        UoPoolMetrics::increment_removed_operations(count, self.entry_point);
+        UoPoolMetrics::increment_removed_entities(self.entry_point);
     }
 
     fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
@@ -307,10 +337,30 @@ where
     }
 }
 
+struct UoPoolMetrics {}
+
+impl UoPoolMetrics {
+    fn update_ops_seen(num_ops: isize, entry_point: Address) {
+        metrics::increment_gauge!("op_pool_ops_seen", num_ops as f64, "entrypoint" => entry_point.to_string());
+    }
+
+    fn increment_unmined_operations(num_ops: usize, entry_point: Address) {
+        metrics::counter!("op_pool_unmined_operations", num_ops as u64, "entrypoint" => entry_point.to_string());
+    }
+
+    fn increment_removed_operations(num_ops: usize, entry_point: Address) {
+        metrics::counter!("op_pool_removed_operations", num_ops as u64, "entrypoint" => entry_point.to_string());
+    }
+
+    fn increment_removed_entities(entry_point: Address) {
+        metrics::increment_counter!("op_pool_removed_entities", "entrypoint" => entry_point.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::types::UserOperation;
+    use crate::{common::types::UserOperation, op_pool::chain::MinedOp};
 
     #[test]
     fn add_single_op() {
@@ -353,6 +403,104 @@ mod tests {
         assert_eq!(pool.best_operations(3), vec![]);
     }
 
+    #[test]
+    fn chain_update_mine() {
+        let pool = create_pool();
+        let ops = vec![
+            create_op(Address::random(), 0, 3),
+            create_op(Address::random(), 0, 2),
+            create_op(Address::random(), 0, 1),
+        ];
+        pool.add_operations(OperationOrigin::Local, ops.clone());
+        check_ops(pool.best_operations(3), ops.clone());
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 1,
+            latest_block_hash: H256::random(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![MinedOp {
+                entry_point: pool.entry_point,
+                hash: ops[0].uo.op_hash(pool.entry_point, 1),
+                sender: ops[0].uo.sender,
+                nonce: ops[0].uo.nonce,
+            }],
+            unmined_ops: vec![],
+        });
+
+        check_ops(pool.best_operations(3), ops[1..].to_vec());
+    }
+
+    #[test]
+    fn chain_update_mine_unmine() {
+        let pool = create_pool();
+        let ops = vec![
+            create_op(Address::random(), 0, 3),
+            create_op(Address::random(), 0, 2),
+            create_op(Address::random(), 0, 1),
+        ];
+        pool.add_operations(OperationOrigin::Local, ops.clone());
+        check_ops(pool.best_operations(3), ops.clone());
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 1,
+            latest_block_hash: H256::random(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![MinedOp {
+                entry_point: pool.entry_point,
+                hash: ops[0].uo.op_hash(pool.entry_point, 1),
+                sender: ops[0].uo.sender,
+                nonce: ops[0].uo.nonce,
+            }],
+            unmined_ops: vec![],
+        });
+        check_ops(pool.best_operations(3), ops.clone()[1..].to_vec());
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 1,
+            latest_block_hash: H256::random(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![],
+            unmined_ops: vec![MinedOp {
+                entry_point: pool.entry_point,
+                hash: ops[0].uo.op_hash(pool.entry_point, 1),
+                sender: ops[0].uo.sender,
+                nonce: ops[0].uo.nonce,
+            }],
+        });
+        check_ops(pool.best_operations(3), ops);
+    }
+
+    #[test]
+    fn chain_update_wrong_ep() {
+        let pool = create_pool();
+        let ops = vec![
+            create_op(Address::random(), 0, 3),
+            create_op(Address::random(), 0, 2),
+            create_op(Address::random(), 0, 1),
+        ];
+        pool.add_operations(OperationOrigin::Local, ops.clone());
+        check_ops(pool.best_operations(3), ops.clone());
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 1,
+            latest_block_hash: H256::random(),
+            earliest_remembered_block_number: 0,
+            reorg_depth: 0,
+            mined_ops: vec![MinedOp {
+                entry_point: Address::random(),
+                hash: ops[0].uo.op_hash(pool.entry_point, 1),
+                sender: ops[0].uo.sender,
+                nonce: ops[0].uo.nonce,
+            }],
+            unmined_ops: vec![],
+        });
+
+        check_ops(pool.best_operations(3), ops);
+    }
+
     fn create_pool() -> UoPool<MockReputationManager> {
         let args = PoolConfig {
             entry_point: Address::random(),
@@ -387,7 +535,7 @@ mod tests {
     }
 
     fn mock_reputation() -> Arc<MockReputationManager> {
-        Arc::new(MockReputationManager::default())
+        Arc::new(MockReputationManager {})
     }
 
     #[derive(Default, Clone)]

@@ -44,7 +44,9 @@ pub struct PoolInner {
     /// Submission ID counter
     submission_id: u64,
     /// keeps track of the size of the pool in bytes
-    size: SizeTracker,
+    pool_size: SizeTracker,
+    /// keeps track of the size of the removed cache in bytes
+    cache_size: SizeTracker,
 }
 
 impl PoolInner {
@@ -58,12 +60,15 @@ impl PoolInner {
             mined_hashes_with_block_numbers: BTreeSet::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
-            size: SizeTracker::default(),
+            pool_size: SizeTracker::default(),
+            cache_size: SizeTracker::default(),
         }
     }
 
     pub fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
-        self.add_operation_internal(Arc::new(op), None)
+        let ret = self.add_operation_internal(Arc::new(op), None);
+        self.update_metrics();
+        ret
     }
 
     pub fn add_operations(
@@ -85,11 +90,15 @@ impl PoolInner {
     }
 
     pub fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
-        self.remove_operation_internal(hash, None)
+        let ret = self.remove_operation_internal(hash, None);
+        self.update_metrics();
+        ret
     }
 
     pub fn mine_operation(&mut self, hash: H256, block_number: u64) -> Option<Arc<PoolOperation>> {
-        self.remove_operation_internal(hash, Some(block_number))
+        let ret = self.remove_operation_internal(hash, Some(block_number));
+        self.update_metrics();
+        ret
     }
 
     pub fn unmine_operation(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
@@ -99,6 +108,7 @@ impl PoolInner {
         if let Err(error) = self.put_back_unmined_operation(op.clone()) {
             info!("Could not put back unmined operation: {error}");
         };
+        self.update_metrics();
         Some(op.po)
     }
 
@@ -112,8 +122,9 @@ impl PoolInner {
             .map(|(hash, _)| *hash)
             .collect::<Vec<_>>();
         for &hash in &to_remove {
-            self.remove_operation_by_hash(hash);
+            self.remove_operation_internal(hash, None);
         }
+        self.update_metrics();
         to_remove
     }
 
@@ -123,9 +134,12 @@ impl PoolInner {
             .first()
             .filter(|(bn, _)| *bn < block_number)
         {
-            self.mined_at_block_number_by_hash.remove(&hash);
+            if let Some((op, _)) = self.mined_at_block_number_by_hash.remove(&hash) {
+                self.cache_size -= op.size();
+            }
             self.mined_hashes_with_block_numbers.remove(&(bn, hash));
         }
+        self.update_metrics();
     }
 
     pub fn clear(&mut self) {
@@ -135,20 +149,22 @@ impl PoolInner {
         self.mined_at_block_number_by_hash.clear();
         self.mined_hashes_with_block_numbers.clear();
         self.count_by_address.clear();
-        self.size = SizeTracker::default();
+        self.pool_size = SizeTracker::default();
+        self.cache_size = SizeTracker::default();
+        self.update_metrics();
     }
 
     fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
         let mut removed = Vec::new();
 
-        while self.size > self.config.max_size_of_pool_bytes {
+        while self.pool_size > self.config.max_size_of_pool_bytes {
             if let Some(worst) = self.best.pop_last() {
                 let hash = worst
                     .uo()
                     .op_hash(self.config.entry_point, self.config.chain_id);
 
                 let _ = self
-                    .remove_operation_by_hash(hash)
+                    .remove_operation_internal(hash, None)
                     .context("should have removed the worst operation")?;
 
                 removed.push(hash);
@@ -226,7 +242,7 @@ impl PoolInner {
         let hash = pool_op
             .uo()
             .op_hash(self.config.entry_point, self.config.chain_id);
-        self.size += pool_op.size();
+        self.pool_size += pool_op.size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
@@ -239,8 +255,6 @@ impl PoolInner {
             Err(MempoolError::DiscardedOnInsert)?;
         }
 
-        metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
-        metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
         Ok(hash)
     }
 
@@ -253,6 +267,7 @@ impl PoolInner {
         self.by_id.remove(&op.uo().id());
         self.best.remove(&op);
         if let Some(block_number) = block_number {
+            self.cache_size += op.size();
             self.mined_at_block_number_by_hash
                 .insert(hash, (op.clone(), block_number));
             self.mined_hashes_with_block_numbers
@@ -262,9 +277,7 @@ impl PoolInner {
             self.decrement_address_count(e.address);
         }
 
-        self.size -= op.size();
-        metrics::gauge!("op_pool_num_ops_in_pool", self.by_hash.len() as f64, "entrypoint_addr" => self.config.entry_point.to_string());
-        metrics::gauge!("op_pool_size_bytes", self.size.0 as f64, "entrypoint_addr" => self.config.entry_point.to_string());
+        self.pool_size -= op.size();
         Some(op.po)
     }
 
@@ -293,6 +306,19 @@ impl PoolInner {
             self.config.min_replacement_fee_increase_percentage,
         );
         (replacement_priority_fee, replacement_fee)
+    }
+
+    fn update_metrics(&self) {
+        PoolMetrics::set_pool_metrics(
+            self.by_hash.len(),
+            self.pool_size.0,
+            self.config.entry_point,
+        );
+        PoolMetrics::set_cache_metrics(
+            self.mined_hashes_with_block_numbers.len(),
+            self.cache_size.0,
+            self.config.entry_point,
+        );
     }
 }
 
@@ -336,6 +362,19 @@ impl PartialOrd for OrderedPoolOperation {
 impl PartialEq for OrderedPoolOperation {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
+    }
+}
+
+struct PoolMetrics {}
+
+impl PoolMetrics {
+    fn set_pool_metrics(num_ops: usize, size_bytes: isize, entry_point: Address) {
+        metrics::gauge!("op_pool_num_ops_in_pool", num_ops as f64, "entrypoint_addr" => entry_point.to_string());
+        metrics::gauge!("op_pool_size_bytes", size_bytes as f64, "entrypoint_addr" => entry_point.to_string());
+    }
+    fn set_cache_metrics(num_ops: usize, size_bytes: isize, entry_point: Address) {
+        metrics::gauge!("op_pool_num_ops_in_cache", num_ops as f64, "entrypoint_addr" => entry_point.to_string());
+        metrics::gauge!("op_pool_cache_size_bytes", size_bytes as f64, "entrypoint_addr" => entry_point.to_string());
     }
 }
 
@@ -599,7 +638,7 @@ mod tests {
         }
 
         assert_eq!(pool.address_count(sender), 1);
-        assert_eq!(pool.size, po1.size());
+        assert_eq!(pool.pool_size, po1.size());
     }
 
     #[test]
@@ -622,7 +661,7 @@ mod tests {
         assert_eq!(pool.address_count(sender), 1);
         assert_eq!(pool.address_count(paymaster1), 0);
         assert_eq!(pool.address_count(paymaster2), 1);
-        assert_eq!(pool.size, po2.size());
+        assert_eq!(pool.pool_size, po2.size());
     }
 
     fn conf() -> PoolConfig {

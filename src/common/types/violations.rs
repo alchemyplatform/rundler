@@ -6,6 +6,22 @@ pub enum ViolationError<T> {
     Other(#[from] anyhow::Error),
 }
 
+impl<T> Clone for ViolationError<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            ViolationError::Violations(violations) => {
+                ViolationError::Violations(violations.clone())
+            }
+            ViolationError::Other(error) => {
+                ViolationError::Other(anyhow::anyhow!(error.to_string()))
+            }
+        }
+    }
+}
+
 impl<T> From<Vec<T>> for ViolationError<T> {
     fn from(violations: Vec<T>) -> Self {
         Self::Violations(violations)

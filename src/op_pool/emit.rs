@@ -57,7 +57,7 @@ pub enum EntityReputation {
 
 #[derive(Clone, Debug)]
 pub enum OpRemovalReason {
-    Requsted,
+    Requested,
     Mined {
         block_number: u64,
         block_hash: H256,
