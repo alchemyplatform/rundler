@@ -201,6 +201,13 @@ impl<P: ProviderLike> Chain<P> {
         while self.blocks.len() > self.settings.history_size as usize {
             self.blocks.pop_front();
         }
+
+        ChainMetrics::set_block_height(current_block_number);
+        if reorg_depth > 0 {
+            ChainMetrics::increment_reorgs_detected();
+            ChainMetrics::increment_total_reorg_depth(reorg_depth);
+        }
+
         self.new_update(reorg_depth, mined_ops, unmined_ops)
     }
 
@@ -417,6 +424,22 @@ impl ChainUpdate {
             mined_ops,
             unmined_ops,
         }
+    }
+}
+
+struct ChainMetrics {}
+
+impl ChainMetrics {
+    fn set_block_height(block_height: u64) {
+        metrics::gauge!("op_pool_chain_block_height", block_height as f64);
+    }
+
+    fn increment_reorgs_detected() {
+        metrics::increment_counter!("op_pool_chain_reorgs_detected");
+    }
+
+    fn increment_total_reorg_depth(depth: u64) {
+        metrics::counter!("op_pool_chain_total_reorg_depth", depth);
     }
 }
 

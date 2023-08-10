@@ -210,22 +210,15 @@ where
         &self,
         op: OpFromPool,
         block_hash: H256,
-    ) -> anyhow::Result<(UserOperation, Option<SimulationSuccess>)> {
+    ) -> anyhow::Result<(UserOperation, Result<SimulationSuccess, SimulationError>)> {
         let result = self
             .simulator
             .simulate_validation(op.op.clone(), Some(block_hash), Some(op.expected_code_hash))
             .await;
         match result {
-            Ok(success) => Ok((
-                op.op,
-                Some(success).filter(|success| {
-                    success
-                        .valid_time_range
-                        .contains(Timestamp::now(), TIME_RANGE_BUFFER)
-                }),
-            )),
+            Ok(success) => Ok((op.op, Ok(success))),
             Err(error) => match error {
-                SimulationError::Violations(_) => Ok((op.op, None)),
+                SimulationError::Violations(_) => Ok((op.op, Err(error))),
                 SimulationError::Other(error) => Err(error),
             },
         }
@@ -233,7 +226,7 @@ where
 
     async fn assemble_context(
         &self,
-        ops_with_simulations: Vec<(UserOperation, Option<SimulationSuccess>)>,
+        ops_with_simulations: Vec<(UserOperation, Result<SimulationSuccess, SimulationError>)>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
@@ -244,14 +237,33 @@ where
         let mut rejected_ops = Vec::<UserOperation>::new();
         let mut paymasters_to_reject = Vec::<Address>::new();
         for (op, simulation) in ops_with_simulations {
-            let Some(simulation) = simulation else {
-                self.emit(BuilderEvent::RejectedOp {
+            let simulation = match simulation {
+                Ok(simulation) => simulation,
+                Err(error) => {
+                    self.emit(BuilderEvent::RejectedOp {
+                        op_hash: self.op_hash(&op),
+                        reason: OpRejectionReason::FailedRevalidation { error },
+                    });
+                    rejected_ops.push(op);
+                    continue;
+                }
+            };
+
+            // filter time range
+            if !simulation
+                .valid_time_range
+                .contains(Timestamp::now(), TIME_RANGE_BUFFER)
+            {
+                self.emit(BuilderEvent::SkippedOp {
                     op_hash: self.op_hash(&op),
-                    reason: OpRejectionReason::FailedRevalidation,
+                    reason: SkipReason::InvalidTimeRange {
+                        valid_range: simulation.valid_time_range,
+                    },
                 });
                 rejected_ops.push(op);
                 continue;
-            };
+            }
+
             if let Some(&other_sender) = simulation
                 .accessed_addresses
                 .iter()
@@ -273,7 +285,7 @@ where
                 };
                 let max_cost = op.max_gas_cost();
                 if *balance < max_cost {
-                    info!("Rejected paymaster ${paymaster:?} becauase its balance was too low.");
+                    info!("Rejected paymaster {paymaster:?} becauase its balance {balance:?} was too low.");
                     paymasters_to_reject.push(paymaster);
                     continue;
                 } else {

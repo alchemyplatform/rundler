@@ -11,18 +11,13 @@ use strum::IntoEnumIterator;
 use self::error::MempoolResult;
 use crate::{
     common::types::{Entity, EntityType, UserOperation, ValidTimeRange},
-    op_pool::{chain::ChainUpdate, reputation::Reputation},
+    op_pool::reputation::Reputation,
 };
 
 /// In-memory operation pool
 pub trait Mempool: Send + Sync {
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
-
-    /// Event listener for when a new block is mined.
-    ///
-    /// Pool is updated according to the chain update event.
-    fn on_chain_update(&self, update: &ChainUpdate);
 
     /// Adds a validated user operation to the pool.
     ///

@@ -277,7 +277,6 @@ mod tests {
     use crate::{
         common::types::Entity,
         op_pool::{
-            chain::ChainUpdate,
             mempool::{error::MempoolResult, PoolOperation},
             reputation::Reputation,
         },
@@ -358,8 +357,6 @@ mod tests {
         fn entry_point(&self) -> Address {
             self.entry_point
         }
-
-        fn on_chain_update(&self, _update: &ChainUpdate) {}
 
         fn add_operation(
             &self,

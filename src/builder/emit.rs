@@ -2,7 +2,7 @@ use std::{fmt::Display, sync::Arc};
 
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256};
 
-use crate::common::{gas::GasFees, strs};
+use crate::common::{gas::GasFees, simulation::SimulationError, strs, types::ValidTimeRange};
 
 #[derive(Clone, Debug)]
 pub enum BuilderEvent {
@@ -45,11 +45,12 @@ pub struct BundleTxDetails {
 #[derive(Clone, Debug)]
 pub enum SkipReason {
     AccessedOtherSender { other_sender: Address },
+    InvalidTimeRange { valid_range: ValidTimeRange },
 }
 
 #[derive(Clone, Debug)]
 pub enum OpRejectionReason {
-    FailedRevalidation,
+    FailedRevalidation { error: SimulationError },
     FailedInBundle { message: Arc<String> },
 }
 
