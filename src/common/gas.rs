@@ -184,11 +184,9 @@ impl<P: ProviderLike> FeeEstimator<P> {
                     self.bundle_priority_fee_overhead_percent,
                 ));
 
-        // Give enough leeway for the base fee to increase by the maximum
-        // possible amount for a single block (12.5%).
         let max_fee_per_gas = required_fees
             .max_fee_per_gas
-            .max((base_fee * 9 / 8) + max_priority_fee_per_gas);
+            .max(base_fee + max_priority_fee_per_gas);
         Ok(GasFees {
             max_fee_per_gas,
             max_priority_fee_per_gas,

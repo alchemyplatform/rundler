@@ -896,12 +896,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_drops_but_not_rejects_op_with_too_low_max_fee_per_gas() {
-        // Required max_fee_per_gas is the base fee increased by 12.5% plus the
-        // required priority fee.
         let base_fee = U256::from(1000);
         let max_priority_fee_per_gas = U256::from(50);
-        let op1 = op_with_sender_and_fees(address(1), 1179.into(), 55.into());
-        let op2 = op_with_sender_and_fees(address(2), 1180.into(), 55.into());
+        let op1 = op_with_sender_and_fees(address(1), 1054.into(), 55.into());
+        let op2 = op_with_sender_and_fees(address(2), 1055.into(), 55.into());
         let bundle = make_bundle(
             vec![
                 MockOp {
@@ -923,7 +921,7 @@ mod tests {
         assert_eq!(
             bundle.gas_fees,
             GasFees {
-                max_fee_per_gas: 1175.into(),
+                max_fee_per_gas: 1050.into(),
                 max_priority_fee_per_gas: 50.into(),
             }
         );

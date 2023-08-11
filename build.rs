@@ -28,7 +28,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("SimpleAccountFactory")?,
         abigen_of("VerifyingPaymaster")?,
         abigen_of("NodeInterface")?,
-        abigen_of("OVM_GasPriceOracle")?,
+        abigen_of("GasPriceOracle")?,
     ])
     .build()?
     .write_to_module("src/common/contracts", false)?;

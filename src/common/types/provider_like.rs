@@ -4,7 +4,10 @@ use anyhow::Context;
 use ethers::{
     contract::ContractError,
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{Address, Block, BlockId, BlockNumber, Bytes, Filter, Log, H160, H256, U256},
+    types::{
+        Address, Block, BlockId, BlockNumber, Bytes, Eip1559TransactionRequest, Filter, Log, H160,
+        H256, U256, U64,
+    },
 };
 #[cfg(test)]
 use mockall::automock;
@@ -12,8 +15,8 @@ use tonic::async_trait;
 
 use crate::common::{
     contracts::{
-        i_aggregator::IAggregator, i_entry_point::IEntryPoint, node_interface::NodeInterface,
-        ovm_gas_price_oracle::OVM_GasPriceOracle,
+        gas_price_oracle::GasPriceOracle, i_aggregator::IAggregator, i_entry_point::IEntryPoint,
+        node_interface::NodeInterface,
     },
     types::UserOperation,
 };
@@ -107,12 +110,12 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
     }
 
     async fn get_base_fee(&self) -> anyhow::Result<U256> {
-        Middleware::get_block(self, BlockNumber::Latest)
+        Middleware::get_block(self, BlockNumber::Pending)
             .await
-            .context("should load latest block to get base fee")?
-            .context("latest block should exist")?
+            .context("should load pending block to get base fee")?
+            .context("pending block should exist")?
             .base_fee_per_gas
-            .context("latest block should have a nonempty base fee")
+            .context("pending block should have a nonempty base fee")
     }
 
     async fn get_max_priority_fee(&self) -> anyhow::Result<U256> {
@@ -184,17 +187,31 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             .calldata()
             .context("should get calldata for entry point handle ops")?;
 
-        let gas_oracle =
-            OVM_GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, Arc::clone(&self));
+        // construct an unsigned transaction with default values just for L1 gas estimation
+        let tx = Eip1559TransactionRequest::new()
+            .from(Address::random())
+            .to(entry_point_address)
+            .gas(U256::from(1_000_000))
+            .max_priority_fee_per_gas(U256::from(100_000_000))
+            .max_fee_per_gas(U256::from(100_000_000))
+            .value(U256::from(0))
+            .data(data)
+            .nonce(U256::from(100_000))
+            .chain_id(U64::from(100_000))
+            .rlp();
 
-        let (l1_gas, l2_gas_fee) = tokio::try_join!(
+        let gas_oracle =
+            GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, Arc::clone(&self));
+
+        let (l1_fee, l2_base_fee, l2_priority_fee) = tokio::try_join!(
             async {
-                let l1_gas = gas_oracle.get_l1_fee(data).call().await?;
+                let l1_gas = gas_oracle.get_l1_fee(tx).call().await?;
                 Ok(l1_gas)
             },
-            self.get_base_fee()
+            self.get_base_fee(),
+            self.get_max_priority_fee(),
         )?;
 
-        Ok(l1_gas / l2_gas_fee)
+        Ok(l1_fee / (l2_base_fee + l2_priority_fee))
     }
 }
