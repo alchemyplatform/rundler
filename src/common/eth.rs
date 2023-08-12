@@ -9,12 +9,17 @@ use ethers::{
         ProviderError, RetryClient, RetryClientBuilder,
     },
     types::{
-        Address, BlockId, Bytes, Eip1559TransactionRequest, Log, Selector, TransactionReceipt, H256,
+        Address, BlockId, Bytes, Eip1559TransactionRequest, Log, Selector, TransactionReceipt,
+        H256, U256,
     },
 };
 use url::Url;
 
-use crate::common::contracts::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
+use super::types::ProviderLike;
+use crate::common::contracts::{
+    get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
+    get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
+};
 
 pub fn new_provider(
     url: &str,
@@ -119,11 +124,11 @@ pub async fn get_chain_id<Client: JsonRpcClient>(
 
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
-pub async fn get_code_hash<Client: JsonRpcClient>(
-    provider: &Provider<Client>,
+pub async fn get_code_hash<P: ProviderLike>(
+    provider: &P,
     mut addresses: Vec<Address>,
     block_id: Option<BlockId>,
-) -> Result<H256, anyhow::Error> {
+) -> anyhow::Result<H256> {
     addresses.sort();
     let out: CodeHashesResult =
         call_constructor(provider, &GETCODEHASHES_BYTECODE, addresses, block_id)
@@ -132,8 +137,17 @@ pub async fn get_code_hash<Client: JsonRpcClient>(
     Ok(H256(out.hash))
 }
 
-async fn call_constructor<Args: AbiEncode, Ret: AbiDecode, Client: JsonRpcClient>(
-    provider: &Provider<Client>,
+pub async fn get_gas_used<P: ProviderLike>(
+    provider: &P,
+    target: Address,
+    value: U256,
+    data: Bytes,
+) -> anyhow::Result<GasUsedResult> {
+    call_constructor(provider, &GETGASUSED_BYTECODE, (target, value, data), None).await
+}
+
+async fn call_constructor<P: ProviderLike, Args: AbiEncode, Ret: AbiDecode>(
+    provider: &P,
     bytecode: &Bytes,
     args: Args,
     block_id: Option<BlockId>,

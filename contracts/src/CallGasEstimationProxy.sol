@@ -58,9 +58,9 @@ contract CallGasEstimationProxy is Proxy {
         bool isContinuation;
     }
 
-    error EstimateCallGasResult(uint256 gasEstimate);
+    error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
 
-    error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas);
+    error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
 
     error EstimateCallGasRevertAtMax(bytes revertData);
 
@@ -91,6 +91,7 @@ contract CallGasEstimationProxy is Proxy {
         uint256 scaledMaxFailureGas = args.minGas / args.rounding;
         uint256 scaledMinSuccessGas = args.maxGas.ceilDiv(args.rounding);
         uint256 scaledGasUsedInSuccess = scaledMinSuccessGas;
+        uint256 scaledGuess = 0;
         if (!args.isContinuation) {
             // Make one call at full gas to make sure success is even possible.
             (
@@ -101,19 +102,22 @@ contract CallGasEstimationProxy is Proxy {
             if (!success) {
                 revert EstimateCallGasRevertAtMax(revertData);
             }
-            scaledGasUsedInSuccess = gasUsed.ceilDiv(args.rounding);
-        }
-        while (scaledMaxFailureGas + 1 < scaledMinSuccessGas) {
-            uint256 scaledGuess = chooseGuess(
+            scaledGuess = (gasUsed * 2) / args.rounding;
+        } else {
+            scaledGuess = chooseGuess(
                 scaledMaxFailureGas,
                 scaledMinSuccessGas,
                 scaledGasUsedInSuccess
             );
+        }
+        uint256 numRounds = 0;
+        while (scaledMaxFailureGas + 1 < scaledMinSuccessGas) {
+            numRounds++;
             uint256 guess = scaledGuess * args.rounding;
             if (!isEnoughGasForGuess(guess)) {
                 uint256 nextMin = scaledMaxFailureGas * args.rounding;
                 uint256 nextMax = scaledMinSuccessGas * args.rounding;
-                revert EstimateCallGasContinuation(nextMin, nextMax);
+                revert EstimateCallGasContinuation(nextMin, nextMax, numRounds);
             }
             (bool success, uint256 gasUsed, ) = innerCall(
                 args.sender,
@@ -128,9 +132,16 @@ contract CallGasEstimationProxy is Proxy {
             } else {
                 scaledMaxFailureGas = scaledGuess;
             }
+
+            scaledGuess = chooseGuess(
+                scaledMaxFailureGas,
+                scaledMinSuccessGas,
+                scaledGasUsedInSuccess
+            );
         }
         revert EstimateCallGasResult(
-            args.maxGas.min(scaledMinSuccessGas * args.rounding)
+            args.maxGas.min(scaledMinSuccessGas * args.rounding),
+            numRounds
         );
     }
 

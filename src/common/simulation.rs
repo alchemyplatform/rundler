@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     mem,
+    ops::Deref,
     sync::Arc,
 };
 
@@ -369,7 +370,7 @@ where
 
         let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
         let code_hash_future = eth::get_code_hash(
-            &self.provider,
+            self.provider.deref(),
             mem::take(&mut tracer_out.accessed_contract_addresses),
             Some(block_id),
         );
