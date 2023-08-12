@@ -79,7 +79,7 @@ pub struct BuilderArgs {
         long = "builder.max_bundle_size",
         name = "builder.max_bundle_size",
         env = "BUILDER_MAX_BUNDLE_SIZE",
-        default_value = "10"
+        default_value = "64"
     )]
     max_bundle_size: u64,
 

@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use ethers::{
     abi::AbiDecode,
     contract::EthCall,
@@ -15,10 +15,13 @@ use tonic::async_trait;
 
 use crate::{
     common::{
-        contracts::call_gas_estimation_proxy::{
-            EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
-            EstimateCallGasResult, EstimateCallGasRevertAtMax,
-            CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
+        contracts::{
+            call_gas_estimation_proxy::{
+                EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
+                EstimateCallGasResult, EstimateCallGasRevertAtMax,
+                CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
+            },
+            i_entry_point,
         },
         eth, gas, math,
         precheck::MIN_CALL_GAS_LIMIT,
@@ -31,7 +34,11 @@ use crate::{
 /// this value reduces the number of rounds of `eth_call` needed in binary
 /// search, e.g. a value of 1024 means ten fewer `eth_call`s needed for each of
 /// verification gas and call gas.
-const GAS_ROUNDING: u64 = 1024;
+const GAS_ROUNDING: u64 = 4096;
+
+/// Gas estimation will stop when the binary search bounds are within
+/// `GAS_ESTIMATION_ERROR_MARGIN` of each other.
+const GAS_ESTIMATION_ERROR_MARGIN: f64 = 0.1;
 
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 
@@ -100,7 +107,10 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
         // Estimate pre verification gas
         let pre_verification_gas = self.calc_pre_verification_gas(&op).await?;
 
-        // Try once with max gas to make sure it's possible to succeed.
+        // We deviate from the spec here always ignoring `max_fee_per_gas` and setting to zero.
+        // If not using a paymaster, the bundler will automatically add 21K to the verification
+        // gas limit to account for the gas fee transfer.
+        // If using a paymaster, the transfer gas will need to be added by the client to the returned limit.
         let op = UserOperation {
             pre_verification_gas,
             verification_gas_limit: settings.max_verification_gas.into(),
@@ -109,11 +119,16 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
             max_priority_fee_per_gas: 0.into(),
             ..op.into_user_operation(settings)
         };
+
         let verification_future = self.binary_search_verification_gas(&op, block_hash);
         let call_future = self.estimate_call_gas(&op, block_hash);
+
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
+        let timer = std::time::Instant::now();
         let (verification_gas_limit, call_gas_limit) = join!(verification_future, call_future);
+        tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
+
         let verification_gas_limit = verification_gas_limit?;
         let call_gas_limit = call_gas_limit?;
         Ok(GasEstimate {
@@ -143,12 +158,40 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         op: &UserOperation,
         block_hash: H256,
     ) -> Result<U256, GasEstimationError> {
+        let timer = std::time::Instant::now();
         let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
 
-        // We deviate from the spec here always ignoring `max_fee_per_gas` and setting to zero.
-        // If not using a paymaster, the bundler will automatically add 21K to the verification
-        // gas limit to account for the gas fee transfer.
-        // If using a paymaster, the transfer gas will need to be added by the client to the returned limit.
+        // Make one attempt at max gas, but zero fees, to see if success is possible.
+        // Capture the gas usage of this attempt and use as the initial guess in the binary search
+        let initial_op = UserOperation {
+            verification_gas_limit: simulation_gas,
+            call_gas_limit: 0.into(),
+            ..op.clone()
+        };
+        let gas_used = eth::get_gas_used(
+            self.provider.deref(),
+            self.entry_point.address(),
+            U256::zero(),
+            eth::call_data_of(
+                i_entry_point::SimulateHandleOpCall::selector(),
+                (initial_op, Address::zero(), Bytes::new()),
+            ),
+        )
+        .await
+        .context("failed to run initial guess")?;
+        if gas_used.success {
+            Err(anyhow!(
+                "simulateHandleOp succeeded, but should always revert"
+            ))?;
+        }
+        if let Some(message) = self
+            .entry_point
+            .decode_simulate_handle_ops_revert(gas_used.result)
+            .err()
+        {
+            return Err(GasEstimationError::RevertInValidation(message));
+        }
+
         let run_attempt_returning_error = |gas: u64| async move {
             let op = UserOperation {
                 verification_gas_limit: gas.into(),
@@ -170,35 +213,32 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
             Result::<_, anyhow::Error>::Ok(error_message)
         };
 
-        // Make one attempt at max gas, but zero fees, to see if success is possible.
-        if let Some(message) =
-            run_attempt_returning_error(self.settings.max_verification_gas).await?
+        let mut max_failure_gas = 0;
+        let mut min_success_gas = self.settings.max_verification_gas;
+        let mut guess = gas_used.gas_used.as_u64() * 2;
+        let mut num_rounds = 0;
+        while (min_success_gas as f64) / (max_failure_gas as f64)
+            > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
         {
-            return Err(GasEstimationError::RevertInValidation(message));
-        }
-
-        // Scale everything down by the rounding constant, then find the
-        // smallest scaled number that succeeds, then scale back up.
-        let mut scaled_max_failure_gas = 0;
-        let mut scaled_min_success_gas =
-            (self.settings.max_verification_gas + GAS_ROUNDING - 1) / GAS_ROUNDING;
-        while scaled_min_success_gas - scaled_max_failure_gas > 1 {
-            let scaled_guess = (scaled_max_failure_gas + scaled_min_success_gas) / 2;
-            let guess = scaled_guess * GAS_ROUNDING;
+            num_rounds += 1;
             let is_failure = run_attempt_returning_error(guess).await?.is_some();
             if is_failure {
-                scaled_max_failure_gas = scaled_guess;
+                max_failure_gas = guess;
             } else {
-                scaled_min_success_gas = scaled_guess;
+                min_success_gas = guess;
             }
+            guess = (max_failure_gas + min_success_gas) / 2;
         }
 
-        let mut min_success_gas = scaled_min_success_gas * GAS_ROUNDING;
+        let mut min_success_gas = min_success_gas;
         if op.paymaster().is_none() {
             // If not using a paymaster, add the gas for the gas fee transfer.
             min_success_gas += GAS_FEE_TRANSFER_COST;
         }
-
+        tracing::debug!(
+            "binary search for verification gas took {num_rounds} rounds, {}ms",
+            timer.elapsed().as_millis()
+        );
         Ok(min_success_gas.into())
     }
 
@@ -207,6 +247,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         op: &UserOperation,
         block_hash: H256,
     ) -> Result<U256, GasEstimationError> {
+        let timer = std::time::Instant::now();
         // For an explanation of what's going on here, see the comment at the
         // top of `CallGasEstimationProxy.sol`.
         let entry_point_code = self
@@ -233,6 +274,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         let mut min_gas = U256::zero();
         let mut max_gas = U256::from(self.settings.max_call_gas);
         let mut is_continuation = false;
+        let mut num_rounds = U256::zero();
         loop {
             let target_call_data = eth::call_data_of(
                 EstimateCallGasCall::selector(),
@@ -259,6 +301,11 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                 .map_err(GasEstimationError::RevertInCallWithMessage)?
                 .target_result;
             if let Ok(result) = EstimateCallGasResult::decode(&target_revert_data) {
+                num_rounds += result.num_rounds;
+                tracing::debug!(
+                    "binary search for call gas took {num_rounds} rounds, {}ms",
+                    timer.elapsed().as_millis()
+                );
                 return Ok(result.gas_estimate);
             } else if let Ok(revert) = EstimateCallGasRevertAtMax::decode(&target_revert_data) {
                 let error = if let Some(message) = eth::parse_revert_message(&revert.revert_data) {
@@ -283,6 +330,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
                 is_continuation = true;
                 min_gas = min_gas.max(continuation.min_gas);
                 max_gas = max_gas.min(continuation.max_gas);
+                num_rounds += continuation.num_rounds;
             } else {
                 Err(anyhow!(
                     "estimateCallGas revert should be a Result or a Continuation"

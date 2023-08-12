@@ -57,6 +57,11 @@ pub trait EntryPointLike: Send + Sync + 'static {
         gas: U256,
         gas_fees: GasFees,
     ) -> TypedTransaction;
+
+    fn decode_simulate_handle_ops_revert(
+        &self,
+        revert_data: Bytes,
+    ) -> Result<ExecutionResult, String>;
 }
 
 #[derive(Clone, Debug)]
@@ -139,15 +144,7 @@ where
             .context("simulateHandleOp succeeded, but should always revert")?;
         let revert_data = eth::get_revert_bytes(contract_error)
             .context("simulateHandleOps should return revert data")?;
-        if let Ok(result) = ExecutionResult::decode(&revert_data) {
-            Ok(Ok(result))
-        } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
-            Ok(Err(failed_op.reason))
-        } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
-            Ok(Err(err.reason))
-        } else {
-            Ok(Err(String::new()))
-        }
+        return Ok(self.decode_simulate_handle_ops_revert(revert_data));
     }
 
     fn get_send_bundle_transaction(
@@ -164,6 +161,21 @@ where
         tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
             .into()
+    }
+
+    fn decode_simulate_handle_ops_revert(
+        &self,
+        revert_data: Bytes,
+    ) -> Result<ExecutionResult, String> {
+        if let Ok(result) = ExecutionResult::decode(&revert_data) {
+            Ok(result)
+        } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+            Err(failed_op.reason)
+        } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
+            Err(err.reason)
+        } else {
+            Err(String::new())
+        }
     }
 }
 
