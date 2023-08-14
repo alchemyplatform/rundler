@@ -1,5 +1,4 @@
 use std::{
-    cmp,
     collections::{HashMap, HashSet},
     mem,
     sync::Arc,
@@ -30,7 +29,7 @@ use crate::{
         simulation::{SimulationError, SimulationSuccess, Simulator},
         types::{
             Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike,
-            Timestamp, UserOperation, OP_BEDROCK_CHAIN_IDS,
+            Timestamp, UserOperation,
         },
     },
 };
@@ -38,7 +37,8 @@ use crate::{
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
-const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 100;
+const MAX_BUNDLE_GAS_LIMIT: u64 = 20_000_000;
+const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 50;
 
 #[derive(Debug, Default)]
 pub struct Bundle {
@@ -113,6 +113,9 @@ where
             self.provider.get_latest_block_hash(),
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
+
+        // Limit the amount of gas in the bundle
+        let ops = self.limit_gas_in_bundle(ops);
 
         // Determine fees required for ops to be included in a bundle, and filter out ops that don't
         // meet the requirements.
@@ -479,6 +482,20 @@ where
         Ok(())
     }
 
+    fn limit_gas_in_bundle(&self, ops: Vec<OpFromPool>) -> Vec<OpFromPool> {
+        let mut gas_left = U256::from(MAX_BUNDLE_GAS_LIMIT);
+        let mut ops_in_bundle = Vec::new();
+        for op in ops {
+            let gas = op.op.total_execution_gas_limit(self.chain_id);
+            if gas_left < gas {
+                break;
+            }
+            gas_left -= gas;
+            ops_in_bundle.push(op);
+        }
+        ops_in_bundle
+    }
+
     fn emit(&self, event: BuilderEvent) {
         let _ = self.event_sender.send(WithEntryPoint {
             entry_point: self.entry_point.address(),
@@ -680,22 +697,8 @@ impl ProposalContext {
     }
 
     fn get_total_gas(&self, chain_id: u64) -> U256 {
-        // On some chains the L1 gas fee is charged via pre_verification_gas
-        // in the bundle, but is not part of the gas limit of the transaction.
-        // Thus, including it can cause the transaction to exceed the maximum limit
-        // of a block. This workaround caps the pre_verification_gas at 100k during
-        // bundle gas estimation.
-        let max_pre_verification_gas = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
-            U256::from(100_000)
-        } else {
-            U256::MAX
-        };
         self.iter_ops()
-            .map(|op| {
-                cmp::min(op.pre_verification_gas, max_pre_verification_gas)
-                    + op.verification_gas_limit
-                    + op.call_gas_limit
-            })
+            .map(|op| op.total_execution_gas_limit(chain_id))
             .fold(U256::zero(), |acc, c| acc + c)
     }
 
@@ -1108,6 +1111,53 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_bundle_gas_limit() {
+        let op1 = op_with_sender_call_gas_limit(address(1), U256::from(10_000_000));
+        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(10_000_000));
+        let op3 = op_with_sender_call_gas_limit(address(3), U256::from(10_000_000));
+        let op4 = op_with_sender_call_gas_limit(address(4), U256::from(10_000_000));
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let bundle = make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op3.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op4.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![deposit, deposit, deposit],
+            U256::zero(),
+            U256::zero(),
+        )
+        .await;
+
+        assert_eq!(bundle.rejected_entities, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op1, op2],
+                ..Default::default()
+            }]
+        );
+        assert_eq!(bundle.gas_estimate, U256::from(30_000_000));
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result:
@@ -1274,6 +1324,14 @@ mod tests {
             sender,
             max_fee_per_gas,
             max_priority_fee_per_gas,
+            ..Default::default()
+        }
+    }
+
+    fn op_with_sender_call_gas_limit(sender: Address, call_gas_limit: U256) -> UserOperation {
+        UserOperation {
+            sender,
+            call_gas_limit,
             ..Default::default()
         }
     }
