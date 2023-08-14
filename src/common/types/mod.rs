@@ -101,6 +101,22 @@ impl UserOperation {
         let max_gas = self.call_gas_limit + self.verification_gas_limit + self.pre_verification_gas;
         max_gas * self.max_fee_per_gas
     }
+
+    pub fn total_execution_gas_limit(&self, chain_id: u64) -> U256 {
+        // On some chains the L1 gas fee is charged via pre_verification_gas
+        // but this not part of the execution gas of the transaction.
+        // This workaround caps the pre_verification_gas at 100k during
+        // the execution gas calculation.
+        let max = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+            U256::from(100_000)
+        } else {
+            U256::MAX
+        };
+
+        std::cmp::min(max, self.pre_verification_gas)
+            + self.call_gas_limit
+            + self.verification_gas_limit
+    }
 }
 
 #[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
