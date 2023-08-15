@@ -13,7 +13,7 @@ use ethers::{
     prelude::EthEvent,
     providers::{JsonRpcClient, Middleware, Provider},
     types::{
-        Address, BlockNumber, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
+        Address, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
         GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, Opcode, TransactionReceipt, H256,
         U256, U64,
     },
@@ -45,7 +45,7 @@ use crate::{
         simulation::{
             self, SimulationError, SimulationSuccess, SimulationViolation, Simulator, SimulatorImpl,
         },
-        types::{Entity, EntityType, EntryPointLike, Timestamp, UserOperation},
+        types::{Entity, EntityType, EntryPointLike, Timestamp, UserOperation, BASE_CHAIN_IDS},
     },
     rpc::{
         estimation::{GasEstimationError, GasEstimator, GasEstimatorImpl},
@@ -183,6 +183,13 @@ where
     }
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
+        let to_block = self.provider.get_block_number().await?;
+        let from_block = if BASE_CHAIN_IDS.contains(&self.chain_id) {
+            to_block.saturating_sub(U64::from(20_000))
+        } else {
+            U64::from(0)
+        };
+
         let filter = Filter::new()
             .address::<Vec<Address>>(
                 self.contexts_by_entry_point
@@ -191,8 +198,8 @@ where
                     .collect(),
             )
             .event(&UserOperationEventFilter::abi_signature())
-            .from_block(BlockNumber::Earliest)
-            .to_block(BlockNumber::Latest)
+            .from_block(from_block)
+            .to_block(to_block)
             .topic1(hash);
 
         let logs = self.provider.get_logs(&filter).await?;
