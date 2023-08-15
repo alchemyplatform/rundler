@@ -350,3 +350,34 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{builder::sender::MockTransactionSender, common::types::MockProviderLike};
+
+    #[tokio::test]
+    async fn test_create() {
+        //TODO implement sender mock implementation instead of trait
+        let sender = MockTransactionSender::new();
+
+        let provider = MockProviderLike::new();
+
+        let settings = Settings {
+            poll_interval: Duration::from_secs(5),
+            max_blocks_to_wait_for_mine: 5,
+            replacement_fee_percent_increase: 5,
+        };
+
+        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+                .await
+                .unwrap();
+
+        let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
+
+        assert_eq!((U256::from(0), None), nonce_and_fees);
+    }
+}
