@@ -37,8 +37,8 @@ use crate::{
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
-const MAX_BUNDLE_GAS_LIMIT: u64 = 20_000_000;
-const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 50;
+const MAX_BUNDLE_GAS_LIMIT: u64 = 10_000_000;
+const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 100;
 
 #[derive(Debug, Default)]
 pub struct Bundle {
@@ -1113,8 +1113,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bundle_gas_limit() {
-        let op1 = op_with_sender_call_gas_limit(address(1), U256::from(10_000_000));
-        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(10_000_000));
+        let op1 = op_with_sender_call_gas_limit(address(1), U256::from(5_000_000));
+        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(5_000_000));
         let op3 = op_with_sender_call_gas_limit(address(3), U256::from(10_000_000));
         let op4 = op_with_sender_call_gas_limit(address(4), U256::from(10_000_000));
         let deposit = parse_units("1", "ether").unwrap().into();
@@ -1155,7 +1155,7 @@ mod tests {
                 ..Default::default()
             }]
         );
-        assert_eq!(bundle.gas_estimate, U256::from(30_000_000));
+        assert_eq!(bundle.gas_estimate, U256::from(20_000_000));
     }
 
     struct MockOp {
