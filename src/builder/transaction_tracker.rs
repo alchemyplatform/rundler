@@ -355,15 +355,24 @@ where
 mod test {
     use std::sync::Arc;
 
+    use ethers::types::{Address, Eip1559TransactionRequest};
+
     use super::*;
-    use crate::{builder::sender::MockTransactionSender, common::types::MockProviderLike};
+    use crate::{
+        builder::sender::{MockTransactionSender, SentTxInfo},
+        common::types::MockProviderLike,
+    };
 
     #[tokio::test]
-    async fn test_create() {
-        //TODO implement sender mock implementation instead of trait
-        let sender = MockTransactionSender::new();
+    async fn test_nonce_and_fees() {
+        let mut sender = MockTransactionSender::new();
+        sender.expect_address().return_const(Address::zero());
 
-        let provider = MockProviderLike::new();
+        let mut provider = MockProviderLike::new();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(U256::from(0)));
 
         let settings = Settings {
             poll_interval: Duration::from_secs(5),
@@ -379,5 +388,42 @@ mod test {
         let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
 
         assert_eq!((U256::from(0), None), nonce_and_fees);
+    }
+
+    #[tokio::test]
+    async fn test_send_transaction() {
+        let mut sender = MockTransactionSender::new();
+        sender.expect_address().return_const(Address::zero());
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
+
+        let mut provider = MockProviderLike::new();
+
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(U256::from(2)));
+
+        let settings = Settings {
+            poll_interval: Duration::from_secs(5),
+            max_blocks_to_wait_for_mine: 5,
+            replacement_fee_percent_increase: 5,
+        };
+
+        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+                .await
+                .unwrap();
+
+        let tx = Eip1559TransactionRequest::new().nonce(2);
+
+        let exp = ExpectedStorage::default();
+
+        let _sent_transaction = mock.send_transaction(tx.into(), &exp).await.unwrap();
     }
 }
