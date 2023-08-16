@@ -381,9 +381,17 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_happy_path_nonce_and_fees() {
+    async fn test_nonce_and_fees() {
         let (mut sender, mut provider, settings) = create_base_config();
         sender.expect_address().return_const(Address::zero());
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
 
         provider
             .expect_get_transaction_count()
@@ -394,9 +402,26 @@ mod test {
                 .await
                 .unwrap();
 
+        let tx = Eip1559TransactionRequest::new()
+            .nonce(0)
+            .gas(10000)
+            .max_fee_per_gas(10000);
+        let exp = ExpectedStorage::default();
+
+        // send dummy transaction
+        let _sent = mock.send_transaction(tx.into(), &exp).await;
         let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
 
-        assert_eq!((U256::from(0), None), nonce_and_fees);
+        assert_eq!(
+            (
+                U256::from(0),
+                Some(GasFees {
+                    max_fee_per_gas: U256::from(10500),
+                    max_priority_fee_per_gas: U256::zero(),
+                })
+            ),
+            nonce_and_fees
+        );
     }
 
     #[tokio::test]
@@ -588,8 +613,6 @@ mod test {
                 })
             })
         });
-
-        let mut provider_seq = Sequence::new();
 
         provider
             .expect_get_transaction_count()
