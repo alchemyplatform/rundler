@@ -367,6 +367,7 @@ mod tests {
     use ethers::utils::hex;
 
     use super::*;
+    use crate::common::types::{MockEntryPointLike, MockProviderLike};
 
     /// Must match the constant in `CallGasEstimationProxy.sol`.
     const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
@@ -381,5 +382,20 @@ mod tests {
             }
         }
         assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
+    }
+
+    #[test]
+    fn test_estimation_mock() {
+        let provider = MockProviderLike::new();
+        let entry = MockEntryPointLike::new();
+
+        let settings = Settings {
+            max_verification_gas: 1000,
+            max_call_gas: 100,
+            max_simulate_handle_ops_gas: 1000,
+        };
+
+        let _estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
     }
 }
