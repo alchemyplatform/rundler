@@ -261,8 +261,6 @@ where
             // The nonce has changed. Check to see which of our transactions has
             // mined, if any.
 
-            info!("GOT HERE");
-
             let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
             for tx in self.transactions.iter().rev() {
                 let status = self
@@ -422,6 +420,53 @@ mod test {
             ),
             nonce_and_fees
         );
+    }
+
+    #[tokio::test]
+    async fn test_nonce_and_fees_dropped() {
+        let (mut sender, mut provider, settings) = create_base_config();
+        sender.expect_address().return_const(Address::zero());
+
+        sender
+            .expect_get_transaction_status()
+            .returning(move |_a| Box::pin(async { Ok(TxStatus::Dropped) }));
+
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
+
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(U256::from(0)));
+
+        provider
+            .expect_get_block_number()
+            .returning(move || Ok(1))
+            .times(1);
+
+        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+                .await
+                .unwrap();
+
+        let tx = Eip1559TransactionRequest::new()
+            .nonce(0)
+            .gas(10000)
+            .max_fee_per_gas(10000);
+        let exp = ExpectedStorage::default();
+
+        // send dummy transaction
+        let _sent = mock.send_transaction(tx.into(), &exp).await;
+        let _tracker_update = mock.wait_for_update().await.unwrap();
+
+        let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
+
+        assert_eq!((U256::from(0), None,), nonce_and_fees);
     }
 
     #[tokio::test]
