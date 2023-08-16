@@ -260,6 +260,9 @@ where
         if self.nonce < external_nonce {
             // The nonce has changed. Check to see which of our transactions has
             // mined, if any.
+
+            info!("GOT HERE");
+
             let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
             for tx in self.transactions.iter().rev() {
                 let status = self
@@ -400,6 +403,7 @@ mod test {
     async fn test_send_transaction_without_nonse() {
         let (mut sender, mut provider, settings) = create_base_config();
         sender.expect_address().return_const(Address::zero());
+
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
@@ -424,34 +428,64 @@ mod test {
         assert_eq!(sent_transaction.is_err(), true);
     }
 
-    // #[tokio::test]
-    // async fn test_send_transaction() {
-    //     let (mut sender, mut provider, settings) = create_base_config();
-    //     sender.expect_address().return_const(Address::zero());
-    //     sender.expect_send_transaction().returning(move |_a, _b| {
-    //         Box::pin(async {
-    //             Ok(SentTxInfo {
-    //                 nonce: U256::from(0),
-    //                 tx_hash: H256::zero(),
-    //             })
-    //         })
-    //     });
+    #[tokio::test]
+    async fn test_send_transaction_with_invalid_nonse() {
+        let (mut sender, mut provider, settings) = create_base_config();
+        sender.expect_address().return_const(Address::zero());
 
-    //     provider
-    //         .expect_get_transaction_count()
-    //         .returning(move |_a| Ok(U256::from(2)));
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
 
-    //     let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-    //         TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-    //             .await
-    //             .unwrap();
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(U256::from(2)));
 
-    //     let tx = Eip1559TransactionRequest::new().nonce(0);
+        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+                .await
+                .unwrap();
 
-    //     let exp = ExpectedStorage::default();
-    //     let sent_transaction = mock.send_transaction(tx.into(), &exp).await;
-    //     assert_eq!(sent_transaction.is_err(), true);
-    // }
+        let tx = Eip1559TransactionRequest::new().nonce(0);
+        let exp = ExpectedStorage::default();
+        let sent_transaction = mock.send_transaction(tx.into(), &exp).await;
+        assert_eq!(sent_transaction.is_err(), true);
+    }
+
+    #[tokio::test]
+    async fn test_send_transaction() {
+        let (mut sender, mut provider, settings) = create_base_config();
+        sender.expect_address().return_const(Address::zero());
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
+
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(U256::from(0)));
+
+        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+                .await
+                .unwrap();
+
+        let tx = Eip1559TransactionRequest::new().nonce(0);
+
+        let exp = ExpectedStorage::default();
+        let sent_transaction = mock.send_transaction(tx.into(), &exp).await.unwrap();
+
+        assert!(matches!(sent_transaction, SendResult::TxHash(..)));
+    }
 
     #[tokio::test]
     async fn test_wait_for_update_still_pending() {
@@ -538,7 +572,6 @@ mod test {
         ));
     }
 
-    //TODO fix this test to by sending transaction and then checking on status of the sent transaction
     #[tokio::test]
     async fn test_wait_for_update_mined() {
         let (mut sender, mut provider, settings) = create_base_config();
@@ -547,19 +580,20 @@ mod test {
             .expect_get_transaction_status()
             .returning(move |_a| Box::pin(async { Ok(TxStatus::Mined { block_number: 1 }) }));
 
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
+
         let mut provider_seq = Sequence::new();
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(0)))
-            .times(1)
-            .in_sequence(&mut provider_seq);
-
-        provider
-            .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(1)))
-            .times(1)
-            .in_sequence(&mut provider_seq);
+            .returning(move |_a| Ok(U256::from(0)));
 
         provider
             .expect_get_block_number()
@@ -571,9 +605,12 @@ mod test {
                 .await
                 .unwrap();
 
-        let tracker_update = mock.wait_for_update().await.unwrap();
+        let tx = Eip1559TransactionRequest::new().nonce(0);
+        let exp = ExpectedStorage::default();
 
-        println!("{:?}", tracker_update);
+        // send dummy transaction
+        let _sent = mock.send_transaction(tx.into(), &exp).await;
+        let tracker_update = mock.wait_for_update().await.unwrap();
 
         assert!(matches!(tracker_update, TrackerUpdate::Mined { .. }));
     }
