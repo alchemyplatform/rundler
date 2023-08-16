@@ -466,7 +466,7 @@ mod test {
 
         let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
 
-        assert_eq!((U256::from(0), None,), nonce_and_fees);
+        assert_eq!((U256::from(0), None), nonce_and_fees);
     }
 
     #[tokio::test]
