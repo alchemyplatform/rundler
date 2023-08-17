@@ -364,13 +364,42 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 
 #[cfg(test)]
 mod tests {
-    use ethers::utils::hex;
+    use ethers::{
+        abi::{AbiEncode, Address},
+        utils::hex,
+    };
 
     use super::*;
-    use crate::common::types::{MockEntryPointLike, MockProviderLike};
+    use crate::common::{
+        contracts::i_entry_point::ExecutionResult,
+        types::{MockEntryPointLike, MockProviderLike},
+    };
 
     /// Must match the constant in `CallGasEstimationProxy.sol`.
     const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
+
+    fn create_base_config() -> (MockEntryPointLike, MockProviderLike) {
+        let entry = MockEntryPointLike::new();
+        let provider = MockProviderLike::new();
+
+        (entry, provider)
+    }
+
+    fn create_estimator(
+        entry: MockEntryPointLike,
+        provider: MockProviderLike,
+    ) -> GasEstimatorImpl<MockProviderLike, MockEntryPointLike> {
+        let settings = Settings {
+            max_verification_gas: 1000,
+            max_call_gas: 100,
+            max_simulate_handle_ops_gas: 1000,
+        };
+
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
+
+        estimator
+    }
 
     #[test]
     fn test_proxy_target_offset() {
@@ -384,18 +413,51 @@ mod tests {
         assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
     }
 
-    #[test]
-    fn test_estimation_mock() {
-        let provider = MockProviderLike::new();
-        let entry = MockEntryPointLike::new();
+    #[tokio::test]
+    async fn test_estimation() {
+        let (mut entry, mut provider) = create_base_config();
 
-        let settings = Settings {
-            max_verification_gas: 1000,
-            max_call_gas: 100,
-            max_simulate_handle_ops_gas: 1000,
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(100),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let estimator = create_estimator(entry, provider);
+
+        let user_op = UserOperation {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: U256::from(1000),
+            verification_gas_limit: U256::from(1000),
+            pre_verification_gas: U256::from(1000),
+            max_fee_per_gas: U256::from(1000),
+            max_priority_fee_per_gas: U256::from(1000),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
         };
 
-        let _estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
-            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
+        let estimation = estimator
+            .estimate_call_gas(&user_op, H256::zero())
+            .await
+            .unwrap();
+
+        assert_eq!(estimation, U256::from(100));
     }
 }
