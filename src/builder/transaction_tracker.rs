@@ -365,22 +365,34 @@ mod test {
         common::types::MockProviderLike,
     };
 
-    fn create_base_config() -> (MockTransactionSender, MockProviderLike, Settings) {
+    fn create_base_config() -> (MockTransactionSender, MockProviderLike) {
         let sender = MockTransactionSender::new();
         let provider = MockProviderLike::new();
 
+        (sender, provider)
+    }
+
+    async fn create_tracker(
+        sender: MockTransactionSender,
+        provider: MockProviderLike,
+    ) -> TransactionTrackerImpl<MockProviderLike, MockTransactionSender> {
         let settings = Settings {
             poll_interval: Duration::from_secs(0),
             max_blocks_to_wait_for_mine: 3,
             replacement_fee_percent_increase: 5,
         };
 
-        (sender, provider, settings)
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+                .await
+                .unwrap();
+
+        tracker
     }
 
     #[tokio::test]
     async fn test_nonce_and_fees() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
@@ -395,10 +407,7 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(0)));
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new()
             .nonce(0)
@@ -424,7 +433,7 @@ mod test {
 
     #[tokio::test]
     async fn test_nonce_and_fees_dropped() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
         sender
@@ -449,10 +458,7 @@ mod test {
             .returning(move || Ok(1))
             .times(1);
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new()
             .nonce(0)
@@ -471,9 +477,8 @@ mod test {
 
     #[tokio::test]
     async fn test_send_transaction_without_nonce() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
-
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
@@ -487,22 +492,20 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(2)));
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new();
         let exp = ExpectedStorage::default();
         let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
+
         assert_eq!(sent_transaction.is_err(), true);
     }
 
     #[tokio::test]
     async fn test_send_transaction_with_invalid_nonce() {
-        let (mut sender, mut provider, settings) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        let (mut sender, mut provider) = create_base_config();
 
+        sender.expect_address().return_const(Address::zero());
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
@@ -516,20 +519,18 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(2)));
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new().nonce(0);
         let exp = ExpectedStorage::default();
         let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
+
         assert_eq!(sent_transaction.is_err(), true);
     }
 
     #[tokio::test]
     async fn test_send_transaction() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
@@ -544,13 +545,9 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(0)));
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new().nonce(0);
-
         let exp = ExpectedStorage::default();
         let sent_transaction = tracker.send_transaction(tx.into(), &exp).await.unwrap();
 
@@ -559,7 +556,7 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_for_update_still_pending() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
         let mut s = Sequence::new();
@@ -576,11 +573,7 @@ mod test {
                 .in_sequence(&mut s);
         }
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
-
+        let tracker = create_tracker(sender, provider).await;
         let tracker_update = tracker.wait_for_update().await.unwrap();
 
         assert!(matches!(
@@ -591,7 +584,7 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_for_update_dropped() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
         sender
@@ -613,16 +606,11 @@ mod test {
 
         provider.expect_get_block_number().returning(move || Ok(1));
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new().nonce(0);
-
         let exp = ExpectedStorage::default();
         let _sent_transaction = tracker.send_transaction(tx.into(), &exp).await.unwrap();
-
         let tracker_update = tracker.wait_for_update().await.unwrap();
 
         assert!(matches!(
@@ -633,7 +621,7 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_for_update_nonce_used() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
         let mut provider_seq = Sequence::new();
@@ -650,10 +638,7 @@ mod test {
             .returning(move || Ok(1))
             .times(1);
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tracker_update = tracker.wait_for_update().await.unwrap();
 
@@ -665,7 +650,7 @@ mod test {
 
     #[tokio::test]
     async fn test_wait_for_update_mined() {
-        let (mut sender, mut provider, settings) = create_base_config();
+        let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
         sender
             .expect_get_transaction_status()
@@ -689,10 +674,7 @@ mod test {
             .returning(move || Ok(1))
             .times(1);
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
-                .await
-                .unwrap();
+        let tracker = create_tracker(sender, provider).await;
 
         let tx = Eip1559TransactionRequest::new().nonce(0);
         let exp = ExpectedStorage::default();
