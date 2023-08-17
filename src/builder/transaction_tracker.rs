@@ -370,7 +370,7 @@ mod test {
         let provider = MockProviderLike::new();
 
         let settings = Settings {
-            poll_interval: Duration::from_secs(1),
+            poll_interval: Duration::from_secs(0),
             max_blocks_to_wait_for_mine: 3,
             replacement_fee_percent_increase: 5,
         };
@@ -395,7 +395,7 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(0)));
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
@@ -407,8 +407,8 @@ mod test {
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = mock.send_transaction(tx.into(), &exp).await;
-        let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
+        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
         assert_eq!(
             (
@@ -449,7 +449,7 @@ mod test {
             .returning(move || Ok(1))
             .times(1);
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
@@ -461,16 +461,16 @@ mod test {
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = mock.send_transaction(tx.into(), &exp).await;
-        let _tracker_update = mock.wait_for_update().await.unwrap();
+        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let _tracker_update = tracker.wait_for_update().await.unwrap();
 
-        let nonce_and_fees = mock.get_nonce_and_required_fees().unwrap();
+        let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
         assert_eq!((U256::from(0), None), nonce_and_fees);
     }
 
     #[tokio::test]
-    async fn test_send_transaction_without_nonse() {
+    async fn test_send_transaction_without_nonce() {
         let (mut sender, mut provider, settings) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
@@ -487,19 +487,19 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(2)));
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
 
         let tx = Eip1559TransactionRequest::new();
         let exp = ExpectedStorage::default();
-        let sent_transaction = mock.send_transaction(tx.into(), &exp).await;
+        let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
         assert_eq!(sent_transaction.is_err(), true);
     }
 
     #[tokio::test]
-    async fn test_send_transaction_with_invalid_nonse() {
+    async fn test_send_transaction_with_invalid_nonce() {
         let (mut sender, mut provider, settings) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
@@ -516,14 +516,14 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(2)));
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
 
         let tx = Eip1559TransactionRequest::new().nonce(0);
         let exp = ExpectedStorage::default();
-        let sent_transaction = mock.send_transaction(tx.into(), &exp).await;
+        let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
         assert_eq!(sent_transaction.is_err(), true);
     }
 
@@ -544,7 +544,7 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(0)));
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
@@ -552,7 +552,7 @@ mod test {
         let tx = Eip1559TransactionRequest::new().nonce(0);
 
         let exp = ExpectedStorage::default();
-        let sent_transaction = mock.send_transaction(tx.into(), &exp).await.unwrap();
+        let sent_transaction = tracker.send_transaction(tx.into(), &exp).await.unwrap();
 
         assert!(matches!(sent_transaction, SendResult::TxHash(..)));
     }
@@ -568,36 +568,20 @@ mod test {
             .expect_get_transaction_count()
             .returning(move |_a| Ok(U256::from(0)));
 
-        provider
-            .expect_get_block_number()
-            .returning(move || Ok(1))
-            .times(1)
-            .in_sequence(&mut s);
+        for block_number in 1..=4 {
+            provider
+                .expect_get_block_number()
+                .returning(move || Ok(block_number))
+                .times(1)
+                .in_sequence(&mut s);
+        }
 
-        provider
-            .expect_get_block_number()
-            .returning(move || Ok(2))
-            .times(1)
-            .in_sequence(&mut s);
-
-        provider
-            .expect_get_block_number()
-            .returning(move || Ok(3))
-            .times(1)
-            .in_sequence(&mut s);
-
-        provider
-            .expect_get_block_number()
-            .returning(move || Ok(4))
-            .times(1)
-            .in_sequence(&mut s);
-
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
 
-        let tracker_update = mock.wait_for_update().await.unwrap();
+        let tracker_update = tracker.wait_for_update().await.unwrap();
 
         assert!(matches!(
             tracker_update,
@@ -629,7 +613,7 @@ mod test {
 
         provider.expect_get_block_number().returning(move || Ok(1));
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
@@ -637,9 +621,9 @@ mod test {
         let tx = Eip1559TransactionRequest::new().nonce(0);
 
         let exp = ExpectedStorage::default();
-        let _sent_transaction = mock.send_transaction(tx.into(), &exp).await.unwrap();
+        let _sent_transaction = tracker.send_transaction(tx.into(), &exp).await.unwrap();
 
-        let tracker_update = mock.wait_for_update().await.unwrap();
+        let tracker_update = tracker.wait_for_update().await.unwrap();
 
         assert!(matches!(
             tracker_update,
@@ -653,30 +637,25 @@ mod test {
         sender.expect_address().return_const(Address::zero());
 
         let mut provider_seq = Sequence::new();
-
-        provider
-            .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(0)))
-            .times(1)
-            .in_sequence(&mut provider_seq);
-
-        provider
-            .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(1)))
-            .times(1)
-            .in_sequence(&mut provider_seq);
+        for transaction_count in 0..=1 {
+            provider
+                .expect_get_transaction_count()
+                .returning(move |_a| Ok(U256::from(transaction_count)))
+                .times(1)
+                .in_sequence(&mut provider_seq);
+        }
 
         provider
             .expect_get_block_number()
             .returning(move || Ok(1))
             .times(1);
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
 
-        let tracker_update = mock.wait_for_update().await.unwrap();
+        let tracker_update = tracker.wait_for_update().await.unwrap();
 
         assert!(matches!(
             tracker_update,
@@ -710,7 +689,7 @@ mod test {
             .returning(move || Ok(1))
             .times(1);
 
-        let mock: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();
@@ -719,8 +698,8 @@ mod test {
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = mock.send_transaction(tx.into(), &exp).await;
-        let tracker_update = mock.wait_for_update().await.unwrap();
+        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let tracker_update = tracker.wait_for_update().await.unwrap();
 
         assert!(matches!(tracker_update, TrackerUpdate::Mined { .. }));
     }
