@@ -420,8 +420,14 @@ mod tests {
         let (mut entry, provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
         let estimator = create_estimator(entry, provider);
+        let user_op = demo_user_op_optional_gas();
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
 
-        let user_op = UserOperationOptionalGas {
+        assert_eq!(U256::from(43656), estimation);
+    }
+
+    fn demo_user_op_optional_gas() -> UserOperationOptionalGas {
+        UserOperationOptionalGas {
             sender: Address::zero(),
             nonce: U256::zero(),
             init_code: Bytes::new(),
@@ -433,11 +439,7 @@ mod tests {
             max_priority_fee_per_gas: Some(U256::from(1000)),
             paymaster_and_data: Bytes::new(),
             signature: Bytes::new(),
-        };
-
-        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
-
-        assert_eq!(U256::from(43656), estimation);
+        }
     }
 
     #[tokio::test]
@@ -458,19 +460,7 @@ mod tests {
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
             GasEstimatorImpl::new(Chain::Arbitrum as u64, Arc::new(provider), entry, settings);
 
-        let user_op = UserOperationOptionalGas {
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: Some(U256::from(1000)),
-            verification_gas_limit: Some(U256::from(1000)),
-            pre_verification_gas: Some(U256::from(1000)),
-            max_fee_per_gas: Some(U256::from(1000)),
-            max_priority_fee_per_gas: Some(U256::from(1000)),
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        };
+        let user_op = demo_user_op_optional_gas();
 
         let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
 
@@ -495,20 +485,7 @@ mod tests {
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
             GasEstimatorImpl::new(Chain::Optimism as u64, Arc::new(provider), entry, settings);
 
-        let user_op = UserOperationOptionalGas {
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: Some(U256::from(1000)),
-            verification_gas_limit: Some(U256::from(1000)),
-            pre_verification_gas: Some(U256::from(1000)),
-            max_fee_per_gas: Some(U256::from(1000)),
-            max_priority_fee_per_gas: Some(U256::from(1000)),
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        };
-
+        let user_op = demo_user_op_optional_gas();
         let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
 
         assert_eq!(U256::from(44656), estimation);
