@@ -366,12 +366,13 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 mod tests {
     use ethers::{
         abi::{AbiEncode, Address},
+        providers::{JsonRpcError, ProviderError, RpcError},
         utils::hex,
     };
 
     use super::*;
     use crate::common::{
-        contracts::i_entry_point::ExecutionResult,
+        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
         types::{MockEntryPointLike, MockProviderLike},
     };
 
@@ -459,5 +460,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(estimation, U256::from(100));
+    }
+
+    #[tokio::test]
+    async fn test_estimation_optional_gas() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(100),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        provider
+            .expect_get_latest_block_hash()
+            .returning(|| Ok(H256::zero()));
+
+        // provider.expect_call().returning(|_a, _b| {
+        //     let json_rpc_error = JsonRpcError {
+        //         code: 696969,
+        //         message: "reverted".to_string(),
+        //         data: Some(
+        //             GasUsedResult {
+        //                 gas_used: U256::from(20000),
+        //                 success: true,
+        //                 result: Bytes::new(),
+        //             }
+        //             .encode()
+        //             .into(),
+        //         ),
+        //     };
+
+        //     Err(ProviderError::JsonRpcClientError(
+        //         Box::new(json_rpc_error) as Box<dyn RpcError + Send + Sync>
+        //     ))
+        // });
+
+        let estimator = create_estimator(entry, provider);
+
+        let user_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        };
+
+        let estimation = estimator.estimate_op_gas(user_op).await;
+
+        println!("{:?}", estimation);
+
+        // assert_eq!(&mut estimation, U256::from(100));
     }
 }
