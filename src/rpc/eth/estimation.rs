@@ -366,7 +366,7 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 mod tests {
     use ethers::{
         abi::{AbiEncode, Address},
-        providers::{JsonRpcError, ProviderError, RpcError},
+        providers::{JsonRpcError, MockError, ProviderError},
         utils::hex,
     };
 
@@ -391,9 +391,9 @@ mod tests {
         provider: MockProviderLike,
     ) -> GasEstimatorImpl<MockProviderLike, MockEntryPointLike> {
         let settings = Settings {
-            max_verification_gas: 1000,
-            max_call_gas: 100,
-            max_simulate_handle_ops_gas: 1000,
+            max_verification_gas: 10000000000,
+            max_call_gas: 10000000000,
+            max_simulate_handle_ops_gas: 100000000,
         };
 
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_estimation_optional_gas() {
+    async fn test_estimation_optional_gas_used_success_field() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
         entry
@@ -489,25 +489,25 @@ mod tests {
             .expect_get_latest_block_hash()
             .returning(|| Ok(H256::zero()));
 
-        // provider.expect_call().returning(|_a, _b| {
-        //     let json_rpc_error = JsonRpcError {
-        //         code: 696969,
-        //         message: "reverted".to_string(),
-        //         data: Some(
-        //             GasUsedResult {
-        //                 gas_used: U256::from(20000),
-        //                 success: true,
-        //                 result: Bytes::new(),
-        //             }
-        //             .encode()
-        //             .into(),
-        //         ),
-        //     };
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: true,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
 
-        //     Err(ProviderError::JsonRpcClientError(
-        //         Box::new(json_rpc_error) as Box<dyn RpcError + Send + Sync>
-        //     ))
-        // });
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
 
         let estimator = create_estimator(entry, provider);
 
@@ -527,8 +527,89 @@ mod tests {
 
         let estimation = estimator.estimate_op_gas(user_op).await;
 
-        println!("{:?}", estimation);
+        assert_eq!(estimation.is_err(), true);
+    }
 
-        // assert_eq!(&mut estimation, U256::from(100));
+    #[tokio::test]
+    async fn test_estimation_optional_gas_used() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        provider
+            .expect_get_latest_block_hash()
+            .returning(|| Ok(H256::zero()));
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(100000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let estimator = create_estimator(entry, provider);
+
+        let user_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        };
+
+        let estimation = estimator.estimate_op_gas(user_op).await.unwrap();
+
+        assert_eq!(estimation.pre_verification_gas, U256::from(43656));
+        assert_eq!(estimation.verification_gas_limit, U256::from(33000));
+        assert_eq!(estimation.call_gas_limit, U256::from(10000));
     }
 }
