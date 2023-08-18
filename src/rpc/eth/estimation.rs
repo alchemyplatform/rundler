@@ -367,6 +367,7 @@ mod tests {
     use ethers::{
         abi::{AbiEncode, Address},
         providers::{JsonRpcError, MockError, ProviderError},
+        types::Chain,
         utils::hex,
     };
 
@@ -412,6 +413,105 @@ mod tests {
             }
         }
         assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input() {
+        let (mut entry, provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        let estimator = create_estimator(entry, provider);
+
+        let user_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        };
+
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        assert_eq!(U256::from(43656), estimation);
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input_arbitrum() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+
+        let settings = Settings {
+            max_verification_gas: 10000000000,
+            max_call_gas: 10000000000,
+            max_simulate_handle_ops_gas: 100000000,
+        };
+
+        provider
+            .expect_calc_arbitrum_l1_gas()
+            .returning(|_a, _b| Ok(U256::from(1000)));
+
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(Chain::Arbitrum as u64, Arc::new(provider), entry, settings);
+
+        let user_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        };
+
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        assert_eq!(U256::from(44656), estimation);
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input_op() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+
+        let settings = Settings {
+            max_verification_gas: 10000000000,
+            max_call_gas: 10000000000,
+            max_simulate_handle_ops_gas: 100000000,
+        };
+
+        provider
+            .expect_calc_optimism_l1_gas()
+            .returning(|_a, _b| Ok(U256::from(1000)));
+
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(Chain::Optimism as u64, Arc::new(provider), entry, settings);
+
+        let user_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        };
+
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        assert_eq!(U256::from(44656), estimation);
     }
 
     #[tokio::test]
@@ -611,5 +711,92 @@ mod tests {
         assert_eq!(estimation.pre_verification_gas, U256::from(43656));
         assert_eq!(estimation.verification_gas_limit, U256::from(33000));
         assert_eq!(estimation.call_gas_limit, U256::from(10000));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "min <= max")]
+    async fn test_estimation_optional_gas_invalid_settings() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        provider
+            .expect_get_latest_block_hash()
+            .returning(|| Ok(H256::zero()));
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(100000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let settings = Settings {
+            max_verification_gas: 10,
+            max_call_gas: 10,
+            max_simulate_handle_ops_gas: 10,
+        };
+
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
+
+        let user_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        };
+
+        let _estimation = estimator.estimate_op_gas(user_op).await;
     }
 }
