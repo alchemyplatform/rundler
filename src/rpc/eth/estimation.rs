@@ -415,17 +415,6 @@ mod tests {
         assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
     }
 
-    #[tokio::test]
-    async fn test_calc_pre_verification_input() {
-        let (mut entry, provider) = create_base_config();
-        entry.expect_address().return_const(Address::zero());
-        let estimator = create_estimator(entry, provider);
-        let user_op = demo_user_op_optional_gas();
-        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
-
-        assert_eq!(U256::from(43656), estimation);
-    }
-
     fn demo_user_op_optional_gas() -> UserOperationOptionalGas {
         UserOperationOptionalGas {
             sender: Address::zero(),
@@ -440,6 +429,33 @@ mod tests {
             paymaster_and_data: Bytes::new(),
             signature: Bytes::new(),
         }
+    }
+
+    fn demo_user_op() -> UserOperation {
+        UserOperation {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: U256::from(1000),
+            verification_gas_limit: U256::from(1000),
+            pre_verification_gas: U256::from(1000),
+            max_fee_per_gas: U256::from(1000),
+            max_priority_fee_per_gas: U256::from(1000),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input() {
+        let (mut entry, provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        let estimator = create_estimator(entry, provider);
+        let user_op = demo_user_op_optional_gas();
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        assert_eq!(U256::from(43656), estimation);
     }
 
     #[tokio::test]
@@ -517,19 +533,7 @@ mod tests {
 
         let estimator = create_estimator(entry, provider);
 
-        let user_op = UserOperation {
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: U256::from(1000),
-            verification_gas_limit: U256::from(1000),
-            pre_verification_gas: U256::from(1000),
-            max_fee_per_gas: U256::from(1000),
-            max_priority_fee_per_gas: U256::from(1000),
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        };
+        let user_op = demo_user_op();
 
         let estimation = estimator
             .estimate_call_gas(&user_op, H256::zero())
@@ -588,19 +592,7 @@ mod tests {
 
         let estimator = create_estimator(entry, provider);
 
-        let user_op = UserOperationOptionalGas {
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: Some(U256::from(1000)),
-            verification_gas_limit: Some(U256::from(1000)),
-            pre_verification_gas: Some(U256::from(1000)),
-            max_fee_per_gas: Some(U256::from(1000)),
-            max_priority_fee_per_gas: Some(U256::from(1000)),
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        };
+        let user_op = demo_user_op_optional_gas();
 
         let estimation = estimator.estimate_op_gas(user_op).await;
 
@@ -669,19 +661,7 @@ mod tests {
 
         let estimator = create_estimator(entry, provider);
 
-        let user_op = UserOperationOptionalGas {
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: Some(U256::from(1000)),
-            verification_gas_limit: Some(U256::from(1000)),
-            pre_verification_gas: Some(U256::from(1000)),
-            max_fee_per_gas: Some(U256::from(1000)),
-            max_priority_fee_per_gas: Some(U256::from(1000)),
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        };
+        let user_op = demo_user_op_optional_gas();
 
         let estimation = estimator.estimate_op_gas(user_op).await.unwrap();
 
@@ -760,19 +740,7 @@ mod tests {
         let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
             GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
 
-        let user_op = UserOperationOptionalGas {
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: Some(U256::from(1000)),
-            verification_gas_limit: Some(U256::from(1000)),
-            pre_verification_gas: Some(U256::from(1000)),
-            max_fee_per_gas: Some(U256::from(1000)),
-            max_priority_fee_per_gas: Some(U256::from(1000)),
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        };
+        let user_op = demo_user_op_optional_gas();
 
         let _estimation = estimator.estimate_op_gas(user_op).await;
     }
