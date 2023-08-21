@@ -13,14 +13,19 @@ enum BundlingMode {
     BUNDLING_MODE_AUTO = 2;
 }
 
+// Defines the gRPC endpoints for a Builder service
 service Builder {
+    // Forces the bundler to build and execute a bundle from the mempool as handleOps() transaction.
     rpc DebugSendBundleNow(DebugSendBundleNowRequest) returns (DebugSendBundleNowResponse);
+    // Sets bundling mode. After setting mode to “manual”, an explicit call to
+    // debug_bundler_sendBundleNow is required to send a bundle.
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
 }
 
 message DebugSendBundleNowRequest {}
 
 message DebugSendBundleNowResponse {
+    // Serialized transaction hash
     bytes transaction_hash = 1;
 }
 
