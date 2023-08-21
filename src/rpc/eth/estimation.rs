@@ -904,6 +904,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_estimate_call_gas_continuation() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasContinuation {
+                        min_gas: U256::from(100),
+                        max_gas: U256::from(100000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: false,
+                    ..Default::default()
+                }))
+            })
+            .times(1);
+
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(100),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            })
+            .times(1);
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let estimator = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .estimate_call_gas(&user_op, H256::zero())
+            .await
+            .unwrap();
+
+        assert_eq!(estimation, U256::from(100));
+    }
+
+    #[tokio::test]
     async fn test_estimation_optional_gas_used() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());

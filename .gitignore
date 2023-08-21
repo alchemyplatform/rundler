@@ -21,3 +21,4 @@ src/common/contracts/
 *.log
 
 *.profraw
+.DS_Store
