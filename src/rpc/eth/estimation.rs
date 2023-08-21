@@ -787,7 +787,6 @@ mod tests {
             .binary_search_verification_gas(&user_op, H256::zero())
             .await;
 
-        println!("{:?}", estimation);
         assert_eq!(estimation.is_err(), true);
     }
 
@@ -833,7 +832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_estimation() {
+    async fn test_estimate_call_gas() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
         entry
@@ -865,6 +864,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(estimation, U256::from(100));
+    }
+
+    #[tokio::test]
+    async fn test_estimate_call_gas_error() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasRevertAtMax {
+                        revert_data: Bytes::new(),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: false,
+                    ..Default::default()
+                }))
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let estimator = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .estimate_call_gas(&user_op, H256::zero())
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(
+            matches!(estimation, GasEstimationError::RevertInCallWithBytes(_)),
+            true
+        );
     }
 
     #[tokio::test]
