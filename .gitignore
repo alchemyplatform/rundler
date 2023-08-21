@@ -19,3 +19,5 @@ src/common/contracts/
 
 .env
 *.log
+
+*.profraw
