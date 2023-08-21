@@ -28,7 +28,7 @@ cargo clippy --all --all-features -- -D warnings || {
 
 echo 'Running buf'
 buf lint proto/. || {
-  echo >&2 'Buf failed. This most likely means you have linting errors in .proto files'
+  echo >&2 'Buf failed. This most likely means you have linting errors in .proto files. If needed, try running "brew install buf"'
   exit 1
 }
 
