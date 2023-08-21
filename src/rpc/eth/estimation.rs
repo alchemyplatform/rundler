@@ -365,16 +365,19 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 #[cfg(test)]
 mod tests {
     use ethers::{
-        abi::{AbiEncode, Address},
+        abi::{AbiEncode, Address, Tokenizable},
         providers::{JsonRpcError, MockError, ProviderError},
         types::Chain,
         utils::hex,
     };
-    use tracing::log::kv::ToValue;
+    use tracing::log::info;
 
     use super::*;
     use crate::common::{
-        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
+        contracts::{
+            get_gas_used::GasUsedResult,
+            i_entry_point::{ExecutionResult, FailedOp},
+        },
         types::{MockEntryPointLike, MockProviderLike},
     };
 
@@ -512,25 +515,6 @@ mod tests {
     async fn test_binary_search_verification_gas() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
-        provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
-
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
-        });
         entry
             .expect_decode_simulate_handle_ops_revert()
             .returning(|_a| {
@@ -558,6 +542,88 @@ mod tests {
                 }))
             });
 
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let estimator = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await
+            .unwrap();
+
+        assert_eq!(U256::from(30000), estimation);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Integer overflow")]
+    async fn test_binary_search_verification_gas_overflow() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(18446744073709551616 as u128),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
         let estimator = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
@@ -572,6 +638,32 @@ mod tests {
     async fn test_binary_search_verification_gas_success_field() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
         provider.expect_call().returning(|_a, _b| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(20000),
@@ -591,32 +683,6 @@ mod tests {
                 MockError::JsonRpcError(json_rpc_error),
             )))
         });
-        entry
-            .expect_decode_simulate_handle_ops_revert()
-            .returning(|_a| {
-                Ok(ExecutionResult {
-                    pre_op_gas: U256::from(10000),
-                    paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
-                    target_success: true,
-                    target_result: Bytes::new(),
-                })
-            });
-        entry
-            .expect_call_spoofed_simulate_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
-                Ok(Ok(ExecutionResult {
-                    target_result: EstimateCallGasResult {
-                        gas_estimate: U256::from(10000),
-                        num_rounds: U256::from(10),
-                    }
-                    .encode()
-                    .into(),
-                    target_success: true,
-                    ..Default::default()
-                }))
-            });
 
         let estimator = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -627,16 +693,33 @@ mod tests {
         assert_eq!(estimation.is_err(), true);
     }
 
-    // TODO make result an encoded failed op
     #[tokio::test]
     async fn test_binary_search_verification_gas_invalid_message() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| Err(String::from("Error with reverted message")));
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(100),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
         provider.expect_call().returning(|_a, _b| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(20000),
                 success: false,
-                result: Bytes::from_static(b"Invalid Result"),
+                result: Bytes::new(),
             }
             .encode()
             .into();
@@ -651,32 +734,6 @@ mod tests {
                 MockError::JsonRpcError(json_rpc_error),
             )))
         });
-        entry
-            .expect_decode_simulate_handle_ops_revert()
-            .returning(|_a| {
-                Ok(ExecutionResult {
-                    pre_op_gas: U256::from(10000),
-                    paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
-                    target_success: true,
-                    target_result: Bytes::new(),
-                })
-            });
-        entry
-            .expect_call_spoofed_simulate_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
-                Ok(Ok(ExecutionResult {
-                    target_result: EstimateCallGasResult {
-                        gas_estimate: U256::from(10000),
-                        num_rounds: U256::from(10),
-                    }
-                    .encode()
-                    .into(),
-                    target_success: true,
-                    ..Default::default()
-                }))
-            });
 
         let estimator = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -688,10 +745,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_binary_search_verification_gas_invalid_spoof() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error")));
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let estimator = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await;
+
+        println!("{:?}", estimation);
+        assert_eq!(estimation.is_err(), true);
+    }
+
+    #[tokio::test]
     async fn test_binary_search_verification_gas_success_response() {
         let (mut entry, mut provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
-        provider.expect_call().returning(|_a, _b| Ok(Bytes::new()));
         entry
             .expect_decode_simulate_handle_ops_revert()
             .returning(|_a| {
@@ -718,6 +825,7 @@ mod tests {
                     ..Default::default()
                 }))
             });
+        provider.expect_call().returning(|_a, _b| Ok(Bytes::new()));
 
         let estimator = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -731,7 +839,6 @@ mod tests {
     #[tokio::test]
     async fn test_estimation() {
         let (mut entry, mut provider) = create_base_config();
-
         entry.expect_address().return_const(Address::zero());
         entry
             .expect_call_spoofed_simulate_op()
