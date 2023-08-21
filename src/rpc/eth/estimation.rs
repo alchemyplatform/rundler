@@ -365,19 +365,15 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 #[cfg(test)]
 mod tests {
     use ethers::{
-        abi::{AbiEncode, Address, Tokenizable},
+        abi::{AbiEncode, Address},
         providers::{JsonRpcError, MockError, ProviderError},
         types::Chain,
         utils::hex,
     };
-    use tracing::log::info;
 
     use super::*;
     use crate::common::{
-        contracts::{
-            get_gas_used::GasUsedResult,
-            i_entry_point::{ExecutionResult, FailedOp},
-        },
+        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
         types::{MockEntryPointLike, MockProviderLike},
     };
 
