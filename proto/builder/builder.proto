@@ -2,9 +2,15 @@ syntax = "proto3";
 package builder;
 
 enum BundlingMode {
-    UNSPECIFIED = 0;
-    MANUAL = 1;
-    AUTO = 2;
+    BUNDLING_MODE_UNSPECIFIED = 0;
+    // Test-only bundling mode, should not be used in production. Allows
+    // triggering of bundles to be built. See the ERC-4337 spec for more
+    // context:
+    // https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4337.md#-debug_bundler_setbundlingmode
+    BUNDLING_MODE_MANUAL = 1;
+    // Default bundling mode to auto-build bundles based off of the
+    // UserOperations present in the mempool.
+    BUNDLING_MODE_AUTO = 2;
 }
 
 service Builder {

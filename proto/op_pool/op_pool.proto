@@ -1,0 +1,200 @@
+// Defines the schemas for an ERC-4337 UserOperation mempool.
+
+syntax = "proto3";
+
+package op_pool;
+
+// Protocol Buffer representation of an ERC-4337 UserOperation. See the official
+// specification at https://eips.ethereum.org/EIPS/eip-4337#definitions
+message UserOperation {
+  // The account making the operation
+  bytes sender = 1;
+  // Anti-replay parameter (see “Semi-abstracted Nonce Support” )
+  bytes nonce = 2;
+  // The initCode of the account (needed if and only if the account is not yet
+  // on-chain and needs to be created)
+  bytes init_code = 3;
+  // The data to pass to the sender during the main execution call
+  bytes call_data = 4;
+  // The amount of gas to allocate the main execution call
+  bytes call_gas_limit = 5;
+  // The amount of gas to allocate for the verification step
+  bytes verification_gas_limit = 6;
+  // The amount of gas to pay for to compensate the bundler for pre-verification
+  // execution and calldata
+  bytes pre_verification_gas = 7;
+  // Maximum fee per gas (similar to EIP-1559 max_fee_per_gas)
+  bytes max_fee_per_gas = 8;
+  // Maximum priority fee per gas (similar to EIP-1559 max_priority_fee_per_gas)
+  bytes max_priority_fee_per_gas = 9;
+  // Address of paymaster sponsoring the transaction, followed by extra data to
+  // send to the paymaster (empty for self-sponsored transaction)
+  bytes paymaster_and_data = 10;
+  // Data passed into the account along with the nonce during the verification
+  // step
+  bytes signature = 11;
+}
+
+// Types of staked entities. 
+enum EntityType {
+  ENTITY_TYPE_UNSPECIFIED = 0;
+  ENTITY_TYPE_ACCOUNT = 1;
+  ENTITY_TYPE_PAYMASTER = 2;
+  ENTITY_TYPE_AGGREGATOR = 3;
+  ENTITY_TYPE_FACTORY = 4;
+}
+
+message Entity {
+  EntityType kind = 1;
+  // 42 character alphanumeric Ethereum address, beginning with 0x.
+  // Not case sensitive.
+  bytes address = 2;
+}
+
+// Defines a UserOperation persisted in a local mempool.
+message MempoolOp {
+  UserOperation uo = 1;
+  // Optional address of the signature aggregator to be used for this UO signature.
+  bytes aggregator = 2;
+  //  Time in seconds since epoch after which a UO is considered valid in the mempool.
+  uint64 valid_after = 3;
+  //  Time in seconds since epoch until which a UO is considered valid in the mempool.
+  uint64 valid_until = 4;
+  // A hash of all contracts who's code a UserOperation touches as computed
+  // during validation before the UserOperation enters the mempool. As per
+  // ERC-4337 requirements, it is later compared against an equivalent hash
+  // computed before being added to a Bundle.
+  // 
+  // Specifically, a bundler should reject a UserOperation if, between the time
+  // if it was added to the pool and the time it’s taken out to be added to a
+  // bundle, any of the code that it touches during validation changes.
+  // Therefore, before any UserOperation is added to the pool, validation is run
+  // once, keeping track every contract whose code it touches. This hash is
+  // computed based on the code of all those contracts. When the second
+  // validation runs later, the hash is computed again to verify the code has
+  // not changed.
+  // 
+  // See rule (5) here:
+  // https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4337.md#specification-1
+  bytes expected_code_hash = 5;
+  // A list of all entities that require stake to process this UO as identified in
+  // validation before entering the mempool.
+  repeated EntityType entities_needing_stake = 6;
+  // Block hash at which the UserOperation was simulated.
+  bytes sim_block_hash = 7;
+  // Indicates if the account is staked. Staked accounts are allowed to have
+  // multiple UserOperations in the mempool, otherwise just one UserOperation is
+  // permitted.
+  bool account_is_staked = 8;
+}
+
+// Defines the gRPC endpoints for a UserOperation mempool services.
+service OpPool {
+  rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
+  rpc AddOp (AddOpRequest) returns (AddOpResponse);
+  rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
+  rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
+  rpc RemoveEntities(RemoveEntitiesRequest) returns (RemoveEntitiesResponse);
+
+  rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
+  rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
+  rpc DebugSetReputation (DebugSetReputationRequest) returns (DebugSetReputationResponse);
+  rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
+}
+
+message GetSupportedEntryPointsRequest {}
+message GetSupportedEntryPointsResponse {
+  // Chain ID as defined in EIP-155.
+  // https://eips.ethereum.org/EIPS/eip-155
+  uint64 chain_id = 1;
+  // The set of entrypoint addresses supported.
+  repeated bytes entry_points = 2;
+}
+
+message AddOpRequest {
+  // The entrypoint address via which the UserOperation is being submitted.
+  bytes entry_point = 1;
+  // The UserOperation with mempool metadata to add to the mempool.
+  MempoolOp op = 2;
+}
+message AddOpResponse {
+  // The UserOperation hash.
+  bytes hash = 1;
+}
+
+message GetOpsRequest {
+  bytes entry_point = 1;
+  uint64 max_ops = 2;
+}
+message GetOpsResponse {
+  repeated MempoolOp ops = 1;
+}
+
+message RemoveOpsRequest {
+  bytes entry_point = 1;
+  repeated bytes hashes = 2;
+}
+message RemoveOpsResponse {}
+
+message RemoveEntitiesRequest {
+  bytes entry_point = 1;
+  repeated Entity entities = 2;
+}
+message RemoveEntitiesResponse {}
+
+message DebugClearStateRequest {}
+message DebugClearStateResponse {}
+
+message DebugDumpMempoolRequest {
+  bytes entry_point = 1;
+}
+message DebugDumpMempoolResponse {
+  repeated MempoolOp ops = 1;
+}
+
+message DebugSetReputationRequest {
+  bytes entry_point = 1;
+  repeated Reputation reputations = 2;
+}
+message DebugSetReputationResponse {}
+
+message DebugDumpReputationRequest {
+  bytes entry_point = 1;
+}
+message DebugDumpReputationResponse {
+  repeated Reputation reputations = 1;
+}
+
+message Reputation {
+  bytes address = 1;
+  ReputationStatus status = 2;
+  uint64 ops_seen = 3;
+  uint64 ops_included = 4;
+}
+
+enum ReputationStatus {
+  REPUTATION_STATUS_UNSPECIFIED = 0;
+  REPUTATION_STATUS_OK = 1;
+  REPUTATION_STATUS_THROTTLED = 2;
+  REPUTATION_STATUS_BANNED = 3;
+}
+
+message ErrorInfo {
+  string reason = 1;
+  map<string, string> metadata = 2;
+}
+
+enum ErrorReason {
+  ERROR_REASON_UNSPECIFIED = 0;
+  ERROR_REASON_INTERNAL = 1;
+  ERROR_REASON_ENTITY_THROTTLED = 2;
+  ERROR_REASON_OPERATION_REJECTED = 3;
+  ERROR_REASON_REPLACEMENT_UNDERPRICED = 4;
+  ERROR_REASON_OPERATION_DISCARDED_ON_INSERT = 5;
+}
+
+enum ErrorMetadataKey {
+  ERROR_METADATA_KEY_UNSPECIFIED = 0;
+  ERROR_METADATA_KEY_CURRENT_MAX_PRIORITY_FEE_PER_GAS = 1;
+  ERROR_METADATA_KEY_CURRENT_MAX_FEE_PER_GAS = 2;
+}

@@ -300,6 +300,7 @@ impl Serialize for ReputationStatus {
         S: Serializer,
     {
         match self {
+            ReputationStatus::Unspecified => serializer.serialize_str("unspecified"),
             ReputationStatus::Ok => serializer.serialize_str("ok"),
             ReputationStatus::Throttled => serializer.serialize_str("throttled"),
             ReputationStatus::Banned => serializer.serialize_str("banned"),
@@ -314,6 +315,7 @@ impl<'de> Deserialize<'de> for ReputationStatus {
     {
         let s = String::deserialize(deserializer)?;
         match s.as_str() {
+            "unspecified" => Ok(ReputationStatus::Unspecified),
             "ok" => Ok(ReputationStatus::Ok),
             "throttled" => Ok(ReputationStatus::Throttled),
             "banned" => Ok(ReputationStatus::Banned),
@@ -327,9 +329,9 @@ impl TryFrom<i32> for ReputationStatus {
 
     fn try_from(status: i32) -> Result<Self, Self::Error> {
         match status {
-            0 => Ok(ReputationStatus::Ok),
-            1 => Ok(ReputationStatus::Throttled),
-            2 => Ok(ReputationStatus::Banned),
+            1 => Ok(ReputationStatus::Ok),
+            2 => Ok(ReputationStatus::Throttled),
+            3 => Ok(ReputationStatus::Banned),
             _ => bail!("Invalid reputation status {status}"),
         }
     }
