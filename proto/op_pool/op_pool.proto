@@ -35,7 +35,6 @@ message UserOperation {
   bytes signature = 11;
 }
 
-// Types of staked entities. 
 enum EntityType {
   ENTITY_TYPE_UNSPECIFIED = 0;
   ENTITY_TYPE_ACCOUNT = 1;
@@ -46,19 +45,18 @@ enum EntityType {
 
 message Entity {
   EntityType kind = 1;
-  // 42 character alphanumeric Ethereum address, beginning with 0x.
-  // Not case sensitive.
+  // A 20 byte serialized binary format representation of the address
   bytes address = 2;
 }
 
-// Defines a UserOperation persisted in a local mempool.
+// Defines a UserOperation persisted in a local mempool
 message MempoolOp {
   UserOperation uo = 1;
-  // Optional address of the signature aggregator to be used for this UO signature.
+  // Optional address of the signature aggregator to be used for this UO signature
   bytes aggregator = 2;
-  //  Time in seconds since epoch after which a UO is considered valid in the mempool.
+  //  Time in seconds since epoch after which a UO is considered valid
   uint64 valid_after = 3;
-  //  Time in seconds since epoch until which a UO is considered valid in the mempool.
+  //  Time in seconds since epoch until which a UO is considered valid
   uint64 valid_until = 4;
   // A hash of all contracts who's code a UserOperation touches as computed
   // during validation before the UserOperation enters the mempool. As per
@@ -78,27 +76,45 @@ message MempoolOp {
   // https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4337.md#specification-1
   bytes expected_code_hash = 5;
   // A list of all entities that require stake to process this UO as identified in
-  // validation before entering the mempool.
+  // validation before entering the mempool
   repeated EntityType entities_needing_stake = 6;
-  // Block hash at which the UserOperation was simulated.
+  // Block hash at which the UserOperation was simulated
   bytes sim_block_hash = 7;
   // Indicates if the account is staked. Staked accounts are allowed to have
   // multiple UserOperations in the mempool, otherwise just one UserOperation is
-  // permitted.
+  // permitted
   bool account_is_staked = 8;
 }
 
-// Defines the gRPC endpoints for a UserOperation mempool services.
+// Defines the gRPC endpoints for a UserOperation mempool service
 service OpPool {
+  // Returns an array of the entry point addresses supported by the client. The
+  // first element of the array SHOULD be the entry point addressed preferred by
+  // the client
   rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
+  
+  // Adds a UserOperation to the mempool
   rpc AddOp (AddOpRequest) returns (AddOpResponse);
+  
+  // Get up to `max_ops` from the mempool.
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
+
+  // Removes UserOperations from the mempool
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
+
+  // For each Entity, remove all UserOperations that interface with that entity
+  // from the mempool
   rpc RemoveEntities(RemoveEntitiesRequest) returns (RemoveEntitiesResponse);
 
+  // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
+  // Dumps the current UserOperations mempool
   rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
+  // Sets reputation of given addresses.
   rpc DebugSetReputation (DebugSetReputationRequest) returns (DebugSetReputationResponse);
+  // Returns the reputation data of all observed addresses. Returns an array of
+  // reputation objects, each with the fields described above in
+  // debug_bundler_setReputation
   rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
 }
 
@@ -107,23 +123,25 @@ message GetSupportedEntryPointsResponse {
   // Chain ID as defined in EIP-155.
   // https://eips.ethereum.org/EIPS/eip-155
   uint64 chain_id = 1;
-  // The set of entrypoint addresses supported.
+  // The set of serialized entry point addresses supported
   repeated bytes entry_points = 2;
 }
 
 message AddOpRequest {
-  // The entrypoint address via which the UserOperation is being submitted.
+  // The serialized entry point address via which the UserOperation is being submitted
   bytes entry_point = 1;
-  // The UserOperation with mempool metadata to add to the mempool.
+  // The UserOperation with mempool metadata to add to the mempool
   MempoolOp op = 2;
 }
 message AddOpResponse {
-  // The UserOperation hash.
+  // The serialized UserOperation hash
   bytes hash = 1;
 }
 
 message GetOpsRequest {
+  // The serialized entry point address
   bytes entry_point = 1;
+  // The maximum number of UserOperations to return
   uint64 max_ops = 2;
 }
 message GetOpsResponse {
@@ -131,13 +149,18 @@ message GetOpsResponse {
 }
 
 message RemoveOpsRequest {
+  // The serialized entry point address
   bytes entry_point = 1;
+  // The serialized UserOperation hashes to remove
   repeated bytes hashes = 2;
 }
 message RemoveOpsResponse {}
 
 message RemoveEntitiesRequest {
+  // The serilaized entry point address
   bytes entry_point = 1;
+  // The set of entities for which any UserOperations referencing the entity
+  // should be removed from the mempool
   repeated Entity entities = 2;
 }
 message RemoveEntitiesResponse {}
@@ -153,12 +176,15 @@ message DebugDumpMempoolResponse {
 }
 
 message DebugSetReputationRequest {
+  // The serialized entry point address via which the UserOperation is being submitted
   bytes entry_point = 1;
+  // An array of reputation entries to add/replace
   repeated Reputation reputations = 2;
 }
 message DebugSetReputationResponse {}
 
 message DebugDumpReputationRequest {
+  // The serialized entry point address.
   bytes entry_point = 1;
 }
 message DebugDumpReputationResponse {
@@ -166,9 +192,13 @@ message DebugDumpReputationResponse {
 }
 
 message Reputation {
+  // The (serialized) address to set the reputation for
   bytes address = 1;
+  // The status of the address in the bundler
   ReputationStatus status = 2;
+  // number of times a user operations with that entity was seen and added to the mempool
   uint64 ops_seen = 3;
+  // number of times a user operations that uses this entity was included on-chain
   uint64 ops_included = 4;
 }
 
