@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=tracer/package.json");
     println!("cargo:rerun-if-changed=tracer/src/validationTracer.ts");
+    update_submodules()?;
     generate_contract_bindings()?;
     generate_protos()?;
     compile_tracer()?;
@@ -51,6 +52,14 @@ fn generate_abis() -> Result<(), Box<dyn error::Error>> {
             .arg("./contracts"),
         "https://getfoundry.sh/",
         "generate ABIs",
+    )
+}
+
+fn update_submodules() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        Command::new("git").arg("submodule").arg("update"),
+        "https://github.com/git-guides/install-git",
+        "update submodules",
     )
 }
 
