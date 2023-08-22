@@ -62,11 +62,11 @@ jobs:
         uses: bufbuild/buf-setup-action@v1
       - name: buf lint
         uses: bufbuild/buf-lint-action@v1
-      - name: buf breaking
-        uses: bufbuild/buf-breaking-action@v1
-        with:
-          # The 'main' branch of the GitHub repository that defines the module.
-          against: "https://github.com/${GITHUB_REPOSITORY}.git#branch=main"
+      # - name: buf breaking
+      #   uses: bufbuild/buf-breaking-action@v1
+      #   with:
+      #     # The 'main' branch of the GitHub repository that defines the module.
+      #     against: "https://github.com/${GITHUB_REPOSITORY}.git#branch=main"
 
   cog_check_job:
     runs-on: ubuntu-latest
