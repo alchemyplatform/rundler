@@ -77,6 +77,7 @@ fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
         })
         .reduce(|a, b| a + b)
         .unwrap_or_default();
+
     ov.fixed / ov.bundle_size
         + call_data_cost
         + ov.per_user_op
