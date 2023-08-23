@@ -92,6 +92,18 @@ pub struct Settings {
     pub max_simulate_handle_ops_gas: u64,
 }
 
+impl Settings {
+    fn validate(&self) -> Option<String> {
+        if U256::from(self.max_call_gas)
+            .cmp(&MIN_CALL_GAS_LIMIT)
+            .is_lt()
+        {
+            return Some("max_call_gas field cannot be lower than MIN_CALL_GAS_LIMIT".to_string());
+        }
+        None
+    }
+}
+
 #[async_trait]
 impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E> {
     async fn estimate_op_gas(
@@ -131,6 +143,11 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
 
         let verification_gas_limit = verification_gas_limit?;
         let call_gas_limit = call_gas_limit?;
+
+        if let Some(err) = settings.validate() {
+            return Err(GasEstimationError::RevertInValidation(err));
+        }
+
         Ok(GasEstimate {
             pre_verification_gas,
             verification_gas_limit: math::increase_by_percent(
@@ -215,6 +232,12 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
 
         let mut max_failure_gas = 0;
         let mut min_success_gas = self.settings.max_verification_gas;
+
+        if gas_used.gas_used.cmp(&U256::from(u64::MAX)).is_gt() {
+            return Err(GasEstimationError::RevertInValidation(
+                "gas_used cannot be larger than a u64 integer".to_string(),
+            ));
+        }
         let mut guess = gas_used.gas_used.as_u64() * 2;
         let mut num_rounds = 0;
         while (min_success_gas as f64) / (max_failure_gas as f64)
@@ -364,12 +387,85 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 
 #[cfg(test)]
 mod tests {
-    use ethers::utils::hex;
+    use ethers::{
+        abi::{AbiEncode, Address},
+        providers::{JsonRpcError, MockError, ProviderError},
+        types::Chain,
+        utils::hex,
+    };
 
     use super::*;
+    use crate::common::{
+        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
+        types::{MockEntryPointLike, MockProviderLike},
+    };
+
+    // Gas overhead defaults
+    const FIXED: u32 = 21000;
+    const PER_USER_OP: u32 = 18300;
+    const PER_USER_OP_WORD: u32 = 4;
+    const BUNDLE_SIZE: u32 = 1;
 
     /// Must match the constant in `CallGasEstimationProxy.sol`.
     const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
+
+    fn create_base_config() -> (MockEntryPointLike, MockProviderLike) {
+        let entry = MockEntryPointLike::new();
+        let provider = MockProviderLike::new();
+
+        (entry, provider)
+    }
+
+    fn create_estimator(
+        entry: MockEntryPointLike,
+        provider: MockProviderLike,
+    ) -> (
+        GasEstimatorImpl<MockProviderLike, MockEntryPointLike>,
+        Settings,
+    ) {
+        let settings = Settings {
+            max_verification_gas: 10000000000,
+            max_call_gas: 10000000000,
+            max_simulate_handle_ops_gas: 100000000,
+        };
+
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings.clone());
+
+        (estimator, settings)
+    }
+
+    fn demo_user_op_optional_gas() -> UserOperationOptionalGas {
+        UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(U256::from(1000)),
+            verification_gas_limit: Some(U256::from(1000)),
+            pre_verification_gas: Some(U256::from(1000)),
+            max_fee_per_gas: Some(U256::from(1000)),
+            max_priority_fee_per_gas: Some(U256::from(1000)),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        }
+    }
+
+    fn demo_user_op() -> UserOperation {
+        UserOperation {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            init_code: Bytes::new(),
+            call_data: Bytes::new(),
+            call_gas_limit: U256::from(1000),
+            verification_gas_limit: U256::from(1000),
+            pre_verification_gas: U256::from(1000),
+            max_fee_per_gas: U256::from(1000),
+            max_priority_fee_per_gas: U256::from(1000),
+            paymaster_and_data: Bytes::new(),
+            signature: Bytes::new(),
+        }
+    }
 
     #[test]
     fn test_proxy_target_offset() {
@@ -381,5 +477,757 @@ mod tests {
             }
         }
         assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input() {
+        let (mut entry, provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+
+        let (estimator, settings) = create_estimator(entry, provider);
+        let user_op = demo_user_op_optional_gas();
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        let u_o = user_op.max_fill(&settings);
+
+        let u_o_packed = u_o.pack();
+        let length_in_words = (u_o_packed.len() + 31) / 32;
+
+        //computed by mapping through the calldata bytes
+        //and adding to the value either 4 or 16 depending
+        //if the byte is non-zero
+        let call_data_cost = 4316;
+
+        let result = U256::from(FIXED) / U256::from(BUNDLE_SIZE)
+            + call_data_cost
+            + U256::from(PER_USER_OP)
+            + U256::from(PER_USER_OP_WORD) * length_in_words;
+
+        let dynamic_gas = 0;
+
+        assert_eq!(result + dynamic_gas, estimation);
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input_arbitrum() {
+        let (mut entry, mut provider) = create_base_config();
+        entry.expect_address().return_const(Address::zero());
+        provider
+            .expect_calc_arbitrum_l1_gas()
+            .returning(|_a, _b| Ok(U256::from(1000)));
+
+        let settings = Settings {
+            max_verification_gas: 10000000000,
+            max_call_gas: 10000000000,
+            max_simulate_handle_ops_gas: 100000000,
+        };
+
+        // Chose arbitrum
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(
+                Chain::Arbitrum as u64,
+                Arc::new(provider),
+                entry,
+                settings.clone(),
+            );
+
+        let user_op = demo_user_op_optional_gas();
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        let u_o = user_op.max_fill(&settings);
+
+        let u_o_packed = u_o.pack();
+        let length_in_words = (u_o_packed.len() + 31) / 32;
+
+        //computed by mapping through the calldata bytes
+        //and adding to the value either 4 or 16 depending
+        //if the byte is non-zero
+        let call_data_cost = 4316;
+
+        let result = U256::from(FIXED) / U256::from(BUNDLE_SIZE)
+            + call_data_cost
+            + U256::from(PER_USER_OP)
+            + U256::from(PER_USER_OP_WORD) * length_in_words;
+
+        //Arbitrum dynamic gas
+        let dynamic_gas = 1000;
+
+        assert_eq!(result + dynamic_gas, estimation);
+    }
+
+    #[tokio::test]
+    async fn test_calc_pre_verification_input_op() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        provider
+            .expect_calc_optimism_l1_gas()
+            .returning(|_a, _b| Ok(U256::from(1000)));
+
+        let settings = Settings {
+            max_verification_gas: 10000000000,
+            max_call_gas: 10000000000,
+            max_simulate_handle_ops_gas: 100000000,
+        };
+
+        // Chose OP
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(
+                Chain::Optimism as u64,
+                Arc::new(provider),
+                entry,
+                settings.clone(),
+            );
+
+        let user_op = demo_user_op_optional_gas();
+        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+
+        let u_o = user_op.max_fill(&settings);
+
+        let u_o_packed = u_o.pack();
+        let length_in_words = (u_o_packed.len() + 31) / 32;
+
+        //computed by mapping through the calldata bytes
+        //and adding to the value either 4 or 16 depending
+        //if the byte is non-zero
+        let call_data_cost = 4316;
+
+        let result = U256::from(FIXED) / U256::from(BUNDLE_SIZE)
+            + call_data_cost
+            + U256::from(PER_USER_OP)
+            + U256::from(PER_USER_OP_WORD) * length_in_words;
+
+        //OP dynamic gas
+        let dynamic_gas = 1000;
+
+        assert_eq!(result + dynamic_gas, estimation);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await
+            .unwrap();
+
+        let pre_op_gas: U256 = 10000.into();
+        let gas_used: U256 = 20000.into();
+
+        // result is based on the combination of pre op gas and gas used in loop
+
+        assert_eq!(pre_op_gas + gas_used, estimation);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas_should_not_overflow() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        // this gas used number is larger than a u64 max number so we need to
+        // check for this overlflow
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(18446744073709551616 as u128),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await
+            .err();
+
+        assert!(matches!(
+            estimation,
+            Some(GasEstimationError::RevertInValidation(..))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas_success_field() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        // the success field should not be true as the
+        // call should always revert
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: true,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await;
+
+        assert_eq!(estimation.is_err(), true);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas_invalid_message() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        // checking for this simulated revert
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| Err(String::from("Error with reverted message")));
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(100),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await;
+
+        assert_eq!(estimation.is_err(), true);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas_invalid_spoof() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        //this mocked response causes error
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error")));
+
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(20000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await;
+
+        assert_eq!(estimation.is_err(), true);
+    }
+
+    #[tokio::test]
+    async fn test_binary_search_verification_gas_success_response() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        // this should always revert instead of return success
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider.expect_call().returning(|_a, _b| Ok(Bytes::new()));
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .binary_search_verification_gas(&user_op, H256::zero())
+            .await;
+
+        assert_eq!(estimation.is_err(), true);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_call_gas() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(100),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .estimate_call_gas(&user_op, H256::zero())
+            .await
+            .unwrap();
+
+        // result is derived from the spoofed gas_estimate field
+
+        assert_eq!(estimation, U256::from(100));
+    }
+
+    #[tokio::test]
+    async fn test_estimate_call_gas_error() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+
+        // return an invalid response for the ExecutionResult
+        // for a successful gas estimation
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasRevertAtMax {
+                        revert_data: Bytes::new(),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: false,
+                    ..Default::default()
+                }))
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .estimate_call_gas(&user_op, H256::zero())
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(
+            matches!(estimation, GasEstimationError::RevertInCallWithBytes(_)),
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn test_estimate_call_gas_continuation() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasContinuation {
+                        min_gas: U256::from(100),
+                        max_gas: U256::from(100000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: false,
+                    ..Default::default()
+                }))
+            })
+            .times(1);
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(200),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            })
+            .times(1);
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+
+        let (estimator, _) = create_estimator(entry, provider);
+        let user_op = demo_user_op();
+        let estimation = estimator
+            .estimate_call_gas(&user_op, H256::zero())
+            .await
+            .unwrap();
+
+        // on the second loop of the estimate gas continuation
+        // I update the spoofed value to 200
+
+        assert_eq!(estimation, U256::from(200));
+    }
+
+    #[tokio::test]
+    async fn test_estimation_optional_gas_used() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+        provider
+            .expect_get_latest_block_hash()
+            .returning(|| Ok(H256::zero()));
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(100000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        let (estimator, _) = create_estimator(entry, provider);
+
+        let user_op = demo_user_op_optional_gas();
+
+        let estimation = estimator.estimate_op_gas(user_op).await.unwrap();
+
+        // this number uses the same logic as the pre_verification tests
+        assert_eq!(estimation.pre_verification_gas, U256::from(43656));
+
+        // 30000 GAS_FEE_TRANSER_COST increased by default 10%
+        assert_eq!(estimation.verification_gas_limit, U256::from(33000));
+
+        // input gas limit clamped with the set limit in settings and constant MIN
+        assert_eq!(estimation.call_gas_limit, U256::from(10000));
+    }
+
+    #[tokio::test]
+    async fn test_estimation_optional_gas_invalid_settings() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry.expect_address().return_const(Address::zero());
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(|_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: EstimateCallGasResult {
+                        gas_estimate: U256::from(10000),
+                        num_rounds: U256::from(10),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+        entry
+            .expect_decode_simulate_handle_ops_revert()
+            .returning(|_a| {
+                Ok(ExecutionResult {
+                    pre_op_gas: U256::from(10000),
+                    paid: U256::from(100000),
+                    valid_after: 100000000000,
+                    valid_until: 100000000001,
+                    target_success: true,
+                    target_result: Bytes::new(),
+                })
+            });
+
+        provider
+            .expect_get_code()
+            .returning(|_a, _b| Ok(Bytes::new()));
+        provider
+            .expect_get_latest_block_hash()
+            .returning(|| Ok(H256::zero()));
+        provider.expect_call().returning(|_a, _b| {
+            let result_data: Bytes = GasUsedResult {
+                gas_used: U256::from(100000),
+                success: false,
+                result: Bytes::new(),
+            }
+            .encode()
+            .into();
+
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(result_data.to_string())),
+            };
+
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        //max_call_gas is less than MIN_CALL_GAS_LIMIT
+
+        let settings = Settings {
+            max_verification_gas: 10,
+            max_call_gas: 10,
+            max_simulate_handle_ops_gas: 10,
+        };
+
+        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
+        let user_op = demo_user_op_optional_gas();
+        let estimation = estimator.estimate_op_gas(user_op).await.err();
+
+        assert!(matches!(
+            estimation,
+            Some(GasEstimationError::RevertInValidation(..))
+        ));
     }
 }
