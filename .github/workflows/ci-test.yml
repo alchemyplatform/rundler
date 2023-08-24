@@ -25,7 +25,7 @@ jobs:
         name: Setup PDM      
         with:
           python-version: 3.11.2 
-          architecture: x86         
+          architecture: x64
       - name: run spec tests
         run: ./test/spec-tests/ci/run-spec-tests.sh
 
