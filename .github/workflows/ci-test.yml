@@ -1,8 +1,7 @@
 on:
   push:
     branches:
-      - main
-  pull_request:
+      - josh/*
 
 name: ci
 jobs:
@@ -22,14 +21,13 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
         run: cargo test
-
-      # - uses: pdm-project/setup-pdm@v3
-      #   name: Setup PDM      
-      #   with:
-      #     python-version: 3.9 
-      #     architecture: x86         
-      # - name: run spec tests
-      #   run: ./test/spec-tests/ci/run-spec-tests.sh
+      - uses: pdm-project/setup-pdm@v3
+        name: Setup PDM      
+        with:
+          python-version: 3.9 
+          architecture: x86         
+      - name: run spec tests
+        run: ./test/spec-tests/ci/run-spec-tests.sh
 
   lint:
     runs-on: ubuntu-latest
