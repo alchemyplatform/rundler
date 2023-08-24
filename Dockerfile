@@ -7,7 +7,13 @@ FROM rust:1.71.0 AS chef-builder
 RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config protobuf-compiler nodejs yarn
-RUN cargo install --git https://github.com/foundry-rs/foundry --profile local --locked foundry-cli
+
+SHELL ["/bin/bash", "-c"]
+RUN curl -L https://foundry.paradigm.xyz | bash
+RUN source ~/.bashrc
+ENV PATH="~/.foundry/bin:${PATH}"
+RUN foundryup
+
 RUN cargo install cargo-chef 
 
 WORKDIR /app
@@ -29,6 +35,7 @@ RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
 
 # Build application
 COPY . .
+RUN forge --help
 RUN cargo build --profile $BUILD_PROFILE --locked --bin rundler
 
 # Use Ubuntu as the release image
