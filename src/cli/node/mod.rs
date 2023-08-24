@@ -1,5 +1,5 @@
 use clap::Args;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 use self::events::Event;
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
         emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
         handle,
     },
-    op_pool::{emit::OpPoolEvent, PoolClientMode, PoolServerMode, PoolTask},
+    op_pool::{emit::OpPoolEvent, LocalPoolBuilder, PoolServerMode, PoolTask},
     rpc::RpcTask,
 };
 mod events;
@@ -40,37 +40,16 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
 
     let builder_url = builder_args.url(false);
 
-    let (tx, rx) = mpsc::channel(1024);
-    let (new_heads_sender, _) = broadcast::channel(1024);
-
     let pool_task_args = pool_args
-        .to_args(
-            &common_args,
-            PoolServerMode::Local {
-                req_receiver: Some(rx),
-                new_heads_sender: Some(new_heads_sender.clone()),
-            },
-        )
+        .to_args(&common_args, PoolServerMode::Local)
         .await?;
-    let builder_task_args = builder_args
-        .to_args(
-            &common_args,
-            PoolClientMode::Local {
-                req_sender: tx.clone(),
-                new_heads_receiver: new_heads_sender.subscribe(),
-            },
-        )
-        .await?;
+    let builder_task_args = builder_args.to_args(&common_args).await?;
     let rpc_task_args = rpc_args
         .to_args(
             &common_args,
             builder_url,
             (&common_args).try_into()?,
             (&common_args).try_into()?,
-            PoolClientMode::Local {
-                req_sender: tx,
-                new_heads_receiver: new_heads_sender.subscribe(),
-            },
         )
         .await?;
 
@@ -97,11 +76,14 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
         }
     });
 
+    let pool_builder = LocalPoolBuilder::new(1024, 1024);
+    let pool_handle = pool_builder.get_handle();
+
     handle::spawn_tasks_with_shutdown(
         [
-            PoolTask::new(pool_task_args, op_pool_event_sender).boxed(),
-            BuilderTask::new(builder_task_args, builder_event_sender).boxed(),
-            RpcTask::new(rpc_task_args).boxed(),
+            PoolTask::new(pool_task_args, op_pool_event_sender, pool_builder).boxed(),
+            BuilderTask::new(builder_task_args, builder_event_sender, pool_handle.clone()).boxed(),
+            RpcTask::new(rpc_task_args, pool_handle).boxed(),
         ],
         tokio::signal::ctrl_c(),
     )

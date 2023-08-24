@@ -16,12 +16,10 @@ pub use reputation::{
     HourlyMovingAverageReputation, Reputation, ReputationParams, ReputationStatus,
 };
 use strum::IntoEnumIterator;
-use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 
 use self::error::MempoolResult;
-use super::{chain::ChainUpdate, MempoolError};
+use super::chain::ChainUpdate;
 use crate::common::{
     mempool::MempoolConfig,
     precheck, simulation,
@@ -178,137 +176,6 @@ impl PoolOperation {
             EntityType::Factory => self.uo.factory(),
             EntityType::Aggregator => self.aggregator,
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct MempoolGroup<M> {
-    mempools: HashMap<Address, M>,
-    chain_update_sender: broadcast::Sender<Arc<ChainUpdate>>,
-}
-
-impl<M> MempoolGroup<M>
-where
-    M: Mempool,
-{
-    pub fn new(mempools: Vec<M>) -> Self {
-        Self {
-            mempools: mempools.into_iter().map(|m| (m.entry_point(), m)).collect(),
-            chain_update_sender: broadcast::channel(1024).0,
-        }
-    }
-
-    pub fn subscribe_chain_update(self: Arc<Self>) -> broadcast::Receiver<Arc<ChainUpdate>> {
-        self.chain_update_sender.subscribe()
-    }
-
-    pub async fn run(
-        self: Arc<Self>,
-        mut chain_update_receiver: broadcast::Receiver<Arc<ChainUpdate>>,
-        shutdown_token: CancellationToken,
-    ) {
-        loop {
-            tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    tracing::info!("Shutting down UoPool");
-                    break;
-                }
-                chain_update = chain_update_receiver.recv() => {
-                    if let Ok(chain_update) = chain_update {
-                        // Update each mempool before notifying listeners of the chain update
-                        // This allows the mempools to update their state before the listeners
-                        // pull information from the mempool.
-                        // For example, a bundle builder listening for a new block to kick off
-                        // its bundle building process will want to be able to query the mempool
-                        // and only receive operations that have not yet been mined.
-                        for mempool in self.mempools.values() {
-                            mempool.on_chain_update(&chain_update);
-                        }
-                        let _ = self.chain_update_sender.send(chain_update);
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn get_supported_entry_points(&self) -> Vec<Address> {
-        self.mempools.keys().copied().collect()
-    }
-
-    pub async fn add_op(
-        &self,
-        entry_point: Address,
-        op: UserOperation,
-        origin: OperationOrigin,
-    ) -> MempoolResult<H256> {
-        let mempool = self.get_pool(entry_point)?;
-        mempool.add_operation(origin, op).await
-    }
-
-    pub fn get_ops(&self, entry_point: Address, max_ops: u64) -> MempoolResult<Vec<PoolOperation>> {
-        let mempool = self.get_pool(entry_point)?;
-        Ok(mempool
-            .best_operations(max_ops as usize)
-            .iter()
-            .map(|op| (**op).clone())
-            .collect())
-    }
-
-    pub fn remove_ops(&self, entry_point: Address, ops: &[H256]) -> MempoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        mempool.remove_operations(ops);
-        Ok(())
-    }
-
-    pub fn remove_entities<'a>(
-        &self,
-        entry_point: Address,
-        entities: impl IntoIterator<Item = &'a Entity>,
-    ) -> MempoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        for entity in entities {
-            mempool.remove_entity(*entity);
-        }
-        Ok(())
-    }
-
-    pub fn debug_clear_state(&self) -> MempoolResult<()> {
-        for mempool in self.mempools.values() {
-            mempool.clear();
-        }
-        Ok(())
-    }
-
-    pub fn debug_dump_mempool(&self, entry_point: Address) -> MempoolResult<Vec<PoolOperation>> {
-        let mempool = self.get_pool(entry_point)?;
-        Ok(mempool
-            .all_operations(usize::MAX)
-            .iter()
-            .map(|op| (**op).clone())
-            .collect())
-    }
-
-    pub fn debug_set_reputations<'a>(
-        &self,
-        entry_point: Address,
-        reputations: impl IntoIterator<Item = &'a Reputation>,
-    ) -> MempoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        for rep in reputations {
-            mempool.set_reputation(rep.address, rep.ops_seen, rep.ops_included);
-        }
-        Ok(())
-    }
-
-    pub fn debug_dump_reputation(&self, entry_point: Address) -> MempoolResult<Vec<Reputation>> {
-        let mempool = self.get_pool(entry_point)?;
-        Ok(mempool.dump_reputation())
-    }
-
-    fn get_pool(&self, entry_point: Address) -> MempoolResult<&M> {
-        self.mempools
-            .get(&entry_point)
-            .ok_or_else(|| MempoolError::UnknownEntryPoint(entry_point))
     }
 }
 

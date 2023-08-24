@@ -28,7 +28,7 @@ use crate::{
             Timestamp, UserOperation,
         },
     },
-    op_pool::{PoolClient, PoolOperation},
+    op_pool::{PoolOperation, PoolServer},
 };
 
 /// A user op must be valid for at least this long into the future to be included.
@@ -76,9 +76,9 @@ where
     S: Simulator,
     E: EntryPointLike,
     P: ProviderLike,
-    C: PoolClient,
+    C: PoolServer,
 {
-    op_pool: C,
+    pool: C,
     simulator: S,
     entry_point: E,
     provider: Arc<P>,
@@ -104,7 +104,7 @@ where
     S: Simulator,
     E: EntryPointLike,
     P: ProviderLike,
-    C: PoolClient,
+    C: PoolServer,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
         let (ops, block_hash, bundle_fees) = try_join!(
@@ -180,10 +180,10 @@ where
     S: Simulator,
     E: EntryPointLike,
     P: ProviderLike,
-    C: PoolClient,
+    C: PoolServer,
 {
     pub fn new(
-        op_pool: C,
+        pool: C,
         simulator: S,
         entry_point: E,
         provider: Arc<P>,
@@ -192,7 +192,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
-            op_pool,
+            pool,
             simulator,
             entry_point,
             provider: provider.clone(),
@@ -398,7 +398,7 @@ where
     }
 
     async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<PoolOperation>> {
-        self.op_pool
+        self.pool
             .get_ops(self.entry_point.address(), self.settings.max_bundle_size)
             .await
             .context("should get ops from pool")
@@ -698,7 +698,7 @@ mod tests {
             },
             types::{MockEntryPointLike, MockProviderLike, ValidTimeRange},
         },
-        op_pool::MockPoolClient,
+        op_pool::MockPoolServer,
     };
 
     #[tokio::test]
@@ -1174,7 +1174,7 @@ mod tests {
             })
             .collect();
 
-        let mut pool_client = MockPoolClient::new();
+        let mut pool_client = MockPoolServer::new();
         pool_client
             .expect_get_ops()
             .returning(move |_, _| Ok(ops.clone()));
