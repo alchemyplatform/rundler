@@ -1,12 +1,17 @@
-use std::pin::Pin;
+use std::{pin::Pin, str::FromStr};
 
-use anyhow::bail;
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::sync::CancellationToken;
-use tonic::{async_trait, transport::Channel};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+use tonic::{
+    async_trait,
+    transport::{Channel, Uri},
+};
+use tonic_health::{
+    pb::{health_client::HealthClient, HealthCheckRequest},
+    ServingStatus,
+};
 
 use super::protos::{
     self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
@@ -20,12 +25,12 @@ use crate::{
     common::{
         protos::{from_bytes, ConversionError},
         retry::{self, UnlimitedRetryOpts},
-        server::connect_with_retries,
+        server::{HealthCheck, ServerStatus},
         types::{Entity, UserOperation},
     },
     op_pool::{
         mempool::{PoolOperation, Reputation},
-        server::{error::PoolServerError, NewHead, PoolClient},
+        server::{error::PoolServerError, NewHead, PoolServer},
         PoolResult,
     },
 };
@@ -33,20 +38,25 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RemotePoolClient {
     op_pool_client: OpPoolClient<Channel>,
+    op_pool_health: HealthClient<Channel>,
 }
 
 impl RemotePoolClient {
-    pub fn new(client: OpPoolClient<Channel>) -> Self {
-        Self {
-            op_pool_client: client,
-        }
+    pub async fn connect(url: String) -> anyhow::Result<Self> {
+        let op_pool_client = OpPoolClient::connect(url.clone()).await?;
+        let op_pool_health =
+            HealthClient::new(Channel::builder(Uri::from_str(&url)?).connect().await?);
+        Ok(Self {
+            op_pool_client,
+            op_pool_health,
+        })
     }
 
     // Handler for the new block subscription. This will attempt to resubscribe if the gRPC
     // connection disconnects using expenential backoff.
     async fn new_heads_subscription_handler(
         client: OpPoolClient<Channel>,
-        tx: mpsc::Sender<NewHead>,
+        tx: mpsc::UnboundedSender<NewHead>,
     ) {
         let mut stream = None;
 
@@ -69,7 +79,7 @@ impl RemotePoolClient {
             match stream.as_mut().unwrap().message().await {
                 Ok(Some(SubscribeNewHeadsResponse { new_head: Some(b) })) => match b.try_into() {
                     Ok(new_head) => {
-                        if tx.send(new_head).await.is_err() {
+                        if tx.send(new_head).is_err() {
                             // recv handle dropped
                             return;
                         }
@@ -95,7 +105,7 @@ impl RemotePoolClient {
 }
 
 #[async_trait]
-impl PoolClient for RemotePoolClient {
+impl PoolServer for RemotePoolClient {
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>> {
         Ok(self
             .op_pool_client
@@ -294,26 +304,29 @@ impl PoolClient for RemotePoolClient {
         }
     }
 
-    fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
-        let (tx, rx) = mpsc::channel(1024);
+    async fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
+        let (tx, rx) = mpsc::unbounded_channel();
         let client = self.op_pool_client.clone();
 
         tokio::spawn(Self::new_heads_subscription_handler(client, tx));
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(Box::pin(UnboundedReceiverStream::new(rx)))
     }
 }
 
-pub async fn connect_remote_pool_client(
-    op_pool_url: &str,
-    shutdown_token: CancellationToken,
-) -> anyhow::Result<RemotePoolClient> {
-    tokio::select! {
-        _ = shutdown_token.cancelled() => {
-            tracing::error!("bailing from connecting client, server shutting down");
-            bail!("Server shutting down")
-        }
-        res = connect_with_retries("op pool from builder", op_pool_url, OpPoolClient::connect) => {
-            Ok(RemotePoolClient::new(res?))
-        }
+#[async_trait]
+impl HealthCheck for RemotePoolClient {
+    fn name(&self) -> &'static str {
+        "RemotePoolServer"
+    }
+
+    async fn status(&self) -> ServerStatus {
+        self.op_pool_health
+            .clone()
+            .check(HealthCheckRequest::default())
+            .await
+            .ok()
+            .filter(|status| status.get_ref().status == ServingStatus::Serving as i32)
+            .map(|_| ServerStatus::Serving)
+            .unwrap_or(ServerStatus::NotServing)
     }
 }

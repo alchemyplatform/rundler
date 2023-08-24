@@ -219,3 +219,12 @@ impl TryFrom<NewHead> for PoolNewHead {
         })
     }
 }
+
+impl From<PoolNewHead> for NewHead {
+    fn from(head: PoolNewHead) -> Self {
+        Self {
+            block_hash: head.block_hash.as_bytes().to_vec(),
+            block_number: head.block_number,
+        }
+    }
+}

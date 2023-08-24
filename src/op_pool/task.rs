@@ -1,21 +1,15 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::providers::{
     Http, HttpRateLimitRetryPolicy, JsonRpcClient, Provider, RetryClientBuilder,
 };
-use tokio::{
-    sync::{broadcast, mpsc},
-    try_join,
-};
+use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 use url::Url;
 
-use super::{
-    mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams},
-    server::{NewHead, ServerRequest},
-};
+use super::mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams};
 use crate::{
     common::{
         contracts::i_entry_point::IEntryPoint,
@@ -28,20 +22,15 @@ use crate::{
     op_pool::{
         chain::{self, Chain},
         emit::OpPoolEvent,
-        mempool::{uo_pool::UoPool, MempoolGroup},
-        server::{spawn_local_mempool_server, spawn_remote_mempool_server},
+        mempool::uo_pool::UoPool,
+        server::{spawn_remote_mempool_server, LocalPoolBuilder},
     },
 };
 
 #[derive(Debug)]
 pub enum PoolServerMode {
-    Local {
-        req_receiver: Option<mpsc::Receiver<ServerRequest>>,
-        new_heads_sender: Option<broadcast::Sender<NewHead>>,
-    },
-    Remote {
-        addr: SocketAddr,
-    },
+    Local,
+    Remote { addr: SocketAddr },
 }
 
 #[derive(Debug)]
@@ -58,11 +47,12 @@ pub struct Args {
 pub struct PoolTask {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+    pool_builder: LocalPoolBuilder,
 }
 
 #[async_trait]
 impl Task for PoolTask {
-    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let chain_id = self.args.chain_id;
         tracing::info!("Chain id: {chain_id}");
         tracing::info!("Http url: {:?}", self.args.http_url);
@@ -96,49 +86,27 @@ impl Task for PoolTask {
         let provider = Arc::new(Provider::new(client));
 
         // create mempools
-        let mut mempools = vec![];
+        let mut mempools = HashMap::new();
         for pool_config in &self.args.pool_configs {
             let pool =
                 PoolTask::create_mempool(pool_config, self.event_sender.clone(), provider.clone())
                     .await
                     .context("should have created mempool")?;
 
-            mempools.push(pool);
+            mempools.insert(pool_config.entry_point, Arc::new(pool));
         }
 
-        let mempool_group = Arc::new(MempoolGroup::new(mempools));
-        let mempool_group_runner = Arc::clone(&mempool_group);
-        let mempool_shutdown = shutdown_token.clone();
-        // handle to wait for mempool group to terminate
-        let mempool_handle = tokio::spawn(async move {
-            mempool_group_runner
-                .run(update_sender.subscribe(), mempool_shutdown)
-                .await;
-            Ok(())
-        });
+        let pool_handle = self.pool_builder.get_handle();
+        let pool_runnder_handle =
+            self.pool_builder
+                .run(mempools, update_sender.subscribe(), shutdown_token.clone());
 
-        let server_handle = match &mut self.args.server_mode {
-            PoolServerMode::Local {
-                ref mut req_receiver,
-                ref mut new_heads_sender,
-            } => {
-                let req_receiver = req_receiver
-                    .take()
-                    .context("should have local server message receiver")?;
-                let new_heads_sender = new_heads_sender
-                    .take()
-                    .context("should have block sender")?;
-                spawn_local_mempool_server(
-                    Arc::clone(&mempool_group),
-                    req_receiver,
-                    new_heads_sender,
-                    shutdown_token.clone(),
-                )?
-            }
+        let remote_handle = match &mut self.args.server_mode {
+            PoolServerMode::Local => tokio::spawn(async { Ok(()) }),
             PoolServerMode::Remote { addr } => {
                 spawn_remote_mempool_server(
                     self.args.chain_id,
-                    Arc::clone(&mempool_group),
+                    pool_handle,
                     *addr,
                     shutdown_token.clone(),
                 )
@@ -149,8 +117,8 @@ impl Task for PoolTask {
         tracing::info!("Started op_pool");
 
         match try_join!(
-            handle::flatten_handle(mempool_handle),
-            handle::flatten_handle(server_handle),
+            handle::flatten_handle(pool_runnder_handle),
+            handle::flatten_handle(remote_handle),
             handle::as_anyhow_handle(chain_handle),
         ) {
             Ok(_) => {
@@ -169,8 +137,13 @@ impl PoolTask {
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        pool_builder: LocalPoolBuilder,
     ) -> PoolTask {
-        Self { args, event_sender }
+        Self {
+            args,
+            event_sender,
+            pool_builder,
+        }
     }
 
     pub fn boxed(self) -> Box<dyn Task> {

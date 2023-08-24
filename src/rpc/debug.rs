@@ -14,7 +14,7 @@ use crate::{
         },
         types::BundlingMode,
     },
-    op_pool::PoolClient,
+    op_pool::PoolServer,
 };
 
 /// Debug API
@@ -44,14 +44,14 @@ pub trait DebugApi {
 }
 
 pub struct DebugApi<P> {
-    op_pool_client: P,
+    pool: P,
     builder_client: builder_client::BuilderClient<Channel>,
 }
 
 impl<P> DebugApi<P> {
-    pub fn new(op_pool_client: P, builder_client: builder_client::BuilderClient<Channel>) -> Self {
+    pub fn new(pool: P, builder_client: builder_client::BuilderClient<Channel>) -> Self {
         Self {
-            op_pool_client,
+            pool,
             builder_client,
         }
     }
@@ -60,11 +60,11 @@ impl<P> DebugApi<P> {
 #[async_trait]
 impl<P> DebugApiServer for DebugApi<P>
 where
-    P: PoolClient,
+    P: PoolServer,
 {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
-            .op_pool_client
+            .pool
             .debug_clear_state()
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;
@@ -74,7 +74,7 @@ where
 
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
         Ok(self
-            .op_pool_client
+            .pool
             .debug_dump_mempool(entry_point)
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?
@@ -112,7 +112,7 @@ where
         entry_point: Address,
     ) -> RpcResult<String> {
         let _ = self
-            .op_pool_client
+            .pool
             .debug_set_reputations(
                 entry_point,
                 reputations.into_iter().map(Into::into).collect(),
@@ -124,7 +124,7 @@ where
 
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>> {
         let result = self
-            .op_pool_client
+            .pool
             .debug_dump_reputation(entry_point)
             .await
             .map_err(|e| RpcError::Custom(e.to_string()))?;

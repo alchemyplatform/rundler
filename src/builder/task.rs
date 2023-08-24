@@ -37,7 +37,7 @@ use crate::{
         server::format_socket_addr,
         simulation::{self, SimulatorImpl},
     },
-    op_pool::{connect_remote_pool_client, LocalPoolClient, PoolClientMode},
+    op_pool::PoolServer,
 };
 
 #[derive(Debug)]
@@ -64,18 +64,21 @@ pub struct Args {
     pub max_blocks_to_wait_for_mine: u64,
     pub replacement_fee_percent_increase: u64,
     pub max_fee_increases: u64,
-    pub pool_client_mode: PoolClientMode,
 }
 
 #[derive(Debug)]
-pub struct BuilderTask {
+pub struct BuilderTask<P> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    pool: P,
 }
 
 #[async_trait]
-impl Task for BuilderTask {
-    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+impl<P> Task for BuilderTask<P>
+where
+    P: PoolServer + Clone,
+{
+    async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         info!("Starting builder server on {}", addr);
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
@@ -153,62 +156,28 @@ impl Task for BuilderTask {
         let manual_bundling_mode = Arc::new(AtomicBool::new(false));
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
-        let mut builder: Box<dyn BundleSender> = match &self.args.pool_client_mode {
-            PoolClientMode::Local {
-                req_sender,
-                new_heads_receiver,
-            } => {
-                let pool_client =
-                    LocalPoolClient::new(req_sender.clone(), new_heads_receiver.resubscribe());
-                let proposer = BundleProposerImpl::new(
-                    pool_client.clone(),
-                    simulator,
-                    entry_point.clone(),
-                    Arc::clone(&provider),
-                    self.args.chain_id,
-                    proposer_settings,
-                    self.event_sender.clone(),
-                );
-                Box::new(BundleSenderImpl::new(
-                    manual_bundling_mode.clone(),
-                    send_bundle_rx,
-                    self.args.chain_id,
-                    beneficiary,
-                    self.args.eth_poll_interval,
-                    proposer,
-                    entry_point,
-                    transaction_tracker,
-                    pool_client,
-                    builder_settings,
-                    self.event_sender.clone(),
-                ))
-            }
-            PoolClientMode::Remote { url } => {
-                let pool_client = connect_remote_pool_client(url, shutdown_token.clone()).await?;
-                let proposer = BundleProposerImpl::new(
-                    pool_client.clone(),
-                    simulator,
-                    entry_point.clone(),
-                    Arc::clone(&provider),
-                    self.args.chain_id,
-                    proposer_settings,
-                    self.event_sender.clone(),
-                );
-                Box::new(BundleSenderImpl::new(
-                    manual_bundling_mode.clone(),
-                    send_bundle_rx,
-                    self.args.chain_id,
-                    beneficiary,
-                    self.args.eth_poll_interval,
-                    proposer,
-                    entry_point,
-                    transaction_tracker,
-                    pool_client,
-                    builder_settings,
-                    self.event_sender.clone(),
-                ))
-            }
-        };
+        let proposer = BundleProposerImpl::new(
+            self.pool.clone(),
+            simulator,
+            entry_point.clone(),
+            Arc::clone(&provider),
+            self.args.chain_id,
+            proposer_settings,
+            self.event_sender.clone(),
+        );
+        let mut builder = BundleSenderImpl::new(
+            manual_bundling_mode.clone(),
+            send_bundle_rx,
+            self.args.chain_id,
+            beneficiary,
+            self.args.eth_poll_interval,
+            proposer,
+            entry_point,
+            transaction_tracker,
+            self.pool,
+            builder_settings,
+            self.event_sender.clone(),
+        );
 
         let _builder_loop_guard =
             { SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await }) };
@@ -248,12 +217,20 @@ impl Task for BuilderTask {
     }
 }
 
-impl BuilderTask {
+impl<P> BuilderTask<P>
+where
+    P: PoolServer + Clone,
+{
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-    ) -> BuilderTask {
-        Self { args, event_sender }
+        pool: P,
+    ) -> Self {
+        Self {
+            args,
+            event_sender,
+            pool,
+        }
     }
 
     pub fn boxed(self) -> Box<dyn Task> {

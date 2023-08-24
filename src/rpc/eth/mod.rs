@@ -32,7 +32,7 @@ use crate::{
         eth::log_to_raw_log,
         types::{UserOperation, BASE_CHAIN_IDS},
     },
-    op_pool::PoolClient,
+    op_pool::PoolServer,
     rpc::{
         estimation::{GasEstimationError, GasEstimator, GasEstimatorImpl},
         GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
@@ -97,24 +97,24 @@ where
 }
 
 #[derive(Debug)]
-pub struct EthApi<C: JsonRpcClient + 'static, P: PoolClient> {
+pub struct EthApi<C: JsonRpcClient + 'static, P: PoolServer> {
     contexts_by_entry_point: HashMap<Address, EntryPointContext<C>>,
     provider: Arc<Provider<C>>,
     chain_id: u64,
-    op_pool_client: P,
+    pool: P,
 }
 
 impl<C, P> EthApi<C, P>
 where
     C: JsonRpcClient + 'static,
-    P: PoolClient,
+    P: PoolServer,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider: Arc<Provider<C>>,
         entry_points: Vec<Address>,
         chain_id: u64,
-        op_pool_client: P,
+        pool: P,
         estimation_settings: estimation::Settings,
     ) -> Self {
         let contexts_by_entry_point = entry_points
@@ -131,7 +131,7 @@ where
             contexts_by_entry_point,
             provider,
             chain_id,
-            op_pool_client,
+            pool,
         }
     }
 
@@ -311,7 +311,7 @@ where
 impl<C, P> EthApiServer for EthApi<C, P>
 where
     C: JsonRpcClient + 'static,
-    P: PoolClient,
+    P: PoolServer,
 {
     async fn send_user_operation(
         &self,
@@ -324,7 +324,7 @@ where
             ))?;
         }
         Ok(self
-            .op_pool_client
+            .pool
             .add_op(entry_point, op.into())
             .await
             .map_err(EthRpcError::from)
@@ -506,7 +506,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::op_pool::MockPoolClient;
+    use crate::op_pool::MockPoolServer;
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
 
@@ -520,7 +520,7 @@ mod tests {
             given_log(UO_OP_TOPIC, "another-hash"),
         ]);
 
-        let result = EthApi::<Http, MockPoolClient>::filter_receipt_logs_matching_user_op(
+        let result = EthApi::<Http, MockPoolServer>::filter_receipt_logs_matching_user_op(
             &reference_log,
             &receipt,
         );
@@ -542,7 +542,7 @@ mod tests {
             given_log(UO_OP_TOPIC, "another-hash"),
         ]);
 
-        let result = EthApi::<Http, MockPoolClient>::filter_receipt_logs_matching_user_op(
+        let result = EthApi::<Http, MockPoolServer>::filter_receipt_logs_matching_user_op(
             &reference_log,
             &receipt,
         );
@@ -564,7 +564,7 @@ mod tests {
             reference_log.clone(),
         ]);
 
-        let result = EthApi::<Http, MockPoolClient>::filter_receipt_logs_matching_user_op(
+        let result = EthApi::<Http, MockPoolServer>::filter_receipt_logs_matching_user_op(
             &reference_log,
             &receipt,
         );
@@ -590,7 +590,7 @@ mod tests {
             reference_log.clone(),
         ]);
 
-        let result = EthApi::<Http, MockPoolClient>::filter_receipt_logs_matching_user_op(
+        let result = EthApi::<Http, MockPoolServer>::filter_receipt_logs_matching_user_op(
             &reference_log,
             &receipt,
         );
@@ -615,7 +615,7 @@ mod tests {
             given_log(UO_OP_TOPIC, "other-hash"),
         ]);
 
-        let result = EthApi::<Http, MockPoolClient>::filter_receipt_logs_matching_user_op(
+        let result = EthApi::<Http, MockPoolServer>::filter_receipt_logs_matching_user_op(
             &reference_log,
             &receipt,
         );
@@ -636,7 +636,7 @@ mod tests {
             given_log("another-topic-2", "some-hash"),
         ]);
 
-        let result = EthApi::<Http, MockPoolClient>::filter_receipt_logs_matching_user_op(
+        let result = EthApi::<Http, MockPoolServer>::filter_receipt_logs_matching_user_op(
             &reference_log,
             &receipt,
         );
