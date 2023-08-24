@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
@@ -6,11 +6,13 @@ use ethers::{
     providers::{JsonRpcClient, Middleware, Provider, ProviderError},
     types::{
         transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
-        Eip1559TransactionRequest, Filter, Log, H160, H256, U256, U64,
+        Eip1559TransactionRequest, Filter, GethDebugTracingOptions, GethTrace, Log, Transaction,
+        TransactionReceipt, TxHash, H160, H256, U256, U64,
     },
 };
 #[cfg(test)]
 use mockall::automock;
+use serde::{de::DeserializeOwned, Serialize};
 use tonic::async_trait;
 
 use crate::common::{
@@ -18,6 +20,7 @@ use crate::common::{
         gas_price_oracle::GasPriceOracle, i_aggregator::IAggregator, i_entry_point::IEntryPoint,
         node_interface::NodeInterface,
     },
+    simulation::AggregatorSimOut,
     types::UserOperation,
 };
 
@@ -29,9 +32,21 @@ const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
     0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0F,
 ]);
 
+#[derive(Debug)]
+pub enum AggregatorOut {
+    NotNeeded,
+    SuccessWithInfo(AggregatorSimOut),
+    ValidationReverted,
+}
+
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait ProviderLike: Send + Sync + 'static {
+    async fn request<T, R>(&self, method: &str, params: T) -> Result<R, ProviderError>
+    where
+        T: Debug + Serialize + Send + Sync + 'static,
+        R: Serialize + DeserializeOwned + Debug + Send + 'static;
+
     async fn call(
         &self,
         tx: &TypedTransaction,
@@ -46,6 +61,22 @@ pub trait ProviderLike: Send + Sync + 'static {
     ) -> anyhow::Result<Option<Block<H256>>>;
 
     async fn get_balance(&self, address: Address, block: Option<BlockId>) -> anyhow::Result<U256>;
+
+    async fn get_transaction<T: Send + Sync + Into<TxHash> + 'static>(
+        &self,
+        tx: T,
+    ) -> Result<Option<Transaction>, ProviderError>;
+
+    async fn get_transaction_receipt<T: Send + Sync + Into<TxHash> + 'static>(
+        &self,
+        transaction_hash: T,
+    ) -> Result<Option<TransactionReceipt>, ProviderError>;
+
+    async fn debug_trace_transaction(
+        &self,
+        tx_hash: TxHash,
+        trace_options: GethDebugTracingOptions,
+    ) -> Result<GethTrace, ProviderError>;
 
     async fn get_latest_block_hash(&self) -> anyhow::Result<H256>;
 
@@ -65,6 +96,13 @@ pub trait ProviderLike: Send + Sync + 'static {
         ops: Vec<UserOperation>,
     ) -> anyhow::Result<Option<Bytes>>;
 
+    async fn validate_user_op_signature(
+        self: Arc<Self>,
+        aggregator_address: Address,
+        user_op: UserOperation,
+        gas_cap: u64,
+    ) -> anyhow::Result<AggregatorOut>;
+
     async fn calc_arbitrum_l1_gas(
         self: Arc<Self>,
         entry_point_address: Address,
@@ -83,6 +121,15 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
     // We implement `ProviderLike` for `Provider` rather than for all
     // `Middleware` because forming a `PendingTransaction` specifically requires
     // a `Provider`.
+
+    async fn request<T, R>(&self, method: &str, params: T) -> Result<R, ProviderError>
+    where
+        T: Debug + Serialize + Send + Sync,
+        R: Serialize + DeserializeOwned + Debug + Send,
+    {
+        let res: R = self.inner().request(method, params).await?;
+        Ok(res)
+    }
 
     async fn call(
         &self,
@@ -106,6 +153,28 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         Middleware::get_block(self, block_hash_or_number)
             .await
             .context("should get block from provider")
+    }
+
+    async fn get_transaction<T: Send + Sync + Into<TxHash>>(
+        &self,
+        transaction_hash: T,
+    ) -> Result<Option<Transaction>, ProviderError> {
+        Middleware::get_transaction(self, transaction_hash).await
+    }
+
+    async fn get_transaction_receipt<T: Send + Sync + Into<TxHash> + 'static>(
+        &self,
+        transaction_hash: T,
+    ) -> Result<Option<TransactionReceipt>, ProviderError> {
+        Middleware::get_transaction_receipt(self, transaction_hash).await
+    }
+
+    async fn debug_trace_transaction(
+        &self,
+        tx_hash: TxHash,
+        trace_options: GethDebugTracingOptions,
+    ) -> Result<GethTrace, ProviderError> {
+        Middleware::debug_trace_transaction(self, tx_hash, trace_options).await
     }
 
     async fn get_balance(&self, address: Address, block: Option<BlockId>) -> anyhow::Result<U256> {
@@ -156,6 +225,29 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
             Ok(bytes) => Ok(Some(bytes)),
             Err(ContractError::Revert(_)) => Ok(None),
             Err(error) => Err(error).context("aggregator contract should aggregate signatures")?,
+        }
+    }
+
+    async fn validate_user_op_signature(
+        self: Arc<Self>,
+        aggregator_address: Address,
+        user_op: UserOperation,
+        gas_cap: u64,
+    ) -> anyhow::Result<AggregatorOut> {
+        let aggregator = IAggregator::new(aggregator_address, self);
+        let result = aggregator
+            .validate_user_op_signature(user_op)
+            .gas(gas_cap)
+            .call()
+            .await;
+
+        match result {
+            Ok(sig) => Ok(AggregatorOut::SuccessWithInfo(AggregatorSimOut {
+                address: aggregator_address,
+                signature: sig,
+            })),
+            Err(ContractError::Revert(_)) => Ok(AggregatorOut::ValidationReverted),
+            Err(error) => Err(error).context("should call aggregator to validate signature")?,
         }
     }
 

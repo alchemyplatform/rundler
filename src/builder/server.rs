@@ -7,10 +7,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use ethers::{
-    providers::{Http, Provider, RetryClient},
-    types::{transaction::eip2718::TypedTransaction, Address, H256, U256},
-};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use tokio::{join, sync::broadcast, time};
 use tonic::{async_trait, transport::Channel, Request, Response, Status};
 use tracing::{debug, error, info, trace, warn};
@@ -36,7 +33,7 @@ use crate::{
                 self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
             },
         },
-        types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
+        types::{Entity, EntryPointLike, ExpectedStorage, ProviderLike, UserOperation},
     },
 };
 
@@ -50,9 +47,10 @@ pub struct Settings {
 }
 
 #[derive(Debug)]
-pub struct BuilderImpl<P, E, T>
+pub struct BuilderImpl<P, PL, E, T>
 where
     P: BundleProposer,
+    PL: ProviderLike,
     E: EntryPointLike,
     T: TransactionTracker,
 {
@@ -65,7 +63,7 @@ where
     entry_point: E,
     transaction_tracker: T,
     // TODO: Figure out what we really want to do for detecting new blocks.
-    provider: Arc<Provider<RetryClient<Http>>>,
+    provider: Arc<PL>,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
 }
@@ -93,9 +91,10 @@ enum SendBundleResult {
     Error(anyhow::Error),
 }
 
-impl<P, E, T> BuilderImpl<P, E, T>
+impl<P, PL, E, T> BuilderImpl<P, PL, E, T>
 where
     P: BundleProposer,
+    PL: ProviderLike,
     E: EntryPointLike,
     T: TransactionTracker,
 {
@@ -108,7 +107,7 @@ where
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
-        provider: Arc<Provider<RetryClient<Http>>>,
+        provider: Arc<PL>,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
@@ -442,9 +441,10 @@ where
 }
 
 #[async_trait]
-impl<P, E, T> Builder for Arc<BuilderImpl<P, E, T>>
+impl<P, PL, E, T> Builder for Arc<BuilderImpl<P, PL, E, T>>
 where
     P: BundleProposer,
+    PL: ProviderLike,
     E: EntryPointLike,
     T: TransactionTracker,
 {

@@ -1,20 +1,18 @@
 use std::{
     collections::{BTreeSet, HashMap},
     fmt::Debug,
+    sync::Arc,
 };
 
 use anyhow::Context;
-use ethers::{
-    providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, BlockId, U256},
-};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, BlockId, U256};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::common::{
+use super::{
     context::LogWithContext,
-    contracts::i_entry_point::IEntryPoint,
-    types::{ExpectedStorage, UserOperation},
+    types::{EntryPointLike, ProviderLike},
 };
+use crate::common::types::{ExpectedStorage, UserOperation};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,34 +65,28 @@ impl AssociatedSlotsByAddress {
 
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
 /// method for the provided user operation.
-pub async fn trace_simulate_validation(
-    entry_point: &IEntryPoint<impl Middleware>,
+pub async fn trace_simulate_validation<E: EntryPointLike, P: ProviderLike>(
+    entry_point: &E,
+    provider: Arc<P>,
     op: UserOperation,
     block_id: BlockId,
     max_validation_gas: u64,
 ) -> anyhow::Result<TracerOutput> {
-    let pvg = op.pre_verification_gas;
     let tx = entry_point
-        .simulate_validation(op)
-        .gas(U256::from(max_validation_gas) + pvg)
-        .tx;
-    trace_call(
-        entry_point.client().provider(),
-        tx,
-        block_id,
-        validation_tracer_js(),
-    )
-    .await
+        .simulate_validation(op, max_validation_gas)
+        .await?;
+
+    trace_call(provider, tx, block_id, validation_tracer_js()).await
 }
 
-async fn trace_call<T>(
-    provider: &Provider<impl JsonRpcClient>,
+async fn trace_call<T, P: ProviderLike>(
+    provider: Arc<P>,
     tx: TypedTransaction,
     block_id: BlockId,
     tracer_code: &str,
 ) -> anyhow::Result<T>
 where
-    T: Debug + DeserializeOwned + Serialize + Send,
+    T: Debug + DeserializeOwned + Serialize + Send + 'static,
 {
     let out = provider
         .request(
