@@ -1,9 +1,7 @@
-use anyhow::Context;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use tonic::{async_trait, transport::Channel};
-use tonic_health::pb::{health_client::HealthClient, HealthCheckRequest};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::CallError};
+use tonic::async_trait;
 
-use crate::op_pool::{LocalPoolClient, PoolClient};
+use crate::common::server::{HealthCheck, ServerStatus};
 
 #[rpc(server, namespace = "system")]
 pub trait SystemApi {
@@ -11,60 +9,32 @@ pub trait SystemApi {
     async fn get_health(&self) -> RpcResult<String>;
 }
 
-pub struct RemoteHealthCheck {
-    op_pool_health_client: HealthClient<Channel>,
-    builder_health_client: HealthClient<Channel>,
+pub struct HealthChecker {
+    servers: Vec<Box<dyn HealthCheck>>,
 }
 
-impl RemoteHealthCheck {
-    pub fn new(
-        op_pool_health_client: HealthClient<Channel>,
-        builder_health_client: HealthClient<Channel>,
-    ) -> Self {
-        Self {
-            op_pool_health_client,
-            builder_health_client,
+impl HealthChecker {
+    pub fn new(servers: Vec<Box<dyn HealthCheck>>) -> Self {
+        Self { servers }
+    }
+}
+
+#[async_trait]
+impl SystemApiServer for HealthChecker {
+    async fn get_health(&self) -> RpcResult<String> {
+        let mut errors = Vec::new();
+        for server in &self.servers {
+            match server.status().await {
+                ServerStatus::Serving => {}
+                ServerStatus::NotServing => errors.push(server.name()),
+            }
         }
-    }
-}
-
-#[async_trait]
-impl SystemApiServer for RemoteHealthCheck {
-    async fn get_health(&self) -> RpcResult<String> {
-        self.op_pool_health_client
-            .clone()
-            .check(HealthCheckRequest::default())
-            .await
-            .context("Op pool server should be live")?;
-
-        self.builder_health_client
-            .clone()
-            .check(HealthCheckRequest::default())
-            .await
-            .context("Builder server should be live")?;
-
-        Ok("ok".to_string())
-    }
-}
-
-pub struct LocalHealthCheck {
-    pool_client: LocalPoolClient,
-}
-
-impl LocalHealthCheck {
-    pub fn new(pool_client: LocalPoolClient) -> Self {
-        Self { pool_client }
-    }
-}
-
-#[async_trait]
-impl SystemApiServer for LocalHealthCheck {
-    async fn get_health(&self) -> RpcResult<String> {
-        self.pool_client
-            .get_supported_entry_points()
-            .await
-            .context("Op pool server should be live")?;
-
-        Ok("ok".to_string())
+        if errors.is_empty() {
+            Ok("ok".to_owned())
+        } else {
+            Err(jsonrpsee::core::Error::Call(CallError::Failed(
+                anyhow::anyhow!("Health check failed: {:?}", errors),
+            )))
+        }
     }
 }

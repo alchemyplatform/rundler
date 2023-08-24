@@ -6,9 +6,8 @@ mod task;
 
 pub use mempool::{error::MempoolError, PoolConfig, PoolOperation, Reputation, ReputationStatus};
 #[cfg(test)]
-pub use server::MockPoolClient;
+pub use server::MockPoolServer;
 pub use server::{
-    connect_remote_pool_client, LocalPoolClient, NewHead, PoolClient, PoolClientMode, PoolResult,
-    PoolServerError, RemotePoolClient, ServerRequest as LocalPoolServerRequest,
+    LocalPoolBuilder, NewHead, PoolResult, PoolServer, PoolServerError, RemotePoolClient,
 };
 pub use task::*;

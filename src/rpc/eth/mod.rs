@@ -30,7 +30,7 @@ use crate::{
         eth::{log_to_raw_log, Settings},
         types::{EntryPointLike, ProviderLike, UserOperation},
     },
-    op_pool::PoolClient,
+    op_pool::PoolServer,
     rpc::{
         estimation::{GasEstimationError, GasEstimatorImpl},
         GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
@@ -98,7 +98,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct EthApi<P: ProviderLike, E: EntryPointLike, PS: PoolClient> {
+pub struct EthApi<P: ProviderLike, E: EntryPointLike, PS: PoolServer> {
     contexts_by_entry_point: HashMap<Address, EntryPointContext<P, E>>,
     provider: Arc<P>,
     chain_id: u64,
@@ -110,7 +110,7 @@ impl<P, E, PS> EthApi<P, E, PS>
 where
     P: ProviderLike,
     E: EntryPointLike,
-    PS: PoolClient,
+    PS: PoolServer,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -321,7 +321,7 @@ impl<P, E, PS> EthApiServer for EthApi<P, E, PS>
 where
     P: ProviderLike,
     E: EntryPointLike,
-    PS: PoolClient,
+    PS: PoolServer,
 {
     async fn send_user_operation(
         &self,
@@ -519,7 +519,7 @@ mod tests {
     use super::*;
     use crate::{
         common::types::{MockEntryPointLike, MockProviderLike},
-        op_pool::MockPoolClient,
+        op_pool::MockPoolServer,
     };
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
@@ -535,7 +535,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -558,7 +558,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -581,7 +581,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -608,7 +608,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -634,7 +634,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -656,7 +656,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolClient>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
