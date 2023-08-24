@@ -11,7 +11,6 @@ use anyhow::{anyhow, bail, Context};
 use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::EthEvent,
-    providers::{JsonRpcClient, Middleware, Provider},
     types::{
         Address, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
         GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, Opcode, TransactionReceipt, H256,
@@ -24,16 +23,18 @@ use prost::Message;
 use tonic::{async_trait, transport::Channel, Status};
 use tracing::{debug, Level};
 
-use self::error::{
-    EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData, ReplacementUnderpricedData,
-    StakeTooLowData, UnsupportedAggregatorData,
+use self::{
+    error::{
+        EthRpcError, OutOfTimeRangeData, PaymasterValidationRejectedData,
+        ReplacementUnderpricedData, StakeTooLowData, UnsupportedAggregatorData,
+    },
+    estimation::GasEstimator,
 };
 use crate::{
     common::{
         context::LogOnError,
         contracts::i_entry_point::{
-            IEntryPoint, IEntryPointCalls, UserOperationEventFilter,
-            UserOperationRevertReasonFilter,
+            IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
         },
         eth::log_to_raw_log,
         mempool::MempoolConfig,
@@ -45,10 +46,13 @@ use crate::{
         simulation::{
             self, SimulationError, SimulationSuccess, SimulationViolation, Simulator, SimulatorImpl,
         },
-        types::{Entity, EntityType, EntryPointLike, Timestamp, UserOperation, BASE_CHAIN_IDS},
+        types::{
+            Entity, EntityType, EntryPointLike, ProviderLike, Timestamp, UserOperation,
+            BASE_CHAIN_IDS,
+        },
     },
     rpc::{
-        estimation::{GasEstimationError, GasEstimator, GasEstimatorImpl},
+        estimation::{GasEstimationError, GasEstimatorImpl},
         GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
         UserOperationReceipt,
     },
@@ -56,6 +60,7 @@ use crate::{
 
 /// Eth API
 #[rpc(client, server, namespace = "eth")]
+#[cfg_attr(test, automock)]
 pub trait EthApi {
     #[method(name = "sendUserOperation")]
     async fn send_user_operation(
@@ -87,29 +92,31 @@ pub trait EthApi {
     async fn chain_id(&self) -> RpcResult<U64>;
 }
 
-// TODO: use ProviderLike and EntrypointLike
 #[derive(Debug)]
-struct EntryPointContext<Client: JsonRpcClient + 'static> {
-    entry_point: IEntryPoint<Provider<Client>>,
-    prechecker: PrecheckerImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
-    simulator: SimulatorImpl<Client>,
-    gas_estimator: GasEstimatorImpl<Provider<Client>, IEntryPoint<Provider<Client>>>,
+struct EntryPointContext<P: ProviderLike, E: EntryPointLike> {
+    entry_point: E,
+    prechecker: PrecheckerImpl<P, E>,
+    simulator: SimulatorImpl<P, E>,
+    gas_estimator: GasEstimatorImpl<P, E>,
 }
 
-impl<Client> EntryPointContext<Client>
+impl<P, E> EntryPointContext<P, E>
 where
-    Client: JsonRpcClient + 'static,
+    P: ProviderLike,
+    E: EntryPointLike,
 {
     pub fn new(
-        address: Address,
         chain_id: u64,
-        provider: Arc<Provider<Client>>,
+        provider: Arc<P>,
+        entry_point: E,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
         estimator_settings: estimation::Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
-    ) -> Self {
-        let entry_point = IEntryPoint::new(address, Arc::clone(&provider));
+    ) -> Self
+    where
+        E: Clone, // Add Clone trait bound for E
+    {
         let prechecker = PrecheckerImpl::new(
             Arc::clone(&provider),
             chain_id,
@@ -118,7 +125,7 @@ where
         );
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
-            address,
+            entry_point.clone(),
             sim_settings,
             mempool_configs,
         );
@@ -134,37 +141,41 @@ where
 }
 
 #[derive(Debug)]
-pub struct EthApi<C: JsonRpcClient + 'static> {
-    contexts_by_entry_point: HashMap<Address, EntryPointContext<C>>,
-    provider: Arc<Provider<C>>,
+pub struct EthApi<P: ProviderLike, E: EntryPointLike> {
+    contexts_by_entry_point: HashMap<Address, EntryPointContext<P, E>>,
+    provider: Arc<P>,
     chain_id: u64,
     op_pool_client: OpPoolClient<Channel>,
 }
 
-impl<C> EthApi<C>
+impl<P, E> EthApi<P, E>
 where
-    C: JsonRpcClient + 'static,
+    P: ProviderLike,
+    E: EntryPointLike,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        provider: Arc<Provider<C>>,
-        entry_points: Vec<Address>,
+        provider: Arc<P>,
+        entry_points: Vec<E>,
         chain_id: u64,
         op_pool_client: OpPoolClient<Channel>,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
         estimation_settings: estimation::Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
-    ) -> Self {
+    ) -> Self
+    where
+        E: Clone,
+    {
         let contexts_by_entry_point = entry_points
-            .iter()
-            .map(|&a| {
+            .into_iter()
+            .map(|entry| {
                 (
-                    a,
+                    entry.address(),
                     EntryPointContext::new(
-                        a,
                         chain_id,
                         Arc::clone(&provider),
+                        entry,
                         precheck_settings,
                         sim_settings,
                         estimation_settings,
@@ -185,9 +196,9 @@ where
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
         let to_block = self.provider.get_block_number().await?;
         let from_block = if BASE_CHAIN_IDS.contains(&self.chain_id) {
-            to_block.saturating_sub(U64::from(20_000))
+            to_block.saturating_sub(20000)
         } else {
-            U64::from(0)
+            0
         };
 
         let filter = Filter::new()
@@ -357,9 +368,10 @@ where
 const EXPIRATION_BUFFER: Duration = Duration::from_secs(30);
 
 #[async_trait]
-impl<C> EthApiServer for EthApi<C>
+impl<P, E> EthApiServer for EthApi<P, E>
 where
-    C: JsonRpcClient + 'static,
+    P: ProviderLike,
+    E: EntryPointLike,
 {
     async fn send_user_operation(
         &self,
@@ -462,6 +474,7 @@ where
                     "supplied entry_point address is not a known entry point".to_string(),
                 )
             })?;
+
         let result = context.gas_estimator.estimate_op_gas(op).await;
         match result {
             Ok(estimate) => Ok(estimate),
@@ -572,7 +585,7 @@ where
         }
 
         // Filter receipt logs to match just those belonging to the user op
-        let filtered_logs = EthApi::<C>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
+        let filtered_logs = EthApi::<P, E>::filter_receipt_logs_matching_user_op(&log, &tx_receipt)
             .context("should have found receipt logs matching user op")?;
 
         // Decode log and find failure reason if not success
@@ -582,7 +595,7 @@ where
         let reason: String = if uo_event.success {
             "".to_owned()
         } else {
-            EthApi::<C>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
+            EthApi::<P, E>::get_user_operation_failure_reason(&tx_receipt.logs, hash)
                 .context("should have found revert reason if tx wasn't successful")?
                 .unwrap_or_default()
         };
@@ -744,15 +757,33 @@ impl From<Status> for EthRpcError {
 #[cfg(test)]
 mod tests {
     use ethers::{
-        providers::Http,
         types::{Log, TransactionReceipt},
         utils::{hex::ToHex, keccak256},
     };
 
     use super::*;
-    use crate::common::protos::op_pool::ErrorReason;
+    use crate::common::{
+        protos::op_pool::ErrorReason,
+        types::{MockEntryPointLike, MockProviderLike},
+    };
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
+
+    // NOTE: Will use base config and mockall once new grpc mocking is enabled
+
+    // fn base_config() -> EthApi {
+    //     let provider = MockProviderLike::new();
+    //     let entrypoints = vec![MockEntryPointLike::new()];
+
+    //     let precheck_settings = precheck::Settings {
+    //         max_verification_gas: U256::from(100000),
+    //         use_bundle_priority_fee: Some(true),
+    //         bundle_priority_fee_overhead_percent: 5,
+    //         priority_fee_mode: PriorityFeeMode::BaseFeePercent(5),
+    //     };
+
+    //     let eth_api = EthApi::new(provider, entrypoints, 0, precheck_settings);
+    // }
 
     #[test]
     fn test_throttled_or_banned_decode() {
@@ -801,7 +832,11 @@ mod tests {
             given_log(UO_OP_TOPIC, "another-hash"),
         ]);
 
-        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result =
+            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+                &reference_log,
+                &receipt,
+            );
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -820,7 +855,11 @@ mod tests {
             given_log(UO_OP_TOPIC, "another-hash"),
         ]);
 
-        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result =
+            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+                &reference_log,
+                &receipt,
+            );
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -839,7 +878,11 @@ mod tests {
             reference_log.clone(),
         ]);
 
-        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result =
+            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+                &reference_log,
+                &receipt,
+            );
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -862,7 +905,11 @@ mod tests {
             reference_log.clone(),
         ]);
 
-        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result =
+            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+                &reference_log,
+                &receipt,
+            );
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -884,7 +931,11 @@ mod tests {
             given_log(UO_OP_TOPIC, "other-hash"),
         ]);
 
-        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result =
+            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+                &reference_log,
+                &receipt,
+            );
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
@@ -902,7 +953,11 @@ mod tests {
             given_log("another-topic-2", "some-hash"),
         ]);
 
-        let result = EthApi::<Http>::filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+        let result =
+            EthApi::<MockProviderLike, MockEntryPointLike>::filter_receipt_logs_matching_user_op(
+                &reference_log,
+                &receipt,
+            );
 
         assert!(result.is_err(), "{:?}", result.unwrap());
     }
