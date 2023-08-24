@@ -5,11 +5,8 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::ContractError,
-    providers::{JsonRpcClient, Provider},
     types::{Address, BlockId, Bytes, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
@@ -18,20 +15,18 @@ use mockall::automock;
 use tonic::async_trait;
 
 use super::{
+    contracts::i_entry_point::FailedOp,
     mempool::{match_mempools, MempoolMatchResult},
     tracer::parse_combined_tracer_str,
+    types::EntryPointLike,
 };
 use crate::common::{
-    contracts::{
-        i_aggregator::IAggregator,
-        i_entry_point::{FailedOp, IEntryPoint},
-    },
     eth,
     mempool::MempoolConfig,
     tracer,
     tracer::{AssociatedSlotsByAddress, StorageAccess, TracerOutput},
     types::{
-        Entity, EntityType, ExpectedStorage, ProviderLike, StakeInfo, UserOperation,
+        AggregatorOut, Entity, EntityType, ExpectedStorage, ProviderLike, StakeInfo, UserOperation,
         ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationError,
     },
 };
@@ -82,24 +77,24 @@ pub trait Simulator: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub struct SimulatorImpl<T: JsonRpcClient> {
-    provider: Arc<Provider<T>>,
-    entry_point: IEntryPoint<Provider<T>>,
+pub struct SimulatorImpl<P: ProviderLike, E: EntryPointLike> {
+    provider: Arc<P>,
+    entry_point: E,
     sim_settings: Settings,
     mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
-impl<T> SimulatorImpl<T>
+impl<P, E> SimulatorImpl<P, E>
 where
-    T: JsonRpcClient + 'static,
+    P: ProviderLike,
+    E: EntryPointLike,
 {
     pub fn new(
-        provider: Arc<Provider<T>>,
-        entry_point_address: Address,
+        provider: Arc<P>,
+        entry_point: E,
         sim_settings: Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
-        let entry_point = IEntryPoint::new(entry_point_address, provider.clone());
         Self {
             provider,
             entry_point,
@@ -124,6 +119,7 @@ where
         let paymaster_address = op.paymaster();
         let tracer_out = tracer::trace_simulate_validation(
             &self.entry_point,
+            Arc::clone(&self.provider),
             op.clone(),
             block_id,
             self.sim_settings.max_verification_gas,
@@ -193,20 +189,11 @@ where
         let Some(aggregator_address) = aggregator_address else {
             return Ok(AggregatorOut::NotNeeded);
         };
-        let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
-        match aggregator
-            .validate_user_op_signature(op)
-            .gas(gas_cap)
-            .call()
+
+        self.provider
+            .clone()
+            .validate_user_op_signature(aggregator_address, op, gas_cap)
             .await
-        {
-            Ok(sig) => Ok(AggregatorOut::SuccessWithInfo(AggregatorSimOut {
-                address: aggregator_address,
-                signature: sig,
-            })),
-            Err(ContractError::Revert(_)) => Ok(AggregatorOut::ValidationReverted),
-            Err(error) => Err(error).context("should call aggregator to validate signature")?,
-        }
     }
 
     // Parse the output from tracing and return a list of violations.
@@ -406,9 +393,10 @@ where
 }
 
 #[async_trait]
-impl<T> Simulator for SimulatorImpl<T>
+impl<P, E> Simulator for SimulatorImpl<P, E>
 where
-    T: JsonRpcClient + 'static,
+    P: ProviderLike,
+    E: EntryPointLike,
 {
     async fn simulate_validation(
         &self,
@@ -556,13 +544,6 @@ struct ValidationContext {
     is_unstaked_wallet_creation: bool,
     entities_needing_stake: Vec<EntityType>,
     accessed_addresses: HashSet<Address>,
-}
-
-#[derive(Debug)]
-enum AggregatorOut {
-    NotNeeded,
-    SuccessWithInfo(AggregatorSimOut),
-    ValidationReverted,
 }
 
 #[derive(Clone, Copy, Debug)]

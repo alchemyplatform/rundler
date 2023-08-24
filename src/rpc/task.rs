@@ -22,6 +22,7 @@ use url::Url;
 use super::ApiNamespace;
 use crate::{
     common::{
+        contracts::i_entry_point::IEntryPoint,
         handle::Task,
         mempool::MempoolConfig,
         precheck,
@@ -114,12 +115,20 @@ impl Task for RpcTask {
             bail!("No entry points provided");
         }
 
+        let entry_point_addrs = &self.args.entry_points;
+        let mut entry_points = vec![];
+
+        for entry in entry_point_addrs {
+            let entry = IEntryPoint::new(*entry, provider.clone());
+            entry_points.push(entry);
+        }
+
         for api in &self.args.api_namespaces {
             match api {
                 ApiNamespace::Eth => module.merge(
                     EthApi::new(
                         provider.clone(),
-                        self.args.entry_points.clone(),
+                        entry_points.clone(),
                         self.args.chain_id,
                         op_pool_client.clone(),
                         self.args.precheck_settings,

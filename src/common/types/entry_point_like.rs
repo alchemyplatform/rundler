@@ -40,6 +40,12 @@ pub trait EntryPointLike: Send + Sync + 'static {
 
     async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
 
+    async fn simulate_validation(
+        &self,
+        user_op: UserOperation,
+        max_validation_gas: u64,
+    ) -> anyhow::Result<TypedTransaction>;
+
     async fn call_spoofed_simulate_op(
         &self,
         op: UserOperation,
@@ -78,6 +84,21 @@ where
 {
     fn address(&self) -> Address {
         self.deref().address()
+    }
+
+    async fn simulate_validation(
+        &self,
+        user_op: UserOperation,
+        max_validation_gas: u64,
+    ) -> anyhow::Result<TypedTransaction> {
+        let pvg = user_op.pre_verification_gas;
+
+        let tx = self
+            .simulate_validation(user_op)
+            .gas(U256::from(max_validation_gas) + pvg)
+            .tx;
+
+        Ok(tx)
     }
 
     async fn call_handle_ops(

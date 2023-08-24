@@ -120,13 +120,15 @@ impl Task for BuilderTask {
         };
         let op_pool =
             Self::connect_client_with_shutdown(&self.args.pool_url, shutdown_token.clone()).await?;
+
+        let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
-            self.args.entry_point_address,
+            entry_point.clone(),
             self.args.sim_settings,
             self.args.mempool_configs.clone(),
         );
-        let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
+
         let proposer = BundleProposerImpl::new(
             op_pool.clone(),
             simulator,
