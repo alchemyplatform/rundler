@@ -1,6 +1,7 @@
 use std::{future::Future, time::Duration};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
+use tonic::async_trait;
 
 use crate::common::{retry, retry::RetryOpts};
 
@@ -16,6 +17,27 @@ pub fn format_socket_addr(host: &String, port: u16) -> String {
     format!("{}:{}", host, port)
 }
 
+pub async fn connect_with_retries_shutdown<F, C, FutF, S, R, E>(
+    server_name: &str,
+    url: &str,
+    func: F,
+    shutdown_signal: S,
+) -> anyhow::Result<C>
+where
+    F: Fn(String) -> FutF,
+    FutF: Future<Output = anyhow::Result<C>> + Send + 'static,
+    S: Future<Output = Result<R, E>> + Send + 'static,
+{
+    tokio::select! {
+        _ = shutdown_signal => {
+            bail!("shutdown signal received")
+        }
+        res = connect_with_retries(server_name, url, func) => {
+            res
+        }
+    }
+}
+
 pub async fn connect_with_retries<F, C, FutF>(
     server_name: &str,
     url: &str,
@@ -23,7 +45,7 @@ pub async fn connect_with_retries<F, C, FutF>(
 ) -> anyhow::Result<C>
 where
     F: Fn(String) -> FutF,
-    FutF: Future<Output = Result<C, tonic::transport::Error>> + Send + 'static,
+    FutF: Future<Output = anyhow::Result<C>> + Send + 'static,
 {
     let description = format!("connect to {server_name} at {url}");
     retry::with_retries(
@@ -38,4 +60,17 @@ where
     )
     .await
     .context("should connect to server when retrying")
+}
+
+#[derive(Debug)]
+pub enum ServerStatus {
+    Serving,
+    NotServing,
+}
+
+#[async_trait]
+pub trait HealthCheck: Send + Sync + 'static {
+    fn name(&self) -> &'static str;
+
+    async fn status(&self) -> ServerStatus;
 }

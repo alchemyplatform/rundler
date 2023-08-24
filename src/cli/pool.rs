@@ -13,7 +13,7 @@ use crate::{
         handle::spawn_tasks_with_shutdown,
         mempool::MempoolConfig,
     },
-    op_pool::{self, PoolConfig, PoolServerMode, PoolTask},
+    op_pool::{self, LocalPoolBuilder, PoolConfig, PoolServerMode, PoolTask},
 };
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]
@@ -198,7 +198,7 @@ pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Res
     emit::receive_and_log_events_with_filter(event_rx, |_| true);
 
     spawn_tasks_with_shutdown(
-        [PoolTask::new(task_args, event_sender).boxed()],
+        [PoolTask::new(task_args, event_sender, LocalPoolBuilder::new(1024, 1024)).boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;

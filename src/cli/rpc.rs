@@ -5,8 +5,10 @@ use clap::Args;
 
 use super::CommonArgs;
 use crate::{
-    common::{eth, handle::spawn_tasks_with_shutdown, precheck},
-    op_pool::PoolClientMode,
+    common::{
+        eth, handle::spawn_tasks_with_shutdown, precheck, server::connect_with_retries_shutdown,
+    },
+    op_pool::RemotePoolClient,
     rpc::{self, estimation, RpcTask},
 };
 
@@ -73,7 +75,6 @@ impl RpcArgs {
         precheck_settings: precheck::Settings,
         eth_api_settings: eth::Settings,
         estimation_settings: estimation::Settings,
-        pool_client_mode: PoolClientMode,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api
@@ -102,7 +103,6 @@ impl RpcArgs {
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
-            pool_client_mode,
         })
     }
 }
@@ -146,10 +146,21 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
             (&common_args).try_into()?,
             (&common_args).into(),
             (&common_args).try_into()?,
-            PoolClientMode::Remote { url: pool_url },
         )
         .await?;
 
-    spawn_tasks_with_shutdown([RpcTask::new(task_args).boxed()], tokio::signal::ctrl_c()).await;
+    let pool = connect_with_retries_shutdown(
+        "op pool from rpc",
+        &pool_url,
+        RemotePoolClient::connect,
+        tokio::signal::ctrl_c(),
+    )
+    .await?;
+
+    spawn_tasks_with_shutdown(
+        [RpcTask::new(task_args, pool).boxed()],
+        tokio::signal::ctrl_c(),
+    )
+    .await;
     Ok(())
 }

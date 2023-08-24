@@ -13,9 +13,9 @@ use crate::{
         gas::PriorityFeeMode,
         handle::spawn_tasks_with_shutdown,
         mempool::MempoolConfig,
-        server::format_server_addr,
+        server::{connect_with_retries_shutdown, format_server_addr},
     },
-    op_pool::PoolClientMode,
+    op_pool::RemotePoolClient,
 };
 
 /// CLI options for the builder
@@ -150,11 +150,7 @@ pub struct BuilderArgs {
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
-    pub async fn to_args(
-        &self,
-        common: &CommonArgs,
-        pool_client_mode: PoolClientMode,
-    ) -> anyhow::Result<builder::Args> {
+    pub async fn to_args(&self, common: &CommonArgs) -> anyhow::Result<builder::Args> {
         let priority_fee_mode = PriorityFeeMode::try_from(
             common.priority_fee_mode_kind.as_str(),
             common.priority_fee_mode_value,
@@ -205,7 +201,6 @@ impl BuilderArgs {
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
-            pool_client_mode,
         })
     }
 
@@ -239,12 +234,18 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
     emit::receive_and_log_events_with_filter(event_rx, is_nonspammy_event);
 
-    let task_args = builder_args
-        .to_args(&common_args, PoolClientMode::Remote { url: pool_url })
-        .await?;
+    let task_args = builder_args.to_args(&common_args).await?;
+
+    let pool = connect_with_retries_shutdown(
+        "op pool from builder",
+        &pool_url,
+        RemotePoolClient::connect,
+        tokio::signal::ctrl_c(),
+    )
+    .await?;
 
     spawn_tasks_with_shutdown(
-        [BuilderTask::new(task_args, event_sender).boxed()],
+        [BuilderTask::new(task_args, event_sender, pool).boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;

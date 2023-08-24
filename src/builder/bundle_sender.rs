@@ -8,12 +8,12 @@ use std::{
 
 use anyhow::{bail, Context};
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
+use futures_util::StreamExt;
 use tokio::{
     join,
     sync::{broadcast, mpsc, oneshot},
     time,
 };
-use tokio_stream::StreamExt;
 use tonic::async_trait;
 use tracing::{error, info, trace, warn};
 
@@ -29,7 +29,7 @@ use crate::{
         math,
         types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
     },
-    op_pool::PoolClient,
+    op_pool::PoolServer,
 };
 
 // Overhead on gas estimates to account for inaccuracies.
@@ -52,7 +52,7 @@ where
     P: BundleProposer,
     E: EntryPointLike,
     T: TransactionTracker,
-    C: PoolClient,
+    C: PoolServer,
 {
     manual_bundling_mode: Arc<AtomicBool>,
     send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
@@ -62,7 +62,7 @@ where
     proposer: P,
     entry_point: E,
     transaction_tracker: T,
-    pool_client: C,
+    pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
 }
@@ -100,15 +100,13 @@ where
     P: BundleProposer,
     E: EntryPointLike,
     T: TransactionTracker,
-    C: PoolClient,
+    C: PoolServer,
 {
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
     async fn send_bundles_in_loop(&mut self) {
-        let mut new_heads = if let Ok(new_blocks) = self.pool_client.subscribe_new_heads() {
-            new_blocks
-        } else {
+        let Ok(mut new_heads) = self.pool.subscribe_new_heads().await else {
             error!("Failed to subscribe to new blocks");
             return;
         };
@@ -116,12 +114,12 @@ where
         // The new_heads stream can buffer up multiple blocks, but we only want to consume the latest one.
         // This task is used to consume the new heads and place them onto a channel that can be syncronously
         // consumed until the latest block is reached.
-        let (tx, mut rx) = mpsc::channel(1024);
+        let (tx, mut rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             loop {
                 match new_heads.next().await {
                     Some(b) => {
-                        if tx.send(b).await.is_err() {
+                        if tx.send(b).is_err() {
                             error!("Failed to buffer new block for bundle sender");
                             return;
                         }
@@ -213,7 +211,7 @@ where
     P: BundleProposer,
     E: EntryPointLike,
     T: TransactionTracker,
-    C: PoolClient,
+    C: PoolServer,
 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -225,7 +223,7 @@ where
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
-        pool_client: C,
+        pool: C,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
@@ -238,7 +236,7 @@ where
             proposer,
             entry_point,
             transaction_tracker,
-            pool_client,
+            pool,
             settings,
             event_sender,
         }
@@ -476,7 +474,7 @@ where
     }
 
     async fn remove_ops_from_pool(&self, ops: &[UserOperation]) -> anyhow::Result<()> {
-        self.pool_client
+        self.pool
             .remove_ops(
                 self.entry_point.address(),
                 ops.iter()
@@ -488,7 +486,7 @@ where
     }
 
     async fn remove_entities_from_pool(&self, entities: &[Entity]) -> anyhow::Result<()> {
-        self.pool_client
+        self.pool
             .remove_entities(self.entry_point.address(), entities.to_vec())
             .await
             .context("builder should remove rejected entities from pool")
