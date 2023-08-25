@@ -10,17 +10,7 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - name: Install protobuf
-        run: sudo apt-get install -y protobuf-compiler
-      - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.71.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/toolchain
       - name: Run tests
         run: cargo test
 
@@ -29,17 +19,9 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - name: Install protobuf
-        run: sudo apt-get install -y protobuf-compiler
-      - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.71.0
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
+      - uses: ./.github/actions/toolchain
+      - name: Run tests
+        run: cargo test
       - uses: pdm-project/setup-pdm@v3
         name: Setup PDM      
         with:
@@ -53,20 +35,11 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - name: Install protobuf
-        run: sudo apt-get -y install protobuf-compiler
-      - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/toolchain
         with:
-          components: clippy
-          toolchain: 1.71.0
+          rust_components: clippy
       - name: Install toolchain (nightly)
         run: rustup toolchain add nightly --component rustfmt --profile minimal
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
         # Build to generate the ABI bindings.
       - name: cargo build
         uses: actions-rs/cargo@v1
