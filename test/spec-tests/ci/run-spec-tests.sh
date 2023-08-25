@@ -2,7 +2,7 @@
 set -x
 cd "$(dirname "$0")"
 
-(cd ../bundler-spec-tests && pdm install && pdm run update-deps)
+(cd ../bundler-spec-tests && ls -la && pdm install && pdm run update-deps)
 
 docker build ../../.. -t alchemy-platform/rundler:latest
 

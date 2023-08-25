@@ -23,6 +23,23 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
         run: cargo test
+
+  spec-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+      - name: Install protobuf
+        run: sudo apt-get install -y protobuf-compiler
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.71.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
       - uses: pdm-project/setup-pdm@v3
         name: Setup PDM      
         with:
