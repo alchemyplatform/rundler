@@ -47,12 +47,8 @@ jobs:
         with:
           python-version: 3.11.2 
           architecture: x64         
-      - name:  docker-compose
-        run: docker-compose -f ./test/spec-tests/launchers/rundler-launcher/docker-compose.yml up -d --wait
-      - name: stop processes
-        run: docker-compose stop
-      # - name: run spec tests
-      #   run: ./test/spec-tests/ci/run-spec-tests.sh
+      - name: run spec tests
+        run: ./test/spec-tests/ci/run-spec-tests.sh
 
   lint:
     runs-on: ubuntu-latest

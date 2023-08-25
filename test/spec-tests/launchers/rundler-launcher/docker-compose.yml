@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   rundler:
-    image: alchemy-platform/rundler:latest
+    image: alchemy-platform/rundler:$TAG
     depends_on:
       - geth
     ports:
