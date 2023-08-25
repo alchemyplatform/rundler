@@ -14,6 +14,8 @@ jobs:
         run: sudo apt-get install -y protobuf-compiler
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.71.0
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -24,8 +26,8 @@ jobs:
       - uses: pdm-project/setup-pdm@v3
         name: Setup PDM      
         with:
-          python-version: 3.11.2 
-          architecture: x64
+          python-version: 3.9 
+          architecture: x86         
       - name: run spec tests
         run: ./test/spec-tests/ci/run-spec-tests.sh
 
@@ -40,6 +42,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          toolchain: 1.71.0
       - name: Install toolchain (nightly)
         run: rustup toolchain add nightly --component rustfmt --profile minimal
       - uses: Swatinem/rust-cache@v2
