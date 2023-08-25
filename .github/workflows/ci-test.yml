@@ -10,7 +10,21 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - uses: ./.github/actions/toolchain
+      - name: Install protobuf
+        run: sudo apt-get install -y protobuf-compiler
+        shell: bash
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        shell: bash
+        with:
+          toolchain: 1.71.0
+      - uses: Swatinem/rust-cache@v2
+        shell: bash
+        with:
+          cache-on-failure: true
+      - name: Install Foundry
+        shell: bash
+        uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
         run: cargo test
 
@@ -19,9 +33,21 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - uses: ./.github/actions/toolchain
-      - name: Run tests
-        run: cargo test
+      - name: Install protobuf
+        run: sudo apt-get install -y protobuf-compiler
+        shell: bash
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        shell: bash
+        with:
+          toolchain: 1.71.0
+      - uses: Swatinem/rust-cache@v2
+        shell: bash
+        with:
+          cache-on-failure: true
+      - name: Install Foundry
+        shell: bash
+        uses: foundry-rs/foundry-toolchain@v1
       - uses: pdm-project/setup-pdm@v3
         name: Setup PDM      
         with:
@@ -35,9 +61,22 @@ jobs:
     steps:
       - name: Checkout sources
         uses: actions/checkout@v3
-      - uses: ./.github/actions/toolchain
+      - name: Install protobuf
+        run: sudo apt-get install -y protobuf-compiler
+        shell: bash
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        shell: bash
         with:
-          rust_components: clippy
+          toolchain: 1.71.0
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        shell: bash
+        with:
+          cache-on-failure: true
+      - name: Install Foundry
+        shell: bash
+        uses: foundry-rs/foundry-toolchain@v1
       - name: Install toolchain (nightly)
         run: rustup toolchain add nightly --component rustfmt --profile minimal
         # Build to generate the ABI bindings.
