@@ -10,10 +10,8 @@ RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-
 
 SHELL ["/bin/bash", "-c"]
 RUN curl -L https://foundry.paradigm.xyz | bash
-RUN source ~/.bashrc
-ENV PATH="~/.foundry/bin:${PATH}"
+ENV PATH="/root/.foundry/bin:${PATH}"
 RUN foundryup
-
 RUN cargo install cargo-chef 
 
 WORKDIR /app
@@ -35,7 +33,6 @@ RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
 
 # Build application
 COPY . .
-RUN forge --help
 RUN cargo build --profile $BUILD_PROFILE --locked --bin rundler
 
 # Use Ubuntu as the release image
