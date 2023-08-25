@@ -26,8 +26,8 @@ jobs:
       - uses: pdm-project/setup-pdm@v3
         name: Setup PDM      
         with:
-          python-version: 3.9 
-          architecture: x86         
+          python-version: 3.11.2 
+          architecture: x64         
       - name: run spec tests
         run: ./test/spec-tests/ci/run-spec-tests.sh
 
