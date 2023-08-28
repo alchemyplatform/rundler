@@ -47,9 +47,14 @@ jobs:
         with:
           python-version: 3.11.2 
           architecture: x64         
+      - name: build docker container      
+        run: docker build . -t alchemy-platform/rundler:latest
       - uses: isbang/compose-action@v1.5.1
         with:
           compose-file: "./test/spec-tests/launchers/rundler-launcher/docker-compose.yml"
+        env:
+          TAG: "latest"
+
       # - name: run spec tests
       #   run: ./test/spec-tests/ci/run-spec-tests.sh
 
