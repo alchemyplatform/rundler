@@ -54,9 +54,8 @@ jobs:
           compose-file: "./test/spec-tests/launchers/rundler-launcher/docker-compose.yml"
         env:
           TAG: "latest"
-
-      # - name: run spec tests
-      #   run: ./test/spec-tests/ci/run-spec-tests.sh
+      - name: run spec tests
+        run: ./test/spec-tests/ci/run-spec-tests.sh
 
   lint:
     runs-on: ubuntu-latest
