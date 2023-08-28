@@ -1,5 +1,5 @@
 #!/bin/bash
-set -x
+set -e
 cd "$(dirname "$0")"
 
 (cd ../bundler-spec-tests && pdm install && pdm run update-deps)

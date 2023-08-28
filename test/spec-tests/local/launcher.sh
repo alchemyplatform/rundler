@@ -1,6 +1,6 @@
 #!/bin/bash 
 # Launcher script for geth and the entrypoint
-set +x
+set -e
 cd `dirname \`realpath $0\``
 case $1 in
 
