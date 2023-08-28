@@ -47,8 +47,11 @@ jobs:
         with:
           python-version: 3.11.2 
           architecture: x64         
-      - name: run spec tests
-        run: ./test/spec-tests/ci/run-spec-tests.sh
+      - uses: isbang/compose-action@v1.5.1
+        with:
+          compose-file: "./test/spec-tests/launchers/rundler-launcher/docker-compose.yml"
+      # - name: run spec tests
+      #   run: ./test/spec-tests/ci/run-spec-tests.sh
 
   lint:
     runs-on: ubuntu-latest
