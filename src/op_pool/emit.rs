@@ -87,6 +87,7 @@ impl Display for OpPoolEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             OpPoolEvent::ReceivedOp {
+                op,
                 op_hash,
                 entities,
                 error,
@@ -100,13 +101,24 @@ impl Display for OpPoolEvent {
                 );
                 write!(
                     f,
-                    concat!("{}", "    Op hash: {:?}", "{}", "{}", "{}", "{}",),
+                    concat!(
+                        "{}",
+                        "    Op hash: {:?}",
+                        "{}",
+                        "{}",
+                        "{}",
+                        "{}",
+                        "    maxFeePerGas: {}",
+                        "    maxPriorityFeePerGas: {}"
+                    ),
                     intro,
                     op_hash,
                     format_entity_status("Sender", Some(&entities.sender)),
                     format_entity_status("Factory", entities.factory.as_ref()),
                     format_entity_status("Paymaster", entities.paymaster.as_ref()),
                     format_entity_status("Aggregator", entities.aggregator.as_ref()),
+                    op.max_fee_per_gas,
+                    op.max_priority_fee_per_gas,
                 )
             }
             OpPoolEvent::RemovedOp { op_hash, reason } => {
