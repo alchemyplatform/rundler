@@ -127,7 +127,7 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         T: Debug + Serialize + Send + Sync,
         R: Serialize + DeserializeOwned + Debug + Send,
     {
-        let res: R = self.inner().request(method, params).await?;
+        let res: R = self.request(method, params).await?;
         Ok(res)
     }
 
