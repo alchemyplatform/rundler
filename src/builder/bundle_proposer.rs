@@ -118,18 +118,33 @@ where
         let ops = self.limit_gas_in_bundle(ops);
 
         // Determine fees required for ops to be included in a bundle, and filter out ops that don't
-        // meet the requirements.
+        // meet the requirements. Simulate unfiltered ops.
         let required_op_fees = self.fee_estimator.required_op_fees(bundle_fees);
         let simulation_futures = ops
             .iter()
             .filter(|op| {
-                op.op.max_fee_per_gas >= required_op_fees.max_fee_per_gas
+                if op.op.max_fee_per_gas >= required_op_fees.max_fee_per_gas
                     && op.op.max_priority_fee_per_gas >= required_op_fees.max_priority_fee_per_gas
+                {
+                    true
+                } else {
+                    self.emit(BuilderEvent::SkippedOp {
+                        op_hash: self.op_hash(&op.op),
+                        reason: SkipReason::InsufficientFees {
+                            required_fees: required_op_fees,
+                            actual_fees: GasFees {
+                                max_fee_per_gas: op.op.max_fee_per_gas,
+                                max_priority_fee_per_gas: op.op.max_priority_fee_per_gas,
+                            },
+                        },
+                    });
+                    false
+                }
             })
             .cloned()
             .map(|op| self.simulate_validation(op, block_hash));
-
         let ops_with_simulations_future = future::join_all(simulation_futures);
+
         let all_paymaster_addresses = ops.iter().filter_map(|op| op.op.paymaster());
         let balances_by_paymaster_future =
             self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);

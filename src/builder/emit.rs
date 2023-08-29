@@ -44,8 +44,16 @@ pub struct BundleTxDetails {
 
 #[derive(Clone, Debug)]
 pub enum SkipReason {
-    AccessedOtherSender { other_sender: Address },
-    InvalidTimeRange { valid_range: ValidTimeRange },
+    AccessedOtherSender {
+        other_sender: Address,
+    },
+    InvalidTimeRange {
+        valid_range: ValidTimeRange,
+    },
+    InsufficientFees {
+        required_fees: GasFees,
+        actual_fees: GasFees,
+    },
 }
 
 #[derive(Clone, Debug)]

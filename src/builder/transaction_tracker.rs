@@ -212,6 +212,7 @@ where
         });
         self.has_dropped = false;
         self.attempt_count += 1;
+        self.update_metrics();
         Ok(SendResult::TxHash(sent_tx.tx_hash))
     }
 
@@ -323,6 +324,7 @@ where
         self.transactions.clear();
         self.has_dropped = false;
         self.attempt_count = 0;
+        self.update_metrics();
     }
 
     async fn get_external_nonce(&self) -> anyhow::Result<U256> {
@@ -349,6 +351,49 @@ where
             }
         }
         Ok(())
+    }
+
+    fn update_metrics(&self) {
+        TransactionTrackerMetrics::set_num_pending_transactions(self.transactions.len());
+        TransactionTrackerMetrics::set_nonce(self.nonce);
+        TransactionTrackerMetrics::set_attempt_count(self.attempt_count);
+        if let Some(tx) = self.transactions.last() {
+            TransactionTrackerMetrics::set_current_fees(Some(tx.gas_fees));
+        } else {
+            TransactionTrackerMetrics::set_current_fees(None);
+        }
+    }
+}
+
+struct TransactionTrackerMetrics {}
+
+impl TransactionTrackerMetrics {
+    fn set_num_pending_transactions(num_pending_transactions: usize) {
+        metrics::gauge!(
+            "builder_tracker_num_pending_transactions",
+            num_pending_transactions as f64
+        );
+    }
+
+    fn set_nonce(nonce: U256) {
+        metrics::gauge!("builder_tracker_nonce", nonce.as_u64() as f64);
+    }
+
+    fn set_attempt_count(attempt_count: u64) {
+        metrics::gauge!("builder_tracker_attempt_count", attempt_count as f64);
+    }
+
+    fn set_current_fees(current_fees: Option<GasFees>) {
+        let fees = current_fees.unwrap_or_default();
+
+        metrics::gauge!(
+            "builder_tracker_current_max_fee_per_gas",
+            fees.max_fee_per_gas.as_u64() as f64
+        );
+        metrics::gauge!(
+            "builder_tracker_current_max_priority_fee_per_gas",
+            fees.max_priority_fee_per_gas.as_u64() as f64
+        );
     }
 }
 

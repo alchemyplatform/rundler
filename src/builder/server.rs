@@ -236,7 +236,6 @@ where
     /// Helper function returning `Result` to be able to use `?`.
     async fn send_bundle_with_increasing_gas_fees_inner(&self) -> anyhow::Result<SendBundleResult> {
         let (nonce, mut required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
-        BuilderMetrics::set_nonce(nonce);
         let mut initial_op_count: Option<usize> = None;
         for fee_increase_count in 0..=self.settings.max_fee_increases {
             let Some(bundle_tx) = self.get_bundle_tx(nonce, required_fees).await? else {
@@ -521,10 +520,6 @@ impl BuilderMetrics {
 
     fn increment_bundle_txn_fee_increases() {
         metrics::increment_counter!("builder_bundle_fee_increases");
-    }
-
-    fn set_nonce(nonce: U256) {
-        metrics::gauge!("builder_nonce", nonce.as_u64() as f64);
     }
 
     fn set_current_fees(fees: &GasFees) {
