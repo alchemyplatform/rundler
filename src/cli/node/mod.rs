@@ -51,6 +51,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
             builder_url,
             (&common_args).try_into()?,
             (&common_args).into(),
+            (&common_args).into(),
             (&common_args).try_into()?,
         )
         .await?;

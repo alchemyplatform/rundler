@@ -23,6 +23,7 @@ use super::ApiNamespace;
 use crate::{
     common::{
         contracts::i_entry_point::IEntryPoint,
+        eth,
         handle::Task,
         mempool::MempoolConfig,
         precheck,
@@ -50,6 +51,7 @@ pub struct Args {
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
     pub precheck_settings: precheck::Settings,
+    pub eth_api_settings: eth::Settings,
     pub sim_settings: simulation::Settings,
     pub estimation_settings: estimation::Settings,
     pub rpc_timeout: Duration,
@@ -132,6 +134,7 @@ impl Task for RpcTask {
                         self.args.chain_id,
                         op_pool_client.clone(),
                         self.args.precheck_settings,
+                        self.args.eth_api_settings,
                         self.args.sim_settings,
                         self.args.estimation_settings,
                         self.args.mempool_configs.clone(),

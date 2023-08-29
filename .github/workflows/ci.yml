@@ -60,7 +60,7 @@ jobs:
         uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all --all-features -- -D warnings
+          args: --all --all-features --tests -- -D warnings
       - name: buf setup
         uses: bufbuild/buf-setup-action@v1
       - name: buf lint

@@ -6,7 +6,9 @@ use ethers::types::H256;
 
 use super::{json::get_json_config, CommonArgs};
 use crate::{
-    common::{handle::spawn_tasks_with_shutdown, mempool::MempoolConfig, precheck, simulation},
+    common::{
+        eth, handle::spawn_tasks_with_shutdown, mempool::MempoolConfig, precheck, simulation,
+    },
     rpc::{self, estimation, RpcTask},
 };
 
@@ -65,6 +67,7 @@ pub struct RpcArgs {
 impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
+    #[allow(clippy::too_many_arguments)]
     pub async fn to_args(
         &self,
         common: &CommonArgs,
@@ -72,6 +75,7 @@ impl RpcArgs {
         builder_url: String,
         precheck_settings: precheck::Settings,
         sim_settings: simulation::Settings,
+        eth_api_settings: eth::Settings,
         estimation_settings: estimation::Settings,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
@@ -105,6 +109,7 @@ impl RpcArgs {
             chain_id: common.chain_id,
             api_namespaces: apis,
             precheck_settings,
+            eth_api_settings,
             sim_settings,
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
@@ -152,6 +157,7 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
             pool_url,
             builder_url,
             (&common_args).try_into()?,
+            (&common_args).into(),
             (&common_args).into(),
             (&common_args).try_into()?,
         )

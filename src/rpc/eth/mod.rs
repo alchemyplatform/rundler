@@ -36,7 +36,7 @@ use crate::{
         contracts::i_entry_point::{
             IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
         },
-        eth::log_to_raw_log,
+        eth::{log_to_raw_log, Settings},
         mempool::MempoolConfig,
         precheck::{self, PrecheckError, Prechecker, PrecheckerImpl},
         protos::op_pool::{
@@ -46,10 +46,7 @@ use crate::{
         simulation::{
             self, SimulationError, SimulationSuccess, SimulationViolation, Simulator, SimulatorImpl,
         },
-        types::{
-            Entity, EntityType, EntryPointLike, ProviderLike, Timestamp, UserOperation,
-            BASE_CHAIN_IDS,
-        },
+        types::{Entity, EntityType, EntryPointLike, ProviderLike, Timestamp, UserOperation},
     },
     rpc::{
         estimation::{GasEstimationError, GasEstimatorImpl},
@@ -146,6 +143,7 @@ pub struct EthApi<P: ProviderLike, E: EntryPointLike> {
     provider: Arc<P>,
     chain_id: u64,
     op_pool_client: OpPoolClient<Channel>,
+    settings: Settings,
 }
 
 impl<P, E> EthApi<P, E>
@@ -160,6 +158,7 @@ where
         chain_id: u64,
         op_pool_client: OpPoolClient<Channel>,
         precheck_settings: precheck::Settings,
+        settings: Settings,
         sim_settings: simulation::Settings,
         estimation_settings: estimation::Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
@@ -186,6 +185,7 @@ where
             .collect();
 
         Self {
+            settings,
             contexts_by_entry_point,
             provider,
             chain_id,
@@ -195,10 +195,10 @@ where
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
         let to_block = self.provider.get_block_number().await?;
-        let from_block = if BASE_CHAIN_IDS.contains(&self.chain_id) {
-            to_block.saturating_sub(20000)
-        } else {
-            0
+
+        let from_block = match self.settings.user_operation_event_block_distance {
+            Some(distance) => to_block.saturating_sub(distance),
+            None => 0,
         };
 
         let filter = Filter::new()
