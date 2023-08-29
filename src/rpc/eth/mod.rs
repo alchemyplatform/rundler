@@ -304,11 +304,7 @@ where
             })
             .next();
 
-        revert_reason_evt.map_or(Ok(None), |revert_reason_evt| {
-            String::from_utf8(revert_reason_evt.revert_reason.to_vec())
-                .map(Some)
-                .context("should have parsed revert reason as string")
-        })
+        Ok(revert_reason_evt.map(|r| r.revert_reason.to_string()))
     }
 
     /// This method takes a transaction hash and a user operation hash and returns the full user operation if it exists.
