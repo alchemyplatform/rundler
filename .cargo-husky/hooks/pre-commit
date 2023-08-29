@@ -21,7 +21,7 @@ cargo +nightly fmt --all || {
 }
 
 echo 'Running clippy'
-cargo clippy --all --all-features -- -D warnings || {
+cargo clippy --all --all-features --tests -- -D warnings || {
   echo >&2 'Clippy failed. This most likely means you have linting errors'
   exit 1
 }

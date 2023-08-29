@@ -205,3 +205,16 @@ pub fn parse_revert_message(revert_data: &[u8]) -> Option<String> {
         .ok()
         .map(|err| err.reason)
 }
+
+#[derive(Copy, Clone, Debug)]
+pub struct Settings {
+    pub user_operation_event_block_distance: Option<u64>,
+}
+
+impl Settings {
+    pub fn new(block_distance: Option<u64>) -> Self {
+        Self {
+            user_operation_event_block_distance: block_distance,
+        }
+    }
+}

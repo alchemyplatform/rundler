@@ -16,6 +16,7 @@ use rpc::RpcCliArgs;
 
 use crate::{
     common::{
+        eth,
         gas::PriorityFeeMode,
         precheck::{self, MIN_CALL_GAS_LIMIT},
         simulation,
@@ -136,6 +137,16 @@ pub struct CommonArgs {
     )]
     min_unstake_delay: u32,
 
+    /// Amount of blocks to search when calling eth_getUserOperationByHash.
+    /// Defaults from 0 to latest block
+    #[arg(
+        long = "user_operation_event_block_distance",
+        name = "user_operation_event_block_distance",
+        env = "USER_OPERATION_EVENT_BLOCK_DISTANCE",
+        global = true
+    )]
+    user_operation_event_block_distance: Option<u64>,
+
     #[arg(
         long = "max_simulate_handle_ops_gas",
         name = "max_simulate_handle_ops_gas",
@@ -249,6 +260,12 @@ impl From<&CommonArgs> for simulation::Settings {
             value.max_simulate_handle_ops_gas,
             value.max_verification_gas,
         )
+    }
+}
+
+impl From<&CommonArgs> for eth::Settings {
+    fn from(value: &CommonArgs) -> Self {
+        Self::new(value.user_operation_event_block_distance)
     }
 }
 
