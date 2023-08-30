@@ -35,7 +35,9 @@ pub struct PrecheckerImpl<P: ProviderLike, E: EntryPointLike> {
 
 #[derive(Copy, Clone, Debug)]
 pub struct Settings {
+    pub chain_id: u64,
     pub max_verification_gas: U256,
+    pub max_total_execution_gas: U256,
     pub use_bundle_priority_fee: Option<bool>,
     pub bundle_priority_fee_overhead_percent: u64,
     pub priority_fee_mode: gas::PriorityFeeMode,
@@ -122,7 +124,9 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
         async_data: AsyncData,
     ) -> ArrayVec<PrecheckViolation, 5> {
         let Settings {
+            chain_id,
             max_verification_gas,
+            max_total_execution_gas,
             ..
         } = self.settings;
         let AsyncData {
@@ -137,6 +141,13 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
                 op.verification_gas_limit,
                 max_verification_gas,
             ));
+        }
+        let total_gas_limit = op.total_execution_gas_limit(chain_id);
+        if total_gas_limit > max_total_execution_gas {
+            violations.push(PrecheckViolation::TotalGasTooHigh(
+                total_gas_limit,
+                max_total_execution_gas,
+            ))
         }
         if op.pre_verification_gas < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
@@ -300,6 +311,8 @@ pub enum PrecheckViolation {
     FactoryIsNotContract(Address),
     #[display("verificationGasLimit is {0} but must be at most {1}")]
     VerificationGasTooHigh(U256, U256),
+    #[display("total execution gas is {0} but must be at most {1}")]
+    TotalGasTooHigh(U256, U256),
     #[display("preVerificationGas is {0} but must be at least {1}")]
     PreVerificationGasTooLow(U256, U256),
     #[display("paymasterAndData must start a 20-byte paymaster address, but was only {0} bytes")]

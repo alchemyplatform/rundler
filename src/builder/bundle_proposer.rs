@@ -37,7 +37,6 @@ use crate::{
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
-const MAX_BUNDLE_GAS_LIMIT: u64 = 10_000_000;
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 100;
 
 #[derive(Debug, Default)]
@@ -84,7 +83,6 @@ where
     simulator: S,
     entry_point: E,
     provider: Arc<P>,
-    chain_id: u64,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -94,6 +92,7 @@ where
 pub struct Settings {
     pub chain_id: u64,
     pub max_bundle_size: u64,
+    pub max_bundle_gas: u64,
     pub beneficiary: Address,
     pub use_bundle_priority_fee: Option<bool>,
     pub bundle_priority_fee_overhead_percent: u64,
@@ -202,7 +201,6 @@ where
         simulator: S,
         entry_point: E,
         provider: Arc<P>,
-        chain_id: u64,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
@@ -211,10 +209,9 @@ where
             simulator,
             entry_point,
             provider: provider.clone(),
-            chain_id,
             fee_estimator: FeeEstimator::new(
                 provider,
-                chain_id,
+                settings.chain_id,
                 settings.priority_fee_mode,
                 settings.use_bundle_priority_fee,
                 settings.bundle_priority_fee_overhead_percent,
@@ -379,7 +376,7 @@ where
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
-            context.get_total_gas(self.chain_id),
+            context.get_total_gas(self.settings.chain_id),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
         let handle_ops_out = self
@@ -498,10 +495,10 @@ where
     }
 
     fn limit_gas_in_bundle(&self, ops: Vec<OpFromPool>) -> Vec<OpFromPool> {
-        let mut gas_left = U256::from(MAX_BUNDLE_GAS_LIMIT);
+        let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = op.op.total_execution_gas_limit(self.chain_id);
+            let gas = op.op.total_execution_gas_limit(self.settings.chain_id);
             if gas_left < gas {
                 continue;
             }
@@ -1274,10 +1271,10 @@ mod tests {
             simulator,
             entry_point,
             Arc::new(provider),
-            0,
             Settings {
                 chain_id: 0,
                 max_bundle_size,
+                max_bundle_gas: 10_000_000,
                 beneficiary,
                 use_bundle_priority_fee: Some(true),
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(10),
