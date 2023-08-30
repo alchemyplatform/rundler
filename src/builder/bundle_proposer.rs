@@ -503,7 +503,7 @@ where
         for op in ops {
             let gas = op.op.total_execution_gas_limit(self.chain_id);
             if gas_left < gas {
-                break;
+                continue;
             }
             gas_left -= gas;
             ops_in_bundle.push(op);
