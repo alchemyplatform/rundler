@@ -120,6 +120,15 @@ pub struct CommonArgs {
     max_verification_gas: u64,
 
     #[arg(
+        long = "max_bundle_gas",
+        name = "max_bundle_gas",
+        default_value = "10000000",
+        env = "MAX_BUNDLE_GAS",
+        global = true
+    )]
+    max_bundle_gas: u64,
+
+    #[arg(
         long = "min_stake_value",
         name = "min_stake_value",
         env = "MIN_STAKE_VALUE",
@@ -241,7 +250,9 @@ impl TryFrom<&CommonArgs> for precheck::Settings {
 
     fn try_from(value: &CommonArgs) -> anyhow::Result<Self> {
         Ok(Self {
+            chain_id: value.chain_id,
             max_verification_gas: value.max_verification_gas.into(),
+            max_total_execution_gas: value.max_bundle_gas.into(),
             use_bundle_priority_fee: value.use_bundle_priority_fee,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(

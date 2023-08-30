@@ -52,6 +52,7 @@ pub struct Args {
     pub redis_lock_ttl_millis: u64,
     pub chain_id: u64,
     pub max_bundle_size: u64,
+    pub max_bundle_gas: u64,
     pub submit_url: String,
     pub use_bundle_priority_fee: Option<bool>,
     pub bundle_priority_fee_overhead_percent: u64,
@@ -113,6 +114,7 @@ impl Task for BuilderTask {
         let proposer_settings = bundle_proposer::Settings {
             chain_id: self.args.chain_id,
             max_bundle_size: self.args.max_bundle_size,
+            max_bundle_gas: self.args.max_bundle_gas,
             beneficiary,
             use_bundle_priority_fee: self.args.use_bundle_priority_fee,
             priority_fee_mode: self.args.priority_fee_mode,
@@ -134,7 +136,6 @@ impl Task for BuilderTask {
             simulator,
             entry_point.clone(),
             Arc::clone(&provider),
-            self.args.chain_id,
             proposer_settings,
             self.event_sender.clone(),
         );
