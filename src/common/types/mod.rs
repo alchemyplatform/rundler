@@ -27,6 +27,7 @@ pub use timestamp::*;
 pub use validation_results::*;
 pub use violations::*;
 
+use super::gas;
 pub use crate::common::contracts::shared_types::UserOperation;
 
 /// Unique identifier for a user operation from a given sender
@@ -105,44 +106,39 @@ impl UserOperation {
     /// Returns the gas limit for the user operation that should will be used onchain.
     pub fn gas_limit(&self, chain_id: u64) -> U256 {
         // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
-        // but this not part of the execution gas of the transaction.
-        // This workaround caps the pre_verification_gas at 100k during
-        // the execution gas calculation.
+        // but this not part of the execution gas of the transaction. Thus we only consider
+        // the static portion of the pre_verification_gas in the onchain gas limit.
         //
         // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas
         // and this IS part of the execution gas of the transaction, and thus needs to be
         // accounted for in the bundle gas limit
-        let max = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
-            U256::from(100_000)
+        let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+            gas::calc_static_pre_verification_gas(self)
         } else {
-            U256::MAX
+            self.pre_verification_gas
         };
 
-        std::cmp::min(max, self.pre_verification_gas)
-            + self.call_gas_limit
-            + self.verification_gas_limit
+        pvg + self.call_gas_limit + self.verification_gas_limit
     }
 
     /// Returns the execution gas limit for the user operation that applies to a blocks' gas cap
     pub fn execution_gas_limit(&self, chain_id: u64) -> U256 {
         // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
         // but this not part of the execution gas of the transaction.
-        // This workaround caps the pre_verification_gas at 100k during
-        // the execution gas calculation.
         //
         // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas and this
         // IS part of the execution gas of the transaction but does NOT apply to the blocks exectution gas cap
         // thus it is not included in the execution gas limit.
-        let max =
+        //
+        // In both cases we only consider the static portion of the pre_verification_gas in the execution gas limit.
+        let pvg =
             if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
-                U256::from(100_000)
+                gas::calc_static_pre_verification_gas(self)
             } else {
-                U256::MAX
+                self.pre_verification_gas
             };
 
-        std::cmp::min(max, self.pre_verification_gas)
-            + self.call_gas_limit
-            + self.verification_gas_limit
+        pvg + self.call_gas_limit + self.verification_gas_limit
     }
 }
 

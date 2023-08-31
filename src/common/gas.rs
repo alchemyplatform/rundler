@@ -62,7 +62,7 @@ pub async fn calc_pre_verification_gas<P: ProviderLike>(
     Ok(static_gas + dynamic_gas)
 }
 
-fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
+pub fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
     let ov = GasOverheads::default();
     let packed = op.pack();
     let length_in_words = (packed.len() + 31) / 32;
