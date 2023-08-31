@@ -107,11 +107,12 @@ impl UserOperation {
         // but this not part of the execution gas of the transaction.
         // This workaround caps the pre_verification_gas at 100k during
         // the execution gas calculation.
-        let max = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
-            U256::from(100_000)
-        } else {
-            U256::MAX
-        };
+        let max =
+            if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
+                U256::from(100_000)
+            } else {
+                U256::MAX
+            };
 
         std::cmp::min(max, self.pre_verification_gas)
             + self.call_gas_limit
