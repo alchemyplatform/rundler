@@ -102,11 +102,37 @@ impl UserOperation {
         max_gas * self.max_fee_per_gas
     }
 
-    pub fn total_execution_gas_limit(&self, chain_id: u64) -> U256 {
-        // On some chains the L1 gas fee is charged via pre_verification_gas
+    /// Returns the gas limit for the user operation that should will be used onchain.
+    pub fn gas_limit(&self, chain_id: u64) -> U256 {
+        // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
         // but this not part of the execution gas of the transaction.
         // This workaround caps the pre_verification_gas at 100k during
         // the execution gas calculation.
+        //
+        // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas
+        // and this IS part of the execution gas of the transaction, and thus needs to be
+        // accounted for in the bundle gas limit
+        let max = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+            U256::from(100_000)
+        } else {
+            U256::MAX
+        };
+
+        std::cmp::min(max, self.pre_verification_gas)
+            + self.call_gas_limit
+            + self.verification_gas_limit
+    }
+
+    /// Returns the execution gas limit for the user operation that applies to a blocks' gas cap
+    pub fn execution_gas_limit(&self, chain_id: u64) -> U256 {
+        // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
+        // but this not part of the execution gas of the transaction.
+        // This workaround caps the pre_verification_gas at 100k during
+        // the execution gas calculation.
+        //
+        // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas and this
+        // IS part of the execution gas of the transaction but does NOT apply to the blocks exectution gas cap
+        // thus it is not included in the execution gas limit.
         let max =
             if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
                 U256::from(100_000)

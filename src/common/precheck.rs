@@ -142,7 +142,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
                 max_verification_gas,
             ));
         }
-        let total_gas_limit = op.total_execution_gas_limit(chain_id);
+        let total_gas_limit = op.execution_gas_limit(chain_id);
         if total_gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasTooHigh(
                 total_gas_limit,

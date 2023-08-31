@@ -376,7 +376,7 @@ where
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
-            context.get_total_gas(self.settings.chain_id),
+            context.get_total_gas_limit(self.settings.chain_id),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
         let handle_ops_out = self
@@ -498,7 +498,7 @@ where
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = op.op.total_execution_gas_limit(self.settings.chain_id);
+            let gas = op.op.execution_gas_limit(self.settings.chain_id);
             if gas_left < gas {
                 continue;
             }
@@ -708,9 +708,9 @@ impl ProposalContext {
             .collect()
     }
 
-    fn get_total_gas(&self, chain_id: u64) -> U256 {
+    fn get_total_gas_limit(&self, chain_id: u64) -> U256 {
         self.iter_ops()
-            .map(|op| op.total_execution_gas_limit(chain_id))
+            .map(|op| op.gas_limit(chain_id))
             .fold(U256::zero(), |acc, c| acc + c)
     }
 
