@@ -122,7 +122,7 @@ pub struct CommonArgs {
     #[arg(
         long = "max_bundle_gas",
         name = "max_bundle_gas",
-        default_value = "10000000",
+        default_value = "25000000",
         env = "MAX_BUNDLE_GAS",
         global = true
     )]
