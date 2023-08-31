@@ -36,8 +36,10 @@ use crate::{
 
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
-
-const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 100;
+/// Entrypoint requires a buffer over the user operation gas limits in the bundle transaction
+const BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER: u64 = 5000;
+/// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
+const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
 
 #[derive(Debug, Default)]
 pub struct Bundle {
@@ -712,6 +714,7 @@ impl ProposalContext {
         self.iter_ops()
             .map(|op| op.gas_limit(chain_id))
             .fold(U256::zero(), |acc, c| acc + c)
+            + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
@@ -758,7 +761,10 @@ mod tests {
         .await;
 
         let expected_gas = math::increase_by_percent(
-            op.pre_verification_gas + op.verification_gas_limit + op.call_gas_limit,
+            op.pre_verification_gas
+                + op.verification_gas_limit * 2
+                + op.call_gas_limit
+                + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER,
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
@@ -1167,7 +1173,13 @@ mod tests {
                 ..Default::default()
             }]
         );
-        assert_eq!(bundle.gas_estimate, U256::from(20_000_000));
+        assert_eq!(
+            bundle.gas_estimate,
+            U256::from(math::increase_by_percent(
+                10_000_000 + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER,
+                BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
+            ))
+        );
     }
 
     struct MockOp {

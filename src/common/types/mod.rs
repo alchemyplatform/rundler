@@ -118,7 +118,8 @@ impl UserOperation {
             self.pre_verification_gas
         };
 
-        pvg + self.call_gas_limit + self.verification_gas_limit
+        pvg + self.call_gas_limit
+            + self.verification_gas_limit * self.verification_gas_limit_multiplier()
     }
 
     /// Returns the execution gas limit for the user operation that applies to a blocks' gas cap
@@ -138,7 +139,20 @@ impl UserOperation {
                 self.pre_verification_gas
             };
 
-        pvg + self.call_gas_limit + self.verification_gas_limit
+        pvg + self.call_gas_limit
+            + self.verification_gas_limit * self.verification_gas_limit_multiplier()
+    }
+
+    fn verification_gas_limit_multiplier(&self) -> u64 {
+        // If using a paymaster, we need to account for potentially 2 postOp
+        // calls (even though it won't be called).
+        // Else the entrypoint expects the gas for 1 postOp call that
+        // uses vefification_gas_limit plus the actual verification call
+        if self.paymaster().is_some() {
+            3
+        } else {
+            2
+        }
     }
 }
 
