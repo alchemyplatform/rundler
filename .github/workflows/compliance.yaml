@@ -1,0 +1,106 @@
+name: compliance
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup PDM
+        run: curl -sSL https://raw.githubusercontent.com/pdm-project/pdm/main/install-pdm.py | python3 -
+
+      - name: "Setup Node.js"
+        uses: "actions/setup-node@v3"
+        with:
+          node-version: 18.15
+
+      - name: Setup Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.19
+          cache: true
+
+      - name: Checkout bundler spec test
+        uses: actions/checkout@v3
+        with:
+          repository: alchemyplatform/bundler-spec-tests
+          ref: master
+          path: ./bundler-spec-tests
+          submodules: true
+
+      - name: Setup bundler spec test
+        working-directory: ./bundler-spec-tests
+        run: |
+          pdm install && \
+          cd @account-abstraction && \
+          yarn install --frozen-lockfile && \
+          yarn compile && \
+          cd ../spec && \
+          yarn install --frozen-lockfile && \
+          yarn build
+
+      - name: Install Geth
+        run: |
+          sudo add-apt-repository -y ppa:ethereum/ethereum && \
+          sudo apt-get update && \
+          sudo apt-get install ethereum
+
+      - name: Run Geth
+        run: |
+          geth \
+          --verbosity 1 \
+          --http.vhosts '*,localhost,host.docker.internal' \
+          --http \
+          --http.api eth,net,web3,debug \
+          --http.corsdomain '*' \
+          --http.addr "0.0.0.0" \
+          --nodiscover --maxpeers 0 --mine \
+          --networkid 1337 \
+          --dev \
+          --allow-insecure-unlock \
+          --rpc.allow-unprotected-txs \
+          --miner.gaslimit 12000000 &
+
+      - name: Install protobuf
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.71.0
+
+      - name: Deploy ERC-4337 contracts
+        working-directory: ./bundler-spec-tests
+        run: |
+          cd @account-abstraction && \
+          yarn deploy --network localhost
+
+      - name: Fund bundler
+        run: |
+          geth \
+          --exec "eth.sendTransaction({from: eth.accounts[0], to: \"0x43378ff8C70109Ee4Dbe85aF34428ab0615EBd23\", value: web3.toWei(10000, \"ether\")})" \
+          attach http://localhost:8545/
+
+      - name: Run Rundler
+        run: cargo run node &
+        env:
+					BUILDER_PRIVATE_KEY: 0x0000000000000000000000000000000000000000000000000000000000000002
+					ENTRY_POINTS: 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+					METRICS_HOST: 127.0.0.1
+					MIN_UNSTAKE_DELAY: 2
+					NODE_HTTP: http://127.0.0.1:8545
+					RPC_API: eth,debug
+					RPC_HOST: 127.0.0.1
+					RUST_LOG: info
+
+      - name: Run test
+        working-directory: ./bundler-spec-tests
+        run: pdm test
