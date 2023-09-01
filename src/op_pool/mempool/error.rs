@@ -11,6 +11,9 @@ pub enum MempoolError {
     /// Some other error occurred
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+    /// Operation with the same hash already in pool
+    #[error("Operation already known")]
+    OperationAlreadyKnown,
     /// Operation with same sender/nonce already in pool
     /// and the replacement operation has lower gas price.
     #[error("Replacement operation underpriced. Existing priority fee: {0}. Existing fee: {1}")]

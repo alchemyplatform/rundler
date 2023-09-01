@@ -2,7 +2,7 @@ use ethers::types::{Address, Opcode, U256};
 use jsonrpsee::{
     core::Error as RpcError,
     types::{
-        error::{CallError, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE, INVALID_REQUEST_CODE},
+        error::{CallError, CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
         ErrorObject,
     },
 };
@@ -67,6 +67,9 @@ pub enum EthRpcError {
     /// Replacement underpriced
     #[error("replacement underpriced")]
     ReplacementUnderpriced(ReplacementUnderpricedData),
+    /// Operation already known
+    #[error("already known")]
+    OperationAlreadyKnown,
     /// Other internal errors
     #[error("Invalid UserOp signature or paymaster signature")]
     SignatureCheckFailed,
@@ -162,9 +165,10 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::ReplacementUnderpriced(data) => {
                 rpc_err_with_data(INVALID_PARAMS_CODE, msg, data)
             }
+            EthRpcError::OperationAlreadyKnown => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
-            EthRpcError::PrecheckFailed(_) => rpc_err(INVALID_PARAMS_CODE, msg),
-            EthRpcError::SimulationFailed(_) => rpc_err(INVALID_REQUEST_CODE, msg),
+            EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
+            EthRpcError::SimulationFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::Internal(_) => rpc_err(INTERNAL_ERROR_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
         }

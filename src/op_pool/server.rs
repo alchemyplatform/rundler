@@ -207,6 +207,10 @@ where
 impl From<MempoolError> for Status {
     fn from(e: MempoolError) -> Self {
         let ei = match &e {
+            MempoolError::OperationAlreadyKnown => ErrorInfo {
+                reason: ErrorReason::OperationAlreadyKnown.as_str_name().to_string(),
+                metadata: HashMap::new(),
+            },
             MempoolError::EntityThrottled(et) => ErrorInfo {
                 reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
                 metadata: HashMap::from([(et.kind.to_string(), to_checksum(&et.address, None))]),

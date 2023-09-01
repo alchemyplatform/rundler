@@ -183,6 +183,14 @@ impl PoolInner {
         op: Arc<PoolOperation>,
         submission_id: Option<u64>,
     ) -> MempoolResult<H256> {
+        // Check if operation already known
+        if self
+            .by_hash
+            .contains_key(&op.uo.op_hash(self.config.entry_point, self.config.chain_id))
+        {
+            return Err(MempoolError::OperationAlreadyKnown);
+        }
+
         // Check for replacement by ID
         if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
             if op.uo.max_fee_per_gas > u128::MAX.into()
@@ -621,18 +629,18 @@ mod tests {
     fn replace_op_underpriced() {
         let mut pool = PoolInner::new(conf());
         let sender = Address::random();
-        let mut po1 = create_op(sender, 0, 10);
-        po1.uo.max_priority_fee_per_gas = 10.into();
+        let mut po1 = create_op(sender, 0, 100);
+        po1.uo.max_priority_fee_per_gas = 100.into();
         let _ = pool.add_operation(po1.clone()).unwrap();
 
-        let mut po2 = create_op(sender, 0, 10);
-        po2.uo.max_priority_fee_per_gas = 10.into();
+        let mut po2 = create_op(sender, 0, 101);
+        po2.uo.max_priority_fee_per_gas = 101.into();
         let res = pool.add_operation(po2);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::ReplacementUnderpriced(a, b) => {
-                assert_eq!(a, 10.into());
-                assert_eq!(b, 10.into());
+                assert_eq!(a, 100.into());
+                assert_eq!(b, 100.into());
             }
             _ => panic!("wrong error"),
         }
@@ -662,6 +670,22 @@ mod tests {
         assert_eq!(pool.address_count(paymaster1), 0);
         assert_eq!(pool.address_count(paymaster2), 1);
         assert_eq!(pool.pool_size, po2.size());
+    }
+
+    #[test]
+    fn test_already_known() {
+        let mut pool = PoolInner::new(conf());
+        let sender = Address::random();
+        let mut po1 = create_op(sender, 0, 10);
+        po1.uo.max_priority_fee_per_gas = 10.into();
+        let _ = pool.add_operation(po1.clone()).unwrap();
+
+        let res = pool.add_operation(po1);
+        assert!(res.is_err());
+        match res.err().unwrap() {
+            MempoolError::OperationAlreadyKnown => (),
+            _ => panic!("wrong error"),
+        }
     }
 
     fn conf() -> PoolConfig {
