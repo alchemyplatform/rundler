@@ -733,6 +733,8 @@ impl From<ErrorInfo> for EthRpcError {
         } else if reason == ErrorReason::OperationDiscardedOnInsert.as_str_name() {
             return anyhow!("operation rejected: mempool full try again with higher gas price")
                 .into();
+        } else if reason == ErrorReason::OperationAlreadyKnown.as_str_name() {
+            return EthRpcError::OperationAlreadyKnown;
         }
 
         anyhow!("operation rejected").into()
