@@ -549,6 +549,7 @@ pub enum DummyBuilder {}
 
 #[async_trait]
 impl Builder for DummyBuilder {
+    #[allow(clippy::diverging_sub_expression)]
     async fn debug_send_bundle_now(
         &self,
         _request: Request<DebugSendBundleNowRequest>,
@@ -556,6 +557,7 @@ impl Builder for DummyBuilder {
         panic!()
     }
 
+    #[allow(clippy::diverging_sub_expression)]
     async fn debug_set_bundling_mode(
         &self,
         _request: Request<DebugSetBundlingModeRequest>,
