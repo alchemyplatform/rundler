@@ -721,11 +721,11 @@ impl From<ErrorInfo> for EthRpcError {
         } else if reason == ErrorReason::ReplacementUnderpriced.as_str_name() {
             let prio_fee = metadata
                 .get(ErrorMetadataKey::CurrentMaxPriorityFeePerGas.as_str_name())
-                .and_then(|fee| fee.parse::<U256>().ok())
+                .and_then(|fee| U256::from_dec_str(fee).ok())
                 .unwrap_or_default();
             let fee = metadata
                 .get(ErrorMetadataKey::CurrentMaxFeePerGas.as_str_name())
-                .and_then(|fee| fee.parse::<U256>().ok())
+                .and_then(|fee| U256::from_dec_str(fee).ok())
                 .unwrap_or_default();
             return EthRpcError::ReplacementUnderpriced(ReplacementUnderpricedData::new(
                 prio_fee, fee,
@@ -956,6 +956,97 @@ mod tests {
             );
 
         assert!(result.is_err(), "{:?}", result.unwrap());
+    }
+
+    #[test]
+    fn test_replcement_fee_error_data() {
+        let fee = U256::from(10000);
+        let prio_fee = U256::from(5000);
+
+        let error_info = ErrorInfo {
+            reason: ErrorReason::ReplacementUnderpriced
+                .as_str_name()
+                .to_string(),
+            metadata: HashMap::from([
+                (
+                    ErrorMetadataKey::CurrentMaxPriorityFeePerGas
+                        .as_str_name()
+                        .to_string(),
+                    prio_fee.to_string(),
+                ),
+                (
+                    ErrorMetadataKey::CurrentMaxFeePerGas
+                        .as_str_name()
+                        .to_string(),
+                    fee.to_string(),
+                ),
+            ]),
+        };
+
+        let details = tonic_types::Status {
+            code: 0,
+            message: "".to_string(),
+            details: vec![prost_types::Any {
+                type_url: "type.alchemy.com/op_pool.ErrorInfo".to_string(),
+                value: error_info.encode_to_vec(),
+            }],
+        };
+
+        let status = Status::with_details(
+            tonic::Code::Internal,
+            "error_message".to_string(),
+            details.encode_to_vec().into(),
+        );
+
+        let rpc_error: EthRpcError = status.into();
+
+        assert!(
+            matches!(
+                rpc_error,
+                EthRpcError::ReplacementUnderpriced(ref data) if data.current_max_priority_fee == prio_fee && data.current_max_fee == fee
+            ),
+            "{:?}",
+            rpc_error
+        );
+    }
+
+    #[test]
+    fn test_entity_throttled_error_data() {
+        let addr = Address::random();
+
+        let error_info = ErrorInfo {
+            reason: ErrorReason::EntityThrottled.as_str_name().to_string(),
+            metadata: HashMap::from([(
+                EntityType::Paymaster.to_string(),
+                to_checksum(&addr, None),
+            )]),
+        };
+
+        let details = tonic_types::Status {
+            code: 0,
+            message: "".to_string(),
+            details: vec![prost_types::Any {
+                type_url: "type.alchemy.com/op_pool.ErrorInfo".to_string(),
+                value: error_info.encode_to_vec(),
+            }],
+        };
+
+        let status = Status::with_details(
+            tonic::Code::Internal,
+            "error_message".to_string(),
+            details.encode_to_vec().into(),
+        );
+
+        let rpc_error: EthRpcError = status.into();
+
+        assert!(
+            matches!(
+                rpc_error,
+                EthRpcError::ThrottledOrBanned(ref data) if *data == Entity::paymaster(addr)
+            ),
+            "{:?}",
+            rpc_error
+        );
     }
 
     fn given_log(topic_0: &str, topic_1: &str) -> Log {
