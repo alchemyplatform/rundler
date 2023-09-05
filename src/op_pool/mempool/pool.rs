@@ -71,16 +71,6 @@ impl PoolInner {
         ret
     }
 
-    pub fn add_operations(
-        &mut self,
-        operations: impl IntoIterator<Item = PoolOperation>,
-    ) -> Vec<MempoolResult<H256>> {
-        operations
-            .into_iter()
-            .map(|op| self.add_operation(op))
-            .collect()
-    }
-
     pub fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
         self.best.clone().into_iter().map(|v| v.po)
     }
