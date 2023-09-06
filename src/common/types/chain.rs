@@ -10,3 +10,5 @@ pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
 pub const ARBITRUM_CHAIN_IDS: &[u64] = &[Chain::Arbitrum as u64, Chain::ArbitrumGoerli as u64];
 
 pub const BASE_CHAIN_IDS: &[u64] = &[8453, Chain::BaseGoerli as u64];
+
+pub const POLYGON_CHAIN_IDS: &[u64] = &[Chain::Polygon as u64, Chain::PolygonMumbai as u64];
