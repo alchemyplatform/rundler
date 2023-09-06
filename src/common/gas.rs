@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, Chain, U256};
+use anyhow::Context;
+use ethers::{
+    prelude::gas_oracle::{GasCategory, GasOracle, Polygon},
+    types::{transaction::eip2718::TypedTransaction, Address, Chain, U256},
+};
 use tokio::try_join;
 
-use super::types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS};
+use super::types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS};
 use crate::common::{
     math,
     types::{ProviderLike, UserOperation},
@@ -153,6 +157,7 @@ pub struct FeeEstimator<P: ProviderLike> {
     priority_fee_mode: PriorityFeeMode,
     use_bundle_priority_fee: bool,
     bundle_priority_fee_overhead_percent: u64,
+    chain_id: u64,
 }
 
 impl<P: ProviderLike> FeeEstimator<P> {
@@ -169,6 +174,7 @@ impl<P: ProviderLike> FeeEstimator<P> {
             use_bundle_priority_fee: use_bundle_priority_fee
                 .unwrap_or_else(|| !is_known_non_eip_1559_chain(chain_id)),
             bundle_priority_fee_overhead_percent,
+            chain_id,
         }
     }
 
@@ -203,7 +209,15 @@ impl<P: ProviderLike> FeeEstimator<P> {
     }
 
     async fn get_priority_fee(&self) -> anyhow::Result<U256> {
-        if self.use_bundle_priority_fee {
+        if POLYGON_CHAIN_IDS.contains(&self.chain_id) {
+            let gas_oracle =
+                Polygon::new(Chain::try_from(self.chain_id)?)?.category(GasCategory::Fast);
+            let fees = gas_oracle
+                .estimate_eip1559_fees()
+                .await
+                .context("failed to query polygon gasstation")?;
+            Ok(fees.1)
+        } else if self.use_bundle_priority_fee {
             self.provider.get_max_priority_fee().await
         } else {
             Ok(U256::zero())
