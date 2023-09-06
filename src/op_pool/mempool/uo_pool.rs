@@ -232,39 +232,17 @@ where
             );
         }
 
-        let emit_event = {
-            let op_hash = op.uo.op_hash(self.entry_point, self.chain_id);
-            let valid_after = op.valid_time_range.valid_after;
-            let valid_until = op.valid_time_range.valid_until;
-            let op = op.uo.clone();
-            move |block_number: u64, error: Option<String>| {
-                self.emit(OpPoolEvent::ReceivedOp {
-                    op_hash,
-                    op,
-                    block_number,
-                    origin,
-                    valid_after,
-                    valid_until,
-                    entities: entity_summary,
-                    error: error.map(Arc::new),
-                })
-            }
-        };
-
-        // If throttled/banned, emit event and return error
+        // If throttled/banned return error
         if let Some(entity) = rejected_entity {
-            let error = MempoolError::EntityThrottled(entity);
-            emit_event(self.state.read().block_number, Some(error.to_string()));
             return Err(MempoolError::EntityThrottled(entity));
         }
 
         // Else, add operation to pool
         let mut state = self.state.write();
         let bn = state.block_number;
-        let hash = match state.pool.add_operation(op) {
+        let hash = match state.pool.add_operation(op.clone()) {
             Ok(hash) => hash,
             Err(error) => {
-                emit_event(bn, Some(error.to_string()));
                 return Err(error);
             }
         };
@@ -277,7 +255,21 @@ where
         if throttled {
             state.throttled_ops.insert(hash, bn);
         }
-        emit_event(bn, None);
+
+        let op_hash = op.uo.op_hash(self.entry_point, self.chain_id);
+        let valid_after = op.valid_time_range.valid_after;
+        let valid_until = op.valid_time_range.valid_until;
+        self.emit(OpPoolEvent::ReceivedOp {
+            op_hash,
+            op: op.uo,
+            block_number: bn,
+            origin,
+            valid_after,
+            valid_until,
+            entities: entity_summary,
+            error: None,
+        });
+
         Ok(hash)
     }
 
