@@ -1,3 +1,5 @@
+// Defines the schemas for an ERC-4337 Bundle builder.
+
 syntax = "proto3";
 
 package builder;
@@ -14,8 +16,10 @@ enum BundlingMode {
     BUNDLING_MODE_AUTO = 2;
 }
 
+
 // Defines the gRPC endpoints for a Builder service
 service Builder {
+    rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);
     // Forces the bundler to build and execute a bundle from the mempool as handleOps() transaction.
     rpc DebugSendBundleNow(DebugSendBundleNowRequest) returns (DebugSendBundleNowResponse);
     // Sets bundling mode. After setting mode to “manual”, an explicit call to
@@ -23,10 +27,21 @@ service Builder {
     rpc DebugSetBundlingMode(DebugSetBundlingModeRequest) returns (DebugSetBundlingModeResponse);
 }
 
+message GetSupportedEntryPointsRequest {}
+message GetSupportedEntryPointsResponse {
+    uint64 chain_id = 1;
+    repeated bytes entry_points = 2;
+}
+
 message DebugSendBundleNowRequest {}
 
 message DebugSendBundleNowResponse {
-    // Serialized transaction hash
+    oneof result {
+        DebugSendBundleNowSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+message DebugSendBundleNowSuccess {
     bytes transaction_hash = 1;
 }
 
@@ -34,4 +49,16 @@ message DebugSetBundlingModeRequest {
     BundlingMode mode = 1;
 }
 
-message DebugSetBundlingModeResponse {}
+message DebugSetBundlingModeResponse {
+    oneof result {
+        DebugSetBundlingModeSuccess success = 1;
+        BuilderError failure = 2;
+    }
+}
+message DebugSetBundlingModeSuccess {}
+
+message BuilderError {
+    oneof error {
+        string internal = 1;
+    }
+}

@@ -9,21 +9,20 @@ use jsonrpsee::{
     server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use tokio::select;
 use tokio_util::sync::CancellationToken;
-use tonic::{async_trait, transport::Channel};
+use tonic::async_trait;
 use tracing::info;
 use url::Url;
 
 use super::ApiNamespace;
 use crate::{
+    builder::BuilderServer,
     common::{
         contracts::i_entry_point::IEntryPoint,
         eth,
         handle::Task,
         precheck,
-        protos::builder::builder_client::BuilderClient,
-        server::{self, format_socket_addr, HealthCheck},
+        server::{format_socket_addr, HealthCheck},
         types::EntryPointLike,
     },
     op_pool::PoolServer,
@@ -40,7 +39,6 @@ use crate::{
 pub struct Args {
     pub port: u16,
     pub host: String,
-    pub builder_url: String,
     pub entry_points: Vec<Address>,
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
@@ -53,15 +51,17 @@ pub struct Args {
 }
 
 #[derive(Debug)]
-pub struct RpcTask<P> {
+pub struct RpcTask<P, B> {
     args: Args,
     pool: P,
+    builder: B,
 }
 
 #[async_trait]
-impl<P> Task for RpcTask<P>
+impl<P, B> Task for RpcTask<P, B>
 where
     P: PoolServer + HealthCheck + Clone,
+    B: BuilderServer + HealthCheck + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
@@ -91,17 +91,11 @@ where
             .map(|addr| IEntryPoint::new(*addr, provider.clone()))
             .collect();
 
-        // TODO(danc) local builder client
-        let builder_client =
-            Self::connect_remote_builder_client(&self.args.builder_url, shutdown_token.clone())
-                .await?;
-        info!("Connected to builder service at {}", self.args.builder_url);
-
         let mut module = RpcModule::new(());
-        self.attach_namespaces(provider, entry_points, builder_client, &mut module)?;
+        self.attach_namespaces(provider, entry_points, &mut module)?;
 
-        // TODO(danc): builder health check
-        let servers: Vec<Box<dyn HealthCheck>> = vec![Box::new(self.pool.clone())];
+        let servers: Vec<Box<dyn HealthCheck>> =
+            vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];
         let health_checker = HealthChecker::new(servers);
         module.merge(health_checker.into_rpc())?;
 
@@ -135,40 +129,27 @@ where
     }
 }
 
-impl<P> RpcTask<P>
+impl<P, B> RpcTask<P, B>
 where
     P: PoolServer + HealthCheck + Clone,
+    B: BuilderServer + HealthCheck + Clone,
 {
-    pub fn new(args: Args, pool: P) -> Self {
-        Self { args, pool }
+    pub fn new(args: Args, pool: P, builder: B) -> Self {
+        Self {
+            args,
+            pool,
+            builder,
+        }
     }
 
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
     }
 
-    async fn connect_remote_builder_client(
-        url: &str,
-        shutdown_token: CancellationToken,
-    ) -> anyhow::Result<BuilderClient<Channel>> {
-        select! {
-            _ = shutdown_token.cancelled() => {
-                tracing::error!("bailing from conneting client, server shutting down");
-                bail!("Server shutting down")
-            }
-            res = server::connect_with_retries("builder from common", url, |url| Box::pin(async move {
-                BuilderClient::connect(url).await.context("should connect to builder")
-            })) => {
-                res.context("should connect to builder")
-            }
-        }
-    }
-
     fn attach_namespaces<E: EntryPointLike + Clone>(
         &self,
         provider: Arc<Provider<RetryClient<Http>>>,
         entry_points: Vec<E>,
-        builder_client: BuilderClient<Channel>,
         module: &mut RpcModule<()>,
     ) -> anyhow::Result<()> {
         for api in &self.args.api_namespaces {
@@ -185,7 +166,7 @@ where
                     .into_rpc(),
                 )?,
                 ApiNamespace::Debug => module
-                    .merge(DebugApi::new(self.pool.clone(), builder_client.clone()).into_rpc())?,
+                    .merge(DebugApi::new(self.pool.clone(), self.builder.clone()).into_rpc())?,
                 ApiNamespace::Rundler => module.merge(
                     RundlerApi::new(
                         provider.clone(),
