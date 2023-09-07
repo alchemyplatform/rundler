@@ -253,7 +253,6 @@ where
                 for &slot in slots {
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
-                        entity,
                         is_unstaked_wallet_creation,
                         entry_point_address: self.entry_point.address(),
                         entity_address: entity_info.address,
@@ -477,10 +476,20 @@ pub enum SimulationViolation {
     UsedForbiddenOpcode(Entity, Address, ViolationOpCode),
     #[display("{0.kind} uses banned precompile: {2:?} in contract {1:?}")]
     UsedForbiddenPrecompile(Entity, Address, Address),
+    #[display(
+        "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
+    )]
+    AccessedUndeployedContract(Entity, Address),
     #[display("factory may only call CREATE2 once during initialization")]
     FactoryCalledCreate2Twice(Address),
     #[display("{0.kind} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, StorageSlot),
+    #[display("{0.kind} called entry point method other than depositTo")]
+    CalledBannedEntryPointMethod(Entity),
+    #[display("{0.kind} must not send ETH during validation (except from account to entry point)")]
+    CallHadValue(Entity),
+    #[display("code accessed by validation has changed since the last time validation was run")]
+    CodeHashChanged,
     #[display("{0.kind} must be staked")]
     NotStaked(Entity, U256, U256),
     #[display("reverted while simulating {0} validation")]
@@ -489,18 +498,8 @@ pub enum SimulationViolation {
     DidNotRevert,
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
     WrongNumberOfPhases(u32),
-    #[display("{0.kind} must not send ETH during validation (except from account to entry point)")]
-    CallHadValue(Entity),
     #[display("ran out of gas during {0.kind} validation")]
     OutOfGas(Entity),
-    #[display(
-        "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
-    )]
-    AccessedUndeployedContract(Entity, Address),
-    #[display("{0.kind} called entry point method other than depositTo")]
-    CalledBannedEntryPointMethod(Entity),
-    #[display("code accessed by validation has changed since the last time validation was run")]
-    CodeHashChanged,
     #[display("aggregator signature validation failed")]
     AggregatorValidationFailed,
 }
@@ -615,7 +614,6 @@ enum StorageRestriction {
 #[derive(Clone, Copy, Debug)]
 struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
-    entity: Entity,
     is_unstaked_wallet_creation: bool,
     entry_point_address: Address,
     entity_address: Address,
@@ -627,34 +625,23 @@ struct GetStorageRestrictionArgs<'a> {
 fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestriction {
     let GetStorageRestrictionArgs {
         slots_by_address,
-        entity,
         is_unstaked_wallet_creation,
         entry_point_address,
         entity_address,
         sender_address,
         accessed_address,
         slot,
+        ..
     } = args;
     if accessed_address == sender_address {
         StorageRestriction::Allowed
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
-        if is_unstaked_wallet_creation
-            && entity.kind != EntityType::Account
-            && accessed_address != entry_point_address
-        {
-            // We deviate from the letter of ERC-4337 to allow an unstaked
-            // sender to access its own associated storage during account
-            // creation, based on discussion with the ERC authors.
-            //
-            // We also deviate by allowing unstaked access to the sender's
-            // associated storage on the entry point during account creation.
-            // Without this, several spec tests fail because the `SimpleWallet`
-            // used in the tests deposits in its constructor, which causes the
-            // factory to access the sender's associated storage on the entry
-            // point.
-            StorageRestriction::NeedsStake
-        } else {
+        // Allow entities to access the sender's associated storage unless its during an unstaked wallet creation
+        // Can always access the entry point's associated storage (note only depositTo is allowed to be called)
+        if accessed_address == entry_point_address || !is_unstaked_wallet_creation {
             StorageRestriction::Allowed
+        } else {
+            StorageRestriction::NeedsStake
         }
     } else if accessed_address == entity_address
         || slots_by_address.is_associated_slot(entity_address, slot)

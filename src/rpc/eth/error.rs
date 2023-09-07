@@ -46,9 +46,9 @@ pub enum EthRpcError {
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
     OpcodeViolation(EntityType, Opcode),
-    /// Precompile violation, maps to Opcode Violation
-    #[error("{0} uses banned precompile: {1:?}")]
-    PrecompileViolation(EntityType, Address),
+    /// Used for other simulation violations that map to Opcode Violations
+    #[error("{0}")]
+    OpcodeViolationMap(SimulationError),
     /// Invalid storage access, maps to Opcode Violation
     #[error("{0} accesses inaccessible storage at address: {1:?} slot: {2:#032x}")]
     InvalidStorageAccess(EntityType, Address, U256),
@@ -150,7 +150,7 @@ impl From<EthRpcError> for RpcError {
                 rpc_err_with_data(PAYMASTER_VALIDATION_REJECTED_CODE, msg, data)
             }
             EthRpcError::OpcodeViolation(_, _)
-            | EthRpcError::PrecompileViolation(_, _)
+            | EthRpcError::OpcodeViolationMap(_)
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)
