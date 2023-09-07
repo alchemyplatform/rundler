@@ -1,28 +1,29 @@
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use ethers::types::{Address, H256};
 use ethers_signers::Signer;
 use rusoto_core::Region;
 use tokio::{
     sync::{broadcast, mpsc},
-    time,
+    time, try_join,
 };
 use tokio_util::sync::CancellationToken;
-use tonic::{async_trait, transport::Server};
+use tonic::async_trait;
 use tracing::info;
 
-use super::emit::BuilderEvent;
+use super::{emit::BuilderEvent, server::LocalBuilderBuilder};
 use crate::{
     builder::{
         bundle_proposer::{self, BundleProposerImpl},
         bundle_sender::{self, BundleSender, BundleSenderImpl},
         sender::get_sender,
-        server::BuilderImpl,
+        server::spawn_remote_builder_server,
         signer::{BundlerSigner, KmsSigner, LocalSigner},
         transaction_tracker::{self, TransactionTrackerImpl},
     },
@@ -31,10 +32,8 @@ use crate::{
         emit::WithEntryPoint,
         eth::{self},
         gas::PriorityFeeMode,
-        handle::{SpawnGuard, Task},
+        handle::{self, SpawnGuard, Task},
         mempool::MempoolConfig,
-        protos::builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
-        server::format_socket_addr,
         simulation::{self, SimulatorImpl},
     },
     op_pool::PoolServer,
@@ -42,8 +41,6 @@ use crate::{
 
 #[derive(Debug)]
 pub struct Args {
-    pub port: u16,
-    pub host: String,
     pub rpc_url: String,
     pub entry_point_address: Address,
     pub private_key: Option<String>,
@@ -65,12 +62,14 @@ pub struct Args {
     pub max_blocks_to_wait_for_mine: u64,
     pub replacement_fee_percent_increase: u64,
     pub max_fee_increases: u64,
+    pub remote_address: Option<SocketAddr>,
 }
 
 #[derive(Debug)]
 pub struct BuilderTask<P> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    builder_builder: LocalBuilderBuilder,
     pool: P,
 }
 
@@ -80,8 +79,6 @@ where
     P: PoolServer + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let addr = format_socket_addr(&self.args.host, self.args.port).parse()?;
-        info!("Starting builder server on {}", addr);
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
@@ -186,36 +183,40 @@ where
         let _builder_loop_guard =
             { SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await }) };
 
-        // gRPC server
-        let builder_server = BuilderImpl::new(manual_bundling_mode, send_bundle_tx);
-        let builder_server = BuilderServer::new(builder_server);
+        let builder_handle = self.builder_builder.get_handle();
+        let builder_runnder_handle = self.builder_builder.run(
+            manual_bundling_mode,
+            send_bundle_tx,
+            vec![self.args.entry_point_address],
+            shutdown_token.clone(),
+        );
 
-        let reflection_service = tonic_reflection::server::Builder::configure()
-            .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
-            .build()?;
-
-        // health service
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-        health_reporter
-            .set_serving::<BuilderServer<BuilderImpl>>()
-            .await;
-
-        let server_handle = Server::builder()
-            .add_service(builder_server)
-            .add_service(reflection_service)
-            .add_service(health_service)
-            .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await });
+        let remote_handle = match self.args.remote_address {
+            Some(addr) => {
+                spawn_remote_builder_server(
+                    addr,
+                    self.args.chain_id,
+                    builder_handle,
+                    shutdown_token,
+                )
+                .await?
+            }
+            None => tokio::spawn(async { Ok(()) }),
+        };
 
         info!("Started bundle builder");
 
-        match server_handle.await {
+        match try_join!(
+            handle::flatten_handle(builder_runnder_handle),
+            handle::flatten_handle(remote_handle),
+        ) {
             Ok(_) => {
                 tracing::info!("Builder server shutdown");
                 Ok(())
             }
             Err(e) => {
-                tracing::error!("Builder server error: {:?}", e);
-                Err(e).context("Builder server error")
+                tracing::error!("Builder server error: {e:?}");
+                bail!("Builder server error: {e:?}")
             }
         }
     }
@@ -228,11 +229,13 @@ where
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+        builder_builder: LocalBuilderBuilder,
         pool: P,
     ) -> Self {
         Self {
             args,
             event_sender,
+            builder_builder,
             pool,
         }
     }

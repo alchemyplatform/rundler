@@ -104,13 +104,8 @@ impl Task for PoolTask {
         let remote_handle = match &mut self.args.server_mode {
             PoolServerMode::Local => tokio::spawn(async { Ok(()) }),
             PoolServerMode::Remote { addr } => {
-                spawn_remote_mempool_server(
-                    self.args.chain_id,
-                    pool_handle,
-                    *addr,
-                    shutdown_token.clone(),
-                )
-                .await?
+                spawn_remote_mempool_server(self.args.chain_id, pool_handle, *addr, shutdown_token)
+                    .await?
             }
         };
 
