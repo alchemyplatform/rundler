@@ -3,7 +3,7 @@ use tokio::sync::broadcast;
 
 use self::events::Event;
 use crate::{
-    builder::{emit::BuilderEvent, BuilderTask},
+    builder::{emit::BuilderEvent, BuilderTask, LocalBuilderBuilder},
     cli::{
         builder::{self, BuilderArgs},
         pool::PoolArgs,
@@ -38,16 +38,13 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
         rpc: rpc_args,
     } = bundler_args;
 
-    let builder_url = builder_args.url(false);
-
     let pool_task_args = pool_args
         .to_args(&common_args, PoolServerMode::Local)
         .await?;
-    let builder_task_args = builder_args.to_args(&common_args).await?;
+    let builder_task_args = builder_args.to_args(&common_args, None).await?;
     let rpc_task_args = rpc_args
         .to_args(
             &common_args,
-            builder_url,
             (&common_args).try_into()?,
             (&common_args).try_into()?,
         )
@@ -79,11 +76,20 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let pool_builder = LocalPoolBuilder::new(1024, 1024);
     let pool_handle = pool_builder.get_handle();
 
+    let builder_builder = LocalBuilderBuilder::new(1024);
+    let builder_handle = builder_builder.get_handle();
+
     handle::spawn_tasks_with_shutdown(
         [
             PoolTask::new(pool_task_args, op_pool_event_sender, pool_builder).boxed(),
-            BuilderTask::new(builder_task_args, builder_event_sender, pool_handle.clone()).boxed(),
-            RpcTask::new(rpc_task_args, pool_handle).boxed(),
+            BuilderTask::new(
+                builder_task_args,
+                builder_event_sender,
+                builder_builder,
+                pool_handle.clone(),
+            )
+            .boxed(),
+            RpcTask::new(rpc_task_args, pool_handle, builder_handle).boxed(),
         ],
         tokio::signal::ctrl_c(),
     )

@@ -5,6 +5,7 @@ use clap::Args;
 
 use super::CommonArgs;
 use crate::{
+    builder::RemoteBuilderClient,
     common::{handle::spawn_tasks_with_shutdown, precheck, server::connect_with_retries_shutdown},
     op_pool::RemotePoolClient,
     rpc::{self, estimation, RpcTask},
@@ -68,7 +69,6 @@ impl RpcArgs {
     pub async fn to_args(
         &self,
         common: &CommonArgs,
-        builder_url: String,
         precheck_settings: precheck::Settings,
         estimation_settings: estimation::Settings,
     ) -> anyhow::Result<rpc::Args> {
@@ -81,7 +81,6 @@ impl RpcArgs {
         Ok(rpc::Args {
             port: self.port,
             host: self.host.clone(),
-            builder_url,
             entry_points: common
                 .entry_points
                 .iter()
@@ -137,7 +136,6 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     let task_args = rpc_args
         .to_args(
             &common_args,
-            builder_url,
             (&common_args).try_into()?,
             (&common_args).try_into()?,
         )
@@ -151,8 +149,16 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     )
     .await?;
 
+    let builder = connect_with_retries_shutdown(
+        "builder from rpc",
+        &builder_url,
+        RemoteBuilderClient::connect,
+        tokio::signal::ctrl_c(),
+    )
+    .await?;
+
     spawn_tasks_with_shutdown(
-        [RpcTask::new(task_args, pool).boxed()],
+        [RpcTask::new(task_args, pool, builder).boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;

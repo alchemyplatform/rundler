@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
@@ -7,13 +7,13 @@ use tokio::sync::broadcast;
 
 use super::{json::get_json_config, CommonArgs};
 use crate::{
-    builder::{self, emit::BuilderEvent, BuilderTask},
+    builder::{self, emit::BuilderEvent, BuilderTask, LocalBuilderBuilder},
     common::{
         emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
         gas::PriorityFeeMode,
         handle::spawn_tasks_with_shutdown,
         mempool::MempoolConfig,
-        server::{connect_with_retries_shutdown, format_server_addr},
+        server::{connect_with_retries_shutdown, format_socket_addr},
     },
     op_pool::RemotePoolClient,
 };
@@ -27,7 +27,7 @@ pub struct BuilderArgs {
         long = "builder.port",
         name = "builder.port",
         env = "BUILDER_PORT",
-        default_value = "50052"
+        default_value = "50051"
     )]
     port: u16,
 
@@ -150,7 +150,11 @@ pub struct BuilderArgs {
 impl BuilderArgs {
     /// Convert the CLI arguments into the arguments for the builder combining
     /// common and builder specific arguments.
-    pub async fn to_args(&self, common: &CommonArgs) -> anyhow::Result<builder::Args> {
+    pub async fn to_args(
+        &self,
+        common: &CommonArgs,
+        remote_address: Option<SocketAddr>,
+    ) -> anyhow::Result<builder::Args> {
         let priority_fee_mode = PriorityFeeMode::try_from(
             common.priority_fee_mode_kind.as_str(),
             common.priority_fee_mode_value,
@@ -170,8 +174,6 @@ impl BuilderArgs {
         };
 
         Ok(builder::Args {
-            port: self.port,
-            host: self.host.clone(),
             rpc_url,
             entry_point_address: common
                 .entry_points
@@ -200,11 +202,8 @@ impl BuilderArgs {
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
+            remote_address,
         })
-    }
-
-    pub fn url(&self, secure: bool) -> String {
-        format_server_addr(&self.host, self.port, secure)
     }
 }
 
@@ -233,7 +232,12 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
     emit::receive_and_log_events_with_filter(event_rx, is_nonspammy_event);
 
-    let task_args = builder_args.to_args(&common_args).await?;
+    let task_args = builder_args
+        .to_args(
+            &common_args,
+            Some(format_socket_addr(&builder_args.host, builder_args.port).parse()?),
+        )
+        .await?;
 
     let pool = connect_with_retries_shutdown(
         "op pool from builder",
@@ -244,7 +248,13 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
     .await?;
 
     spawn_tasks_with_shutdown(
-        [BuilderTask::new(task_args, event_sender, pool).boxed()],
+        [BuilderTask::new(
+            task_args,
+            event_sender,
+            LocalBuilderBuilder::new(1024),
+            pool,
+        )
+        .boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;
