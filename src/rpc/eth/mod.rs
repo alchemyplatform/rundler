@@ -661,9 +661,10 @@ impl From<SimulationError> for EthRpcError {
             SimulationViolation::UsedForbiddenOpcode(entity, _, op) => {
                 Self::OpcodeViolation(entity.kind, op.clone().0)
             }
-            SimulationViolation::UsedForbiddenPrecompile(entity, _, precompile) => {
-                Self::PrecompileViolation(entity.kind, *precompile)
-            }
+            SimulationViolation::UsedForbiddenPrecompile(_, _, _)
+            | SimulationViolation::AccessedUndeployedContract(_, _)
+            | SimulationViolation::CalledBannedEntryPointMethod(_)
+            | SimulationViolation::CallHadValue(_) => Self::OpcodeViolationMap(value),
             SimulationViolation::FactoryCalledCreate2Twice(_) => {
                 Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
             }
