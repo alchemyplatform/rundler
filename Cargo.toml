@@ -28,6 +28,7 @@ cargo-husky = { version = "1", default-features = false, features = ["user-hooks
 ethers = "2.0.8"
 futures = "0.3.28"
 futures-util = "0.3.28"
+jsonrpsee = "0.20.1"
 metrics = "0.21.0"
 mockall = "0.11.4"
 parse-display = "0.8.0"

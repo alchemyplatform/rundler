@@ -133,7 +133,8 @@ pub struct BuilderArgs {
     )]
     replacement_fee_percent_increase: u64,
 
-    ///
+    /// Maximum number of times to increase gas fees when retrying a transaction
+    /// before giving up.
     #[arg(
         long = "builder.max_fee_increases",
         name = "builder.max_fee_increases",
@@ -142,6 +143,15 @@ pub struct BuilderArgs {
         default_value = "7"
     )]
     max_fee_increases: u64,
+
+    /// If using Polygon Mainnet, the auth header to use
+    /// for Bloxroute polygon_private_tx sender
+    #[arg(
+        long = "builder.bloxroute_auth_header",
+        name = "builder.bloxroute_auth_header",
+        env = "BUILDER_BLOXROUTE_AUTH_HEADER"
+    )]
+    bloxroute_auth_header: Option<String>,
 }
 
 impl BuilderArgs {
@@ -201,6 +211,7 @@ impl BuilderArgs {
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
             remote_address,
+            bloxroute_auth_header: self.bloxroute_auth_header.clone(),
         })
     }
 }

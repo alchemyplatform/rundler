@@ -88,6 +88,12 @@ pub struct Args {
     pub max_fee_increases: u64,
     /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
+    /// Optional Bloxroute auth header
+    ///
+    /// This is only used for Polygon.
+    ///
+    /// Checked ~after~ checking for conditional sender or Flashbots sender.
+    pub bloxroute_auth_header: Option<String>,
 }
 
 /// Builder task
@@ -167,7 +173,10 @@ where
             signer,
             self.args.use_conditional_send_transaction,
             &self.args.submit_url,
-        );
+            self.args.chain_id,
+            self.args.eth_poll_interval,
+            &self.args.bloxroute_auth_header,
+        )?;
         let tracker_settings = transaction_tracker::Settings {
             poll_interval: self.args.eth_poll_interval,
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
