@@ -1,18 +1,21 @@
+mod bloxroute;
 mod conditional;
 mod flashbots;
 mod raw;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
 use async_trait::async_trait;
+pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 pub(crate) use conditional::ConditionalTransactionSender;
 use enum_dispatch::enum_dispatch;
 use ethers::{
     prelude::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, Provider},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, H256, U256,
+        transaction::eip2718::TypedTransaction, Address, Bytes, Chain, TransactionReceipt, H256,
+        U256,
     },
 };
 use ethers_signers::Signer;
@@ -61,6 +64,7 @@ where
     Raw(RawTransactionSender<C, S>),
     Conditional(ConditionalTransactionSender<C, S>),
     Flashbots(FlashbotsTransactionSender<C, S>),
+    PolygonBloxroute(PolygonBloxrouteTransactionSender<C, S>),
 }
 
 async fn fill_and_sign<C, S>(
@@ -91,16 +95,27 @@ pub(crate) fn get_sender<C, S>(
     signer: S,
     is_conditional: bool,
     url: &str,
-) -> TransactionSenderEnum<C, S>
+    chain_id: u64,
+    poll_interval: Duration,
+    bloxroute_auth_header: &Option<String>,
+) -> anyhow::Result<TransactionSenderEnum<C, S>>
 where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
 {
-    if is_conditional {
+    let sender = if is_conditional {
         ConditionalTransactionSender::new(provider, signer).into()
     } else if url.contains("flashbots") {
         FlashbotsTransactionSender::new(provider, signer).into()
+    } else if let Some(auth_header) = bloxroute_auth_header {
+        assert!(
+            chain_id == Chain::Polygon as u64,
+            "Bloxroute sender is only supported on Polygon mainnet"
+        );
+        PolygonBloxrouteTransactionSender::new(provider, signer, poll_interval, auth_header)?.into()
     } else {
         RawTransactionSender::new(provider, signer).into()
-    }
+    };
+
+    Ok(sender)
 }

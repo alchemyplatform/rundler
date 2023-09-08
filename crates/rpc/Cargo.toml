@@ -18,7 +18,7 @@ rundler-utils = { path = "../utils" }
 anyhow.workspace = true
 async-trait.workspace = true
 ethers.workspace = true
-jsonrpsee = { version = "0.20.0", features = ["client", "macros", "server"] }
+jsonrpsee = { workspace = true , features = ["client", "macros", "server"] }
 metrics.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
