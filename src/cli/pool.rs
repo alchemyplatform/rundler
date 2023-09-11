@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
@@ -13,7 +13,7 @@ use crate::{
         handle::spawn_tasks_with_shutdown,
         mempool::MempoolConfig,
     },
-    op_pool::{self, LocalPoolBuilder, PoolConfig, PoolServerMode, PoolTask},
+    op_pool::{self, LocalPoolBuilder, PoolConfig, PoolTask},
 };
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]
@@ -99,7 +99,7 @@ impl PoolArgs {
     pub async fn to_args(
         &self,
         common: &CommonArgs,
-        server_mode: PoolServerMode,
+        remote_address: Option<SocketAddr>,
     ) -> anyhow::Result<op_pool::Args> {
         let blocklist = match &self.blocklist_path {
             Some(blocklist) => Some(get_json_config(blocklist, &common.aws_region).await?),
@@ -152,7 +152,7 @@ impl PoolArgs {
                 .context("pool requires node_http arg")?,
             http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
             pool_configs,
-            server_mode,
+            remote_address,
         })
     }
 }
@@ -189,9 +189,7 @@ pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Res
     let task_args = pool_args
         .to_args(
             &common_args,
-            PoolServerMode::Remote {
-                addr: format!("{}:{}", pool_args.host, pool_args.port).parse()?,
-            },
+            Some(format!("{}:{}", pool_args.host, pool_args.port).parse()?),
         )
         .await?;
 

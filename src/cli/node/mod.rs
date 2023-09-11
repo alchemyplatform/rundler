@@ -14,7 +14,7 @@ use crate::{
         emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
         handle,
     },
-    op_pool::{emit::OpPoolEvent, LocalPoolBuilder, PoolServerMode, PoolTask},
+    op_pool::{emit::OpPoolEvent, LocalPoolBuilder, PoolTask},
     rpc::RpcTask,
 };
 mod events;
@@ -38,9 +38,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
         rpc: rpc_args,
     } = bundler_args;
 
-    let pool_task_args = pool_args
-        .to_args(&common_args, PoolServerMode::Local)
-        .await?;
+    let pool_task_args = pool_args.to_args(&common_args, None).await?;
     let builder_task_args = builder_args.to_args(&common_args, None).await?;
     let rpc_task_args = rpc_args
         .to_args(
