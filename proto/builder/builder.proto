@@ -16,7 +16,6 @@ enum BundlingMode {
     BUNDLING_MODE_AUTO = 2;
 }
 
-
 // Defines the gRPC endpoints for a Builder service
 service Builder {
     rpc GetSupportedEntryPoints (GetSupportedEntryPointsRequest) returns (GetSupportedEntryPointsResponse);

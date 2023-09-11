@@ -28,19 +28,13 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub enum PoolServerMode {
-    Local,
-    Remote { addr: SocketAddr },
-}
-
-#[derive(Debug)]
 pub struct Args {
     pub http_url: String,
     pub http_poll_interval: Duration,
     pub chain_id: u64,
     pub chain_history_size: u64,
     pub pool_configs: Vec<PoolConfig>,
-    pub server_mode: PoolServerMode,
+    pub remote_address: Option<SocketAddr>,
 }
 
 #[derive(Debug)]
@@ -101,12 +95,12 @@ impl Task for PoolTask {
             self.pool_builder
                 .run(mempools, update_sender.subscribe(), shutdown_token.clone());
 
-        let remote_handle = match &mut self.args.server_mode {
-            PoolServerMode::Local => tokio::spawn(async { Ok(()) }),
-            PoolServerMode::Remote { addr } => {
-                spawn_remote_mempool_server(self.args.chain_id, pool_handle, *addr, shutdown_token)
+        let remote_handle = match self.args.remote_address {
+            Some(addr) => {
+                spawn_remote_mempool_server(self.args.chain_id, pool_handle, addr, shutdown_token)
                     .await?
             }
+            None => tokio::spawn(async { Ok(()) }),
         };
 
         tracing::info!("Started op_pool");
