@@ -196,10 +196,10 @@ Here are some example commands to use the CLI:
 
 ```sh
 # Run the Node subcommand with custom options
-$ ./app node --entry_points 0x0000000000000000000000000000000000000000000000000000000000000000 --chain_id 1337 --max_verification_gas 10000000
+$ ./app --entry_points 0x0000000000000000000000000000000000000000 --chain_id 1337 --max_verification_gas 10000000 node
 
 # Run the Rpc subcommand with custom options and enable JSON logging
-$ ./app rpc --node_http http://localhost:8545 --log.json
+$ ./app --node_http http://localhost:8545 --log.json rpc
 
 # Run the Pool subcommand with custom options and specify a mempool config file
-$ ./app pool --max_simulate_handle_ops_gas 15000000 --mempool_config_path /path/to/mempool.json --node_http http://localhost:8545
+$ ./app --max_simulate_handle_ops_gas=15000000  --mempool_config_path=mempool.json --node_http http://localhost:8545 --chain_id=8453 pool
