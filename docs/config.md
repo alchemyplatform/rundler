@@ -198,7 +198,7 @@ Here are some example commands to use the CLI:
 # Run the Node subcommand with custom options
 $ ./app --entry_points 0x0000000000000000000000000000000000000000 --chain_id 1337 --max_verification_gas 10000000 node
 
-# Run the Rpc subcommand with custom options and enable JSON logging
+# Run the Rpc subcommand with custom options and enable JSON logging. The builder and pool will need to be running before this starts.
 $ ./app --node_http http://localhost:8545 --log.json rpc
 
 # Run the Pool subcommand with custom options and specify a mempool config file
