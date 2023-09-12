@@ -33,30 +33,24 @@ These options are common to all subcommands and can be used globally:
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
 - `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
   - env: *MAX_SIMULATE_HANDLE_OPS_GAS*
-- `--use_bundle_priority_fee`: Enable bundle priority fee.
+- `--use_bundle_priority_fee`: Enable bundle priority fee. (default: `true` on known networks that support EIP-1559, else `false`.)
   - env: *USE_BUNDLE_PRIORITY_FEE*
-- `--bundle_priority_fee_overhead_percent`: Bundle priority fee overhead percentage. (default: `0`).
+- `--bundle_priority_fee_overhead_percent`: bundle transaction priority fee overhead over network value. (default: `0`).
   - env: *BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT*
 - `--priority_fee_mode_kind`: Priority fee mode kind. Possible values are `base_fee_percent` and `priority_fee_increase_percent`. (default: `priority_fee_increase_percent`).
+  - options: ["base_fee_percent", "priority_fee_increase_percent"]
   - env: *PRIORITY_FEE_MODE_KIND*
+  - These options have slightly different outcomes. When a transaction is not landed on chain, we need to increase the fee's to five the operation a higher
+    chance of landing. The `base_fee_percent ` field will increase the the base fee (`max_fee_per_gas - max_priority_fee_per_gas`) by the `priority_fee_mode_value` percentage.
+    The `priority_fee_increase_percent` field will increase the `max_priority_fee_per_gas` by the `priority_fee_mode_value` percentage.
 - `--priority_fee_mode_value`: Priority fee mode value. (default: `0`).
   - env: *PRIORITY_FEE_MODE_VALUE*
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
-- `--mempool_config_path`: Path to the mempool configuration file.
+- `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
+  - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
-
-  *example configuration*
-
-  ```
-  {
-    "0x0000000000000000000000000000000000000000000000000000000000000000": {
-      "description": "USDC paymaster allowlist - base goerli",
-      "chainIds": ["0x2105"],
-      "allowlist": []
-    }
-  }
-  ```
+  - [config example](docs/alt-mempools.md)
 
 ## Metrics Options
 
@@ -84,8 +78,10 @@ List of command line options for configuring the RPC API.
 
 - `--rpc.port`:	Port to listen on for JSON-RPC requests (default: `3000`)
   - env: *RPC_PORT*
+  - *Only required when running in distributed mode* 
 - `--rpc.host`:	Host to listen on for JSON-RPC requests (default: `0.0.0.0`)
   - env: *RPC_HOST*
+  - *Only required when running in distributed mode* 
 - `--rpc.api`:	Which APIs to expose over the RPC interface (default: `eth,rundler`)
   - env: *RPC_API*
 - `--rpc.timeout_seconds`:	Timeout for RPC requests (default: 20)
@@ -103,8 +99,10 @@ List of command line options for configuring the OP Pool.
 
 - `--pool.port`: Port to listen on for gRPC requests (default: `50051`)
   - env: *POOL_PORT*
+  - *Only required when running in distributed mode* 
 - `--pool.host`: Host to listen on for gRPC requests (default: `127.0.0.1`)
   - env: *POOL_HOST*
+  - *Only required when running in distributed mode* 
 - `--pool.max_size_in_bytes`: Maximum size in bytes for the pool (default: `500000000`, 0.5 GB)
   - env: *POOL_MAX_SIZE_IN_BYTES*
 - `--pool.max_userops_per_sender`: Maximum number of user operations per sender (default: `4`)
@@ -113,28 +111,12 @@ List of command line options for configuring the OP Pool.
   - env: *POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE*
 - `--pool.http_poll_interval_millis`: ETH Node HTTP polling interval in milliseconds (default: `100`)
   - env: *POOL_HTTP_POLL_INTERVAL_MILLIS*
-- `--pool.blocklist_path`: Path to a blocklist file (e.g blocklist.json)
+- `--pool.blocklist_path`: Path to a blocklist file (e.g `blocklist.json`, `s3://my-bucket/blocklist.json`)
   - env: *POOL_BLOCKLIST_PATH*
-
-  *example configuration*
-
-  ```
-  [
-    "0x0000000000000000000000000000000000000000000000000000000000000000"
-  ]
-  ```
-
-- `--pool.allowlist_path`: Path to an allowlist file (e.g allowlist.json)
+  - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
+- `--pool.allowlist_path`: Path to an allowlist file (e.g `allowlist.json`, `s3://my-bucket/allowlist.json`)
   - env: *POOL_ALLOWLIST_PATH*
-
-  *example configuration*
-
-  ```
-  [
-    "0x0000000000000000000000000000000000000000000000000000000000000000"
-  ]
-  ```
-
+  - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
 - `--pool.chain_history_size`: Size of the chain history
   - env: *POOL_CHAIN_HISTORY_SIZE*
 
@@ -144,16 +126,22 @@ List of command line options for configuring the Builder.
 
 - `--builder.port`: Port to listen on for gRPC requests (default: `50052`)
   - env: *BUILDER_PORT*
+  - *Only required when running in distributed mode* 
 - `--builder.host`: Host to listen on for gRPC requests (default: `127.0.0.1`)
   - env: *BUILDER_HOST*
+  - *Only required when running in distributed mode* 
 - `--builder.private_key`: Private key to use for signing transactions
   - env: *BUILDER_PRIVATE_KEY*
+  - *Only required if BUILDER_AWS_KMS_KEY_IDS is not provided* 
 - `--builder.aws_kms_key_ids`: AWS KMS key IDs to use for signing transactions (comma-separated)
   - env: *BUILDER_AWS_KMS_KEY_IDS*
+  - *Only required if BUILDER_PRIVATE_KEY is not provided* 
 - `--builder.redis_uri`: Redis URI to use for KMS leasing (default: `""`)
   - env: *BUILDER_REDIS_URI*
+  - *Only required when AWS_KMS_KEY_IDS are provided* 
 - `--builder.redis_lock_ttl_millis`: Redis lock TTL in milliseconds (default: `60000`)
   - env: *BUILDER_REDIS_LOCK_TTL_MILLIS*
+  - *Only required when AWS_KMS_KEY_IDS are provided* 
 - `--builder.max_bundle_size`: Maximum number of ops to include in one bundle (default: `128`)
   - env: *BUILDER_MAX_BUNDLE_SIZE*
 - `--builder.eth_poll_interval_millis`: Interval at which the builder polls an Eth node for new blocks and mined transactions (default: `250`)
@@ -169,7 +157,38 @@ List of command line options for configuring the Builder.
 - `--builder.max_fee_increases`: Maximum number of fee increases to attempt (Seven increases of 10% is roughly 2x the initial fees) (default: `7`)
   - env: *BUILDER_MAX_FEE_INCREASES*
 
-**The options for each command can also be set via environment variables if preferred**
+## Key management
+
+Private keys for the bundler can be provided in a few ways. You can set the `--builder.private_key` flag or the `BUILDER_PRIVATE_KEY` environment variable
+within your local or deployed environment. Alternateley, you can provide the application with one or more AWS KMS ids using the `--builder.aws_kms_key_ids` flag or `AWS_KMS_KEY_IDS` environment
+variable. Rundler will download the key/s so long as you have `kms:DescribeKey` & `kms:Decrypt` IAM access to the KMS resource.
+
+When using KMS keys, a redis url must be provided to the bundler which will take care of key locking to make sure keys are not accessed at the same time from concurrent processes
+
+## Example configuration files
+
+### Pool allowlist path
+
+```
+export POOL_ALLOWLIST_PATH=blocklist.json
+```
+
+```
+[
+  "0x0000000000000000000000000000000000000000000000000000000000000000"
+]
+```
+### Pool blocklist path
+
+```
+export POOL_BLOCKLIST_PATH=blocklist.json
+```
+
+```
+[
+  "0x0000000000000000000000000000000000000000000000000000000000000000"
+]
+```
 
 ## Example Usage
 
