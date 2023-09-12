@@ -44,6 +44,18 @@ These options are common to all subcommands and can be used globally:
 - `--mempool_config_path`: Path to the mempool configuration file.
   - env: *MEMPOOL_CONFIG_PATH*
 
+  *example configuration*
+
+  ```
+  {
+    "0x0000000000000000000000000000000000000000000000000000000000000000": {
+      "description": "USDC paymaster allowlist - base goerli",
+      "chainIds": ["0x2105"],
+      "allowlist": []
+    }
+  }
+  ```
+
 ## Metrics Options
 
 Options for the metrics server:
