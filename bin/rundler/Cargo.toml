@@ -1,0 +1,17 @@
+[package]
+name = "rundler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = """
+Rundler node implementation
+"""
+
+[dependencies]
+rundler-rundler = { path = "../../crates/rundler" }
+
+# CLI dependencies
+tokio = "1.27.0"
+dotenv = "0.15.0"

@@ -1,13 +1,13 @@
-[submodule "contracts/lib/account-abstraction"]
-	path = contracts/lib/account-abstraction
+[submodule "crates/rundler/contracts/lib/account-abstraction"]
+	path = crates/rundler/contracts/lib/account-abstraction
 	url = https://github.com/eth-infinitism/account-abstraction
 	branch = v0.5
-[submodule "contracts/lib/forge-std"]
-	path = contracts/lib/forge-std
+[submodule "crates/rundler/contracts/lib/forge-std"]
+	path = crates/rundler/contracts/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
 	branch = chore/v1.5.0
-[submodule "foundry/lib/openzeppelin-contracts"]
-	path = contracts/lib/openzeppelin-contracts
+[submodule "crates/rundler/contracts/lib/openzeppelin-contracts"]
+	path = crates/rundler/contracts/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
 	branch = release-v4.8
 [submodule "test/spec-tests/bundler-spec-tests"]
