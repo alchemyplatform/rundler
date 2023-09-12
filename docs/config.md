@@ -17,9 +17,9 @@ These options are common to all subcommands and can be used globally:
 
 - `--entry_points`: Entry point addresses to target. Provide a comma-separated list. (multiple entry points is currently in beta, we have only tested 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789)
   - env: *ENTRY_POINTS*
-- `--chain_id`: Chain ID to target. (default: `1337`, REQUIRED).
+- `--chain_id`: Chain ID to target. (default: `1337`).
   - env: *CHAIN_ID*
-- `--node_http`: ETH Node HTTP URL to connect to.
+- `--node_http`: ETH Node HTTP URL to connect to. (REQUIRED)
   - env: *NODE_HTTP*
 - `--max_verification_gas`: Maximum verification gas. (default: `5000000`).
   - env: *MAX_VERIFICATION_GAS*
