@@ -21,7 +21,7 @@ use crate::{
         precheck::{self, MIN_CALL_GAS_LIMIT},
         simulation,
     },
-    rpc::estimation,
+    rpc::EstimationSettings,
 };
 
 /// Main entry point for the CLI
@@ -215,7 +215,7 @@ pub struct CommonArgs {
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
 
-impl TryFrom<&CommonArgs> for estimation::Settings {
+impl TryFrom<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {

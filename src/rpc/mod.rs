@@ -6,11 +6,12 @@ mod rundler;
 mod task;
 
 pub use debug::DebugApiClient;
-pub use eth::{estimation, EthApiClient};
+pub use eth::{EstimationSettings, EthApiClient};
 use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
+use jsonrpsee::types::{ErrorObject, ErrorObjectOwned};
 use rand::RngCore;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
@@ -147,7 +148,7 @@ impl UserOperationOptionalGas {
     // cover the modified user op, calculate the gas needed for the worst
     // case scenario where the gas fields of the user operation are entirely
     // nonzero bytes. Likewise for the signature field.
-    pub fn max_fill(&self, settings: &estimation::Settings) -> UserOperation {
+    pub fn max_fill(&self, settings: &EstimationSettings) -> UserOperation {
         UserOperation {
             call_gas_limit: U256::MAX,
             verification_gas_limit: U256::MAX,
@@ -167,7 +168,7 @@ impl UserOperationOptionalGas {
     //
     // Note that this will slightly overestimate the calldata gas needed as it uses
     // the worst case scenario for the unknown gas values and paymaster_and_data.
-    pub fn random_fill(&self, settings: &estimation::Settings) -> UserOperation {
+    pub fn random_fill(&self, settings: &EstimationSettings) -> UserOperation {
         UserOperation {
             call_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
             verification_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
@@ -180,7 +181,7 @@ impl UserOperationOptionalGas {
         }
     }
 
-    pub fn into_user_operation(self, settings: &estimation::Settings) -> UserOperation {
+    pub fn into_user_operation(self, settings: &EstimationSettings) -> UserOperation {
         UserOperation {
             sender: self.sender,
             nonce: self.nonce,
@@ -348,4 +349,24 @@ impl TryFrom<Reputation> for RpcReputation {
             status: reputation.status,
         })
     }
+}
+
+pub fn rpc_err(code: i32, msg: impl Into<String>) -> ErrorObjectOwned {
+    create_rpc_err(code, msg, None::<()>)
+}
+
+pub fn rpc_err_with_data<S: Serialize>(
+    code: i32,
+    msg: impl Into<String>,
+    data: S,
+) -> ErrorObjectOwned {
+    create_rpc_err(code, msg, Some(data))
+}
+
+fn create_rpc_err<S: Serialize>(
+    code: i32,
+    msg: impl Into<String>,
+    data: Option<S>,
+) -> ErrorObjectOwned {
+    ErrorObject::owned(code, msg.into(), data)
 }

@@ -206,7 +206,7 @@ impl<'a, P: JsonRpcClient> PendingFlashbotsTransaction<'a, P> {
 impl<'a, P: JsonRpcClient> Future for PendingFlashbotsTransaction<'a, P> {
     type Output = anyhow::Result<Option<TransactionReceipt>>;
 
-    fn poll(self: Pin<&mut Self>, ctx: &mut TaskContext) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, ctx: &mut TaskContext<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
         match this.state {

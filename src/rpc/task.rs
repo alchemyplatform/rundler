@@ -6,7 +6,7 @@ use ethers::{
     types::Address,
 };
 use jsonrpsee::{
-    server::{middleware::proxy_get_request::ProxyGetRequestLayer, ServerBuilder},
+    server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
 use tokio_util::sync::CancellationToken;
@@ -14,7 +14,7 @@ use tonic::async_trait;
 use tracing::info;
 use url::Url;
 
-use super::ApiNamespace;
+use super::{eth::EthApi, ApiNamespace};
 use crate::{
     builder::BuilderServer,
     common::{
@@ -28,7 +28,7 @@ use crate::{
     op_pool::PoolServer,
     rpc::{
         debug::{DebugApi, DebugApiServer},
-        eth::{estimation, EthApi, EthApiServer},
+        eth::{EstimationSettings, EthApiServer},
         health::{HealthChecker, SystemApiServer},
         metrics::RpcMetricsLogger,
         rundler::{RundlerApi, RundlerApiServer},
@@ -45,7 +45,7 @@ pub struct Args {
     pub rpc_url: String,
     pub precheck_settings: precheck::Settings,
     pub eth_api_settings: eth::Settings,
-    pub estimation_settings: estimation::Settings,
+    pub estimation_settings: EstimationSettings,
     pub rpc_timeout: Duration,
     pub max_connections: u32,
 }
@@ -112,7 +112,7 @@ where
             .http_only()
             .build(addr)
             .await?;
-        let handle = server.start(module)?;
+        let handle = server.start(module);
 
         info!("Started RPC server");
 

@@ -10,7 +10,7 @@ use crate::{
         eth, handle::spawn_tasks_with_shutdown, precheck, server::connect_with_retries_shutdown,
     },
     op_pool::RemotePoolClient,
-    rpc::{self, estimation, RpcTask},
+    rpc::{self, EstimationSettings, RpcTask},
 };
 
 /// CLI options for the RPC server
@@ -74,7 +74,7 @@ impl RpcArgs {
         common: &CommonArgs,
         precheck_settings: precheck::Settings,
         eth_api_settings: eth::Settings,
-        estimation_settings: estimation::Settings,
+        estimation_settings: EstimationSettings,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self
             .api

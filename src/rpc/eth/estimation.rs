@@ -78,7 +78,7 @@ pub trait GasEstimator: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub struct GasEstimatorImpl<P: ProviderLike, E: EntryPointLike> {
+pub struct GasEstimatorImpl<P, E> {
     chain_id: u64,
     provider: Arc<P>,
     entry_point: E,

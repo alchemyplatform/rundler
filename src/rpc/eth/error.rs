@@ -1,10 +1,7 @@
 use ethers::types::{Address, Opcode, U256};
-use jsonrpsee::{
-    core::Error as RpcError,
-    types::{
-        error::{CallError, CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
-        ErrorObject,
-    },
+use jsonrpsee::types::{
+    error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
+    ErrorObjectOwned,
 };
 use serde::Serialize;
 
@@ -15,6 +12,7 @@ use crate::{
         types::{Entity, EntityType, Timestamp},
     },
     op_pool::{MempoolError, PoolServerError},
+    rpc::{rpc_err, rpc_err_with_data},
 };
 
 // Error codes borrowed from jsonrpsee
@@ -32,6 +30,8 @@ const STAKE_TOO_LOW_CODE: i32 = -32505;
 const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
 const EXECUTION_REVERTED: i32 = -32521;
+
+pub type EthResult<T> = Result<T, EthRpcError>;
 
 /// Error returned by the RPC server eth namespace
 #[derive(Debug, thiserror::Error)]
@@ -227,7 +227,7 @@ impl From<SimulationViolation> for EthRpcError {
     }
 }
 
-impl From<EthRpcError> for RpcError {
+impl From<EthRpcError> for ErrorObjectOwned {
     fn from(error: EthRpcError) -> Self {
         let msg = error.to_string();
 
@@ -264,22 +264,6 @@ impl From<EthRpcError> for RpcError {
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
         }
     }
-}
-
-fn rpc_err(code: i32, msg: impl Into<String>) -> RpcError {
-    create_rpc_err(code, msg, None::<()>)
-}
-
-fn rpc_err_with_data<S: Serialize>(code: i32, msg: impl Into<String>, data: S) -> RpcError {
-    create_rpc_err(code, msg, Some(data))
-}
-
-fn create_rpc_err<S: Serialize>(code: i32, msg: impl Into<String>, data: Option<S>) -> RpcError {
-    RpcError::Call(CallError::Custom(ErrorObject::owned(
-        code,
-        msg.into(),
-        data,
-    )))
 }
 
 impl From<tonic::Status> for EthRpcError {
