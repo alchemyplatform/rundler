@@ -15,8 +15,8 @@ files_to_git_add=$(echo "$git_short_status" | grep '^[^ ] ' | awk '{ print $NF }
 files_with_unstaged_changes=$(echo "$git_short_status" | grep '^[^ ][^ ]' | awk '{ print $NF }')
 
 echo 'Running rustfmt (+nightly)'
-cargo +nightly fmt --all || {
-  echo >&2 'Formatting failed. This most likely means you have syntax errors'
+cargo +nightly fmt --check || {
+  echo >&2 'Formatting check failed. This most likely means you have syntax errors. Run `cargo +nightly fmt --check`'
   exit 1
 }
 

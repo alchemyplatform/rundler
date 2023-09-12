@@ -1,5 +1,5 @@
 use dotenv::dotenv;
-use rundler::cli;
+use rundler_rundler::cli;
 
 #[tokio::main]
 async fn main() {

@@ -1,3 +1,2 @@
 group_imports = "StdExternalCrate"
-ignore = ["src/common/contracts/"] # Generated files
 imports_granularity = "Crate"

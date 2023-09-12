@@ -1,6 +1,7 @@
 pub mod block_watcher;
 pub mod context;
 #[allow(non_snake_case)]
+#[rustfmt::skip]
 pub mod contracts;
 pub mod dev;
 pub mod emit;

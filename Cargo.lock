@@ -3947,13 +3947,21 @@ dependencies = [
 name = "rundler"
 version = "0.1.0-beta"
 dependencies = [
+ "dotenv",
+ "rundler-rundler",
+ "tokio",
+]
+
+[[package]]
+name = "rundler-rundler"
+version = "0.1.0-beta"
+dependencies = [
  "anyhow",
  "arrayvec",
  "async-stream",
  "cargo-husky",
  "chrono",
  "clap 4.2.4",
- "dotenv",
  "enum_dispatch",
  "ethers",
  "ethers-signers",
@@ -4003,6 +4011,22 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "rundler-tools"
+version = "0.1.0-beta"
+dependencies = [
+ "anyhow",
+ "clap 4.2.4",
+ "dotenv",
+ "ethers",
+ "ethers-signers",
+ "rundler-rundler",
+ "rusoto_core",
+ "rusoto_kms",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

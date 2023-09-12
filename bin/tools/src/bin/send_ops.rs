@@ -1,5 +1,5 @@
 use dotenv::dotenv;
-use rundler::common::{dev::DevClients, eth};
+use rundler_rundler::common::{dev::DevClients, eth};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     // simply call the nonce method multiple times
     for i in 0..10 {
         println!("Sending op {i}");
-        let op = clients.new_wallet_op(wallet.get_nonce(), 0.into()).await?;
+        let op = clients.new_wallet_op(wallet.nonce(), 0.into()).await?;
         let call = entry_point.handle_ops(vec![op], bundler_client.address());
         eth::await_mined_tx(call.send(), "send user operation").await?;
     }

@@ -366,7 +366,7 @@ impl DevClients {
             .context("call executed by wallet should have to address")?;
         let nonce = self
             .wallet
-            .get_nonce()
+            .nonce()
             .await
             .context("should read nonce from wallet")?;
         let call_data = Bytes::clone(

@@ -163,6 +163,10 @@ impl LocalBuilderServerRunner {
                                 })
                             },
                             ServerRequestKind::DebugSendBundleNow => {
+                                if !self.manual_bundling_mode.load(Ordering::Relaxed) {
+                                    break 'a Err(anyhow::anyhow!("bundling mode is not manual").into())
+                                }
+
                                 let (tx, rx) = oneshot::channel();
                                 match self.send_bundle_requester.send(SendBundleRequest{
                                     responder: tx

@@ -1,5 +1,5 @@
 use ethers::utils::hex;
-use rundler::common::{
+use rundler_rundler::common::{
     dev,
     dev::{DevAddresses, BUNDLER_ACCOUNT_ID, PAYMASTER_SIGNER_ACCOUNT_ID, WALLET_OWNER_ACCOUNT_ID},
 };
@@ -7,7 +7,7 @@ use rundler::common::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let bytecode = include_str!(
-        "../../contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789.txt",
+        "../../../../crates/rundler/contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789.txt",
     );
     let addresses = dev::deploy_dev_contracts(bytecode).await?;
     addresses.write_to_env_file()?;
