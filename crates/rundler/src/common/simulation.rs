@@ -98,7 +98,7 @@ where
         Self {
             provider,
             entry_point,
-            simulate_validation_tracer: simulate_validation_tracer,
+            simulate_validation_tracer,
             sim_settings,
             mempool_configs,
         }
@@ -702,7 +702,7 @@ mod tests {
     use crate::common::types::{MockEntryPointLike, MockProviderLike};
 
     fn create_base_config() -> (MockProviderLike, MockEntryPointLike) {
-        return (MockProviderLike::new(), MockEntryPointLike::new());
+        (MockProviderLike::new(), MockEntryPointLike::new())
     }
 
     fn create_simulator(
@@ -880,6 +880,6 @@ mod tests {
         let res = simulator
             .simulate_validation(user_operation, None, None)
             .await;
-        assert_eq!(res.is_ok(), true);
+        assert!(res.is_ok());
     }
 }
