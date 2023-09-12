@@ -113,8 +113,26 @@ List of command line options for configuring the OP Pool.
   - env: *POOL_HTTP_POLL_INTERVAL_MILLIS*
 - `--pool.blocklist_path`: Path to a blocklist file (e.g blocklist.json)
   - env: *POOL_BLOCKLIST_PATH*
+
+  *example configuration*
+
+  ```
+  [
+    "0x0000000000000000000000000000000000000000000000000000000000000000"
+  ]
+  ```
+
 - `--pool.allowlist_path`: Path to an allowlist file (e.g allowlist.json)
   - env: *POOL_ALLOWLIST_PATH*
+
+  *example configuration*
+
+  ```
+  [
+    "0x0000000000000000000000000000000000000000000000000000000000000000"
+  ]
+  ```
+
 - `--pool.chain_history_size`: Size of the chain history
   - env: *POOL_CHAIN_HISTORY_SIZE*
 
@@ -157,7 +175,7 @@ Here are some example commands to use the CLI:
 
 ```sh
 # Run the Node subcommand with custom options
-$ ./app node --entry_points 0x0000000000000000000000000000000000000 --chain_id 1337 --max_verification_gas 10000000
+$ ./app node --entry_points 0x0000000000000000000000000000000000000000000000000000000000000000 --chain_id 1337 --max_verification_gas 10000000
 
 # Run the Rpc subcommand with custom options and enable JSON logging
 $ ./app rpc --node_http http://localhost:8545 --log.json
