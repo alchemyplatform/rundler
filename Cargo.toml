@@ -2,17 +2,9 @@
 members = [
     "bin/rundler",
     "bin/tools",
-    "crates/builder",
-    "crates/dev",
-    "crates/pool",
-    "crates/provider",
-    "crates/rpc",
-    "crates/sim",
-    "crates/task",
-    "crates/types",
-    "crates/utils"
+    "crates/rundler"
 ]
-default-members = ["bin/rundler"]
+default-members = ["bin/rundler", "bin/tools"]
 
 [workspace.package]
 version = "0.1.0-beta"
@@ -41,13 +33,3 @@ reqwest = { version = "0.11.18", default-features = false, features = ["rustls-t
 rustls = "0.21.7"
 thiserror = "1.0.40"
 tokio = { version = "1.27.0", default-features = false }
-tokio-util = "0.7.8"
-tonic = "0.10.0"
-tonic-build = "0.10.0"
-tonic-health = "0.10.0"
-tonic-reflection = "0.10.0"
-tonic-types = "0.10.0"
-tower = "0.4.13"
-tracing = "0.1.37"
-strum = "0.25.0"
-url = "2.3.1"

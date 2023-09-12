@@ -1,5 +1,5 @@
 use dotenv::dotenv;
-use rundler_dev::{self, DevClients};
+use rundler_rundler::common::{dev::DevClients, eth};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
         println!("Sending op {i}");
         let op = clients.new_wallet_op(wallet.nonce(), 0.into()).await?;
         let call = entry_point.handle_ops(vec![op], bundler_client.address());
-        rundler_dev::await_mined_tx(call.send(), "send user operation").await?;
+        eth::await_mined_tx(call.send(), "send user operation").await?;
     }
 
     Ok(())

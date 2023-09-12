@@ -1,6 +1,5 @@
 use dotenv::dotenv;
-use rundler_dev::DevClients;
-use rundler_rpc::RpcUserOperation;
+use rundler_rundler::{common::dev::DevClients, rpc::RpcUserOperation};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
