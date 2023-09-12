@@ -9,13 +9,15 @@ The Rundler Command Line Interface (CLI) offers a versatile and configurable Use
 - `pool`: Runs the Pool server.
 - `builder`: Runs the Builder server.
 
+The `pool` and `builder` servers will also start a gRPC endpoint to allow other processes to interact with each service
+
 ## General Options
 
 These options are common to all subcommands and can be used globally:
 
-- `--entry_points`: Entry point addresses to target. Provide a comma-separated list.
+- `--entry_points`: Entry point addresses to target. Provide a comma-separated list. (multiple entry points is currently in beta, we have only tested 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789)
   - env: *ENTRY_POINTS*
-- `--chain_id`: Chain ID to target. (default: `1337`).
+- `--chain_id`: Chain ID to target. (default: `1337`, REQUIRED).
   - env: *CHAIN_ID*
 - `--node_http`: ETH Node HTTP URL to connect to.
   - env: *NODE_HTTP*
