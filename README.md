@@ -56,6 +56,10 @@ cargo run --bin deploy_dev_contracts
 cargo run node
 ```
 
+### Documentation
+
+- [configuration](docs/config.md)
+
 ### Contributing:
 
 * Commit messages must follow [conventional commits style](https://www.conventionalcommits.org/en/v1.0.0/).
