@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use jsonrpsee::server::logger::Logger;
+use jsonrpsee::{helpers::MethodResponseResult, server::logger::Logger};
 
 #[derive(Clone)]
 pub struct RpcMetricsLogger;
@@ -26,7 +26,7 @@ impl Logger for RpcMetricsLogger {
     fn on_call(
         &self,
         method_name: &str,
-        _params: jsonrpsee::types::Params,
+        _params: jsonrpsee::types::Params<'_>,
         _kind: jsonrpsee::server::logger::MethodKind,
         _transport: jsonrpsee::server::logger::TransportProtocol,
     ) {
@@ -37,14 +37,14 @@ impl Logger for RpcMetricsLogger {
     fn on_result(
         &self,
         method_name: &str,
-        success: bool,
+        result: MethodResponseResult,
         started_at: Self::Instant,
         _transport: jsonrpsee::server::logger::TransportProtocol,
     ) {
         RpcMetrics::record_request_latency(method_name.to_string(), started_at.elapsed());
         RpcMetrics::decrement_open_requests(method_name.to_string());
 
-        if !success {
+        if let MethodResponseResult::Failed(_) = result {
             RpcMetrics::increment_rpc_error_count(method_name.to_string());
         }
     }

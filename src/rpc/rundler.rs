@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use ethers::types::U256;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use tonic::async_trait;
 
+use super::rpc_err;
 use crate::common::{gas::FeeEstimator, precheck, types::ProviderLike};
 
 #[rpc(client, server, namespace = "rundler")]
@@ -39,7 +40,11 @@ where
     P: ProviderLike,
 {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
-        let bundle_fees = self.fee_estimator.required_bundle_fees(None).await?;
+        let bundle_fees = self
+            .fee_estimator
+            .required_bundle_fees(None)
+            .await
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
         Ok(self
             .fee_estimator
             .required_op_fees(bundle_fees)

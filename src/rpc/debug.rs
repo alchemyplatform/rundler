@@ -1,11 +1,8 @@
 use ethers::types::{Address, H256};
-use jsonrpsee::{
-    core::{Error as RpcError, RpcResult},
-    proc_macros::rpc,
-};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use tonic::async_trait;
 
-use super::{RpcReputation, RpcUserOperation};
+use super::{rpc_err, RpcReputation, RpcUserOperation};
 use crate::{
     builder::{BuilderServer, BundlingMode},
     op_pool::PoolServer,
@@ -59,7 +56,7 @@ where
             .pool
             .debug_clear_state()
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))?;
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
         Ok("ok".to_string())
     }
@@ -69,7 +66,7 @@ where
             .pool
             .debug_dump_mempool(entry_point)
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))?
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?
             .into_iter()
             .map(|pop| pop.uo.into())
             .collect::<Vec<RpcUserOperation>>())
@@ -79,14 +76,14 @@ where
         self.builder
             .debug_send_bundle_now()
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))
     }
 
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
         self.builder
             .debug_set_bundling_mode(mode)
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))?;
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
         Ok("ok".to_string())
     }
@@ -112,12 +109,12 @@ where
             .pool
             .debug_dump_reputation(entry_point)
             .await
-            .map_err(|e| RpcError::Custom(e.to_string()))?;
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
         result
             .into_iter()
             .map(|r| r.try_into())
             .collect::<Result<Vec<_>, anyhow::Error>>()
-            .map_err(|e| RpcError::Custom(e.to_string()))
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))
     }
 }

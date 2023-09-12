@@ -543,7 +543,7 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
 
                 SimulationViolation::UnintendedRevertWithMessage(
                     crate::common::types::EntityType::try_from(
-                        EntityType::from_i32(entity.kind).context("unknown entity type")?,
+                        EntityType::try_from(entity.kind).context("unknown entity type")?,
                     )?,
                     e.reason,
                     addr,
@@ -584,7 +584,7 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             }
             Some(simulation_violation_error::Violation::UnintendedRevert(e)) => {
                 SimulationViolation::UnintendedRevert(crate::common::types::EntityType::try_from(
-                    EntityType::from_i32(e.entity_type).context("unknown entity type")?,
+                    EntityType::try_from(e.entity_type).context("unknown entity type")?,
                 )?)
             }
             Some(simulation_violation_error::Violation::DidNotRevert(_)) => {

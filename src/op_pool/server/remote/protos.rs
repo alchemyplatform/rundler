@@ -88,8 +88,8 @@ impl TryFrom<&Entity> for CommonEntity {
 
     fn try_from(entity: &Entity) -> Result<Self, ConversionError> {
         Ok(CommonEntity {
-            kind: EntityType::from_i32(entity.kind)
-                .ok_or(ConversionError::InvalidEnumValue(entity.kind))?
+            kind: EntityType::try_from(entity.kind)
+                .map_err(|_| ConversionError::InvalidEnumValue(entity.kind))?
                 .try_into()?,
             address: from_bytes(&entity.address)?,
         })
@@ -192,7 +192,8 @@ impl TryFrom<MempoolOp> for PoolOperation {
             .entities_needing_stake
             .into_iter()
             .map(|e| {
-                let pe = EntityType::from_i32(e).ok_or(ConversionError::InvalidEnumValue(e))?;
+                let pe =
+                    EntityType::try_from(e).map_err(|_| ConversionError::InvalidEnumValue(e))?;
                 pe.try_into()
             })
             .collect::<Result<Vec<_>, ConversionError>>()?;

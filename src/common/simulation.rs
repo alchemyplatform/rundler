@@ -622,7 +622,7 @@ struct GetStorageRestrictionArgs<'a> {
     slot: U256,
 }
 
-fn get_storage_restriction(args: GetStorageRestrictionArgs) -> StorageRestriction {
+fn get_storage_restriction(args: GetStorageRestrictionArgs<'_>) -> StorageRestriction {
     let GetStorageRestrictionArgs {
         slots_by_address,
         is_unstaked_wallet_creation,

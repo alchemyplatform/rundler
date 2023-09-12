@@ -1,6 +1,7 @@
-use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::CallError};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use tonic::async_trait;
 
+use super::rpc_err;
 use crate::common::server::{HealthCheck, ServerStatus};
 
 #[rpc(server, namespace = "system")]
@@ -32,9 +33,10 @@ impl SystemApiServer for HealthChecker {
         if errors.is_empty() {
             Ok("ok".to_owned())
         } else {
-            Err(jsonrpsee::core::Error::Call(CallError::Failed(
-                anyhow::anyhow!("Health check failed: {:?}", errors),
-            )))
+            Err(rpc_err(
+                INTERNAL_ERROR_CODE,
+                format!("Some servers are not serving {}", errors.join(", ")),
+            ))
         }
     }
 }
