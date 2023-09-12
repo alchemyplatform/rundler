@@ -10,11 +10,17 @@ use ethers::types::{
     transaction::eip2718::TypedTransaction, Address, BlockId, GethDebugTracerType,
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, U256,
 };
+use anyhow::{bail, Context};
+use ethers::types::{
+    Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
+    GethTrace, U256,
+};
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_types::UserOperation;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use tonic::async_trait;
 
 use super::{
