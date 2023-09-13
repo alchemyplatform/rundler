@@ -52,7 +52,7 @@ These options are common to all subcommands and can be used globally:
 - `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
-  - [config example](docs/alt-mempools.md)
+  - [config example](alt-mempools.md)
 
 ## Metrics Options
 
