@@ -1,12 +1,10 @@
 use std::{fmt::Display, sync::Arc};
 
 use ethers::types::{Address, H256};
+use rundler_types::{Entity, EntityType, UserOperation};
 
 use crate::{
-    common::{
-        strs,
-        types::{Entity, EntityType, Timestamp, UserOperation},
-    },
+    common::{strs, types::Timestamp},
     op_pool::mempool::OperationOrigin,
 };
 

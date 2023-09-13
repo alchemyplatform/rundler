@@ -1,0 +1,19 @@
+[package]
+name = "rundler-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rundler-utils = { path = "../utils" }
+
+anyhow.workspace = true
+ethers.workspace = true
+parse-display = "0.8.0"
+serde.workspace = true
+strum = { version = "0.25.0", features = ["derive"] }
+
+[build-dependencies]
+ethers.workspace = true

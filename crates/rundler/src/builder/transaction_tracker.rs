@@ -2,16 +2,15 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use ethers::types::{transaction::eip2718::TypedTransaction, H256, U256};
+use rundler_provider::Provider;
+use rundler_types::GasFees;
 use tokio::time;
 use tonic::async_trait;
 use tracing::info;
 
 use crate::{
     builder::sender::{TransactionSender, TxStatus},
-    common::{
-        gas::GasFees,
-        types::{ExpectedStorage, ProviderLike},
-    },
+    common::types::ExpectedStorage,
 };
 
 /// Keeps track of pending transactions in order to suggest nonces and
@@ -78,13 +77,13 @@ pub enum TrackerUpdate {
 #[derive(Debug)]
 pub struct TransactionTrackerImpl<P, T>(tokio::sync::Mutex<TransactionTrackerImplInner<P, T>>)
 where
-    P: ProviderLike,
+    P: Provider,
     T: TransactionSender;
 
 #[derive(Debug)]
 struct TransactionTrackerImplInner<P, T>
 where
-    P: ProviderLike,
+    P: Provider,
     T: TransactionSender,
 {
     provider: Arc<P>,
@@ -113,7 +112,7 @@ struct PendingTransaction {
 #[async_trait]
 impl<P, T> TransactionTracker for TransactionTrackerImpl<P, T>
 where
-    P: ProviderLike,
+    P: Provider,
     T: TransactionSender,
 {
     fn get_nonce_and_required_fees(&self) -> anyhow::Result<(U256, Option<GasFees>)> {
@@ -139,7 +138,7 @@ where
 
 impl<P, T> TransactionTrackerImpl<P, T>
 where
-    P: ProviderLike,
+    P: Provider,
     T: TransactionSender,
 {
     pub async fn new(provider: Arc<P>, sender: T, settings: Settings) -> anyhow::Result<Self> {
@@ -158,7 +157,7 @@ where
 
 impl<P, T> TransactionTrackerImplInner<P, T>
 where
-    P: ProviderLike,
+    P: Provider,
     T: TransactionSender,
 {
     async fn new(provider: Arc<P>, sender: T, settings: Settings) -> anyhow::Result<Self> {
@@ -403,31 +402,29 @@ mod test {
 
     use ethers::types::{Address, Eip1559TransactionRequest};
     use mockall::Sequence;
+    use rundler_provider::MockProvider;
 
     use super::*;
-    use crate::{
-        builder::sender::{MockTransactionSender, SentTxInfo},
-        common::types::MockProviderLike,
-    };
+    use crate::builder::sender::{MockTransactionSender, SentTxInfo};
 
-    fn create_base_config() -> (MockTransactionSender, MockProviderLike) {
+    fn create_base_config() -> (MockTransactionSender, MockProvider) {
         let sender = MockTransactionSender::new();
-        let provider = MockProviderLike::new();
+        let provider = MockProvider::new();
 
         (sender, provider)
     }
 
     async fn create_tracker(
         sender: MockTransactionSender,
-        provider: MockProviderLike,
-    ) -> TransactionTrackerImpl<MockProviderLike, MockTransactionSender> {
+        provider: MockProvider,
+    ) -> TransactionTrackerImpl<MockProvider, MockTransactionSender> {
         let settings = Settings {
             poll_interval: Duration::from_secs(0),
             max_blocks_to_wait_for_mine: 3,
             replacement_fee_percent_increase: 5,
         };
 
-        let tracker: TransactionTrackerImpl<MockProviderLike, MockTransactionSender> =
+        let tracker: TransactionTrackerImpl<MockProvider, MockTransactionSender> =
             TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
                 .await
                 .unwrap();

@@ -11,10 +11,10 @@ pub use local::{LocalPoolBuilder, LocalPoolHandle};
 #[cfg(test)]
 use mockall::automock;
 pub use remote::{spawn_remote_mempool_server, RemotePoolClient};
+use rundler_types::{Entity, UserOperation};
 use tonic::async_trait;
 
 use super::{mempool::PoolOperation, Reputation};
-use crate::common::types::{Entity, UserOperation};
 
 pub type PoolResult<T> = std::result::Result<T, PoolServerError>;
 

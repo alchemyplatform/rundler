@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use ethers::types::U256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
+use rundler_provider::Provider;
 use tonic::async_trait;
 
 use super::rpc_err;
-use crate::common::{gas::FeeEstimator, precheck, types::ProviderLike};
+use crate::common::{gas::FeeEstimator, precheck};
 
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
@@ -13,13 +14,13 @@ pub trait RundlerApi {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256>;
 }
 
-pub struct RundlerApi<P: ProviderLike> {
+pub struct RundlerApi<P: Provider> {
     fee_estimator: FeeEstimator<P>,
 }
 
 impl<P> RundlerApi<P>
 where
-    P: ProviderLike,
+    P: Provider,
 {
     pub fn new(provider: Arc<P>, chain_id: u64, settings: precheck::Settings) -> Self {
         Self {
@@ -37,7 +38,7 @@ where
 #[async_trait]
 impl<P> RundlerApiServer for RundlerApi<P>
 where
-    P: ProviderLike,
+    P: Provider,
 {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
         let bundle_fees = self

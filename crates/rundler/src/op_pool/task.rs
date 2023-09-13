@@ -4,6 +4,7 @@ use anyhow::{bail, Context};
 use ethers::providers::{
     Http, HttpRateLimitRetryPolicy, JsonRpcClient, Provider, RetryClientBuilder,
 };
+use rundler_types::contracts::i_entry_point::IEntryPoint;
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
@@ -12,7 +13,6 @@ use url::Url;
 use super::mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams};
 use crate::{
     common::{
-        contracts::i_entry_point::IEntryPoint,
         emit::WithEntryPoint,
         eth, handle,
         handle::Task,

@@ -1,9 +1,9 @@
 use ethers::types::{Address, H256, U64};
 use jsonrpsee::core::RpcResult;
+use rundler_provider::{EntryPoint, Provider};
 
 use super::{api::EthApi, EthApiServer};
 use crate::{
-    common::types::{EntryPointLike, ProviderLike},
     op_pool::PoolServer,
     rpc::{
         GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
@@ -14,8 +14,8 @@ use crate::{
 #[tonic::async_trait]
 impl<P, E, PS> EthApiServer for EthApi<P, E, PS>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
     PS: PoolServer,
 {
     async fn send_user_operation(

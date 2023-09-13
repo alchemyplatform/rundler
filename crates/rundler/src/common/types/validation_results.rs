@@ -3,11 +3,9 @@ use ethers::{
     abi::{AbiDecode, AbiError},
     types::{Address, Bytes, U256},
 };
+use rundler_types::contracts::entry_point::{ValidationResult, ValidationResultWithAggregation};
 
-use crate::common::{
-    contracts::entry_point::{ValidationResult, ValidationResultWithAggregation},
-    types::Timestamp,
-};
+use crate::common::types::Timestamp;
 
 /// Equivalent to the generated `ValidationResult` or
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs

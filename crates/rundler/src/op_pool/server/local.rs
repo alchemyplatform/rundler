@@ -3,6 +3,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 use async_stream::stream;
 use ethers::types::{Address, H256};
 use futures_util::Stream;
+use rundler_types::{Entity, UserOperation};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -12,10 +13,7 @@ use tonic::async_trait;
 use tracing::error;
 
 use crate::{
-    common::{
-        server::{HealthCheck, ServerStatus},
-        types::{Entity, UserOperation},
-    },
+    common::server::{HealthCheck, ServerStatus},
     op_pool::{
         chain::ChainUpdate,
         mempool::{Mempool, OperationOrigin, PoolOperation},

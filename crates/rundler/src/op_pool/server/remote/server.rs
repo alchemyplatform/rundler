@@ -8,6 +8,7 @@ use std::{
 
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
+use rundler_types::Entity;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -28,7 +29,7 @@ use super::protos::{
     SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
-    common::{grpc::metrics::GrpcMetricsLayer, protos::from_bytes, types::Entity},
+    common::{grpc::metrics::GrpcMetricsLayer, protos::from_bytes},
     op_pool::{mempool::Reputation, server::local::LocalPoolHandle, PoolServer},
 };
 

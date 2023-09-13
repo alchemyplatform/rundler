@@ -5,16 +5,11 @@ use arrayvec::ArrayVec;
 use ethers::types::{Address, U256};
 #[cfg(test)]
 use mockall::automock;
+use rundler_provider::{EntryPoint, Provider};
+use rundler_types::{GasFees, UserOperation};
 use tonic::async_trait;
 
-use super::{
-    gas::GasFees,
-    types::{EntryPointLike, ProviderLike},
-};
-use crate::common::{
-    gas,
-    types::{UserOperation, ViolationError},
-};
+use crate::common::{gas, types::ViolationError};
 
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
 pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
@@ -28,7 +23,7 @@ pub trait Prechecker: Send + Sync + 'static {
 pub type PrecheckError = ViolationError<PrecheckViolation>;
 
 #[derive(Debug)]
-pub struct PrecheckerImpl<P: ProviderLike, E: EntryPointLike> {
+pub struct PrecheckerImpl<P: Provider, E: EntryPoint> {
     provider: Arc<P>,
     chain_id: u64,
     entry_point: E,
@@ -70,7 +65,7 @@ struct AsyncData {
 }
 
 #[async_trait]
-impl<P: ProviderLike, E: EntryPointLike> Prechecker for PrecheckerImpl<P, E> {
+impl<P: Provider, E: EntryPoint> Prechecker for PrecheckerImpl<P, E> {
     async fn check(&self, op: &UserOperation) -> Result<(), PrecheckError> {
         let async_data = self.load_async_data(op).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
@@ -84,7 +79,7 @@ impl<P: ProviderLike, E: EntryPointLike> Prechecker for PrecheckerImpl<P, E> {
     }
 }
 
-impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
+impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     pub fn new(provider: Arc<P>, chain_id: u64, entry_point: E, settings: Settings) -> Self {
         Self {
             provider: provider.clone(),
@@ -158,7 +153,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
                 max_verification_gas,
             ));
         }
-        let total_gas_limit = op.execution_gas_limit(chain_id);
+        let total_gas_limit = gas::user_operation_execution_gas_limit(op, chain_id);
         if total_gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 total_gas_limit,
@@ -212,7 +207,7 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
             }
         }
-        let max_gas_cost = op.max_gas_cost();
+        let max_gas_cost = gas::user_operation_max_gas_cost(op, self.chain_id);
         if payer_funds < max_gas_cost {
             if op.paymaster_and_data.is_empty() {
                 return Some(PrecheckViolation::SenderFundsTooLow(
@@ -304,8 +299,8 @@ impl<P: ProviderLike, E: EntryPointLike> PrecheckerImpl<P, E> {
 
     async fn get_pre_verification_gas(&self, op: UserOperation) -> anyhow::Result<U256> {
         gas::calc_pre_verification_gas(
-            op.clone(),
-            op,
+            &op,
+            &op,
             self.entry_point.address(),
             self.provider.clone(),
             self.chain_id,

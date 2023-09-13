@@ -7,7 +7,7 @@ use rundler_rundler::common::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let bytecode = include_str!(
-        "../../../../crates/rundler/contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789.txt",
+        "../../../../crates/types/contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789.txt",
     );
     let addresses = dev::deploy_dev_contracts(bytecode).await?;
     addresses.write_to_env_file()?;

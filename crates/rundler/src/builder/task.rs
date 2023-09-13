@@ -8,6 +8,7 @@ use std::{
 use anyhow::{bail, Context};
 use ethers::types::{Address, H256};
 use ethers_signers::Signer;
+use rundler_types::contracts::i_entry_point::IEntryPoint;
 use rusoto_core::Region;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -28,7 +29,6 @@ use crate::{
         transaction_tracker::{self, TransactionTrackerImpl},
     },
     common::{
-        contracts::i_entry_point::IEntryPoint,
         emit::WithEntryPoint,
         eth::{self},
         gas::PriorityFeeMode,

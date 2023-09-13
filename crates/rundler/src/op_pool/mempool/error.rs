@@ -1,11 +1,11 @@
 use std::mem;
 
 use ethers::{abi::Address, types::U256};
+use rundler_types::Entity;
 
 use crate::common::{
     precheck::{PrecheckError, PrecheckViolation},
     simulation::{SimulationError, SimulationViolation},
-    types::Entity,
 };
 
 /// Mempool result type.

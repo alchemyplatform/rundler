@@ -7,13 +7,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-anyhow = "1.0.70"
+rundler-provider = { path = "../provider" } 
+rundler-types = { path = "../types" }
+rundler-utils = { path = "../utils" }
+
+anyhow.workspace = true
 arrayvec = "0.7.2"
 async-stream = "0.3.5"
 chrono = "0.4.24"
 clap = { version = "4.2.4", features = ["derive", "env"] }
 enum_dispatch = "0.3.11"
-ethers = { version = "2.0.8", features = ["ws"] }
+ethers.workspace = true
 ethers-signers = {version = "2.0.8", features = ["aws"] }
 futures = "0.3.28"
 futures-timer = "3.0.2"
@@ -61,8 +65,9 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt", "jso
 url = "2.3.1"
 
 [dev-dependencies]
-cargo-husky = { version = "1", default-features = false, features = ["user-hooks" ] }
-mockall = "0.11.4"
+cargo-husky.workspace = true
+mockall.workspace = true
+rundler-provider = { path = "../provider", features = ["test-utils"] } 
 tokio-util = "0.7.7"
 
 [build-dependencies]

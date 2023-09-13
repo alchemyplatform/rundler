@@ -9,6 +9,8 @@ use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
+use rundler_provider::EntryPoint;
+use rundler_types::contracts::i_entry_point::IEntryPoint;
 use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 use tracing::info;
@@ -18,12 +20,10 @@ use super::{eth::EthApi, ApiNamespace};
 use crate::{
     builder::BuilderServer,
     common::{
-        contracts::i_entry_point::IEntryPoint,
         eth,
         handle::Task,
         precheck,
         server::{format_socket_addr, HealthCheck},
-        types::EntryPointLike,
     },
     op_pool::PoolServer,
     rpc::{
@@ -146,7 +146,7 @@ where
         Box::new(self)
     }
 
-    fn attach_namespaces<E: EntryPointLike + Clone>(
+    fn attach_namespaces<E: EntryPoint + Clone>(
         &self,
         provider: Arc<Provider<RetryClient<Http>>>,
         entry_points: Vec<E>,

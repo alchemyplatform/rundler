@@ -1,10 +1,10 @@
 use std::{collections::HashMap, str::FromStr};
 
 use ethers::types::{Address, Opcode, H256, U256};
+use rundler_types::{Entity, EntityType};
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
 
-use super::types::{Entity, EntityType};
 use crate::common::simulation::SimulationViolation;
 
 /// The entity allowed by an allowlist entry.

@@ -10,75 +10,19 @@ use ethers::{
         U256,
     },
 };
-#[cfg(test)]
-use mockall::automock;
-use tonic::async_trait;
-
-use crate::common::{
+use rundler_types::{
     contracts::{
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
         shared_types::UserOpsPerAggregator,
     },
-    eth::{self, ContractRevertError},
-    gas::GasFees,
-    types::UserOperation,
+    GasFees, UserOperation,
 };
+use rundler_utils::eth::{self, ContractRevertError};
 
-#[cfg_attr(test, automock)]
-#[async_trait]
-pub trait EntryPointLike: Send + Sync + 'static {
-    fn address(&self) -> Address;
+use crate::traits::{EntryPoint, HandleOpsOut};
 
-    async fn call_handle_ops(
-        &self,
-        ops_per_aggregator: Vec<UserOpsPerAggregator>,
-        beneficiary: Address,
-        gas: U256,
-    ) -> anyhow::Result<HandleOpsOut>;
-
-    async fn balance_of(&self, address: Address) -> anyhow::Result<U256>;
-
-    async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
-
-    async fn simulate_validation(
-        &self,
-        user_op: UserOperation,
-        max_validation_gas: u64,
-    ) -> anyhow::Result<TypedTransaction>;
-
-    async fn call_spoofed_simulate_op(
-        &self,
-        op: UserOperation,
-        target: Address,
-        target_call_data: Bytes,
-        block_hash: H256,
-        gas: U256,
-        spoofed_state: &spoof::State,
-    ) -> anyhow::Result<Result<ExecutionResult, String>>;
-
-    fn get_send_bundle_transaction(
-        &self,
-        ops_per_aggregator: Vec<UserOpsPerAggregator>,
-        beneficiary: Address,
-        gas: U256,
-        gas_fees: GasFees,
-    ) -> TypedTransaction;
-
-    fn decode_simulate_handle_ops_revert(
-        &self,
-        revert_data: Bytes,
-    ) -> Result<ExecutionResult, String>;
-}
-
-#[derive(Clone, Debug)]
-pub enum HandleOpsOut {
-    Success,
-    FailedOp(usize, String),
-    SignatureValidationFailed(Address),
-}
-
-#[async_trait]
-impl<M> EntryPointLike for IEntryPoint<M>
+#[async_trait::async_trait]
+impl<M> EntryPoint for IEntryPoint<M>
 where
     M: Middleware + 'static,
 {

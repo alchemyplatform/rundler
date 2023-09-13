@@ -6,6 +6,7 @@ use std::{
 use ethers::types::{Address, H256};
 use itertools::Itertools;
 use parking_lot::RwLock;
+use rundler_types::{Entity, UserOperation};
 use tokio::sync::broadcast;
 use tonic::async_trait;
 use tracing::info;
@@ -17,12 +18,7 @@ use super::{
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
-    common::{
-        emit::WithEntryPoint,
-        precheck::Prechecker,
-        simulation::Simulator,
-        types::{Entity, UserOperation},
-    },
+    common::{emit::WithEntryPoint, precheck::Prechecker, simulation::Simulator},
     op_pool::{
         chain::ChainUpdate,
         emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
@@ -376,6 +372,8 @@ impl UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
+    use rundler_types::EntityType;
+
     use super::*;
     use crate::{
         common::{
@@ -383,7 +381,6 @@ mod tests {
             simulation::{
                 self, MockSimulator, SimulationError, SimulationSuccess, SimulationViolation,
             },
-            types::{EntityType, UserOperation},
         },
         op_pool::chain::MinedOp,
     };

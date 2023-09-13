@@ -2,9 +2,12 @@
 members = [
     "bin/rundler",
     "bin/tools",
-    "crates/rundler"
+    "crates/rundler",
+    "crates/provider",
+    "crates/types",
+    "crates/utils"
 ]
-default-members = ["bin/rundler", "bin/tools"]
+default-members = ["bin/rundler"]
 
 [workspace.package]
 version = "0.1.0-beta"
@@ -14,4 +17,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/alchemyplatform/rundler"
 
 [workspace.dependencies]
+anyhow = "1.0.70"
+async-trait = "0.1.73"
+ethers = "2.0.8"
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks" ] }
+serde = "1.0.160"
 tokio = { version = "1.27.0", default-features = false }
+mockall = "0.11.4"

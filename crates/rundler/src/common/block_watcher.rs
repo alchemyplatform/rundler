@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use ethers::types::{Block, BlockNumber, H256};
+use rundler_provider::Provider;
 use tokio::time;
 use tracing::error;
 
-use crate::common::{retry, retry::UnlimitedRetryOpts, types::ProviderLike};
+use crate::common::{retry, retry::UnlimitedRetryOpts};
 
 pub async fn wait_for_new_block(
-    provider: &impl ProviderLike,
+    provider: &impl Provider,
     last_block_hash: H256,
     poll_interval: Duration,
 ) -> (H256, Block<H256>) {
@@ -34,7 +35,7 @@ pub async fn wait_for_new_block(
 }
 
 pub async fn wait_for_new_block_number(
-    provider: &impl ProviderLike,
+    provider: &impl Provider,
     last_block_number: u64,
     poll_interval: Duration,
 ) -> u64 {

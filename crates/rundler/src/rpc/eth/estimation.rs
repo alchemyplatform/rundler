@@ -10,23 +10,24 @@ use ethers::{
 #[cfg(test)]
 use mockall::automock;
 use rand::Rng;
+use rundler_provider::{EntryPoint, Provider};
+use rundler_types::{
+    contracts::{
+        call_gas_estimation_proxy::{
+            EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
+            EstimateCallGasResult, EstimateCallGasRevertAtMax,
+            CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
+        },
+        i_entry_point,
+    },
+    UserOperation,
+};
+use rundler_utils::{eth, math};
 use tokio::join;
 use tonic::async_trait;
 
 use crate::{
-    common::{
-        contracts::{
-            call_gas_estimation_proxy::{
-                EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
-                EstimateCallGasResult, EstimateCallGasRevertAtMax,
-                CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
-            },
-            i_entry_point,
-        },
-        eth, gas, math,
-        precheck::MIN_CALL_GAS_LIMIT,
-        types::{EntryPointLike, ProviderLike, UserOperation},
-    },
+    common::{eth as common_eth, gas, precheck::MIN_CALL_GAS_LIMIT},
     rpc::{GasEstimate, UserOperationOptionalGas},
 };
 
@@ -105,7 +106,7 @@ impl Settings {
 }
 
 #[async_trait]
-impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E> {
+impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,
@@ -160,7 +161,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimator for GasEstimatorImpl<P, E>
     }
 }
 
-impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
+impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
     pub fn new(chain_id: u64, provider: Arc<P>, entry_point: E, settings: Settings) -> Self {
         Self {
             chain_id,
@@ -185,11 +186,11 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
             call_gas_limit: 0.into(),
             ..op.clone()
         };
-        let gas_used = eth::get_gas_used(
+        let gas_used = common_eth::get_gas_used(
             self.provider.deref(),
             self.entry_point.address(),
             U256::zero(),
-            eth::call_data_of(
+            common_eth::call_data_of(
                 i_entry_point::SimulateHandleOpCall::selector(),
                 (initial_op, Address::zero(), Bytes::new()),
             ),
@@ -299,7 +300,7 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         let mut is_continuation = false;
         let mut num_rounds = U256::zero();
         loop {
-            let target_call_data = eth::call_data_of(
+            let target_call_data = common_eth::call_data_of(
                 EstimateCallGasCall::selector(),
                 (EstimateCallGasArgs {
                     sender: op.sender,
@@ -367,8 +368,8 @@ impl<P: ProviderLike, E: EntryPointLike> GasEstimatorImpl<P, E> {
         op: &UserOperationOptionalGas,
     ) -> Result<U256, GasEstimationError> {
         Ok(gas::calc_pre_verification_gas(
-            op.max_fill(&self.settings),
-            op.random_fill(&self.settings),
+            &op.max_fill(&self.settings),
+            &op.random_fill(&self.settings),
             self.entry_point.address(),
             self.provider.clone(),
             self.chain_id,
@@ -393,12 +394,10 @@ mod tests {
         types::Chain,
         utils::hex,
     };
+    use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_types::contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult};
 
     use super::*;
-    use crate::common::{
-        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
-        types::{MockEntryPointLike, MockProviderLike},
-    };
 
     // Gas overhead defaults
     const FIXED: u32 = 21000;
@@ -409,27 +408,24 @@ mod tests {
     /// Must match the constant in `CallGasEstimationProxy.sol`.
     const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
 
-    fn create_base_config() -> (MockEntryPointLike, MockProviderLike) {
-        let entry = MockEntryPointLike::new();
-        let provider = MockProviderLike::new();
+    fn create_base_config() -> (MockEntryPoint, MockProvider) {
+        let entry = MockEntryPoint::new();
+        let provider = MockProvider::new();
 
         (entry, provider)
     }
 
     fn create_estimator(
-        entry: MockEntryPointLike,
-        provider: MockProviderLike,
-    ) -> (
-        GasEstimatorImpl<MockProviderLike, MockEntryPointLike>,
-        Settings,
-    ) {
+        entry: MockEntryPoint,
+        provider: MockProvider,
+    ) -> (GasEstimatorImpl<MockProvider, MockEntryPoint>, Settings) {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
         };
 
-        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
             GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
 
         (estimator, settings)
@@ -523,7 +519,7 @@ mod tests {
         };
 
         // Chose arbitrum
-        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
             GasEstimatorImpl::new(Chain::Arbitrum as u64, Arc::new(provider), entry, settings);
 
         let user_op = demo_user_op_optional_gas();
@@ -566,7 +562,7 @@ mod tests {
         };
 
         // Chose OP
-        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
             GasEstimatorImpl::new(Chain::Optimism as u64, Arc::new(provider), entry, settings);
 
         let user_op = demo_user_op_optional_gas();
@@ -1210,7 +1206,7 @@ mod tests {
             max_simulate_handle_ops_gas: 10,
         };
 
-        let estimator: GasEstimatorImpl<MockProviderLike, MockEntryPointLike> =
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
             GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator.estimate_op_gas(user_op).await.err();

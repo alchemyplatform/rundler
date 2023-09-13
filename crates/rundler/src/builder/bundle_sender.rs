@@ -9,6 +9,9 @@ use std::{
 use anyhow::{bail, Context};
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use futures_util::StreamExt;
+use rundler_provider::EntryPoint;
+use rundler_types::{Entity, GasFees, UserOperation};
+use rundler_utils::math;
 use tokio::{
     join,
     sync::{broadcast, mpsc, oneshot},
@@ -23,12 +26,7 @@ use crate::{
         emit::{BuilderEvent, BundleTxDetails},
         transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
     },
-    common::{
-        emit::WithEntryPoint,
-        gas::GasFees,
-        math,
-        types::{Entity, EntryPointLike, ExpectedStorage, UserOperation},
-    },
+    common::{emit::WithEntryPoint, types::ExpectedStorage},
     op_pool::PoolServer,
 };
 
@@ -50,7 +48,7 @@ pub struct Settings {
 pub struct BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
-    E: EntryPointLike,
+    E: EntryPoint,
     T: TransactionTracker,
     C: PoolServer,
 {
@@ -98,7 +96,7 @@ pub enum SendBundleResult {
 impl<P, E, T, C> BundleSender for BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
-    E: EntryPointLike,
+    E: EntryPoint,
     T: TransactionTracker,
     C: PoolServer,
 {
@@ -209,7 +207,7 @@ where
 impl<P, E, T, C> BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
-    E: EntryPointLike,
+    E: EntryPoint,
     T: TransactionTracker,
     C: PoolServer,
 {

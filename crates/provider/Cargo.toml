@@ -1,0 +1,22 @@
+[package]
+name = "rundler-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rundler-types = { path = "../types" }
+rundler-utils = { path = "../utils" }
+
+anyhow.workspace = true
+async-trait.workspace = true
+ethers.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+mockall = {workspace = true, optional = true }
+
+[features]
+test-utils = [ "mockall" ]

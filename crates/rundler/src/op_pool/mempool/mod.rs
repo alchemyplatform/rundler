@@ -15,16 +15,13 @@ use mockall::automock;
 pub use reputation::{
     HourlyMovingAverageReputation, Reputation, ReputationParams, ReputationStatus,
 };
+use rundler_types::{Entity, EntityType, UserOperation};
 use strum::IntoEnumIterator;
 use tonic::async_trait;
 
 use self::error::MempoolResult;
 use super::chain::ChainUpdate;
-use crate::common::{
-    mempool::MempoolConfig,
-    precheck, simulation,
-    types::{Entity, EntityType, UserOperation, ValidTimeRange},
-};
+use crate::common::{mempool::MempoolConfig, precheck, simulation, types::ValidTimeRange};
 
 #[cfg_attr(test, automock)]
 #[async_trait]
