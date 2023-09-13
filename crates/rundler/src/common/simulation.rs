@@ -690,11 +690,13 @@ mod tests {
     use std::str::FromStr;
 
     use ethers::{
+        abi::AbiEncode,
         providers::{JsonRpcError, MockError, ProviderError},
         types::{
             transaction::{eip2718::TypedTransaction, eip2930::AccessList},
-            Address, Eip1559TransactionRequest, NameOrAddress,
+            Address, BlockNumber, Eip1559TransactionRequest, NameOrAddress,
         },
+        utils::hex,
     };
 
     use super::*;
@@ -802,21 +804,21 @@ mod tests {
             "#).unwrap(),
             phases: vec![
                 Phase {
-                    addresses_calling_with_value: Vec::new(),
+                    addresses_calling_with_value: vec![],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
-                    forbidden_opcodes_used: Vec::new(),
-                    forbidden_precompiles_used: Vec::new(),
+                    forbidden_opcodes_used: vec![],
+                    forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
-                    storage_accesses: Vec::new(),
-                    undeployed_contract_accesses: Vec::new(),
+                    storage_accesses: vec![],
+                    undeployed_contract_accesses: vec![],
                 },
                 Phase {
                     addresses_calling_with_value: vec![Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap()],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
-                    forbidden_opcodes_used: Vec::new(),
-                    forbidden_precompiles_used: Vec::new(),
+                    forbidden_opcodes_used: vec![],
+                    forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
                     storage_accesses: vec![
                         StorageAccess {
@@ -833,17 +835,17 @@ mod tests {
                             ],
                         }
                     ],
-                    undeployed_contract_accesses: Vec::new(),
+                    undeployed_contract_accesses: vec![],
                 },
                 Phase {
-                    addresses_calling_with_value: Vec::new(),
+                    addresses_calling_with_value: vec![],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
-                    forbidden_opcodes_used: Vec::new(),
-                    forbidden_precompiles_used: Vec::new(),
+                    forbidden_opcodes_used: vec![],
+                    forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
-                    storage_accesses: Vec::new(),
-                    undeployed_contract_accesses: Vec::new(),
+                    storage_accesses: vec![],
+                    undeployed_contract_accesses: vec![],
                 }
             ],
             revert_data: Some("0xe0cff05f00000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014eff00000000000000000000000000000000000000000000000000000b7679c50c24000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffff00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000000".into()),
@@ -891,5 +893,112 @@ mod tests {
             .simulate_validation(user_operation, None, None)
             .await;
         assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_context_two_phases_unintended_revert() {
+        let (provider, entry_point, mut tracer) = create_base_config();
+
+        tracer.expect_trace_simulate_validation().returning(move |_, _, _| Ok(SimulationTracerOutput {
+            accessed_contract_addresses: vec![
+                Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),            
+            ],
+            associated_slots_by_address: serde_json::from_str(r#"
+            {
+                "0x0000000000000000000000000000000000000000": [
+                    "0xd5c1ebdd81c5c7bebcd52bc11c8d37f7038b3c64f849c2ca58a022abeab1adae",
+                    "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5"
+                ],
+                "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4": [
+                    "0x3072884cc37d411af7360b34f105e1e860b1631783232a4f2d5c094d365cdaab",
+                    "0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5",
+                    "0xf264fff4db20d04721712f34a6b5a8bca69a212345e40a92101082e79bdd1f0a"
+                ]
+            }
+            "#).unwrap(),
+            factory_called_create2_twice: false,
+            expected_storage: serde_json::from_str(r#"
+            {
+                "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789": {
+                    "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                    "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb6": "0x0000000000000000000000000000000000000000000000000000000000000000"
+                }
+            }
+            "#).unwrap(),
+            phases: vec![
+                Phase {
+                    addresses_calling_with_value: vec![],
+                    called_banned_entry_point_method: false,
+                    called_non_entry_point_with_value: false,
+                    forbidden_opcodes_used: vec![],
+                    forbidden_precompiles_used: vec![],
+                    ran_out_of_gas: false,
+                    storage_accesses: vec![],
+                    undeployed_contract_accesses: vec![],
+                },
+                Phase {
+                    addresses_calling_with_value: vec![Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap()],
+                    called_banned_entry_point_method: false,
+                    called_non_entry_point_with_value: false,
+                    forbidden_opcodes_used: vec![],
+                    forbidden_precompiles_used: vec![],
+                    ran_out_of_gas: false,
+                    storage_accesses: vec![
+                        StorageAccess {
+                            address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                            slots: vec![
+                                U256::from_str("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc").unwrap(),
+                                U256::from_str("0x0000000000000000000000000000000000000000000000000000000000000000").unwrap()
+                            ],
+                        },
+                        StorageAccess {
+                            address: Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                            slots: vec![
+                                U256::from_str("0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5").unwrap()
+                            ],
+                        }
+                    ],
+                    undeployed_contract_accesses: vec![],
+                }
+            ],
+            revert_data: Some(hex::encode(
+                FailedOp {
+                    op_index: U256::from(10),
+                    reason: "AA23 reverted (or OOG)".to_string(),
+                }.encode())),
+        }));
+
+        let user_operation = UserOperation {
+            sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+            nonce: U256::from(264),
+            init_code: Bytes::from_str("0x").unwrap(),
+            call_data: Bytes::from_str("0xb61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000").unwrap(),
+            call_gas_limit: U256::from(9100),
+            verification_gas_limit: U256::from(64805),
+            pre_verification_gas: U256::from(46128),
+            max_fee_per_gas: U256::from(105000100),
+            max_priority_fee_per_gas: U256::from(105000000),
+            paymaster_and_data: Bytes::from_str("0x").unwrap(),
+            signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
+        };
+
+        let simulator = create_simulator(provider, entry_point, tracer);
+        let res = simulator
+            .create_context(user_operation, BlockId::Number(BlockNumber::Latest))
+            .await;
+
+        assert!(matches!(
+            res,
+            Err(ViolationError::Violations(violations)) if matches!(
+                violations.get(0),
+                Some(&SimulationViolation::UnintendedRevertWithMessage(
+                    EntityType::Account,
+                    ref reason,
+                    _
+                )) if reason == "AA23 reverted (or OOG)"
+            )
+        ));
     }
 }
