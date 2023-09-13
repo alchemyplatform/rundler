@@ -59,6 +59,7 @@ cargo run node
 ### Documentation
 
 - [configuration](docs/config.md)
+- [transactions](docs/transactions.md)
 
 ### Contributing:
 
