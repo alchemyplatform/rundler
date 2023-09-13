@@ -1,66 +1,12 @@
 use std::{env, error, io::ErrorKind, path::PathBuf, process::Command};
 
-use ethers::contract::{Abigen, MultiAbigen};
-
 fn main() -> Result<(), Box<dyn error::Error>> {
-    println!("cargo:rerun-if-changed=contracts/lib");
-    println!("cargo:rerun-if-changed=contracts/src");
-    println!("cargo:rerun-if-changed=contracts/foundry.toml");
-    println!("cargo:rerun-if-changed=contracts/remappings.txt");
     println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed=tracer/package.json");
     println!("cargo:rerun-if-changed=tracer/src/validationTracer.ts");
-    update_submodules()?;
-    generate_contract_bindings()?;
     generate_protos()?;
     compile_tracer()?;
     Ok(())
-}
-
-fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
-    generate_abis()?;
-    MultiAbigen::from_abigens([
-        abigen_of("IEntryPoint")?,
-        abigen_of("EntryPoint")?,
-        abigen_of("IAggregator")?,
-        abigen_of("GetCodeHashes")?,
-        abigen_of("GetGasUsed")?,
-        abigen_of("CallGasEstimationProxy")?,
-        abigen_of("SimpleAccount")?,
-        abigen_of("SimpleAccountFactory")?,
-        abigen_of("VerifyingPaymaster")?,
-        abigen_of("NodeInterface")?,
-        abigen_of("GasPriceOracle")?,
-    ])
-    .build()?
-    .write_to_module("src/common/contracts", false)?;
-    Ok(())
-}
-
-fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
-    Ok(Abigen::new(
-        contract,
-        format!("contracts/out/{contract}.sol/{contract}.json"),
-    )?)
-}
-
-fn generate_abis() -> Result<(), Box<dyn error::Error>> {
-    run_command(
-        Command::new("forge")
-            .arg("build")
-            .arg("--root")
-            .arg("./contracts"),
-        "https://getfoundry.sh/",
-        "generate ABIs",
-    )
-}
-
-fn update_submodules() -> Result<(), Box<dyn error::Error>> {
-    run_command(
-        Command::new("git").arg("submodule").arg("update"),
-        "https://github.com/git-guides/install-git",
-        "update submodules",
-    )
 }
 
 fn generate_protos() -> Result<(), Box<dyn error::Error>> {

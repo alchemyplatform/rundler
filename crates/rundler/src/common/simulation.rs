@@ -7,18 +7,18 @@ use std::{
 
 use ethers::{
     abi::AbiDecode,
-    types::{Address, BlockId, Bytes, Opcode, H256, U256},
+    types::{Address, BlockId, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
 #[cfg(test)]
 use mockall::automock;
+use rundler_provider::{AggregatorOut, AggregatorSimOut, EntryPoint, Provider};
+use rundler_types::{contracts::i_entry_point::FailedOp, Entity, EntityType, UserOperation};
 use tonic::async_trait;
 
 use super::{
-    contracts::i_entry_point::FailedOp,
     mempool::{match_mempools, MempoolMatchResult},
     tracer::parse_combined_tracer_str,
-    types::EntryPointLike,
 };
 use crate::common::{
     eth,
@@ -26,8 +26,8 @@ use crate::common::{
     tracer,
     tracer::{AssociatedSlotsByAddress, StorageAccess, TracerOutput},
     types::{
-        AggregatorOut, Entity, EntityType, ExpectedStorage, ProviderLike, StakeInfo, UserOperation,
-        ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationError,
+        ExpectedStorage, StakeInfo, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
+        ViolationError,
     },
 };
 
@@ -43,12 +43,6 @@ pub struct SimulationSuccess {
     pub account_is_staked: bool,
     pub accessed_addresses: HashSet<Address>,
     pub expected_storage: ExpectedStorage,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct AggregatorSimOut {
-    pub address: Address,
-    pub signature: Bytes,
 }
 
 impl SimulationSuccess {
@@ -77,7 +71,7 @@ pub trait Simulator: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub struct SimulatorImpl<P: ProviderLike, E: EntryPointLike> {
+pub struct SimulatorImpl<P: Provider, E: EntryPoint> {
     provider: Arc<P>,
     entry_point: E,
     sim_settings: Settings,
@@ -86,8 +80,8 @@ pub struct SimulatorImpl<P: ProviderLike, E: EntryPointLike> {
 
 impl<P, E> SimulatorImpl<P, E>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
 {
     pub fn new(
         provider: Arc<P>,
@@ -137,7 +131,7 @@ where
         let Some(ref revert_data) = tracer_out.revert_data else {
             Err(vec![SimulationViolation::DidNotRevert])?
         };
-        let last_entity = EntityType::from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
+        let last_entity = entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
 
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
             let entity_addr = match last_entity {
@@ -222,7 +216,7 @@ where
         let sender_address = entity_infos.sender_address();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-            let kind = EntityType::from_simulation_phase(index).unwrap();
+            let kind = entity_type_from_simulation_phase(index).unwrap();
             let Some(entity_info) = entity_infos.get(kind) else {
                 continue;
             };
@@ -394,8 +388,8 @@ where
 #[async_trait]
 impl<P, E> Simulator for SimulatorImpl<P, E>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
 {
     async fn simulate_validation(
         &self,
@@ -523,14 +517,12 @@ impl Ord for ViolationOpCode {
     }
 }
 
-impl EntityType {
-    pub fn from_simulation_phase(i: usize) -> Option<Self> {
-        match i {
-            0 => Some(Self::Factory),
-            1 => Some(Self::Account),
-            2 => Some(Self::Paymaster),
-            _ => None,
-        }
+fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
+    match i {
+        0 => Some(EntityType::Factory),
+        1 => Some(EntityType::Account),
+        2 => Some(EntityType::Paymaster),
+        _ => None,
     }
 }
 

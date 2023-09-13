@@ -18,15 +18,15 @@ use ethers::{
     types::{Address, Bytes, NameOrAddress, TransactionRequest, H256, U256},
     utils::{self, hex, keccak256},
 };
-
-use crate::common::{
+use rundler_types::{
     contracts::{
         entry_point::EntryPoint, simple_account::SimpleAccount,
         simple_account_factory::SimpleAccountFactory, verifying_paymaster::VerifyingPaymaster,
     },
-    eth,
-    types::UserOperation,
+    UserOperation,
 };
+
+use crate::common::eth;
 
 pub const DEV_CHAIN_ID: u64 = 1337;
 pub const DEPLOYER_ACCOUNT_ID: u8 = 1;

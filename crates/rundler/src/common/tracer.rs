@@ -6,13 +6,12 @@ use std::{
 
 use anyhow::Context;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, BlockId, U256};
+use rundler_provider::{EntryPoint, Provider};
+use rundler_types::UserOperation;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use super::{
-    context::LogWithContext,
-    types::{EntryPointLike, ProviderLike},
-};
-use crate::common::types::{ExpectedStorage, UserOperation};
+use super::context::LogWithContext;
+use crate::common::types::ExpectedStorage;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,7 +64,7 @@ impl AssociatedSlotsByAddress {
 
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
 /// method for the provided user operation.
-pub async fn trace_simulate_validation<E: EntryPointLike, P: ProviderLike>(
+pub async fn trace_simulate_validation<E: EntryPoint, P: Provider>(
     entry_point: &E,
     provider: Arc<P>,
     op: UserOperation,
@@ -79,7 +78,7 @@ pub async fn trace_simulate_validation<E: EntryPointLike, P: ProviderLike>(
     trace_call(provider, tx, block_id, validation_tracer_js()).await
 }
 
-async fn trace_call<T, P: ProviderLike>(
+async fn trace_call<T, P: Provider>(
     provider: Arc<P>,
     tx: TypedTransaction,
     block_id: BlockId,

@@ -283,9 +283,9 @@ checksum = "ecc7ab41815b3c653ccd2978ec3255c81349336702dfdf62ee6f7069b12a3aae"
 
 [[package]]
 name = "async-trait"
-version = "0.1.68"
+version = "0.1.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9ccdd8f2a161be9bd5c023df56f1b2a0bd1d83872ae53b71a84a12c9bf6e842"
+checksum = "bc00ceb34980c03614e35a3a4e218276a0a824e911d07651cd0d858a51e8c0f0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1642,7 +1642,6 @@ dependencies = [
  "bytes",
  "enr",
  "ethers-core",
- "futures-channel",
  "futures-core",
  "futures-timer",
  "futures-util",
@@ -3953,6 +3952,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rundler-provider"
+version = "0.1.0-beta"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ethers",
+ "mockall",
+ "rundler-types",
+ "rundler-utils",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "rundler-rundler"
 version = "0.1.0-beta"
 dependencies = [
@@ -3986,6 +3999,9 @@ dependencies = [
  "rand",
  "reqwest",
  "rslock",
+ "rundler-provider",
+ "rundler-types",
+ "rundler-utils",
  "rusoto_core",
  "rusoto_kms",
  "rusoto_s3",
@@ -4027,6 +4043,25 @@ dependencies = [
  "rusoto_kms",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "rundler-types"
+version = "0.1.0-beta"
+dependencies = [
+ "anyhow",
+ "ethers",
+ "parse-display",
+ "rundler-utils",
+ "serde",
+ "strum",
+]
+
+[[package]]
+name = "rundler-utils"
+version = "0.1.0-beta"
+dependencies = [
+ "ethers",
 ]
 
 [[package]]

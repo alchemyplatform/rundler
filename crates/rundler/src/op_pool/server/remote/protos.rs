@@ -1,13 +1,13 @@
 use anyhow::Context;
 use ethers::types::{Address, H256};
+use rundler_types::{
+    Entity as RundlerEntity, EntityType as RundlerEntityType, UserOperation as RundlerUserOperation,
+};
 
 use crate::{
     common::{
         protos::{from_bytes, to_le_bytes, ConversionError},
-        types::{
-            Entity as CommonEntity, EntityType as CommonEntityType,
-            UserOperation as PoolUserOperation, ValidTimeRange,
-        },
+        types::ValidTimeRange,
     },
     op_pool::{
         mempool::{Reputation as PoolReputation, ReputationStatus as PoolReputationStatus},
@@ -20,8 +20,8 @@ tonic::include_proto!("op_pool");
 pub const OP_POOL_FILE_DESCRIPTOR_SET: &[u8] =
     tonic::include_file_descriptor_set!("op_pool_descriptor");
 
-impl From<&PoolUserOperation> for UserOperation {
-    fn from(op: &PoolUserOperation) -> Self {
+impl From<&RundlerUserOperation> for UserOperation {
+    fn from(op: &RundlerUserOperation) -> Self {
         UserOperation {
             sender: op.sender.0.to_vec(),
             nonce: to_le_bytes(op.nonce),
@@ -38,11 +38,11 @@ impl From<&PoolUserOperation> for UserOperation {
     }
 }
 
-impl TryFrom<UserOperation> for PoolUserOperation {
+impl TryFrom<UserOperation> for RundlerUserOperation {
     type Error = ConversionError;
 
     fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
-        Ok(PoolUserOperation {
+        Ok(RundlerUserOperation {
             sender: from_bytes(&op.sender)?,
             nonce: from_bytes(&op.nonce)?,
             init_code: op.init_code.into(),
@@ -58,36 +58,36 @@ impl TryFrom<UserOperation> for PoolUserOperation {
     }
 }
 
-impl TryFrom<EntityType> for CommonEntityType {
+impl TryFrom<EntityType> for RundlerEntityType {
     type Error = ConversionError;
 
     fn try_from(entity: EntityType) -> Result<Self, Self::Error> {
         match entity {
             EntityType::Unspecified => Err(ConversionError::InvalidEnumValue(entity as i32)),
-            EntityType::Account => Ok(CommonEntityType::Account),
-            EntityType::Paymaster => Ok(CommonEntityType::Paymaster),
-            EntityType::Aggregator => Ok(CommonEntityType::Aggregator),
-            EntityType::Factory => Ok(CommonEntityType::Factory),
+            EntityType::Account => Ok(RundlerEntityType::Account),
+            EntityType::Paymaster => Ok(RundlerEntityType::Paymaster),
+            EntityType::Aggregator => Ok(RundlerEntityType::Aggregator),
+            EntityType::Factory => Ok(RundlerEntityType::Factory),
         }
     }
 }
 
-impl From<CommonEntityType> for EntityType {
-    fn from(entity: CommonEntityType) -> Self {
+impl From<RundlerEntityType> for EntityType {
+    fn from(entity: RundlerEntityType) -> Self {
         match entity {
-            CommonEntityType::Account => EntityType::Account,
-            CommonEntityType::Paymaster => EntityType::Paymaster,
-            CommonEntityType::Aggregator => EntityType::Aggregator,
-            CommonEntityType::Factory => EntityType::Factory,
+            RundlerEntityType::Account => EntityType::Account,
+            RundlerEntityType::Paymaster => EntityType::Paymaster,
+            RundlerEntityType::Aggregator => EntityType::Aggregator,
+            RundlerEntityType::Factory => EntityType::Factory,
         }
     }
 }
 
-impl TryFrom<&Entity> for CommonEntity {
+impl TryFrom<&Entity> for RundlerEntity {
     type Error = ConversionError;
 
     fn try_from(entity: &Entity) -> Result<Self, ConversionError> {
-        Ok(CommonEntity {
+        Ok(RundlerEntity {
             kind: EntityType::try_from(entity.kind)
                 .map_err(|_| ConversionError::InvalidEnumValue(entity.kind))?
                 .try_into()?,
@@ -96,8 +96,8 @@ impl TryFrom<&Entity> for CommonEntity {
     }
 }
 
-impl From<&CommonEntity> for Entity {
-    fn from(entity: &CommonEntity) -> Self {
+impl From<&RundlerEntity> for Entity {
+    fn from(entity: &RundlerEntity) -> Self {
         Entity {
             kind: EntityType::from(entity.kind).into(),
             address: entity.address.as_bytes().to_vec(),

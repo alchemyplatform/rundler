@@ -5,26 +5,25 @@ use ethers::{
     abi::{AbiDecode, AbiEncode, RawLog},
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
     providers::{
-        Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, PendingTransaction, Provider,
-        ProviderError, RetryClient, RetryClientBuilder,
+        Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, PendingTransaction,
+        Provider as EthersProvider, ProviderError, RetryClient, RetryClientBuilder,
     },
     types::{
         Address, BlockId, Bytes, Eip1559TransactionRequest, Log, Selector, TransactionReceipt,
         H256, U256,
     },
 };
-use url::Url;
-
-use super::types::ProviderLike;
-use crate::common::contracts::{
+use rundler_provider::Provider;
+use rundler_types::contracts::{
     get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
     get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
 };
+use url::Url;
 
 pub fn new_provider(
     url: &str,
     poll_interval: Duration,
-) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
+) -> anyhow::Result<Arc<EthersProvider<RetryClient<Http>>>> {
     let parsed_url = Url::parse(url).context("provider url should be valid")?;
     let http = Http::new(parsed_url);
     let client = RetryClientBuilder::default()
@@ -34,7 +33,9 @@ pub fn new_provider(
         .timeout_retries(3)
         .initial_backoff(Duration::from_millis(500))
         .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-    Ok(Arc::new(Provider::new(client).interval(poll_interval)))
+    Ok(Arc::new(
+        EthersProvider::new(client).interval(poll_interval),
+    ))
 }
 
 /// Waits for a pending transaction to be mined, providing appropriate error
@@ -113,7 +114,7 @@ pub fn log_to_raw_log(log: Log) -> RawLog {
 }
 
 pub async fn get_chain_id<Client: JsonRpcClient>(
-    provider: &Provider<Client>,
+    provider: &EthersProvider<Client>,
 ) -> anyhow::Result<u32> {
     Ok(provider
         .get_chainid()
@@ -124,7 +125,7 @@ pub async fn get_chain_id<Client: JsonRpcClient>(
 
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
-pub async fn get_code_hash<P: ProviderLike>(
+pub async fn get_code_hash<P: Provider>(
     provider: &P,
     mut addresses: Vec<Address>,
     block_id: Option<BlockId>,
@@ -137,7 +138,7 @@ pub async fn get_code_hash<P: ProviderLike>(
     Ok(H256(out.hash))
 }
 
-pub async fn get_gas_used<P: ProviderLike>(
+pub async fn get_gas_used<P: Provider>(
     provider: &P,
     target: Address,
     value: U256,
@@ -146,7 +147,7 @@ pub async fn get_gas_used<P: ProviderLike>(
     call_constructor(provider, &GETGASUSED_BYTECODE, (target, value, data), None).await
 }
 
-async fn call_constructor<P: ProviderLike, Args: AbiEncode, Ret: AbiDecode>(
+async fn call_constructor<P: Provider, Args: AbiEncode, Ret: AbiDecode>(
     provider: &P,
     bytecode: &Bytes,
     args: Args,
@@ -181,29 +182,6 @@ fn get_revert_data<D: AbiDecode>(mut error: ProviderError) -> Result<D, Provider
         Some(ret) => Ok(ret),
         None => Err(error),
     }
-}
-
-/// Gets the revert data from a contract error if it is a revert error,
-/// otherwise returns the original error.
-pub fn get_revert_bytes<M: Middleware>(error: ContractError<M>) -> Result<Bytes, ContractError<M>> {
-    if let ContractError::Revert(bytes) = error {
-        Ok(bytes)
-    } else {
-        Err(error)
-    }
-}
-
-/// This is the abi for what happens when you just revert("message") in a contract
-#[derive(Clone, Debug, Default, Eq, PartialEq, ethers::contract::EthError)]
-#[etherror(name = "Error", abi = "Error(string)")]
-pub struct ContractRevertError {
-    pub reason: String,
-}
-
-pub fn parse_revert_message(revert_data: &[u8]) -> Option<String> {
-    ContractRevertError::decode(revert_data)
-        .ok()
-        .map(|err| err.reason)
 }
 
 #[derive(Copy, Clone, Debug)]

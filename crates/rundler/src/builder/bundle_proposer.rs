@@ -11,6 +11,9 @@ use futures::future;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
+use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
+use rundler_types::{Entity, EntityType, GasFees, UserOperation, UserOpsPerAggregator};
+use rundler_utils::math;
 use tokio::{sync::broadcast, try_join};
 use tonic::async_trait;
 use tracing::{error, info};
@@ -18,15 +21,10 @@ use tracing::{error, info};
 use crate::{
     builder::emit::{BuilderEvent, OpRejectionReason, SkipReason},
     common::{
-        contracts::entry_point::UserOpsPerAggregator,
         emit::WithEntryPoint,
-        gas::{FeeEstimator, GasFees, PriorityFeeMode},
-        math,
+        gas::{self, FeeEstimator, PriorityFeeMode},
         simulation::{SimulationError, SimulationSuccess, Simulator},
-        types::{
-            Entity, EntityType, EntryPointLike, ExpectedStorage, HandleOpsOut, ProviderLike,
-            Timestamp, UserOperation,
-        },
+        types::{ExpectedStorage, Timestamp},
     },
     op_pool::{PoolOperation, PoolServer},
 };
@@ -75,8 +73,8 @@ pub trait BundleProposer: Send + Sync + 'static {
 pub struct BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
-    E: EntryPointLike,
-    P: ProviderLike,
+    E: EntryPoint,
+    P: Provider,
     C: PoolServer,
 {
     pool: C,
@@ -103,8 +101,8 @@ pub struct Settings {
 impl<S, E, P, C> BundleProposer for BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
-    E: EntryPointLike,
-    P: ProviderLike,
+    E: EntryPoint,
+    P: Provider,
     C: PoolServer,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
@@ -193,8 +191,8 @@ where
 impl<S, E, P, C> BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
-    E: EntryPointLike,
-    P: ProviderLike,
+    E: EntryPoint,
+    P: Provider,
     C: PoolServer,
 {
     pub fn new(
@@ -299,7 +297,7 @@ where
                     error!("Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle.");
                     continue;
                 };
-                let max_cost = op.max_gas_cost();
+                let max_cost = gas::user_operation_max_gas_cost(&op, self.settings.chain_id);
                 if *balance < max_cost {
                     info!("Rejected paymaster {paymaster:?} becauase its balance {balance:?} was too low.");
                     paymasters_to_reject.push(paymaster);
@@ -490,7 +488,7 @@ where
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = op.uo.execution_gas_limit(self.settings.chain_id);
+            let gas = gas::user_operation_execution_gas_limit(&op.uo, self.settings.chain_id);
             if gas_left < gas {
                 continue;
             }
@@ -682,7 +680,7 @@ impl ProposalContext {
 
     fn get_total_gas_limit(&self, chain_id: u64) -> U256 {
         self.iter_ops()
-            .map(|op| op.gas_limit(chain_id))
+            .map(|op| gas::user_operation_gas_limit(op, chain_id))
             .fold(U256::zero(), |acc, c| acc + c)
             + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER
     }
@@ -702,15 +700,13 @@ impl ProposalContext {
 mod tests {
     use anyhow::anyhow;
     use ethers::{types::H160, utils::parse_units};
+    use rundler_provider::{AggregatorSimOut, MockEntryPoint, MockProvider};
 
     use super::*;
     use crate::{
         common::{
-            simulation::{
-                AggregatorSimOut, MockSimulator, SimulationError, SimulationSuccess,
-                SimulationViolation,
-            },
-            types::{MockEntryPointLike, MockProviderLike, ValidTimeRange},
+            simulation::{MockSimulator, SimulationError, SimulationSuccess, SimulationViolation},
+            types::ValidTimeRange,
         },
         op_pool::MockPoolServer,
     };
@@ -1213,7 +1209,7 @@ mod tests {
                 block_hash == Some(current_block_hash) && code_hash == Some(expected_code_hash)
             })
             .returning(move |op, _, _| simulations_by_op[&op.op_hash(entry_point_address, 0)]());
-        let mut entry_point = MockEntryPointLike::new();
+        let mut entry_point = MockEntryPoint::new();
         entry_point
             .expect_address()
             .return_const(entry_point_address);
@@ -1235,7 +1231,7 @@ mod tests {
             .into_iter()
             .map(|agg| (agg.address, agg.signature))
             .collect();
-        let mut provider = MockProviderLike::new();
+        let mut provider = MockProvider::new();
         provider
             .expect_get_latest_block_hash()
             .returning(move || Ok(current_block_hash));

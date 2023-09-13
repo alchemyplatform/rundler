@@ -13,14 +13,12 @@ use ethers::{
 };
 use jsonrpsee::types::{ErrorObject, ErrorObjectOwned};
 use rand::RngCore;
+use rundler_types::UserOperation;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 pub use task::*;
 
-use crate::{
-    common::types::UserOperation,
-    op_pool::{Reputation, ReputationStatus},
-};
+use crate::op_pool::{Reputation, ReputationStatus};
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]

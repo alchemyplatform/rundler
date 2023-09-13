@@ -3,15 +3,14 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     prelude::gas_oracle::{GasCategory, GasOracle, Polygon},
-    types::{transaction::eip2718::TypedTransaction, Address, Chain, U256},
+    types::{Address, Chain, U256},
 };
+use rundler_provider::Provider;
+use rundler_types::{GasFees, UserOperation};
+use rundler_utils::math;
 use tokio::try_join;
 
 use super::types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS};
-use crate::common::{
-    math,
-    types::{ProviderLike, UserOperation},
-};
 
 /// Gas overheads for user operations
 /// used in calculating the pre-verification gas
@@ -39,25 +38,25 @@ impl Default for GasOverheads {
     }
 }
 
-pub async fn calc_pre_verification_gas<P: ProviderLike>(
-    full_op: UserOperation,
-    random_op: UserOperation,
+pub async fn calc_pre_verification_gas<P: Provider>(
+    full_op: &UserOperation,
+    random_op: &UserOperation,
     entry_point: Address,
     provider: Arc<P>,
     chain_id: u64,
 ) -> anyhow::Result<U256> {
-    let static_gas = calc_static_pre_verification_gas(&full_op);
+    let static_gas = calc_static_pre_verification_gas(full_op);
     let dynamic_gas = match chain_id {
         _ if ARBITRUM_CHAIN_IDS.contains(&chain_id) => {
             provider
                 .clone()
-                .calc_arbitrum_l1_gas(entry_point, random_op)
+                .calc_arbitrum_l1_gas(entry_point, random_op.clone())
                 .await?
         }
         _ if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) => {
             provider
                 .clone()
-                .calc_optimism_l1_gas(entry_point, random_op)
+                .calc_optimism_l1_gas(entry_point, random_op.clone())
                 .await?
         }
         _ => U256::zero(),
@@ -88,33 +87,56 @@ pub fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
         + ov.per_user_op_word * length_in_words
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct GasFees {
-    pub max_fee_per_gas: U256,
-    pub max_priority_fee_per_gas: U256,
+/// Returns the gas limit for the user operation that should will be used onchain.
+pub fn user_operation_gas_limit(uo: &UserOperation, chain_id: u64) -> U256 {
+    // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
+    // but this not part of the execution gas of the transaction. Thus we only consider
+    // the static portion of the pre_verification_gas in the onchain gas limit.
+    //
+    // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas
+    // and this IS part of the execution gas of the transaction, and thus needs to be
+    // accounted for in the bundle gas limit
+    let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+        calc_static_pre_verification_gas(uo)
+    } else {
+        uo.pre_verification_gas
+    };
+
+    pvg + uo.call_gas_limit + uo.verification_gas_limit * verification_gas_limit_multiplier(uo)
 }
 
-impl From<&TypedTransaction> for GasFees {
-    fn from(tx: &TypedTransaction) -> Self {
-        match tx {
-            TypedTransaction::Eip1559(tx) => Self {
-                max_fee_per_gas: tx.max_fee_per_gas.unwrap_or_default(),
-                max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or_default(),
-            },
-            _ => Self::default(),
-        }
-    }
+/// Returns the execution gas limit for the user operation that applies to a blocks' gas cap
+pub fn user_operation_execution_gas_limit(uo: &UserOperation, chain_id: u64) -> U256 {
+    // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
+    // but this not part of the execution gas of the transaction.
+    //
+    // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas and this
+    // IS part of the execution gas of the transaction but does NOT apply to the blocks exectution gas cap
+    // thus it is not included in the execution gas limit.
+    //
+    // In both cases we only consider the static portion of the pre_verification_gas in the execution gas limit.
+    let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
+        calc_static_pre_verification_gas(uo)
+    } else {
+        uo.pre_verification_gas
+    };
+
+    pvg + uo.call_gas_limit + uo.verification_gas_limit * verification_gas_limit_multiplier(uo)
 }
 
-impl GasFees {
-    pub fn increase_by_percent(self, percent: u64) -> Self {
-        Self {
-            max_fee_per_gas: math::increase_by_percent(self.max_fee_per_gas, percent),
-            max_priority_fee_per_gas: math::increase_by_percent(
-                self.max_priority_fee_per_gas,
-                percent,
-            ),
-        }
+pub fn user_operation_max_gas_cost(uo: &UserOperation, chain_id: u64) -> U256 {
+    user_operation_gas_limit(uo, chain_id) * uo.max_fee_per_gas
+}
+
+fn verification_gas_limit_multiplier(uo: &UserOperation) -> u64 {
+    // If using a paymaster, we need to account for potentially 2 postOp
+    // calls (even though it won't be called).
+    // Else the entrypoint expects the gas for 1 postOp call that
+    // uses vefification_gas_limit plus the actual verification call
+    if uo.paymaster().is_some() {
+        3
+    } else {
+        2
     }
 }
 
@@ -152,7 +174,7 @@ impl PriorityFeeMode {
 }
 
 #[derive(Debug, Clone)]
-pub struct FeeEstimator<P: ProviderLike> {
+pub struct FeeEstimator<P: Provider> {
     provider: Arc<P>,
     priority_fee_mode: PriorityFeeMode,
     use_bundle_priority_fee: bool,
@@ -160,7 +182,7 @@ pub struct FeeEstimator<P: ProviderLike> {
     chain_id: u64,
 }
 
-impl<P: ProviderLike> FeeEstimator<P> {
+impl<P: Provider> FeeEstimator<P> {
     pub fn new(
         provider: Arc<P>,
         chain_id: u64,

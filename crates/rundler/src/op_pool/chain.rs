@@ -11,6 +11,8 @@ use ethers::{
     types::{Address, Block, Filter, H256, U256},
 };
 use futures::future;
+use rundler_provider::Provider;
+use rundler_types::contracts::i_entry_point::UserOperationEventFilter;
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
@@ -19,9 +21,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use crate::common::{
-    block_watcher, contracts::i_entry_point::UserOperationEventFilter, types::ProviderLike,
-};
+use crate::common::block_watcher;
 
 const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 
@@ -31,7 +31,7 @@ const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 /// Will update itself when `.sync_to_block_number` is called, at which point it
 /// will query a node to determine the new state of the chain.
 #[derive(Debug)]
-pub struct Chain<P: ProviderLike> {
+pub struct Chain<P: Provider> {
     provider: Arc<P>,
     settings: Settings,
     /// Blocks are stored from earliest to latest, so the oldest block is at the
@@ -76,7 +76,7 @@ struct BlockSummary {
     pub ops: Vec<MinedOp>,
 }
 
-impl<P: ProviderLike> Chain<P> {
+impl<P: Provider> Chain<P> {
     pub fn new(provider: Arc<P>, settings: Settings) -> Self {
         let history_size = settings.history_size as usize;
         assert!(history_size > 0, "history size should be positive");
@@ -453,9 +453,9 @@ mod tests {
         utils,
     };
     use parking_lot::RwLock;
+    use rundler_provider::MockProvider;
 
     use super::*;
-    use crate::common::types::MockProviderLike;
 
     const HISTORY_SIZE: u64 = 3;
     const ENTRY_POINT_ADDRESS: Address = H160(*b"01234567890123456789");
@@ -748,7 +748,7 @@ mod tests {
         );
     }
 
-    fn new_chain() -> (Chain<impl ProviderLike>, ProviderController) {
+    fn new_chain() -> (Chain<impl Provider>, ProviderController) {
         let (provider, controller) = new_mock_provider();
         let chain = Chain::new(
             Arc::new(provider),
@@ -761,11 +761,11 @@ mod tests {
         (chain, controller)
     }
 
-    fn new_mock_provider() -> (impl ProviderLike, ProviderController) {
+    fn new_mock_provider() -> (impl Provider, ProviderController) {
         let controller = ProviderController {
             blocks: Arc::new(RwLock::new(vec![])),
         };
-        let mut provider = MockProviderLike::new();
+        let mut provider = MockProvider::new();
 
         provider.expect_get_block::<H256>().returning({
             let controller = controller.clone();

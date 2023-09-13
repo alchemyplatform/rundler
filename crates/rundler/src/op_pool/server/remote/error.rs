@@ -542,7 +542,7 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 };
 
                 SimulationViolation::UnintendedRevertWithMessage(
-                    crate::common::types::EntityType::try_from(
+                    rundler_types::EntityType::try_from(
                         EntityType::try_from(entity.kind).context("unknown entity type")?,
                     )?,
                     e.reason,
@@ -583,7 +583,7 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 )
             }
             Some(simulation_violation_error::Violation::UnintendedRevert(e)) => {
-                SimulationViolation::UnintendedRevert(crate::common::types::EntityType::try_from(
+                SimulationViolation::UnintendedRevert(rundler_types::EntityType::try_from(
                     EntityType::try_from(e.entity_type).context("unknown entity type")?,
                 )?)
             }
@@ -630,7 +630,6 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::types;
 
     #[test]
     fn test_other_error() {
@@ -659,13 +658,13 @@ mod tests {
     #[test]
     fn test_simulation_error() {
         let error = MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
-            types::EntityType::Aggregator,
+            rundler_types::EntityType::Aggregator,
         ));
         let proto_error: ProtoMempoolError = error.into();
         let error2 = proto_error.try_into().unwrap();
         match error2 {
             MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
-                types::EntityType::Aggregator,
+                rundler_types::EntityType::Aggregator,
             )) => {}
             _ => panic!("wrong error type"),
         }

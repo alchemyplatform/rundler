@@ -2,6 +2,7 @@ use std::{pin::Pin, str::FromStr};
 
 use ethers::types::{Address, H256};
 use futures_util::Stream;
+use rundler_types::{Entity, UserOperation};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{
@@ -26,7 +27,6 @@ use crate::{
         protos::{from_bytes, ConversionError},
         retry::{self, UnlimitedRetryOpts},
         server::{HealthCheck, ServerStatus},
-        types::{Entity, UserOperation},
     },
     op_pool::{
         mempool::{PoolOperation, Reputation},

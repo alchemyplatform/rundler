@@ -14,6 +14,13 @@ use ethers::{
     },
     utils::to_checksum,
 };
+use rundler_provider::{EntryPoint, Provider};
+use rundler_types::{
+    contracts::i_entry_point::{
+        IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
+    },
+    UserOperation,
+};
 use tracing::Level;
 
 use super::{
@@ -23,11 +30,7 @@ use super::{
 use crate::{
     common::{
         context::LogOnError,
-        contracts::i_entry_point::{
-            IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
-        },
         eth::{log_to_raw_log, Settings},
-        types::{EntryPointLike, ProviderLike, UserOperation},
     },
     op_pool::PoolServer,
     rpc::{
@@ -43,8 +46,8 @@ struct EntryPointContext<P, E> {
 
 impl<P, E> EntryPointContext<P, E>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
 {
     pub fn new(
         chain_id: u64,
@@ -72,8 +75,8 @@ pub struct EthApi<P, E, PS> {
 
 impl<P, E, PS> EthApi<P, E, PS>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
     PS: PoolServer,
 {
     pub fn new(
@@ -474,12 +477,10 @@ mod tests {
         types::{Log, TransactionReceipt},
         utils::keccak256,
     };
+    use rundler_provider::{MockEntryPoint, MockProvider};
 
     use super::*;
-    use crate::{
-        common::types::{MockEntryPointLike, MockProviderLike},
-        op_pool::MockPoolServer,
-    };
+    use crate::op_pool::MockPoolServer;
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
 
@@ -494,7 +495,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -517,7 +518,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -540,7 +541,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -567,7 +568,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -593,7 +594,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -615,7 +616,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProviderLike, MockEntryPointLike, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
