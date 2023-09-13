@@ -47,6 +47,8 @@ These options are common to all subcommands and can be used globally:
   - env: *PRIORITY_FEE_MODE_VALUE*
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
+- `--eth_poll_interval_millis`: Interval at which the builder polls an Eth node for new blocks and mined transactions (default: `100`)
+  - env: *ETH_POLL_INTERVAL_MILLIS*
 - `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
@@ -109,8 +111,6 @@ List of command line options for configuring the OP Pool.
   - env: *POOL_MAX_USEROPS_PER_SENDER*
 - `--pool.min_replacement_fee_increase_percentage`: Minimum replacement fee increase percentage (default: `10`)
   - env: *POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE*
-- `--pool.http_poll_interval_millis`: ETH Node HTTP polling interval in milliseconds (default: `100`)
-  - env: *POOL_HTTP_POLL_INTERVAL_MILLIS*
 - `--pool.blocklist_path`: Path to a blocklist file (e.g `blocklist.json`, `s3://my-bucket/blocklist.json`)
   - env: *POOL_BLOCKLIST_PATH*
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
@@ -144,8 +144,6 @@ List of command line options for configuring the Builder.
   - *Only required when AWS_KMS_KEY_IDS are provided* 
 - `--builder.max_bundle_size`: Maximum number of ops to include in one bundle (default: `128`)
   - env: *BUILDER_MAX_BUNDLE_SIZE*
-- `--builder.eth_poll_interval_millis`: Interval at which the builder polls an Eth node for new blocks and mined transactions (default: `250`)
-  - env: *BUILDER_ETH_POLL_INTERVAL_MILLIS*
 - `--builder.submit_url`: If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`.
   - env: *BUILDER_SUBMIT_URL*
 - `--builder.use_conditional_send_transaction`: If true, will use the provider's `eth_sendRawTransactionConditional` method instead of `eth_sendRawTransaction`, passing in expected storage values determined through simulation. Must not be set on networks which do not support this method (default: `false`)

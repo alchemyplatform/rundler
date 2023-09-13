@@ -140,6 +140,16 @@ pub struct CommonArgs {
     )]
     min_unstake_delay: u32,
 
+    /// Interval at which the builder polls an Eth node for new blocks and
+    /// mined transactions.
+    #[arg(
+        long = "eth_poll_interval_millis",
+        name = "eth_poll_interval_millis",
+        env = "ETH_POLL_INTERVAL_MILLIS",
+        default_value = "100"
+    )]
+    pub eth_poll_interval_millis: u64,
+
     /// Amount of blocks to search when calling eth_getUserOperationByHash.
     /// Defaults from 0 to latest block
     #[arg(
