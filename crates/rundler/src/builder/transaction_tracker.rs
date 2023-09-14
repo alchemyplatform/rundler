@@ -397,7 +397,7 @@ impl TransactionTrackerMetrics {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use std::sync::Arc;
 
     use ethers::types::{Address, Eip1559TransactionRequest};
