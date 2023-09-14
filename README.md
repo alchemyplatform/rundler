@@ -60,6 +60,7 @@ cargo run node
 
 - [configuration](docs/config.md)
 - [transactions](docs/transactions.md)
+- [contributing](docs/CONTRIBUTING.md)
 
 ### Goals
 
@@ -72,10 +73,6 @@ cargo run node
 ### Resources
 
 - [EIP-4337](https://eips.ethereum.org/EIPS/eip-4337)
-
-### Contributing:
-
-* Commit messages must follow [conventional commits sytle](https://www.conventionalcommits.org/en/v1.0.0/).
 
 ### Communication:
 - [Telegram](https://t.me/+F_xS9IVOdJZmZjQx)
