@@ -35,6 +35,7 @@ use crate::{
         handle::{self, SpawnGuard, Task},
         mempool::MempoolConfig,
         simulation::{self, SimulatorImpl},
+        tracer::SimulateValidationTracerImpl,
     },
     op_pool::PoolServer,
 };
@@ -124,9 +125,12 @@ where
         };
 
         let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
+        let simulate_validation_tracer =
+            SimulateValidationTracerImpl::new(Arc::clone(&provider), entry_point.clone());
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
             entry_point.clone(),
+            simulate_validation_tracer,
             self.args.sim_settings,
             self.args.mempool_configs.clone(),
         );
