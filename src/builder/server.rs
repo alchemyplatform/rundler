@@ -18,17 +18,17 @@ use crate::{
 
 pub struct BuilderImpl {
     manual_bundling_mode: Arc<AtomicBool>,
-    send_bundle_requester: mpsc::Sender<SendBundleRequest>,
+    send_bundle_requesters: Vec<mpsc::Sender<SendBundleRequest>>,
 }
 
 impl BuilderImpl {
     pub fn new(
         manual_bundling_mode: Arc<AtomicBool>,
-        send_bundle_requester: mpsc::Sender<SendBundleRequest>,
+        send_bundle_requesters: Vec<mpsc::Sender<SendBundleRequest>>,
     ) -> Self {
         Self {
             manual_bundling_mode,
-            send_bundle_requester,
+            send_bundle_requesters,
         }
     }
 }
@@ -46,8 +46,14 @@ impl Builder for BuilderImpl {
 
         let (tx, rx) = oneshot::channel();
 
-        if self
-            .send_bundle_requester
+        // TODO(danc): implement this for multiple senders
+        if self.send_bundle_requesters.len() != 1 {
+            return Err(Status::internal(
+                "expected exactly one send bundle requester",
+            ));
+        }
+
+        if self.send_bundle_requesters[0]
             .send(SendBundleRequest { responder: tx })
             .await
             .is_err()

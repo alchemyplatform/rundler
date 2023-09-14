@@ -5,7 +5,10 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use ethers::types::{Address, H256};
+use ethers::{
+    providers::{JsonRpcClient, Provider},
+    types::{Address, H256},
+};
 use ethers_signers::Signer;
 use rusoto_core::Region;
 use tokio::{
@@ -20,6 +23,7 @@ use tonic::{
 };
 use tracing::info;
 
+use super::bundle_sender::SendBundleRequest;
 use crate::{
     builder::{
         self,
@@ -73,6 +77,8 @@ pub struct Args {
     pub max_blocks_to_wait_for_mine: u64,
     pub replacement_fee_percent_increase: u64,
     pub max_fee_increases: u64,
+    pub num_bundle_builders: u64,
+    pub bundle_builder_id_offset: u64,
 }
 
 #[derive(Debug)]
@@ -89,113 +95,25 @@ impl Task for BuilderTask {
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
-        let signer = if let Some(pk) = &self.args.private_key {
-            info!("Using local signer");
-            BundlerSigner::Local(
-                LocalSigner::connect(Arc::clone(&provider), self.args.chain_id, pk.to_owned())
-                    .await?,
-            )
-        } else {
-            info!("Using AWS KMS signer");
-            let signer = time::timeout(
-                // timeout must be << than the lock TTL to avoid a
-                // bug in the redis lock implementation that panics if connection
-                // takes longer than the TTL. Generally the TLL should be on the order of 10s of seconds
-                // so this should give ample time for the connection to establish.
-                Duration::from_millis(self.args.redis_lock_ttl_millis / 10),
-                KmsSigner::connect(
-                    Arc::clone(&provider),
-                    self.args.chain_id,
-                    self.args.aws_kms_region.clone(),
-                    self.args.aws_kms_key_ids.clone(),
-                    self.args.redis_uri.clone(),
-                    self.args.redis_lock_ttl_millis,
-                ),
-            )
-            .await
-            .context("timeout connecting to KMS")?
-            .context("failure connecting to KMS")?;
-            let ret = BundlerSigner::Kms(signer);
-            info!("Created AWS KMS signer");
-            ret
-        };
-        let beneficiary = signer.address();
-        let proposer_settings = bundle_proposer::Settings {
-            chain_id: self.args.chain_id,
-            max_bundle_size: self.args.max_bundle_size,
-            max_bundle_gas: self.args.max_bundle_gas,
-            beneficiary,
-            use_bundle_priority_fee: self.args.use_bundle_priority_fee,
-            priority_fee_mode: self.args.priority_fee_mode,
-            bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
-        };
-        let op_pool =
-            Self::connect_client_with_shutdown(&self.args.pool_url, shutdown_token.clone()).await?;
-
-        let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
-        let simulator = SimulatorImpl::new(
-            Arc::clone(&provider),
-            entry_point.clone(),
-            self.args.sim_settings,
-            self.args.mempool_configs.clone(),
-        );
-
-        let proposer = BundleProposerImpl::new(
-            op_pool.clone(),
-            simulator,
-            entry_point.clone(),
-            Arc::clone(&provider),
-            proposer_settings,
-            self.event_sender.clone(),
-        );
-        let submit_provider =
-            eth::new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
-        let transaction_sender = get_sender(
-            submit_provider,
-            signer,
-            self.args.use_conditional_send_transaction,
-            &self.args.submit_url,
-        );
-        let tracker_settings = transaction_tracker::Settings {
-            poll_interval: self.args.eth_poll_interval,
-            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
-            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
-        };
-        let transaction_tracker = TransactionTrackerImpl::new(
-            Arc::clone(&provider),
-            transaction_sender,
-            tracker_settings,
-        )
-        .await?;
-
-        let builder_settings = builder::bundle_sender::Settings {
-            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
-            max_fee_increases: self.args.max_fee_increases,
-        };
         let manual_bundling_mode = Arc::new(AtomicBool::new(false));
-        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
-        let bundle_sender = BundleSender::new(
-            manual_bundling_mode.clone(),
-            send_bundle_rx,
-            self.args.chain_id,
-            beneficiary,
-            self.args.eth_poll_interval,
-            op_pool,
-            proposer,
-            entry_point,
-            transaction_tracker,
-            provider,
-            builder_settings,
-            self.event_sender.clone(),
-        );
-
-        let _sender_loop_guard = {
-            SpawnGuard::spawn_with_guard(async move { bundle_sender.send_bundles_in_loop().await })
-        };
+        let mut spawn_guards = vec![];
+        let mut send_bundle_txs = vec![];
+        for i in 0..self.args.num_bundle_builders {
+            let (spawn_guard, send_bundle_tx) = self
+                .create_bundle_sender(
+                    i + self.args.bundle_builder_id_offset,
+                    Arc::clone(&manual_bundling_mode),
+                    Arc::clone(&provider),
+                    shutdown_token.clone(),
+                )
+                .await?;
+            spawn_guards.push(spawn_guard);
+            send_bundle_txs.push(send_bundle_tx);
+        }
 
         // gRPC server
-        let builder = BuilderImpl::new(manual_bundling_mode, send_bundle_tx);
+        let builder = BuilderImpl::new(manual_bundling_mode, send_bundle_txs);
         let builder_server = BuilderServer::new(builder);
 
         let reflection_service = tonic_reflection::server::Builder::configure()
@@ -254,5 +172,121 @@ impl BuilderTask {
                 res
             }
         }
+    }
+
+    async fn create_bundle_sender<C: JsonRpcClient + 'static>(
+        &self,
+        id: u64,
+        manual_bundling_mode: Arc<AtomicBool>,
+        provider: Arc<Provider<C>>,
+        shutdown_token: CancellationToken,
+    ) -> anyhow::Result<(SpawnGuard, mpsc::Sender<SendBundleRequest>)> {
+        let signer = if let Some(pk) = &self.args.private_key {
+            info!("Using local signer");
+            BundlerSigner::Local(
+                LocalSigner::connect(Arc::clone(&provider), self.args.chain_id, pk.to_owned())
+                    .await?,
+            )
+        } else {
+            info!("Using AWS KMS signer");
+            let signer = time::timeout(
+                // timeout must be << than the lock TTL to avoid a
+                // bug in the redis lock implementation that panics if connection
+                // takes longer than the TTL. Generally the TLL should be on the order of 10s of seconds
+                // so this should give ample time for the connection to establish.
+                Duration::from_millis(self.args.redis_lock_ttl_millis / 10),
+                KmsSigner::connect(
+                    Arc::clone(&provider),
+                    self.args.chain_id,
+                    self.args.aws_kms_region.clone(),
+                    self.args.aws_kms_key_ids.clone(),
+                    self.args.redis_uri.clone(),
+                    self.args.redis_lock_ttl_millis,
+                ),
+            )
+            .await
+            .context("timeout connecting to KMS")?
+            .context("failure connecting to KMS")?;
+            let ret = BundlerSigner::Kms(signer);
+            info!("Created AWS KMS signer");
+            ret
+        };
+        let beneficiary = signer.address();
+        let proposer_settings = bundle_proposer::Settings {
+            chain_id: self.args.chain_id,
+            max_bundle_size: self.args.max_bundle_size,
+            max_bundle_gas: self.args.max_bundle_gas,
+            beneficiary,
+            use_bundle_priority_fee: self.args.use_bundle_priority_fee,
+            priority_fee_mode: self.args.priority_fee_mode,
+            bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
+        };
+        let op_pool =
+            Self::connect_client_with_shutdown(&self.args.pool_url, shutdown_token.clone()).await?;
+
+        let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
+        let simulator = SimulatorImpl::new(
+            Arc::clone(&provider),
+            entry_point.clone(),
+            self.args.sim_settings,
+            self.args.mempool_configs.clone(),
+        );
+
+        let proposer = BundleProposerImpl::new(
+            id,
+            op_pool.clone(),
+            simulator,
+            entry_point.clone(),
+            Arc::clone(&provider),
+            proposer_settings,
+            self.event_sender.clone(),
+        );
+        let submit_provider =
+            eth::new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
+        let transaction_sender = get_sender(
+            submit_provider,
+            signer,
+            self.args.use_conditional_send_transaction,
+            &self.args.submit_url,
+        );
+        let tracker_settings = transaction_tracker::Settings {
+            poll_interval: self.args.eth_poll_interval,
+            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
+            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
+        };
+        let transaction_tracker = TransactionTrackerImpl::new(
+            Arc::clone(&provider),
+            transaction_sender,
+            tracker_settings,
+        )
+        .await?;
+
+        let builder_settings = builder::bundle_sender::Settings {
+            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
+            max_fee_increases: self.args.max_fee_increases,
+        };
+
+        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
+
+        let bundle_sender = BundleSender::new(
+            id,
+            manual_bundling_mode.clone(),
+            send_bundle_rx,
+            self.args.chain_id,
+            beneficiary,
+            self.args.eth_poll_interval,
+            op_pool,
+            proposer,
+            entry_point,
+            transaction_tracker,
+            provider,
+            builder_settings,
+            self.event_sender.clone(),
+        );
+
+        Ok((
+            SpawnGuard::spawn_with_guard(async move { bundle_sender.send_bundles_in_loop().await }),
+            send_bundle_tx,
+        ))
     }
 }

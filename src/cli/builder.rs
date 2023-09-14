@@ -7,7 +7,11 @@ use tokio::sync::broadcast;
 
 use super::{json::get_json_config, CommonArgs};
 use crate::{
-    builder::{self, emit::BuilderEvent, BuilderTask},
+    builder::{
+        self,
+        emit::{BuilderEvent, BuilderEventKind},
+        BuilderTask,
+    },
     common::{
         emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
         gas::PriorityFeeMode,
@@ -144,6 +148,15 @@ pub struct BuilderArgs {
         default_value = "7"
     )]
     max_fee_increases: u64,
+
+    /// The ID offset to apply to the builder ID when reporting to the pool.
+    #[arg(
+        long = "builder_id_offset",
+        name = "builder_id_offset",
+        env = "BUILDER_ID_OFFSET",
+        default_value = "0"
+    )]
+    pub builder_id_offset: u64,
 }
 
 impl BuilderArgs {
@@ -205,6 +218,8 @@ impl BuilderArgs {
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
+            num_bundle_builders: common.num_builders,
+            bundle_builder_id_offset: self.builder_id_offset,
         })
     }
 
@@ -248,11 +263,11 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
 }
 
 pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
-    if let BuilderEvent::FormedBundle {
+    if let BuilderEventKind::FormedBundle {
         tx_details,
         fee_increase_count,
         ..
-    } = &event.event
+    } = &event.event.kind
     {
         if tx_details.is_none() && *fee_increase_count == 0 {
             return false;

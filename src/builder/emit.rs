@@ -5,7 +5,75 @@ use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256};
 use crate::common::{gas::GasFees, simulation::SimulationError, strs, types::ValidTimeRange};
 
 #[derive(Clone, Debug)]
-pub enum BuilderEvent {
+pub struct BuilderEvent {
+    pub builder_id: u64,
+    pub kind: BuilderEventKind,
+}
+
+impl BuilderEvent {
+    pub fn new(builder_id: u64, kind: BuilderEventKind) -> Self {
+        Self { builder_id, kind }
+    }
+
+    pub fn formed_bundle(
+        builder_id: u64,
+        tx_details: Option<BundleTxDetails>,
+        nonce: u64,
+        fee_increase_count: u64,
+        required_fees: Option<GasFees>,
+    ) -> Self {
+        Self::new(
+            builder_id,
+            BuilderEventKind::FormedBundle {
+                tx_details,
+                nonce,
+                fee_increase_count,
+                required_fees,
+            },
+        )
+    }
+
+    pub fn transaction_mined(
+        builder_id: u64,
+        tx_hash: H256,
+        nonce: u64,
+        block_number: u64,
+    ) -> Self {
+        Self::new(
+            builder_id,
+            BuilderEventKind::TransactionMined {
+                tx_hash,
+                nonce,
+                block_number,
+            },
+        )
+    }
+
+    pub fn latest_transaction_dropped(builder_id: u64, nonce: u64) -> Self {
+        Self::new(
+            builder_id,
+            BuilderEventKind::LatestTransactionDropped { nonce },
+        )
+    }
+
+    pub fn nonce_used_for_other_transaction(builder_id: u64, nonce: u64) -> Self {
+        Self::new(
+            builder_id,
+            BuilderEventKind::NonceUsedForOtherTransaction { nonce },
+        )
+    }
+
+    pub fn skipped_op(builder_id: u64, op_hash: H256, reason: SkipReason) -> Self {
+        Self::new(builder_id, BuilderEventKind::SkippedOp { op_hash, reason })
+    }
+
+    pub fn rejected_op(builder_id: u64, op_hash: H256, reason: OpRejectionReason) -> Self {
+        Self::new(builder_id, BuilderEventKind::RejectedOp { op_hash, reason })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum BuilderEventKind {
     FormedBundle {
         /// If `None`, means that the bundle contained no operations and so no
         /// transaction was created.
@@ -64,8 +132,8 @@ pub enum OpRejectionReason {
 
 impl Display for BuilderEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BuilderEvent::FormedBundle {
+        match &self.kind {
+            BuilderEventKind::FormedBundle {
                 tx_details,
                 nonce,
                 fee_increase_count,
@@ -89,6 +157,7 @@ impl Display for BuilderEvent {
                             f,
                             concat!(
                                 "Bundle transaction sent!",
+                                "    Builder id: {:?}",
                                 "    Transaction hash: {:?}",
                                 "    Nonce: {}",
                                 "    Fee increases: {}",
@@ -96,6 +165,7 @@ impl Display for BuilderEvent {
                                 "    Required maxPriorityFeePerGas: {}",
                                 "    Op hashes: {}",
                             ),
+                            self.builder_id,
                             tx_details.tx_hash,
                             nonce,
                             fee_increase_count,
@@ -108,11 +178,13 @@ impl Display for BuilderEvent {
                         f,
                         concat!(
                             "Bundle was empty.",
+                            "    Builder id: {:?}",
                             "    Nonce: {}",
                             "    Fee increases: {}",
                             "    Required maxFeePerGas: {}",
                             "    Required maxPriorityFeePerGas: {}",
                         ),
+                        self.builder_id,
                         nonce,
                         fee_increase_count,
                         required_max_fee_per_gas,
@@ -120,7 +192,7 @@ impl Display for BuilderEvent {
                     ),
                 }
             }
-            BuilderEvent::TransactionMined {
+            BuilderEventKind::TransactionMined {
                 tx_hash,
                 nonce,
                 block_number,
@@ -128,26 +200,28 @@ impl Display for BuilderEvent {
                 f,
                 concat!(
                     "Transaction mined!",
+                    "    Builder id: {:?}",
                     "    Transaction hash: {:?}",
                     "    Nonce: {}",
                     "    Block number: {}",
                 ),
-                tx_hash, nonce, block_number,
+                self.builder_id, tx_hash, nonce, block_number,
             ),
-            BuilderEvent::LatestTransactionDropped { nonce } => {
+            BuilderEventKind::LatestTransactionDropped { nonce } => {
                 write!(
                     f,
-                    "Latest transaction dropped. Higher fees are needed.    Nonce: {nonce}"
+                    "Latest transaction dropped. Higher fees are needed.  Builder id: {:?}    Nonce: {nonce}",
+                    self.builder_id
                 )
             }
-            BuilderEvent::NonceUsedForOtherTransaction { nonce } => {
-                write!(f, "Transaction failed because nonce was used by another transaction outside of this Rundler.    Nonce: {nonce}")
+            BuilderEventKind::NonceUsedForOtherTransaction { nonce } => {
+                write!(f, "Transaction failed because nonce was used by another transaction outside of this Rundler. Builder id: {:?}    Nonce: {nonce}", self.builder_id)
             }
-            BuilderEvent::SkippedOp { op_hash, reason } => {
-                write!(f, "Op skipped in bundle (but remains in pool).    Op hash: {op_hash:?}    Reason: {reason:?}")
+            BuilderEventKind::SkippedOp { op_hash, reason } => {
+                write!(f, "Op skipped in bundle (but remains in pool).  Builder id: {:?}   Op hash: {op_hash:?}    Reason: {reason:?}", self.builder_id)
             }
-            BuilderEvent::RejectedOp { op_hash, reason } => {
-                write!(f, "Op rejected from bundle and removed from pool.    Op hash: {op_hash:?}    Reason: {reason:?}")
+            BuilderEventKind::RejectedOp { op_hash, reason } => {
+                write!(f, "Op rejected from bundle and removed from pool.  Builder id: {:?}   Op hash: {op_hash:?}    Reason: {reason:?}", self.builder_id)
             }
         }
     }

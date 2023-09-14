@@ -81,6 +81,7 @@ where
     E: EntryPointLike,
     P: ProviderLike,
 {
+    id: u64,
     op_pool: OpPoolClient<Channel>,
     simulator: S,
     entry_point: E,
@@ -129,16 +130,17 @@ where
                 {
                     true
                 } else {
-                    self.emit(BuilderEvent::SkippedOp {
-                        op_hash: self.op_hash(&op.op),
-                        reason: SkipReason::InsufficientFees {
+                    self.emit(BuilderEvent::skipped_op(
+                        self.id,
+                        self.op_hash(&op.op),
+                        SkipReason::InsufficientFees {
                             required_fees: required_op_fees,
                             actual_fees: GasFees {
                                 max_fee_per_gas: op.op.max_fee_per_gas,
                                 max_priority_fee_per_gas: op.op.max_priority_fee_per_gas,
                             },
                         },
-                    });
+                    ));
                     false
                 }
             })
@@ -199,6 +201,7 @@ where
     P: ProviderLike,
 {
     pub fn new(
+        id: u64,
         op_pool: OpPoolClient<Channel>,
         simulator: S,
         entry_point: E,
@@ -207,6 +210,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
+            id,
             op_pool,
             simulator,
             entry_point,
@@ -257,10 +261,11 @@ where
             let simulation = match simulation {
                 Ok(simulation) => simulation,
                 Err(error) => {
-                    self.emit(BuilderEvent::RejectedOp {
-                        op_hash: self.op_hash(&op),
-                        reason: OpRejectionReason::FailedRevalidation { error },
-                    });
+                    self.emit(BuilderEvent::rejected_op(
+                        self.id,
+                        self.op_hash(&op),
+                        OpRejectionReason::FailedRevalidation { error },
+                    ));
                     rejected_ops.push(op);
                     continue;
                 }
@@ -271,12 +276,13 @@ where
                 .valid_time_range
                 .contains(Timestamp::now(), TIME_RANGE_BUFFER)
             {
-                self.emit(BuilderEvent::SkippedOp {
-                    op_hash: self.op_hash(&op),
-                    reason: SkipReason::InvalidTimeRange {
+                self.emit(BuilderEvent::skipped_op(
+                    self.id,
+                    self.op_hash(&op),
+                    SkipReason::InvalidTimeRange {
                         valid_range: simulation.valid_time_range,
                     },
-                });
+                ));
                 rejected_ops.push(op);
                 continue;
             }
@@ -289,10 +295,11 @@ where
                 // Exclude ops that access the sender of another op in the
                 // batch, but don't reject them (remove them from pool).
                 info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender);
-                self.emit(BuilderEvent::SkippedOp {
-                    op_hash: self.op_hash(&op),
-                    reason: SkipReason::AccessedOtherSender { other_sender },
-                });
+                self.emit(BuilderEvent::skipped_op(
+                    self.id,
+                    self.op_hash(&op),
+                    SkipReason::AccessedOtherSender { other_sender },
+                ));
                 continue;
             }
             if let Some(paymaster) = op.paymaster() {
@@ -393,12 +400,13 @@ where
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas)),
             HandleOpsOut::FailedOp(index, message) => {
-                self.emit(BuilderEvent::RejectedOp {
-                    op_hash: self.op_hash(context.get_op_at(index)?),
-                    reason: OpRejectionReason::FailedInBundle {
+                self.emit(BuilderEvent::rejected_op(
+                    self.id,
+                    self.op_hash(context.get_op_at(index)?),
+                    OpRejectionReason::FailedInBundle {
                         message: Arc::new(message.clone()),
                     },
-                });
+                ));
                 self.process_failed_op(context, index, message).await?;
                 Ok(None)
             }
@@ -417,6 +425,7 @@ where
             .get_ops(GetOpsRequest {
                 entry_point: self.entry_point.address().as_bytes().to_vec(),
                 max_ops: self.settings.max_bundle_size,
+                builder_id: self.id,
             })
             .await
             .context("should get ops from op pool to bundle")?
@@ -1279,6 +1288,7 @@ mod tests {
             .returning(move |address, _| signatures_by_aggregator[&address]());
         let (event_sender, _) = broadcast::channel(16);
         let proposer = BundleProposerImpl::new(
+            0,
             op_pool_handle.client.clone(),
             simulator,
             entry_point,

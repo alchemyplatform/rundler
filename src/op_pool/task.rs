@@ -32,6 +32,7 @@ pub struct Args {
     pub http_poll_interval: Duration,
     pub chain_id: u64,
     pub chain_history_size: u64,
+    pub num_builders: u64,
     pub pool_configs: Vec<PoolConfig>,
 }
 
@@ -98,7 +99,11 @@ impl Task for PoolTask {
         });
 
         // gRPC server
-        let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_map));
+        let op_pool_server = OpPoolServer::new(OpPoolImpl::new(
+            chain_id,
+            mempool_map,
+            self.args.num_builders,
+        ));
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
             .build()?;
