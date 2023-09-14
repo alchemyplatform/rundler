@@ -8,8 +8,8 @@ The rpc module is used to expose a JSONRPC http api, much like a normal Ethereum
 
 ## Builder
 
-The builder module is used to gather user operations out of the mempool and colate them together within a bundle and send them as a bundle to get propogated on chain. There are 3 components to the builder module that have repsective purposes.
-
+The builder module is used to propose, send and track transactions that need to be bundled together and pushed onto the chain. There are 3 components to the builder module that have repsective purposes.
+ 
 ### Sender
 
 The sender components function is to forward the bundled user operations to a node url or to a relay server (eg. Flashbots) if the chain is supported.
@@ -26,7 +26,7 @@ If the server is running in the distributed mode, messaging is done via gRPC whi
 
 ## Pool
 
-The pool components purpose is to manage the mempool operations. Once a `eth_sendUserOperation` request is sent to the RPC server, the pool will add the operation to its mempool to be able to be included into a bundle.
+The pool components purpose is to manage the mempool operations. Once a user operation is sent to the RPC server, the pool will add the operation to its mempool to be proposed via the builder and then to be propogated on chain.
 
 
 ## Distributed architecture
