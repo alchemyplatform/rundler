@@ -86,7 +86,7 @@ type StringSet = Record<string, boolean | undefined>;
     "EXTCODELENGTH",
   ]);
   // Whitelisted precompile addresses.
-  const PRECOMPILE_WHILTELIST = stringSet([
+  const PRECOMPILE_WHITELIST = stringSet([
     "0x0000000000000000000000000000000000000001", // ecRecover
     "0x0000000000000000000000000000000000000002", // SHA2-256
     "0x0000000000000000000000000000000000000003", // RIPEMD-160
@@ -324,7 +324,7 @@ type StringSet = Record<string, boolean | undefined>;
             }
           }
           accessedContractAddresses[addressHex] = true;
-        } else if (!PRECOMPILE_WHILTELIST[addressHex]) {
+        } else if (!PRECOMPILE_WHITELIST[addressHex]) {
           currentPhase.forbiddenPrecompilesUsed[getContractCombinedKey(log, addressHex)] = true;
         }
       }

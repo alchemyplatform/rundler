@@ -717,68 +717,12 @@ mod tests {
         )
     }
 
-    fn create_simulator(
-        provider: MockProviderLike,
-        entry_point: MockEntryPointLike,
-        simulate_validation_tracer: MockSimulateValidationTracer,
-    ) -> SimulatorImpl<MockProviderLike, MockEntryPointLike, MockSimulateValidationTracer> {
-        let settings = Settings::default();
-
-        let mut mempool_configs = HashMap::new();
-        mempool_configs.insert(H256::zero(), MempoolConfig::default());
-
-        let provider = Arc::new(provider);
-
-        let simulator: SimulatorImpl<
-            MockProviderLike,
-            MockEntryPointLike,
-            MockSimulateValidationTracer,
-        > = SimulatorImpl::new(
-            Arc::clone(&provider),
-            entry_point,
-            simulate_validation_tracer,
-            settings,
-            mempool_configs,
-        );
-
-        simulator
-    }
-
-    #[tokio::test]
-    async fn test_simulate_validation() {
-        let (mut provider, mut entry_point, mut tracer) = create_base_config();
-
-        provider.expect_get_latest_block_hash().returning(|| {
-            Ok(
-                H256::from_str(
-                    "0x38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d",
-                )
-                .unwrap(),
-            )
-        });
-
-        entry_point.expect_simulate_validation().returning(|_, _| {
-            Ok(TypedTransaction::Eip1559(Eip1559TransactionRequest {
-                from: None,
-                to: Some(NameOrAddress::Address(
-                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                )),
-                nonce: None,
-                gas: None,
-                value: None,
-                data: None,
-                chain_id: None,
-                access_list: AccessList(vec![]),
-                max_priority_fee_per_gas: None,
-                max_fee_per_gas: None,
-            }))
-        });
-
-        tracer.expect_trace_simulate_validation().returning(move |_, _, _| Ok(SimulationTracerOutput {
+    fn get_test_tracer_output() -> SimulationTracerOutput {
+        SimulationTracerOutput {
             accessed_contract_addresses: vec![
                 Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
                 Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),            
+                Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
             ],
             associated_slots_by_address: serde_json::from_str(r#"
             {
@@ -849,7 +793,69 @@ mod tests {
                 }
             ],
             revert_data: Some("0xe0cff05f00000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014eff00000000000000000000000000000000000000000000000000000b7679c50c24000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffff00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000000".into()),
-        }));
+        }
+    }
+
+    fn create_simulator(
+        provider: MockProviderLike,
+        entry_point: MockEntryPointLike,
+        simulate_validation_tracer: MockSimulateValidationTracer,
+    ) -> SimulatorImpl<MockProviderLike, MockEntryPointLike, MockSimulateValidationTracer> {
+        let settings = Settings::default();
+
+        let mut mempool_configs = HashMap::new();
+        mempool_configs.insert(H256::zero(), MempoolConfig::default());
+
+        let provider = Arc::new(provider);
+
+        let simulator: SimulatorImpl<
+            MockProviderLike,
+            MockEntryPointLike,
+            MockSimulateValidationTracer,
+        > = SimulatorImpl::new(
+            Arc::clone(&provider),
+            entry_point,
+            simulate_validation_tracer,
+            settings,
+            mempool_configs,
+        );
+
+        simulator
+    }
+
+    #[tokio::test]
+    async fn test_simulate_validation() {
+        let (mut provider, mut entry_point, mut tracer) = create_base_config();
+
+        provider.expect_get_latest_block_hash().returning(|| {
+            Ok(
+                H256::from_str(
+                    "0x38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d",
+                )
+                .unwrap(),
+            )
+        });
+
+        entry_point.expect_simulate_validation().returning(|_, _| {
+            Ok(TypedTransaction::Eip1559(Eip1559TransactionRequest {
+                from: None,
+                to: Some(NameOrAddress::Address(
+                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                )),
+                nonce: None,
+                gas: None,
+                value: None,
+                data: None,
+                chain_id: None,
+                access_list: AccessList(vec![]),
+                max_priority_fee_per_gas: None,
+                max_fee_per_gas: None,
+            }))
+        });
+
+        tracer
+            .expect_trace_simulate_validation()
+            .returning(move |_, _, _| Ok(get_test_tracer_output()));
 
         entry_point
             .expect_address()
@@ -899,76 +905,19 @@ mod tests {
     async fn test_create_context_two_phases_unintended_revert() {
         let (provider, entry_point, mut tracer) = create_base_config();
 
-        tracer.expect_trace_simulate_validation().returning(move |_, _, _| Ok(SimulationTracerOutput {
-            accessed_contract_addresses: vec![
-                Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),            
-            ],
-            associated_slots_by_address: serde_json::from_str(r#"
-            {
-                "0x0000000000000000000000000000000000000000": [
-                    "0xd5c1ebdd81c5c7bebcd52bc11c8d37f7038b3c64f849c2ca58a022abeab1adae",
-                    "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5"
-                ],
-                "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4": [
-                    "0x3072884cc37d411af7360b34f105e1e860b1631783232a4f2d5c094d365cdaab",
-                    "0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5",
-                    "0xf264fff4db20d04721712f34a6b5a8bca69a212345e40a92101082e79bdd1f0a"
-                ]
-            }
-            "#).unwrap(),
-            factory_called_create2_twice: false,
-            expected_storage: serde_json::from_str(r#"
-            {
-                "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789": {
-                    "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                    "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb6": "0x0000000000000000000000000000000000000000000000000000000000000000"
-                }
-            }
-            "#).unwrap(),
-            phases: vec![
-                Phase {
-                    addresses_calling_with_value: vec![],
-                    called_banned_entry_point_method: false,
-                    called_non_entry_point_with_value: false,
-                    forbidden_opcodes_used: vec![],
-                    forbidden_precompiles_used: vec![],
-                    ran_out_of_gas: false,
-                    storage_accesses: vec![],
-                    undeployed_contract_accesses: vec![],
-                },
-                Phase {
-                    addresses_calling_with_value: vec![Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap()],
-                    called_banned_entry_point_method: false,
-                    called_non_entry_point_with_value: false,
-                    forbidden_opcodes_used: vec![],
-                    forbidden_precompiles_used: vec![],
-                    ran_out_of_gas: false,
-                    storage_accesses: vec![
-                        StorageAccess {
-                            address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                            slots: vec![
-                                U256::from_str("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc").unwrap(),
-                                U256::from_str("0x0000000000000000000000000000000000000000000000000000000000000000").unwrap()
-                            ],
-                        },
-                        StorageAccess {
-                            address: Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                            slots: vec![
-                                U256::from_str("0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5").unwrap()
-                            ],
-                        }
-                    ],
-                    undeployed_contract_accesses: vec![],
-                }
-            ],
-            revert_data: Some(hex::encode(
-                FailedOp {
-                    op_index: U256::from(10),
-                    reason: "AA23 reverted (or OOG)".to_string(),
-                }.encode())),
-        }));
+        tracer
+            .expect_trace_simulate_validation()
+            .returning(|_, _, _| {
+                let mut tracer_output = get_test_tracer_output();
+                tracer_output.revert_data = Some(hex::encode(
+                    FailedOp {
+                        op_index: U256::from(10),
+                        reason: "AA23 reverted (or OOG)".to_string(),
+                    }
+                    .encode(),
+                ));
+                Ok(tracer_output)
+            });
 
         let user_operation = UserOperation {
             sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
@@ -1000,5 +949,131 @@ mod tests {
                 )) if reason == "AA23 reverted (or OOG)"
             )
         ));
+    }
+
+    #[tokio::test]
+    async fn test_gather_context_violations() {
+        let (provider, mut entry_point, tracer) = create_base_config();
+
+        let mut tracer_output = get_test_tracer_output();
+
+        // add forbidden opcodes and precompiles
+        tracer_output.phases[1].forbidden_opcodes_used = vec![
+            String::from("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4:GASPRICE"),
+            String::from("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4:COINBASE"),
+        ];
+        tracer_output.phases[1].forbidden_precompiles_used = vec![String::from(
+            "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4:0x0000000000000000000000000000000000000019",
+        )];
+
+        // add a storage access for a random unrelated address
+        tracer_output.phases[1]
+            .storage_accesses
+            .push(StorageAccess {
+                address: Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6").unwrap(),
+                slots: vec![U256::from_str(
+                    "0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b",
+                )
+                .unwrap()],
+            });
+
+        let mut validation_context = ValidationContext {
+            block_id: BlockId::Number(BlockNumber::Latest),
+            entity_infos: EntityInfos::new(
+                Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
+                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
+                &ValidationOutput {
+                    return_info: ValidationReturnInfo::from((
+                        U256::default(),
+                        U256::default(),
+                        false,
+                        0,
+                        0,
+                        Bytes::default(),
+                    )),
+                    sender_info: StakeInfo::from((U256::default(), U256::default())),
+                    factory_info: StakeInfo::from((U256::default(), U256::default())),
+                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                    aggregator_info: None,
+                },
+                Settings::default(),
+            ),
+            tracer_out: tracer_output,
+            entry_point_out: ValidationOutput {
+                return_info: ValidationReturnInfo::from((
+                    U256::default(),
+                    U256::default(),
+                    true,
+                    0,
+                    0,
+                    Bytes::default(),
+                )),
+                sender_info: StakeInfo::from((U256::default(), U256::default())),
+                factory_info: StakeInfo::from((U256::default(), U256::default())),
+                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                aggregator_info: None,
+            },
+            is_unstaked_wallet_creation: false,
+
+            entities_needing_stake: vec![],
+            accessed_addresses: HashSet::new(),
+        };
+
+        entry_point
+            .expect_address()
+            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+
+        let simulator = create_simulator(provider, entry_point, tracer);
+        let res = simulator.gather_context_violations(&mut validation_context);
+
+        assert_eq!(
+            res.unwrap(),
+            vec![
+                SimulationViolation::InvalidSignature,
+                SimulationViolation::UsedForbiddenOpcode(
+                    Entity {
+                        kind: EntityType::Account,
+                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
+                            .unwrap()
+                    },
+                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    ViolationOpCode(Opcode::GASPRICE),
+                ),
+                SimulationViolation::UsedForbiddenOpcode(
+                    Entity {
+                        kind: EntityType::Account,
+                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
+                            .unwrap()
+                    },
+                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    ViolationOpCode(Opcode::COINBASE),
+                ),
+                SimulationViolation::UsedForbiddenPrecompile(
+                    Entity {
+                        kind: EntityType::Account,
+                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
+                            .unwrap()
+                    },
+                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    Address::from_str("0x0000000000000000000000000000000000000019").unwrap(),
+                ),
+                SimulationViolation::InvalidStorageAccess(
+                    Entity {
+                        kind: EntityType::Account,
+                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
+                            .unwrap()
+                    },
+                    StorageSlot {
+                        address: Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6")
+                            .unwrap(),
+                        slot: U256::from_str(
+                            "0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b"
+                        )
+                        .unwrap()
+                    }
+                )
+            ]
+        );
     }
 }
