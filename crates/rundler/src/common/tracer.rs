@@ -1,27 +1,49 @@
 use std::{
     collections::{BTreeSet, HashMap},
+    convert::TryFrom,
     fmt::Debug,
     sync::Arc,
 };
 
-use anyhow::Context;
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, BlockId, U256};
+use anyhow::{bail, Context};
+use ethers::types::{
+    transaction::eip2718::TypedTransaction, Address, BlockId, GethDebugTracerType,
+    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, U256,
+};
+#[cfg(test)]
+use mockall::automock;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_types::UserOperation;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tonic::async_trait;
 
-use super::context::LogWithContext;
-use crate::common::types::ExpectedStorage;
+use super::{
+    context::LogWithContext,
+    types::{EntryPointLike, ProviderLike},
+};
+use crate::common::types::{ExpectedStorage, UserOperation};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TracerOutput {
+pub struct SimulationTracerOutput {
     pub phases: Vec<Phase>,
     pub revert_data: Option<String>,
     pub accessed_contract_addresses: Vec<Address>,
     pub associated_slots_by_address: AssociatedSlotsByAddress,
     pub factory_called_create2_twice: bool,
     pub expected_storage: ExpectedStorage,
+}
+
+impl TryFrom<GethTrace> for SimulationTracerOutput {
+    type Error = anyhow::Error;
+    fn try_from(trace: GethTrace) -> Result<Self, Self::Error> {
+        match trace {
+            GethTrace::Unknown(value) => Ok(SimulationTracerOutput::deserialize(&value)?),
+            GethTrace::Known(_) => {
+                bail!("Failed to deserialize simulation trace")
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -62,39 +84,78 @@ impl AssociatedSlotsByAddress {
     }
 }
 
-/// Runs the bundler's custom tracer on the entry point's `simulateValidation`
-/// method for the provided user operation.
-pub async fn trace_simulate_validation<E: EntryPoint, P: Provider>(
-    entry_point: &E,
-    provider: Arc<P>,
-    op: UserOperation,
-    block_id: BlockId,
-    max_validation_gas: u64,
-) -> anyhow::Result<TracerOutput> {
-    let tx = entry_point
-        .simulate_validation(op, max_validation_gas)
-        .await?;
-
-    trace_call(provider, tx, block_id, validation_tracer_js()).await
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait SimulateValidationTracer: Send + Sync + 'static {
+    async fn trace_simulate_validation(
+        &self,
+        op: UserOperation,
+        block_id: BlockId,
+        max_validation_gas: u64,
+    ) -> anyhow::Result<SimulationTracerOutput>;
 }
 
-async fn trace_call<T, P: Provider>(
-    provider: Arc<P>,
-    tx: TypedTransaction,
-    block_id: BlockId,
-    tracer_code: &str,
-) -> anyhow::Result<T>
+#[derive(Debug)]
+pub struct SimulateValidationTracerImpl<P, E>
 where
-    T: Debug + DeserializeOwned + Serialize + Send + 'static,
+    P: ProviderLike,
+    E: EntryPointLike,
 {
-    let out = provider
-        .request(
-            "debug_traceCall",
-            (tx, block_id, serde_json::json!({ "tracer": tracer_code })),
-        )
-        .await
-        .log_context("failed to run bundler trace")?;
-    Ok(out)
+    provider: Arc<P>,
+    entry_point: Arc<E>,
+}
+
+/// Runs the bundler's custom tracer on the entry point's `simulateValidation`
+/// method for the provided user operation.
+
+#[async_trait]
+impl<P, E> SimulateValidationTracer for SimulateValidationTracerImpl<P, E>
+where
+    P: ProviderLike,
+    E: EntryPointLike,
+{
+    async fn trace_simulate_validation(
+        &self,
+        op: UserOperation,
+        block_id: BlockId,
+        max_validation_gas: u64,
+    ) -> anyhow::Result<SimulationTracerOutput> {
+        let tx = self
+            .entry_point
+            .simulate_validation(op, max_validation_gas)
+            .await?;
+
+        let asdf = self
+            .provider
+            .debug_trace_call(
+                &tx,
+                Some(block_id),
+                GethDebugTracingCallOptions {
+                    tracing_options: GethDebugTracingOptions {
+                        tracer: Some(GethDebugTracerType::JsTracer(
+                            validation_tracer_js().to_string(),
+                        )),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await?;
+        return SimulationTracerOutput::try_from(asdf);
+    }
+}
+
+impl<P, E> SimulateValidationTracerImpl<P, E>
+where
+    P: ProviderLike,
+    E: EntryPointLike,
+{
+    pub fn new(provider: Arc<P>, entry_point: Arc<E>) -> Self {
+        Self {
+            provider,
+            entry_point,
+        }
+    }
 }
 
 fn validation_tracer_js() -> &'static str {

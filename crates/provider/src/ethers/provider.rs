@@ -6,8 +6,8 @@ use ethers::{
     providers::{JsonRpcClient, Middleware, Provider as EthersProvider, ProviderError},
     types::{
         transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
-        Eip1559TransactionRequest, Filter, GethDebugTracingOptions, GethTrace, Log, Transaction,
-        TransactionReceipt, TxHash, H160, H256, U256, U64,
+        Eip1559TransactionRequest, Filter, GethDebugTracingCallOptions, GethDebugTracingOptions,
+        GethTrace, Log, Transaction, TransactionReceipt, TxHash, H160, H256, U256, U64,
     },
 };
 use rundler_types::{
@@ -87,6 +87,15 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         trace_options: GethDebugTracingOptions,
     ) -> Result<GethTrace, ProviderError> {
         Middleware::debug_trace_transaction(self, tx_hash, trace_options).await
+    }
+
+    async fn debug_trace_call(
+        &self,
+        tx: &TypedTransaction,
+        block_id: Option<BlockId>,
+        trace_options: GethDebugTracingCallOptions,
+    ) -> Result<GethTrace, ProviderError> {
+        Middleware::debug_trace_call(self, (*tx).clone(), block_id, trace_options).await
     }
 
     async fn get_balance(&self, address: Address, block: Option<BlockId>) -> anyhow::Result<U256> {

@@ -23,8 +23,10 @@ use super::{
 use crate::common::{
     eth,
     mempool::MempoolConfig,
-    tracer,
-    tracer::{AssociatedSlotsByAddress, StorageAccess, TracerOutput},
+    tracer::{
+        AssociatedSlotsByAddress, SimulateValidationTracer, SimulateValidationTracerImpl,
+        SimulationTracerOutput, StorageAccess,
+    },
     types::{
         ExpectedStorage, StakeInfo, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
         ViolationError,
@@ -73,7 +75,8 @@ pub trait Simulator: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct SimulatorImpl<P: Provider, E: EntryPoint> {
     provider: Arc<P>,
-    entry_point: E,
+    entry_point: Arc<E>,
+    simulate_validation_tracer: SimulateValidationTracerImpl<P, E>,
     sim_settings: Settings,
     mempool_configs: HashMap<H256, MempoolConfig>,
 }
@@ -89,9 +92,13 @@ where
         sim_settings: Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
+        let entry_point = Arc::new(entry_point);
+        let simulate_validation_tracer =
+            SimulateValidationTracerImpl::new(Arc::clone(&provider), Arc::clone(&entry_point));
         Self {
             provider,
             entry_point,
+            simulate_validation_tracer: simulate_validation_tracer,
             sim_settings,
             mempool_configs,
         }
@@ -111,14 +118,10 @@ where
         let factory_address = op.factory();
         let sender_address = op.sender;
         let paymaster_address = op.paymaster();
-        let tracer_out = tracer::trace_simulate_validation(
-            &self.entry_point,
-            Arc::clone(&self.provider),
-            op.clone(),
-            block_id,
-            self.sim_settings.max_verification_gas,
-        )
-        .await?;
+        let tracer_out = self
+            .simulate_validation_tracer
+            .trace_simulate_validation(op.clone(), block_id, self.sim_settings.max_verification_gas)
+            .await?;
         let num_phases = tracer_out.phases.len() as u32;
         // Check if there are too many phases here, then check too few at the
         // end. We are detecting cases where the entry point is broken. Too many
@@ -530,7 +533,7 @@ fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
 struct ValidationContext {
     block_id: BlockId,
     entity_infos: EntityInfos,
-    tracer_out: TracerOutput,
+    tracer_out: SimulationTracerOutput,
     entry_point_out: ValidationOutput,
     is_unstaked_wallet_creation: bool,
     entities_needing_stake: Vec<EntityType>,
@@ -679,5 +682,204 @@ impl Default for Settings {
             max_simulate_handle_ops_gas: 550_000_000,
             max_verification_gas: 5_000_000,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use ethers::{
+        providers::{JsonRpcError, MockError, ProviderError},
+        types::{
+            transaction::{eip2718::TypedTransaction, eip2930::AccessList},
+            Address, Eip1559TransactionRequest, GethTrace, NameOrAddress,
+        },
+    };
+    use serde_json::Value;
+
+    use super::*;
+    use crate::common::types::{MockEntryPointLike, MockProviderLike};
+
+    fn create_base_config() -> (MockProviderLike, MockEntryPointLike) {
+        return (MockProviderLike::new(), MockEntryPointLike::new());
+    }
+
+    fn create_simulator(
+        provider: MockProviderLike,
+        entry_point: MockEntryPointLike,
+    ) -> SimulatorImpl<MockProviderLike, MockEntryPointLike> {
+        let settings = Settings::default();
+
+        let mut mempool_configs = HashMap::new();
+        mempool_configs.insert(H256::zero(), MempoolConfig::default());
+
+        let provider = Arc::new(provider);
+        let simulator: SimulatorImpl<MockProviderLike, MockEntryPointLike> = SimulatorImpl::new(
+            Arc::clone(&provider),
+            entry_point,
+            settings,
+            mempool_configs,
+        );
+
+        simulator
+    }
+
+    #[tokio::test]
+    async fn test_simulate_validation() {
+        let (mut provider, mut entry_point) = create_base_config();
+
+        provider.expect_get_latest_block_hash().returning(|| {
+            Ok(
+                H256::from_str(
+                    "0x38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d",
+                )
+                .unwrap(),
+            )
+        });
+
+        entry_point.expect_simulate_validation().returning(|_, _| {
+            Ok(TypedTransaction::Eip1559(Eip1559TransactionRequest {
+                from: None,
+                to: Some(NameOrAddress::Address(
+                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                )),
+                nonce: None,
+                gas: None,
+                value: None,
+                data: None,
+                chain_id: None,
+                access_list: AccessList(vec![]),
+                max_priority_fee_per_gas: None,
+                max_fee_per_gas: None,
+            }))
+        });
+
+        let simulation_tracer_result_json = r#"{
+            "accessedContractAddresses": [
+                "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+                "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4",
+                "0x8abb13360b87be5eeb1b98647a016add927a136c"
+            ],
+            "associatedSlotsByAddress": {
+                "0x0000000000000000000000000000000000000000": [
+                "0xd5c1ebdd81c5c7bebcd52bc11c8d37f7038b3c64f849c2ca58a022abeab1adae",
+                "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5"
+                ],
+                "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4": [
+                "0x3072884cc37d411af7360b34f105e1e860b1631783232a4f2d5c094d365cdaab",
+                "0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5",
+                "0xf264fff4db20d04721712f34a6b5a8bca69a212345e40a92101082e79bdd1f0a"
+                ]
+            },
+            "expectedStorage": {
+                "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789": {
+                "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb6": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "0xd5c1ebdd81c5c7bebcd52bc11c8d37f7038b3c64f849c2ca58a022abeab1adae": "0x0000000000000000000000000000000000000000000000000000000000000104",
+                "0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5": "0x000000000000000000000000000000000000000000000000000002de01482e02",
+                "0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd6": "0x0000000000000000000000000000000000000000000000000000000000000000"
+                },
+                "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4": {
+                "0x0000000000000000000000000000000000000000000000000000000000000000": "0x00000000000000000000f7f00d283ce4cdbefd1a7c7c22d3e3b7189f2fd10001",
+                "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc": "0x0000000000000000000000008abb13360b87be5eeb1b98647a016add927a136c"
+                }
+            },
+            "factoryCalledCreate2Twice": false,
+            "phases": [
+                {
+                "addressesCallingWithValue": [],
+                "calledBannedEntryPointMethod": false,
+                "calledNonEntryPointWithValue": false,
+                "forbiddenOpcodesUsed": [],
+                "forbiddenPrecompilesUsed": [],
+                "ranOutOfGas": false,
+                "storageAccesses": [],
+                "undeployedContractAccesses": []
+                },
+                {
+                "addressesCallingWithValue": ["0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4"],
+                "calledBannedEntryPointMethod": false,
+                "calledNonEntryPointWithValue": false,
+                "forbiddenOpcodesUsed": [],
+                "forbiddenPrecompilesUsed": [],
+                "ranOutOfGas": false,
+                "storageAccesses": [
+                    {
+                    "address": "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4",
+                    "slots": [
+                        "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+                        "0x0000000000000000000000000000000000000000000000000000000000000000"
+                    ]
+                    },
+                    {
+                    "address": "0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789",
+                    "slots": ["0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5"]
+                    }
+                ],
+                "undeployedContractAccesses": []
+                },
+                {
+                "addressesCallingWithValue": [],
+                "calledBannedEntryPointMethod": false,
+                "calledNonEntryPointWithValue": false,
+                "forbiddenOpcodesUsed": [],
+                "forbiddenPrecompilesUsed": [],
+                "ranOutOfGas": false,
+                "storageAccesses": [],
+                "undeployedContractAccesses": []
+                }
+            ],
+            "revertData": "0xe0cff05f00000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014eff00000000000000000000000000000000000000000000000000000b7679c50c24000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffff00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000000"
+        }"#;
+
+        let value: Value = serde_json::from_str(simulation_tracer_result_json).unwrap();
+
+        provider
+            .expect_debug_trace_call()
+            .returning(move |_, _, _| Ok(GethTrace::Unknown(value.clone())));
+
+        entry_point
+            .expect_address()
+            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+
+        // The underlying eth_call when getting the code hash in check_contracts
+        provider.expect_call().returning(|_, _| {
+            let json_rpc_error = JsonRpcError {
+                code: -32000,
+                message: "execution reverted".to_string(),
+                data: Some(serde_json::Value::String(
+                    "0x091cd005abf68e7b82c951a8619f065986132f67a0945153533cfcdd93b6895f33dbc0c7"
+                        .to_string(),
+                )),
+            };
+            Err(ProviderError::JsonRpcClientError(Box::new(
+                MockError::JsonRpcError(json_rpc_error),
+            )))
+        });
+
+        provider
+            .expect_validate_user_op_signature()
+            .returning(|_, _, _| Ok(AggregatorOut::NotNeeded));
+
+        let user_operation = UserOperation {
+            sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+            nonce: U256::from(264),
+            init_code: Bytes::from_str("0x").unwrap(),
+            call_data: Bytes::from_str("0xb61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000").unwrap(),
+            call_gas_limit: U256::from(9100),
+            verification_gas_limit: U256::from(64805),
+            pre_verification_gas: U256::from(46128),
+            max_fee_per_gas: U256::from(105000100),
+            max_priority_fee_per_gas: U256::from(105000000),
+            paymaster_and_data: Bytes::from_str("0x").unwrap(),
+            signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
+        };
+
+        let simulator = create_simulator(provider, entry_point);
+        let res = simulator
+            .simulate_validation(user_operation, None, None)
+            .await;
+        assert_eq!(res.is_ok(), true);
     }
 }
