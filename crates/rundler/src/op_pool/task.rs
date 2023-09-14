@@ -18,6 +18,7 @@ use crate::{
         handle::Task,
         precheck::{Prechecker, PrecheckerImpl},
         simulation::{Simulator, SimulatorImpl},
+        tracer::SimulateValidationTracerImpl,
     },
     op_pool::{
         chain::{self, Chain},
@@ -156,6 +157,8 @@ impl PoolTask {
         tokio::spawn(async move { reputation_runner.run().await });
 
         let i_entry_point = IEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
+        let simulate_validation_tracer =
+            SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
         let prechecker = PrecheckerImpl::new(
             Arc::clone(&provider),
             pool_config.chain_id,
@@ -165,6 +168,7 @@ impl PoolTask {
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
             i_entry_point,
+            simulate_validation_tracer,
             pool_config.sim_settings,
             pool_config.mempool_channel_configs.clone(),
         );

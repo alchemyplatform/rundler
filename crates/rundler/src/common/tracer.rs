@@ -108,7 +108,7 @@ where
     E: EntryPointLike,
 {
     provider: Arc<P>,
-    entry_point: Arc<E>,
+    entry_point: E,
 }
 
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
@@ -156,7 +156,7 @@ where
     P: ProviderLike,
     E: EntryPointLike,
 {
-    pub fn new(provider: Arc<P>, entry_point: Arc<E>) -> Self {
+    pub fn new(provider: Arc<P>, entry_point: E) -> Self {
         Self {
             provider,
             entry_point,
