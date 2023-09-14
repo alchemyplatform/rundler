@@ -138,6 +138,7 @@ impl PoolArgs {
                 .clone()
                 .context("pool requires node_http arg")?,
             http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
+            num_builders: common.num_builders,
             pool_configs,
         })
     }

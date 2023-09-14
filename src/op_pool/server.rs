@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use ethers::{
-    types::{Address, H256},
+    types::{Address, H256, U256},
     utils::to_checksum,
 };
 use prost::Message;
@@ -23,14 +23,19 @@ use crate::common::protos::{
 pub struct OpPoolImpl<M: Mempool> {
     chain_id: u64,
     mempools: HashMap<Address, Arc<M>>,
+    num_builders: u64,
 }
 
 impl<M> OpPoolImpl<M>
 where
     M: Mempool,
 {
-    pub fn new(chain_id: u64, mempools: HashMap<Address, Arc<M>>) -> Self {
-        Self { chain_id, mempools }
+    pub fn new(chain_id: u64, mempools: HashMap<Address, Arc<M>>, num_builders: u64) -> Self {
+        Self {
+            chain_id,
+            mempools,
+            num_builders,
+        }
     }
 
     fn get_mempool_for_entry_point(&self, req_entry_point: &[u8]) -> Result<&Arc<M>> {
@@ -92,6 +97,13 @@ where
         let ops = mempool
             .best_operations(req.max_ops as usize)
             .iter()
+            .filter(|op| {
+                (self.num_builders == 1)
+                    | (U256::from_little_endian(op.uo.sender.as_bytes())
+                        .div_mod(self.num_builders.into())
+                        .1
+                        == req.builder_id.into())
+            })
             .map(|op| MempoolOp::try_from(&(**op)))
             .collect::<Result<Vec<MempoolOp>, _>>()
             .map_err(|e| Status::internal(format!("Failed to convert to proto mempool op: {e}")))?;
@@ -342,6 +354,7 @@ mod tests {
         OpPoolImpl::<MockMempool>::new(
             1,
             HashMap::from([(TEST_ADDRESS_ARR.into(), MockMempool::default().into())]),
+            1,
         )
     }
 

@@ -143,6 +143,8 @@ message GetOpsRequest {
   bytes entry_point = 1;
   // The maximum number of UserOperations to return
   uint64 max_ops = 2;
+  // The id of the builder making the request to return disjoint operations
+  uint64 builder_id = 3;
 }
 message GetOpsResponse {
   repeated MempoolOp ops = 1;
