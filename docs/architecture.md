@@ -27,3 +27,12 @@ If the server is running in the distributed mode, messaging is done via gRPC whi
 ## Pool
 
 The pool components purpose is to manage the mempool operations. Once a `eth_sendUserOperation` request is sent to the RPC server, the pool will add the operation to its mempool to be able to be included into a bundle.
+
+
+## Distributed architecture
+
+![distributed](images/multiimage.png)  
+
+## Single Image architecture
+
+![singleimage](images/multiprocess.png)  
