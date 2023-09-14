@@ -91,5 +91,4 @@ We follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0
 From within GitHub, opening a new pull request will present you with a template that should be filled out. Please try your best at filling out the details, but feel free to skip parts if you're not sure what to put.
 
 [dev-tg]: https://t.me/+F_xS9IVOdJZmZjQx
-[hiding-a-comment]: https://help.github.com/articles/managing-disruptive-comments/#hiding-a-comment
 
