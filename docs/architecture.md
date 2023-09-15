@@ -9,15 +9,18 @@ To generate the JSONRPC api, we make use of [Parity's][parity] [jsonrpsee librar
 
 ## Builder
 
-The builder module is used to propose, send and track transactions that need to be bundled together and pushed onto the chain. There are 3 components to the builder module that have repsective purposes.
+The builder module is used to propose, send and track transactions that need to be bundled together and pushed onto the chain. There are 3 components to the builder module that have repsective purposes, `sender`, `signer` and `server`.
  
 ### Sender
 
-The sender components function is to forward the bundled user operations to a node url or to a relay server (eg. Flashbots) if the chain is supported.
+The sender components function is to forward the bundled user operations to a node url or to a relay server (eg. Flashbots) if the chain is supported, after the transactions have been sent out to be landed on chain, there are a
+couple process that track the status of the operations and perform updates to the gas price if the transaction has not landed within a few blocks.
 
 ### Signer
 
 The signer component is used to sign transactions before they are sent to be propogated on chain. The signing process can either be done by a key that is local to the server instance or an AWS KMS key.
+When using the KMS option, there also needs to be a configured redis cache to perform locking. The locking is required as if there are multiple instances of the builder modules running with access to the same pool, we want to
+make sure that none of those builders have the same key which could lead to bundle invalidation once proposed bundles have reached a validator.
 
 ### Server
 
