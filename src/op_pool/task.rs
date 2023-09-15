@@ -71,14 +71,15 @@ impl Task for PoolTask {
         let mut mempools = Vec::new();
         let mut mempool_handles = Vec::new();
         for pool_config in &self.args.pool_configs {
-            let (pool, handle) = PoolTask::create_mempool(
-                pool_config,
-                update_sender.subscribe(),
-                self.event_sender.clone(),
-                shutdown_token.clone(),
-            )
-            .await
-            .context("should have created mempool")?;
+            let (pool, handle) = self
+                .create_mempool(
+                    pool_config,
+                    update_sender.subscribe(),
+                    self.event_sender.clone(),
+                    shutdown_token.clone(),
+                )
+                .await
+                .context("should have created mempool")?;
 
             mempools.push(pool);
             mempool_handles.push(handle);
@@ -99,11 +100,7 @@ impl Task for PoolTask {
         });
 
         // gRPC server
-        let op_pool_server = OpPoolServer::new(OpPoolImpl::new(
-            chain_id,
-            mempool_map,
-            self.args.num_builders,
-        ));
+        let op_pool_server = OpPoolServer::new(OpPoolImpl::new(chain_id, mempool_map));
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
             .build()?;
@@ -158,6 +155,7 @@ impl PoolTask {
     }
 
     async fn create_mempool(
+        &self,
         pool_config: &PoolConfig,
         update_rx: broadcast::Receiver<Arc<ChainUpdate>>,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
@@ -178,6 +176,7 @@ impl PoolTask {
             pool_config.clone(),
             Arc::clone(&reputation),
             event_sender,
+            self.args.num_builders,
         ));
         let mp_runner = Arc::clone(&mp);
         let handle =

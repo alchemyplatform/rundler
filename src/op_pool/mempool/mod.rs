@@ -47,7 +47,7 @@ pub trait Mempool: Send + Sync {
     /// the specified maximum number of operations.
     ///
     /// NOTE: Will only return one operation per sender.
-    fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
+    fn best_operations(&self, max: usize, builder_id: u64) -> Vec<Arc<PoolOperation>>;
 
     /// Returns the all operations from the pool up to a max size
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
