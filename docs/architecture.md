@@ -36,3 +36,4 @@ The pool components purpose is to manage the mempool operations. Once a user ope
 ## Single Image architecture
 
 ![singleimage](images/multiprocess.png)  
+

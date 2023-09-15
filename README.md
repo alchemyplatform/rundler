@@ -61,6 +61,7 @@ cargo run node
 - [configuration](docs/config.md)
 - [transactions](docs/transactions.md)
 - [contributing](docs/CONTRIBUTING.md)
+- [architecture](docs/architecture.md)
 
 ### Goals
 
