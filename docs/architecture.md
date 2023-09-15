@@ -9,19 +9,21 @@ To generate the JSONRPC api, we make use of [Parity's][parity] [jsonrpsee librar
 
 ## Builder
 
-The builder module is used to propose, send and track transactions that need to be bundled together and pushed onto the chain. There are 3 components to the builder module that have repsective purposes, `sender`, `signer` and `server`.
+The builder module is used to propose, send and track transactions that need to be bundled together and pushed onto the chain. 
 
 ## Bundle Proposer
 
-The bundle proposer is is most important part of the build  f 
+The bundle proposer is is most important part of Rundler as it performs numerous operations to check whether transactions and valid based on the [EIP4337 spec](https://eips.ethereum.org/EIPS/eip-4337), estimate gas and see if the next bundle
+has enough room for it to be included or wait until a new bundle is proposed. 
  
 ## Bundle Sender 
 
-Like the bundle sender 
+After the bundle proposal runs, the bundle sender logic will handle the process of propagating a transction on chain and checking on the status to see if it is included in a block. This process also handles the gas increases if the transaction
+has any issues being included.
  
 ## Sender
 
-The sender components function is to forward the bundled user operations to a node url or to a relay server (eg. Flashbots) if the chain is supported, after the transactions have been sent out to be landed on chain, there are a
+The sender is a lower level module that is used by the bundle sender to forward the bundled user operations to a node url or to a relay server (eg. Flashbots) if the chain is supported, after the transactions have been sent out to be landed on chain, there are a
 couple process that track the status of the operations and perform updates to the gas price if the transaction has not landed within a few blocks.
 
 ## Signer
