@@ -10,6 +10,7 @@ pub mod grpc;
 pub mod handle;
 pub mod math;
 pub mod mempool;
+pub mod polygon;
 pub mod precheck;
 pub mod protos;
 pub mod retry;

@@ -225,6 +225,12 @@ impl<P: ProviderLike> FeeEstimator<P> {
     }
 }
 
+const GWEI_TO_WEI: u64 = 1_000_000_000;
+
+pub fn from_gwei_f64(gwei: f64) -> U256 {
+    U256::from((gwei * GWEI_TO_WEI as f64).ceil() as u64)
+}
+
 const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
     Chain::Arbitrum as u64,
     Chain::ArbitrumNova as u64,
@@ -233,4 +239,18 @@ const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
 
 fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
     NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gwei_conversion() {
+        let max_priority_fee: f64 = 1.8963421368;
+
+        let result = from_gwei_f64(max_priority_fee);
+
+        assert_eq!(result, U256::from(1896342137));
+    }
 }
