@@ -6,8 +6,8 @@ use ethers::{
     providers::ProviderError,
     types::{
         transaction::eip2718::TypedTransaction, Address, Block, BlockId, Bytes, Filter,
-        GethDebugTracingOptions, GethTrace, Log, Transaction, TransactionReceipt, TxHash, H256,
-        U256,
+        GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log, Transaction,
+        TransactionReceipt, TxHash, H256, U256,
     },
 };
 #[cfg(feature = "test-utils")]
@@ -81,6 +81,14 @@ pub trait Provider: Send + Sync + 'static {
         &self,
         tx_hash: TxHash,
         trace_options: GethDebugTracingOptions,
+    ) -> Result<GethTrace, ProviderError>;
+
+    /// Debug trace a call
+    async fn debug_trace_call(
+        &self,
+        tx: TypedTransaction,
+        block_id: Option<BlockId>,
+        trace_options: GethDebugTracingCallOptions,
     ) -> Result<GethTrace, ProviderError>;
 
     /// Get the latest block hash
