@@ -7,6 +7,7 @@ pub mod gas;
 pub mod grpc;
 pub mod handle;
 pub mod mempool;
+pub mod polygon;
 pub mod precheck;
 #[allow(non_snake_case)]
 pub mod protos;
