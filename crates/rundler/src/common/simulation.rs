@@ -72,31 +72,29 @@ pub trait Simulator: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub struct SimulatorImpl<P: ProviderLike, E: EntryPointLike, T: SimulateValidationTracer> {
+pub struct SimulatorImpl<P: ProviderLike, T: SimulateValidationTracer> {
     provider: Arc<P>,
-    entry_point: Arc<E>,
+    entry_point_address: Address,
     simulate_validation_tracer: T,
     sim_settings: Settings,
     mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
-impl<P, E, T> SimulatorImpl<P, E, T>
+impl<P, T> SimulatorImpl<P, T>
 where
     P: ProviderLike,
-    E: EntryPointLike,
     T: SimulateValidationTracer,
 {
     pub fn new(
         provider: Arc<P>,
-        entry_point: E,
+        entry_point_address: Address,
         simulate_validation_tracer: T,
         sim_settings: Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
-        let entry_point = Arc::new(entry_point);
         Self {
             provider,
-            entry_point,
+            entry_point_address,
             simulate_validation_tracer,
             sim_settings,
             mempool_configs,
@@ -250,7 +248,7 @@ where
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         is_unstaked_wallet_creation,
-                        entry_point_address: self.entry_point.address(),
+                        entry_point_address: self.entry_point_address,
                         entity_address: entity_info.address,
                         sender_address,
                         accessed_address: address,
@@ -322,7 +320,7 @@ where
                     // weird case where CREATE2 is called > 1, but there isn't a factory
                     // defined. This should never happen, blame the violation on the entry point.
                     violations.push(SimulationViolation::FactoryCalledCreate2Twice(
-                        self.entry_point.address(),
+                        self.entry_point_address,
                     ));
                 }
             }
@@ -388,10 +386,9 @@ where
 }
 
 #[async_trait]
-impl<P, E, T> Simulator for SimulatorImpl<P, E, T>
+impl<P, T> Simulator for SimulatorImpl<P, T>
 where
     P: ProviderLike,
-    E: EntryPointLike,
     T: SimulateValidationTracer,
 {
     async fn simulate_validation(
@@ -692,29 +689,18 @@ mod tests {
     use ethers::{
         abi::AbiEncode,
         providers::{JsonRpcError, MockError, ProviderError},
-        types::{
-            transaction::{eip2718::TypedTransaction, eip2930::AccessList},
-            Address, BlockNumber, Eip1559TransactionRequest, NameOrAddress,
-        },
+        types::{Address, BlockNumber},
         utils::hex,
     };
 
     use super::*;
     use crate::common::{
         tracer::{MockSimulateValidationTracer, Phase},
-        types::{MockEntryPointLike, MockProviderLike},
+        types::MockProviderLike,
     };
 
-    fn create_base_config() -> (
-        MockProviderLike,
-        MockEntryPointLike,
-        MockSimulateValidationTracer,
-    ) {
-        (
-            MockProviderLike::new(),
-            MockEntryPointLike::new(),
-            MockSimulateValidationTracer::new(),
-        )
+    fn create_base_config() -> (MockProviderLike, MockSimulateValidationTracer) {
+        (MockProviderLike::new(), MockSimulateValidationTracer::new())
     }
 
     fn get_test_tracer_output() -> SimulationTracerOutput {
@@ -798,9 +784,8 @@ mod tests {
 
     fn create_simulator(
         provider: MockProviderLike,
-        entry_point: MockEntryPointLike,
         simulate_validation_tracer: MockSimulateValidationTracer,
-    ) -> SimulatorImpl<MockProviderLike, MockEntryPointLike, MockSimulateValidationTracer> {
+    ) -> SimulatorImpl<MockProviderLike, MockSimulateValidationTracer> {
         let settings = Settings::default();
 
         let mut mempool_configs = HashMap::new();
@@ -808,24 +793,21 @@ mod tests {
 
         let provider = Arc::new(provider);
 
-        let simulator: SimulatorImpl<
-            MockProviderLike,
-            MockEntryPointLike,
-            MockSimulateValidationTracer,
-        > = SimulatorImpl::new(
-            Arc::clone(&provider),
-            entry_point,
-            simulate_validation_tracer,
-            settings,
-            mempool_configs,
-        );
+        let simulator: SimulatorImpl<MockProviderLike, MockSimulateValidationTracer> =
+            SimulatorImpl::new(
+                Arc::clone(&provider),
+                Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                simulate_validation_tracer,
+                settings,
+                mempool_configs,
+            );
 
         simulator
     }
 
     #[tokio::test]
     async fn test_simulate_validation() {
-        let (mut provider, mut entry_point, mut tracer) = create_base_config();
+        let (mut provider, mut tracer) = create_base_config();
 
         provider.expect_get_latest_block_hash().returning(|| {
             Ok(
@@ -836,30 +818,9 @@ mod tests {
             )
         });
 
-        entry_point.expect_simulate_validation().returning(|_, _| {
-            Ok(TypedTransaction::Eip1559(Eip1559TransactionRequest {
-                from: None,
-                to: Some(NameOrAddress::Address(
-                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                )),
-                nonce: None,
-                gas: None,
-                value: None,
-                data: None,
-                chain_id: None,
-                access_list: AccessList(vec![]),
-                max_priority_fee_per_gas: None,
-                max_fee_per_gas: None,
-            }))
-        });
-
         tracer
             .expect_trace_simulate_validation()
             .returning(move |_, _, _| Ok(get_test_tracer_output()));
-
-        entry_point
-            .expect_address()
-            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
 
         // The underlying eth_call when getting the code hash in check_contracts
         provider.expect_call().returning(|_, _| {
@@ -894,7 +855,7 @@ mod tests {
             signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
         };
 
-        let simulator = create_simulator(provider, entry_point, tracer);
+        let simulator = create_simulator(provider, tracer);
         let res = simulator
             .simulate_validation(user_operation, None, None)
             .await;
@@ -903,7 +864,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_context_two_phases_unintended_revert() {
-        let (provider, entry_point, mut tracer) = create_base_config();
+        let (provider, mut tracer) = create_base_config();
 
         tracer
             .expect_trace_simulate_validation()
@@ -911,7 +872,7 @@ mod tests {
                 let mut tracer_output = get_test_tracer_output();
                 tracer_output.revert_data = Some(hex::encode(
                     FailedOp {
-                        op_index: U256::from(10),
+                        op_index: U256::from(100),
                         reason: "AA23 reverted (or OOG)".to_string(),
                     }
                     .encode(),
@@ -933,7 +894,7 @@ mod tests {
             signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
         };
 
-        let simulator = create_simulator(provider, entry_point, tracer);
+        let simulator = create_simulator(provider, tracer);
         let res = simulator
             .create_context(user_operation, BlockId::Number(BlockNumber::Latest))
             .await;
@@ -943,7 +904,7 @@ mod tests {
             Err(ViolationError::Violations(violations)) if matches!(
                 violations.get(0),
                 Some(&SimulationViolation::UnintendedRevertWithMessage(
-                    EntityType::Account,
+                    EntityType::Paymaster,
                     ref reason,
                     _
                 )) if reason == "AA23 reverted (or OOG)"
@@ -953,7 +914,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_gather_context_violations() {
-        let (provider, mut entry_point, tracer) = create_base_config();
+        let (provider, tracer) = create_base_config();
 
         let mut tracer_output = get_test_tracer_output();
 
@@ -1020,11 +981,7 @@ mod tests {
             accessed_addresses: HashSet::new(),
         };
 
-        entry_point
-            .expect_address()
-            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
-
-        let simulator = create_simulator(provider, entry_point, tracer);
+        let simulator = create_simulator(provider, tracer);
         let res = simulator.gather_context_violations(&mut validation_context);
 
         assert_eq!(

@@ -91,11 +91,11 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
 
     async fn debug_trace_call(
         &self,
-        tx: &TypedTransaction,
+        tx: TypedTransaction,
         block_id: Option<BlockId>,
         trace_options: GethDebugTracingCallOptions,
     ) -> Result<GethTrace, ProviderError> {
-        Middleware::debug_trace_call(self, (*tx).clone(), block_id, trace_options).await
+        Middleware::debug_trace_call(self, tx, block_id, trace_options).await
     }
 
     async fn get_balance(&self, address: Address, block: Option<BlockId>) -> anyhow::Result<U256> {

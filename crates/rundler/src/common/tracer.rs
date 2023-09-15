@@ -131,23 +131,23 @@ where
             .simulate_validation(op, max_validation_gas)
             .await?;
 
-        let asdf = self
-            .provider
-            .debug_trace_call(
-                &tx,
-                Some(block_id),
-                GethDebugTracingCallOptions {
-                    tracing_options: GethDebugTracingOptions {
-                        tracer: Some(GethDebugTracerType::JsTracer(
-                            validation_tracer_js().to_string(),
-                        )),
+        SimulationTracerOutput::try_from(
+            self.provider
+                .debug_trace_call(
+                    tx,
+                    Some(block_id),
+                    GethDebugTracingCallOptions {
+                        tracing_options: GethDebugTracingOptions {
+                            tracer: Some(GethDebugTracerType::JsTracer(
+                                validation_tracer_js().to_string(),
+                            )),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
-                    ..Default::default()
-                },
-            )
-            .await?;
-        return SimulationTracerOutput::try_from(asdf);
+                )
+                .await?,
+        )
     }
 }
 

@@ -167,7 +167,7 @@ impl PoolTask {
         );
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
-            i_entry_point,
+            i_entry_point.address(),
             simulate_validation_tracer,
             pool_config.sim_settings,
             pool_config.mempool_channel_configs.clone(),

@@ -129,7 +129,7 @@ where
             SimulateValidationTracerImpl::new(Arc::clone(&provider), entry_point.clone());
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
-            entry_point.clone(),
+            entry_point.address(),
             simulate_validation_tracer,
             self.args.sim_settings,
             self.args.mempool_configs.clone(),
