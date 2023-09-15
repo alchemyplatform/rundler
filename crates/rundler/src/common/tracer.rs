@@ -7,11 +7,6 @@ use std::{
 
 use anyhow::{bail, Context};
 use ethers::types::{
-    transaction::eip2718::TypedTransaction, Address, BlockId, GethDebugTracerType,
-    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, U256,
-};
-use anyhow::{bail, Context};
-use ethers::types::{
     Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
     GethTrace, U256,
 };
@@ -19,15 +14,10 @@ use ethers::types::{
 use mockall::automock;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_types::UserOperation;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde::{Deserialize, Serialize};
 use tonic::async_trait;
 
-use super::{
-    context::LogWithContext,
-    types::{EntryPointLike, ProviderLike},
-};
-use crate::common::types::{ExpectedStorage, UserOperation};
+use crate::common::types::ExpectedStorage;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,8 +94,8 @@ pub trait SimulateValidationTracer: Send + Sync + 'static {
 #[derive(Debug)]
 pub struct SimulateValidationTracerImpl<P, E>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
 {
     provider: Arc<P>,
     entry_point: E,
@@ -117,8 +107,8 @@ where
 #[async_trait]
 impl<P, E> SimulateValidationTracer for SimulateValidationTracerImpl<P, E>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
 {
     async fn trace_simulate_validation(
         &self,
@@ -153,8 +143,8 @@ where
 
 impl<P, E> SimulateValidationTracerImpl<P, E>
 where
-    P: ProviderLike,
-    E: EntryPointLike,
+    P: Provider,
+    E: EntryPoint,
 {
     pub fn new(provider: Arc<P>, entry_point: E) -> Self {
         Self {

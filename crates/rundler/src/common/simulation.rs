@@ -12,7 +12,7 @@ use ethers::{
 use indexmap::IndexSet;
 #[cfg(test)]
 use mockall::automock;
-use rundler_provider::{AggregatorOut, AggregatorSimOut, EntryPoint, Provider};
+use rundler_provider::{AggregatorOut, AggregatorSimOut, Provider};
 use rundler_types::{contracts::i_entry_point::FailedOp, Entity, EntityType, UserOperation};
 use tonic::async_trait;
 
@@ -72,7 +72,7 @@ pub trait Simulator: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub struct SimulatorImpl<P: ProviderLike, T: SimulateValidationTracer> {
+pub struct SimulatorImpl<P: Provider, T: SimulateValidationTracer> {
     provider: Arc<P>,
     entry_point_address: Address,
     simulate_validation_tracer: T,
@@ -82,7 +82,7 @@ pub struct SimulatorImpl<P: ProviderLike, T: SimulateValidationTracer> {
 
 impl<P, T> SimulatorImpl<P, T>
 where
-    P: ProviderLike,
+    P: Provider,
     T: SimulateValidationTracer,
 {
     pub fn new(
@@ -388,7 +388,7 @@ where
 #[async_trait]
 impl<P, T> Simulator for SimulatorImpl<P, T>
 where
-    P: ProviderLike,
+    P: Provider,
     T: SimulateValidationTracer,
 {
     async fn simulate_validation(
@@ -689,18 +689,16 @@ mod tests {
     use ethers::{
         abi::AbiEncode,
         providers::{JsonRpcError, MockError, ProviderError},
-        types::{Address, BlockNumber},
+        types::{Address, BlockNumber, Bytes},
         utils::hex,
     };
+    use rundler_provider::{AggregatorOut, MockProvider};
 
     use super::*;
-    use crate::common::{
-        tracer::{MockSimulateValidationTracer, Phase},
-        types::MockProviderLike,
-    };
+    use crate::common::tracer::{MockSimulateValidationTracer, Phase};
 
-    fn create_base_config() -> (MockProviderLike, MockSimulateValidationTracer) {
-        (MockProviderLike::new(), MockSimulateValidationTracer::new())
+    fn create_base_config() -> (MockProvider, MockSimulateValidationTracer) {
+        (MockProvider::new(), MockSimulateValidationTracer::new())
     }
 
     fn get_test_tracer_output() -> SimulationTracerOutput {
@@ -783,9 +781,9 @@ mod tests {
     }
 
     fn create_simulator(
-        provider: MockProviderLike,
+        provider: MockProvider,
         simulate_validation_tracer: MockSimulateValidationTracer,
-    ) -> SimulatorImpl<MockProviderLike, MockSimulateValidationTracer> {
+    ) -> SimulatorImpl<MockProvider, MockSimulateValidationTracer> {
         let settings = Settings::default();
 
         let mut mempool_configs = HashMap::new();
@@ -793,7 +791,7 @@ mod tests {
 
         let provider = Arc::new(provider);
 
-        let simulator: SimulatorImpl<MockProviderLike, MockSimulateValidationTracer> =
+        let simulator: SimulatorImpl<MockProvider, MockSimulateValidationTracer> =
             SimulatorImpl::new(
                 Arc::clone(&provider),
                 Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
