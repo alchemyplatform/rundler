@@ -11,12 +11,12 @@ To generate the JSONRPC api, we make use of [Parity's][parity] [jsonrpsee librar
 
 The builder module is used to propose, send and track transactions that need to be bundled together and pushed onto the chain. 
 
-## Bundle Proposer
+### Bundle Proposer
 
 The bundle proposer is is most important part of Rundler as it performs numerous operations to check whether transactions and valid based on the [EIP4337 spec](https://eips.ethereum.org/EIPS/eip-4337), estimate gas and see if the next bundle
 has enough room for it to be included or wait until a new bundle is proposed. 
  
-## Bundle Sender 
+### Bundle Sender 
 
 After the bundle proposal runs, the bundle sender logic will handle the process of propagating a transction on chain and checking on the status to see if it is included in a block. This process also handles the gas increases if the transaction
 has any issues being included.
