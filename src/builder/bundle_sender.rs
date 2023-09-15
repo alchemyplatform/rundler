@@ -26,16 +26,12 @@ use crate::{
         block_watcher,
         emit::WithEntryPoint,
         gas::GasFees,
-        math,
         protos::op_pool::{
             self, op_pool_client::OpPoolClient, RemoveEntitiesRequest, RemoveOpsRequest,
         },
         types::{Entity, EntryPointLike, ExpectedStorage, ProviderLike, UserOperation},
     },
 };
-
-// Overhead on gas estimates to account for inaccuracies.
-const GAS_ESTIMATE_OVERHEAD_PERCENT: u64 = 10;
 
 #[derive(Debug)]
 pub struct Settings {
@@ -414,12 +410,11 @@ where
             bundle.rejected_ops.len(),
             bundle.rejected_entities.len()
         );
-        let gas = math::increase_by_percent(bundle.gas_estimate, GAS_ESTIMATE_OVERHEAD_PERCENT);
         let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
             self.beneficiary,
-            gas,
+            bundle.gas_estimate,
             bundle.gas_fees,
         );
         tx.set_nonce(nonce);

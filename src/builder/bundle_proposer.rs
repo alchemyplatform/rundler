@@ -117,7 +117,18 @@ where
         )?;
 
         // Limit the amount of gas in the bundle
-        let ops = self.limit_gas_in_bundle(ops);
+        tracing::debug!(
+            "Builder id: {}, starting bundle proposal with {} ops",
+            self.id,
+            ops.len(),
+        );
+        let (ops, gas_limit) = self.limit_gas_in_bundle(ops);
+        tracing::debug!(
+            "Builder id: {}, bundle proposal after limit had {} ops and {:?} gas limit",
+            self.id,
+            ops.len(),
+            gas_limit
+        );
 
         // Determine fees required for ops to be included in a bundle, and filter out ops that don't
         // meet the requirements. Simulate unfiltered ops.
@@ -174,6 +185,12 @@ where
                 expected_storage.merge(&op.simulation.expected_storage)?;
             }
             if let Some(gas_estimate) = gas_estimate {
+                tracing::debug!(
+                    "Builder id: {}, bundle proposal succeeded with {} ops and {:?} gas limit",
+                    self.id,
+                    context.iter_ops().count(),
+                    gas_estimate
+                );
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
@@ -309,7 +326,7 @@ where
                 };
                 let max_cost = op.max_gas_cost();
                 if *balance < max_cost {
-                    info!("Rejected paymaster {paymaster:?} becauase its balance {balance:?} was too low.");
+                    info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
                     paymasters_to_reject.push(paymaster);
                     continue;
                 } else {
@@ -505,18 +522,26 @@ where
         Ok(())
     }
 
-    fn limit_gas_in_bundle(&self, ops: Vec<OpFromPool>) -> Vec<OpFromPool> {
+    fn limit_gas_in_bundle(&self, ops: Vec<OpFromPool>) -> (Vec<OpFromPool>, u64) {
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
             let gas = op.op.execution_gas_limit(self.settings.chain_id);
             if gas_left < gas {
+                self.emit(BuilderEvent::skipped_op(
+                    self.id,
+                    self.op_hash(&op.op),
+                    SkipReason::GasLimit,
+                ));
                 continue;
             }
             gas_left -= gas;
             ops_in_bundle.push(op);
         }
-        ops_in_bundle
+        (
+            ops_in_bundle,
+            self.settings.max_bundle_gas - gas_left.as_u64(),
+        )
     }
 
     fn emit(&self, event: BuilderEvent) {

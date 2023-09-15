@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use ethers::types::{Address, H256};
+use ethers::types::{Address, H256, U256};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -38,6 +38,7 @@ pub struct UoPool<R: ReputationManager> {
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+    num_builders: u64,
 }
 
 struct UoPoolState {
@@ -54,6 +55,7 @@ where
         args: PoolConfig,
         reputation: Arc<R>,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        num_builders: u64,
     ) -> Self {
         Self {
             entry_point: args.entry_point,
@@ -65,6 +67,7 @@ where
                 block_number: 0,
             }),
             event_sender,
+            num_builders,
         }
     }
 
@@ -319,7 +322,7 @@ where
         UoPoolMetrics::increment_removed_entities(self.entry_point);
     }
 
-    fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
+    fn best_operations(&self, max: usize, builder_id: u64) -> Vec<Arc<PoolOperation>> {
         // get the best operations from the pool
         let ordered_ops = self.state.read().pool.best_operations();
         // keep track of senders to avoid sending multiple ops from the same sender
@@ -327,6 +330,13 @@ where
 
         ordered_ops
             .into_iter()
+            .filter(|op| {
+                (self.num_builders == 1)
+                    | (U256::from_little_endian(op.uo.sender.as_bytes())
+                        .div_mod(self.num_builders.into())
+                        .1
+                        == builder_id.into())
+            })
             .filter(|op| {
                 // filter out ops from senders we've already seen
                 senders.insert(op.uo.sender)
@@ -391,9 +401,9 @@ mod tests {
         let hash = pool
             .add_operation(OperationOrigin::Local, op.clone())
             .unwrap();
-        check_ops(pool.best_operations(1), vec![op]);
+        check_ops(pool.best_operations(1, 0), vec![op]);
         pool.remove_operations(&vec![hash]);
-        assert_eq!(pool.best_operations(1), vec![]);
+        assert_eq!(pool.best_operations(1, 0), vec![]);
     }
 
     #[test]
@@ -406,9 +416,9 @@ mod tests {
         ];
         let res = pool.add_operations(OperationOrigin::Local, ops.clone());
         let hashes: Vec<H256> = res.into_iter().map(|r| r.unwrap()).collect();
-        check_ops(pool.best_operations(3), ops);
+        check_ops(pool.best_operations(3, 0), ops);
         pool.remove_operations(&hashes);
-        assert_eq!(pool.best_operations(3), vec![]);
+        assert_eq!(pool.best_operations(3, 0), vec![]);
     }
 
     #[test]
@@ -420,9 +430,9 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ];
         pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops);
+        check_ops(pool.best_operations(3, 0), ops);
         pool.clear();
-        assert_eq!(pool.best_operations(3), vec![]);
+        assert_eq!(pool.best_operations(3, 0), vec![]);
     }
 
     #[test]
@@ -434,7 +444,7 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ];
         pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops.clone());
+        check_ops(pool.best_operations(3, 0), ops.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -450,7 +460,7 @@ mod tests {
             unmined_ops: vec![],
         });
 
-        check_ops(pool.best_operations(3), ops[1..].to_vec());
+        check_ops(pool.best_operations(3, 0), ops[1..].to_vec());
     }
 
     #[test]
@@ -462,7 +472,7 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ];
         pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops.clone());
+        check_ops(pool.best_operations(3, 0), ops.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -477,7 +487,7 @@ mod tests {
             }],
             unmined_ops: vec![],
         });
-        check_ops(pool.best_operations(3), ops.clone()[1..].to_vec());
+        check_ops(pool.best_operations(3, 0), ops.clone()[1..].to_vec());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -492,7 +502,7 @@ mod tests {
                 nonce: ops[0].uo.nonce,
             }],
         });
-        check_ops(pool.best_operations(3), ops);
+        check_ops(pool.best_operations(3, 0), ops);
     }
 
     #[test]
@@ -504,7 +514,7 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ];
         pool.add_operations(OperationOrigin::Local, ops.clone());
-        check_ops(pool.best_operations(3), ops.clone());
+        check_ops(pool.best_operations(3, 0), ops.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -520,7 +530,7 @@ mod tests {
             unmined_ops: vec![],
         });
 
-        check_ops(pool.best_operations(3), ops);
+        check_ops(pool.best_operations(3, 0), ops);
     }
 
     #[test]
@@ -534,7 +544,7 @@ mod tests {
         ];
         pool.add_operations(OperationOrigin::Local, ops.clone());
         // Only return 1 op per sender
-        check_ops(pool.best_operations(3), vec![ops[0].clone()]);
+        check_ops(pool.best_operations(3, 0), vec![ops[0].clone()]);
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -579,7 +589,7 @@ mod tests {
         // First op should be included
         pool.add_operation(OperationOrigin::Local, ops[0].clone())
             .unwrap();
-        check_ops(pool.best_operations(1), vec![ops[0].clone()]);
+        check_ops(pool.best_operations(1, 0), vec![ops[0].clone()]);
 
         // Second op should be thorottled
         let ret = pool.add_operation(OperationOrigin::Local, ops[1].clone());
@@ -610,7 +620,7 @@ mod tests {
         // Second op should be included
         pool.add_operation(OperationOrigin::Local, ops[1].clone())
             .unwrap();
-        check_ops(pool.best_operations(1), vec![ops[1].clone()]);
+        check_ops(pool.best_operations(1, 0), vec![ops[1].clone()]);
     }
 
     #[test]
@@ -650,6 +660,7 @@ mod tests {
             args,
             mock_reputation(THROTTLE_SLACK, BAN_SLACK),
             event_sender,
+            1,
         )
     }
 

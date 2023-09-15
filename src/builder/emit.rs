@@ -122,6 +122,7 @@ pub enum SkipReason {
         required_fees: GasFees,
         actual_fees: GasFees,
     },
+    GasLimit,
 }
 
 #[derive(Clone, Debug)]
