@@ -5,6 +5,7 @@ there are 3 main process that are execute when running the rundler application a
 ## RPC
 
 The rpc module is used to expose a JSONRPC http api, much like a normal Ethereum node. To see the available requests, please refer to the [EIP4337 spec](https://eips.ethereum.org/EIPS/eip-4337) and find the RPC methods section. 
+To generate the JSONRPC api, we make use of [Parity's][parity] [jsonrpsee library][jsonrpsee] and its useful macro definitions.
 
 ## Builder
 
@@ -36,4 +37,7 @@ The pool components purpose is to manage the mempool operations. Once a user ope
 ## Single Image architecture
 
 ![singleimage](images/multiprocess.png)  
+
+[parity]: https://www.parity.io/
+[jsonrpsee]: https://github.com/paritytech/jsonrpsee
 
