@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use ethers::{
-    prelude::gas_oracle::{GasCategory, GasOracle, Polygon},
+    prelude::gas_oracle::{GasCategory, GasOracle},
     types::{Address, Chain, U256},
 };
 use rundler_provider::Provider;
@@ -10,7 +10,10 @@ use rundler_types::{GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
 
-use super::types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS};
+use super::{
+    polygon::Polygon,
+    types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS},
+};
 
 /// Gas overheads for user operations
 /// used in calculating the pre-verification gas
@@ -247,6 +250,12 @@ impl<P: Provider> FeeEstimator<P> {
     }
 }
 
+const GWEI_TO_WEI: u64 = 1_000_000_000;
+
+pub fn from_gwei_f64(gwei: f64) -> U256 {
+    U256::from((gwei * GWEI_TO_WEI as f64).ceil() as u64)
+}
+
 const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
     Chain::Arbitrum as u64,
     Chain::ArbitrumNova as u64,
@@ -255,4 +264,18 @@ const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
 
 fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
     NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gwei_conversion() {
+        let max_priority_fee: f64 = 1.8963421368;
+
+        let result = from_gwei_f64(max_priority_fee);
+
+        assert_eq!(result, U256::from(1896342137));
+    }
 }
