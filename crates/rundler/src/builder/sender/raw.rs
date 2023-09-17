@@ -7,12 +7,10 @@ use ethers::{
     types::{transaction::eip2718::TypedTransaction, Address, TransactionReceipt, H256},
 };
 use ethers_signers::Signer;
+use rundler_sim::ExpectedStorage;
 use tonic::async_trait;
 
-use crate::{
-    builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus},
-    common::types::ExpectedStorage,
-};
+use crate::builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
 
 #[derive(Debug)]
 pub struct RawTransactionSender<C, S>

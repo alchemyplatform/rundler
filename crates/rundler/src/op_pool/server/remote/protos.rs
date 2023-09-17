@@ -1,14 +1,12 @@
 use anyhow::Context;
 use ethers::types::{Address, H256};
 use rundler_types::{
-    Entity as RundlerEntity, EntityType as RundlerEntityType, UserOperation as RundlerUserOperation,
+    Entity as RundlerEntity, EntityType as RundlerEntityType,
+    UserOperation as RundlerUserOperation, ValidTimeRange,
 };
 
 use crate::{
-    common::{
-        protos::{from_bytes, to_le_bytes, ConversionError},
-        types::ValidTimeRange,
-    },
+    common::protos::{from_bytes, to_le_bytes, ConversionError},
     op_pool::{
         mempool::{Reputation as PoolReputation, ReputationStatus as PoolReputationStatus},
         NewHead as PoolNewHead, PoolOperation,

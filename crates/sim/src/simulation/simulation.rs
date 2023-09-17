@@ -5,64 +5,77 @@ use std::{
     sync::Arc,
 };
 
+use async_trait::async_trait;
 use ethers::{
     abi::AbiDecode,
     types::{Address, BlockId, Opcode, H256, U256},
 };
 use indexmap::IndexSet;
-#[cfg(test)]
+#[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{AggregatorOut, AggregatorSimOut, Provider};
-use rundler_types::{contracts::i_entry_point::FailedOp, Entity, EntityType, UserOperation};
-use tonic::async_trait;
+use rundler_types::{
+    contracts::i_entry_point::FailedOp, Entity, EntityType, StorageSlot, UserOperation,
+    ValidTimeRange,
+};
 
 use super::{
-    mempool::{match_mempools, MempoolMatchResult},
-    tracer::parse_combined_tracer_str,
-};
-use crate::common::{
-    eth,
-    mempool::MempoolConfig,
+    mempool::{match_mempools, MempoolConfig, MempoolMatchResult},
     tracer::{
-        AssociatedSlotsByAddress, SimulateValidationTracer, SimulationTracerOutput, StorageAccess,
+        parse_combined_tracer_str, AssociatedSlotsByAddress, SimulateValidationTracer,
+        SimulationTracerOutput, StorageAccess,
     },
-    types::{
-        ExpectedStorage, StakeInfo, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
-        ViolationError,
-    },
+    validation_results::{StakeInfo, ValidationOutput, ValidationReturnInfo},
+};
+use crate::{
+    types::{ExpectedStorage, ViolationError},
+    utils,
 };
 
+/// The result of a successful simulation
 #[derive(Clone, Debug, Default)]
 pub struct SimulationSuccess {
+    /// The mempool IDs that support this operation
     pub mempools: Vec<H256>,
+    /// Block hash this operation was simulated against
     pub block_hash: H256,
+    /// Gas used in the pre-op phase of simulation measured
+    /// by the entry point
     pub pre_op_gas: U256,
+    /// The time range for which this operation is valid
     pub valid_time_range: ValidTimeRange,
+    /// If using an aggregator, the result of the aggregation
+    /// simulation
     pub aggregator: Option<AggregatorSimOut>,
+    /// Code hash of all accessed contracts
     pub code_hash: H256,
+    /// List of used entities that need to be staked for this operation
+    /// to be valid
     pub entities_needing_stake: Vec<EntityType>,
+    /// Whether the sender account is staked
     pub account_is_staked: bool,
+    /// List of all addresses accessed during validation
     pub accessed_addresses: HashSet<Address>,
+    /// Expected storage values for all accessed slots during validation
     pub expected_storage: ExpectedStorage,
 }
 
 impl SimulationSuccess {
+    /// Get the aggregator address if one was used
     pub fn aggregator_address(&self) -> Option<Address> {
         self.aggregator.as_ref().map(|agg| agg.address)
     }
 }
 
+/// The result of a failed simulation
 pub type SimulationError = ViolationError<SimulationViolation>;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-pub struct StorageSlot {
-    pub address: Address,
-    pub slot: U256,
-}
-
-#[cfg_attr(test, automock)]
-#[async_trait]
+/// Simulator trait for running user operation simulations
+#[cfg_attr(feature = "test-utils", automock)]
+#[async_trait::async_trait]
 pub trait Simulator: Send + Sync + 'static {
+    /// Simulate a user operation, returning simulation information
+    /// upon success, or simulation violations.
     async fn simulate_validation(
         &self,
         op: UserOperation,
@@ -71,6 +84,17 @@ pub trait Simulator: Send + Sync + 'static {
     ) -> Result<SimulationSuccess, SimulationError>;
 }
 
+/// Simulator implementation.
+///
+/// This simulator supports the use of "alternative mempools".
+/// During simulation, the simulator will check the violations found
+/// against the mempool configurations provided in the constructor.
+///
+/// If a mempool is found to support all of the associated violations,
+/// it will be included in the list of mempools returned by the simulator.
+///
+/// If no mempools are found, the simulator will return an error containing
+/// the violations.
 #[derive(Debug)]
 pub struct SimulatorImpl<P: Provider, T: SimulateValidationTracer> {
     provider: Arc<P>,
@@ -85,6 +109,11 @@ where
     P: Provider,
     T: SimulateValidationTracer,
 {
+    /// Create a new simulator
+    ///
+    /// `mempool_configs` is a map of mempool IDs to mempool configurations.
+    /// It is used during simulation to determine which mempools support
+    /// the violations found during simulation.
     pub fn new(
         provider: Arc<P>,
         entry_point_address: Address,
@@ -101,6 +130,7 @@ where
         }
     }
 
+    /// Return the associated settings
     pub fn settings(&self) -> &Settings {
         &self.sim_settings
     }
@@ -244,7 +274,7 @@ where
             for StorageAccess { address, slots } in &phase.storage_accesses {
                 let address = *address;
                 accessed_addresses.insert(address);
-                for &slot in slots {
+                for slot in slots {
                     let restriction = get_storage_restriction(GetStorageRestrictionArgs {
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         is_unstaked_wallet_creation,
@@ -252,13 +282,16 @@ where
                         entity_address: entity_info.address,
                         sender_address,
                         accessed_address: address,
-                        slot,
+                        slot: *slot,
                     });
                     match restriction {
                         StorageRestriction::Allowed => {}
                         StorageRestriction::NeedsStake => needs_stake = true,
                         StorageRestriction::Banned => {
-                            banned_slots_accessed.insert(StorageSlot { address, slot });
+                            banned_slots_accessed.insert(StorageSlot {
+                                address,
+                                slot: *slot,
+                            });
                         }
                     }
                 }
@@ -349,7 +382,7 @@ where
         let mut violations = vec![];
 
         let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
-        let code_hash_future = eth::get_code_hash(
+        let code_hash_future = utils::get_code_hash(
             self.provider.deref(),
             mem::take(&mut tracer_out.accessed_contract_addresses),
             Some(block_id),
@@ -458,46 +491,65 @@ where
     }
 }
 
+/// All possible simulation violations
 #[derive(Clone, Debug, parse_display::Display, Ord, Eq, PartialOrd, PartialEq)]
 pub enum SimulationViolation {
     // Make sure to maintain the order here based on the importance
-    // of the violation for converting to an JRPC error
+    // of the violation for converting to an JSON RPC error
+    /// The user operation signature is invalid
     #[display("invalid signature")]
     InvalidSignature,
-    #[display("reverted while simulating {0} validation: {1}")]
-    UnintendedRevertWithMessage(EntityType, String, Option<Address>),
+    /// The user operation used an opcode that is not allowed
     #[display("{0.kind} uses banned opcode: {2} in contract {1:?}")]
     UsedForbiddenOpcode(Entity, Address, ViolationOpCode),
+    /// The user operation used a precompile that is not allowed
     #[display("{0.kind} uses banned precompile: {2:?} in contract {1:?}")]
     UsedForbiddenPrecompile(Entity, Address, Address),
+    /// The user operation accessed a contract that has not been deployed
     #[display(
         "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
     )]
     AccessedUndeployedContract(Entity, Address),
+    /// The user operation factory entity called CREATE2 more than once during initialization
     #[display("factory may only call CREATE2 once during initialization")]
     FactoryCalledCreate2Twice(Address),
+    /// The user operation accessed a storage slot that is not allowed
     #[display("{0.kind} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, StorageSlot),
+    /// The user operation called an entry point method that is not allowed
     #[display("{0.kind} called entry point method other than depositTo")]
     CalledBannedEntryPointMethod(Entity),
+    /// The user operation made a call that contained value to a contract other than the entrypoint
+    /// during validation
     #[display("{0.kind} must not send ETH during validation (except from account to entry point)")]
     CallHadValue(Entity),
+    /// The code hash of accessed contracts changed on the second simulation
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
+    /// The user operation contained an entity that accessed storage without being staked
     #[display("{0.kind} must be staked")]
     NotStaked(Entity, U256, U256),
+    /// Simulation reverted with an unintended reason, containing a message
+    #[display("reverted while simulating {0} validation: {1}")]
+    UnintendedRevertWithMessage(EntityType, String, Option<Address>),
+    /// Simulation reverted with an unintended reason
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(EntityType),
+    /// Simulation did not revert, a revert is always expected
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
+    /// Simulation had the wrong number of phases
     #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
     WrongNumberOfPhases(u32),
+    /// The user operation ran out of gas during validation
     #[display("ran out of gas during {0.kind} validation")]
     OutOfGas(Entity),
+    /// The user operation aggregator signature validation failed
     #[display("aggregator signature validation failed")]
     AggregatorValidationFailed,
 }
 
+/// A wrapper around Opcode that implements extra traits
 #[derive(Debug, PartialEq, Clone, parse_display::Display, Eq)]
 #[display("{0:?}")]
 pub struct ViolationOpCode(pub Opcode);
@@ -539,8 +591,8 @@ struct ValidationContext {
 
 #[derive(Clone, Copy, Debug)]
 struct EntityInfo {
-    pub address: Address,
-    pub is_staked: bool,
+    address: Address,
+    is_staked: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -551,7 +603,7 @@ struct EntityInfos {
 }
 
 impl EntityInfos {
-    pub fn new(
+    fn new(
         factory_address: Option<Address>,
         sender_address: Address,
         paymaster_address: Option<Address>,
@@ -577,7 +629,7 @@ impl EntityInfos {
         }
     }
 
-    pub fn get(self, entity: EntityType) -> Option<EntityInfo> {
+    fn get(self, entity: EntityType) -> Option<EntityInfo> {
         match entity {
             EntityType::Factory => self.factory,
             EntityType::Account => Some(self.sender),
@@ -586,7 +638,7 @@ impl EntityInfos {
         }
     }
 
-    pub fn sender_address(self) -> Address {
+    fn sender_address(self) -> Address {
         self.sender.address
     }
 }
@@ -644,15 +696,23 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs<'_>) -> StorageRestri
     }
 }
 
+/// Simulation Settings
 #[derive(Debug, Copy, Clone)]
 pub struct Settings {
+    /// The minimum amount of time that a staked entity must have configured as
+    /// their unstake delay on the entry point contract in order to be considered staked.
     pub min_unstake_delay: u32,
+    /// The minimum amount of stake that a staked entity must have on the entry point
+    /// contract in order to be considered staked.
     pub min_stake_value: u128,
+    /// The maximum amount of gas that can be used during the simulation call
     pub max_simulate_handle_ops_gas: u64,
+    /// The maximum amount of verification gas that can be used during the simulation call
     pub max_verification_gas: u64,
 }
 
 impl Settings {
+    /// Create new settings
     pub fn new(
         min_unstake_delay: u32,
         min_stake_value: u128,
@@ -668,6 +728,7 @@ impl Settings {
     }
 }
 
+#[cfg(feature = "test-utils")]
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -695,7 +756,7 @@ mod tests {
     use rundler_provider::{AggregatorOut, MockProvider};
 
     use super::*;
-    use crate::common::tracer::{MockSimulateValidationTracer, Phase};
+    use crate::simulation::tracer::{MockSimulateValidationTracer, Phase};
 
     fn create_base_config() -> (MockProvider, MockSimulateValidationTracer) {
         (MockProvider::new(), MockSimulateValidationTracer::new())

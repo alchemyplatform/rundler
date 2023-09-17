@@ -7,7 +7,7 @@ use ethers::{
     providers::spoof,
     types::{Address, Bytes, H256, U256},
 };
-#[cfg(test)]
+#[cfg(feature = "test-utils")]
 use mockall::automock;
 use rand::Rng;
 use rundler_provider::{EntryPoint, Provider};
@@ -24,12 +24,9 @@ use rundler_types::{
 };
 use rundler_utils::{eth, math};
 use tokio::join;
-use tonic::async_trait;
 
-use crate::{
-    common::{eth as common_eth, gas, precheck::MIN_CALL_GAS_LIMIT},
-    rpc::{GasEstimate, UserOperationOptionalGas},
-};
+use super::types::{GasEstimate, Settings, UserOperationOptionalGas};
+use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, utils};
 
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary
@@ -55,20 +52,26 @@ const GAS_FEE_TRANSFER_COST: u64 = 30000;
 /// failure will tell you the new value.
 const PROXY_TARGET_OFFSET: usize = 137;
 
+/// Error type for gas estimation
 #[derive(Debug, thiserror::Error)]
 pub enum GasEstimationError {
+    /// Validation reverted
     #[error("{0}")]
     RevertInValidation(String),
+    /// Call reverted with a string message
     #[error("user operation's call reverted: {0}")]
     RevertInCallWithMessage(String),
+    /// Call reverted with bytes
     #[error("user operation's call reverted: {0:#x}")]
     RevertInCallWithBytes(Bytes),
+    /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
-#[cfg_attr(test, automock)]
-#[async_trait]
+/// Gas estimator trait
+#[cfg_attr(feature = "test-utils", automock)]
+#[async_trait::async_trait]
 pub trait GasEstimator: Send + Sync + 'static {
     /// Returns a gas estimate or a revert message, or an anyhow error on any
     /// other error.
@@ -78,6 +81,7 @@ pub trait GasEstimator: Send + Sync + 'static {
     ) -> Result<GasEstimate, GasEstimationError>;
 }
 
+/// Gas estimator implementation
 #[derive(Debug)]
 pub struct GasEstimatorImpl<P, E> {
     chain_id: u64,
@@ -86,26 +90,7 @@ pub struct GasEstimatorImpl<P, E> {
     settings: Settings,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct Settings {
-    pub max_verification_gas: u64,
-    pub max_call_gas: u64,
-    pub max_simulate_handle_ops_gas: u64,
-}
-
-impl Settings {
-    fn validate(&self) -> Option<String> {
-        if U256::from(self.max_call_gas)
-            .cmp(&MIN_CALL_GAS_LIMIT)
-            .is_lt()
-        {
-            return Some("max_call_gas field cannot be lower than MIN_CALL_GAS_LIMIT".to_string());
-        }
-        None
-    }
-}
-
-#[async_trait]
+#[async_trait::async_trait]
 impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
     async fn estimate_op_gas(
         &self,
@@ -162,6 +147,7 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
 }
 
 impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
+    /// Create a new gas estimator
     pub fn new(chain_id: u64, provider: Arc<P>, entry_point: E, settings: Settings) -> Self {
         Self {
             chain_id,
@@ -186,11 +172,11 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
             call_gas_limit: 0.into(),
             ..op.clone()
         };
-        let gas_used = common_eth::get_gas_used(
+        let gas_used = utils::get_gas_used(
             self.provider.deref(),
             self.entry_point.address(),
             U256::zero(),
-            common_eth::call_data_of(
+            utils::call_data_of(
                 i_entry_point::SimulateHandleOpCall::selector(),
                 (initial_op, Address::zero(), Bytes::new()),
             ),
@@ -300,7 +286,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         let mut is_continuation = false;
         let mut num_rounds = U256::zero();
         loop {
-            let target_call_data = common_eth::call_data_of(
+            let target_call_data = utils::call_data_of(
                 EstimateCallGasCall::selector(),
                 (EstimateCallGasArgs {
                     sender: op.sender,

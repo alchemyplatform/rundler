@@ -6,26 +6,26 @@ use ethers::{
     types::{Address, Chain, U256},
 };
 use rundler_provider::Provider;
-use rundler_types::{GasFees, UserOperation};
+use rundler_types::{
+    chain::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS},
+    GasFees, UserOperation,
+};
 use rundler_utils::math;
 use tokio::try_join;
 
-use super::{
-    polygon::Polygon,
-    types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS},
-};
+use super::polygon::Polygon;
 
-/// Gas overheads for user operations
-/// used in calculating the pre-verification gas
-/// see: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
+// Gas overheads for user operations
+// used in calculating the pre-verification gas
+// see: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
 #[derive(Clone, Copy, Debug)]
 struct GasOverheads {
-    pub fixed: U256,
-    pub per_user_op: U256,
-    pub per_user_op_word: U256,
-    pub zero_byte: U256,
-    pub non_zero_byte: U256,
-    pub bundle_size: U256,
+    fixed: U256,
+    per_user_op: U256,
+    per_user_op_word: U256,
+    zero_byte: U256,
+    non_zero_byte: U256,
+    bundle_size: U256,
 }
 
 impl Default for GasOverheads {
@@ -41,6 +41,19 @@ impl Default for GasOverheads {
     }
 }
 
+/// Returns the required pre_verification_gas for the given user operation
+///
+/// `full_op` is either the user operation submitted via `sendUserOperation`
+/// or the user operation that was submitted via `estimateUserOperationGas` and filled
+/// in via its `max_fill()` call. It is used to calculate the static portion of the pre_verification_gas
+///
+/// `random_op` is either the user operation submitted via `sendUserOperation`
+/// or the user operation that was submitted via `estimateUserOperationGas` and filled
+/// in via its `random_fill()` call. It is used to calculate the dynamic portion of the pre_verification_gas
+/// on networks that require it.
+///
+/// Networks that require dynamic pre_verification_gas are typically those that charge extra calldata fees
+/// that can scale based on dynamic gas prices.
 pub async fn calc_pre_verification_gas<P: Provider>(
     full_op: &UserOperation,
     random_op: &UserOperation,
@@ -66,28 +79,6 @@ pub async fn calc_pre_verification_gas<P: Provider>(
     };
 
     Ok(static_gas + dynamic_gas)
-}
-
-pub fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
-    let ov = GasOverheads::default();
-    let packed = op.pack();
-    let length_in_words = (packed.len() + 31) / 32;
-    let call_data_cost: U256 = packed
-        .iter()
-        .map(|&x| {
-            if x == 0 {
-                ov.zero_byte
-            } else {
-                ov.non_zero_byte
-            }
-        })
-        .reduce(|a, b| a + b)
-        .unwrap_or_default();
-
-    ov.fixed / ov.bundle_size
-        + call_data_cost
-        + ov.per_user_op
-        + ov.per_user_op_word * length_in_words
 }
 
 /// Returns the gas limit for the user operation that should will be used onchain.
@@ -127,15 +118,38 @@ pub fn user_operation_execution_gas_limit(uo: &UserOperation, chain_id: u64) -> 
     pvg + uo.call_gas_limit + uo.verification_gas_limit * verification_gas_limit_multiplier(uo)
 }
 
+/// Returns the maximum cost, in wei, of this user operation
 pub fn user_operation_max_gas_cost(uo: &UserOperation, chain_id: u64) -> U256 {
     user_operation_gas_limit(uo, chain_id) * uo.max_fee_per_gas
+}
+
+fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
+    let ov = GasOverheads::default();
+    let packed = op.pack();
+    let length_in_words = (packed.len() + 31) / 32;
+    let call_data_cost: U256 = packed
+        .iter()
+        .map(|&x| {
+            if x == 0 {
+                ov.zero_byte
+            } else {
+                ov.non_zero_byte
+            }
+        })
+        .reduce(|a, b| a + b)
+        .unwrap_or_default();
+
+    ov.fixed / ov.bundle_size
+        + call_data_cost
+        + ov.per_user_op
+        + ov.per_user_op_word * length_in_words
 }
 
 fn verification_gas_limit_multiplier(uo: &UserOperation) -> u64 {
     // If using a paymaster, we need to account for potentially 2 postOp
     // calls (even though it won't be called).
     // Else the entrypoint expects the gas for 1 postOp call that
-    // uses vefification_gas_limit plus the actual verification call
+    // uses verification_gas_limit plus the actual verification call
     if uo.paymaster().is_some() {
         3
     } else {
@@ -143,13 +157,18 @@ fn verification_gas_limit_multiplier(uo: &UserOperation) -> u64 {
     }
 }
 
+/// Different modes for calculating the required priority fee
+/// for the bundler to include a user operation in a bundle.
 #[derive(Debug, Clone, Copy)]
 pub enum PriorityFeeMode {
+    /// The priority fee is required to be a percentage of the bundle base fee.
     BaseFeePercent(u64),
+    /// The priority fee is required to be a percentage above the bundle priority fee.
     PriorityFeeIncreasePercent(u64),
 }
 
 impl PriorityFeeMode {
+    /// Try to create a priority fee mode from a string and value.
     pub fn try_from(kind: &str, value: u64) -> anyhow::Result<Self> {
         match kind {
             "base_fee_percent" => Ok(Self::BaseFeePercent(value)),
@@ -158,6 +177,8 @@ impl PriorityFeeMode {
         }
     }
 
+    /// Returns the required fees for the given bundle fees based on this priority
+    /// fee mode.
     pub fn required_fees(&self, bundle_fees: GasFees) -> GasFees {
         let base_fee = bundle_fees.max_fee_per_gas - bundle_fees.max_priority_fee_per_gas;
 
@@ -176,6 +197,7 @@ impl PriorityFeeMode {
     }
 }
 
+/// Gas fee estimator for a 4337 user operation.
 #[derive(Debug, Clone)]
 pub struct FeeEstimator<P: Provider> {
     provider: Arc<P>,
@@ -186,6 +208,15 @@ pub struct FeeEstimator<P: Provider> {
 }
 
 impl<P: Provider> FeeEstimator<P> {
+    /// Create a new fee estimator.
+    ///
+    /// `priority_fee_mode` is used to determine how the required priority fee is calculated.
+    ///
+    /// `use_bundle_priority_fee` is used to determine if the bundle priority fee should be used.
+    /// Set to true on EIP-1559 chains, false on non-EIP-1559 chains.
+    ///
+    /// `bundle_priority_fee_overhead_percent` is used to determine the overhead percentage to add
+    /// to the network returned priority fee to ensure the bundle priority fee is high enough.
     pub fn new(
         provider: Arc<P>,
         chain_id: u64,
@@ -203,6 +234,11 @@ impl<P: Provider> FeeEstimator<P> {
         }
     }
 
+    /// Returns the required fees for the given bundle fees.
+    ///
+    /// `min_fees` is used to set the minimum fees to use for the bundle. Typically used if a
+    /// bundle has already been submitted and its fees must at least be a certain amount above the
+    /// already submitted fees.
     pub async fn required_bundle_fees(&self, min_fees: Option<GasFees>) -> anyhow::Result<GasFees> {
         let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
 
@@ -225,6 +261,7 @@ impl<P: Provider> FeeEstimator<P> {
         })
     }
 
+    /// Returns the required operation fees for the given bundle fees.
     pub fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees {
         self.priority_fee_mode.required_fees(bundle_fees)
     }
@@ -252,7 +289,7 @@ impl<P: Provider> FeeEstimator<P> {
 
 const GWEI_TO_WEI: u64 = 1_000_000_000;
 
-pub fn from_gwei_f64(gwei: f64) -> U256 {
+pub(crate) fn from_gwei_f64(gwei: f64) -> U256 {
     U256::from((gwei * GWEI_TO_WEI as f64).ceil() as u64)
 }
 

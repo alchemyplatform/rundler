@@ -3,10 +3,10 @@ use std::sync::Arc;
 use ethers::types::U256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_provider::Provider;
+use rundler_sim::{FeeEstimator, PrecheckSettings};
 use tonic::async_trait;
 
 use super::rpc_err;
-use crate::common::{gas::FeeEstimator, precheck};
 
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
@@ -22,7 +22,7 @@ impl<P> RundlerApi<P>
 where
     P: Provider,
 {
-    pub fn new(provider: Arc<P>, chain_id: u64, settings: precheck::Settings) -> Self {
+    pub fn new(provider: Arc<P>, chain_id: u64, settings: PrecheckSettings) -> Self {
         Self {
             fee_estimator: FeeEstimator::new(
                 provider,

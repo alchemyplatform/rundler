@@ -10,9 +10,11 @@ repository.workspace = true
 rundler-utils = { path = "../utils" }
 
 anyhow.workspace = true
+chrono = "0.4.24"
 ethers.workspace = true
 parse-display = "0.8.0"
 serde.workspace = true
+serde_json.workspace = true
 strum = { version = "0.25.0", features = ["derive"] }
 
 [build-dependencies]

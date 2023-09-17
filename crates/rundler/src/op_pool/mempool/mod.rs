@@ -15,13 +15,13 @@ use mockall::automock;
 pub use reputation::{
     HourlyMovingAverageReputation, Reputation, ReputationParams, ReputationStatus,
 };
-use rundler_types::{Entity, EntityType, UserOperation};
+use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
+use rundler_types::{Entity, EntityType, UserOperation, ValidTimeRange};
 use strum::IntoEnumIterator;
 use tonic::async_trait;
 
 use self::error::MempoolResult;
 use super::chain::ChainUpdate;
-use crate::common::{mempool::MempoolConfig, precheck, simulation, types::ValidTimeRange};
 
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -88,9 +88,9 @@ pub struct PoolConfig {
     /// Operations that are allways allowed in the mempool, regardless of reputation
     pub allowlist: Option<HashSet<Address>>,
     /// Settings for precheck validation
-    pub precheck_settings: precheck::Settings,
+    pub precheck_settings: PrecheckSettings,
     /// Settings for simulation validation
-    pub sim_settings: simulation::Settings,
+    pub sim_settings: SimulationSettings,
     /// Configuration for the mempool channels, by channel ID
     pub mempool_channel_configs: HashMap<H256, MempoolConfig>,
 }

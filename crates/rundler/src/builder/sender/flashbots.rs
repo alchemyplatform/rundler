@@ -18,14 +18,12 @@ use ethers_signers::Signer;
 use futures_timer::Delay;
 use futures_util::{Stream, StreamExt, TryFutureExt};
 use pin_project::pin_project;
+use rundler_sim::ExpectedStorage;
 use serde::{de, Deserialize};
 use serde_json::Value;
 use tonic::async_trait;
 
-use crate::{
-    builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus},
-    common::types::ExpectedStorage,
-};
+use crate::builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
 
 #[derive(Debug)]
 pub struct FlashbotsTransactionSender<C, S>

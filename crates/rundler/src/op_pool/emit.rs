@@ -1,12 +1,9 @@
 use std::{fmt::Display, sync::Arc};
 
 use ethers::types::{Address, H256};
-use rundler_types::{Entity, EntityType, UserOperation};
+use rundler_types::{Entity, EntityType, Timestamp, UserOperation};
 
-use crate::{
-    common::{strs, types::Timestamp},
-    op_pool::mempool::OperationOrigin,
-};
+use crate::{common::strs, op_pool::mempool::OperationOrigin};
 
 #[derive(Clone, Debug)]
 pub enum OpPoolEvent {

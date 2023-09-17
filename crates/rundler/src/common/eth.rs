@@ -2,21 +2,13 @@ use std::{error, future::Future, ops::Deref, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use ethers::{
-    abi::{AbiDecode, AbiEncode, RawLog},
+    abi::RawLog,
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
     providers::{
         Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, PendingTransaction,
-        Provider as EthersProvider, ProviderError, RetryClient, RetryClientBuilder,
+        Provider as EthersProvider, RetryClient, RetryClientBuilder,
     },
-    types::{
-        Address, BlockId, Bytes, Eip1559TransactionRequest, Log, Selector, TransactionReceipt,
-        H256, U256,
-    },
-};
-use rundler_provider::Provider;
-use rundler_types::contracts::{
-    get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
-    get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
+    types::{Address, Bytes, Log, TransactionReceipt},
 };
 use url::Url;
 
@@ -93,17 +85,6 @@ pub fn compact_call_data<M, D>(address: Address, call: ContractCall<M, D>) -> By
     bytes.into()
 }
 
-/// Creates call data from a method and its arguments. The arguments should be
-/// passed as a tuple.
-///
-/// Important: if the method takes a single argument, then this function should
-/// be passed a single-element tuple, and not just the argument by itself.
-pub fn call_data_of(selector: Selector, args: impl AbiEncode) -> Bytes {
-    let mut bytes = selector.to_vec();
-    bytes.extend(args.encode());
-    bytes.into()
-}
-
 /// Converts an ethers `Log` into an ethabi `RawLog`.
 pub fn log_to_raw_log(log: Log) -> RawLog {
     let Log { topics, data, .. } = log;
@@ -121,67 +102,6 @@ pub async fn get_chain_id<Client: JsonRpcClient>(
         .await
         .context("should get chain id")?
         .as_u32())
-}
-
-/// Hashes together the code from all the provided addresses. The order of the input addresses does
-/// not matter.
-pub async fn get_code_hash<P: Provider>(
-    provider: &P,
-    mut addresses: Vec<Address>,
-    block_id: Option<BlockId>,
-) -> anyhow::Result<H256> {
-    addresses.sort();
-    let out: CodeHashesResult =
-        call_constructor(provider, &GETCODEHASHES_BYTECODE, addresses, block_id)
-            .await
-            .context("should compute code hashes")?;
-    Ok(H256(out.hash))
-}
-
-pub async fn get_gas_used<P: Provider>(
-    provider: &P,
-    target: Address,
-    value: U256,
-    data: Bytes,
-) -> anyhow::Result<GasUsedResult> {
-    call_constructor(provider, &GETGASUSED_BYTECODE, (target, value, data), None).await
-}
-
-async fn call_constructor<P: Provider, Args: AbiEncode, Ret: AbiDecode>(
-    provider: &P,
-    bytecode: &Bytes,
-    args: Args,
-    block_id: Option<BlockId>,
-) -> anyhow::Result<Ret> {
-    let mut data = bytecode.to_vec();
-    data.extend(AbiEncode::encode(args));
-    let tx = Eip1559TransactionRequest {
-        data: Some(data.into()),
-        ..Default::default()
-    };
-    let error = provider
-        .call(&tx.into(), block_id)
-        .await
-        .err()
-        .context("called constructor should revert")?;
-    get_revert_data(error).context("should decode revert data from called constructor")
-}
-
-// Gets and decodes the revert data from a provider error, if it is a revert error.
-fn get_revert_data<D: AbiDecode>(mut error: ProviderError) -> Result<D, ProviderError> {
-    let ProviderError::JsonRpcClientError(dyn_error) = &mut error else {
-        return Err(error);
-    };
-    let Some(jsonrpc_error) = dyn_error.as_error_response() else {
-        return Err(error);
-    };
-    if !jsonrpc_error.is_revert() {
-        return Err(error);
-    }
-    match jsonrpc_error.decode_revert_data() {
-        Some(ret) => Ok(ret),
-        None => Err(error),
-    }
 }
 
 #[derive(Copy, Clone, Debug)]

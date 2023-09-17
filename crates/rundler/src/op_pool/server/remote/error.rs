@@ -1,5 +1,7 @@
 use anyhow::{bail, Context};
 use ethers::types::Opcode;
+use rundler_sim::{PrecheckViolation, SimulationViolation, ViolationOpCode};
+use rundler_types::StorageSlot;
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error,
@@ -18,11 +20,7 @@ use super::protos::{
     VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 use crate::{
-    common::{
-        precheck::PrecheckViolation,
-        protos::{from_bytes, to_le_bytes, ConversionError},
-        simulation::{SimulationViolation, StorageSlot},
-    },
+    common::protos::{from_bytes, to_le_bytes, ConversionError},
     op_pool::{mempool::error::MempoolError, server::error::PoolServerError},
 };
 
@@ -553,7 +551,7 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 SimulationViolation::UsedForbiddenOpcode(
                     (&e.entity.context("should have entity in error")?).try_into()?,
                     from_bytes(&e.contract_address)?,
-                    crate::common::simulation::ViolationOpCode(Opcode::try_from(e.opcode as u8)?),
+                    ViolationOpCode(Opcode::try_from(e.opcode as u8)?),
                 )
             }
             Some(simulation_violation_error::Violation::UsedForbiddenPrecompile(e)) => {

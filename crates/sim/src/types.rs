@@ -1,0 +1,87 @@
+use std::collections::{btree_map, BTreeMap};
+
+use anyhow::bail;
+use ethers::types::{Address, H256};
+use serde::{Deserialize, Serialize};
+
+/// The expected storage values for a user operation that must
+/// be checked to determine if this operation is valid.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct ExpectedStorage(BTreeMap<Address, BTreeMap<H256, H256>>);
+
+impl ExpectedStorage {
+    /// Merge this expected storage with another one, accounting for conflicts.
+    pub fn merge(&mut self, other: &Self) -> anyhow::Result<()> {
+        for (&address, other_values_by_slot) in &other.0 {
+            let values_by_slot = self.0.entry(address).or_default();
+            for (&slot, &value) in other_values_by_slot {
+                match values_by_slot.entry(slot) {
+                    btree_map::Entry::Occupied(mut entry) => {
+                        if *entry.get() != value {
+                            bail!(
+                                "a storage slot was read with a different value from multiple ops. Address: {address:?}, slot: {slot}, first value seen: {value}, second value seen: {}",
+                                entry.get(),
+                            );
+                        }
+                        entry.insert(value);
+                    }
+                    btree_map::Entry::Vacant(entry) => {
+                        entry.insert(value);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+use std::fmt::{Display, Formatter};
+
+/// An error that occurs when a user operation violates a spec rule.
+#[derive(Debug, thiserror::Error)]
+pub enum ViolationError<T> {
+    Violations(Vec<T>),
+    Other(#[from] anyhow::Error),
+}
+
+impl<T> Clone for ViolationError<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            ViolationError::Violations(violations) => {
+                ViolationError::Violations(violations.clone())
+            }
+            ViolationError::Other(error) => {
+                ViolationError::Other(anyhow::anyhow!(error.to_string()))
+            }
+        }
+    }
+}
+
+impl<T> From<Vec<T>> for ViolationError<T> {
+    fn from(violations: Vec<T>) -> Self {
+        Self::Violations(violations)
+    }
+}
+
+impl<T: Display> Display for ViolationError<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ViolationError::Violations(violations) => {
+                if violations.len() == 1 {
+                    Display::fmt(&violations[0], f)
+                } else {
+                    f.write_str("multiple violations: ")?;
+                    for violation in violations {
+                        Display::fmt(violation, f)?;
+                        f.write_str("; ")?;
+                    }
+                    Ok(())
+                }
+            }
+            ViolationError::Other(error) => Display::fmt(error, f),
+        }
+    }
+}

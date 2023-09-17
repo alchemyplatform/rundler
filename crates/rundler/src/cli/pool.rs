@@ -3,6 +3,7 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use ethers::types::{Chain, H256};
+use rundler_sim::MempoolConfig;
 use tokio::sync::broadcast;
 
 use super::CommonArgs;
@@ -11,7 +12,6 @@ use crate::{
     common::{
         emit::{self, EVENT_CHANNEL_CAPACITY},
         handle::spawn_tasks_with_shutdown,
-        mempool::MempoolConfig,
     },
     op_pool::{self, LocalPoolBuilder, PoolConfig, PoolTask},
 };

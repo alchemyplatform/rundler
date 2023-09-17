@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use async_trait::async_trait;
 use ethers::types::{
     Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
     GethTrace, U256,
@@ -15,19 +16,18 @@ use mockall::automock;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_types::UserOperation;
 use serde::{Deserialize, Serialize};
-use tonic::async_trait;
 
-use crate::common::types::ExpectedStorage;
+use crate::ExpectedStorage;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SimulationTracerOutput {
-    pub phases: Vec<Phase>,
-    pub revert_data: Option<String>,
-    pub accessed_contract_addresses: Vec<Address>,
-    pub associated_slots_by_address: AssociatedSlotsByAddress,
-    pub factory_called_create2_twice: bool,
-    pub expected_storage: ExpectedStorage,
+    pub(crate) phases: Vec<Phase>,
+    pub(crate) revert_data: Option<String>,
+    pub(crate) accessed_contract_addresses: Vec<Address>,
+    pub(crate) associated_slots_by_address: AssociatedSlotsByAddress,
+    pub(crate) factory_called_create2_twice: bool,
+    pub(crate) expected_storage: ExpectedStorage,
 }
 
 impl TryFrom<GethTrace> for SimulationTracerOutput {
@@ -44,29 +44,29 @@ impl TryFrom<GethTrace> for SimulationTracerOutput {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Phase {
-    pub forbidden_opcodes_used: Vec<String>,
-    pub forbidden_precompiles_used: Vec<String>,
-    pub storage_accesses: Vec<StorageAccess>,
-    pub called_banned_entry_point_method: bool,
-    pub addresses_calling_with_value: Vec<Address>,
-    pub called_non_entry_point_with_value: bool,
-    pub ran_out_of_gas: bool,
-    pub undeployed_contract_accesses: Vec<Address>,
+pub(crate) struct Phase {
+    pub(crate) forbidden_opcodes_used: Vec<String>,
+    pub(crate) forbidden_precompiles_used: Vec<String>,
+    pub(crate) storage_accesses: Vec<StorageAccess>,
+    pub(crate) called_banned_entry_point_method: bool,
+    pub(crate) addresses_calling_with_value: Vec<Address>,
+    pub(crate) called_non_entry_point_with_value: bool,
+    pub(crate) ran_out_of_gas: bool,
+    pub(crate) undeployed_contract_accesses: Vec<Address>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct StorageAccess {
-    pub address: Address,
-    pub slots: Vec<U256>,
+pub(crate) struct StorageAccess {
+    pub(crate) address: Address,
+    pub(crate) slots: Vec<U256>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct AssociatedSlotsByAddress(HashMap<Address, BTreeSet<U256>>);
+pub(crate) struct AssociatedSlotsByAddress(HashMap<Address, BTreeSet<U256>>);
 
 impl AssociatedSlotsByAddress {
-    pub fn is_associated_slot(&self, address: Address, slot: U256) -> bool {
+    pub(crate) fn is_associated_slot(&self, address: Address, slot: U256) -> bool {
         if slot == address.as_bytes().into() {
             return true;
         }
@@ -80,9 +80,11 @@ impl AssociatedSlotsByAddress {
     }
 }
 
+/// Trait for tracing the simulation of a user operation.
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait SimulateValidationTracer: Send + Sync + 'static {
+    /// Traces the simulation of a user operation.
     async fn trace_simulate_validation(
         &self,
         op: UserOperation,
@@ -91,6 +93,7 @@ pub trait SimulateValidationTracer: Send + Sync + 'static {
     ) -> anyhow::Result<SimulationTracerOutput>;
 }
 
+/// Tracer implementation for the bundler's custom tracer.
 #[derive(Debug)]
 pub struct SimulateValidationTracerImpl<P, E>
 where
@@ -146,6 +149,7 @@ where
     P: Provider,
     E: EntryPoint,
 {
+    /// Creates a new instance of the bundler's custom tracer.
     pub fn new(provider: Arc<P>, entry_point: E) -> Self {
         Self {
             provider,
@@ -158,7 +162,7 @@ fn validation_tracer_js() -> &'static str {
     include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
 }
 
-pub fn parse_combined_tracer_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>
+pub(crate) fn parse_combined_tracer_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>
 where
     A: std::str::FromStr,
     B: std::str::FromStr,

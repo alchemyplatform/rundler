@@ -1,9 +1,10 @@
 use std::{fmt::Display, sync::Arc};
 
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256};
-use rundler_types::GasFees;
+use rundler_sim::SimulationError;
+use rundler_types::{GasFees, ValidTimeRange};
 
-use crate::common::{simulation::SimulationError, strs, types::ValidTimeRange};
+use crate::common::strs;
 
 #[derive(Clone, Debug)]
 pub enum BuilderEvent {

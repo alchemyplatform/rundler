@@ -19,9 +19,8 @@ pub use flashbots::FlashbotsTransactionSender;
 #[cfg(test)]
 use mockall::automock;
 pub use raw::RawTransactionSender;
+use rundler_sim::ExpectedStorage;
 use tonic::async_trait;
-
-use crate::common::types::ExpectedStorage;
 
 #[derive(Debug)]
 pub struct SentTxInfo {

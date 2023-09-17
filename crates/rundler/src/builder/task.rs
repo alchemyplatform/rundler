@@ -8,6 +8,9 @@ use std::{
 use anyhow::{bail, Context};
 use ethers::types::{Address, H256};
 use ethers_signers::Signer;
+use rundler_sim::{
+    MempoolConfig, PriorityFeeMode, SimulateValidationTracerImpl, SimulationSettings, SimulatorImpl,
+};
 use rundler_types::contracts::i_entry_point::IEntryPoint;
 use rusoto_core::Region;
 use tokio::{
@@ -30,12 +33,8 @@ use crate::{
     },
     common::{
         emit::WithEntryPoint,
-        eth::{self},
-        gas::PriorityFeeMode,
+        eth,
         handle::{self, SpawnGuard, Task},
-        mempool::MempoolConfig,
-        simulation::{self, SimulatorImpl},
-        tracer::SimulateValidationTracerImpl,
     },
     op_pool::PoolServer,
 };
@@ -58,7 +57,7 @@ pub struct Args {
     pub priority_fee_mode: PriorityFeeMode,
     pub use_conditional_send_transaction: bool,
     pub eth_poll_interval: Duration,
-    pub sim_settings: simulation::Settings,
+    pub sim_settings: SimulationSettings,
     pub mempool_configs: HashMap<H256, MempoolConfig>,
     pub max_blocks_to_wait_for_mine: u64,
     pub replacement_fee_percent_increase: u64,

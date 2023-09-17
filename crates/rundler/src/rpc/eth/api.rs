@@ -15,28 +15,24 @@ use ethers::{
     utils::to_checksum,
 };
 use rundler_provider::{EntryPoint, Provider};
+use rundler_sim::{
+    EstimationSettings, GasEstimate, GasEstimationError, GasEstimator, GasEstimatorImpl,
+    UserOperationOptionalGas,
+};
 use rundler_types::{
     contracts::i_entry_point::{
         IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
     UserOperation,
 };
+use rundler_utils::log::LogOnError;
 use tracing::Level;
 
-use super::{
-    error::{EthResult, EthRpcError},
-    estimation::{self, GasEstimationError, GasEstimator, GasEstimatorImpl},
-};
+use super::error::{EthResult, EthRpcError};
 use crate::{
-    common::{
-        context::LogOnError,
-        eth::{log_to_raw_log, Settings},
-    },
+    common::eth::{log_to_raw_log, Settings},
     op_pool::PoolServer,
-    rpc::{
-        GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
-        UserOperationReceipt,
-    },
+    rpc::{RichUserOperation, RpcUserOperation, UserOperationReceipt},
 };
 
 #[derive(Debug)]
@@ -53,7 +49,7 @@ where
         chain_id: u64,
         provider: Arc<P>,
         entry_point: E,
-        estimation_settings: estimation::Settings,
+        estimation_settings: EstimationSettings,
     ) -> Self
     where
         E: Clone, // Add Clone trait bound for E
@@ -85,7 +81,7 @@ where
         chain_id: u64,
         pool: PS,
         settings: Settings,
-        estimation_settings: estimation::Settings,
+        estimation_settings: EstimationSettings,
     ) -> Self
     where
         E: Clone,

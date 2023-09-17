@@ -10,6 +10,7 @@ use jsonrpsee::{
     RpcModule,
 };
 use rundler_provider::EntryPoint;
+use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_types::contracts::i_entry_point::IEntryPoint;
 use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
@@ -22,13 +23,12 @@ use crate::{
     common::{
         eth,
         handle::Task,
-        precheck,
         server::{format_socket_addr, HealthCheck},
     },
     op_pool::PoolServer,
     rpc::{
         debug::{DebugApi, DebugApiServer},
-        eth::{EstimationSettings, EthApiServer},
+        eth::EthApiServer,
         health::{HealthChecker, SystemApiServer},
         metrics::RpcMetricsLogger,
         rundler::{RundlerApi, RundlerApiServer},
@@ -43,7 +43,7 @@ pub struct Args {
     pub chain_id: u64,
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
-    pub precheck_settings: precheck::Settings,
+    pub precheck_settings: PrecheckSettings,
     pub eth_api_settings: eth::Settings,
     pub estimation_settings: EstimationSettings,
     pub rpc_timeout: Duration,

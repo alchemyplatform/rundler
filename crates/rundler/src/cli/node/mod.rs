@@ -40,14 +40,12 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
 
     let pool_task_args = pool_args.to_args(&common_args, None).await?;
     let builder_task_args = builder_args.to_args(&common_args, None).await?;
-    let rpc_task_args = rpc_args
-        .to_args(
-            &common_args,
-            (&common_args).try_into()?,
-            (&common_args).try_into()?,
-            (&common_args).try_into()?,
-        )
-        .await?;
+    let rpc_task_args = rpc_args.to_args(
+        &common_args,
+        (&common_args).try_into()?,
+        (&common_args).try_into()?,
+        (&common_args).try_into()?,
+    )?;
 
     let (event_sender, event_rx) =
         broadcast::channel::<WithEntryPoint<Event>>(EVENT_CHANNEL_CAPACITY);

@@ -4,6 +4,9 @@ use anyhow::{bail, Context};
 use ethers::providers::{
     Http, HttpRateLimitRetryPolicy, JsonRpcClient, Provider, RetryClientBuilder,
 };
+use rundler_sim::{
+    Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
+};
 use rundler_types::contracts::i_entry_point::IEntryPoint;
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -12,14 +15,7 @@ use url::Url;
 
 use super::mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams};
 use crate::{
-    common::{
-        emit::WithEntryPoint,
-        eth, handle,
-        handle::Task,
-        precheck::{Prechecker, PrecheckerImpl},
-        simulation::{Simulator, SimulatorImpl},
-        tracer::SimulateValidationTracerImpl,
-    },
+    common::{emit::WithEntryPoint, eth, handle, handle::Task},
     op_pool::{
         chain::{self, Chain},
         emit::OpPoolEvent,
@@ -161,7 +157,6 @@ impl PoolTask {
             SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
         let prechecker = PrecheckerImpl::new(
             Arc::clone(&provider),
-            pool_config.chain_id,
             i_entry_point.clone(),
             pool_config.precheck_settings,
         );

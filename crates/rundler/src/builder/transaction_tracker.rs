@@ -3,15 +3,13 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use ethers::types::{transaction::eip2718::TypedTransaction, H256, U256};
 use rundler_provider::Provider;
+use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use tokio::time;
 use tonic::async_trait;
 use tracing::info;
 
-use crate::{
-    builder::sender::{TransactionSender, TxStatus},
-    common::types::ExpectedStorage,
-};
+use crate::builder::sender::{TransactionSender, TxStatus};
 
 /// Keeps track of pending transactions in order to suggest nonces and
 /// replacement fees and ensure that transactions do not get stalled. All sent
