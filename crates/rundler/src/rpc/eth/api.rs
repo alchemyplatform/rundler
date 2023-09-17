@@ -14,6 +14,7 @@ use ethers::{
     },
     utils::to_checksum,
 };
+use rundler_pool::PoolServer;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_sim::{
     EstimationSettings, GasEstimate, GasEstimationError, GasEstimator, GasEstimatorImpl,
@@ -30,10 +31,22 @@ use tracing::Level;
 
 use super::error::{EthResult, EthRpcError};
 use crate::{
-    common::eth::{log_to_raw_log, Settings},
-    op_pool::PoolServer,
+    common::eth::log_to_raw_log,
     rpc::{RichUserOperation, RpcUserOperation, UserOperationReceipt},
 };
+
+#[derive(Copy, Clone, Debug)]
+pub struct Settings {
+    pub user_operation_event_block_distance: Option<u64>,
+}
+
+impl Settings {
+    pub fn new(block_distance: Option<u64>) -> Self {
+        Self {
+            user_operation_event_block_distance: block_distance,
+        }
+    }
+}
 
 #[derive(Debug)]
 struct EntryPointContext<P, E> {
@@ -473,10 +486,10 @@ mod tests {
         types::{Log, TransactionReceipt},
         utils::keccak256,
     };
+    use rundler_pool::MockPoolServer;
     use rundler_provider::{MockEntryPoint, MockProvider};
 
     use super::*;
-    use crate::op_pool::MockPoolServer;
 
     const UO_OP_TOPIC: &str = "user-op-event-topic";
 

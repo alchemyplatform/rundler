@@ -9,4 +9,8 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 ethers.workspace = true
+futures.workspace = true
+rand.workspace = true
+tokio.workspace = true
 tracing.workspace = true
+url.workspace = true

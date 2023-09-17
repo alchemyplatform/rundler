@@ -17,7 +17,7 @@ use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
 
-use crate::common::eth;
+use crate::rpc::EthApiSettings;
 
 /// Main entry point for the CLI
 ///
@@ -269,7 +269,7 @@ impl From<&CommonArgs> for SimulationSettings {
     }
 }
 
-impl From<&CommonArgs> for eth::Settings {
+impl From<&CommonArgs> for EthApiSettings {
     fn from(value: &CommonArgs) -> Self {
         Self::new(value.user_operation_event_block_distance)
     }

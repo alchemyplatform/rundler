@@ -11,22 +11,19 @@ use futures::future;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
+use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
     gas, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess,
     Simulator,
 };
 use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
-use rundler_utils::math;
+use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
 use tonic::async_trait;
 use tracing::{error, info};
 
-use crate::{
-    builder::emit::{BuilderEvent, OpRejectionReason, SkipReason},
-    common::emit::WithEntryPoint,
-    op_pool::{PoolOperation, PoolServer},
-};
+use crate::builder::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
@@ -702,12 +699,12 @@ impl ProposalContext {
 mod tests {
     use anyhow::anyhow;
     use ethers::{types::H160, utils::parse_units};
+    use rundler_pool::MockPoolServer;
     use rundler_provider::{AggregatorSimOut, MockEntryPoint, MockProvider};
     use rundler_sim::{MockSimulator, SimulationViolation};
     use rundler_types::ValidTimeRange;
 
     use super::*;
-    use crate::op_pool::MockPoolServer;
 
     #[tokio::test]
     async fn test_singleton_valid_bundle() {

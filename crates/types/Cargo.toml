@@ -15,7 +15,7 @@ ethers.workspace = true
 parse-display = "0.8.0"
 serde.workspace = true
 serde_json.workspace = true
-strum = { version = "0.25.0", features = ["derive"] }
+strum.workspace = true
 
 [build-dependencies]
 ethers.workspace = true

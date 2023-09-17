@@ -4,12 +4,12 @@ use anyhow::Context;
 use ethers::providers::Middleware;
 use ethers_signers::{AwsSigner, Signer};
 use rslock::{LockGuard, LockManager};
+use rundler_utils::handle::SpawnGuard;
 use rusoto_core::Region;
 use rusoto_kms::KmsClient;
 use tokio::{sync::oneshot, time::sleep};
 
 use super::monitor_account_balance;
-use crate::common::handle::SpawnGuard;
 
 /// A KMS signer handle that will release the key_id when dropped.
 #[derive(Debug)]

@@ -1,12 +1,13 @@
 use std::fmt::Display;
 
 use ethers::types::Address;
+use rundler_pool::PoolEvent;
 
-use crate::{builder::emit::BuilderEvent, op_pool::emit::OpPoolEvent};
+use crate::builder::emit::BuilderEvent;
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    OpPoolEvent(OpPoolEvent),
+    PoolEvent(PoolEvent),
     BuilderEvent(BuilderEvent),
 }
 
@@ -16,9 +17,9 @@ pub struct WithEntryPoint<T> {
     pub event: T,
 }
 
-impl From<OpPoolEvent> for Event {
-    fn from(event: OpPoolEvent) -> Self {
-        Self::OpPoolEvent(event)
+impl From<PoolEvent> for Event {
+    fn from(event: PoolEvent) -> Self {
+        Self::PoolEvent(event)
     }
 }
 
@@ -31,7 +32,7 @@ impl From<BuilderEvent> for Event {
 impl Display for Event {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Event::OpPoolEvent(event) => event.fmt(f),
+            Event::PoolEvent(event) => event.fmt(f),
             Event::BuilderEvent(event) => event.fmt(f),
         }
     }

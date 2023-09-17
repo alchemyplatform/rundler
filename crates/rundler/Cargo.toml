@@ -7,13 +7,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+rundler-pool = { path = "../pool" }
 rundler-provider = { path = "../provider" } 
 rundler-sim = { path = "../sim" }
+rundler-task = { path = "../task" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
 anyhow.workspace = true
-async-stream = "0.3.5"
 clap = { version = "4.2.4", features = ["derive", "env"] }
 enum_dispatch = "0.3.11"
 ethers.workspace = true
@@ -29,7 +30,6 @@ metrics = "0.21.0"
 metrics-exporter-prometheus = "0.12.0"
 metrics-process = "1.0.10"
 metrics-util = "0.15.0"
-parking_lot = "0.12.1"
 parse-display = "0.8.0"
 pin-project = "1.0.12"
 prost = "0.12.0"
@@ -48,7 +48,6 @@ strum = { version = "0.25.0", features = ["derive"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-rustls = "0.24.1"
-tokio-stream = { version = "0.1.12", features = ["sync"] }
 tokio-util = "0.7.8"
 tonic = "0.10.0"
 tonic-health = "0.10.0"
@@ -64,6 +63,7 @@ url.workspace = true
 [dev-dependencies]
 cargo-husky.workspace = true
 mockall.workspace = true
+rundler-pool = { path = "../pool", features = ["test-utils"] }
 rundler-provider = { path = "../provider", features = ["test-utils"] }
 rundler-sim = { path = "../sim", features = ["test-utils"] } 
 tokio-util = "0.7.7"

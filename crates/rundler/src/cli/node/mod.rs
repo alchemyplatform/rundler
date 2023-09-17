@@ -1,4 +1,7 @@
 use clap::Args;
+use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
+use rundler_task::spawn_tasks_with_shutdown;
+use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
 use self::events::Event;
@@ -10,11 +13,6 @@ use crate::{
         rpc::RpcArgs,
         CommonArgs,
     },
-    common::{
-        emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
-        handle,
-    },
-    op_pool::{emit::OpPoolEvent, LocalPoolBuilder, PoolTask},
     rpc::RpcTask,
 };
 mod events;
@@ -50,7 +48,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let (event_sender, event_rx) =
         broadcast::channel::<WithEntryPoint<Event>>(EVENT_CHANNEL_CAPACITY);
     let (op_pool_event_sender, op_pool_event_rx) =
-        broadcast::channel::<WithEntryPoint<OpPoolEvent>>(EVENT_CHANNEL_CAPACITY);
+        broadcast::channel::<WithEntryPoint<PoolEvent>>(EVENT_CHANNEL_CAPACITY);
     let (builder_event_sender, builder_event_rx) =
         broadcast::channel::<WithEntryPoint<BuilderEvent>>(EVENT_CHANNEL_CAPACITY);
 
@@ -76,7 +74,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let builder_builder = LocalBuilderBuilder::new(1024);
     let builder_handle = builder_builder.get_handle();
 
-    handle::spawn_tasks_with_shutdown(
+    spawn_tasks_with_shutdown(
         [
             PoolTask::new(pool_task_args, op_pool_event_sender, pool_builder).boxed(),
             BuilderTask::new(

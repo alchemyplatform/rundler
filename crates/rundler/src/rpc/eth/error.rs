@@ -3,14 +3,12 @@ use jsonrpsee::types::{
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
     ErrorObjectOwned,
 };
+use rundler_pool::{MempoolError, PoolServerError};
 use rundler_sim::{PrecheckViolation, SimulationViolation};
 use rundler_types::{Entity, EntityType, Timestamp};
 use serde::Serialize;
 
-use crate::{
-    op_pool::{MempoolError, PoolServerError},
-    rpc::{rpc_err, rpc_err_with_data},
-};
+use crate::rpc::{rpc_err, rpc_err_with_data};
 
 // Error codes borrowed from jsonrpsee
 // INVALID_REQUEST_CODE = -32600

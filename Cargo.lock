@@ -3953,6 +3953,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "rundler-pool"
+version = "0.1.0-beta"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "ethers",
+ "futures",
+ "futures-util",
+ "itertools 0.11.0",
+ "metrics",
+ "mockall",
+ "parking_lot",
+ "prost",
+ "rundler-provider",
+ "rundler-sim",
+ "rundler-task",
+ "rundler-types",
+ "rundler-utils",
+ "serde",
+ "strum",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-build",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "rundler-provider"
 version = "0.1.0-beta"
 dependencies = [
@@ -3971,7 +4005,6 @@ name = "rundler-rundler"
 version = "0.1.0-beta"
 dependencies = [
  "anyhow",
- "async-stream",
  "cargo-husky",
  "clap 4.2.4",
  "enum_dispatch",
@@ -3989,7 +4022,6 @@ dependencies = [
  "metrics-process",
  "metrics-util",
  "mockall",
- "parking_lot",
  "parse-display",
  "pin-project",
  "prost",
@@ -3997,8 +4029,10 @@ dependencies = [
  "rand",
  "reqwest",
  "rslock",
+ "rundler-pool",
  "rundler-provider",
  "rundler-sim",
+ "rundler-task",
  "rundler-types",
  "rundler-utils",
  "rusoto_core",
@@ -4012,7 +4046,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls 0.24.1",
- "tokio-stream",
  "tokio-util",
  "tonic",
  "tonic-build",
@@ -4053,6 +4086,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rundler-task"
+version = "0.1.0-beta"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "ethers",
+ "futures",
+ "metrics",
+ "pin-project",
+ "rundler-provider",
+ "rundler-utils",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "rundler-tools"
 version = "0.1.0-beta"
 dependencies = [
@@ -4088,7 +4141,11 @@ version = "0.1.0-beta"
 dependencies = [
  "anyhow",
  "ethers",
+ "futures",
+ "rand",
+ "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]

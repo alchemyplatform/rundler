@@ -2,14 +2,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
+use rundler_pool::RemotePoolClient;
 use rundler_sim::{EstimationSettings, PrecheckSettings};
+use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
 
 use super::CommonArgs;
 use crate::{
     builder::RemoteBuilderClient,
-    common::{eth, handle::spawn_tasks_with_shutdown, server::connect_with_retries_shutdown},
-    op_pool::RemotePoolClient,
-    rpc::{self, RpcTask},
+    rpc::{self, EthApiSettings, RpcTask},
 };
 
 /// CLI options for the RPC server
@@ -72,7 +72,7 @@ impl RpcArgs {
         &self,
         common: &CommonArgs,
         precheck_settings: PrecheckSettings,
-        eth_api_settings: eth::Settings,
+        eth_api_settings: EthApiSettings,
         estimation_settings: EstimationSettings,
     ) -> anyhow::Result<rpc::Args> {
         let apis = self

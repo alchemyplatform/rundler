@@ -1,0 +1,47 @@
+[package]
+name = "rundler-pool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rundler-provider = { path = "../provider" }
+rundler-sim = { path = "../sim" }
+rundler-task = { path = "../task" }
+rundler-types = { path = "../types" }
+rundler-utils = { path = "../utils" }
+
+anyhow.workspace = true
+async-stream = "0.3.5"
+async-trait.workspace = true
+ethers.workspace = true
+futures.workspace = true
+futures-util.workspace = true
+itertools = "0.11.0"
+metrics.workspace = true
+parking_lot = "0.12.1"
+prost.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream = { version = "0.1.12", features = ["sync"] }
+tokio-util.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tonic-reflection.workspace = true
+tracing.workspace = true
+serde.workspace = true
+strum.workspace = true
+url.workspace = true
+
+mockall = {workspace = true, optional = true }
+
+[dev-dependencies]
+mockall.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+
+[features]
+test-utils = [ "mockall" ]

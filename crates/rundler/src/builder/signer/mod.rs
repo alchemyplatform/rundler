@@ -12,9 +12,8 @@ use ethers::{
     },
 };
 use ethers_signers::{AwsSignerError, LocalWallet, Signer, WalletError};
+use rundler_utils::handle::SpawnGuard;
 use tonic::async_trait;
-
-use crate::common::handle::SpawnGuard;
 
 /// A local signer handle
 #[derive(Debug)]
