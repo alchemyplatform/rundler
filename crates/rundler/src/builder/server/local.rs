@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use ethers::types::{Address, H256};
+use rundler_task::server::{HealthCheck, ServerStatus};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -12,13 +13,10 @@ use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 
 use super::{BuilderServer, BuilderServerError};
-use crate::{
-    builder::{
-        bundle_sender::{SendBundleRequest, SendBundleResult},
-        server::BuilderResult,
-        BundlingMode,
-    },
-    common::server::{HealthCheck, ServerStatus},
+use crate::builder::{
+    bundle_sender::{SendBundleRequest, SendBundleResult},
+    server::BuilderResult,
+    BundlingMode,
 };
 
 #[derive(Debug)]

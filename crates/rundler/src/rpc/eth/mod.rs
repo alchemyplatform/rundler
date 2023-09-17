@@ -2,7 +2,7 @@ mod api;
 mod error;
 mod server;
 
-pub use api::EthApi;
+pub use api::{EthApi, Settings as EthApiSettings};
 use ethers::types::{Address, H256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_sim::{GasEstimate, UserOperationOptionalGas};

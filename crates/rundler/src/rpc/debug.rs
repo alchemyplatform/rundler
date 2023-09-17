@@ -1,12 +1,10 @@
 use ethers::types::{Address, H256};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
+use rundler_pool::PoolServer;
 use tonic::async_trait;
 
 use super::{rpc_err, RpcReputation, RpcUserOperation};
-use crate::{
-    builder::{BuilderServer, BundlingMode},
-    op_pool::PoolServer,
-};
+use crate::builder::{BuilderServer, BundlingMode};
 
 /// Debug API
 #[rpc(client, server, namespace = "debug")]

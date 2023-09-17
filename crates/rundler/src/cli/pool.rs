@@ -3,18 +3,14 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use ethers::types::{Chain, H256};
+use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfig;
+use rundler_task::spawn_tasks_with_shutdown;
+use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
 use super::CommonArgs;
-use crate::{
-    cli::json::get_json_config,
-    common::{
-        emit::{self, EVENT_CHANNEL_CAPACITY},
-        handle::spawn_tasks_with_shutdown,
-    },
-    op_pool::{self, LocalPoolBuilder, PoolConfig, PoolTask},
-};
+use crate::cli::json::get_json_config;
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]
 #[command(next_help_heading = "POOL")]
@@ -100,7 +96,7 @@ impl PoolArgs {
         &self,
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
-    ) -> anyhow::Result<op_pool::Args> {
+    ) -> anyhow::Result<PoolTaskArgs> {
         let blocklist = match &self.blocklist_path {
             Some(blocklist) => Some(get_json_config(blocklist, &common.aws_region).await?),
             None => None,
@@ -141,7 +137,7 @@ impl PoolArgs {
             })
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
 
-        Ok(op_pool::Args {
+        Ok(PoolTaskArgs {
             chain_id: common.chain_id,
             chain_history_size: self
                 .chain_history_size

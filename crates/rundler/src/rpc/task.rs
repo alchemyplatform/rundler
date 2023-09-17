@@ -9,23 +9,22 @@ use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
+use rundler_pool::PoolServer;
 use rundler_provider::EntryPoint;
 use rundler_sim::{EstimationSettings, PrecheckSettings};
+use rundler_task::{
+    server::{format_socket_addr, HealthCheck},
+    Task,
+};
 use rundler_types::contracts::i_entry_point::IEntryPoint;
 use tokio_util::sync::CancellationToken;
 use tonic::async_trait;
 use tracing::info;
 use url::Url;
 
-use super::{eth::EthApi, ApiNamespace};
+use super::{eth::EthApi, ApiNamespace, EthApiSettings};
 use crate::{
     builder::BuilderServer,
-    common::{
-        eth,
-        handle::Task,
-        server::{format_socket_addr, HealthCheck},
-    },
-    op_pool::PoolServer,
     rpc::{
         debug::{DebugApi, DebugApiServer},
         eth::EthApiServer,
@@ -44,7 +43,7 @@ pub struct Args {
     pub api_namespaces: Vec<ApiNamespace>,
     pub rpc_url: String,
     pub precheck_settings: PrecheckSettings,
-    pub eth_api_settings: eth::Settings,
+    pub eth_api_settings: EthApiSettings,
     pub estimation_settings: EstimationSettings,
     pub rpc_timeout: Duration,
     pub max_connections: u32,

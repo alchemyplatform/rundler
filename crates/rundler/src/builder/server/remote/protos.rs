@@ -1,4 +1,6 @@
-use crate::{builder::BundlingMode as RpcBundlingMode, common::protos::ConversionError};
+use rundler_task::grpc::protos::ConversionError;
+
+use crate::builder::BundlingMode as RpcBundlingMode;
 
 tonic::include_proto!("builder");
 

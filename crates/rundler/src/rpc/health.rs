@@ -1,8 +1,8 @@
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
+use rundler_task::server::{HealthCheck, ServerStatus};
 use tonic::async_trait;
 
 use super::rpc_err;
-use crate::common::server::{HealthCheck, ServerStatus};
 
 #[rpc(server, namespace = "system")]
 pub trait SystemApi {

@@ -1,5 +1,7 @@
+use rundler_task::grpc::protos::ConversionError;
+
 use super::protos::{builder_error, BuilderError as ProtoBuilderError};
-use crate::{builder::server::BuilderServerError, common::protos::ConversionError};
+use crate::builder::server::BuilderServerError;
 
 impl From<tonic::Status> for BuilderServerError {
     fn from(value: tonic::Status) -> Self {

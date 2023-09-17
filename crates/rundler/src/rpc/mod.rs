@@ -6,18 +6,17 @@ mod rundler;
 mod task;
 
 pub use debug::DebugApiClient;
-pub use eth::EthApiClient;
+pub use eth::{EthApiClient, EthApiSettings};
 use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
 use jsonrpsee::types::{ErrorObject, ErrorObjectOwned};
+use rundler_pool::{Reputation, ReputationStatus};
 use rundler_types::UserOperation;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum;
 pub use task::*;
-
-use crate::op_pool::{Reputation, ReputationStatus};
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
@@ -141,34 +140,6 @@ pub struct UserOperationReceipt {
     pub reason: String,
     pub logs: Vec<Log>,
     pub receipt: TransactionReceipt,
-}
-
-impl Serialize for ReputationStatus {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            ReputationStatus::Ok => serializer.serialize_str("ok"),
-            ReputationStatus::Throttled => serializer.serialize_str("throttled"),
-            ReputationStatus::Banned => serializer.serialize_str("banned"),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ReputationStatus {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "ok" => Ok(ReputationStatus::Ok),
-            "throttled" => Ok(ReputationStatus::Throttled),
-            "banned" => Ok(ReputationStatus::Banned),
-            _ => Err(de::Error::custom(format!("Invalid reputation status {s}"))),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

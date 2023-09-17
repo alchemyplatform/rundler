@@ -7,6 +7,10 @@
 
 //! Rundler utilities
 
+pub mod emit;
 pub mod eth;
+pub mod handle;
 pub mod log;
 pub mod math;
+pub mod retry;
+pub mod strs;

@@ -1,6 +1,10 @@
 use std::str::FromStr;
 
 use ethers::types::{Address, H256};
+use rundler_task::{
+    grpc::protos::{from_bytes, ConversionError},
+    server::{HealthCheck, ServerStatus},
+};
 use tonic::{
     async_trait,
     transport::{Channel, Uri},
@@ -15,15 +19,9 @@ use super::protos::{
     debug_set_bundling_mode_response, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
     DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest,
 };
-use crate::{
-    builder::{
-        server::{BuilderResult, BuilderServer, BuilderServerError},
-        BundlingMode,
-    },
-    common::{
-        protos::{from_bytes, ConversionError},
-        server::{HealthCheck, ServerStatus},
-    },
+use crate::builder::{
+    server::{BuilderResult, BuilderServer, BuilderServerError},
+    BundlingMode,
 };
 
 #[derive(Debug, Clone)]

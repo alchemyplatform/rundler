@@ -1,34 +1,12 @@
-use std::{error, future::Future, ops::Deref, sync::Arc, time::Duration};
+use std::{error, future::Future, ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
     abi::RawLog,
     contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
-    providers::{
-        Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, PendingTransaction,
-        Provider as EthersProvider, RetryClient, RetryClientBuilder,
-    },
+    providers::{JsonRpcClient, Middleware, PendingTransaction},
     types::{Address, Bytes, Log, TransactionReceipt},
 };
-use url::Url;
-
-pub fn new_provider(
-    url: &str,
-    poll_interval: Duration,
-) -> anyhow::Result<Arc<EthersProvider<RetryClient<Http>>>> {
-    let parsed_url = Url::parse(url).context("provider url should be valid")?;
-    let http = Http::new(parsed_url);
-    let client = RetryClientBuilder::default()
-        // these retries are if the server returns a 429
-        .rate_limit_retries(10)
-        // these retries are if the connection is dubious
-        .timeout_retries(3)
-        .initial_backoff(Duration::from_millis(500))
-        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-    Ok(Arc::new(
-        EthersProvider::new(client).interval(poll_interval),
-    ))
-}
 
 /// Waits for a pending transaction to be mined, providing appropriate error
 /// messages for each point of failure.
@@ -91,28 +69,5 @@ pub fn log_to_raw_log(log: Log) -> RawLog {
     RawLog {
         topics,
         data: data.to_vec(),
-    }
-}
-
-pub async fn get_chain_id<Client: JsonRpcClient>(
-    provider: &EthersProvider<Client>,
-) -> anyhow::Result<u32> {
-    Ok(provider
-        .get_chainid()
-        .await
-        .context("should get chain id")?
-        .as_u32())
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct Settings {
-    pub user_operation_event_block_distance: Option<u64>,
-}
-
-impl Settings {
-    pub fn new(block_distance: Option<u64>) -> Self {
-        Self {
-            user_operation_event_block_distance: block_distance,
-        }
     }
 }
