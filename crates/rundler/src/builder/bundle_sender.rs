@@ -10,6 +10,7 @@ use anyhow::{bail, Context};
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use futures_util::StreamExt;
 use rundler_provider::EntryPoint;
+use rundler_sim::ExpectedStorage;
 use rundler_types::{Entity, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::{
@@ -26,7 +27,7 @@ use crate::{
         emit::{BuilderEvent, BundleTxDetails},
         transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
     },
-    common::{emit::WithEntryPoint, types::ExpectedStorage},
+    common::emit::WithEntryPoint,
     op_pool::PoolServer,
 };
 

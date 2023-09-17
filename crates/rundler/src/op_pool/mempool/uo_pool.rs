@@ -6,6 +6,7 @@ use std::{
 use ethers::types::{Address, H256};
 use itertools::Itertools;
 use parking_lot::RwLock;
+use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{Entity, UserOperation};
 use tokio::sync::broadcast;
 use tonic::async_trait;
@@ -18,7 +19,7 @@ use super::{
     Mempool, OperationOrigin, PoolConfig, PoolOperation,
 };
 use crate::{
-    common::{emit::WithEntryPoint, precheck::Prechecker, simulation::Simulator},
+    common::emit::WithEntryPoint,
     op_pool::{
         chain::ChainUpdate,
         emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
@@ -56,18 +57,18 @@ where
     S: Simulator,
 {
     pub fn new(
-        args: PoolConfig,
+        config: PoolConfig,
         reputation: Arc<R>,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
     ) -> Self {
         Self {
-            entry_point: args.entry_point,
-            chain_id: args.chain_id,
+            entry_point: config.entry_point,
+            chain_id: config.chain_id,
             reputation,
             state: RwLock::new(UoPoolState {
-                pool: PoolInner::new(args),
+                pool: PoolInner::new(config.into()),
                 throttled_ops: HashMap::new(),
                 block_number: 0,
             }),
@@ -372,18 +373,14 @@ impl UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
+    use rundler_sim::{
+        MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
+        SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,
+    };
     use rundler_types::EntityType;
 
     use super::*;
-    use crate::{
-        common::{
-            precheck::{self, MockPrechecker, PrecheckError, PrecheckViolation},
-            simulation::{
-                self, MockSimulator, SimulationError, SimulationSuccess, SimulationViolation,
-            },
-        },
-        op_pool::chain::MinedOp,
-    };
+    use crate::op_pool::chain::MinedOp;
 
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -742,8 +739,8 @@ mod tests {
             max_size_of_pool_bytes: 10000,
             blocklist: None,
             allowlist: None,
-            precheck_settings: precheck::Settings::default(),
-            sim_settings: simulation::Settings::default(),
+            precheck_settings: PrecheckSettings::default(),
+            sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
         };
         let (event_sender, _) = broadcast::channel(4);

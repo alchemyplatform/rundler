@@ -2,15 +2,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
+use rundler_sim::{EstimationSettings, PrecheckSettings};
 
 use super::CommonArgs;
 use crate::{
     builder::RemoteBuilderClient,
-    common::{
-        eth, handle::spawn_tasks_with_shutdown, precheck, server::connect_with_retries_shutdown,
-    },
+    common::{eth, handle::spawn_tasks_with_shutdown, server::connect_with_retries_shutdown},
     op_pool::RemotePoolClient,
-    rpc::{self, EstimationSettings, RpcTask},
+    rpc::{self, RpcTask},
 };
 
 /// CLI options for the RPC server
@@ -69,10 +68,10 @@ impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
     #[allow(clippy::too_many_arguments)]
-    pub async fn to_args(
+    pub fn to_args(
         &self,
         common: &CommonArgs,
-        precheck_settings: precheck::Settings,
+        precheck_settings: PrecheckSettings,
         eth_api_settings: eth::Settings,
         estimation_settings: EstimationSettings,
     ) -> anyhow::Result<rpc::Args> {
@@ -138,14 +137,12 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
         builder_url,
     } = rpc_args;
 
-    let task_args = rpc_args
-        .to_args(
-            &common_args,
-            (&common_args).try_into()?,
-            (&common_args).into(),
-            (&common_args).try_into()?,
-        )
-        .await?;
+    let task_args = rpc_args.to_args(
+        &common_args,
+        (&common_args).try_into()?,
+        (&common_args).into(),
+        (&common_args).try_into()?,
+    )?;
 
     let pool = connect_with_retries_shutdown(
         "op pool from rpc",

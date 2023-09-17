@@ -5,11 +5,20 @@ use rundler_types::{Entity, EntityType};
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
 
-use crate::common::simulation::SimulationViolation;
+use crate::simulation::SimulationViolation;
+
+/// A mempool configuration.
+///
+/// Typically read from a JSON file using the `Deserialize` trait.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MempoolConfig {
+    /// Allowlist to match violations against.
+    allowlist: Vec<AllowlistEntry>,
+}
 
 /// The entity allowed by an allowlist entry.
 #[derive(Debug, Copy, Clone)]
-pub enum AllowEntity {
+enum AllowEntity {
     /// Any entity is allowed.
     Any,
     /// Entity of a specific type is allowed.
@@ -47,7 +56,7 @@ impl AllowEntity {
 /// An allowlist rule.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "rule", rename_all = "camelCase")]
-pub enum AllowRule {
+enum AllowRule {
     /// Allowlist a forbidden opcode on a contract.
     ForbiddenOpcode { contract: Address, opcode: Opcode },
     /// Allowlist a forbidden precompile by its address on a contract
@@ -66,7 +75,7 @@ pub enum AllowRule {
 /// An allowlist entry
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
-pub struct AllowlistEntry {
+struct AllowlistEntry {
     /// The entity allowed by this entry.
     #[serde_as(as = "DisplayFromStr")]
     entity: AllowEntity,
@@ -76,12 +85,13 @@ pub struct AllowlistEntry {
 }
 
 impl AllowlistEntry {
-    pub fn new(entity: AllowEntity, rule: AllowRule) -> Self {
+    #[cfg(test)]
+    fn new(entity: AllowEntity, rule: AllowRule) -> Self {
         Self { entity, rule }
     }
 
     /// Check if the allowlist entry allows the given violation.
-    pub fn is_allowed(&self, violation: &SimulationViolation) -> bool {
+    fn is_allowed(&self, violation: &SimulationViolation) -> bool {
         match &self.rule {
             AllowRule::ForbiddenOpcode { contract, opcode } => {
                 if let SimulationViolation::UsedForbiddenOpcode(
@@ -143,16 +153,9 @@ impl AllowlistEntry {
     }
 }
 
-/// A mempool configuration.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MempoolConfig {
-    /// Allowlist to match violations against.
-    allowlist: Vec<AllowlistEntry>,
-}
-
 /// Return value for matching mempools
 #[derive(Debug, PartialEq, Eq)]
-pub enum MempoolMatchResult {
+pub(crate) enum MempoolMatchResult {
     /// One or more matched mempools by ID
     Matches(Vec<H256>),
     /// No mempools matched, with the index of the first violation that didn't match
@@ -162,7 +165,7 @@ pub enum MempoolMatchResult {
 /// Match mempools based on a list of violations. Operations are matched to each of the
 /// mempools in which all of their violations are allowlisted. If zero violations,
 /// an operation will match all mempools.
-pub fn match_mempools(
+pub(crate) fn match_mempools(
     mempools: &HashMap<H256, MempoolConfig>,
     violations: &[SimulationViolation],
 ) -> MempoolMatchResult {
@@ -184,9 +187,10 @@ pub fn match_mempools(
 #[cfg(test)]
 mod tests {
     use ethers::types::U256;
+    use rundler_types::StorageSlot;
 
     use super::*;
-    use crate::common::simulation::{StorageSlot, ViolationOpCode};
+    use crate::simulation::ViolationOpCode;
 
     #[test]
     fn test_allow_entity_any() {

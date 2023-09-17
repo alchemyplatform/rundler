@@ -1,17 +1,13 @@
 mod api;
 mod error;
-mod estimation;
 mod server;
 
 pub use api::EthApi;
-pub use estimation::Settings as EstimationSettings;
 use ethers::types::{Address, H256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use rundler_sim::{GasEstimate, UserOperationOptionalGas};
 
-use super::{
-    GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
-    UserOperationReceipt,
-};
+use super::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
 
 /// Eth API
 #[rpc(client, server, namespace = "eth")]

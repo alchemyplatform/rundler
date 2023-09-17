@@ -13,16 +13,11 @@ use builder::BuilderCliArgs;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
-
-use crate::{
-    common::{
-        eth,
-        gas::PriorityFeeMode,
-        precheck::{self, MIN_CALL_GAS_LIMIT},
-        simulation,
-    },
-    rpc::EstimationSettings,
+use rundler_sim::{
+    EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
+
+use crate::common::eth;
 
 /// Main entry point for the CLI
 ///
@@ -245,7 +240,7 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
     }
 }
 
-impl TryFrom<&CommonArgs> for precheck::Settings {
+impl TryFrom<&CommonArgs> for PrecheckSettings {
     type Error = anyhow::Error;
 
     fn try_from(value: &CommonArgs) -> anyhow::Result<Self> {
@@ -263,7 +258,7 @@ impl TryFrom<&CommonArgs> for precheck::Settings {
     }
 }
 
-impl From<&CommonArgs> for simulation::Settings {
+impl From<&CommonArgs> for SimulationSettings {
     fn from(value: &CommonArgs) -> Self {
         Self::new(
             value.min_unstake_delay,

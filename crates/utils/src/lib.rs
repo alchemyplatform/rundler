@@ -8,4 +8,5 @@
 //! Rundler utilities
 
 pub mod eth;
+pub mod log;
 pub mod math;

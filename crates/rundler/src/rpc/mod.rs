@@ -6,13 +6,12 @@ mod rundler;
 mod task;
 
 pub use debug::DebugApiClient;
-pub use eth::{EstimationSettings, EthApiClient};
+pub use eth::EthApiClient;
 use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
 use jsonrpsee::types::{ErrorObject, ErrorObjectOwned};
-use rand::RngCore;
 use rundler_types::UserOperation;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use strum;
@@ -114,151 +113,6 @@ impl From<RpcUserOperation> for UserOperation {
             signature: def.signature,
         }
     }
-}
-
-/// User operation with optional gas fields for gas estimation RPC
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct UserOperationOptionalGas {
-    pub sender: Address,
-    pub nonce: U256,
-    pub init_code: Bytes,
-    pub call_data: Bytes,
-    pub call_gas_limit: Option<U256>,
-    pub verification_gas_limit: Option<U256>,
-    pub pre_verification_gas: Option<U256>,
-    pub max_fee_per_gas: Option<U256>,
-    pub max_priority_fee_per_gas: Option<U256>,
-    pub paymaster_and_data: Bytes,
-    pub signature: Bytes,
-}
-
-impl UserOperationOptionalGas {
-    pub fn cheap_clone(&self) -> Self {
-        self.clone()
-    }
-
-    // If someone is estimating pre-verification gas, it means that
-    // they are most likely going to be taking the results and plugging them
-    // into their user operation. However, doing so changes the
-    // pre-verification gas, which depends on the number of nonzero bytes in
-    // the packed user operation. To make sure the returned gas is enough to
-    // cover the modified user op, calculate the gas needed for the worst
-    // case scenario where the gas fields of the user operation are entirely
-    // nonzero bytes. Likewise for the signature field.
-    pub fn max_fill(&self, settings: &EstimationSettings) -> UserOperation {
-        UserOperation {
-            call_gas_limit: U256::MAX,
-            verification_gas_limit: U256::MAX,
-            pre_verification_gas: U256::MAX,
-            max_fee_per_gas: U256::MAX,
-            max_priority_fee_per_gas: U256::MAX,
-            signature: vec![255_u8; self.signature.len()].into(),
-            paymaster_and_data: vec![255_u8; self.paymaster_and_data.len()].into(),
-            ..self.cheap_clone().into_user_operation(settings)
-        }
-    }
-
-    // For estimating pre-verification gas, specifically on networks that use
-    // compression algorithms on their data that they post to their data availability
-    // layer (like Arbitrum), it is important to make sure that the data that is
-    // random such that it compresses to a representative size.
-    //
-    // Note that this will slightly overestimate the calldata gas needed as it uses
-    // the worst case scenario for the unknown gas values and paymaster_and_data.
-    pub fn random_fill(&self, settings: &EstimationSettings) -> UserOperation {
-        UserOperation {
-            call_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
-            verification_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
-            pre_verification_gas: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
-            max_fee_per_gas: U256::from_big_endian(&Self::random_bytes(8)), // 2^64 max
-            max_priority_fee_per_gas: U256::from_big_endian(&Self::random_bytes(8)), // 2^64 max
-            signature: Self::random_bytes(self.signature.len()),
-            paymaster_and_data: Self::random_bytes(self.paymaster_and_data.len()),
-            ..self.cheap_clone().into_user_operation(settings)
-        }
-    }
-
-    pub fn into_user_operation(self, settings: &EstimationSettings) -> UserOperation {
-        UserOperation {
-            sender: self.sender,
-            nonce: self.nonce,
-            init_code: self.init_code,
-            call_data: self.call_data,
-            paymaster_and_data: self.paymaster_and_data,
-            signature: self.signature,
-            // If unset, default these to gas limits from settings
-            // Cap their values to the gas limits from settings
-            verification_gas_limit: self
-                .verification_gas_limit
-                .unwrap_or_else(|| settings.max_verification_gas.into())
-                .min(settings.max_verification_gas.into()),
-            call_gas_limit: self
-                .call_gas_limit
-                .unwrap_or_else(|| settings.max_call_gas.into())
-                .min(settings.max_call_gas.into()),
-            // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
-            pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
-            max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
-            max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
-        }
-    }
-
-    pub fn into_user_operation_with_estimates(self, estimates: GasEstimate) -> UserOperation {
-        UserOperation {
-            sender: self.sender,
-            nonce: self.nonce,
-            init_code: self.init_code,
-            call_data: self.call_data,
-            paymaster_and_data: self.paymaster_and_data,
-            signature: self.signature,
-            verification_gas_limit: estimates.verification_gas_limit,
-            call_gas_limit: estimates.call_gas_limit,
-            pre_verification_gas: estimates.pre_verification_gas,
-            max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
-            max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
-        }
-    }
-
-    pub fn from_user_operation_keeping_gas(op: UserOperation) -> Self {
-        Self::from_user_operation(op, true)
-    }
-
-    pub fn from_user_operation_without_gas(op: UserOperation) -> Self {
-        Self::from_user_operation(op, false)
-    }
-
-    fn from_user_operation(op: UserOperation, keep_gas: bool) -> Self {
-        let if_keep_gas = |x: U256| Some(x).filter(|_| keep_gas);
-        Self {
-            sender: op.sender,
-            nonce: op.nonce,
-            init_code: op.init_code,
-            call_data: op.call_data,
-            call_gas_limit: if_keep_gas(op.call_gas_limit),
-            verification_gas_limit: if_keep_gas(op.verification_gas_limit),
-            pre_verification_gas: if_keep_gas(op.pre_verification_gas),
-            max_fee_per_gas: if_keep_gas(op.max_fee_per_gas),
-            max_priority_fee_per_gas: if_keep_gas(op.max_priority_fee_per_gas),
-            paymaster_and_data: op.paymaster_and_data,
-            signature: op.signature,
-        }
-    }
-
-    fn random_bytes(len: usize) -> Bytes {
-        let mut bytes = vec![0_u8; len];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        bytes.into()
-    }
-}
-
-/// Gas estimate for a user operation
-#[derive(Debug, Copy, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GasEstimate {
-    pub pre_verification_gas: U256,
-    pub verification_gas_limit: U256,
-    pub call_gas_limit: U256,
 }
 
 /// User operation with additional metadata

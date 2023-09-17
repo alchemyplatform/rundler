@@ -1,12 +1,12 @@
 // This code was taken from ethers-rs, we will remove it once our PR is merged for rounding errors
 
+use async_trait::async_trait;
 use ethers::{
     prelude::gas_oracle::{GasCategory, GasOracle, GasOracleError, Result},
     types::{Chain, U256},
 };
 use reqwest::Client;
 use serde::Deserialize;
-use tonic::async_trait;
 use url::Url;
 
 use super::gas::from_gwei_f64;
@@ -18,7 +18,7 @@ const MUMBAI_URL: &str = "https://gasstation-testnet.polygon.technology/v2";
 /// Queries over HTTP and implements the `GasOracle` trait.
 #[derive(Clone, Debug)]
 #[must_use]
-pub struct Polygon {
+pub(crate) struct Polygon {
     client: Client,
     url: Url,
     gas_category: GasCategory,
@@ -29,21 +29,21 @@ pub struct Polygon {
 /// Gas prices are in __Gwei__.
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct Response {
+struct Response {
     #[serde(deserialize_with = "deserialize_stringified_f64")]
-    pub estimated_base_fee: f64,
-    pub safe_low: GasEstimate,
-    pub standard: GasEstimate,
-    pub fast: GasEstimate,
+    estimated_base_fee: f64,
+    safe_low: GasEstimate,
+    standard: GasEstimate,
+    fast: GasEstimate,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct GasEstimate {
+struct GasEstimate {
     #[serde(deserialize_with = "deserialize_stringified_f64")]
-    pub max_priority_fee: f64,
+    max_priority_fee: f64,
     #[serde(deserialize_with = "deserialize_stringified_f64")]
-    pub max_fee: f64,
+    max_fee: f64,
 }
 
 fn deserialize_stringified_f64<'de, D>(deserializer: D) -> Result<f64, D::Error>
@@ -66,7 +66,7 @@ where
 
 impl Response {
     #[inline]
-    pub fn estimate_from_category(&self, gas_category: GasCategory) -> GasEstimate {
+    fn estimate_from_category(&self, gas_category: GasCategory) -> GasEstimate {
         match gas_category {
             GasCategory::SafeLow => self.safe_low,
             GasCategory::Standard => self.standard,
@@ -105,7 +105,7 @@ impl GasOracle for Polygon {
 }
 
 impl Polygon {
-    pub fn new(chain: Chain) -> Result<Self> {
+    pub(crate) fn new(chain: Chain) -> Result<Self> {
         #[cfg(not(target_arch = "wasm32"))]
         static APP_USER_AGENT: &str =
             concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
@@ -117,7 +117,7 @@ impl Polygon {
         Self::with_client(builder.build()?, chain)
     }
 
-    pub fn with_client(client: Client, chain: Chain) -> Result<Self> {
+    fn with_client(client: Client, chain: Chain) -> Result<Self> {
         // TODO: Sniff chain from chain id.
         let url = match chain {
             Chain::Polygon => MAINNET_URL,
@@ -132,13 +132,13 @@ impl Polygon {
     }
 
     /// Sets the gas price category to be used when fetching the gas price.
-    pub fn category(mut self, gas_category: GasCategory) -> Self {
+    pub(crate) fn category(mut self, gas_category: GasCategory) -> Self {
         self.gas_category = gas_category;
         self
     }
 
     /// Perform a request to the gas price API and deserialize the response.
-    pub async fn query(&self) -> Result<Response> {
+    async fn query(&self) -> Result<Response> {
         let response = self
             .client
             .get(self.url.clone())

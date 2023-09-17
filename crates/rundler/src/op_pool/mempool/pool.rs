@@ -19,11 +19,32 @@ use super::{
     PoolConfig, PoolOperation,
 };
 
+#[derive(Debug, Clone)]
+pub struct PoolInnerConfig {
+    entry_point: Address,
+    chain_id: u64,
+    max_userops_per_sender: usize,
+    max_size_of_pool_bytes: usize,
+    min_replacement_fee_increase_percentage: u64,
+}
+
+impl From<PoolConfig> for PoolInnerConfig {
+    fn from(config: PoolConfig) -> Self {
+        Self {
+            entry_point: config.entry_point,
+            chain_id: config.chain_id,
+            max_userops_per_sender: config.max_userops_per_sender,
+            max_size_of_pool_bytes: config.max_size_of_pool_bytes,
+            min_replacement_fee_increase_percentage: config.min_replacement_fee_increase_percentage,
+        }
+    }
+}
+
 /// Pool of user operations
 #[derive(Debug)]
 pub struct PoolInner {
     /// Pool settings
-    config: PoolConfig,
+    config: PoolInnerConfig,
     /// Operations by hash
     by_hash: HashMap<H256, OrderedPoolOperation>,
     /// Operations by operation ID
@@ -48,7 +69,7 @@ pub struct PoolInner {
 }
 
 impl PoolInner {
-    pub fn new(config: PoolConfig) -> Self {
+    pub fn new(config: PoolInnerConfig) -> Self {
         Self {
             config,
             by_hash: HashMap::new(),
@@ -382,7 +403,6 @@ impl PoolMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::{precheck, simulation};
 
     #[test]
     fn add_single_op() {
@@ -682,18 +702,13 @@ mod tests {
         }
     }
 
-    fn conf() -> PoolConfig {
-        PoolConfig {
+    fn conf() -> PoolInnerConfig {
+        PoolInnerConfig {
             entry_point: Address::random(),
             chain_id: 1,
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 20 * size_of_op(),
-            blocklist: None,
-            allowlist: None,
-            precheck_settings: precheck::Settings::default(),
-            sim_settings: simulation::Settings::default(),
-            mempool_channel_configs: HashMap::new(),
         }
     }
 

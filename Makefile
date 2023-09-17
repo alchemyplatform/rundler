@@ -4,6 +4,9 @@
 
 UNIT_TEST_ARGS := --locked --workspace --all-features
 
+.PHONY: test
+test: test-unit ## Run all tests.
+
 .PHONY: test-unit
 test-unit: ## Run unit tests.
 	cargo install cargo-nextest --locked

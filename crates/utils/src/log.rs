@@ -1,15 +1,18 @@
+//! Utility module with helper traits for logging errors and context
+
 use std::fmt::{Debug, Display};
 
 use anyhow::{bail, Context};
 use tracing::Level;
 
+/// Trait for adding logging and context to a result-like
 pub trait LogWithContext<T> {
     /// Used to log the original error and then wrap it in an anyhow::Error
     fn log_context<C>(self, context: C) -> Result<T, anyhow::Error>
     where
         C: Display + Send + Sync + 'static;
 
-    /// used to log the original error and then wrap it in an anyhow::Error while
+    /// Used to log the original error and then wrap it in an anyhow::Error while
     /// lazy evaluating the context
     fn log_with_context<C, F>(self, context: F) -> Result<T, anyhow::Error>
     where
@@ -17,6 +20,7 @@ pub trait LogWithContext<T> {
         F: FnOnce() -> C;
 }
 
+/// Trait for logging an error if there is one on a result-like object
 pub trait LogOnError {
     /// This will log an error if there is one, but will preserve the original error type
     fn log_on_error<C>(self, context: C) -> Self
@@ -41,7 +45,6 @@ where
             Ok(ok) => Ok(ok),
             Err(error) => {
                 tracing::error!("{context}: {error:?}");
-
                 Err(error).context(context)
             }
         }
@@ -57,7 +60,6 @@ where
             Err(error) => {
                 let context = context();
                 tracing::error!("{context}: {error:?}");
-
                 Err(error).context(context)
             }
         }

@@ -3,20 +3,21 @@ use ethers::{
     abi::{AbiDecode, AbiError},
     types::{Address, Bytes, U256},
 };
-use rundler_types::contracts::entry_point::{ValidationResult, ValidationResultWithAggregation};
-
-use crate::common::types::Timestamp;
+use rundler_types::{
+    contracts::entry_point::{ValidationResult, ValidationResultWithAggregation},
+    Timestamp,
+};
 
 /// Equivalent to the generated `ValidationResult` or
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs
 /// instead of tuples and with a helper for deserializing.
 #[derive(Debug)]
-pub struct ValidationOutput {
-    pub return_info: ValidationReturnInfo,
-    pub sender_info: StakeInfo,
-    pub factory_info: StakeInfo,
-    pub paymaster_info: StakeInfo,
-    pub aggregator_info: Option<AggregatorInfo>,
+pub(crate) struct ValidationOutput {
+    pub(crate) return_info: ValidationReturnInfo,
+    pub(crate) sender_info: StakeInfo,
+    pub(crate) factory_info: StakeInfo,
+    pub(crate) paymaster_info: StakeInfo,
+    pub(crate) aggregator_info: Option<AggregatorInfo>,
 }
 
 impl AbiDecode for ValidationOutput {
@@ -69,21 +70,26 @@ impl From<ValidationResultWithAggregation> for ValidationOutput {
 }
 
 #[derive(Debug)]
-pub struct ValidationReturnInfo {
-    pub pre_op_gas: U256,
-    pub prefund: U256,
-    pub sig_failed: bool,
-    pub valid_after: Timestamp,
-    pub valid_until: Timestamp,
-    pub paymaster_context: Bytes,
+pub(crate) struct ValidationReturnInfo {
+    pub(crate) pre_op_gas: U256,
+    pub(crate) sig_failed: bool,
+    pub(crate) valid_after: Timestamp,
+    pub(crate) valid_until: Timestamp,
+    pub(crate) paymaster_context: Bytes,
 }
 
 impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
     fn from(value: (U256, U256, bool, u64, u64, Bytes)) -> Self {
-        let (pre_op_gas, prefund, sig_failed, valid_after, valid_until, paymaster_context) = value;
+        let (
+            pre_op_gas,
+            _, /* prefund */
+            sig_failed,
+            valid_after,
+            valid_until,
+            paymaster_context,
+        ) = value;
         Self {
             pre_op_gas,
-            prefund,
             sig_failed,
             valid_after: valid_after.into(),
             valid_until: valid_until.into(),
@@ -93,9 +99,9 @@ impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct StakeInfo {
-    pub stake: U256,
-    pub unstake_delay_sec: U256,
+pub(crate) struct StakeInfo {
+    pub(crate) stake: U256,
+    pub(crate) unstake_delay_sec: U256,
 }
 
 impl From<(U256, U256)> for StakeInfo {
@@ -108,9 +114,9 @@ impl From<(U256, U256)> for StakeInfo {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct AggregatorInfo {
-    pub address: Address,
-    pub stake_info: StakeInfo,
+pub(crate) struct AggregatorInfo {
+    pub(crate) address: Address,
+    pub(crate) stake_info: StakeInfo,
 }
 
 impl From<(Address, (U256, U256))> for AggregatorInfo {

@@ -1,3 +1,5 @@
+//! Timestamps and time ranges for ERC-4337 validity checks.
+
 use std::{
     error::Error,
     fmt,
@@ -23,13 +25,17 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub struct Timestamp(u64);
 
 impl Timestamp {
+    /// Minimum timestamp value
     pub const MIN: Timestamp = Timestamp(u64::MIN);
+    /// Maximum timestamp value
     pub const MAX: Timestamp = Timestamp(u64::MAX);
 
+    /// Create a new timestamp from seconds since the epoch.
     pub fn new(seconds_since_epoch: u64) -> Self {
         Self(seconds_since_epoch)
     }
 
+    /// Create a new timestamp representing the current time.
     pub fn now() -> Self {
         Self(
             SystemTime::now()
@@ -39,6 +45,7 @@ impl Timestamp {
         )
     }
 
+    /// Returns the number of seconds since the epoch of this timestamp.
     pub fn seconds_since_epoch(self) -> u64 {
         self.0
     }
@@ -134,11 +141,12 @@ impl Display for TimestampTooLarge {
 
 impl Error for TimestampTooLarge {}
 
-/// Represents a `(valid_after, valid_before)` pair as seen in ERC-4337 validity
-/// checks. A `valid_until` of zero means that there is no bound on end time.
+/// Represents a `[valid_after, valid_until)` pair as seen in ERC-4337 validity checks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ValidTimeRange {
+    /// The earliest time at which the operation is valid, inclusive.
     pub valid_after: Timestamp,
+    /// The latest time at which the operation is valid, inclusive.
     pub valid_until: Timestamp,
 }
 
@@ -152,6 +160,7 @@ impl Default for ValidTimeRange {
 }
 
 impl ValidTimeRange {
+    /// Create a new valid new time range.
     pub fn new(valid_after: Timestamp, valid_until: Timestamp) -> Self {
         Self {
             valid_after,
@@ -168,7 +177,7 @@ impl ValidTimeRange {
     /// including a minimum buffer time that must be remaining before the time
     /// range expires.
     pub fn contains(self, timestamp: Timestamp, buffer: Duration) -> bool {
-        self.valid_after <= timestamp && timestamp + buffer < self.valid_until
+        self.valid_after <= timestamp && (timestamp + buffer) <= self.valid_until
     }
 }
 

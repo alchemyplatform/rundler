@@ -3,6 +3,7 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use ethers::types::H256;
+use rundler_sim::{MempoolConfig, PriorityFeeMode};
 use tokio::sync::broadcast;
 
 use super::{json::get_json_config, CommonArgs};
@@ -10,9 +11,7 @@ use crate::{
     builder::{self, emit::BuilderEvent, BuilderTask, LocalBuilderBuilder},
     common::{
         emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY},
-        gas::PriorityFeeMode,
         handle::spawn_tasks_with_shutdown,
-        mempool::MempoolConfig,
         server::{connect_with_retries_shutdown, format_socket_addr},
     },
     op_pool::RemotePoolClient,

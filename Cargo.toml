@@ -4,6 +4,7 @@ members = [
     "bin/tools",
     "crates/rundler",
     "crates/provider",
+    "crates/sim",
     "crates/types",
     "crates/utils"
 ]
@@ -21,6 +22,13 @@ anyhow = "1.0.70"
 async-trait = "0.1.73"
 ethers = "2.0.8"
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks" ] }
-serde = "1.0.160"
-tokio = { version = "1.27.0", default-features = false }
 mockall = "0.11.4"
+parse-display = "0.8.0"
+serde = "1.0.160"
+serde_json = "1.0.64"
+rand = "0.8.5"
+reqwest = { version = "0.11.18", default-features = false, features = ["rustls-tls"] }
+thiserror = "1.0.40"
+tokio = { version = "1.27.0", default-features = false }
+tracing = "0.1.37"
+url = "2.3.1"

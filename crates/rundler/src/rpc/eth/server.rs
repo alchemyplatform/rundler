@@ -1,14 +1,12 @@
 use ethers::types::{Address, H256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_provider::{EntryPoint, Provider};
+use rundler_sim::{GasEstimate, UserOperationOptionalGas};
 
 use super::{api::EthApi, EthApiServer};
 use crate::{
     op_pool::PoolServer,
-    rpc::{
-        GasEstimate, RichUserOperation, RpcUserOperation, UserOperationOptionalGas,
-        UserOperationReceipt,
-    },
+    rpc::{RichUserOperation, RpcUserOperation, UserOperationReceipt},
 };
 
 #[tonic::async_trait]
