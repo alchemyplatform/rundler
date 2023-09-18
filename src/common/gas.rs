@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use ethers::{
     prelude::gas_oracle::{GasCategory, GasOracle, Polygon},
     types::{transaction::eip2718::TypedTransaction, Address, Chain, U256},
@@ -212,11 +211,17 @@ impl<P: ProviderLike> FeeEstimator<P> {
         if POLYGON_CHAIN_IDS.contains(&self.chain_id) {
             let gas_oracle =
                 Polygon::new(Chain::try_from(self.chain_id)?)?.category(GasCategory::Fast);
-            let fees = gas_oracle
-                .estimate_eip1559_fees()
-                .await
-                .context("failed to query polygon gasstation")?;
-            Ok(fees.1)
+            match gas_oracle.estimate_eip1559_fees().await {
+                Ok(fees) => Ok(fees.1),
+                // Polygon gas station is very unreliable, fallback to max priority fee if it fails
+                // Fast can be 10% faster than what is returned by `eth_maxPriorityFeePerGas`
+                // so we increase the max priority fee by 10% to ensure that multiple
+                // calls to this endpoint give reasonably similar results.
+                Err(_) => Ok(math::increase_by_percent(
+                    self.provider.get_max_priority_fee().await?,
+                    10,
+                )),
+            }
         } else if self.use_bundle_priority_fee {
             self.provider.get_max_priority_fee().await
         } else {
