@@ -29,5 +29,8 @@ url.workspace = true
 
 mockall = {workspace = true, optional = true }
 
+[dev-dependencies]
+mockall.workspace = true
+
 [features]
 test-utils = [ "mockall" ]
