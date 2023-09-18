@@ -1,3 +1,11 @@
+#![warn(missing_docs, unreachable_pub)]
+#![deny(unused_must_use, rust_2018_idioms)]
+#![doc(test(
+    no_crate_inject,
+    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
+))]
+//! Development utilities for the Rundler project.
+
 use std::{
     collections::HashMap,
     env, error,
@@ -28,10 +36,15 @@ use rundler_types::{
     UserOperation,
 };
 
+/// Chain ID used by Geth in --dev mode.
 pub const DEV_CHAIN_ID: u64 = 1337;
+/// Account ID used by the deployer account.
 pub const DEPLOYER_ACCOUNT_ID: u8 = 1;
+/// Account ID used by the bundler account.
 pub const BUNDLER_ACCOUNT_ID: u8 = 2;
+/// Account ID used by the wallet owner account.
 pub const WALLET_OWNER_ACCOUNT_ID: u8 = 3;
+/// Account ID used by the paymaster signer account.
 pub const PAYMASTER_SIGNER_ACCOUNT_ID: u8 = 4;
 
 /// Waits for a pending transaction to be mined, providing appropriate error
@@ -151,6 +164,7 @@ pub fn new_test_wallet(test_account_id: u8) -> LocalWallet {
     LocalWallet::from(key).with_chain_id(DEV_CHAIN_ID)
 }
 
+/// Creates a signing key whose secret is based on a fixed id
 pub fn test_signing_key_bytes(test_account_id: u8) -> [u8; 32] {
     let mut bytes = [0_u8; 32];
     bytes[31] = test_account_id;
@@ -169,15 +183,21 @@ pub fn base_user_op() -> UserOperation {
     }
 }
 
+/// A collection of addresses for the development contracts.
 #[derive(Copy, Clone, Debug)]
 pub struct DevAddresses {
+    /// The address of the entry point contract.
     pub entry_point_address: Address,
+    /// The address of the dev account factory contract.
     pub factory_address: Address,
+    /// The address of the dev wallet contract.
     pub wallet_address: Address,
+    /// The address of the dev paymaster contract.
     pub paymaster_address: Address,
 }
 
 impl DevAddresses {
+    /// Write the addresses to a `.env` file.
     pub fn write_to_env_file(&self) -> anyhow::Result<()> {
         let file = File::open(".env")?;
         let mut vars = io::BufReader::new(file)
@@ -214,6 +234,7 @@ impl DevAddresses {
         Ok(())
     }
 
+    /// Creates a new collection of addresses for the development contracts from env
     pub fn new_from_env() -> anyhow::Result<Self> {
         Ok(Self {
             entry_point_address: address_from_env_var("DEV_ENTRY_POINT_ADDRESS")?,
@@ -231,6 +252,7 @@ fn address_from_env_var(key: &str) -> anyhow::Result<Address> {
         .with_context(|| format!("should parse address from environment variable {key}"))
 }
 
+/// Deploy all of the development contracts to a local Geth node in --dev mode.
 pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<DevAddresses> {
     let provider = new_local_provider();
     let deployer_client = new_test_client(Arc::clone(&provider), DEPLOYER_ACCOUNT_ID);
@@ -302,21 +324,32 @@ pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<
     })
 }
 
+/// Alias for the signer middleware type used
 pub type SimpleSignerMiddleware = SignerMiddleware<Arc<Provider<Http>>, LocalWallet>;
 
+/// A collection of clients for interacting with the development contracts.
 #[derive(Debug)]
 pub struct DevClients {
+    /// The provider used by all clients.
     pub provider: Arc<Provider<Http>>,
+    /// The client used by the bundler.
     pub bundler_client: Arc<SimpleSignerMiddleware>,
+    /// The entry point contract.
     pub entry_point: EntryPoint<SimpleSignerMiddleware>,
+    /// The account factory contract.
     pub factory: SimpleAccountFactory<Provider<Http>>,
+    /// The wallet contract.
     pub wallet: SimpleAccount<Provider<Http>>,
+    /// The paymaster contract.
     pub paymaster: VerifyingPaymaster<Provider<Http>>,
+    /// The wallet owner signer.
     pub wallet_owner_signer: LocalWallet,
+    /// The paymaster signer.
     pub paymaster_signer: LocalWallet,
 }
 
 impl DevClients {
+    /// Creates a new collection of clients for interacting with the development contracts.
     pub fn new(addresses: DevAddresses) -> Self {
         let DevAddresses {
             entry_point_address,
@@ -345,11 +378,13 @@ impl DevClients {
         }
     }
 
+    /// New from environment variables.
     pub fn new_from_env() -> anyhow::Result<Self> {
         let addresses = DevAddresses::new_from_env()?;
         Ok(Self::new(addresses))
     }
 
+    /// Adds a signature to a user operation.
     pub async fn add_signature(
         &self,
         op: &mut UserOperation,
@@ -388,6 +423,7 @@ impl DevClients {
         Ok(())
     }
 
+    /// Creates a new user operation on the wallet
     pub async fn new_wallet_op<M, D>(
         &self,
         call: ContractCall<M, D>,
@@ -396,6 +432,7 @@ impl DevClients {
         self.new_wallet_op_internal(call, value, false).await
     }
 
+    /// Creates a new user operation on the wallet with a paymaster
     pub async fn new_wallet_op_with_paymaster<M, D>(
         &self,
         call: ContractCall<M, D>,
@@ -453,13 +490,15 @@ impl<M: Middleware + 'static, S: Signer + 'static> DeterministicDeployProxy<M, S
     const DEPLOYMENT_GAS_PRICE: u64 = 100_000_000_000;
     const DEPLOYMENT_GAS_LIMIT: u64 = 100_000;
 
-    pub async fn new(client: Arc<SignerMiddleware<M, S>>) -> anyhow::Result<Self> {
+    /// Creates a new deterministic deploy proxy.
+    async fn new(client: Arc<SignerMiddleware<M, S>>) -> anyhow::Result<Self> {
         let ret = Self { client };
         ret.deploy_deployer().await?;
         Ok(ret)
     }
 
-    pub async fn deploy_bytecode(&self, bytecode: &str, salt: u64) -> anyhow::Result<Address> {
+    /// Deploys a contract with a deterministic address.
+    async fn deploy_bytecode(&self, bytecode: &str, salt: u64) -> anyhow::Result<Address> {
         let addr = self.deploy_bytecode_address(bytecode, salt)?;
         if self.is_deployed(addr).await? {
             return Ok(addr);
@@ -478,7 +517,8 @@ impl<M: Middleware + 'static, S: Signer + 'static> DeterministicDeployProxy<M, S
         Ok(addr)
     }
 
-    pub fn deploy_bytecode_address(&self, bytecode: &str, salt: u64) -> anyhow::Result<Address> {
+    /// Computes the address of a contract with a deterministic address.
+    fn deploy_bytecode_address(&self, bytecode: &str, salt: u64) -> anyhow::Result<Address> {
         let code_hash = hex::encode(keccak256(hex::decode(&bytecode[2..])?));
         let x = keccak256(hex::decode(format!(
             "ff{}{}{}",

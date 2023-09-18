@@ -4,6 +4,14 @@
 
 UNIT_TEST_ARGS := --locked --workspace --all-features
 
+.PHONY: build
+build: ## Build the project.
+	cargo build --all --all-features
+
+.PHONY: clean
+clean: ## Clean the project.
+	cargo clean
+
 .PHONY: test
 test: test-unit ## Run all tests.
 

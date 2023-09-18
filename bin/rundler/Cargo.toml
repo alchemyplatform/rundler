@@ -10,8 +10,33 @@ Rundler node implementation
 """
 
 [dependencies]
-rundler-rundler = { path = "../../crates/rundler" }
+rundler-builder = { path = "../../crates/builder" }
+rundler-pool = { path = "../../crates/pool" }
+rundler-provider = { path = "../../crates/provider" }
+rundler-rpc = { path = "../../crates/rpc" }
+rundler-sim = { path = "../../crates/sim" }
+rundler-task = { path = "../../crates/task" }
+rundler-types = { path = "../../crates/types" }
+rundler-utils = { path = "../../crates/utils" }
 
 # CLI dependencies
-tokio = "1.27.0"
+anyhow.workspace = true
+clap = { version = "4.2.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
+ethers.workspace = true
+itertools = "0.11.0"
+metrics = "0.21.0"
+metrics-exporter-prometheus = "0.12.0"
+metrics-process = "1.0.10"
+metrics-util = "0.15.0"
+rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
+rusoto_s3 = { version = "0.48.0", default-features = false, features = ["rustls"] }
+serde.workspace = true
+serde_json.workspace = true
+sscanf = "0.4.0"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+tokio-rustls = "0.24.1"
+tokio-util = "0.7.8"
+tracing.workspace = true
+tracing-appender = "0.2.2"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt", "json"] }
