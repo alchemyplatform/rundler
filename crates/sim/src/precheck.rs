@@ -147,7 +147,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         &self,
         op: &UserOperation,
         async_data: AsyncData,
-    ) -> ArrayVec<PrecheckViolation, 5> {
+    ) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
             chain_id,
             max_verification_gas,
@@ -373,4 +373,134 @@ pub enum PrecheckViolation {
     /// The call gas limit is too low to account for any possible call.
     #[display("callGasLimit is {0} but must be at least {1}")]
     CallGasLimitTooLow(U256, U256),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use ethers::types::Bytes;
+    use rundler_provider::{MockEntryPoint, MockProvider};
+
+    use super::*;
+
+    fn create_base_config() -> (MockProvider, MockEntryPoint) {
+        (MockProvider::new(), MockEntryPoint::new())
+    }
+
+    fn get_test_async_data() -> AsyncData {
+        AsyncData {
+            factory_exists: true,
+            sender_exists: true,
+            paymaster_exists: true,
+            payer_funds: 5_000_000.into(),
+            bundle_fees: GasFees {
+                max_fee_per_gas: 5_000.into(),
+                max_priority_fee_per_gas: 1_000.into(),
+            },
+            min_pre_verification_gas: 1_000.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_check_init_code() {
+        let (provider, entry_point) = create_base_config();
+        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, Settings::default());
+        let op = UserOperation {
+            sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
+            nonce: 100.into(),
+            init_code: Bytes::from_str("0x1000").unwrap(),
+            call_data: Bytes::default(),
+            call_gas_limit: 9_000.into(), // large call gas limit high to trigger TotalGasLimitTooHigh
+            verification_gas_limit: 10_000_000.into(),
+            pre_verification_gas: 0.into(),
+            max_fee_per_gas: 5_000.into(),
+            max_priority_fee_per_gas: 2_000.into(),
+            paymaster_and_data: Bytes::default(),
+            signature: Bytes::default(),
+        };
+
+        let res = prechecker.check_init_code(&op, get_test_async_data());
+        assert_eq!(
+            res,
+            ArrayVec::<PrecheckViolation, 2>::from([
+                PrecheckViolation::InitCodeTooShort(2),
+                PrecheckViolation::ExistingSenderWithInitCode(
+                    Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap()
+                )
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_gas() {
+        let (provider, entry_point) = create_base_config();
+        let test_settings = Settings {
+            chain_id: 1,
+            max_verification_gas: 5_000_000.into(),
+            max_total_execution_gas: 10_000_000.into(),
+            use_bundle_priority_fee: None,
+            bundle_priority_fee_overhead_percent: 0,
+            priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(100),
+        };
+        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, test_settings);
+        let op = UserOperation {
+            sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
+            nonce: 100.into(),
+            init_code: Bytes::from_str("0x1000000000000000000000000000000000000000").unwrap(),
+            call_data: Bytes::default(),
+            call_gas_limit: 9_000.into(), // large call gas limit high to trigger TotalGasLimitTooHigh
+            verification_gas_limit: 10_000_000.into(),
+            pre_verification_gas: 0.into(),
+            max_fee_per_gas: 5_000.into(),
+            max_priority_fee_per_gas: 2_000.into(),
+            paymaster_and_data: Bytes::default(),
+            signature: Bytes::default(),
+        };
+
+        let res = prechecker.check_gas(&op, get_test_async_data());
+
+        assert_eq!(
+            res,
+            ArrayVec::<PrecheckViolation, 6>::from([
+                PrecheckViolation::VerificationGasLimitTooHigh(10_000_000.into(), 5_000_000.into(),),
+                PrecheckViolation::TotalGasLimitTooHigh(20_009_000.into(), 10_000_000.into(),),
+                PrecheckViolation::PreVerificationGasTooLow(0.into(), 1_000.into(),),
+                PrecheckViolation::MaxFeePerGasTooLow(5_000.into(), 8_000.into(),),
+                PrecheckViolation::MaxPriorityFeePerGasTooLow(2_000.into(), 4_000.into(),),
+                PrecheckViolation::CallGasLimitTooLow(9_000.into(), 9_100.into(),),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_payer_paymaster_deposit_too_low() {
+        let (provider, entry_point) = create_base_config();
+        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, Settings::default());
+        let op = UserOperation {
+            sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
+            nonce: 100.into(),
+            init_code: Bytes::default(),
+            call_data: Bytes::default(),
+            call_gas_limit: 500_000.into(),
+            verification_gas_limit: 500_000.into(),
+            pre_verification_gas: 0.into(),
+            max_fee_per_gas: 1_000.into(),
+            max_priority_fee_per_gas: 0.into(),
+            paymaster_and_data: Bytes::from_str(
+                "0xa4b2c8f0351d60729e4f0a12345678d9b1c3e5f27890abcdef123456780abcdef1",
+            )
+            .unwrap(),
+            signature: Bytes::default(),
+        };
+
+        let res = prechecker.check_payer(&op, get_test_async_data());
+        assert_eq!(
+            res,
+            Some(PrecheckViolation::PaymasterDepositTooLow(
+                5_000_000.into(),
+                2_000_000_000.into(),
+            ))
+        );
+    }
 }

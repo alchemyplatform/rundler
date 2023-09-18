@@ -96,7 +96,7 @@ impl Task for PoolTask {
         }
 
         let pool_handle = self.pool_builder.get_handle();
-        let pool_runnder_handle =
+        let pool_runner_handle =
             self.pool_builder
                 .run(mempools, update_sender.subscribe(), shutdown_token.clone());
 
@@ -111,7 +111,7 @@ impl Task for PoolTask {
         tracing::info!("Started op_pool");
 
         match try_join!(
-            handle::flatten_handle(pool_runnder_handle),
+            handle::flatten_handle(pool_runner_handle),
             handle::flatten_handle(remote_handle),
             handle::as_anyhow_handle(chain_handle),
         ) {
