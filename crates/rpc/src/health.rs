@@ -1,8 +1,8 @@
+use async_trait::async_trait;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_task::server::{HealthCheck, ServerStatus};
-use tonic::async_trait;
 
-use super::rpc_err;
+use crate::error::rpc_err;
 
 #[rpc(server, namespace = "system")]
 pub trait SystemApi {
@@ -10,12 +10,12 @@ pub trait SystemApi {
     async fn get_health(&self) -> RpcResult<String>;
 }
 
-pub struct HealthChecker {
+pub(crate) struct HealthChecker {
     servers: Vec<Box<dyn HealthCheck>>,
 }
 
 impl HealthChecker {
-    pub fn new(servers: Vec<Box<dyn HealthCheck>>) -> Self {
+    pub(crate) fn new(servers: Vec<Box<dyn HealthCheck>>) -> Self {
         Self { servers }
     }
 }

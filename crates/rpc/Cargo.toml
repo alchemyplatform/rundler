@@ -1,0 +1,31 @@
+[package]
+name = "rundler-rpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rundler-builder = { path = "../builder" }
+rundler-pool = { path = "../pool" }
+rundler-provider = { path = "../provider" }
+rundler-sim = { path = "../sim" }
+rundler-task = { path = "../task" }
+rundler-types = { path = "../types" }
+rundler-utils = { path = "../utils" }
+
+anyhow.workspace = true
+async-trait.workspace = true
+ethers.workspace = true
+jsonrpsee = { version = "0.20.0", features = ["client", "macros", "server"] }
+metrics.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tower.workspace = true
+tracing.workspace = true
+serde.workspace = true
+strum.workspace = true
+url.workspace = true

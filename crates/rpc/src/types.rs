@@ -1,22 +1,10 @@
-mod debug;
-mod eth;
-mod health;
-mod metrics;
-mod rundler;
-mod task;
-
-pub use debug::DebugApiClient;
-pub use eth::{EthApiClient, EthApiSettings};
 use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
-use jsonrpsee::types::{ErrorObject, ErrorObjectOwned};
 use rundler_pool::{Reputation, ReputationStatus};
 use rundler_types::UserOperation;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use strum;
-pub use task::*;
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
@@ -118,10 +106,15 @@ impl From<RpcUserOperation> for UserOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RichUserOperation {
+    /// The full user operation
     pub user_operation: RpcUserOperation,
+    /// The entry point address this operation was sent to
     pub entry_point: RpcAddress,
+    /// The number of the block this operation was included in
     pub block_number: U256,
+    /// The hash of the block this operation was included in
     pub block_hash: H256,
+    /// The hash of the transaction this operation was included in
     pub transaction_hash: H256,
 }
 
@@ -129,24 +122,40 @@ pub struct RichUserOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserOperationReceipt {
+    /// The hash of the user operation
     pub user_op_hash: H256,
+    /// The entry point address this operation was sent to
     pub entry_point: RpcAddress,
+    /// The sender of this user operation
     pub sender: RpcAddress,
+    /// The nonce of this user operation
     pub nonce: U256,
+    /// The paymaster used by this operation, empty if none used
     pub paymaster: RpcAddress,
+    /// The gas cost of this operation
     pub actual_gas_cost: U256,
+    /// The gas used by this operation
     pub actual_gas_used: U256,
+    /// Whether this operation's execution was successful
     pub success: bool,
+    /// If not successful, the revert reason string
     pub reason: String,
+    /// Logs emitted by this operation
     pub logs: Vec<Log>,
+    /// The receipt of the transaction that included this operation
     pub receipt: TransactionReceipt,
 }
 
+/// Reputation of an entity
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RpcReputation {
+    /// Entity address
     pub address: Address,
+    /// Number of operations seen in this interval
     pub ops_seen: U256,
+    /// Number of operations included in this interval
     pub ops_included: U256,
+    /// Reputation status
     pub status: ReputationStatus,
 }
 
@@ -172,24 +181,4 @@ impl TryFrom<Reputation> for RpcReputation {
             status: reputation.status,
         })
     }
-}
-
-pub fn rpc_err(code: i32, msg: impl Into<String>) -> ErrorObjectOwned {
-    create_rpc_err(code, msg, None::<()>)
-}
-
-pub fn rpc_err_with_data<S: Serialize>(
-    code: i32,
-    msg: impl Into<String>,
-    data: S,
-) -> ErrorObjectOwned {
-    create_rpc_err(code, msg, Some(data))
-}
-
-fn create_rpc_err<S: Serialize>(
-    code: i32,
-    msg: impl Into<String>,
-    data: Option<S>,
-) -> ErrorObjectOwned {
-    ErrorObject::owned(code, msg.into(), data)
 }

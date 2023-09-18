@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use jsonrpsee::{helpers::MethodResponseResult, server::logger::Logger};
 
 #[derive(Clone)]
-pub struct RpcMetricsLogger;
+pub(crate) struct RpcMetricsLogger;
 
 impl Logger for RpcMetricsLogger {
     type Instant = Instant;
@@ -65,7 +65,7 @@ impl Logger for RpcMetricsLogger {
     }
 }
 
-pub struct RpcMetrics {}
+pub(crate) struct RpcMetrics {}
 
 impl RpcMetrics {
     fn increment_num_requests(method_name: String) {

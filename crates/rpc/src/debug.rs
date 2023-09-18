@@ -1,26 +1,36 @@
+use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_builder::{BuilderServer, BundlingMode};
 use rundler_pool::PoolServer;
-use tonic::async_trait;
 
-use super::{rpc_err, RpcReputation, RpcUserOperation};
+use crate::{
+    error::rpc_err,
+    types::{RpcReputation, RpcUserOperation},
+};
 
 /// Debug API
 #[rpc(client, server, namespace = "debug")]
 pub trait DebugApi {
+    /// Clears the state of the pool.
     #[method(name = "bundler_clearState")]
     async fn bundler_clear_state(&self) -> RpcResult<String>;
 
+    /// Dumps the mempool.
     #[method(name = "bundler_dumpMempool")]
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>>;
 
+    /// Triggers the builder to send a bundle now
+    ///
+    /// Note that the bundling mode must be set to `Manual` else this will fail.
     #[method(name = "bundler_sendBundleNow")]
     async fn bundler_send_bundle_now(&self) -> RpcResult<H256>;
 
+    /// Sets the bundling mode.
     #[method(name = "bundler_setBundlingMode")]
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String>;
 
+    /// Sets the reputations of entities on the given entry point.
     #[method(name = "bundler_setReputation")]
     async fn bundler_set_reputation(
         &self,
@@ -28,17 +38,18 @@ pub trait DebugApi {
         entry_point: Address,
     ) -> RpcResult<String>;
 
+    /// Dumps the reputations of entities from the given entry point.
     #[method(name = "bundler_dumpReputation")]
     async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>>;
 }
 
-pub struct DebugApi<P, B> {
+pub(crate) struct DebugApi<P, B> {
     pool: P,
     builder: B,
 }
 
 impl<P, B> DebugApi<P, B> {
-    pub fn new(pool: P, builder: B) -> Self {
+    pub(crate) fn new(pool: P, builder: B) -> Self {
         Self { pool, builder }
     }
 }

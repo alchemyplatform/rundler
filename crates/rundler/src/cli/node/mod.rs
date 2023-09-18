@@ -1,19 +1,17 @@
 use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
+use rundler_rpc::RpcTask;
 use rundler_task::spawn_tasks_with_shutdown;
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
 use self::events::Event;
-use crate::{
-    cli::{
-        builder::{self, BuilderArgs},
-        pool::PoolArgs,
-        rpc::RpcArgs,
-        CommonArgs,
-    },
-    rpc::RpcTask,
+use crate::cli::{
+    builder::{self, BuilderArgs},
+    pool::PoolArgs,
+    rpc::RpcArgs,
+    CommonArgs,
 };
 mod events;
 
