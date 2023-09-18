@@ -2,15 +2,13 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Args;
+use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
 
 use super::CommonArgs;
-use crate::{
-    builder::RemoteBuilderClient,
-    rpc::{self, EthApiSettings, RpcTask},
-};
+use crate::rpc::{self, EthApiSettings, RpcTask};
 
 /// CLI options for the RPC server
 #[derive(Args, Debug)]

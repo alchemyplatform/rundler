@@ -160,9 +160,9 @@ dependencies = [
 
 [[package]]
 name = "async-channel"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf46fee83e5ccffc220104713af3292ff9bc7c64c7de289f66dae8e38d826833"
+checksum = "81953c529336010edd6d8e358f886d9581267795c61b19475b71314bffa46d35"
 dependencies = [
  "concurrent-queue",
  "event-listener",
@@ -1352,14 +1352,14 @@ dependencies = [
 
 [[package]]
 name = "enum_dispatch"
-version = "0.3.11"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11f36e95862220b211a6e2aa5eca09b4fa391b13cd52ceb8035a24bf65a79de2"
+checksum = "8f33313078bb8d4d05a2733a94ac4c2d8a0df9a2b84424ebf4f33bfc224a890e"
 dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
- "syn 1.0.107",
+ "syn 2.0.32",
 ]
 
 [[package]]
@@ -3423,9 +3423,9 @@ checksum = "6ac9a59f73473f1b8d852421e59e64809f025994837ef743615c6d0c5b305160"
 
 [[package]]
 name = "polling"
-version = "2.7.0"
+version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4be1c66a6add46bff50935c313dae30a5030cf8385c5206e8a95e9e9def974aa"
+checksum = "4b2d323e8ca7996b3e23126511a523f7e62924d93ecd5ae73b333815b0eb3dce"
 dependencies = [
  "autocfg",
  "bitflags",
@@ -3953,6 +3953,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "rundler-builder"
+version = "0.1.0-beta"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "enum_dispatch",
+ "ethers",
+ "ethers-signers",
+ "futures",
+ "futures-timer",
+ "futures-util",
+ "linked-hash-map",
+ "metrics",
+ "mockall",
+ "parse-display",
+ "pin-project",
+ "prost",
+ "reqwest",
+ "rslock",
+ "rundler-pool",
+ "rundler-provider",
+ "rundler-sim",
+ "rundler-task",
+ "rundler-types",
+ "rundler-utils",
+ "rusoto_core",
+ "rusoto_kms",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tonic-build",
+ "tonic-health",
+ "tonic-reflection",
+ "tracing",
+]
+
+[[package]]
 name = "rundler-pool"
 version = "0.1.0-beta"
 dependencies = [
@@ -4007,16 +4047,12 @@ dependencies = [
  "anyhow",
  "cargo-husky",
  "clap 4.2.4",
- "enum_dispatch",
  "ethers",
- "ethers-signers",
  "futures",
- "futures-timer",
  "futures-util",
  "hyper",
  "itertools 0.11.0",
  "jsonrpsee",
- "linked-hash-map",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-process",
@@ -4028,7 +4064,7 @@ dependencies = [
  "prost-types",
  "rand",
  "reqwest",
- "rslock",
+ "rundler-builder",
  "rundler-pool",
  "rundler-provider",
  "rundler-sim",

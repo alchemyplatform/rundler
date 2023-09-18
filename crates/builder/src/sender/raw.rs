@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Context;
+use async_trait::async_trait;
 use ethers::{
     middleware::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, PendingTransaction, Provider},
@@ -8,12 +9,11 @@ use ethers::{
 };
 use ethers_signers::Signer;
 use rundler_sim::ExpectedStorage;
-use tonic::async_trait;
 
-use crate::builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
+use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
 
 #[derive(Debug)]
-pub struct RawTransactionSender<C, S>
+pub(crate) struct RawTransactionSender<C, S>
 where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
@@ -79,7 +79,7 @@ where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
 {
-    pub fn new(provider: Arc<Provider<C>>, signer: S) -> Self {
+    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S) -> Self {
         Self {
             provider: SignerMiddleware::new(provider, signer),
         }

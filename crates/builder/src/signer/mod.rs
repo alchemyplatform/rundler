@@ -2,7 +2,8 @@ mod aws;
 use std::sync::Arc;
 
 use anyhow::Context;
-pub use aws::*;
+use async_trait::async_trait;
+pub(crate) use aws::*;
 use ethers::{
     abi::Address,
     providers::Middleware,
@@ -13,17 +14,16 @@ use ethers::{
 };
 use ethers_signers::{AwsSignerError, LocalWallet, Signer, WalletError};
 use rundler_utils::handle::SpawnGuard;
-use tonic::async_trait;
 
 /// A local signer handle
 #[derive(Debug)]
-pub struct LocalSigner {
+pub(crate) struct LocalSigner {
     signer: LocalWallet,
     _monitor_abort_handle: SpawnGuard,
 }
 
 impl LocalSigner {
-    pub async fn connect<M: Middleware + 'static>(
+    pub(crate) async fn connect<M: Middleware + 'static>(
         provider: Arc<M>,
         chain_id: u64,
         private_key: String,
@@ -42,7 +42,7 @@ impl LocalSigner {
     }
 }
 
-pub async fn monitor_account_balance<M: Middleware>(addr: Address, provider: Arc<M>) {
+pub(crate) async fn monitor_account_balance<M: Middleware>(addr: Address, provider: Arc<M>) {
     loop {
         match provider.get_balance(addr, None).await {
             Ok(balance) => {
@@ -62,13 +62,13 @@ pub async fn monitor_account_balance<M: Middleware>(addr: Address, provider: Arc
 
 /// A `Signer` which is backed by either a local signer or a KMS signer.
 #[derive(Debug)]
-pub enum BundlerSigner {
+pub(crate) enum BundlerSigner {
     Local(LocalSigner),
     Kms(KmsSigner),
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum BundlerSignerError {
+pub(crate) enum BundlerSignerError {
     #[error(transparent)]
     Local(#[from] WalletError),
     #[error(transparent)]

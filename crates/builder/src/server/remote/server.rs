@@ -11,12 +11,12 @@ use super::protos::{
     DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
     BUILDER_FILE_DESCRIPTOR_SET,
 };
-use crate::builder::{
-    server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess},
-    BuilderServer,
+use crate::server::{
+    local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess, BuilderServer,
 };
 
-pub async fn spawn_remote_builder_server(
+/// Spawn a remote builder server
+pub(crate) async fn spawn_remote_builder_server(
     addr: SocketAddr,
     chain_id: u64,
     local_builder: LocalBuilderHandle,
@@ -48,13 +48,13 @@ pub async fn spawn_remote_builder_server(
 }
 
 #[derive(Debug)]
-pub struct GrpcBuilderServerImpl {
+struct GrpcBuilderServerImpl {
     chain_id: u64,
     local_builder: LocalBuilderHandle,
 }
 
 impl GrpcBuilderServerImpl {
-    pub fn new(chain_id: u64, local_builder: LocalBuilderHandle) -> Self {
+    fn new(chain_id: u64, local_builder: LocalBuilderHandle) -> Self {
         Self {
             chain_id,
             local_builder,

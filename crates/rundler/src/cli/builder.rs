@@ -3,6 +3,7 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use ethers::types::H256;
+use rundler_builder::{self, BuilderEvent, BuilderTask, BuilderTaskArgs, LocalBuilderBuilder};
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfig, PriorityFeeMode};
 use rundler_task::{
@@ -13,7 +14,6 @@ use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
 use super::{json::get_json_config, CommonArgs};
-use crate::builder::{self, emit::BuilderEvent, BuilderTask, LocalBuilderBuilder};
 
 /// CLI options for the builder
 #[derive(Args, Debug)]
@@ -151,7 +151,7 @@ impl BuilderArgs {
         &self,
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
-    ) -> anyhow::Result<builder::Args> {
+    ) -> anyhow::Result<BuilderTaskArgs> {
         let priority_fee_mode = PriorityFeeMode::try_from(
             common.priority_fee_mode_kind.as_str(),
             common.priority_fee_mode_value,
@@ -170,7 +170,7 @@ impl BuilderArgs {
             None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
         };
 
-        Ok(builder::Args {
+        Ok(BuilderTaskArgs {
             rpc_url,
             entry_point_address: common
                 .entry_points

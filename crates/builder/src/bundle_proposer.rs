@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::Context;
+use async_trait::async_trait;
 use ethers::types::{Address, BlockId, Bytes, H256, U256};
 use futures::future;
 use linked_hash_map::LinkedHashMap;
@@ -20,10 +21,9 @@ use rundler_sim::{
 use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
-use tonic::async_trait;
 use tracing::{error, info};
 
-use crate::builder::emit::{BuilderEvent, OpRejectionReason, SkipReason};
+use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
@@ -33,40 +33,40 @@ const BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER: u64 = 5000;
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
 
 #[derive(Debug, Default)]
-pub struct Bundle {
-    pub ops_per_aggregator: Vec<UserOpsPerAggregator>,
-    pub gas_estimate: U256,
-    pub gas_fees: GasFees,
-    pub expected_storage: ExpectedStorage,
-    pub rejected_ops: Vec<UserOperation>,
-    pub rejected_entities: Vec<Entity>,
+pub(crate) struct Bundle {
+    pub(crate) ops_per_aggregator: Vec<UserOpsPerAggregator>,
+    pub(crate) gas_estimate: U256,
+    pub(crate) gas_fees: GasFees,
+    pub(crate) expected_storage: ExpectedStorage,
+    pub(crate) rejected_ops: Vec<UserOperation>,
+    pub(crate) rejected_entities: Vec<Entity>,
 }
 
 impl Bundle {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.ops_per_aggregator
             .iter()
             .map(|ops| ops.user_ops.len())
             .sum()
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.ops_per_aggregator.is_empty()
     }
 
-    pub fn iter_ops(&self) -> impl Iterator<Item = &UserOperation> + '_ {
+    pub(crate) fn iter_ops(&self) -> impl Iterator<Item = &UserOperation> + '_ {
         self.ops_per_aggregator.iter().flat_map(|ops| &ops.user_ops)
     }
 }
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait BundleProposer: Send + Sync + 'static {
+pub(crate) trait BundleProposer: Send + Sync + 'static {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle>;
 }
 
 #[derive(Debug)]
-pub struct BundleProposerImpl<S, E, P, C>
+pub(crate) struct BundleProposerImpl<S, E, P, C>
 where
     S: Simulator,
     E: EntryPoint,
@@ -83,14 +83,14 @@ where
 }
 
 #[derive(Debug)]
-pub struct Settings {
-    pub chain_id: u64,
-    pub max_bundle_size: u64,
-    pub max_bundle_gas: u64,
-    pub beneficiary: Address,
-    pub use_bundle_priority_fee: Option<bool>,
-    pub bundle_priority_fee_overhead_percent: u64,
-    pub priority_fee_mode: PriorityFeeMode,
+pub(crate) struct Settings {
+    pub(crate) chain_id: u64,
+    pub(crate) max_bundle_size: u64,
+    pub(crate) max_bundle_gas: u64,
+    pub(crate) beneficiary: Address,
+    pub(crate) use_bundle_priority_fee: Option<bool>,
+    pub(crate) bundle_priority_fee_overhead_percent: u64,
+    pub(crate) priority_fee_mode: PriorityFeeMode,
 }
 
 #[async_trait]
@@ -191,7 +191,7 @@ where
     P: Provider,
     C: PoolServer,
 {
-    pub fn new(
+    pub(crate) fn new(
         pool: C,
         simulator: S,
         entry_point: E,
@@ -295,7 +295,7 @@ where
                 };
                 let max_cost = gas::user_operation_max_gas_cost(&op, self.settings.chain_id);
                 if *balance < max_cost {
-                    info!("Rejected paymaster {paymaster:?} becauase its balance {balance:?} was too low.");
+                    info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
                     paymasters_to_reject.push(paymaster);
                     continue;
                 } else {
@@ -413,10 +413,10 @@ where
 
     async fn get_balances_by_paymaster(
         &self,
-        addreses: impl Iterator<Item = Address>,
+        addresses: impl Iterator<Item = Address>,
         block_hash: H256,
     ) -> anyhow::Result<HashMap<Address, U256>> {
-        let futures = addreses.map(|address| async move {
+        let futures = addresses.map(|address| async move {
             let deposit = self
                 .entry_point
                 .balance_of(address, Some(BlockId::Hash(block_hash)))

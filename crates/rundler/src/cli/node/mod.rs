@@ -1,4 +1,5 @@
 use clap::Args;
+use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
 use rundler_task::spawn_tasks_with_shutdown;
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
@@ -6,7 +7,6 @@ use tokio::sync::broadcast;
 
 use self::events::Event;
 use crate::{
-    builder::{emit::BuilderEvent, BuilderTask, LocalBuilderBuilder},
     cli::{
         builder::{self, BuilderArgs},
         pool::PoolArgs,

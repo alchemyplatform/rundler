@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use ethers_signers::Signer;
 use rundler_pool::PoolServer;
@@ -25,45 +26,71 @@ use tokio::{
     time, try_join,
 };
 use tokio_util::sync::CancellationToken;
-use tonic::async_trait;
 use tracing::info;
 
-use super::{emit::BuilderEvent, server::LocalBuilderBuilder};
-use crate::builder::{
+use crate::{
     bundle_proposer::{self, BundleProposerImpl},
     bundle_sender::{self, BundleSender, BundleSenderImpl},
+    emit::BuilderEvent,
     sender::get_sender,
-    server::spawn_remote_builder_server,
+    server::{spawn_remote_builder_server, LocalBuilderBuilder},
     signer::{BundlerSigner, KmsSigner, LocalSigner},
     transaction_tracker::{self, TransactionTrackerImpl},
 };
 
+/// Builder task arguments
 #[derive(Debug)]
 pub struct Args {
+    /// Full node RPC url
     pub rpc_url: String,
+    /// Address of the entry point contract this builder targets
     pub entry_point_address: Address,
+    /// Private key to use for signing transactions
+    /// If not provided, AWS KMS will be used
     pub private_key: Option<String>,
+    /// AWS KMS key ids to use for signing transactions
+    /// Only used if private_key is not provided
     pub aws_kms_key_ids: Vec<String>,
+    /// AWS KMS region
     pub aws_kms_region: Region,
+    /// Redis URI for key leasing
     pub redis_uri: String,
+    /// Redis lease TTL in milliseconds
     pub redis_lock_ttl_millis: u64,
+    /// Chain ID
     pub chain_id: u64,
+    /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
+    /// Maximum bundle size in gas limit
     pub max_bundle_gas: u64,
+    /// URL to submit bundles too
     pub submit_url: String,
+    /// Whether to use bundle priority fee
+    /// If unset, will use the default value of true for known EIP-1559 chains
     pub use_bundle_priority_fee: Option<bool>,
+    /// Percentage to add to the the network priority fee for the bundle priority fee
     pub bundle_priority_fee_overhead_percent: u64,
+    /// Priority fee mode to use for operation priority fee minimums
     pub priority_fee_mode: PriorityFeeMode,
+    /// Whether to use conditional send transactions
     pub use_conditional_send_transaction: bool,
+    /// RPC node poll interval
     pub eth_poll_interval: Duration,
+    /// Operation simulation settings
     pub sim_settings: SimulationSettings,
+    /// Alt-mempool configs
     pub mempool_configs: HashMap<H256, MempoolConfig>,
+    /// Maximum number of blocks to wait for a transaction to be mined
     pub max_blocks_to_wait_for_mine: u64,
+    /// Percentage to increase the fees by when replacing a bundle transaction
     pub replacement_fee_percent_increase: u64,
+    /// Maximum number of times to increase the fees when replacing a bundle transaction
     pub max_fee_increases: u64,
+    /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
 }
 
+/// Builder task
 #[derive(Debug)]
 pub struct BuilderTask<P> {
     args: Args,
@@ -228,6 +255,7 @@ impl<P> BuilderTask<P>
 where
     P: PoolServer + Clone,
 {
+    /// Create a new builder task
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -242,6 +270,7 @@ where
         }
     }
 
+    /// Convert this task into a boxed task
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
     }

@@ -1,9 +1,8 @@
 use std::fmt::Display;
 
 use ethers::types::Address;
+use rundler_builder::BuilderEvent;
 use rundler_pool::PoolEvent;
-
-use crate::builder::emit::BuilderEvent;
 
 #[derive(Clone, Debug)]
 pub enum Event {

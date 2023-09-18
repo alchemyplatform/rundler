@@ -9,6 +9,7 @@ use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
+use rundler_builder::BuilderServer;
 use rundler_pool::PoolServer;
 use rundler_provider::EntryPoint;
 use rundler_sim::{EstimationSettings, PrecheckSettings};
@@ -22,16 +23,13 @@ use tonic::async_trait;
 use tracing::info;
 use url::Url;
 
-use super::{eth::EthApi, ApiNamespace, EthApiSettings};
-use crate::{
-    builder::BuilderServer,
-    rpc::{
-        debug::{DebugApi, DebugApiServer},
-        eth::EthApiServer,
-        health::{HealthChecker, SystemApiServer},
-        metrics::RpcMetricsLogger,
-        rundler::{RundlerApi, RundlerApiServer},
-    },
+use crate::rpc::{
+    debug::{DebugApi, DebugApiServer},
+    eth::{EthApi, EthApiServer},
+    health::{HealthChecker, SystemApiServer},
+    metrics::RpcMetricsLogger,
+    rundler::{RundlerApi, RundlerApiServer},
+    ApiNamespace, EthApiSettings,
 };
 
 #[derive(Debug)]
