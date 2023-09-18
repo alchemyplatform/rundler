@@ -4,11 +4,11 @@ use anyhow::Context;
 use clap::Args;
 use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
+use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
 
 use super::CommonArgs;
-use crate::rpc::{self, EthApiSettings, RpcTask};
 
 /// CLI options for the RPC server
 #[derive(Args, Debug)]
@@ -72,14 +72,14 @@ impl RpcArgs {
         precheck_settings: PrecheckSettings,
         eth_api_settings: EthApiSettings,
         estimation_settings: EstimationSettings,
-    ) -> anyhow::Result<rpc::Args> {
+    ) -> anyhow::Result<RpcTaskArgs> {
         let apis = self
             .api
             .iter()
             .map(|api| api.parse())
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(rpc::Args {
+        Ok(RpcTaskArgs {
             port: self.port,
             host: self.host.clone(),
             entry_points: common

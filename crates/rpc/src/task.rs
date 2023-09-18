@@ -1,6 +1,7 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
+use async_trait::async_trait;
 use ethers::{
     providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClient, RetryClientBuilder},
     types::Address,
@@ -19,34 +20,46 @@ use rundler_task::{
 };
 use rundler_types::contracts::i_entry_point::IEntryPoint;
 use tokio_util::sync::CancellationToken;
-use tonic::async_trait;
 use tracing::info;
 use url::Url;
 
-use crate::rpc::{
+use crate::{
     debug::{DebugApi, DebugApiServer},
-    eth::{EthApi, EthApiServer},
+    eth::{EthApi, EthApiServer, EthApiSettings},
     health::{HealthChecker, SystemApiServer},
     metrics::RpcMetricsLogger,
     rundler::{RundlerApi, RundlerApiServer},
-    ApiNamespace, EthApiSettings,
+    types::ApiNamespace,
 };
 
+/// RPC server arguments.
 #[derive(Debug)]
 pub struct Args {
+    /// Port to listen on.
     pub port: u16,
+    /// Host to listen on.
     pub host: String,
+    /// List of supported entry points.
     pub entry_points: Vec<Address>,
+    /// Chain ID.
     pub chain_id: u64,
+    /// List of API namespaces to enable.
     pub api_namespaces: Vec<ApiNamespace>,
+    /// Full node RPC URL to use.
     pub rpc_url: String,
+    /// Precheck settings.
     pub precheck_settings: PrecheckSettings,
+    /// eth_ API settings.
     pub eth_api_settings: EthApiSettings,
+    /// Estimation settings.
     pub estimation_settings: EstimationSettings,
+    /// RPC timeout.
     pub rpc_timeout: Duration,
+    /// Max number of connections.
     pub max_connections: u32,
 }
 
+/// JSON-RPC server task.
 #[derive(Debug)]
 pub struct RpcTask<P, B> {
     args: Args,
@@ -131,6 +144,7 @@ where
     P: PoolServer + HealthCheck + Clone,
     B: BuilderServer + HealthCheck + Clone,
 {
+    /// Creates a new RPC server task.
     pub fn new(args: Args, pool: P, builder: B) -> Self {
         Self {
             args,
@@ -139,6 +153,7 @@ where
         }
     }
 
+    /// Converts the task into a boxed trait object.
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
     }

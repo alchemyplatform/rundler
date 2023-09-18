@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
-    env,
+    env, error,
     fs::File,
+    future::Future,
     io::{self, BufRead, Write},
+    ops::Deref,
     sync::Arc,
     time::Duration,
 };
@@ -10,12 +12,12 @@ use std::{
 use anyhow::Context;
 use ethers::{
     abi::AbiEncode,
-    contract::builders::ContractCall,
+    contract::{builders::ContractCall, Contract, ContractDeployer, ContractError},
     core::k256::ecdsa::SigningKey,
     middleware::SignerMiddleware,
-    providers::{Http, Middleware, Provider},
+    providers::{Http, JsonRpcClient, Middleware, PendingTransaction, Provider},
     signers::{LocalWallet, Signer},
-    types::{Address, Bytes, NameOrAddress, TransactionRequest, H256, U256},
+    types::{Address, Bytes, NameOrAddress, TransactionReceipt, TransactionRequest, H256, U256},
     utils::{self, hex, keccak256},
 };
 use rundler_types::{
@@ -26,13 +28,66 @@ use rundler_types::{
     UserOperation,
 };
 
-use crate::common::eth;
-
 pub const DEV_CHAIN_ID: u64 = 1337;
 pub const DEPLOYER_ACCOUNT_ID: u8 = 1;
 pub const BUNDLER_ACCOUNT_ID: u8 = 2;
 pub const WALLET_OWNER_ACCOUNT_ID: u8 = 3;
 pub const PAYMASTER_SIGNER_ACCOUNT_ID: u8 = 4;
+
+/// Waits for a pending transaction to be mined, providing appropriate error
+/// messages for each point of failure.
+pub async fn await_mined_tx<'a, Fut, C, Err>(
+    tx: Fut,
+    action: &str,
+) -> anyhow::Result<TransactionReceipt>
+where
+    Fut: Future<Output = Result<PendingTransaction<'a, C>, Err>>,
+    C: JsonRpcClient + 'a,
+    Err: error::Error + Send + Sync + 'static,
+{
+    tx.await
+        .with_context(|| format!("should send transaction to {action}"))?
+        .await
+        .with_context(|| format!("should wait for transaction to {action}"))?
+        .with_context(|| format!("transaction to {action} should not be dropped"))
+}
+
+/// Waits for a contract deployment, providing appropriate error messages.
+pub async fn await_contract_deployment<M, C>(
+    deployer: Result<ContractDeployer<M, C>, ContractError<M>>,
+    contract_name: &str,
+) -> anyhow::Result<C>
+where
+    M: Middleware + 'static,
+    C: From<Contract<M>>,
+{
+    deployer
+        .with_context(|| format!("should create deployer for {contract_name}"))?
+        .send()
+        .await
+        .with_context(|| format!("should deploy {contract_name}"))
+}
+
+/// Changes out a contract object's signer and returns a new contract of the
+/// same type. Needed because although the general-purpose `Contract` has a
+/// `.connect()` method to do this, specialized contract objects do not.
+pub fn connect_contract<M, C>(contract: &C, provider: Arc<M>) -> C
+where
+    M: Clone + Middleware,
+    C: Deref<Target = Contract<M>> + From<Contract<M>>,
+{
+    contract.connect(provider).into()
+}
+
+/// Packs an address followed by call data into a single `Bytes`. This is used
+/// in ERC-4337 for calling wallets, factories, and paymasters.
+pub fn compact_call_data<M, D>(address: Address, call: ContractCall<M, D>) -> Bytes {
+    let mut bytes = address.as_bytes().to_vec();
+    if let Some(call_data) = call.tx.data() {
+        bytes.extend(call_data);
+    }
+    bytes.into()
+}
 
 /// Creates a provider that connects to a locally running Geth node on its
 /// default port of 8545.
@@ -55,7 +110,7 @@ pub async fn grant_eth(provider: &Provider<Http>, to: Address) -> anyhow::Result
         TransactionRequest::pay(to, value).from(funder_address),
         None,
     );
-    eth::await_mined_tx(tx, "grant ETH").await?;
+    await_mined_tx(tx, "grant ETH").await?;
     Ok(())
 }
 
@@ -197,23 +252,22 @@ pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<
     // account factory
     let factory_deployer =
         SimpleAccountFactory::deploy(Arc::clone(&deployer_client), entry_point.address());
-    let factory = eth::await_contract_deployment(factory_deployer, "SimpleAccountFactory").await?;
-    let factory = eth::connect_contract(&factory, Arc::clone(&bundler_client));
+    let factory = await_contract_deployment(factory_deployer, "SimpleAccountFactory").await?;
+    let factory = connect_contract(&factory, Arc::clone(&bundler_client));
 
     // paymaster
     let paymaster_deployer = VerifyingPaymaster::deploy(
         Arc::clone(&deployer_client),
         (entry_point.address(), paymaster_signer_address),
     );
-    let paymaster =
-        eth::await_contract_deployment(paymaster_deployer, "VerifyingPaymaster").await?;
+    let paymaster = await_contract_deployment(paymaster_deployer, "VerifyingPaymaster").await?;
 
     let funder_address = get_funder_address(&provider).await?;
     let call = paymaster
         .deposit()
         .from(funder_address)
         .value(thousand_eth());
-    eth::await_mined_tx(call.send(), "deposit funds for paymaster").await?;
+    await_mined_tx(call.send(), "deposit funds for paymaster").await?;
     let salt = U256::from(1);
     let wallet_address = factory
         .get_address(wallet_owner_eoa.address(), salt)
@@ -221,7 +275,7 @@ pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<
         .await
         .context("factory's get_address should return the counterfactual address")?;
     grant_eth(&provider, wallet_address).await?;
-    let init_code = eth::compact_call_data(
+    let init_code = compact_call_data(
         factory.address(),
         factory.create_account(wallet_owner_eoa.address(), salt),
     );
@@ -238,7 +292,7 @@ pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<
         .context("user eoa should sign op hash")?;
     op.signature = signature.to_vec().into();
     let call = entry_point.handle_ops(vec![op], bundler_client.address());
-    eth::await_mined_tx(call.send(), "deploy wallet using entry point").await?;
+    await_mined_tx(call.send(), "deploy wallet using entry point").await?;
 
     Ok(DevAddresses {
         entry_point_address: entry_point.address(),

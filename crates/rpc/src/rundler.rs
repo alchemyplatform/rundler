@@ -1,20 +1,21 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use ethers::types::U256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_provider::Provider;
 use rundler_sim::{FeeEstimator, PrecheckSettings};
-use tonic::async_trait;
 
-use super::rpc_err;
+use crate::error::rpc_err;
 
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
+    /// Returns the maximum priority fee per gas required by Rundler
     #[method(name = "maxPriorityFeePerGas")]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256>;
 }
 
-pub struct RundlerApi<P: Provider> {
+pub(crate) struct RundlerApi<P: Provider> {
     fee_estimator: FeeEstimator<P>,
 }
 
@@ -22,7 +23,7 @@ impl<P> RundlerApi<P>
 where
     P: Provider,
 {
-    pub fn new(provider: Arc<P>, chain_id: u64, settings: PrecheckSettings) -> Self {
+    pub(crate) fn new(provider: Arc<P>, chain_id: u64, settings: PrecheckSettings) -> Self {
         Self {
             fee_estimator: FeeEstimator::new(
                 provider,

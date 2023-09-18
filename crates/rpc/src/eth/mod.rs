@@ -1,18 +1,21 @@
 mod api;
+pub(crate) use api::EthApi;
+pub use api::Settings as EthApiSettings;
+
 mod error;
 mod server;
 
-pub use api::{EthApi, Settings as EthApiSettings};
 use ethers::types::{Address, H256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_sim::{GasEstimate, UserOperationOptionalGas};
 
-use super::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
+use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
 
 /// Eth API
 #[rpc(client, server, namespace = "eth")]
 #[cfg_attr(test, automock)]
 pub trait EthApi {
+    /// Sends a user operation to the pool.
     #[method(name = "sendUserOperation")]
     async fn send_user_operation(
         &self,
@@ -20,6 +23,7 @@ pub trait EthApi {
         entry_point: Address,
     ) -> RpcResult<H256>;
 
+    /// Estimates the gas fields for a user operation.
     #[method(name = "estimateUserOperationGas")]
     async fn estimate_user_operation_gas(
         &self,
@@ -27,18 +31,22 @@ pub trait EthApi {
         entry_point: Address,
     ) -> RpcResult<GasEstimate>;
 
+    /// Returns the user operation with the given hash.
     #[method(name = "getUserOperationByHash")]
     async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>>;
 
+    /// Returns the user operation receipt with the given hash.
     #[method(name = "getUserOperationReceipt")]
     async fn get_user_operation_receipt(
         &self,
         hash: H256,
     ) -> RpcResult<Option<UserOperationReceipt>>;
 
+    /// Returns the supported entry points addresses
     #[method(name = "supportedEntryPoints")]
     async fn supported_entry_points(&self) -> RpcResult<Vec<String>>;
 
+    /// Returns the chain ID
     #[method(name = "chainId")]
     async fn chain_id(&self) -> RpcResult<U64>;
 }

@@ -11,6 +11,7 @@ Rundler tools
 
 [dependencies]
 rundler-rundler = { path = "../../crates/rundler" }
+rundler-rpc = { path = "../../crates/rpc" }
 
 anyhow = "1.0.70"
 clap = { version = "4.2.4", features = ["derive", "env"] }

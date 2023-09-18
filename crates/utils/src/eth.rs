@@ -4,12 +4,12 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
 use ethers::{
-    abi::AbiDecode,
+    abi::{AbiDecode, RawLog},
     contract::ContractError,
     providers::{
         Http, HttpRateLimitRetryPolicy, Middleware, Provider, RetryClient, RetryClientBuilder,
     },
-    types::Bytes,
+    types::{Bytes, Log},
 };
 use url::Url;
 
@@ -55,4 +55,13 @@ pub fn new_provider(
         .initial_backoff(Duration::from_millis(500))
         .build(http, Box::<HttpRateLimitRetryPolicy>::default());
     Ok(Arc::new(Provider::new(client).interval(poll_interval)))
+}
+
+/// Converts an ethers `Log` into an ethabi `RawLog`.
+pub fn log_to_raw_log(log: Log) -> RawLog {
+    let Log { topics, data, .. } = log;
+    RawLog {
+        topics,
+        data: data.to_vec(),
+    }
 }

@@ -13,11 +13,10 @@ use builder::BuilderCliArgs;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
+use rundler_rpc::EthApiSettings;
 use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
-
-use crate::rpc::EthApiSettings;
 
 /// Main entry point for the CLI
 ///

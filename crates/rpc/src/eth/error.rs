@@ -8,7 +8,7 @@ use rundler_sim::{PrecheckViolation, SimulationViolation};
 use rundler_types::{Entity, EntityType, Timestamp};
 use serde::Serialize;
 
-use crate::rpc::{rpc_err, rpc_err_with_data};
+use crate::error::{rpc_err, rpc_err_with_data};
 
 // Error codes borrowed from jsonrpsee
 // INVALID_REQUEST_CODE = -32600
@@ -26,7 +26,7 @@ const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
 const EXECUTION_REVERTED: i32 = -32521;
 
-pub type EthResult<T> = Result<T, EthRpcError>;
+pub(crate) type EthResult<T> = Result<T, EthRpcError>;
 
 /// Error returned by the RPC server eth namespace
 #[derive(Debug, thiserror::Error)]

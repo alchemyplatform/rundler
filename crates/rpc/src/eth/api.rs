@@ -26,21 +26,21 @@ use rundler_types::{
     },
     UserOperation,
 };
-use rundler_utils::log::LogOnError;
+use rundler_utils::{eth::log_to_raw_log, log::LogOnError};
 use tracing::Level;
 
 use super::error::{EthResult, EthRpcError};
-use crate::{
-    common::eth::log_to_raw_log,
-    rpc::{RichUserOperation, RpcUserOperation, UserOperationReceipt},
-};
+use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
 
+/// Settings for the `eth_` API
 #[derive(Copy, Clone, Debug)]
 pub struct Settings {
+    /// The number of blocks to look back for user operation events
     pub user_operation_event_block_distance: Option<u64>,
 }
 
 impl Settings {
+    /// Create new settings for the `eth_` API
     pub fn new(block_distance: Option<u64>) -> Self {
         Self {
             user_operation_event_block_distance: block_distance,
@@ -58,7 +58,7 @@ where
     P: Provider,
     E: EntryPoint,
 {
-    pub fn new(
+    fn new(
         chain_id: u64,
         provider: Arc<P>,
         entry_point: E,
@@ -74,7 +74,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct EthApi<P, E, PS> {
+pub(crate) struct EthApi<P, E, PS> {
     contexts_by_entry_point: HashMap<Address, EntryPointContext<P, E>>,
     provider: Arc<P>,
     chain_id: u64,
@@ -88,7 +88,7 @@ where
     E: EntryPoint,
     PS: PoolServer,
 {
-    pub fn new(
+    pub(crate) fn new(
         provider: Arc<P>,
         entry_points: Vec<E>,
         chain_id: u64,
@@ -123,7 +123,7 @@ where
         }
     }
 
-    pub async fn send_user_operation(
+    pub(crate) async fn send_user_operation(
         &self,
         op: RpcUserOperation,
         entry_point: Address,
@@ -140,7 +140,7 @@ where
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")
     }
 
-    pub async fn estimate_user_operation_gas(
+    pub(crate) async fn estimate_user_operation_gas(
         &self,
         op: UserOperationOptionalGas,
         entry_point: Address,
@@ -170,7 +170,7 @@ where
         }
     }
 
-    pub async fn get_user_operation_by_hash(
+    pub(crate) async fn get_user_operation_by_hash(
         &self,
         hash: H256,
     ) -> EthResult<Option<RichUserOperation>> {
@@ -233,7 +233,7 @@ where
         }))
     }
 
-    pub async fn get_user_operation_receipt(
+    pub(crate) async fn get_user_operation_receipt(
         &self,
         hash: H256,
     ) -> EthResult<Option<UserOperationReceipt>> {
@@ -298,7 +298,7 @@ where
         }))
     }
 
-    pub async fn supported_entry_points(&self) -> EthResult<Vec<String>> {
+    pub(crate) async fn supported_entry_points(&self) -> EthResult<Vec<String>> {
         Ok(self
             .contexts_by_entry_point
             .keys()
@@ -306,7 +306,7 @@ where
             .collect())
     }
 
-    pub async fn chain_id(&self) -> EthResult<U64> {
+    pub(crate) async fn chain_id(&self) -> EthResult<U64> {
         Ok(self.chain_id.into())
     }
 
