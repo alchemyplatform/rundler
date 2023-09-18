@@ -1,15 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
+use async_trait::async_trait;
 use ethers::types::{transaction::eip2718::TypedTransaction, H256, U256};
 use rundler_provider::Provider;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use tokio::time;
-use tonic::async_trait;
 use tracing::info;
 
-use crate::builder::sender::{TransactionSender, TxStatus};
+use crate::sender::{TransactionSender, TxStatus};
 
 /// Keeps track of pending transactions in order to suggest nonces and
 /// replacement fees and ensure that transactions do not get stalled. All sent
@@ -21,7 +21,7 @@ use crate::builder::sender::{TransactionSender, TxStatus};
 /// succeeded (potentially not the most recent one) or whether circumstances
 /// have changed so that it is worth making another attempt.
 #[async_trait]
-pub trait TransactionTracker: Send + Sync + 'static {
+pub(crate) trait TransactionTracker: Send + Sync + 'static {
     fn get_nonce_and_required_fees(&self) -> anyhow::Result<(U256, Option<GasFees>)>;
 
     /// Sends the provided transaction and typically returns its transaction
@@ -49,17 +49,16 @@ pub trait TransactionTracker: Send + Sync + 'static {
     async fn check_for_update_now(&self) -> anyhow::Result<Option<TrackerUpdate>>;
 }
 
-pub enum SendResult {
+pub(crate) enum SendResult {
     TxHash(H256),
     TrackerUpdate(TrackerUpdate),
 }
 
 #[derive(Debug)]
-pub enum TrackerUpdate {
+pub(crate) enum TrackerUpdate {
     Mined {
         tx_hash: H256,
         nonce: U256,
-        gas_fees: GasFees,
         block_number: u64,
         attempt_number: u64,
     },
@@ -73,7 +72,9 @@ pub enum TrackerUpdate {
 }
 
 #[derive(Debug)]
-pub struct TransactionTrackerImpl<P, T>(tokio::sync::Mutex<TransactionTrackerImplInner<P, T>>)
+pub(crate) struct TransactionTrackerImpl<P, T>(
+    tokio::sync::Mutex<TransactionTrackerImplInner<P, T>>,
+)
 where
     P: Provider,
     T: TransactionSender;
@@ -94,10 +95,10 @@ where
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Settings {
-    pub poll_interval: Duration,
-    pub max_blocks_to_wait_for_mine: u64,
-    pub replacement_fee_percent_increase: u64,
+pub(crate) struct Settings {
+    pub(crate) poll_interval: Duration,
+    pub(crate) max_blocks_to_wait_for_mine: u64,
+    pub(crate) replacement_fee_percent_increase: u64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -139,7 +140,11 @@ where
     P: Provider,
     T: TransactionSender,
 {
-    pub async fn new(provider: Arc<P>, sender: T, settings: Settings) -> anyhow::Result<Self> {
+    pub(crate) async fn new(
+        provider: Arc<P>,
+        sender: T,
+        settings: Settings,
+    ) -> anyhow::Result<Self> {
         let inner = TransactionTrackerImplInner::new(provider, sender, settings).await?;
         Ok(Self(tokio::sync::Mutex::new(inner)))
     }
@@ -201,7 +206,10 @@ where
                 return Ok(SendResult::TrackerUpdate(tracker_update));
             }
         };
-        info!("Sent transaction {:?}", sent_tx.tx_hash);
+        info!(
+            "Sent transaction {:?} nonce: {:?}",
+            sent_tx.tx_hash, sent_tx.nonce
+        );
         self.transactions.push(PendingTransaction {
             tx_hash: sent_tx.tx_hash,
             gas_fees,
@@ -270,7 +278,6 @@ where
                     out = TrackerUpdate::Mined {
                         tx_hash: tx.tx_hash,
                         nonce: self.nonce,
-                        gas_fees: tx.gas_fees,
                         block_number,
                         attempt_number: tx.attempt_number,
                     };
@@ -304,7 +311,6 @@ where
                 Some(TrackerUpdate::Mined {
                     tx_hash: last_tx.tx_hash,
                     nonce,
-                    gas_fees: last_tx.gas_fees,
                     block_number,
                     attempt_number: last_tx.attempt_number,
                 })
@@ -403,7 +409,7 @@ mod tests {
     use rundler_provider::MockProvider;
 
     use super::*;
-    use crate::builder::sender::{MockTransactionSender, SentTxInfo};
+    use crate::sender::{MockTransactionSender, SentTxInfo};
 
     fn create_base_config() -> (MockTransactionSender, MockProvider) {
         let sender = MockTransactionSender::new();

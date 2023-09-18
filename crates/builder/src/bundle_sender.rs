@@ -7,6 +7,7 @@ use std::{
 };
 
 use anyhow::{bail, Context};
+use async_trait::async_trait;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use futures_util::StreamExt;
 use rundler_pool::PoolServer;
@@ -19,10 +20,9 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
     time,
 };
-use tonic::async_trait;
 use tracing::{error, info, trace, warn};
 
-use crate::builder::{
+use crate::{
     bundle_proposer::BundleProposer,
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
@@ -32,18 +32,18 @@ use crate::builder::{
 const GAS_ESTIMATE_OVERHEAD_PERCENT: u64 = 10;
 
 #[async_trait]
-pub trait BundleSender: Send + Sync + 'static {
+pub(crate) trait BundleSender: Send + Sync + 'static {
     async fn send_bundles_in_loop(&mut self);
 }
 
 #[derive(Debug)]
-pub struct Settings {
-    pub replacement_fee_percent_increase: u64,
-    pub max_fee_increases: u64,
+pub(crate) struct Settings {
+    pub(crate) replacement_fee_percent_increase: u64,
+    pub(crate) max_fee_increases: u64,
 }
 
 #[derive(Debug)]
-pub struct BundleSenderImpl<P, E, T, C>
+pub(crate) struct BundleSenderImpl<P, E, T, C>
 where
     P: BundleProposer,
     E: EntryPoint,
@@ -210,7 +210,7 @@ where
     C: PoolServer,
 {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         manual_bundling_mode: Arc<AtomicBool>,
         send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
         chain_id: u64,
@@ -362,7 +362,6 @@ where
                 TrackerUpdate::Mined {
                     tx_hash,
                     nonce,
-                    gas_fees: _,
                     block_number,
                     attempt_number,
                 } => {

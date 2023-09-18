@@ -19,11 +19,9 @@ use super::protos::{
     debug_set_bundling_mode_response, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
     DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest,
 };
-use crate::builder::{
-    server::{BuilderResult, BuilderServer, BuilderServerError},
-    BundlingMode,
-};
+use crate::server::{BuilderResult, BuilderServer, BuilderServerError, BundlingMode};
 
+/// Remote builder client, used for communicating with a remote builder server
 #[derive(Debug, Clone)]
 pub struct RemoteBuilderClient {
     grpc_client: BuilderClient<Channel>,
@@ -31,6 +29,7 @@ pub struct RemoteBuilderClient {
 }
 
 impl RemoteBuilderClient {
+    /// Connect to a remote builder server
     pub async fn connect(url: String) -> anyhow::Result<Self> {
         let grpc_client = BuilderClient::connect(url.clone()).await?;
         let health_client =

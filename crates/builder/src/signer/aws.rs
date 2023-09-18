@@ -13,14 +13,14 @@ use super::monitor_account_balance;
 
 /// A KMS signer handle that will release the key_id when dropped.
 #[derive(Debug)]
-pub struct KmsSigner {
-    pub signer: AwsSigner,
+pub(crate) struct KmsSigner {
+    pub(crate) signer: AwsSigner,
     _kms_guard: SpawnGuard,
     _monitor_guard: SpawnGuard,
 }
 
 impl KmsSigner {
-    pub async fn connect<M: Middleware + 'static>(
+    pub(crate) async fn connect<M: Middleware + 'static>(
         provider: Arc<M>,
         chain_id: u64,
         region: Region,

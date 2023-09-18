@@ -5,7 +5,8 @@ mod raw;
 use std::sync::Arc;
 
 use anyhow::Context;
-pub use conditional::ConditionalTransactionSender;
+use async_trait::async_trait;
+pub(crate) use conditional::ConditionalTransactionSender;
 use enum_dispatch::enum_dispatch;
 use ethers::{
     prelude::SignerMiddleware,
@@ -15,21 +16,20 @@ use ethers::{
     },
 };
 use ethers_signers::Signer;
-pub use flashbots::FlashbotsTransactionSender;
+pub(crate) use flashbots::FlashbotsTransactionSender;
 #[cfg(test)]
 use mockall::automock;
-pub use raw::RawTransactionSender;
+pub(crate) use raw::RawTransactionSender;
 use rundler_sim::ExpectedStorage;
-use tonic::async_trait;
 
 #[derive(Debug)]
-pub struct SentTxInfo {
-    pub nonce: U256,
-    pub tx_hash: H256,
+pub(crate) struct SentTxInfo {
+    pub(crate) nonce: U256,
+    pub(crate) tx_hash: H256,
 }
 
 #[derive(Debug)]
-pub enum TxStatus {
+pub(crate) enum TxStatus {
     Pending,
     Mined { block_number: u64 },
     Dropped,
@@ -38,7 +38,7 @@ pub enum TxStatus {
 #[async_trait]
 #[enum_dispatch(TransactionSenderEnum<_C,_S>)]
 #[cfg_attr(test, automock)]
-pub trait TransactionSender: Send + Sync + 'static {
+pub(crate) trait TransactionSender: Send + Sync + 'static {
     async fn send_transaction(
         &self,
         tx: TypedTransaction,
@@ -53,7 +53,7 @@ pub trait TransactionSender: Send + Sync + 'static {
 }
 
 #[enum_dispatch]
-pub enum TransactionSenderEnum<C, S>
+pub(crate) enum TransactionSenderEnum<C, S>
 where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
@@ -86,7 +86,7 @@ where
     Ok((tx.rlp_signed(&signature), nonce))
 }
 
-pub fn get_sender<C, S>(
+pub(crate) fn get_sender<C, S>(
     provider: Arc<Provider<C>>,
     signer: S,
     is_conditional: bool,

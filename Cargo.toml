@@ -3,6 +3,7 @@ members = [
     "bin/rundler",
     "bin/tools",
     "crates/rundler",
+    "crates/builder",
     "crates/pool",
     "crates/provider",
     "crates/sim",

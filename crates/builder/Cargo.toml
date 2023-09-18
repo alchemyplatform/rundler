@@ -1,0 +1,53 @@
+[package]
+name = "rundler-builder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rundler-pool = { path = "../pool" }
+rundler-provider = { path = "../provider" }
+rundler-sim = { path = "../sim" }
+rundler-task = { path = "../task" }
+rundler-types = { path = "../types" }
+rundler-utils = { path = "../utils" }
+
+anyhow.workspace = true
+async-trait.workspace = true
+enum_dispatch = "0.3.11"
+ethers.workspace = true
+ethers-signers = {version = "2.0.8", features = ["aws"] }
+futures.workspace = true
+futures-timer = "3.0.2"
+futures-util.workspace = true
+linked-hash-map = "0.5.6"
+metrics.workspace = true
+pin-project.workspace = true
+prost.workspace = true
+parse-display.workspace = true
+reqwest.workspace = true
+rslock = "0.2.2"
+rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
+rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tonic-reflection.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+mockall = {workspace = true, optional = true }
+
+[dev-dependencies]
+mockall.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+
+[features]
+test-utils = [ "mockall" ]

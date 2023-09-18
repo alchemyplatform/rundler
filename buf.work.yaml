@@ -1,4 +1,4 @@
 version: v1
 directories:
-  - crates/rundler/proto
+  - crates/builder/proto
   - crates/pool/proto

@@ -3,6 +3,7 @@ use std::sync::{
     Arc,
 };
 
+use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use rundler_task::server::{HealthCheck, ServerStatus};
 use tokio::{
@@ -10,15 +11,13 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tonic::async_trait;
 
-use super::{BuilderServer, BuilderServerError};
-use crate::builder::{
+use crate::{
     bundle_sender::{SendBundleRequest, SendBundleResult},
-    server::BuilderResult,
-    BundlingMode,
+    server::{BuilderResult, BuilderServer, BuilderServerError, BundlingMode},
 };
 
+/// Local builder server builder
 #[derive(Debug)]
 pub struct LocalBuilderBuilder {
     req_sender: mpsc::Sender<ServerRequest>,
@@ -26,6 +25,7 @@ pub struct LocalBuilderBuilder {
 }
 
 impl LocalBuilderBuilder {
+    /// Create a new local builder server builder
     pub fn new(request_capcity: usize) -> Self {
         let (req_sender, req_receiver) = mpsc::channel(request_capcity);
         Self {
@@ -34,12 +34,14 @@ impl LocalBuilderBuilder {
         }
     }
 
+    /// Get a handle to the local builder server
     pub fn get_handle(&self) -> LocalBuilderHandle {
         LocalBuilderHandle {
             req_sender: self.req_sender.clone(),
         }
     }
 
+    /// Run the local builder server, consuming the builder
     pub fn run(
         self,
         manual_bundling_mode: Arc<AtomicBool>,
@@ -57,12 +59,13 @@ impl LocalBuilderBuilder {
     }
 }
 
+/// Local builder server handle, used to send requests to the server
 #[derive(Debug, Clone)]
 pub struct LocalBuilderHandle {
     req_sender: mpsc::Sender<ServerRequest>,
 }
 
-pub struct LocalBuilderServerRunner {
+struct LocalBuilderServerRunner {
     req_receiver: mpsc::Receiver<ServerRequest>,
     send_bundle_requester: mpsc::Sender<SendBundleRequest>,
     manual_bundling_mode: Arc<AtomicBool>,
@@ -132,7 +135,7 @@ impl HealthCheck for LocalBuilderHandle {
 }
 
 impl LocalBuilderServerRunner {
-    pub fn new(
+    fn new(
         req_receiver: mpsc::Receiver<ServerRequest>,
         manual_bundling_mode: Arc<AtomicBool>,
         send_bundle_requester: mpsc::Sender<SendBundleRequest>,
@@ -146,7 +149,7 @@ impl LocalBuilderServerRunner {
         }
     }
 
-    pub async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         loop {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {
@@ -209,20 +212,20 @@ impl LocalBuilderServerRunner {
 }
 
 #[derive(Clone, Debug)]
-pub enum ServerRequestKind {
+enum ServerRequestKind {
     GetSupportedEntryPoints,
     DebugSendBundleNow,
     DebugSetBundlingMode { mode: BundlingMode },
 }
 
 #[derive(Debug)]
-pub struct ServerRequest {
-    pub request: ServerRequestKind,
-    pub response: oneshot::Sender<BuilderResult<ServerResponse>>,
+struct ServerRequest {
+    request: ServerRequestKind,
+    response: oneshot::Sender<BuilderResult<ServerResponse>>,
 }
 
 #[derive(Clone, Debug)]
-pub enum ServerResponse {
+enum ServerResponse {
     GetSupportedEntryPoints { entry_points: Vec<Address> },
     DebugSendBundleNow { hash: H256 },
     DebugSetBundlingMode,

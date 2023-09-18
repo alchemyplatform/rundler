@@ -11,9 +11,9 @@ use rundler_sim::ExpectedStorage;
 use serde_json::json;
 use tonic::async_trait;
 
-use crate::builder::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
+use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
 
-pub struct ConditionalTransactionSender<C, S>
+pub(crate) struct ConditionalTransactionSender<C, S>
 where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
@@ -83,7 +83,7 @@ where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
 {
-    pub fn new(provider: Arc<Provider<C>>, signer: S) -> Self {
+    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S) -> Self {
         Self {
             provider: SignerMiddleware::new(provider, signer),
         }
