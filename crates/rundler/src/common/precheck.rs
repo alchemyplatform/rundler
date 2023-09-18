@@ -274,7 +274,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             None => op.sender,
         };
         self.entry_point
-            .balance_of(payer)
+            .balance_of(payer, None)
             .await
             .context("precheck should get payer balance")
     }

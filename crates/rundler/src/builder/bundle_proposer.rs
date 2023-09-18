@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::Context;
-use ethers::types::{Address, Bytes, H256, U256};
+use ethers::types::{Address, BlockId, Bytes, H256, U256};
 use futures::future;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
@@ -421,7 +421,10 @@ where
         block_hash: H256,
     ) -> anyhow::Result<HashMap<Address, U256>> {
         let futures = addreses.map(|address| async move {
-            let deposit = self.entry_point.get_deposit(address, block_hash).await?;
+            let deposit = self
+                .entry_point
+                .balance_of(address, Some(BlockId::Hash(block_hash)))
+                .await?;
             Ok::<_, anyhow::Error>((address, deposit))
         });
         let addresses_and_deposits = future::try_join_all(futures)
@@ -1222,7 +1225,7 @@ mod tests {
         }
         for deposit in mock_paymaster_deposits {
             entry_point
-                .expect_get_deposit()
+                .expect_balance_of()
                 .times(..=1)
                 .return_once(move |_, _| Ok(deposit));
         }

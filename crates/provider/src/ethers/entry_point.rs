@@ -6,8 +6,8 @@ use ethers::{
     contract::{ContractError, FunctionCall},
     providers::{spoof, Middleware, RawCall},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, H256,
-        U256,
+        transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
+        H256, U256,
     },
 };
 use rundler_types::{
@@ -72,21 +72,18 @@ where
         Err(error)?
     }
 
-    async fn balance_of(&self, address: Address) -> anyhow::Result<U256> {
-        self.balance_of(address)
+    async fn balance_of(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>,
+    ) -> anyhow::Result<U256> {
+        block_id
+            .map_or(self.balance_of(address), |bid| {
+                self.balance_of(address).block(bid)
+            })
             .call()
             .await
             .context("entry point should return balance")
-    }
-
-    async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256> {
-        let deposit_info = self
-            .get_deposit_info(address)
-            .block(block_hash)
-            .call()
-            .await
-            .context("entry point should return deposit info")?;
-        Ok(deposit_info.deposit.into())
     }
 
     async fn call_spoofed_simulate_op(

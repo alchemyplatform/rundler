@@ -1,4 +1,6 @@
-use ethers::types::{spoof, transaction::eip2718::TypedTransaction, Address, Bytes, H256, U256};
+use ethers::types::{
+    spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
+};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_types::{
@@ -35,10 +37,8 @@ pub trait EntryPoint: Send + Sync + 'static {
     ) -> anyhow::Result<HandleOpsOut>;
 
     /// Get the balance of an address
-    async fn balance_of(&self, address: Address) -> anyhow::Result<U256>;
-
-    /// Get the deposit value of an address on the entry point contract
-    async fn get_deposit(&self, address: Address, block_hash: H256) -> anyhow::Result<U256>;
+    async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
+        -> anyhow::Result<U256>;
 
     /// Call the entry point contract's `simulateValidation` function
     async fn simulate_validation(
