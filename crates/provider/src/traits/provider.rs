@@ -5,9 +5,9 @@ use std::{fmt::Debug, sync::Arc};
 use ethers::{
     providers::ProviderError,
     types::{
-        transaction::eip2718::TypedTransaction, Address, Block, BlockId, Bytes, Filter,
-        GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log, Transaction,
-        TransactionReceipt, TxHash, H256, U256,
+        transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
+        FeeHistory, Filter, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log,
+        Transaction, TransactionReceipt, TxHash, H256, U256,
     },
 };
 #[cfg(feature = "test-utils")]
@@ -44,6 +44,14 @@ pub trait Provider: Send + Sync + 'static {
     where
         T: Debug + Serialize + Send + Sync + 'static,
         R: Serialize + DeserializeOwned + Debug + Send + 'static;
+
+    /// Get fee history given a number of blocks and reward percentiles
+    async fn fee_history<T: Into<U256> + Serialize + Send + Sync + 'static>(
+        &self,
+        t: T,
+        block_number: BlockNumber,
+        reward_percentiles: &[f64],
+    ) -> Result<FeeHistory, ProviderError>;
 
     /// Simulate a transaction via an eth_call
     async fn call(
