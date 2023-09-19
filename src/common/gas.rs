@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::{
-    prelude::gas_oracle::{GasCategory, GasOracle},
+    prelude::gas_oracle::GasCategory,
     types::{transaction::eip2718::TypedTransaction, Address, Chain, U256},
 };
 use tokio::try_join;
@@ -210,31 +210,16 @@ impl<P: ProviderLike> FeeEstimator<P> {
 
     async fn get_priority_fee(&self) -> anyhow::Result<U256> {
         if POLYGON_CHAIN_IDS.contains(&self.chain_id) {
-            let gas_oracle =
-                Polygon::new(Chain::try_from(self.chain_id)?)?.category(GasCategory::Fast);
-            match gas_oracle.estimate_eip1559_fees().await {
-                Ok(fees) => Ok(fees.1),
-                // Polygon gas station is very unreliable, fallback to max priority fee if it fails
-                // Fast can be 10% faster than what is returned by `eth_maxPriorityFeePerGas`
-                // so we increase the max priority fee by 10% to ensure that multiple
-                // calls to this endpoint give reasonably similar results.
-                Err(_) => Ok(math::increase_by_percent(
-                    self.provider.get_max_priority_fee().await?,
-                    10,
-                )),
-            }
+            let gas_oracle = Polygon::new(Arc::clone(&self.provider)).category(GasCategory::Fast);
+
+            let fees = gas_oracle.estimate_eip1559_fees().await?;
+            Ok(fees.1)
         } else if self.use_bundle_priority_fee {
             self.provider.get_max_priority_fee().await
         } else {
             Ok(U256::zero())
         }
     }
-}
-
-const GWEI_TO_WEI: u64 = 1_000_000_000;
-
-pub fn from_gwei_f64(gwei: f64) -> U256 {
-    U256::from((gwei * GWEI_TO_WEI as f64).ceil() as u64)
 }
 
 const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
@@ -245,18 +230,4 @@ const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
 
 fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
     NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_gwei_conversion() {
-        let max_priority_fee: f64 = 1.8963421368;
-
-        let result = from_gwei_f64(max_priority_fee);
-
-        assert_eq!(result, U256::from(1896342137));
-    }
 }
