@@ -6,8 +6,8 @@ use ethers::{
     providers::{JsonRpcClient, Middleware, Provider, ProviderError},
     types::{
         transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
-        Eip1559TransactionRequest, Filter, GethDebugTracingOptions, GethTrace, Log, Transaction,
-        TransactionReceipt, TxHash, H160, H256, U256, U64,
+        Eip1559TransactionRequest, FeeHistory, Filter, GethDebugTracingOptions, GethTrace, Log,
+        Transaction, TransactionReceipt, TxHash, H160, H256, U256, U64,
     },
 };
 #[cfg(test)]
@@ -52,6 +52,13 @@ pub trait ProviderLike: Send + Sync + 'static {
         tx: &TypedTransaction,
         block: Option<BlockId>,
     ) -> Result<Bytes, ProviderError>;
+
+    async fn fee_history<T: Into<U256> + Send + Sync + Serialize + 'static>(
+        &self,
+        t: T,
+        block_number: BlockNumber,
+        reward_percentiles: &[f64],
+    ) -> Result<FeeHistory, ProviderError>;
 
     async fn get_block_number(&self) -> anyhow::Result<u64>;
 
@@ -136,6 +143,15 @@ impl<C: JsonRpcClient + 'static> ProviderLike for Provider<C> {
         block: Option<BlockId>,
     ) -> Result<Bytes, ProviderError> {
         Middleware::call(self, tx, block).await
+    }
+
+    async fn fee_history<T: Into<U256> + Send + Sync + Serialize + 'static>(
+        &self,
+        t: T,
+        block_number: BlockNumber,
+        reward_percentiles: &[f64],
+    ) -> Result<FeeHistory, ProviderError> {
+        Middleware::fee_history(self, t, block_number, reward_percentiles).await
     }
 
     async fn get_block_number(&self) -> anyhow::Result<u64> {
