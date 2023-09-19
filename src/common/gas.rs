@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use ethers::{
-    prelude::gas_oracle::{GasCategory, GasOracle, Polygon},
+    prelude::gas_oracle::{GasCategory, GasOracle},
     types::{transaction::eip2718::TypedTransaction, Address, Chain, U256},
 };
 use tokio::try_join;
@@ -9,6 +9,7 @@ use tokio::try_join;
 use super::types::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS};
 use crate::common::{
     math,
+    polygon::Polygon,
     types::{ProviderLike, UserOperation},
 };
 
