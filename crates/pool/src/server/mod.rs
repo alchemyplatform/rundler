@@ -37,7 +37,12 @@ pub trait PoolServer: Send + Sync + 'static {
     async fn add_op(&self, entry_point: Address, op: UserOperation) -> PoolResult<H256>;
 
     /// Get operations from the pool
-    async fn get_ops(&self, entry_point: Address, max_ops: u64) -> PoolResult<Vec<PoolOperation>>;
+    async fn get_ops(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        shard_index: u64,
+    ) -> PoolResult<Vec<PoolOperation>>;
 
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()>;

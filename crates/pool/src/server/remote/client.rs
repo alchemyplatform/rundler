@@ -141,13 +141,19 @@ impl PoolServer for RemotePoolClient {
         }
     }
 
-    async fn get_ops(&self, entry_point: Address, max_ops: u64) -> PoolResult<Vec<PoolOperation>> {
+    async fn get_ops(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        shard_index: u64,
+    ) -> PoolResult<Vec<PoolOperation>> {
         let res = self
             .op_pool_client
             .clone()
             .get_ops(GetOpsRequest {
                 entry_point: entry_point.as_bytes().to_vec(),
                 max_ops,
+                shard_index,
             })
             .await?
             .into_inner()

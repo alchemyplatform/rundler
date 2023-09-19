@@ -215,6 +215,14 @@ pub struct CommonArgs {
         env = "MEMPOOL_CONFIG_PATH"
     )]
     pub mempool_config_path: Option<String>,
+
+    #[arg(
+        long = "num_builders",
+        name = "num_builders",
+        env = "NUM_BUILDERS",
+        default_value = "1"
+    )]
+    pub num_builders: u64,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;

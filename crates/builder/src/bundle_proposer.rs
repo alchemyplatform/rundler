@@ -73,6 +73,7 @@ where
     P: Provider,
     C: PoolServer,
 {
+    builder_index: u64,
     pool: C,
     simulator: S,
     entry_point: E,
@@ -109,7 +110,18 @@ where
         )?;
 
         // Limit the amount of gas in the bundle
-        let ops = self.limit_gas_in_bundle(ops);
+        tracing::debug!(
+            "Builder index: {}, starting bundle proposal with {} ops",
+            self.builder_index,
+            ops.len(),
+        );
+        let (ops, gas_limit) = self.limit_gas_in_bundle(ops);
+        tracing::debug!(
+            "Builder index: {}, bundle proposal after limit had {} ops and {:?} gas limit",
+            self.builder_index,
+            ops.len(),
+            gas_limit
+        );
 
         // Determine fees required for ops to be included in a bundle, and filter out ops that don't
         // meet the requirements. Simulate unfiltered ops.
@@ -122,16 +134,17 @@ where
                 {
                     true
                 } else {
-                    self.emit(BuilderEvent::SkippedOp {
-                        op_hash: self.op_hash(&op.uo),
-                        reason: SkipReason::InsufficientFees {
+                    self.emit(BuilderEvent::skipped_op(
+                        self.builder_index,
+                        self.op_hash(&op.uo),
+                        SkipReason::InsufficientFees {
                             required_fees: required_op_fees,
                             actual_fees: GasFees {
                                 max_fee_per_gas: op.uo.max_fee_per_gas,
                                 max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas,
                             },
                         },
-                    });
+                    ));
                     false
                 }
             })
@@ -164,6 +177,12 @@ where
                 expected_storage.merge(&op.simulation.expected_storage)?;
             }
             if let Some(gas_estimate) = gas_estimate {
+                tracing::debug!(
+                    "Builder index: {}, bundle proposal succeeded with {} ops and {:?} gas limit",
+                    self.builder_index,
+                    context.iter_ops().count(),
+                    gas_estimate
+                );
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
@@ -192,6 +211,7 @@ where
     C: PoolServer,
 {
     pub(crate) fn new(
+        builder_index: u64,
         pool: C,
         simulator: S,
         entry_point: E,
@@ -200,6 +220,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
+            builder_index,
             pool,
             simulator,
             entry_point,
@@ -250,10 +271,11 @@ where
             let simulation = match simulation {
                 Ok(simulation) => simulation,
                 Err(error) => {
-                    self.emit(BuilderEvent::RejectedOp {
-                        op_hash: self.op_hash(&op),
-                        reason: OpRejectionReason::FailedRevalidation { error },
-                    });
+                    self.emit(BuilderEvent::rejected_op(
+                        self.builder_index,
+                        self.op_hash(&op),
+                        OpRejectionReason::FailedRevalidation { error },
+                    ));
                     rejected_ops.push(op);
                     continue;
                 }
@@ -264,12 +286,13 @@ where
                 .valid_time_range
                 .contains(Timestamp::now(), TIME_RANGE_BUFFER)
             {
-                self.emit(BuilderEvent::SkippedOp {
-                    op_hash: self.op_hash(&op),
-                    reason: SkipReason::InvalidTimeRange {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op),
+                    SkipReason::InvalidTimeRange {
                         valid_range: simulation.valid_time_range,
                     },
-                });
+                ));
                 rejected_ops.push(op);
                 continue;
             }
@@ -282,10 +305,11 @@ where
                 // Exclude ops that access the sender of another op in the
                 // batch, but don't reject them (remove them from pool).
                 info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender);
-                self.emit(BuilderEvent::SkippedOp {
-                    op_hash: self.op_hash(&op),
-                    reason: SkipReason::AccessedOtherSender { other_sender },
-                });
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op),
+                    SkipReason::AccessedOtherSender { other_sender },
+                ));
                 continue;
             }
             if let Some(paymaster) = op.paymaster() {
@@ -386,12 +410,13 @@ where
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas)),
             HandleOpsOut::FailedOp(index, message) => {
-                self.emit(BuilderEvent::RejectedOp {
-                    op_hash: self.op_hash(context.get_op_at(index)?),
-                    reason: OpRejectionReason::FailedInBundle {
+                self.emit(BuilderEvent::rejected_op(
+                    self.builder_index,
+                    self.op_hash(context.get_op_at(index)?),
+                    OpRejectionReason::FailedInBundle {
                         message: Arc::new(message.clone()),
                     },
-                });
+                ));
                 self.process_failed_op(context, index, message).await?;
                 Ok(None)
             }
@@ -405,8 +430,17 @@ where
     }
 
     async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<PoolOperation>> {
+        // Use builder's index as the shard index to ensure that two builders don't
+        // attempt to bundle the same operations.
+        //
+        // NOTE: this assumes that the pool server has as many shards as there
+        // are builders.
         self.pool
-            .get_ops(self.entry_point.address(), self.settings.max_bundle_size)
+            .get_ops(
+                self.entry_point.address(),
+                self.settings.max_bundle_size,
+                self.builder_index,
+            )
             .await
             .context("should get ops from pool")
     }
@@ -483,18 +517,28 @@ where
         Ok(())
     }
 
-    fn limit_gas_in_bundle(&self, ops: Vec<PoolOperation>) -> Vec<PoolOperation> {
+    fn limit_gas_in_bundle(&self, ops: Vec<PoolOperation>) -> (Vec<PoolOperation>, u64) {
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
             let gas = gas::user_operation_execution_gas_limit(&op.uo, self.settings.chain_id);
             if gas_left < gas {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op.uo),
+                    SkipReason::GasLimit,
+                ));
                 continue;
             }
             gas_left -= gas;
             ops_in_bundle.push(op);
         }
-        ops_in_bundle
+        (
+            ops_in_bundle,
+            self.settings
+                .max_bundle_gas
+                .saturating_sub(gas_left.as_u64()),
+        )
     }
 
     fn emit(&self, event: BuilderEvent) {
@@ -1191,7 +1235,7 @@ mod tests {
         let mut pool_client = MockPoolServer::new();
         pool_client
             .expect_get_ops()
-            .returning(move |_, _| Ok(ops.clone()));
+            .returning(move |_, _, _| Ok(ops.clone()));
 
         let simulations_by_op: HashMap<_, _> = mock_ops
             .into_iter()
@@ -1241,6 +1285,7 @@ mod tests {
             .returning(move |address, _| signatures_by_aggregator[&address]());
         let (event_sender, _) = broadcast::channel(16);
         let proposer = BundleProposerImpl::new(
+            0,
             pool_client,
             simulator,
             entry_point,
