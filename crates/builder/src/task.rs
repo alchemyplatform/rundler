@@ -7,7 +7,10 @@ use std::{
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
+use ethers::{
+    providers::{JsonRpcClient, Provider},
+    types::{Address, H256},
+};
 use ethers_signers::Signer;
 use rundler_pool::PoolServer;
 use rundler_sim::{
@@ -30,7 +33,7 @@ use tracing::info;
 
 use crate::{
     bundle_proposer::{self, BundleProposerImpl},
-    bundle_sender::{self, BundleSender, BundleSenderImpl},
+    bundle_sender::{self, BundleSender, BundleSenderImpl, SendBundleRequest},
     emit::BuilderEvent,
     sender::get_sender,
     server::{spawn_remote_builder_server, LocalBuilderBuilder},
@@ -94,6 +97,10 @@ pub struct Args {
     ///
     /// Checked ~after~ checking for conditional sender or Flashbots sender.
     pub bloxroute_auth_header: Option<String>,
+    /// Number of bundle builders to start
+    pub num_bundle_builders: u64,
+    /// Index offset for bundle builders
+    pub bundle_builder_index_offset: u64,
 }
 
 /// Builder task
@@ -114,6 +121,93 @@ where
         tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
+        let manual_bundling_mode = Arc::new(AtomicBool::new(false));
+
+        let mut spawn_guards = vec![];
+        let mut send_bundle_txs = vec![];
+        for i in 0..self.args.num_bundle_builders {
+            let (spawn_guard, send_bundle_tx) = self
+                .create_bundle_builder(
+                    i + self.args.bundle_builder_index_offset,
+                    Arc::clone(&manual_bundling_mode),
+                    Arc::clone(&provider),
+                )
+                .await?;
+            spawn_guards.push(spawn_guard);
+            send_bundle_txs.push(send_bundle_tx);
+        }
+
+        let builder_handle = self.builder_builder.get_handle();
+        let builder_runnder_handle = self.builder_builder.run(
+            manual_bundling_mode,
+            send_bundle_txs,
+            vec![self.args.entry_point_address],
+            shutdown_token.clone(),
+        );
+
+        let remote_handle = match self.args.remote_address {
+            Some(addr) => {
+                spawn_remote_builder_server(
+                    addr,
+                    self.args.chain_id,
+                    builder_handle,
+                    shutdown_token,
+                )
+                .await?
+            }
+            None => tokio::spawn(async { Ok(()) }),
+        };
+
+        info!("Started bundle builder");
+
+        match try_join!(
+            handle::flatten_handle(builder_runnder_handle),
+            handle::flatten_handle(remote_handle),
+        ) {
+            Ok(_) => {
+                tracing::info!("Builder server shutdown");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("Builder server error: {e:?}");
+                bail!("Builder server error: {e:?}")
+            }
+        }
+    }
+}
+
+impl<P> BuilderTask<P>
+where
+    P: PoolServer + Clone,
+{
+    /// Create a new builder task
+    pub fn new(
+        args: Args,
+        event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+        builder_builder: LocalBuilderBuilder,
+        pool: P,
+    ) -> Self {
+        Self {
+            args,
+            event_sender,
+            builder_builder,
+            pool,
+        }
+    }
+
+    /// Convert this task into a boxed task
+    pub fn boxed(self) -> Box<dyn Task> {
+        Box::new(self)
+    }
+
+    async fn create_bundle_builder<C: JsonRpcClient + 'static>(
+        &self,
+        index: u64,
+        manual_bundling_mode: Arc<AtomicBool>,
+        provider: Arc<Provider<C>>,
+    ) -> anyhow::Result<(SpawnGuard, mpsc::Sender<SendBundleRequest>)> {
+        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
+
         let signer = if let Some(pk) = &self.args.private_key {
             info!("Using local signer");
             BundlerSigner::Local(
@@ -193,10 +287,9 @@ where
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
             max_fee_increases: self.args.max_fee_increases,
         };
-        let manual_bundling_mode = Arc::new(AtomicBool::new(false));
-        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
         let proposer = BundleProposerImpl::new(
+            index,
             self.pool.clone(),
             simulator,
             entry_point.clone(),
@@ -205,6 +298,7 @@ where
             self.event_sender.clone(),
         );
         let mut builder = BundleSenderImpl::new(
+            index,
             manual_bundling_mode.clone(),
             send_bundle_rx,
             self.args.chain_id,
@@ -213,74 +307,14 @@ where
             proposer,
             entry_point,
             transaction_tracker,
-            self.pool,
+            self.pool.clone(),
             builder_settings,
             self.event_sender.clone(),
         );
 
-        let _builder_loop_guard =
-            { SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await }) };
-
-        let builder_handle = self.builder_builder.get_handle();
-        let builder_runnder_handle = self.builder_builder.run(
-            manual_bundling_mode,
+        Ok((
+            SpawnGuard::spawn_with_guard(async move { builder.send_bundles_in_loop().await }),
             send_bundle_tx,
-            vec![self.args.entry_point_address],
-            shutdown_token.clone(),
-        );
-
-        let remote_handle = match self.args.remote_address {
-            Some(addr) => {
-                spawn_remote_builder_server(
-                    addr,
-                    self.args.chain_id,
-                    builder_handle,
-                    shutdown_token,
-                )
-                .await?
-            }
-            None => tokio::spawn(async { Ok(()) }),
-        };
-
-        info!("Started bundle builder");
-
-        match try_join!(
-            handle::flatten_handle(builder_runnder_handle),
-            handle::flatten_handle(remote_handle),
-        ) {
-            Ok(_) => {
-                tracing::info!("Builder server shutdown");
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Builder server error: {e:?}");
-                bail!("Builder server error: {e:?}")
-            }
-        }
-    }
-}
-
-impl<P> BuilderTask<P>
-where
-    P: PoolServer + Clone,
-{
-    /// Create a new builder task
-    pub fn new(
-        args: Args,
-        event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-        builder_builder: LocalBuilderBuilder,
-        pool: P,
-    ) -> Self {
-        Self {
-            args,
-            event_sender,
-            builder_builder,
-            pool,
-        }
-    }
-
-    /// Convert this task into a boxed task
-    pub fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
+        ))
     }
 }

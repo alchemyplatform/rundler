@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use ethers::types::{Address, H256};
+use ethers::types::{Address, H256, U256};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use rundler_sim::{Prechecker, Simulator};
@@ -35,6 +35,7 @@ const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
 pub(crate) struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator> {
     entry_point: Address,
     chain_id: u64,
+    num_shards: u64,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
@@ -64,6 +65,7 @@ where
         Self {
             entry_point: config.entry_point,
             chain_id: config.chain_id,
+            num_shards: config.num_shards,
             reputation,
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(config.into()),
@@ -314,20 +316,34 @@ where
         UoPoolMetrics::increment_removed_entities(self.entry_point);
     }
 
-    fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
+    fn best_operations(
+        &self,
+        max: usize,
+        shard_index: u64,
+    ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
+        if shard_index >= self.num_shards {
+            Err(anyhow::anyhow!("Invalid shard ID"))?;
+        }
+
         // get the best operations from the pool
         let ordered_ops = self.state.read().pool.best_operations();
         // keep track of senders to avoid sending multiple ops from the same sender
         let mut senders = HashSet::<Address>::new();
 
-        ordered_ops
+        Ok(ordered_ops
             .into_iter()
             .filter(|op| {
+                // short-circuit the mod if there is only 1 shard
+                ((self.num_shards == 1) ||
+                (U256::from_little_endian(op.uo.sender.as_bytes())
+                        .div_mod(self.num_shards.into())
+                        .1
+                        == shard_index.into())) &&
                 // filter out ops from senders we've already seen
                 senders.insert(op.uo.sender)
             })
             .take(max)
-            .collect()
+            .collect())
     }
 
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
@@ -393,9 +409,9 @@ mod tests {
             .add_operation(OperationOrigin::Local, op.op)
             .await
             .unwrap();
-        check_ops(pool.best_operations(1), uos);
+        check_ops(pool.best_operations(1, 0).unwrap(), uos);
         pool.remove_operations(&[hash]);
-        assert_eq!(pool.best_operations(1), vec![]);
+        assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -416,9 +432,9 @@ mod tests {
                 .unwrap();
             hashes.push(hash);
         }
-        check_ops(pool.best_operations(3), uos);
+        check_ops(pool.best_operations(3, 0).unwrap(), uos);
         pool.remove_operations(&hashes);
-        assert_eq!(pool.best_operations(3), vec![]);
+        assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -437,9 +453,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        check_ops(pool.best_operations(3), uos);
+        check_ops(pool.best_operations(3, 0).unwrap(), uos);
         pool.clear();
-        assert_eq!(pool.best_operations(3), vec![]);
+        assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -450,7 +466,7 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ])
         .await;
-        check_ops(pool.best_operations(3), uos.clone());
+        check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -466,7 +482,7 @@ mod tests {
             unmined_ops: vec![],
         });
 
-        check_ops(pool.best_operations(3), uos[1..].to_vec());
+        check_ops(pool.best_operations(3, 0).unwrap(), uos[1..].to_vec());
     }
 
     #[tokio::test]
@@ -477,7 +493,7 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ])
         .await;
-        check_ops(pool.best_operations(3), uos.clone());
+        check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -492,7 +508,10 @@ mod tests {
             }],
             unmined_ops: vec![],
         });
-        check_ops(pool.best_operations(3), uos.clone()[1..].to_vec());
+        check_ops(
+            pool.best_operations(3, 0).unwrap(),
+            uos.clone()[1..].to_vec(),
+        );
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -507,7 +526,7 @@ mod tests {
                 nonce: uos[0].nonce,
             }],
         });
-        check_ops(pool.best_operations(3), uos);
+        check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -518,7 +537,7 @@ mod tests {
             create_op(Address::random(), 0, 1),
         ])
         .await;
-        check_ops(pool.best_operations(3), uos.clone());
+        check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -534,7 +553,7 @@ mod tests {
             unmined_ops: vec![],
         });
 
-        check_ops(pool.best_operations(3), uos);
+        check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -547,7 +566,7 @@ mod tests {
         ])
         .await;
         // Only return 1 op per sender
-        check_ops(pool.best_operations(3), vec![uos[0].clone()]);
+        check_ops(pool.best_operations(3, 0).unwrap(), vec![uos[0].clone()]);
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -593,9 +612,9 @@ mod tests {
         pool.add_operation(OperationOrigin::Local, uos[0].clone())
             .await
             .unwrap();
-        check_ops(pool.best_operations(1), vec![uos[0].clone()]);
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![uos[0].clone()]);
 
-        // Second op should be thorottled
+        // Second op should be throttled
         let ret = pool
             .add_operation(OperationOrigin::Local, uos[1].clone())
             .await;
@@ -627,7 +646,7 @@ mod tests {
         pool.add_operation(OperationOrigin::Local, uos[1].clone())
             .await
             .unwrap();
-        check_ops(pool.best_operations(1), vec![uos[1].clone()]);
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![uos[1].clone()]);
     }
 
     #[tokio::test]
@@ -669,7 +688,7 @@ mod tests {
             Err(MempoolError::PrecheckViolation(PrecheckViolation::InitCodeTooShort(_))) => {}
             _ => panic!("Expected InitCodeTooShort error"),
         }
-        assert_eq!(pool.best_operations(1), vec![]);
+        assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -689,7 +708,7 @@ mod tests {
             Err(MempoolError::SimulationViolation(SimulationViolation::DidNotRevert)) => {}
             _ => panic!("Expected DidNotRevert error"),
         }
-        assert_eq!(pool.best_operations(1), vec![]);
+        assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
     }
 
     #[derive(Clone, Debug)]
@@ -739,6 +758,7 @@ mod tests {
             precheck_settings: PrecheckSettings::default(),
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
+            num_shards: 1,
         };
         let (event_sender, _) = broadcast::channel(4);
         UoPool::new(args, reputation, event_sender, prechecker, simulator)

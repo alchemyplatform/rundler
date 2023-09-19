@@ -114,6 +114,8 @@ impl PoolArgs {
                 Ok(PoolConfig {
                     entry_point,
                     chain_id: common.chain_id,
+                    // Currently use the same shard count as the number of builders
+                    num_shards: common.num_builders,
                     max_userops_per_sender: self.max_userops_per_sender,
                     min_replacement_fee_increase_percentage: self
                         .min_replacement_fee_increase_percentage,

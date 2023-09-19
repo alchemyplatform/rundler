@@ -45,14 +45,14 @@ impl LocalBuilderBuilder {
     pub fn run(
         self,
         manual_bundling_mode: Arc<AtomicBool>,
-        send_bundle_requester: mpsc::Sender<SendBundleRequest>,
+        send_bundle_requesters: Vec<mpsc::Sender<SendBundleRequest>>,
         entry_points: Vec<Address>,
         shutdown_token: CancellationToken,
     ) -> JoinHandle<anyhow::Result<()>> {
         let mut runner = LocalBuilderServerRunner::new(
             self.req_receiver,
             manual_bundling_mode,
-            send_bundle_requester,
+            send_bundle_requesters,
             entry_points,
         );
         tokio::spawn(async move { runner.run(shutdown_token).await })
@@ -67,7 +67,7 @@ pub struct LocalBuilderHandle {
 
 struct LocalBuilderServerRunner {
     req_receiver: mpsc::Receiver<ServerRequest>,
-    send_bundle_requester: mpsc::Sender<SendBundleRequest>,
+    send_bundle_requesters: Vec<mpsc::Sender<SendBundleRequest>>,
     manual_bundling_mode: Arc<AtomicBool>,
     entry_points: Vec<Address>,
 }
@@ -138,13 +138,13 @@ impl LocalBuilderServerRunner {
     fn new(
         req_receiver: mpsc::Receiver<ServerRequest>,
         manual_bundling_mode: Arc<AtomicBool>,
-        send_bundle_requester: mpsc::Sender<SendBundleRequest>,
+        send_bundle_requesters: Vec<mpsc::Sender<SendBundleRequest>>,
         entry_points: Vec<Address>,
     ) -> Self {
         Self {
             req_receiver,
             manual_bundling_mode,
-            send_bundle_requester,
+            send_bundle_requesters,
             entry_points,
         }
     }
@@ -166,10 +166,12 @@ impl LocalBuilderServerRunner {
                             ServerRequestKind::DebugSendBundleNow => {
                                 if !self.manual_bundling_mode.load(Ordering::Relaxed) {
                                     break 'a Err(anyhow::anyhow!("bundling mode is not manual").into())
+                                } else if self.send_bundle_requesters.len() != 1 {
+                                    break 'a Err(anyhow::anyhow!("more than 1 bundle builder not supported in debug mode").into())
                                 }
 
                                 let (tx, rx) = oneshot::channel();
-                                match self.send_bundle_requester.send(SendBundleRequest{
+                                match self.send_bundle_requesters[0].send(SendBundleRequest{
                                     responder: tx
                                 }).await {
                                     Ok(()) => {},

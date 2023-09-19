@@ -10,7 +10,7 @@ mod bundle_proposer;
 mod bundle_sender;
 
 mod emit;
-pub use emit::BuilderEvent;
+pub use emit::{BuilderEvent, BuilderEventKind};
 
 mod sender;
 

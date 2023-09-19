@@ -118,10 +118,16 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
-    async fn get_ops(&self, entry_point: Address, max_ops: u64) -> PoolResult<Vec<PoolOperation>> {
+    async fn get_ops(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        shard_index: u64,
+    ) -> PoolResult<Vec<PoolOperation>> {
         let req = ServerRequestKind::GetOps {
             entry_point,
             max_ops,
+            shard_index,
         };
         let resp = self.send(req).await?;
         match resp {
@@ -256,10 +262,15 @@ where
         })
     }
 
-    fn get_ops(&self, entry_point: Address, max_ops: u64) -> PoolResult<Vec<PoolOperation>> {
+    fn get_ops(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        shard_index: u64,
+    ) -> PoolResult<Vec<PoolOperation>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool
-            .best_operations(max_ops as usize)
+            .best_operations(max_ops as usize, shard_index)?
             .iter()
             .map(|op| (**op).clone())
             .collect())
@@ -365,8 +376,8 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::GetOps { entry_point, max_ops } => {
-                            match self.get_ops(entry_point, max_ops) {
+                        ServerRequestKind::GetOps { entry_point, max_ops, shard_index } => {
+                            match self.get_ops(entry_point, max_ops, shard_index) {
                                 Ok(ops) => Ok(ServerResponse::GetOps { ops }),
                                 Err(e) => Err(e),
                             }
@@ -439,6 +450,7 @@ enum ServerRequestKind {
     GetOps {
         entry_point: Address,
         max_ops: u64,
+        shard_index: u64,
     },
     RemoveOps {
         entry_point: Address,

@@ -12,10 +12,20 @@ build: ## Build the project.
 clean: ## Clean the project.
 	cargo clean
 
+## Run all tests.
 .PHONY: test
-test: test-unit ## Run all tests.
+test: test-unit test-spec-integrated test-spec-modular
 
 .PHONY: test-unit
 test-unit: ## Run unit tests.
 	cargo install cargo-nextest --locked
 	cargo nextest run $(UNIT_TEST_ARGS)
+
+.PHONY: test-spec-integrated
+test-spec-integrated: ## Run spec tests in integrated mode
+	test/spec-tests/local/run-spec-tests.sh
+
+.PHONY: test-spec-modular
+test-spec-modular: ## Run spec tests in modular mode
+	test/spec-tests/remote/run-spec-tests.sh
+	

@@ -14,7 +14,7 @@ use rundler_pool::PoolServer;
 use rundler_provider::EntryPoint;
 use rundler_sim::ExpectedStorage;
 use rundler_types::{Entity, GasFees, UserOperation};
-use rundler_utils::{emit::WithEntryPoint, math};
+use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
     sync::{broadcast, mpsc, oneshot},
@@ -27,9 +27,6 @@ use crate::{
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
 };
-
-// Overhead on gas estimates to account for inaccuracies.
-const GAS_ESTIMATE_OVERHEAD_PERCENT: u64 = 10;
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync + 'static {
@@ -50,6 +47,7 @@ where
     T: TransactionTracker,
     C: PoolServer,
 {
+    builder_index: u64,
     manual_bundling_mode: Arc<AtomicBool>,
     send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
     chain_id: u64,
@@ -188,7 +186,7 @@ where
                 } => info!("Bundle initially had {initial_op_count} operations, but after increasing gas fees {attempt_number} time(s) it was empty"),
                 SendBundleResult::StalledAtMaxFeeIncreases => warn!("Bundle failed to mine after {} fee increases", self.settings.max_fee_increases),
                 SendBundleResult::Error(error) => {
-                    BuilderMetrics::increment_bundle_txns_failed();
+                    BuilderMetrics::increment_bundle_txns_failed(self.builder_index);
                     error!("Failed to send bundle. Will retry next block: {error:#?}");
                 }
             }
@@ -211,6 +209,7 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        builder_index: u64,
         manual_bundling_mode: Arc<AtomicBool>,
         send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
         chain_id: u64,
@@ -224,6 +223,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
+            builder_index,
             manual_bundling_mode,
             send_bundle_receiver,
             chain_id,
@@ -257,7 +257,7 @@ where
                 attempt_number,
                 ..
             } => {
-                BuilderMetrics::increment_bundle_txns_success();
+                BuilderMetrics::increment_bundle_txns_success(self.builder_index);
                 if attempt_number == 0 {
                     info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
                 } else {
@@ -266,17 +266,19 @@ where
             }
             TrackerUpdate::StillPendingAfterWait => (),
             TrackerUpdate::LatestTxDropped { nonce } => {
-                self.emit(BuilderEvent::LatestTransactionDropped {
-                    nonce: nonce.low_u64(),
-                });
-                BuilderMetrics::increment_bundle_txns_dropped();
+                self.emit(BuilderEvent::latest_transaction_dropped(
+                    self.builder_index,
+                    nonce.low_u64(),
+                ));
+                BuilderMetrics::increment_bundle_txns_dropped(self.builder_index);
                 info!("Previous transaction dropped by sender");
             }
             TrackerUpdate::NonceUsedForOtherTx { nonce } => {
-                self.emit(BuilderEvent::NonceUsedForOtherTransaction {
-                    nonce: nonce.low_u64(),
-                });
-                BuilderMetrics::increment_bundle_txns_nonce_used();
+                self.emit(BuilderEvent::nonce_used_for_other_transaction(
+                    self.builder_index,
+                    nonce.low_u64(),
+                ));
+                BuilderMetrics::increment_bundle_txns_nonce_used(self.builder_index);
                 info!("Nonce used by external transaction")
             }
         };
@@ -308,15 +310,16 @@ where
         let mut initial_op_count: Option<usize> = None;
         for fee_increase_count in 0..=self.settings.max_fee_increases {
             let Some(bundle_tx) = self.get_bundle_tx(nonce, required_fees).await? else {
-                self.emit(BuilderEvent::FormedBundle {
-                    tx_details: None,
-                    nonce: nonce.low_u64(),
+                self.emit(BuilderEvent::formed_bundle(
+                    self.builder_index,
+                    None,
+                    nonce.low_u64(),
                     fee_increase_count,
                     required_fees,
-                });
+                ));
                 return Ok(match initial_op_count {
                     Some(initial_op_count) => {
-                        BuilderMetrics::increment_bundle_txns_abandoned();
+                        BuilderMetrics::increment_bundle_txns_abandoned(self.builder_index);
                         SendBundleResult::NoOperationsAfterFeeIncreases {
                             initial_op_count,
                             attempt_number: fee_increase_count,
@@ -335,7 +338,7 @@ where
             }
             let current_fees = GasFees::from(&tx);
 
-            BuilderMetrics::increment_bundle_txns_sent();
+            BuilderMetrics::increment_bundle_txns_sent(self.builder_index);
             BuilderMetrics::set_current_fees(&current_fees);
 
             let send_result = self
@@ -345,16 +348,17 @@ where
             let update = match send_result {
                 SendResult::TrackerUpdate(update) => update,
                 SendResult::TxHash(tx_hash) => {
-                    self.emit(BuilderEvent::FormedBundle {
-                        tx_details: Some(BundleTxDetails {
+                    self.emit(BuilderEvent::formed_bundle(
+                        self.builder_index,
+                        Some(BundleTxDetails {
                             tx_hash,
                             tx,
                             op_hashes: Arc::new(op_hashes),
                         }),
-                        nonce: nonce.low_u64(),
+                        nonce.low_u64(),
                         fee_increase_count,
                         required_fees,
-                    });
+                    ));
                     self.transaction_tracker.wait_for_update().await?
                 }
             };
@@ -365,12 +369,13 @@ where
                     block_number,
                     attempt_number,
                 } => {
-                    self.emit(BuilderEvent::TransactionMined {
+                    self.emit(BuilderEvent::transaction_mined(
+                        self.builder_index,
                         tx_hash,
-                        nonce: nonce.low_u64(),
+                        nonce.low_u64(),
                         block_number,
-                    });
-                    BuilderMetrics::increment_bundle_txns_success();
+                    ));
+                    BuilderMetrics::increment_bundle_txns_success(self.builder_index);
                     return Ok(SendBundleResult::Success {
                         block_number,
                         attempt_number,
@@ -381,17 +386,19 @@ where
                     info!("Transaction not mined for several blocks")
                 }
                 TrackerUpdate::LatestTxDropped { nonce } => {
-                    self.emit(BuilderEvent::LatestTransactionDropped {
-                        nonce: nonce.low_u64(),
-                    });
-                    BuilderMetrics::increment_bundle_txns_dropped();
+                    self.emit(BuilderEvent::latest_transaction_dropped(
+                        self.builder_index,
+                        nonce.low_u64(),
+                    ));
+                    BuilderMetrics::increment_bundle_txns_dropped(self.builder_index);
                     info!("Previous transaction dropped by sender");
                 }
                 TrackerUpdate::NonceUsedForOtherTx { nonce } => {
-                    self.emit(BuilderEvent::NonceUsedForOtherTransaction {
-                        nonce: nonce.low_u64(),
-                    });
-                    BuilderMetrics::increment_bundle_txns_nonce_used();
+                    self.emit(BuilderEvent::nonce_used_for_other_transaction(
+                        self.builder_index,
+                        nonce.low_u64(),
+                    ));
+                    BuilderMetrics::increment_bundle_txns_nonce_used(self.builder_index);
                     bail!("nonce used by external transaction")
                 }
             };
@@ -400,12 +407,12 @@ where
                 current_fees.max_fee_per_gas,
                 current_fees.max_priority_fee_per_gas,
             );
-            BuilderMetrics::increment_bundle_txn_fee_increases();
+            BuilderMetrics::increment_bundle_txn_fee_increases(self.builder_index);
             required_fees = Some(
                 current_fees.increase_by_percent(self.settings.replacement_fee_percent_increase),
             );
         }
-        BuilderMetrics::increment_bundle_txns_abandoned();
+        BuilderMetrics::increment_bundle_txns_abandoned(self.builder_index);
         Ok(SendBundleResult::StalledAtMaxFeeIncreases)
     }
 
@@ -452,12 +459,11 @@ where
             bundle.rejected_ops.len(),
             bundle.rejected_entities.len()
         );
-        let gas = math::increase_by_percent(bundle.gas_estimate, GAS_ESTIMATE_OVERHEAD_PERCENT);
         let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
             self.beneficiary,
-            gas,
+            bundle.gas_estimate,
             bundle.gas_fees,
         );
         tx.set_nonce(nonce);
@@ -502,34 +508,34 @@ where
 struct BuilderMetrics {}
 
 impl BuilderMetrics {
-    fn increment_bundle_txns_sent() {
-        metrics::increment_counter!("builder_bundle_txns_sent");
+    fn increment_bundle_txns_sent(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_txns_sent", "builder_index" => builder_index.to_string());
     }
 
-    fn increment_bundle_txns_success() {
-        metrics::increment_counter!("builder_bundle_txns_success");
+    fn increment_bundle_txns_success(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_txns_success", "builder_index" => builder_index.to_string());
     }
 
-    fn increment_bundle_txns_dropped() {
-        metrics::increment_counter!("builder_bundle_txns_dropped");
+    fn increment_bundle_txns_dropped(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_txns_dropped", "builder_index" => builder_index.to_string());
     }
 
     // used when we decide to stop trying a transaction
-    fn increment_bundle_txns_abandoned() {
-        metrics::increment_counter!("builder_bundle_txns_abandoned");
+    fn increment_bundle_txns_abandoned(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_txns_abandoned", "builder_index" => builder_index.to_string());
     }
 
     // used when sending a transaction fails
-    fn increment_bundle_txns_failed() {
-        metrics::increment_counter!("builder_bundle_txns_failed");
+    fn increment_bundle_txns_failed(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_txns_failed", "builder_index" => builder_index.to_string());
     }
 
-    fn increment_bundle_txns_nonce_used() {
-        metrics::increment_counter!("builder_bundle_txns_nonce_used");
+    fn increment_bundle_txns_nonce_used(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_txns_nonce_used", "builder_index" => builder_index.to_string());
     }
 
-    fn increment_bundle_txn_fee_increases() {
-        metrics::increment_counter!("builder_bundle_fee_increases");
+    fn increment_bundle_txn_fee_increases(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_fee_increases", "builder_index" => builder_index.to_string());
     }
 
     fn set_current_fees(fees: &GasFees) {

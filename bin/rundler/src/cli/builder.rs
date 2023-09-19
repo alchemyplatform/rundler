@@ -3,7 +3,9 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use ethers::types::H256;
-use rundler_builder::{self, BuilderEvent, BuilderTask, BuilderTaskArgs, LocalBuilderBuilder};
+use rundler_builder::{
+    self, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs, LocalBuilderBuilder,
+};
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfig, PriorityFeeMode};
 use rundler_task::{
@@ -142,6 +144,14 @@ pub struct BuilderArgs {
         env = "BUILDER_BLOXROUTE_AUTH_HEADER"
     )]
     bloxroute_auth_header: Option<String>,
+    /// The index offset to apply to the builder index
+    #[arg(
+        long = "builder_index_offset",
+        name = "builder_index_offset",
+        env = "BUILDER_INDEX_OFFSET",
+        default_value = "0"
+    )]
+    pub builder_index_offset: u64,
 }
 
 impl BuilderArgs {
@@ -202,6 +212,8 @@ impl BuilderArgs {
             max_fee_increases: self.max_fee_increases,
             remote_address,
             bloxroute_auth_header: self.bloxroute_auth_header.clone(),
+            num_bundle_builders: common.num_builders,
+            bundle_builder_index_offset: self.builder_index_offset,
         })
     }
 }
@@ -261,11 +273,11 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
 }
 
 pub fn is_nonspammy_event(event: &WithEntryPoint<BuilderEvent>) -> bool {
-    if let BuilderEvent::FormedBundle {
+    if let BuilderEventKind::FormedBundle {
         tx_details,
         fee_increase_count,
         ..
-    } = &event.event
+    } = &event.event.kind
     {
         if tx_details.is_none() && *fee_increase_count == 0 {
             return false;

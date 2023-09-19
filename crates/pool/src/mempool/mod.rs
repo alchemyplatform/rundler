@@ -47,16 +47,22 @@ pub trait Mempool: Send + Sync + 'static {
     /// Removes a set of operations from the pool.
     fn remove_operations(&self, hashes: &[H256]);
 
-    /// Removes all operations assocaited with a given entity from the pool.
+    /// Removes all operations associated with a given entity from the pool.
     fn remove_entity(&self, entity: Entity);
 
     /// Returns the best operations from the pool.
     ///
     /// Returns the best operations from the pool based on their gas bids up to
-    /// the specified maximum number of operations.
+    /// the specified maximum number of operations, limiting to one per sender.
     ///
-    /// NOTE: Will only return one operation per sender.
-    fn best_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
+    /// The `shard_index` is used to divide the mempool into disjoint shards to ensure
+    /// that two bundle builders don't attempt to but bundle the same operations. If
+    /// the supplied `shard_index` does not exist, the call will error.
+    fn best_operations(
+        &self,
+        max: usize,
+        shard_index: u64,
+    ) -> MempoolResult<Vec<Arc<PoolOperation>>>;
 
     /// Returns the all operations from the pool up to a max size
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
@@ -89,7 +95,7 @@ pub struct PoolConfig {
     pub max_size_of_pool_bytes: usize,
     /// Operations that are always banned from the mempool
     pub blocklist: Option<HashSet<Address>>,
-    /// Operations that are allways allowed in the mempool, regardless of reputation
+    /// Operations that are always allowed in the mempool, regardless of reputation
     pub allowlist: Option<HashSet<Address>>,
     /// Settings for precheck validation
     pub precheck_settings: PrecheckSettings,
@@ -97,6 +103,11 @@ pub struct PoolConfig {
     pub sim_settings: SimulationSettings,
     /// Configuration for the mempool channels, by channel ID
     pub mempool_channel_configs: HashMap<H256, MempoolConfig>,
+    /// Number of mempool shards to use. A mempool shard is a disjoint subset of the mempool
+    /// that is used to ensure that two bundle builders don't attempt to but bundle the same
+    /// operations. The mempool is divided into shards by taking the hash of the operation
+    /// and modding it by the number of shards.
+    pub num_shards: u64,
 }
 
 /// Origin of an operation.
@@ -156,7 +167,7 @@ impl PoolOperation {
         }
     }
 
-    /// Returns an iterator over all entities that are included in this opearation.
+    /// Returns an iterator over all entities that are included in this operation.
     pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         EntityType::iter().filter_map(|entity| {
             self.entity_address(entity)
@@ -164,7 +175,7 @@ impl PoolOperation {
         })
     }
 
-    /// Returns an iterator over all staked entities that are included in this opearation.
+    /// Returns an iterator over all staked entities that are included in this operation.
     pub fn staked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         EntityType::iter()
             .filter(|entity| self.is_staked(*entity))

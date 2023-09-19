@@ -143,7 +143,11 @@ impl OpPool for OpPoolImpl {
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let resp = match self.local_pool.get_ops(ep, req.max_ops).await {
+        let resp = match self
+            .local_pool
+            .get_ops(ep, req.max_ops, req.shard_index)
+            .await
+        {
             Ok(ops) => GetOpsResponse {
                 result: Some(get_ops_response::Result::Success(GetOpsSuccess {
                     ops: ops.iter().map(MempoolOp::from).collect(),
