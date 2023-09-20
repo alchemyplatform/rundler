@@ -56,6 +56,24 @@ cargo run --bin deploy_dev_contracts
 cargo run node
 ```
 
-### Contributing:
+### Documentation
 
-* Commit messages must follow [conventional commits style](https://www.conventionalcommits.org/en/v1.0.0/).
+- [configuration](docs/config.md)
+- [transactions](docs/transactions.md)
+- [contributing](docs/CONTRIBUTING.md)
+- [architecture](docs/architecture.md)
+
+### Goals
+
+- Implement P2P mempool
+- Implement persistant mempool
+- Keep our spec test fork in like with origin 
+- Deploy public docker image
+- Cross platform compilation
+
+### Resources
+
+- [EIP-4337](https://eips.ethereum.org/EIPS/eip-4337)
+
+### Communication:
+- [Telegram](https://t.me/+F_xS9IVOdJZmZjQx)
