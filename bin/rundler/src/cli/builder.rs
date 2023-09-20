@@ -81,16 +81,6 @@ pub struct BuilderArgs {
     )]
     max_bundle_size: u64,
 
-    /// Interval at which the builder polls an Eth node for new blocks and
-    /// mined transactions.
-    #[arg(
-        long = "builder.eth_poll_interval_millis",
-        name = "builder.eth_poll_interval_millis",
-        env = "BUILDER_ETH_POLL_INTERVAL_MILLIS",
-        default_value = "250"
-    )]
-    pub eth_poll_interval_millis: u64,
-
     /// If present, the url of the ETH provider that will be used to send
     /// transactions. Defaults to the value of `node_http`.
     #[arg(
@@ -204,7 +194,7 @@ impl BuilderArgs {
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
             use_conditional_send_transaction: self.use_conditional_send_transaction,
-            eth_poll_interval: Duration::from_millis(self.eth_poll_interval_millis),
+            eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
             mempool_configs,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
