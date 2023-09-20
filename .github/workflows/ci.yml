@@ -83,7 +83,7 @@ jobs:
       - name: Checkout sources
         uses: actions/checkout@v3
       - name: Install codespell
-        run: sudo pip3 install codespell
+        run: sudo pip3 install codespell tomli
       - name: Check spelling
         run: codespell --toml .codespell.toml *.md docs/*.md 
         
