@@ -18,7 +18,7 @@ has enough room for it to be included or wait until a new bundle is proposed.
  
 ### Bundle Sender 
 
-After the bundle proposal runs, the bundle sender logic will handle the process of propagating a transction on chain and checking on the status to see if it is included in a block. This process also handles the gas increases if the transaction
+After the bundle proposal runs, the bundle sender logic will handle the process of propagating a transaction on chain and checking on the status to see if it is included in a block. This process also handles the gas increases if the transaction
 has any issues being included.
  
 ### Sender
@@ -28,9 +28,9 @@ couple process that track the status of the operations and perform updates to th
 
 ### Signer
 
-The signer component is used to sign transactions before they are sent to be propogated on chain. The signing process can either be done by a key that is local to the server instance or an AWS KMS key.
+The signer component is used to sign transactions before they are sent to be propagated on chain. The signing process can either be done by a key that is local to the server instance or an AWS KMS key.
 When using the KMS option, there also needs to be a configured redis cache to perform locking. The locking is required as if there are multiple instances of the builder modules running, we want to
-make sure that none there are two of the services are using the same key with the same nonce. This can lead to an imediate revertion of the bundle if the nonce is not correct when sending the bundle to be
+make sure that none there are two of the services are using the same key with the same nonce. This can lead to an immediate revertion of the bundle if the nonce is not correct when sending the bundle to be
 processed on chain.
 
 ### Server
@@ -40,8 +40,8 @@ If the server is running in the distributed mode, messaging is done via gRPC whi
 
 ## Op Pool
 
-The pool components purpose is to manage the mempool operations. Once a user operation is sent to the RPC server, the pool will add the operation to its mempool to be proposed via the builder and then to be propogated on chain. The Pool should be the 
-module that lets the bulder know when a new user operation has been added to the mempool so that it can then be proposed to be incuded in a new bundle.
+The pool components purpose is to manage the mempool operations. Once a user operation is sent to the RPC server, the pool will add the operation to its mempool to be proposed via the builder and then to be propagated on chain. The Pool should be the 
+module that lets the bulder know when a new user operation has been added to the mempool so that it can then be proposed to be included in a new bundle.
 
 ### Mempool
 
