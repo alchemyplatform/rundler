@@ -362,7 +362,7 @@ impl OrderedPoolOperation {
     }
 
     fn size(&self) -> usize {
-        self.po.size()
+        self.po.mem_size()
     }
 }
 
@@ -664,7 +664,7 @@ mod tests {
         }
 
         assert_eq!(pool.address_count(sender), 1);
-        assert_eq!(pool.pool_size, po1.size());
+        assert_eq!(pool.pool_size, po1.mem_size());
     }
 
     #[test]
@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(pool.address_count(sender), 1);
         assert_eq!(pool.address_count(paymaster1), 0);
         assert_eq!(pool.address_count(paymaster2), 1);
-        assert_eq!(pool.pool_size, po2.size());
+        assert_eq!(pool.pool_size, po2.mem_size());
     }
 
     #[test]
@@ -712,12 +712,12 @@ mod tests {
             chain_id: 1,
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
-            max_size_of_pool_bytes: 20 * size_of_op(),
+            max_size_of_pool_bytes: 20 * mem_size_of_op(),
         }
     }
 
-    fn size_of_op() -> usize {
-        create_op(Address::random(), 1, 1).size()
+    fn mem_size_of_op() -> usize {
+        create_op(Address::random(), 1, 1).mem_size()
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {

@@ -185,9 +185,12 @@ impl PoolOperation {
             })
     }
 
-    /// Returns the size of the operation in bytes.
-    pub fn size(&self) -> usize {
-        self.uo.pack().len()
+    /// Compute the amount of memory the PoolOperation takes up.
+    pub fn mem_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.uo.mem_size()
+            + std::mem::size_of::<Vec<EntityType>>()
+            + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
     }
 
     fn entity_address(&self, entity: EntityType) -> Option<Address> {
