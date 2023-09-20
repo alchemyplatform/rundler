@@ -165,7 +165,7 @@ impl PoolInner {
             .filter(|(bn, _)| *bn < block_number)
         {
             if let Some((op, _)) = self.mined_at_block_number_by_hash.remove(&hash) {
-                self.cache_size -= op.size();
+                self.cache_size -= op.mem_size();
             }
             self.mined_hashes_with_block_numbers.remove(&(bn, hash));
         }
@@ -268,7 +268,7 @@ impl PoolInner {
         let hash = pool_op
             .uo()
             .op_hash(self.config.entry_point, self.config.chain_id);
-        self.pool_size += pool_op.size();
+        self.pool_size += pool_op.mem_size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
@@ -293,7 +293,7 @@ impl PoolInner {
         self.by_id.remove(&op.uo().id());
         self.best.remove(&op);
         if let Some(block_number) = block_number {
-            self.cache_size += op.size();
+            self.cache_size += op.mem_size();
             self.mined_at_block_number_by_hash
                 .insert(hash, (op.clone(), block_number));
             self.mined_hashes_with_block_numbers
@@ -303,7 +303,7 @@ impl PoolInner {
             self.decrement_address_count(e.address);
         }
 
-        self.pool_size -= op.size();
+        self.pool_size -= op.mem_size();
         Some(op.po)
     }
 
@@ -361,8 +361,8 @@ impl OrderedPoolOperation {
         &self.po.uo
     }
 
-    fn size(&self) -> usize {
-        self.po.mem_size()
+    fn mem_size(&self) -> usize {
+        std::mem::size_of::<OrderedPoolOperation>() + self.po.mem_size()
     }
 }
 
@@ -664,7 +664,14 @@ mod tests {
         }
 
         assert_eq!(pool.address_count(sender), 1);
-        assert_eq!(pool.pool_size, po1.mem_size());
+        assert_eq!(
+            pool.pool_size,
+            OrderedPoolOperation {
+                po: Arc::new(po1),
+                submission_id: 0
+            }
+            .mem_size()
+        );
     }
 
     #[test]
@@ -687,7 +694,14 @@ mod tests {
         assert_eq!(pool.address_count(sender), 1);
         assert_eq!(pool.address_count(paymaster1), 0);
         assert_eq!(pool.address_count(paymaster2), 1);
-        assert_eq!(pool.pool_size, po2.mem_size());
+        assert_eq!(
+            pool.pool_size,
+            OrderedPoolOperation {
+                po: Arc::new(po2),
+                submission_id: 0
+            }
+            .mem_size()
+        );
     }
 
     #[test]
@@ -712,12 +726,16 @@ mod tests {
             chain_id: 1,
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
-            max_size_of_pool_bytes: 20 * mem_size_of_op(),
+            max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
         }
     }
 
-    fn mem_size_of_op() -> usize {
-        create_op(Address::random(), 1, 1).mem_size()
+    fn mem_size_of_ordered_pool_op() -> usize {
+        OrderedPoolOperation {
+            po: Arc::new(create_op(Address::random(), 1, 1)),
+            submission_id: 1,
+        }
+        .mem_size()
     }
 
     fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {

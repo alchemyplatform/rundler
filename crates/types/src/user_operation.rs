@@ -72,10 +72,9 @@ impl UserOperation {
             + pad_len(&self.signature)
     }
 
-    /// Calculates the size of the user operation in memory
-    pub fn mem_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.init_code.len()
+    /// Compute the amount of heap memory the UserOperation takes up.
+    pub fn heap_size(&self) -> usize {
+        self.init_code.len()
             + self.call_data.len()
             + self.paymaster_and_data.len()
             + self.signature.len()
