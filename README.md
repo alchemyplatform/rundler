@@ -24,7 +24,7 @@ cargo test --all
 
 ### Run locally:
 
-Running locally requires access to an Ethereum RPC node on the network the Rundler is running on. For testing it is recommended to run a local devlopment node.
+Running locally requires access to an Ethereum RPC node on the network the Rundler is running on. For testing it is recommended to run a local development node.
 
 Steps to run `Geth` in dev mode locally:
 
@@ -66,7 +66,7 @@ cargo run node
 ### Goals
 
 - Implement P2P mempool
-- Implement persistant mempool
+- Implement persistent mempool
 - Keep our spec test fork in like with origin 
 - Deploy public docker image
 - Cross platform compilation

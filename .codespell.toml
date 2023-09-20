@@ -1,0 +1,4 @@
+[tool.codespell]
+skip = '*/node_modules,./target'
+count = ''
+quiet-level = 3
