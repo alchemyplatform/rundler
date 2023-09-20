@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ethers::{
+    abi::AbiEncode,
     prelude::gas_oracle::GasCategory,
     types::{Address, Chain, U256},
 };
@@ -124,9 +125,9 @@ pub fn user_operation_max_gas_cost(uo: &UserOperation, chain_id: u64) -> U256 {
 
 fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
     let ov = GasOverheads::default();
-    let packed = op.pack();
-    let length_in_words = (packed.len() + 31) / 32;
-    let call_data_cost: U256 = packed
+    let encoded_op = op.clone().encode();
+    let length_in_words = encoded_op.len() / 32; // size of packed user op is always a multiple of 32 bytes
+    let call_data_cost: U256 = encoded_op
         .iter()
         .map(|&x| {
             if x == 0 {
