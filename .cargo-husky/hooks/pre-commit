@@ -32,7 +32,6 @@ buf lint . || {
   exit 1
 }
 
-
 declare -a file_array=()
 for file in $files_to_git_add; do
   file_array+=("${file}")
