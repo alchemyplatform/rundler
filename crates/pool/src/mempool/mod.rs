@@ -185,11 +185,10 @@ impl PoolOperation {
             })
     }
 
-    /// Compute the amount of memory the PoolOperation takes up.
+    /// Compute the amount of heap memory the PoolOperation takes up.
     pub fn mem_size(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.uo.mem_size()
-            + std::mem::size_of::<Vec<EntityType>>()
+            + self.uo.heap_size()
             + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
     }
 
