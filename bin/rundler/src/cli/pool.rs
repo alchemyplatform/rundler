@@ -57,16 +57,6 @@ pub struct PoolArgs {
     )]
     pub min_replacement_fee_increase_percentage: u64,
 
-    /// ETH Node HTTP polling interval in milliseconds
-    /// (only used if node_http is set)
-    #[arg(
-        long = "pool.http_poll_interval_millis",
-        name = "pool.http_poll_interval_millis",
-        env = "POOL_HTTP_POLL_INTERVAL_MILLIS",
-        default_value = "100"
-    )]
-    pub http_poll_interval_millis: u64,
-
     #[arg(
         long = "pool.blocklist_path",
         name = "pool.blocklist_path",
@@ -146,7 +136,7 @@ impl PoolArgs {
                 .node_http
                 .clone()
                 .context("pool requires node_http arg")?,
-            http_poll_interval: Duration::from_millis(self.http_poll_interval_millis),
+            http_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             pool_configs,
             remote_address,
         })

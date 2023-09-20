@@ -191,6 +191,16 @@ pub struct CommonArgs {
     )]
     priority_fee_mode_value: u64,
 
+    /// Interval at which the builder polls an Eth node for new blocks and
+    /// mined transactions.
+    #[arg(
+        long = "eth_poll_interval_millis",
+        name = "eth_poll_interval_millis",
+        env = "ETH_POLL_INTERVAL_MILLIS",
+        default_value = "100"
+    )]
+    pub eth_poll_interval_millis: u64,
+
     #[arg(
         long = "aws_region",
         name = "aws_region",
