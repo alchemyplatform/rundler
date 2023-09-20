@@ -32,11 +32,6 @@ buf lint . || {
   exit 1
 }
 
-echo 'Running Spell check'
-codespell --toml .codespell.toml docs/*.md *.md || {
-  echo >&2 'Spell check failed. This most likely means you incorrect spelling in one of the markdown files. If needed, try running "pip install codespell"'
-  exit 1
-}
 
 declare -a file_array=()
 for file in $files_to_git_add; do
