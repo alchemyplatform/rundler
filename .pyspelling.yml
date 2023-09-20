@@ -1,8 +1,0 @@
-matrix:
-- name: markdown
-  pipeline:
-  - pyspelling.filters.text
-  sources:
-  - 'docs/*.md'
-  - 'README.md'
-  default_encoding: utf-8
