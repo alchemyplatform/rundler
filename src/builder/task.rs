@@ -10,11 +10,14 @@ use ethers::{
     types::{Address, H256},
 };
 use ethers_signers::Signer;
+use futures::future;
+use futures_util::TryFutureExt;
 use rusoto_core::Region;
 use tokio::{
     select,
     sync::{broadcast, mpsc},
-    time,
+    task::JoinHandle,
+    time, try_join,
 };
 use tokio_util::sync::CancellationToken;
 use tonic::{
@@ -40,7 +43,7 @@ use crate::{
         emit::WithEntryPoint,
         eth,
         gas::PriorityFeeMode,
-        handle::{SpawnGuard, Task},
+        handle::Task,
         mempool::MempoolConfig,
         protos::{
             builder::{builder_server::BuilderServer, BUILDER_FILE_DESCRIPTOR_SET},
@@ -97,7 +100,7 @@ impl Task for BuilderTask {
         let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
         let manual_bundling_mode = Arc::new(AtomicBool::new(false));
 
-        let mut spawn_guards = vec![];
+        let mut sender_handles = vec![];
         let mut send_bundle_txs = vec![];
         for i in 0..self.args.num_bundle_builders {
             let (spawn_guard, send_bundle_tx) = self
@@ -108,9 +111,15 @@ impl Task for BuilderTask {
                     shutdown_token.clone(),
                 )
                 .await?;
-            spawn_guards.push(spawn_guard);
+            sender_handles.push(spawn_guard);
             send_bundle_txs.push(send_bundle_tx);
         }
+        // flatten the senders handles to one handle, short-circuit on errors
+        let sender_handle = tokio::spawn(
+            future::try_join_all(sender_handles)
+                .map_ok(|_| ())
+                .map_err(|e| anyhow::anyhow!(e)),
+        );
 
         // gRPC server
         let builder = BuilderImpl::new(manual_bundling_mode, send_bundle_txs);
@@ -126,15 +135,17 @@ impl Task for BuilderTask {
             .set_serving::<BuilderServer<DummyBuilder>>()
             .await;
 
-        let server_handle = Server::builder()
-            .add_service(builder_server)
-            .add_service(reflection_service)
-            .add_service(health_service)
-            .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await });
+        let server_handle = tokio::spawn(
+            Server::builder()
+                .add_service(builder_server)
+                .add_service(reflection_service)
+                .add_service(health_service)
+                .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await }),
+        );
 
         info!("Started bundle builder");
 
-        match server_handle.await {
+        match try_join!(server_handle, sender_handle) {
             Ok(_) => {
                 tracing::info!("Builder server shutdown");
                 Ok(())
@@ -180,7 +191,7 @@ impl BuilderTask {
         manual_bundling_mode: Arc<AtomicBool>,
         provider: Arc<Provider<C>>,
         shutdown_token: CancellationToken,
-    ) -> anyhow::Result<(SpawnGuard, mpsc::Sender<SendBundleRequest>)> {
+    ) -> anyhow::Result<(JoinHandle<()>, mpsc::Sender<SendBundleRequest>)> {
         let signer = if let Some(pk) = &self.args.private_key {
             info!("Using local signer");
             BundlerSigner::Local(
@@ -285,7 +296,7 @@ impl BuilderTask {
         );
 
         Ok((
-            SpawnGuard::spawn_with_guard(async move { bundle_sender.send_bundles_in_loop().await }),
+            tokio::spawn(bundle_sender.send_bundles_in_loop()),
             send_bundle_tx,
         ))
     }
