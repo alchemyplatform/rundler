@@ -85,7 +85,7 @@ jobs:
       - name: Install codespell
         run: sudo pip3 install codespell tomli
       - name: Check spelling
-        run: codespell --toml .codespell.toml *.md docs/*.md 
+        run: codespell --toml .github/workflows/codespell.toml *.md docs/*.md 
         
   cog_check_job:
     runs-on: ubuntu-latest
