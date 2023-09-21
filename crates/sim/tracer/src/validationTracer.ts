@@ -269,7 +269,7 @@ type StringSet = Record<string, boolean | undefined>;
         }
       }
 
-      if (secondLast?.opcode.includes("EXT")) {
+      if (secondLast && EXT_OPCODES[secondLast.opcode]) {
         const opString = `${secondLast.opcode} ${last?.opcode}`;
         if (secondLast?.stackEnd && opString !== "EXTCODESIZE ISZERO") {
           const addr = toAddress(secondLast.stackEnd.toString(16));
