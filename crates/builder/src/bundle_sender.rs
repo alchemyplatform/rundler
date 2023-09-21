@@ -30,7 +30,7 @@ use crate::{
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync + 'static {
-    async fn send_bundles_in_loop(&mut self);
+    async fn send_bundles_in_loop(self) -> anyhow::Result<()>;
 }
 
 #[derive(Debug)]
@@ -99,10 +99,10 @@ where
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
-    async fn send_bundles_in_loop(&mut self) {
+    async fn send_bundles_in_loop(mut self) -> anyhow::Result<()> {
         let Ok(mut new_heads) = self.pool.subscribe_new_heads().await else {
             error!("Failed to subscribe to new blocks");
-            return;
+            bail!("failed to subscribe to new blocks");
         };
 
         // The new_heads stream can buffer up multiple blocks, but we only want to consume the latest one.
@@ -147,7 +147,7 @@ where
                 Some(b) => b,
                 None => {
                     error!("Block stream closed");
-                    return;
+                    bail!("Block stream closed");
                 }
             };
             // Consume any other blocks that may have been buffered up
@@ -161,7 +161,7 @@ where
                     }
                     Err(mpsc::error::TryRecvError::Disconnected) => {
                         error!("Block stream closed");
-                        return;
+                        bail!("Block stream closed");
                     }
                 }
             }
