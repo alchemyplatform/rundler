@@ -9,7 +9,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::types::{
     Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
-    GethTrace, U256,
+    GethTrace, Opcode, U256,
 };
 #[cfg(test)]
 use mockall::automock;
@@ -53,6 +53,7 @@ pub(crate) struct Phase {
     pub(crate) called_non_entry_point_with_value: bool,
     pub(crate) ran_out_of_gas: bool,
     pub(crate) undeployed_contract_accesses: Vec<Address>,
+    pub(crate) ext_code_access_info: HashMap<Address, Opcode>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

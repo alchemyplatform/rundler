@@ -262,6 +262,17 @@ where
                     ViolationOpCode(opcode),
                 ));
             }
+
+            for (addr, opcode) in &phase.ext_code_access_info {
+                if *addr == self.entry_point_address {
+                    violations.push(SimulationViolation::UsedForbiddenOpcode(
+                        entity,
+                        *addr,
+                        ViolationOpCode(*opcode),
+                    ));
+                }
+            }
+
             for precompile in &phase.forbidden_precompiles_used {
                 let (contract, precompile) = parse_combined_tracer_str(precompile)?;
                 violations.push(SimulationViolation::UsedForbiddenPrecompile(
@@ -801,6 +812,7 @@ mod tests {
                     ran_out_of_gas: false,
                     storage_accesses: vec![],
                     undeployed_contract_accesses: vec![],
+                    ext_code_access_info: HashMap::new(),
                 },
                 Phase {
                     addresses_calling_with_value: vec![Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap()],
@@ -825,6 +837,7 @@ mod tests {
                         }
                     ],
                     undeployed_contract_accesses: vec![],
+                    ext_code_access_info: HashMap::new(),
                 },
                 Phase {
                     addresses_calling_with_value: vec![],
@@ -835,6 +848,7 @@ mod tests {
                     ran_out_of_gas: false,
                     storage_accesses: vec![],
                     undeployed_contract_accesses: vec![],
+                    ext_code_access_info: HashMap::new(),
                 }
             ],
             revert_data: Some("0xe0cff05f00000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014eff00000000000000000000000000000000000000000000000000000b7679c50c24000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffff00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000000".into()),
