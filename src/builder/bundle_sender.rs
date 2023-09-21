@@ -133,7 +133,7 @@ where
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
-    pub async fn send_bundles_in_loop(mut self) -> ! {
+    pub async fn send_bundles_in_loop(mut self) {
         let mut last_block_number = 0;
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
