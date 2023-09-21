@@ -23,11 +23,17 @@ interface Phase {
   calledNonEntryPointWithValue: boolean;
   ranOutOfGas: boolean;
   undeployedContractAccesses: string[];
+  extCodeAccessInfo: Record<string, string>;
 }
 
 interface StorageAccess {
   address: string;
   slots: string[];
+}
+
+interface RelevantStepData {
+  opcode: string;
+  stackEnd: BigInt | null;
 }
 
 type InternalPhase = Omit<
@@ -80,11 +86,7 @@ type StringSet = Record<string, boolean | undefined>;
   ]);
   // If you add any opcodes to this list, make sure they take the contract
   // address as their *first* argument, or modify the handling below.
-  const EXT_OPCODES = stringSet([
-    "EXTCODECOPY",
-    "EXTCODEHASH",
-    "EXTCODELENGTH",
-  ]);
+  const EXT_OPCODES = stringSet(["EXTCODECOPY", "EXTCODEHASH", "EXTCODESIZE"]);
   // Whitelisted precompile addresses.
   const PRECOMPILE_WHITELIST = stringSet([
     "0x0000000000000000000000000000000000000001", // ecRecover
@@ -106,8 +108,9 @@ type StringSet = Record<string, boolean | undefined>;
   let factoryCreate2Count = 0;
   let currentPhase = newInternalPhase();
   let entryPointAddress = "";
-  let justCalledGas = false;
   let pendingKeccakAddress = "";
+  let last: RelevantStepData | null = null;
+  let secondLast: RelevantStepData | null = null;
 
   function newInternalPhase(): InternalPhase {
     return {
@@ -119,6 +122,7 @@ type StringSet = Record<string, boolean | undefined>;
       calledNonEntryPointWithValue: false,
       ranOutOfGas: false,
       undeployedContractAccesses: {},
+      extCodeAccessInfo: {},
     };
   }
 
@@ -127,6 +131,7 @@ type StringSet = Record<string, boolean | undefined>;
       calledBannedEntryPointMethod,
       calledNonEntryPointWithValue,
       ranOutOfGas,
+      extCodeAccessInfo,
     } = currentPhase;
     const forbiddenOpcodesUsed = Object.keys(currentPhase.forbiddenOpcodesUsed);
     const forbiddenPrecompilesUsed = Object.keys(
@@ -143,6 +148,7 @@ type StringSet = Record<string, boolean | undefined>;
       const slotsSet = currentPhase.storageAccesses[address];
       storageAccesses.push({ address, slots: Object.keys(slotsSet) });
     });
+
     const phase: Phase = {
       forbiddenOpcodesUsed,
       forbiddenPrecompilesUsed,
@@ -152,6 +158,7 @@ type StringSet = Record<string, boolean | undefined>;
       calledNonEntryPointWithValue,
       ranOutOfGas,
       undeployedContractAccesses,
+      extCodeAccessInfo,
     };
     phases.push(phase);
     currentPhase = newInternalPhase();
@@ -177,7 +184,7 @@ type StringSet = Record<string, boolean | undefined>;
 
   function getContractCombinedKey(log: LogStep, key: string): string {
     return [toHex(log.contract.getAddress()), key].join(":");
-  } 
+  }
 
   return {
     result(_ctx, _db): Output {
@@ -234,7 +241,9 @@ type StringSet = Record<string, boolean | undefined>;
         )[keccakResult] = true;
         pendingKeccakAddress = "";
       }
+
       const opcode = log.op.toString();
+
       const entryPointIsExecuting = log.getDepth() === 1;
       if (entryPointIsExecuting) {
         if (opcode === "NUMBER") {
@@ -247,20 +256,36 @@ type StringSet = Record<string, boolean | undefined>;
       } else {
         // The entry point is allowed to freely call `GAS`, but otherwise we
         // require that a call opcode comes next.
-        if (justCalledGas && !CALL_OPCODES[opcode]) {
-          currentPhase.forbiddenOpcodesUsed[getContractCombinedKey(log, "GAS")] = true;
+        if (last?.opcode === "GAS" && !CALL_OPCODES[opcode]) {
+          currentPhase.forbiddenOpcodesUsed[
+            getContractCombinedKey(log, "GAS")
+          ] = true;
         }
-        justCalledGas = opcode === "GAS";
+
         if (FORBIDDEN_OPCODES[opcode]) {
-          currentPhase.forbiddenOpcodesUsed[getContractCombinedKey(log, opcode)] = true;
+          currentPhase.forbiddenOpcodesUsed[
+            getContractCombinedKey(log, opcode)
+          ] = true;
         }
       }
+
+      if (secondLast?.opcode.includes("EXT")) {
+        const opString = `${secondLast.opcode} ${last?.opcode}`;
+        if (secondLast?.stackEnd && opString !== "EXTCODESIZE ISZERO") {
+          const addr = toAddress(secondLast.stackEnd.toString(16));
+          const hexAddr = toHex(addr);
+          currentPhase.extCodeAccessInfo[hexAddr] = opcode;
+        }
+      }
+
       if (opcode === "CREATE2") {
         if (phases.length === 0) {
           // In factory phase.
           factoryCreate2Count++;
         } else {
-          currentPhase.forbiddenOpcodesUsed[getContractCombinedKey(log, opcode)] = true;
+          currentPhase.forbiddenOpcodesUsed[
+            getContractCombinedKey(log, opcode)
+          ] = true;
         }
       } else if (opcode === "KECCAK256") {
         //
@@ -325,9 +350,15 @@ type StringSet = Record<string, boolean | undefined>;
           }
           accessedContractAddresses[addressHex] = true;
         } else if (!PRECOMPILE_WHITELIST[addressHex]) {
-          currentPhase.forbiddenPrecompilesUsed[getContractCombinedKey(log, addressHex)] = true;
+          currentPhase.forbiddenPrecompilesUsed[
+            getContractCombinedKey(log, addressHex)
+          ] = true;
         }
       }
+
+      secondLast = last;
+      const stackEnd = log.stack.length() > 0 ? log.stack.peek(0) : null;
+      last = { opcode, stackEnd };
     },
 
     enter(frame) {
