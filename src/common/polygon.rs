@@ -3,16 +3,20 @@ use std::sync::Arc;
 use ethers::{
     prelude::gas_oracle::{GasCategory, Result},
     providers::ProviderError,
-    types::{BlockNumber, U256},
+    types::{BlockNumber, Chain, U256},
 };
 use serde::Deserialize;
 
 use crate::common::types::ProviderLike;
 
+const MUMBAI_MAX_PRIORITY_FEE_DEFAULT: u64 = 1_500_000_000;
+const MAINNET_MAX_PRIORITY_FEE_DEFAULT: u64 = 30_000_000_000;
+
 #[derive(Debug)]
 pub(crate) struct Polygon<P> {
     provider: Arc<P>,
     gas_category: GasCategory,
+    chain_id: u64,
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq)]
@@ -25,10 +29,11 @@ impl<P> Polygon<P>
 where
     P: ProviderLike,
 {
-    pub(crate) fn new(provider: Arc<P>) -> Self {
+    pub(crate) fn new(provider: Arc<P>, chain_id: u64) -> Self {
         Self {
             provider,
             gas_category: GasCategory::Standard,
+            chain_id,
         }
     }
 
@@ -68,14 +73,20 @@ where
             .fold(U256::from(0), |acc, val| acc.saturating_add(*val))
             .div_mod(U256::from(fee_history.base_fee_per_gas.len()));
 
-        let estimate = calculate_estimate_from_rewards(&fee_history.reward, base_fee_per_gas);
+        let estimate =
+            calculate_estimate_from_rewards(&fee_history.reward, base_fee_per_gas, self.chain_id);
+
         Ok(estimate)
     }
 }
 
 /// Calculates the estimate based on the index of inner vector
 /// and skips the average if block is empty
-fn calculate_estimate_from_rewards(reward: &[Vec<U256>], base_fee_per_gas: U256) -> GasEstimate {
+fn calculate_estimate_from_rewards(
+    reward: &[Vec<U256>],
+    base_fee_per_gas: U256,
+    chain_id: u64,
+) -> GasEstimate {
     let (sum, count): (U256, U256) = reward
         .iter()
         .filter(|b| !b[0].is_zero())
@@ -89,6 +100,13 @@ fn calculate_estimate_from_rewards(reward: &[Vec<U256>], base_fee_per_gas: U256)
     if !count.is_zero() {
         let (avg, _mod) = average.div_mod(count);
         average = avg;
+    } else {
+        let fallback = match chain_id {
+            x if x == Chain::Polygon as u64 => MAINNET_MAX_PRIORITY_FEE_DEFAULT.into(),
+            x if x == Chain::PolygonMumbai as u64 => MUMBAI_MAX_PRIORITY_FEE_DEFAULT.into(),
+            _ => U256::zero(),
+        };
+        average = fallback;
     }
 
     GasEstimate {
