@@ -210,8 +210,8 @@ impl<P: ProviderLike> FeeEstimator<P> {
 
     async fn get_priority_fee(&self) -> anyhow::Result<U256> {
         if POLYGON_CHAIN_IDS.contains(&self.chain_id) {
-            let gas_oracle = Polygon::new(Arc::clone(&self.provider)).category(GasCategory::Fast);
-
+            let gas_oracle =
+                Polygon::new(Arc::clone(&self.provider), self.chain_id).category(GasCategory::Fast);
             let fees = gas_oracle.estimate_eip1559_fees().await?;
             Ok(fees.1)
         } else if self.use_bundle_priority_fee {
