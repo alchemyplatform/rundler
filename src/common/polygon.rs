@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use ethers::{
-    prelude::gas_oracle::{GasCategory, Result},
-    providers::ProviderError,
+    prelude::gas_oracle::GasCategory,
     types::{BlockNumber, Chain, U256},
 };
+use futures_util::TryFutureExt;
 use serde::Deserialize;
 
 use crate::common::types::ProviderLike;
@@ -52,26 +52,22 @@ where
     }
 
     /// Estimates max and priority gas and converts to U256
-    pub(crate) async fn estimate_eip1559_fees(&self) -> Result<(U256, U256), ProviderError> {
+    pub(crate) async fn estimate_eip1559_fees(&self) -> anyhow::Result<(U256, U256)> {
         let estimate = self.calculate_fees().await?;
-        let max = estimate.max_fee;
-        let prio = estimate.max_priority_fee;
-        Ok((max, prio))
+        Ok((estimate.max_fee, estimate.max_priority_fee))
     }
 
     /// Perform a request to the gas price API and deserialize the response.
-    pub(crate) async fn calculate_fees(&self) -> Result<GasEstimate, ProviderError> {
-        let gas_percentile = self.gas_category_percentile();
-        let fee_history = self
+    pub(crate) async fn calculate_fees(&self) -> anyhow::Result<GasEstimate> {
+        let gas_percentile = Vec::from([self.gas_category_percentile()]);
+        let base_fee_fut = self.provider.get_base_fee();
+        let fee_history_fut = self
             .provider
-            .fee_history(15, BlockNumber::Latest, &[gas_percentile])
-            .await?;
-
-        let (base_fee_per_gas, _mod) = fee_history
-            .base_fee_per_gas
-            .iter()
-            .fold(U256::from(0), |acc, val| acc.saturating_add(*val))
-            .div_mod(U256::from(fee_history.base_fee_per_gas.len()));
+            .fee_history(15, BlockNumber::Latest, &gas_percentile);
+        let (base_fee_per_gas, fee_history) = tokio::try_join!(
+            base_fee_fut,
+            fee_history_fut.map_err(|e| anyhow::anyhow!("Failed to get fee history {e:?}"))
+        )?;
 
         let estimate =
             calculate_estimate_from_rewards(&fee_history.reward, base_fee_per_gas, self.chain_id);
