@@ -1,12 +1,13 @@
-use std::sync::Arc;
+use std::{cmp, sync::Arc};
 
 use ethers::{
-    prelude::gas_oracle::{GasCategory, Result},
-    providers::ProviderError,
+    prelude::gas_oracle::GasCategory,
     types::{BlockNumber, Chain, U256},
 };
+use futures_util::TryFutureExt;
 use rundler_provider::Provider;
 use serde::Deserialize;
+use tokio::try_join;
 
 const MUMBAI_MAX_PRIORITY_FEE_DEFAULT: u64 = 1_500_000_000;
 const MAINNET_MAX_PRIORITY_FEE_DEFAULT: u64 = 30_000_000_000;
@@ -51,41 +52,32 @@ where
     }
 
     /// Estimates max and priority gas and converts to U256
-    pub(crate) async fn estimate_eip1559_fees(&self) -> Result<(U256, U256), ProviderError> {
-        let estimate = self.calculate_fees().await?;
-        let max = estimate.max_fee;
-        let prio = estimate.max_priority_fee;
-        Ok((max, prio))
+    pub(crate) async fn estimate_priority_fee(&self) -> anyhow::Result<U256> {
+        let (provider_estiamte, fee_history_estimate) = try_join!(
+            self.provider.get_max_priority_fee().map_err(|e| e.into()),
+            self.calculate_fees()
+        )?;
+
+        Ok(cmp::max(provider_estiamte, fee_history_estimate))
     }
 
     /// Perform a request to the gas price API and deserialize the response.
-    pub(crate) async fn calculate_fees(&self) -> Result<GasEstimate, ProviderError> {
+    async fn calculate_fees(&self) -> anyhow::Result<U256> {
         let gas_percentile = self.gas_category_percentile();
         let fee_history = self
             .provider
             .fee_history(15, BlockNumber::Latest, &[gas_percentile])
             .await?;
-
-        let (base_fee_per_gas, _mod) = fee_history
-            .base_fee_per_gas
-            .iter()
-            .fold(U256::from(0), |acc, val| acc.saturating_add(*val))
-            .div_mod(U256::from(fee_history.base_fee_per_gas.len()));
-
-        let estimate =
-            calculate_estimate_from_rewards(&fee_history.reward, base_fee_per_gas, self.chain_id);
-
-        Ok(estimate)
+        Ok(calculate_estimate_from_rewards(
+            &fee_history.reward,
+            self.chain_id,
+        ))
     }
 }
 
 /// Calculates the estimate based on the index of inner vector
 /// and skips the average if block is empty
-fn calculate_estimate_from_rewards(
-    reward: &[Vec<U256>],
-    base_fee_per_gas: U256,
-    chain_id: u64,
-) -> GasEstimate {
+fn calculate_estimate_from_rewards(reward: &[Vec<U256>], chain_id: u64) -> U256 {
     let (sum, count): (U256, U256) = reward
         .iter()
         .filter(|b| !b[0].is_zero())
@@ -108,8 +100,5 @@ fn calculate_estimate_from_rewards(
         average = fallback;
     }
 
-    GasEstimate {
-        max_priority_fee: average,
-        max_fee: base_fee_per_gas + average,
-    }
+    average
 }

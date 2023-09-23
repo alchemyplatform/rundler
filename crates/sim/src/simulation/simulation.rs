@@ -214,10 +214,11 @@ where
             return Ok(AggregatorOut::NotNeeded);
         };
 
-        self.provider
+        Ok(self
+            .provider
             .clone()
             .validate_user_op_signature(aggregator_address, op, gas_cap)
-            .await
+            .await?)
     }
 
     // Parse the output from tracing and return a list of violations.
@@ -443,7 +444,11 @@ where
     ) -> Result<SimulationSuccess, SimulationError> {
         let block_hash = match block_hash {
             Some(block_hash) => block_hash,
-            None => self.provider.get_latest_block_hash().await?,
+            None => self
+                .provider
+                .get_latest_block_hash()
+                .await
+                .map_err(anyhow::Error::from)?,
         };
         let block_id = block_hash.into();
         let mut context = match self.create_context(op.clone(), block_id).await {
@@ -760,11 +765,11 @@ mod tests {
 
     use ethers::{
         abi::AbiEncode,
-        providers::{JsonRpcError, MockError, ProviderError},
+        providers::JsonRpcError,
         types::{Address, BlockNumber, Bytes},
         utils::hex,
     };
-    use rundler_provider::{AggregatorOut, MockProvider};
+    use rundler_provider::{AggregatorOut, MockProvider, ProviderError};
 
     use super::*;
     use crate::simulation::tracer::{MockSimulateValidationTracer, Phase};
@@ -905,9 +910,7 @@ mod tests {
                         .to_string(),
                 )),
             };
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         provider

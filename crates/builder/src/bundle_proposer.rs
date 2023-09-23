@@ -9,6 +9,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use ethers::types::{Address, BlockId, Bytes, H256, U256};
 use futures::future;
+use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
@@ -105,7 +106,9 @@ where
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
         let (ops, block_hash, bundle_fees) = try_join!(
             self.get_ops_from_pool(),
-            self.provider.get_latest_block_hash(),
+            self.provider
+                .get_latest_block_hash()
+                .map_err(anyhow::Error::from),
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
 
@@ -475,7 +478,8 @@ where
             .collect();
         let result = Arc::clone(&self.provider)
             .aggregate_signatures(aggregator, ops)
-            .await;
+            .await
+            .map_err(anyhow::Error::from);
         (aggregator, result)
     }
 
@@ -1282,7 +1286,7 @@ mod tests {
             .returning(move || Ok(max_priority_fee_per_gas));
         provider
             .expect_aggregate_signatures()
-            .returning(move |address, _| signatures_by_aggregator[&address]());
+            .returning(move |address, _| Ok(signatures_by_aggregator[&address]()?));
         let (event_sender, _) = broadcast::channel(16);
         let proposer = BundleProposerImpl::new(
             0,

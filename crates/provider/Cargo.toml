@@ -15,6 +15,7 @@ async-trait.workspace = true
 ethers.workspace = true
 serde.workspace = true
 tokio.workspace = true
+thiserror.workspace = true
 
 mockall = {workspace = true, optional = true }
 
