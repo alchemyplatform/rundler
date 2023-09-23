@@ -4062,6 +4062,7 @@ dependencies = [
  "rundler-types",
  "rundler-utils",
  "serde",
+ "thiserror",
  "tokio",
 ]
 
@@ -4100,6 +4101,7 @@ dependencies = [
  "arrayvec",
  "async-trait",
  "ethers",
+ "futures-util",
  "indexmap 2.0.0",
  "mockall",
  "parse-display",

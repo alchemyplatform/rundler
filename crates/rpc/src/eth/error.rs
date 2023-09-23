@@ -4,6 +4,7 @@ use jsonrpsee::types::{
     ErrorObjectOwned,
 };
 use rundler_pool::{MempoolError, PoolServerError};
+use rundler_provider::ProviderError;
 use rundler_sim::{PrecheckViolation, SimulationViolation};
 use rundler_types::{Entity, EntityType, Timestamp};
 use serde::Serialize;
@@ -263,10 +264,16 @@ impl From<EthRpcError> for ErrorObjectOwned {
 
 impl From<tonic::Status> for EthRpcError {
     fn from(status: tonic::Status) -> Self {
-        EthRpcError::Internal(anyhow::anyhow!(format!(
+        EthRpcError::Internal(anyhow::anyhow!(
             "internal server error code: {} message: {}",
             status.code(),
             status.message()
-        )))
+        ))
+    }
+}
+
+impl From<ProviderError> for EthRpcError {
+    fn from(e: ProviderError) -> Self {
+        EthRpcError::Internal(anyhow::anyhow!("provider error: {e:?}"))
     }
 }

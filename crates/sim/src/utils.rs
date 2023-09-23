@@ -1,10 +1,9 @@
 use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, AbiEncode},
-    providers::ProviderError,
     types::{Address, BlockId, Bytes, Eip1559TransactionRequest, Selector, H256, U256},
 };
-use rundler_provider::Provider;
+use rundler_provider::{Provider, ProviderError};
 use rundler_types::contracts::{
     get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
     get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
@@ -67,11 +66,8 @@ async fn call_constructor<P: Provider, Args: AbiEncode, Ret: AbiDecode>(
 }
 
 // Gets and decodes the revert data from a provider error, if it is a revert error.
-fn get_revert_data<D: AbiDecode>(mut error: ProviderError) -> Result<D, ProviderError> {
-    let ProviderError::JsonRpcClientError(dyn_error) = &mut error else {
-        return Err(error);
-    };
-    let Some(jsonrpc_error) = dyn_error.as_error_response() else {
+fn get_revert_data<D: AbiDecode>(error: ProviderError) -> Result<D, ProviderError> {
+    let ProviderError::JsonRpcError(jsonrpc_error) = &error else {
         return Err(error);
     };
     if !jsonrpc_error.is_revert() {

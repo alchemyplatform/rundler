@@ -100,7 +100,10 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
             provider, settings, ..
         } = self;
 
-        let block_hash = provider.get_latest_block_hash().await?;
+        let block_hash = provider
+            .get_latest_block_hash()
+            .await
+            .map_err(anyhow::Error::from)?;
 
         // Estimate pre verification gas
         let pre_verification_gas = self.calc_pre_verification_gas(&op).await?;
@@ -263,7 +266,8 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         let entry_point_code = self
             .provider
             .get_code(self.entry_point.address(), Some(block_hash))
-            .await?;
+            .await
+            .map_err(anyhow::Error::from)?;
         // Use a random address for the moved entry point so that users can't
         // intentionally get bad estimates by interacting with the hardcoded
         // address.
@@ -376,11 +380,11 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 mod tests {
     use ethers::{
         abi::{AbiEncode, Address},
-        providers::{JsonRpcError, MockError, ProviderError},
+        providers::JsonRpcError,
         types::Chain,
         utils::hex,
     };
-    use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_provider::{MockEntryPoint, MockProvider, ProviderError};
     use rundler_types::contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult};
 
     use super::*;
@@ -621,10 +625,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         let (estimator, _) = create_estimator(entry, provider);
@@ -690,10 +691,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         let (estimator, _) = create_estimator(entry, provider);
@@ -757,10 +755,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         let (estimator, _) = create_estimator(entry, provider);
@@ -810,10 +805,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         let (estimator, _) = create_estimator(entry, provider);
@@ -862,10 +854,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         let (estimator, _) = create_estimator(entry, provider);
@@ -1104,10 +1093,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         let (estimator, _) = create_estimator(entry, provider);
@@ -1178,10 +1164,7 @@ mod tests {
                 message: "execution reverted".to_string(),
                 data: Some(serde_json::Value::String(result_data.to_string())),
             };
-
-            Err(ProviderError::JsonRpcClientError(Box::new(
-                MockError::JsonRpcError(json_rpc_error),
-            )))
+            Err(ProviderError::JsonRpcError(json_rpc_error))
         });
 
         //max_call_gas is less than MIN_CALL_GAS_LIMIT
