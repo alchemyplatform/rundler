@@ -11,6 +11,10 @@ use tokio::sync::broadcast;
 
 use super::CommonArgs;
 use crate::cli::json::get_json_config;
+
+const REQUEST_CHANNEL_CAPACITY: usize = 1024;
+const BLOCK_CHANNEL_CAPACITY: usize = 1024;
+
 /// CLI options for the OP Pool
 #[derive(Args, Debug)]
 #[command(next_help_heading = "POOL")]
@@ -77,6 +81,13 @@ pub struct PoolArgs {
         env = "POOL_CHAIN_HISTORY_SIZE"
     )]
     pub chain_history_size: Option<u64>,
+
+    #[arg(
+        long = "pool.chain_update_channel_capacity",
+        name = "pool.chain_update_channel_capacity",
+        env = "POOL_CHAIN_UPDATE_CHANNEL_CAPACITY"
+    )]
+    pub chain_update_channel_capacity: Option<usize>,
 }
 
 impl PoolArgs {
@@ -141,6 +152,7 @@ impl PoolArgs {
             http_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             pool_configs,
             remote_address,
+            chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
         })
     }
 }
@@ -184,7 +196,12 @@ pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Res
     emit::receive_and_log_events_with_filter(event_rx, |_| true);
 
     spawn_tasks_with_shutdown(
-        [PoolTask::new(task_args, event_sender, LocalPoolBuilder::new(1024, 1024)).boxed()],
+        [PoolTask::new(
+            task_args,
+            event_sender,
+            LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
+        )
+        .boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;

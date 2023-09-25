@@ -15,6 +15,9 @@ use crate::cli::{
 };
 mod events;
 
+const REQUEST_CHANNEL_CAPACITY: usize = 1024;
+const BLOCK_CHANNEL_CAPACITY: usize = 1024;
+
 #[derive(Debug, Args)]
 pub struct NodeCliArgs {
     #[command(flatten)]
@@ -66,10 +69,10 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
         }
     });
 
-    let pool_builder = LocalPoolBuilder::new(1024, 1024);
+    let pool_builder = LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY);
     let pool_handle = pool_builder.get_handle();
 
-    let builder_builder = LocalBuilderBuilder::new(1024);
+    let builder_builder = LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY);
     let builder_handle = builder_builder.get_handle();
 
     spawn_tasks_with_shutdown(

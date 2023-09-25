@@ -106,7 +106,7 @@ where
         };
 
         // The new_heads stream can buffer up multiple blocks, but we only want to consume the latest one.
-        // This task is used to consume the new heads and place them onto a channel that can be syncronously
+        // This task is used to consume the new heads and place them onto a channel that can be synchronously
         // consumed until the latest block is reached.
         let (tx, mut rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
