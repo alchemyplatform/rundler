@@ -39,6 +39,8 @@ pub struct Args {
     /// Address to bind the remote mempool server to, if any.
     /// If not provided, a server will not be started.
     pub remote_address: Option<SocketAddr>,
+    /// Channel capacity for the chain update channel.
+    pub chain_update_channel_capacity: usize,
 }
 
 /// Mempool task.
@@ -69,7 +71,7 @@ impl Task for PoolTask {
         };
         let provider = eth::new_provider(&self.args.http_url, self.args.http_poll_interval)?;
         let chain = Chain::new(provider, chain_settings);
-        let (update_sender, _) = broadcast::channel(1000);
+        let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
         let chain_handle = chain.spawn_watcher(update_sender.clone(), shutdown_token.clone());
 
         let parsed_url = Url::parse(&self.args.http_url).context("Invalid RPC URL")?;

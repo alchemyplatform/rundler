@@ -17,6 +17,8 @@ use tokio::sync::broadcast;
 
 use super::{json::get_json_config, CommonArgs};
 
+const REQUEST_CHANNEL_CAPACITY: usize = 1024;
+
 /// CLI options for the builder
 #[derive(Args, Debug)]
 #[command(next_help_heading = "BUILDER")]
@@ -262,7 +264,7 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
         [BuilderTask::new(
             task_args,
             event_sender,
-            LocalBuilderBuilder::new(1024),
+            LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY),
             pool,
         )
         .boxed()],
