@@ -11,7 +11,7 @@ It should be considered as a guide to help you navigate the process.
 
 The [Telegram][dev-tg] is available for any concerns you may have that are not covered in this guide.
 
-If you contribute to this project, your contributions will be made to the project under both Apache 2.0 and the MIT license.
+If you contribute to this project, your contributions will be made to the project under the project's GNU Lesser General Public Library v3.0 license.
 
 ### Ways to contribute
 
@@ -66,28 +66,43 @@ cargo +nightly fmt -- --check
 cargo +nightly clippy --all --all-features -- -D warnings
 ```
 
+If you are working in VSCOde, we recommend you install the [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer) extension, and use the following VSCode user settings:
+```
+    "[rust]": {
+        "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        "editor.formatOnSave": true
+    },
+    "rust-analyzer.rustfmt.extraArgs": [
+        "+nightly"
+    ],
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.files.excludeDirs": [
+      "crates/sim/contracts",
+      "crates/sim/tracer",
+      "crates/builder/proto",
+      "crates/pool/proto",
+      "test",
+    ],
+```
+
+If you are working on a larger feature, we encourage you to open up a draft pull request, to make sure that other contributors are not duplicating work.
+
 #### Adding tests
 
 If the change being proposed alters code, it is either adding new functionality to Rundler, or fixing existing, broken functionality.
 In both of these cases, the pull request should include one or more tests to ensure that Rundler does not regress in the future.
-
-Types of tests include:
-
--   **Unit tests**: Functions which have very specific tasks should be unit tested.
--   **Integration tests**: For general purpose, far reaching functionality,
-    integration tests should be added. The best way to add a new integration test is to look at existing ones and follow the style.
-
-Tests that use forking must contain "fork" in their name.
 
 #### Commits
 
 It is a recommended best practice to keep your changes as logically grouped as possible within individual commits. There is no limit to the number of commits any single pull request may have, and many contributors find it easier to review changes that are split across multiple commits.
 That said, if you have a number of commits that are "checkpoints" and don't represent a single logical change, please squash those together.
 
-We follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) specification to make sure that all of our commits are formatted well and are properly tailored to the change that the commit is making.
+We follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) specification to make sure that all of our commits are formatted and properly tailored to the change that the commit is making. Please choose commit messages that correctly describe the change you are making.
 
 #### Opening the pull request
 
 From within GitHub, opening a new pull request will present you with a template that should be filled out. Please try your best at filling out the details, but feel free to skip parts if you're not sure what to put.
 
 [dev-tg]: https://t.me/rundler
+
+*Adapted from the [Reth contributing guide](https://github.com/paradigmxyz/reth/blob/main/CONTRIBUTING.md).*
