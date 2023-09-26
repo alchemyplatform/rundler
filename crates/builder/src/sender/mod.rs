@@ -15,10 +15,9 @@ mod bloxroute;
 mod conditional;
 mod flashbots;
 mod raw;
+use std::{str::FromStr, sync::Arc, time::Duration};
 
-use std::{sync::Arc, time::Duration};
-
-use anyhow::Context;
+use anyhow::{bail, Context, Error};
 use async_trait::async_trait;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 pub(crate) use conditional::ConditionalTransactionSender;
@@ -37,6 +36,7 @@ pub(crate) use flashbots::FlashbotsTransactionSender;
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
 use rundler_sim::ExpectedStorage;
+use serde::Serialize;
 
 #[derive(Debug)]
 pub(crate) struct SentTxInfo {
@@ -80,6 +80,109 @@ where
     PolygonBloxroute(PolygonBloxrouteTransactionSender<C, S>),
 }
 
+/// Transaction sender types
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransactionSenderType {
+    /// Raw transaction sender
+    Raw,
+    /// Conditional transaction sender
+    Conditional,
+    /// Flashbots transaction sender
+    ///
+    /// Currently only supported on Eth mainnet
+    Flashbots,
+    /// Bloxroute transaction sender
+    ///
+    /// Currently only supported on Polygon mainnet
+    PolygonBloxroute,
+}
+
+impl FromStr for TransactionSenderType {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "raw" => Ok(TransactionSenderType::Raw),
+            "conditional" => Ok(TransactionSenderType::Conditional),
+            "flashbots" => Ok(TransactionSenderType::Flashbots),
+            "polygon_bloxroute" => Ok(TransactionSenderType::PolygonBloxroute),
+            _ => bail!("Invalid sender input. Must be one of either 'raw', 'conditional', 'flashbots' or 'polygon_bloxroute'"),
+        }
+    }
+}
+
+impl TransactionSenderType {
+    fn into_snake_case(self) -> String {
+        match self {
+            TransactionSenderType::Raw => "raw",
+            TransactionSenderType::Conditional => "conditional",
+            TransactionSenderType::Flashbots => "flashbots",
+            TransactionSenderType::PolygonBloxroute => "polygon_bloxroute",
+        }
+        .to_string()
+    }
+
+    pub(crate) fn into_sender<C: JsonRpcClient + 'static, S: Signer + 'static>(
+        self,
+        client: Arc<Provider<C>>,
+        signer: S,
+        chain_id: u64,
+        eth_poll_interval: Duration,
+        bloxroute_header: &Option<String>,
+    ) -> Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
+        let sender = match self {
+            Self::Raw => TransactionSenderEnum::Raw(RawTransactionSender::new(client, signer)),
+            Self::Conditional => TransactionSenderEnum::Conditional(
+                ConditionalTransactionSender::new(client, signer),
+            ),
+            Self::Flashbots => {
+                if chain_id != Chain::Mainnet as u64 {
+                    return Err(SenderConstructorErrors::InvalidChainForSender(
+                        chain_id,
+                        self.into_snake_case(),
+                    ));
+                }
+                TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(client, signer)?)
+            }
+            Self::PolygonBloxroute => {
+                if let Some(header) = bloxroute_header {
+                    if chain_id == Chain::Polygon as u64 {
+                        return Err(SenderConstructorErrors::InvalidChainForSender(
+                            chain_id,
+                            self.into_snake_case(),
+                        ));
+                    }
+
+                    TransactionSenderEnum::PolygonBloxroute(PolygonBloxrouteTransactionSender::new(
+                        client,
+                        signer,
+                        eth_poll_interval,
+                        header,
+                    )?)
+                } else {
+                    return Err(SenderConstructorErrors::BloxRouteMissingToken);
+                }
+            }
+        };
+        Ok(sender)
+    }
+}
+
+/// Custom errors for the sender constructor
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SenderConstructorErrors {
+    /// Anyhow error fallback
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+    /// Invalid Chain ID error for sender
+    #[error("Chain ID: {0} cannot be used with the {1} sender")]
+    InvalidChainForSender(u64, String),
+    /// Bloxroute missing token error
+    #[error("Missing token for Bloxroute API")]
+    BloxRouteMissingToken,
+}
+
 async fn fill_and_sign<C, S>(
     provider: &SignerMiddleware<Arc<Provider<C>>, S>,
     mut tx: TypedTransaction,
@@ -101,34 +204,4 @@ where
         .await
         .context("should sign transaction before sending")?;
     Ok((tx.rlp_signed(&signature), nonce))
-}
-
-pub(crate) fn get_sender<C, S>(
-    provider: Arc<Provider<C>>,
-    signer: S,
-    is_conditional: bool,
-    url: &str,
-    chain_id: u64,
-    poll_interval: Duration,
-    bloxroute_auth_header: &Option<String>,
-) -> anyhow::Result<TransactionSenderEnum<C, S>>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-{
-    let sender = if is_conditional {
-        ConditionalTransactionSender::new(provider, signer).into()
-    } else if url.contains("flashbots") {
-        FlashbotsTransactionSender::new(provider, signer).into()
-    } else if let Some(auth_header) = bloxroute_auth_header {
-        assert!(
-            chain_id == Chain::Polygon as u64,
-            "Bloxroute sender is only supported on Polygon mainnet"
-        );
-        PolygonBloxrouteTransactionSender::new(provider, signer, poll_interval, auth_header)?.into()
-    } else {
-        RawTransactionSender::new(provider, signer).into()
-    };
-
-    Ok(sender)
 }

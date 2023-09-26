@@ -18,6 +18,7 @@ use clap::Args;
 use ethers::types::H256;
 use rundler_builder::{
     self, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs, LocalBuilderBuilder,
+    TransactionSenderType,
 };
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfig, PriorityFeeMode};
@@ -107,17 +108,17 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// If true, will use the provider's `eth_sendRawTransactionConditional`
-    /// method instead `eth_sendRawTransaction`, passing in expected storage
-    /// values determined through simulation. Must not be set on networks
-    /// which do not support this method.
+    /// Choice of what sender type to to use for transaction submission.
+    /// Defaults to the value of `raw`. Other options inclue `flashbots`,
+    /// `conditional` and `polygon_bloxroute`
     #[arg(
-        long = "builder.use_conditional_send_transaction",
-        name = "builder.use_conditional_send_transaction",
-        env = "BUILDER_USE_CONDITIONAL_SEND_TRANSACTION",
-        default_value = "false"
+        long = "builder.sender",
+        name = "builder.sender",
+        env = "BUILDER_SENDER",
+        value_enum,
+        default_value = "raw"
     )]
-    use_conditional_send_transaction: bool,
+    pub sender_type: TransactionSenderType,
 
     /// After submitting a bundle transaction, the maximum number of blocks to
     /// wait for that transaction to mine before we try resending with higher
@@ -218,7 +219,7 @@ impl BuilderArgs {
             use_bundle_priority_fee: common.use_bundle_priority_fee,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
-            use_conditional_send_transaction: self.use_conditional_send_transaction,
+            sender_type: self.sender_type,
             eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
             mempool_configs,

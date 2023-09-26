@@ -21,7 +21,7 @@ rundler-utils = { path = "../../crates/utils" }
 
 # CLI dependencies
 anyhow.workspace = true
-clap = { version = "4.2.4", features = ["derive", "env"] }
+clap = { version = "4.4.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
 ethers.workspace = true
 itertools = "0.11.0"

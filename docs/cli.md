@@ -151,8 +151,8 @@ List of command line options for configuring the Builder.
   - env: *BUILDER_MAX_BUNDLE_SIZE*
 - `--builder.submit_url`: If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`.
   - env: *BUILDER_SUBMIT_URL*
-- `--builder.use_conditional_send_transaction`: If true, will use the provider's `eth_sendRawTransactionConditional` method instead of `eth_sendRawTransaction`, passing in expected storage values determined through simulation. Must not be set on networks which do not support this method (default: `false`)
-  - env: *BUILDER_USE_CONDITIONAL_SEND_TRANSACTION*
+- `--builder.sender`: Choice of what sender type to to use for transaction submission. (default: `raw`, options: `raw`, `conditional`, `flashbots`, `polygon_bloxroute`)
+  - env: *BUILDER_SENDER*
 - `--builder.max_blocks_to_wait_for_mine`: After submitting a bundle transaction, the maximum number of blocks to wait for that transaction to mine before trying to resend with higher gas fees (default: `2`)
   - env: *BUILDER_MAX_BLOCKS_TO_WAIT_FOR_MINE*
 - `--builder.replacement_fee_percent_increase`: Percentage amount to increase gas fees when retrying a transaction after it failed to mine (default: `10`)
