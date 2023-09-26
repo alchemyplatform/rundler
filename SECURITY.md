@@ -8,4 +8,4 @@
 
 ## Reporting a Vulnerability
 
-If you would like to report a vulnerability, please open a github issue and tag it with the `security` label.
+If you would like to report a vulnerability, please contact security@alchemy.com

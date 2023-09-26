@@ -1,16 +1,7 @@
 [workspace]
 members = [
-    "bin/rundler",
-    "bin/tools",
-    "crates/builder",
-    "crates/dev",
-    "crates/pool",
-    "crates/provider",
-    "crates/rpc",
-    "crates/sim",
-    "crates/task",
-    "crates/types",
-    "crates/utils"
+    "bin/*",
+    "crates/*",
 ]
 default-members = ["bin/rundler"]
 

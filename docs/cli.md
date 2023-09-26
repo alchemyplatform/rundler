@@ -1,6 +1,6 @@
-# RUNDLER CLI
+# Rundler CLI
 
-The Rundler Command Line Interface (CLI) offers a versatile and configurable User Operation Bundler, equipped with a wide array of options and subcommands tailored to your needs.
+The Rundler Command Line Interface (CLI) offers a wide array of options and subcommands. Most options contain reasonable defaults that can be overridden.
 
 ## Subcommands
 
@@ -9,17 +9,18 @@ The Rundler Command Line Interface (CLI) offers a versatile and configurable Use
 - `pool`: Runs the Pool server.
 - `builder`: Runs the Builder server.
 
-The `pool` and `builder` servers will also start a gRPC endpoint to allow other processes to interact with each service
+The `pool` and `builder` commands will also start a gRPC endpoint to allow other processes to interact with each service.
 
-## General Options
+## Common Options
 
 These options are common to all subcommands and can be used globally:
 
-- `--entry_points`: Entry point addresses to target. Provide a comma-separated list. (multiple entry points is currently in beta, we have only tested 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789)
+- `--entry_points`: Entry point addresses to target. Provide a comma-separated list. (**REQUIRED**)
   - env: *ENTRY_POINTS*
-- `--chain_id`: Chain ID to target. (default: `1337`).
+  - (multiple entry points is currently in beta, we only officially support `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789`)
+- `--chain_id`: Chain ID to target. (default: `1337` **IMPORTANT**).
   - env: *CHAIN_ID*
-- `--node_http`: ETH Node HTTP URL to connect to. (REQUIRED)
+- `--node_http`: ETH Node HTTP URL to connect to. (**REQUIRED**)
   - env: *NODE_HTTP*
 - `--max_verification_gas`: Maximum verification gas. (default: `5000000`).
   - env: *MAX_VERIFICATION_GAS*
@@ -29,7 +30,7 @@ These options are common to all subcommands and can be used globally:
   - env: *MIN_STAKE_VALUE*
 - `--min_unstake_delay`: Minimum unstake delay. (default: `84600`).
   - env: *MIN_UNSTAKE_DELAY*
-- `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`. (default: genisis to latest)
+- `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`. (default: distance to genesis **IMPORTANT**)
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
 - `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
   - env: *MAX_SIMULATE_HANDLE_OPS_GAS*
@@ -40,19 +41,21 @@ These options are common to all subcommands and can be used globally:
 - `--priority_fee_mode_kind`: Priority fee mode kind. Possible values are `base_fee_percent` and `priority_fee_increase_percent`. (default: `priority_fee_increase_percent`).
   - options: ["base_fee_percent", "priority_fee_increase_percent"]
   - env: *PRIORITY_FEE_MODE_KIND*
-  - These options have slightly different outcomes. When a transaction is not landed on chain, we need to increase the fee's to five the operation a higher
-    chance of landing. The `base_fee_percent ` field will increase the the base fee (`max_fee_per_gas - max_priority_fee_per_gas`) by the `priority_fee_mode_value` percentage.
-    The `priority_fee_increase_percent` field will increase the `max_priority_fee_per_gas` by the `priority_fee_mode_value` percentage.
 - `--priority_fee_mode_value`: Priority fee mode value. (default: `0`).
   - env: *PRIORITY_FEE_MODE_VALUE*
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
-- `--eth_poll_interval_millis`: Interval at which the builder polls an Eth node for new blocks and mined transactions (default: `100`)
+  - (*Only required if using other AWS features*)
+- `--eth_poll_interval_millis`: Interval at which the builder polls an RPC node for new blocks and mined transactions (default: `100`)
   - env: *ETH_POLL_INTERVAL_MILLIS*
 - `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
-  - [config example](alt-mempools.md)
+  - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
+- `--num_builders`: The number of bundle builders to run (default: `1`)
+  - env: *NUM_BUILDERS*
+
+### Mempool Configuration
 
 ## Metrics Options
 
@@ -80,24 +83,24 @@ List of command line options for configuring the RPC API.
 
 - `--rpc.port`:	Port to listen on for JSON-RPC requests (default: `3000`)
   - env: *RPC_PORT*
-  - *Only required when running in distributed mode* 
 - `--rpc.host`:	Host to listen on for JSON-RPC requests (default: `0.0.0.0`)
   - env: *RPC_HOST*
-  - *Only required when running in distributed mode* 
 - `--rpc.api`:	Which APIs to expose over the RPC interface (default: `eth,rundler`)
   - env: *RPC_API*
-- `--rpc.timeout_seconds`:	Timeout for RPC requests (default: 20)
+- `--rpc.timeout_seconds`:	Timeout for RPC requests (default: `20`)
   - env: *RPC_TIMEOUT_SECONDS*
 - `--rpc.max_connections`:	Maximum number of concurrent connections (default: `100`)
   - env: *RPC_MAX_CONNECTIONS*
 - `--rpc.pool_url`:	Pool URL for RPC (default: `http://localhost:50051`)
   - env: *RPC_POOL_URL*
+  - *Only required when running in distributed mode* 
 - `--rpc.builder_url`:	Builder URL for RPC (default: `http://localhost:50052`)
   - env: *RPC_BUILDER_URL*
+  - *Only required when running in distributed mode* 
 
-## OP Pool Options
+## Pool Options
 
-List of command line options for configuring the OP Pool.
+List of command line options for configuring the Pool.
 
 - `--pool.port`: Port to listen on for gRPC requests (default: `50051`)
   - env: *POOL_PORT*
@@ -105,7 +108,7 @@ List of command line options for configuring the OP Pool.
 - `--pool.host`: Host to listen on for gRPC requests (default: `127.0.0.1`)
   - env: *POOL_HOST*
   - *Only required when running in distributed mode* 
-- `--pool.max_size_in_bytes`: Maximum size in bytes for the pool (default: `500000000`, 0.5 GB)
+- `--pool.max_size_in_bytes`: Maximum size in bytes for the pool (default: `500000000`, `0.5 GB`)
   - env: *POOL_MAX_SIZE_IN_BYTES*
 - `--pool.max_userops_per_sender`: Maximum number of user operations per sender (default: `4`)
   - env: *POOL_MAX_USEROPS_PER_SENDER*
@@ -114,13 +117,15 @@ List of command line options for configuring the OP Pool.
 - `--pool.blocklist_path`: Path to a blocklist file (e.g `blocklist.json`, `s3://my-bucket/blocklist.json`)
   - env: *POOL_BLOCKLIST_PATH*
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
+  - See [here](./architecture/pool.md#allowlistblocklist) for details.
 - `--pool.allowlist_path`: Path to an allowlist file (e.g `allowlist.json`, `s3://my-bucket/allowlist.json`)
   - env: *POOL_ALLOWLIST_PATH*
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
+  - See [here](./architecture/pool.md#allowlistblocklist) for details.
 - `--pool.chain_history_size`: Size of the chain history
   - env: *POOL_CHAIN_HISTORY_SIZE*
 
-## Builder CLI Options
+## Builder Options
 
 List of command line options for configuring the Builder.
 
@@ -154,39 +159,23 @@ List of command line options for configuring the Builder.
   - env: *BUILDER_REPLACEMENT_FEE_PERCENT_INCREASE*
 - `--builder.max_fee_increases`: Maximum number of fee increases to attempt (Seven increases of 10% is roughly 2x the initial fees) (default: `7`)
   - env: *BUILDER_MAX_FEE_INCREASES*
+- `--builder.bloxroute_auth_header`: If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
+  - env: `BUILDER_BLOXROUTE_AUTH_HEADER`
+  - *Only required when `--builder.sender=polygon_bloxroute`*
+- `--builder.index_offset`: If running multiple builder processes, this is the index offset to assign unique indexes to each bundle sender. (default: 0)
+  - env: `BUILDER_INDEX_OFFSET`
+- `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
+  - env: `BUILDER_POOL_URL`
+  - *Only required when running in distributed mode*
 
-## Key management
+
+### Key management
 
 Private keys for the bundler can be provided in a few ways. You can set the `--builder.private_key` flag or the `BUILDER_PRIVATE_KEY` environment variable
-within your local or deployed environment. Alternateley, you can provide the application with one or more AWS KMS ids using the `--builder.aws_kms_key_ids` flag or `AWS_KMS_KEY_IDS` environment
+within your local or deployed environment. Alternatively, you can provide the application with one or more AWS KMS ids using the `--builder.aws_kms_key_ids` flag or `AWS_KMS_KEY_IDS` environment
 variable. Rundler will download the key/s so long as you have `kms:DescribeKey` & `kms:Decrypt` IAM access to the KMS resource.
 
-When using KMS keys, a redis url must be provided to the bundler which will take care of key locking to make sure keys are not accessed at the same time from concurrent processes
-
-## Example configuration files
-
-### Pool allowlist path
-
-```
-export POOL_ALLOWLIST_PATH=blocklist.json
-```
-
-```
-[
-  "0x0000000000000000000000000000000000000000000000000000000000000000"
-]
-```
-### Pool blocklist path
-
-```
-export POOL_BLOCKLIST_PATH=blocklist.json
-```
-
-```
-[
-  "0x0000000000000000000000000000000000000000000000000000000000000000"
-]
-```
+When using KMS keys, a Redis URL must be provided to Rundler which will take care of key leasing to make sure keys are not accessed at the same time from concurrent processes.
 
 ## Example Usage
 
@@ -194,10 +183,11 @@ Here are some example commands to use the CLI:
 
 ```sh
 # Run the Node subcommand with custom options
-$ ./app --entry_points 0x0000000000000000000000000000000000000000 --chain_id 1337 --max_verification_gas 10000000 node
+$ ./rundler node --entry_points 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789 --chain_id 1337 --max_verification_gas 10000000
 
-# Run the Rpc subcommand with custom options and enable JSON logging. The builder and pool will need to be running before this starts.
-$ ./app --node_http http://localhost:8545 --log.json rpc
+# Run the RPC subcommand with custom options and enable JSON logging. The builder and pool will need to be running before this starts.
+$ ./rundler rpc --node_http http://localhost:8545 --log.json
 
 # Run the Pool subcommand with custom options and specify a mempool config file
-$ ./app --max_simulate_handle_ops_gas=15000000  --mempool_config_path=mempool.json --node_http http://localhost:8545 --chain_id=8453 pool
+$ ./rundler pool --max_simulate_handle_ops_gas 15000000  --mempool_config_path mempool.json --node_http http://localhost:8545 --chain_id 8453
+```
