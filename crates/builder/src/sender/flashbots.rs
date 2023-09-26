@@ -21,22 +21,28 @@ use std::{
     task::{Context as TaskContext, Poll},
 };
 
-use anyhow::{bail, Context};
+use anyhow::{bail, Context, Result};
 use ethers::{
     middleware::SignerMiddleware,
     providers::{interval, JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, TransactionReceipt, H256, U256, U64},
+    types::{
+        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, TxHash, H256,
+        U256, U64,
+    },
 };
 use ethers_signers::Signer;
 use futures_timer::Delay;
 use futures_util::{Stream, StreamExt, TryFutureExt};
+use jsonrpsee::{
+    core::{client::ClientT, traits::ToRpcParams},
+    http_client::{transport::HttpBackend, HttpClient, HttpClientBuilder},
+};
 use pin_project::pin_project;
-use rundler_sim::ExpectedStorage;
-use serde::{de, Deserialize};
-use serde_json::Value;
+use serde::{de, Deserialize, Serialize};
+use serde_json::{value::RawValue, Value};
 use tonic::async_trait;
 
-use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
+use super::{fill_and_sign, ExpectedStorage, SentTxInfo, TransactionSender, TxStatus};
 
 #[derive(Debug)]
 pub(crate) struct FlashbotsTransactionSender<C, S>
@@ -62,9 +68,8 @@ where
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
         let tx_hash = self
-            .provider
-            .provider()
-            .request("eth_sendRawTransaction", (raw_tx,))
+            .client
+            .send_transaction(raw_tx)
             .await
             .context("should send raw transaction to node")?;
 
@@ -117,11 +122,11 @@ where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
 {
-    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S) -> Self {
-        Self {
+    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S) -> Result<Self> {
+        Ok(Self {
             provider: SignerMiddleware::new(provider, signer),
-            client: FlashbotsClient::default(),
-        }
+            client: FlashbotsClient::new()?,
+        })
     }
 }
 
@@ -167,17 +172,52 @@ struct FlashbotsAPIResponse {
     seen_in_mempool: bool,
 }
 
-#[derive(Debug, Default)]
-struct FlashbotsClient {}
+#[derive(Debug)]
+struct FlashbotsClient {
+    client: HttpClient<HttpBackend>,
+}
 
 impl FlashbotsClient {
-    async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
+    fn new() -> Result<Self> {
+        let client = HttpClientBuilder::default().build("https://rpc.flashbots.net")?;
+        Ok(Self { client })
+    }
+
+    async fn status(&self, tx_hash: H256) -> Result<FlashbotsAPIResponse> {
         let url = format!("https://protect.flashbots.net/tx/{:?}", tx_hash);
         let resp = reqwest::get(&url).await?;
         resp.json::<FlashbotsAPIResponse>()
             .await
             .context("should deserialize FlashbotsAPIResponse")
     }
+
+    async fn send_transaction(&self, raw_tx: Bytes) -> anyhow::Result<TxHash> {
+        let response: FlashbotsResponse = self
+            .client
+            .request("eth_sendRawTransaction", (raw_tx,))
+            .await?;
+        Ok(response.tx_hash)
+    }
+}
+
+#[derive(Serialize)]
+struct FlashbotsRequest {
+    transaction: String,
+}
+
+impl ToRpcParams for FlashbotsRequest {
+    fn to_rpc_params(self) -> Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
+        let s = String::from_utf8(serde_json::to_vec(&self)?).expect("Valid UTF8 format");
+        RawValue::from_string(s)
+            .map(Some)
+            .map_err(jsonrpsee::core::Error::ParseError)
+    }
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FlashbotsResponse {
+    tx_hash: TxHash,
 }
 
 type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;

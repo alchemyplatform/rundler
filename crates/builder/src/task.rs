@@ -47,7 +47,7 @@ use crate::{
     bundle_proposer::{self, BundleProposerImpl},
     bundle_sender::{self, BundleSender, BundleSenderImpl, SendBundleRequest},
     emit::BuilderEvent,
-    sender::get_sender,
+    sender::TransactionSenderType,
     server::{spawn_remote_builder_server, LocalBuilderBuilder},
     signer::{BundlerSigner, KmsSigner, LocalSigner},
     transaction_tracker::{self, TransactionTrackerImpl},
@@ -87,8 +87,8 @@ pub struct Args {
     pub bundle_priority_fee_overhead_percent: u64,
     /// Priority fee mode to use for operation priority fee minimums
     pub priority_fee_mode: PriorityFeeMode,
-    /// Whether to use conditional send transactions
-    pub use_conditional_send_transaction: bool,
+    /// Sender to be used by the builder
+    pub sender_type: TransactionSenderType,
     /// RPC node poll interval
     pub eth_poll_interval: Duration,
     /// Operation simulation settings
@@ -130,7 +130,7 @@ where
     P: PoolServer + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        tracing::info!("Mempool config: {:?}", self.args.mempool_configs);
+        info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
         let manual_bundling_mode = Arc::new(AtomicBool::new(false));
@@ -184,7 +184,7 @@ where
             handle::flatten_handle(remote_handle),
         ) {
             Ok(_) => {
-                tracing::info!("Builder server shutdown");
+                info!("Builder server shutdown");
                 Ok(())
             }
             Err(e) => {
@@ -284,20 +284,21 @@ where
 
         let submit_provider =
             eth::new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
-        let transaction_sender = get_sender(
+
+        let transaction_sender = self.args.sender_type.into_sender(
             submit_provider,
             signer,
-            self.args.use_conditional_send_transaction,
-            &self.args.submit_url,
             self.args.chain_id,
             self.args.eth_poll_interval,
             &self.args.bloxroute_auth_header,
         )?;
+
         let tracker_settings = transaction_tracker::Settings {
             poll_interval: self.args.eth_poll_interval,
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
         };
+
         let transaction_tracker = TransactionTrackerImpl::new(
             Arc::clone(&provider),
             transaction_sender,
