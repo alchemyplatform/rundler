@@ -84,10 +84,10 @@ Tests that use forking must contain "fork" in their name.
 It is a recommended best practice to keep your changes as logically grouped as possible within individual commits. There is no limit to the number of commits any single pull request may have, and many contributors find it easier to review changes that are split across multiple commits.
 That said, if you have a number of commits that are "checkpoints" and don't represent a single logical change, please squash those together.
 
-We follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) specification to make sure that all of our commits are formatted well and are in proporly tailored to the change that the commit is making.
+We follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/) specification to make sure that all of our commits are formatted well and are properly tailored to the change that the commit is making.
 
 #### Opening the pull request
 
 From within GitHub, opening a new pull request will present you with a template that should be filled out. Please try your best at filling out the details, but feel free to skip parts if you're not sure what to put.
 
-[dev-tg]: https://t.me/+F_xS9IVOdJZmZjQx
+[dev-tg]: https://t.me/rundler
