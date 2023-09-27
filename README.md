@@ -14,13 +14,13 @@
 
 🚧 *Under active development, see [status](#status) below.* 🚧
 
-## What's a Rundler?
+## Overview
 
 **Rundler** (**R**ust B**undler**) is an [ERC-4337][eip_link] bundler implementation written in Rust. Rundler is designed to achieve high-performance and high-reliability in cloud deployments via a modular architecture. 
 
 Built, maintained, and used by [Alchemy](https://www.alchemy.com/) to push the limits of user experience on EVM chains via [Account Abstraction](https://www.alchemy.com/blog/account-abstraction).
 
-## Goals
+### Goals
 
 Rundler is meant to power the ERC-4337 ecosystem with an implementation that users can rely on to scale to their needs while maintaining high reliability. As ERC-4337 is a nascent technology, Rundler strives to be on the bleeding edge of feature support and the team will be contributing to push the protocol forward.
 
@@ -107,10 +107,10 @@ See [SECURITY.md](SECURITY.md) for details.
 
 ## Acknowledgements
 
-We stand on the shoulders of the following teams:
+The work on this project would not have been possible without the amazing contributions from:
 
 - [ERC-4337 team](https://github.com/eth-infinitism/account-abstraction): The ERC-4337 team has pioneered the standard, and has answered countless questions during our development. They developed the [bundler reference implementation](https://github.com/eth-infinitism/bundler) and [spec tests](https://github.com/eth-infinitism/bundler-spec-tests) that were invaluable during our development process. We are excited to continue to work with this team to push ERC-4337 ahead.
-- [Reth](https://github.com/paradigmxyz/reth): Big thanks to the Reth team, from which we've taken inspiration for many of our practices in this repo (including this README). They are pushing the Ethereum Rust ecosystem forward in an open way. We thank the Reth team for their continued contributions.
+- [Reth](https://github.com/paradigmxyz/reth): Shout-out to the Reth team, from which we've taken inspiration for many of our practices in this repo (including this README). They are pushing the Ethereum Rust ecosystem forward in an open way. We thank the Reth team for their continued contributions.
 
 [eip_link]: https://eips.ethereum.org/EIPS/eip-4337
 
