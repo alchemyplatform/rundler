@@ -11,7 +11,7 @@ It should be considered as a guide to help you navigate the process.
 
 The [Telegram][dev-tg] is available for any concerns you may have that are not covered in this guide.
 
-If you contribute to this project, your contributions will be made to the project under the project's GNU Lesser General Public Library v3.0 license.
+If you contribute to this project, your contributions will be made to the project as follow: (a) contributions to the Rundler library (i.e. all code outside of the `bin` directory) will be licensed under the GNU Lesser General Public License v3.0, also included in our repository in the COPYING.LESSER file; and (b) contributions to the Rundler binaries (i.e. all code inside of the `bin` directory) will be licensed under the GNU General Public License v3.0, also included in our repository in the COPYING file.
 
 ### Ways to contribute
 
