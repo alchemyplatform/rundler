@@ -3,8 +3,8 @@
 [![gh_ci_badge]][gh_ci_link]
 [![tg_badge]][tg_link]
 
-[gh_ci_badge]: https://github.com/OMGWINNING/rundler/workflows/ci/badge.svg
-[gh_ci_link]: https://github.com/OMGWINNING/rundler/actions/workflows/ci.yml
+[gh_ci_badge]: https://github.com/alchemyplatform/rundler/workflows/ci/badge.svg
+[gh_ci_link]: https://github.com/alchemyplatform/rundler/actions/workflows/ci.yml
 [tg_badge]: https://img.shields.io/endpoint?color=neon&logo=telegram&label=chat&url=https://mogyo.ro/quart-apis/tgmembercount?chat_id=rundler
 [tg_link]: https://t.me/rundler
 
@@ -73,7 +73,7 @@ Install [prerequisites](docs/developing.md#setup).
 
 Clone the repository and checkout submodules:
 ```
-git clone https://github.com/OMGWINNING/rundler
+git clone https://github.com/alchemyplatform/rundler
 cd rundler
 git submodule update --init --recursive
 ```
@@ -97,7 +97,7 @@ With further questions:
 
 * Github discussions
 * [Telegram][tg_link]
-* [Github issues](https://github.com/OMGWINNING/rundler/issues/new/choose)
+* [Github issues](https://github.com/alchemyplatform/rundler/issues/new/choose)
 
 If you have questions regarding Alchemy's APIs or service, kindly refrain from discussion here. Please join the [Discord](https://discord.com/invite/alchemyplatform) or reach out to support@alchemy.com.
 
