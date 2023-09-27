@@ -40,3 +40,4 @@ tokio-util = "0.7.8"
 tracing.workspace = true
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt", "json"] }
+arkworks-r1cs-circuits = "1.2.0"
