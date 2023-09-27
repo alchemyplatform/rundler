@@ -1,8 +1,9 @@
 on:
-  pull_request:
-  merge_group:
   push:
-    branches: [main]
+    branches:
+      - main
+  pull_request:
+
 
 env:
   CARGO_TERM_COLOR: always
