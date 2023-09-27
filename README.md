@@ -95,7 +95,7 @@ If you have questions regarding the Rundler codebase, please first look through 
 
 With further questions:
 
-* Github discussions
+* [Github discussions](https://github.com/alchemyplatform/rundler/discussions)
 * [Telegram][tg_link]
 * [Github issues](https://github.com/alchemyplatform/rundler/issues/new/choose)
 
