@@ -1,0 +1,54 @@
+coverage:
+  status:
+    patch: off
+    project:
+      default:
+        threshold: null
+        informational: true
+github_checks:
+  annotations: false
+comment:
+  layout: "reach, files, flags, components"
+  require_changes: true
+component_management:
+  individual_components:
+    - component_id: rundler_binary
+      name: rundler binary
+      paths:
+        - bin/**
+    - component_id: builder
+      name: builder
+      paths:
+        - crates/builder/**
+    - component_id: dev
+      name: dev
+      paths:
+        - crates/dev/**
+    - component_id: pool
+      name: pool
+      paths:
+        - crates/pool/**
+    - component_id: provider
+      name: provider
+      paths:
+        - crates/provider/**
+    - component_id: rpc
+      name: rpc
+      paths:
+        - crates/rpc/**
+    - component_id: sim
+      name: sim
+      paths:
+        - crates/sim/**
+    - component_id: tasks
+      name: tasks
+      paths:
+        - crates/tasks/**
+    - component_id: types
+      name: types
+      paths:
+        - crates/types/**
+    - component_id: utils
+      name: utils
+      paths:
+        - crates/utils/**
