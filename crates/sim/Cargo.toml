@@ -32,6 +32,7 @@ mockall = {workspace = true, optional = true }
 
 [dev-dependencies]
 mockall.workspace = true
+rundler-provider = { path = "../provider", features = ["test-utils"] }
 
 [features]
 test-utils = [ "mockall" ]

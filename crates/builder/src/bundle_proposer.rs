@@ -333,7 +333,7 @@ where
                     error!("Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle.");
                     continue;
                 };
-                let max_cost = gas::user_operation_max_gas_cost(&op, self.settings.chain_id);
+                let max_cost = gas::user_operation_max_gas_cost(&op);
                 if *balance < max_cost {
                     info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
                     paymasters_to_reject.push(paymaster);
@@ -538,7 +538,7 @@ where
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = gas::user_operation_execution_gas_limit(&op.uo, self.settings.chain_id);
+            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,

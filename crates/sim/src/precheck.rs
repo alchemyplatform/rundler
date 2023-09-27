@@ -67,7 +67,7 @@ pub struct Settings {
     pub priority_fee_mode: gas::PriorityFeeMode,
 }
 
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -180,7 +180,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 max_verification_gas,
             ));
         }
-        let total_gas_limit = gas::user_operation_execution_gas_limit(op, chain_id);
+        let total_gas_limit = gas::user_operation_gas_limit(op, chain_id);
         if total_gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 total_gas_limit,
@@ -234,7 +234,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
             }
         }
-        let max_gas_cost = gas::user_operation_max_gas_cost(op, self.settings.chain_id);
+        let max_gas_cost = gas::user_operation_max_gas_cost(op);
         if payer_funds < max_gas_cost {
             if op.paymaster_and_data.is_empty() {
                 return Some(PrecheckViolation::SenderFundsTooLow(
