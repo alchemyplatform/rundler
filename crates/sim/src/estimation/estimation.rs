@@ -689,7 +689,7 @@ mod tests {
             });
 
         // this gas used number is larger than a u64 max number so we need to
-        // check for this overlflow
+        // check for this overflow
         provider.expect_call().returning(|_a, _b| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(18446744073709551616_u128),
@@ -1118,7 +1118,7 @@ mod tests {
         // this number uses the same logic as the pre_verification tests
         assert_eq!(estimation.pre_verification_gas, U256::from(43296));
 
-        // 30000 GAS_FEE_TRANSER_COST increased by default 10%
+        // 30000 GAS_FEE_TRANSFER_COST increased by default 10%
         assert_eq!(estimation.verification_gas_limit, U256::from(33000));
 
         // input gas limit clamped with the set limit in settings and constant MIN

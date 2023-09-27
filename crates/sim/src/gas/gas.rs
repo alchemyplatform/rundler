@@ -94,34 +94,11 @@ pub async fn calc_pre_verification_gas<P: Provider>(
     Ok(static_gas + dynamic_gas)
 }
 
-/// Returns the gas limit for the user operation that should will be used onchain.
+/// Returns the gas limit for the user operation that applies to bundle transaction's limit
 pub fn user_operation_gas_limit(uo: &UserOperation, chain_id: u64) -> U256 {
-    // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
-    // but this not part of the execution gas of the transaction. Thus we only consider
-    // the static portion of the pre_verification_gas in the onchain gas limit.
-    //
-    // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas
-    // and this IS part of the execution gas of the transaction, and thus needs to be
-    // accounted for in the bundle gas limit
-    let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
-        calc_static_pre_verification_gas(uo)
-    } else {
-        uo.pre_verification_gas
-    };
-
-    pvg + uo.call_gas_limit + uo.verification_gas_limit * verification_gas_limit_multiplier(uo)
-}
-
-/// Returns the execution gas limit for the user operation that applies to a blocks' gas cap
-pub fn user_operation_execution_gas_limit(uo: &UserOperation, chain_id: u64) -> U256 {
-    // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
-    // but this not part of the execution gas of the transaction.
-    //
-    // On other chains (Arbitrum) the L1 gas fee is charged via pre_verification_gas and this
-    // IS part of the execution gas of the transaction but does NOT apply to the blocks exectution gas cap
-    // thus it is not included in the execution gas limit.
-    //
-    // In both cases we only consider the static portion of the pre_verification_gas in the execution gas limit.
+    // On some chains (OP bedrock, Arbitrum) the L1 gas fee is charged via pre_verification_gas
+    // but this not part of the execution gas limit of the transaction.
+    // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
     let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
         calc_static_pre_verification_gas(uo)
     } else {
@@ -132,8 +109,10 @@ pub fn user_operation_execution_gas_limit(uo: &UserOperation, chain_id: u64) -> 
 }
 
 /// Returns the maximum cost, in wei, of this user operation
-pub fn user_operation_max_gas_cost(uo: &UserOperation, chain_id: u64) -> U256 {
-    user_operation_gas_limit(uo, chain_id) * uo.max_fee_per_gas
+pub fn user_operation_max_gas_cost(uo: &UserOperation) -> U256 {
+    let mul = if uo.paymaster().is_some() { 3 } else { 1 };
+    uo.max_fee_per_gas
+        * (uo.pre_verification_gas + uo.call_gas_limit + uo.verification_gas_limit * mul)
 }
 
 fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
