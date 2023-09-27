@@ -10,7 +10,7 @@
 
 **High-performance, modular implementation of an ERC-4337 bundler**
 
-![Rundler Banner](./docs/images/rundler-banner.png)
+![Rundler Banner](./docs/images/rundler-banner.jpg)
 
 [Run](#running) | [Developer Docs](./docs)
 
