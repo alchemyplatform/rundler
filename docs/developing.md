@@ -5,7 +5,7 @@
 1. Clone the repo and checkout submodules
 
 ```
-git clone https://github.com/OMGWINNING/rundler
+git clone https://github.com/alchemyplatform/rundler
 cd rundler
 git submodule update --init --recursive
 ```
