@@ -12,7 +12,11 @@ jobs:
           stale-issue-message: 'This issue is stale because it has been open 30 days with no activity. Remove stale label or comment or this will be closed in 5 days.'
           days-before-stale: 30
           days-before-close: 5
-          exempt-assignees: dancoombs,dphilipson,0xfourzerofour,alex-miao 
+          stale-pr-label: "stale"
+          exempt-issue-labels: "prevent-stale"
+          exempt-all-milestones: true
+          exempt-all-assignees: true
+
   todo:
     runs-on: "ubuntu-latest"
     steps:
