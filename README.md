@@ -29,13 +29,13 @@ Rundler is meant to power the ERC-4337 ecosystem with an implementation that use
 Our goals with Rundler:
 
 1. **ERC-4337 Specification Compliance**: Rundler strives to implement the full ERC-4337 specification and to maintain support as the specification changes and new onchain components are released. This includes new Entry Point contract support, support for the upcoming P2P mempool specification, support for alternative mempools, and more.
-2. **High Performance and Reliability**:  Rundler strives to power the most demanding workloads in cloud environments. Rust was chosen for its high performance and memory safety. Rundler's modular architecture lets providers choose to run the stateless components (RPC, builder) in a fully horizontally scalable manner connecting to the stateful components (mempool, p2p, event cache) via the network. Rundler's bundle builder is designed to be able to support the full gas throughput of the network its building for.
+2. **High Performance and Reliability**:  Rundler strives to power the most demanding workloads in cloud environments. Rust was chosen for its high performance and memory safety. Rundler's modular architecture lets providers choose to run the stateless components (RPC, builder) in a fully horizontally scalable manner connecting to the stateful components (mempool, p2p, event cache) via the network. Rundler's bundle builder is designed to be able to support the full gas throughput of the network it's building for.
 3. **Extendability/Chain Support**: ERC-4337 is designed to support any EVM chain. However, different EVM supporting networks have different rules around how they support things like gas usage, gas fees, precompiles, etc. Rundler is designed to be extendable and easily adapted to support any EVM chain.
 4. **Modularity**: Rundler is written in a modular manner, allowing its components to be run as a single integrated binary, or as a distributed system. Rundler also strives for its individual crates to be used to support future ERC-4337 tooling.
 
 ## Status
 
-Rundler is under active development. It is used in Alchemy's cloud to power its account abstraction APIs. However, it is rapidly being upgraded, features are being added, interfaces will have breaking changes, and the ERC-4337 spec is evolving from onchain learnings.
+Rundler is under active development. It is used in Alchemy's cloud to power Alchemy's Account Abstraction APIs account abstraction APIs. However, Rundler is rapidly being upgraded, features are being added, interfaces will have breaking changes, and the ERC-4337 spec is evolving from onchain learnings.
 
 The documentation is work in progress, and we are working to improve it. Please [reach out](#help) with any questions.
 

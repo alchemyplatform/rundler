@@ -11,14 +11,14 @@ It should be considered as a guide to help you navigate the process.
 
 The [Telegram][dev-tg] is available for any concerns you may have that are not covered in this guide.
 
-If you contribute to this project, your contributions will be made to the project as follow: (a) contributions to the Rundler library (i.e. all code outside of the `bin` directory) will be licensed under the GNU Lesser General Public License v3.0, also included in our repository in the COPYING.LESSER file; and (b) contributions to the Rundler binaries (i.e. all code inside of the `bin` directory) will be licensed under the GNU General Public License v3.0, also included in our repository in the COPYING file.
+If you contribute to this project, your contributions will be made to the project as follows: (a) contributions to the Rundler library (i.e. all code outside of the `bin` directory) will be licensed under the GNU Lesser General Public License v3.0, also included in our repository in the COPYING.LESSER file; and (b) contributions to the Rundler binaries (i.e. all code inside of the `bin` directory) will be licensed under the GNU General Public License v3.0, also included in our repository in the COPYING file.
 
 ### Ways to contribute
 
 There are fundamentally three ways an individual can contribute:
 
 1. **By opening an issue:** For example, if you believe that you have uncovered a bug
-   in Rundler, creating a new issue in the issue tracker is the way to report it.
+   in Rundler, creating a new issue in the [issue tracker][gh-issues] is the way to report it.
 2. **By adding context:** Providing additional context to existing issues,
    such as screenshots and code snippets to help resolve issues.
 3. **By resolving issues:** Typically this is done in the form of either
@@ -30,7 +30,7 @@ There are fundamentally three ways an individual can contribute:
 
 ### Submitting a bug report
 
-When filing a new bug report in the issue tracker, you will be presented with a basic form to fill out.
+When filing a new bug report in the [issue tracker][gh-issues], you will be presented with a basic form to fill out.
 
 If you believe that you have uncovered a bug, please fill out the form to the best of your ability. Do not worry if you cannot answer every detail, just fill in what you can. Contributors will ask follow-up questions if something is unclear.
 
@@ -103,6 +103,7 @@ We follow the [conventional commits](https://www.conventionalcommits.org/en/v1.0
 
 From within GitHub, opening a new pull request will present you with a template that should be filled out. Please try your best at filling out the details, but feel free to skip parts if you're not sure what to put.
 
-[dev-tg]: https://t.me/rundler
-
 *Adapted from the [Reth contributing guide](https://github.com/paradigmxyz/reth/blob/main/CONTRIBUTING.md).*
+
+[dev-tg]: https://t.me/rundler
+[gh-issues]: https://github.com/alchemyplatform/rundler/issues/new/choose
