@@ -1,5 +1,6 @@
-#!/bin/bash 
-# Launcher script for the rundler.
+#!/bin/bash
+#launcher script for the AA reference bundler.
+# copied from https://github.com/eth-infinitism/bundler/blob/main/dockers/test/aabundler-launcher.sh
 
 export TAG=latest
 cd `dirname \`realpath $0\``
@@ -11,11 +12,13 @@ case $1 in
 
  start)
 	docker-compose up -d --wait
-	cast send --from $(cast rpc eth_accounts | tail -n 1 | tr -d '[]"') --value 1ether 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 > /dev/null
-    cd ../../bundler-spec-tests/@account-abstraction && yarn deploy --network localhost
+	echo waiting for bundler to start
+	./waitForBundler.sh http://localhost:3000
 	;;
  stop)
- 	docker-compose down -t 3
+	docker-compose logs rundler --no-log-prefix > /tmp/rundler.log
+	echo dumped rundler log to /tmp/bundler.log
+ 	docker-compose down -t 1
 	;;
 
  *)

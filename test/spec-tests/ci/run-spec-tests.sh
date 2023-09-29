@@ -6,6 +6,12 @@ cd "$(dirname "$0")"
 
 docker build ../../.. -t alchemy-platform/rundler:latest
 
-(cd ../bundler-spec-tests && pdm run test --launcher-script=../launchers/rundler-launcher/rundler-launcher.sh $@)
+(cd ../bundler-spec-tests && \
+pdm run pytest -rA -W ignore::DeprecationWarning \
+--url http://localhost:3000 \
+--entry-point 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789 \
+--ethereum-node http://localhost:8545 \
+--launcher-script ../launchers/rundler-launcher/rundler-launcher.sh \
+$@)
 
 ../launchers/rundler-launcher/rundler-launcher.sh stop

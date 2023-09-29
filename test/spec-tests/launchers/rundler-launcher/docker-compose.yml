@@ -8,7 +8,7 @@ services:
     ports:
       - "3000:3000"
       - "8080:8080"
-    command: bash -c "sleep 10; /usr/local/bin/rundler node"
+    command: bash -c "sleep 20; /usr/local/bin/rundler node"
     environment:
       - RUST_LOG=debug
       - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
@@ -16,13 +16,6 @@ services:
       - RPC_API=eth,debug
       - MIN_UNSTAKE_DELAY=2
       - BUILDER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-    healthcheck:
-      test: curl --fail http://localhost:3000/health || exit 1
-      interval: 1s
-      timeout: 1s
-      retries: 60
-      start_period: 10s
-
   geth:
     image: ethereum/client-go:v1.10.26
     ports:
@@ -47,3 +40,9 @@ services:
       - --mine
       - --miner.threads=1
       - --networkid=1337
+    healthcheck:
+      test: [ "CMD-SHELL", "geth attach --exec eth.blockNumber" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

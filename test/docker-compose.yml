@@ -19,9 +19,15 @@ services:
       - --allow-insecure-unlock
       - --rpc.allow-unprotected-txs
       - --dev
-      - --verbosity=2
+      - --verbosity=1
+      - --http.corsdomain='*'
       - --nodiscover
       - --maxpeers=0
       - --mine
       - --miner.threads=1
       - --networkid=1337
+    healthcheck:
+      test: [ "CMD-SHELL", "geth attach --exec eth.blockNumber" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
