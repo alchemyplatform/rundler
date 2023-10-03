@@ -41,12 +41,8 @@ use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 
 /// A user op must be valid for at least this long into the future to be included.
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
-/// Entrypoint requires a buffer over the user operation gas limits in the bundle transaction
-const BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER: u64 = 5000;
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
-/// The fixed gas overhead for any EVM transaction
-const EVM_TRANSACTION_GAS_OVERHEAD: u64 = 21000;
 
 #[derive(Debug, Default)]
 pub(crate) struct Bundle {
@@ -741,11 +737,7 @@ impl ProposalContext {
     }
 
     fn get_total_gas_limit(&self, chain_id: u64) -> U256 {
-        self.iter_ops()
-            .map(|op| gas::user_operation_gas_limit(op, chain_id, false))
-            .fold(U256::zero(), |acc, c| acc + c)
-            + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER
-            + EVM_TRANSACTION_GAS_OVERHEAD
+        gas::bundle_gas_limit(self.iter_ops(), chain_id)
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
@@ -789,8 +781,8 @@ mod tests {
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
                 + op.call_gas_limit
-                + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER
-                + EVM_TRANSACTION_GAS_OVERHEAD,
+                + U256::from(5_000)
+                + U256::from(21_000),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
@@ -1202,7 +1194,7 @@ mod tests {
         assert_eq!(
             bundle.gas_estimate,
             U256::from(math::increase_by_percent(
-                10_000_000 + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER + EVM_TRANSACTION_GAS_OVERHEAD,
+                10_000_000 + 5_000 + 21_000,
                 BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
             ))
         );
