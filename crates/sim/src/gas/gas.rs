@@ -38,7 +38,6 @@ struct GasOverheads {
     per_user_op_word: U256,
     zero_byte: U256,
     non_zero_byte: U256,
-    bundle_size: U256,
 }
 
 impl Default for GasOverheads {
@@ -49,7 +48,6 @@ impl Default for GasOverheads {
             per_user_op_word: 4.into(),
             zero_byte: 4.into(),
             non_zero_byte: 16.into(),
-            bundle_size: 1.into(),
         }
     }
 }
@@ -74,7 +72,7 @@ pub async fn calc_pre_verification_gas<P: Provider>(
     provider: Arc<P>,
     chain_id: u64,
 ) -> anyhow::Result<U256> {
-    let static_gas = calc_static_pre_verification_gas(full_op);
+    let static_gas = calc_static_pre_verification_gas(full_op, true);
     let dynamic_gas = match chain_id {
         _ if ARBITRUM_CHAIN_IDS.contains(&chain_id) => {
             provider
@@ -95,12 +93,16 @@ pub async fn calc_pre_verification_gas<P: Provider>(
 }
 
 /// Returns the gas limit for the user operation that applies to bundle transaction's limit
-pub fn user_operation_gas_limit(uo: &UserOperation, chain_id: u64) -> U256 {
+pub fn user_operation_gas_limit(
+    uo: &UserOperation,
+    chain_id: u64,
+    include_fixed_gas_overhead: bool,
+) -> U256 {
     // On some chains (OP bedrock, Arbitrum) the L1 gas fee is charged via pre_verification_gas
     // but this not part of the execution gas limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
     let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
-        calc_static_pre_verification_gas(uo)
+        calc_static_pre_verification_gas(uo, include_fixed_gas_overhead)
     } else {
         uo.pre_verification_gas
     };
@@ -115,7 +117,7 @@ pub fn user_operation_max_gas_cost(uo: &UserOperation) -> U256 {
         * (uo.pre_verification_gas + uo.call_gas_limit + uo.verification_gas_limit * mul)
 }
 
-fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
+fn calc_static_pre_verification_gas(op: &UserOperation, include_fixed_gas_overhead: bool) -> U256 {
     let ov = GasOverheads::default();
     let encoded_op = op.clone().encode();
     let length_in_words = encoded_op.len() / 32; // size of packed user op is always a multiple of 32 bytes
@@ -131,10 +133,14 @@ fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
         .reduce(|a, b| a + b)
         .unwrap_or_default();
 
-    ov.fixed / ov.bundle_size
-        + call_data_cost
+    call_data_cost
         + ov.per_user_op
         + ov.per_user_op_word * length_in_words
+        + (if include_fixed_gas_overhead {
+            ov.fixed
+        } else {
+            0.into()
+        })
 }
 
 fn verification_gas_limit_multiplier(uo: &UserOperation) -> u64 {
