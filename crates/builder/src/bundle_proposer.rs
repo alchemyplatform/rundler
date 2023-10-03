@@ -45,6 +45,8 @@ const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER: u64 = 5000;
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
+/// The fixed gas overhead for any EVM transaction
+const EVM_TRANSACTION_GAS_OVERHEAD: u64 = 21000;
 
 #[derive(Debug, Default)]
 pub(crate) struct Bundle {
@@ -538,7 +540,7 @@ where
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id);
+            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
@@ -740,9 +742,10 @@ impl ProposalContext {
 
     fn get_total_gas_limit(&self, chain_id: u64) -> U256 {
         self.iter_ops()
-            .map(|op| gas::user_operation_gas_limit(op, chain_id))
+            .map(|op| gas::user_operation_gas_limit(op, chain_id, false))
             .fold(U256::zero(), |acc, c| acc + c)
             + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER
+            + EVM_TRANSACTION_GAS_OVERHEAD
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
@@ -786,7 +789,8 @@ mod tests {
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
                 + op.call_gas_limit
-                + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER,
+                + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER
+                + EVM_TRANSACTION_GAS_OVERHEAD,
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
@@ -909,7 +913,7 @@ mod tests {
         let max_priority_fee_per_gas = U256::from(50);
         let op1 = op_with_sender_and_fees(address(1), 2054.into(), 54.into());
         let op2 = op_with_sender_and_fees(address(2), 2055.into(), 55.into());
-        let bundle = make_bundle(
+        let bundle = mock_make_bundle(
             vec![
                 MockOp {
                     op: op1.clone(),
@@ -943,7 +947,7 @@ mod tests {
         let max_priority_fee_per_gas = U256::from(50);
         let op1 = op_with_sender_and_fees(address(1), 1054.into(), 55.into());
         let op2 = op_with_sender_and_fees(address(2), 1055.into(), 55.into());
-        let bundle = make_bundle(
+        let bundle = mock_make_bundle(
             vec![
                 MockOp {
                     op: op1.clone(),
@@ -993,7 +997,7 @@ mod tests {
         let op_b_aggregated_sig = 21;
         let aggregator_a_signature = 101;
         let aggregator_b_signature = 102;
-        let bundle = make_bundle(
+        let bundle = mock_make_bundle(
             vec![
                 MockOp {
                     op: unaggregated_op.clone(),
@@ -1098,7 +1102,7 @@ mod tests {
         let op6 = op_with_sender_factory(address(6), address(4));
         let deposit = parse_units("1", "ether").unwrap().into();
 
-        let bundle = make_bundle(
+        let bundle = mock_make_bundle(
             vec![
                 MockOp {
                     op: op1.clone(),
@@ -1159,7 +1163,7 @@ mod tests {
         let op4 = op_with_sender_call_gas_limit(address(4), U256::from(10_000_000));
         let deposit = parse_units("1", "ether").unwrap().into();
 
-        let bundle = make_bundle(
+        let bundle = mock_make_bundle(
             vec![
                 MockOp {
                     op: op1.clone(),
@@ -1198,7 +1202,7 @@ mod tests {
         assert_eq!(
             bundle.gas_estimate,
             U256::from(math::increase_by_percent(
-                10_000_000 + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER,
+                10_000_000 + BUNDLE_TRANSACTION_GAS_OVERHEAD_BUFFER + EVM_TRANSACTION_GAS_OVERHEAD,
                 BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
             ))
         );
@@ -1216,7 +1220,7 @@ mod tests {
     }
 
     async fn simple_make_bundle(mock_ops: Vec<MockOp>) -> Bundle {
-        make_bundle(
+        mock_make_bundle(
             mock_ops,
             vec![],
             vec![HandleOpsOut::Success],
@@ -1227,7 +1231,7 @@ mod tests {
         .await
     }
 
-    async fn make_bundle(
+    async fn mock_make_bundle(
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,
         mock_handle_ops_call_results: Vec<HandleOpsOut>,
