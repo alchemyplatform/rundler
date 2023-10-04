@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
+use std::{cmp, sync::Arc};
 
 use ethers::{
     abi::AbiEncode,
@@ -103,21 +103,17 @@ where
     let mut max_gas = U256::zero();
     let mut gas_spent = U256::zero();
     for op in iter_ops {
-        let post_exec_req_gas = if op.paymaster().is_some()
-            && (op.verification_gas_limit).gt(&ov.bundle_transaction_gas_buffer)
-        {
-            op.verification_gas_limit
-        } else {
-            ov.bundle_transaction_gas_buffer
-        };
+        let post_exec_req_gas = op
+            .paymaster()
+            .map_or(ov.bundle_transaction_gas_buffer, |_| {
+                cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
+            });
         let required_gas = gas_spent
             + user_operation_pre_verification_gas_limit(op, chain_id, false)
-            + U256::from(2) * op.verification_gas_limit
+            + op.verification_gas_limit * 2
             + op.call_gas_limit
             + post_exec_req_gas;
-        if required_gas > max_gas {
-            max_gas = required_gas;
-        }
+        max_gas = cmp::max(required_gas, max_gas);
         gas_spent += user_operation_gas_limit(op, chain_id, false);
     }
 
@@ -373,11 +369,11 @@ mod tests {
         let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
 
         // The gas requirement in the first user operation dominates and determines the expected gas limit
-        let expected_gas_limit = U256::from(21_000)
-            + U256::from(5_000)
-            + op1.pre_verification_gas
-            + U256::from(2) * op1.verification_gas_limit
-            + op1.call_gas_limit;
+        let expected_gas_limit = op1.pre_verification_gas
+            + op1.verification_gas_limit * 2
+            + op1.call_gas_limit
+            + 21_000
+            + 5_000;
 
         assert_eq!(gas_limit, expected_gas_limit);
     }
@@ -415,14 +411,14 @@ mod tests {
         let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
 
         // The gas requirement in the second user operation dominates and determines the expected gas limit
-        let expected_gas_limit = U256::from(21_000)
-            + U256::from(5_000)
-            + op1.pre_verification_gas
-            + U256::from(3) * op1.verification_gas_limit
+        let expected_gas_limit = op1.pre_verification_gas
+            + op1.verification_gas_limit * 3
             + op1.call_gas_limit
             + op2.pre_verification_gas
-            + U256::from(2) * op2.verification_gas_limit
-            + op2.call_gas_limit;
+            + op2.verification_gas_limit * 2
+            + op2.call_gas_limit
+            + 21_000
+            + 5_000;
 
         assert_eq!(gas_limit, expected_gas_limit);
     }
