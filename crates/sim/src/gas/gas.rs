@@ -336,34 +336,29 @@ mod tests {
 
     use super::*;
 
+    fn create_test_op_with_gas(
+        pre_verification_gas: U256,
+        call_gas_limit: U256,
+        verification_gas_limit: U256,
+        with_paymaster: bool,
+    ) -> UserOperation {
+        UserOperation {
+            pre_verification_gas,
+            call_gas_limit,
+            verification_gas_limit,
+            paymaster_and_data: if with_paymaster {
+                Bytes::from(vec![0; 20])
+            } else {
+                Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_bundle_gas_limit() {
-        let op1 = UserOperation {
-            pre_verification_gas: 100_000.into(),
-            call_gas_limit: 100_000.into(),
-            verification_gas_limit: 1_000_000.into(),
-            max_fee_per_gas: Default::default(),
-            sender: Default::default(),
-            nonce: Default::default(),
-            init_code: Default::default(),
-            call_data: Default::default(),
-            max_priority_fee_per_gas: Default::default(),
-            paymaster_and_data: Default::default(),
-            signature: Default::default(),
-        };
-        let op2 = UserOperation {
-            pre_verification_gas: 100_000.into(),
-            call_gas_limit: 100_000.into(),
-            verification_gas_limit: 200_000.into(),
-            max_fee_per_gas: Default::default(),
-            sender: Default::default(),
-            nonce: Default::default(),
-            init_code: Default::default(),
-            call_data: Default::default(),
-            max_priority_fee_per_gas: Default::default(),
-            paymaster_and_data: Default::default(),
-            signature: Default::default(),
-        };
+        let op1 = create_test_op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), false);
+        let op2 = create_test_op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
         let ops = vec![op1.clone(), op2.clone()];
         let chain_id = 1;
         let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
@@ -380,32 +375,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_bundle_gas_limit_with_paymaster_op() {
-        let op1 = UserOperation {
-            pre_verification_gas: 100_000.into(),
-            call_gas_limit: 100_000.into(),
-            verification_gas_limit: 1_000_000.into(),
-            max_fee_per_gas: Default::default(),
-            sender: Default::default(),
-            nonce: Default::default(),
-            init_code: Default::default(),
-            call_data: Default::default(),
-            max_priority_fee_per_gas: Default::default(),
-            paymaster_and_data: Bytes::from(vec![0; 20]), // has paymaster
-            signature: Default::default(),
-        };
-        let op2 = UserOperation {
-            pre_verification_gas: 100_000.into(),
-            call_gas_limit: 100_000.into(),
-            verification_gas_limit: 200_000.into(),
-            max_fee_per_gas: Default::default(),
-            sender: Default::default(),
-            nonce: Default::default(),
-            init_code: Default::default(),
-            call_data: Default::default(),
-            max_priority_fee_per_gas: Default::default(),
-            paymaster_and_data: Default::default(),
-            signature: Default::default(),
-        };
+        let op1 = create_test_op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), true); // has paymaster
+        let op2 = create_test_op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
         let ops = vec![op1.clone(), op2.clone()];
         let chain_id = 1;
         let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
