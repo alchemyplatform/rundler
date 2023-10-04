@@ -757,7 +757,7 @@ mod tests {
     use ethers::{types::H160, utils::parse_units};
     use rundler_pool::MockPoolServer;
     use rundler_provider::{AggregatorSimOut, MockEntryPoint, MockProvider};
-    use rundler_sim::{MockSimulator, SimulationViolation};
+    use rundler_sim::{gas::GasOverheads, MockSimulator, SimulationViolation};
     use rundler_types::ValidTimeRange;
 
     use super::*;
@@ -777,12 +777,13 @@ mod tests {
         }])
         .await;
 
+        let ov = GasOverheads::default();
         let expected_gas = math::increase_by_percent(
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
                 + op.call_gas_limit
-                + U256::from(5_000)
-                + U256::from(21_000),
+                + ov.bundle_transaction_gas_buffer
+                + ov.transaction_gas_overhead,
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
