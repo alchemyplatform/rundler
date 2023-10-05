@@ -74,6 +74,8 @@ pub(crate) enum TrackerUpdate {
         nonce: U256,
         block_number: u64,
         attempt_number: u64,
+        gas_limit: U256,
+        gas_used: U256,
     },
     StillPendingAfterWait,
     LatestTxDropped {
@@ -288,11 +290,14 @@ where
                     .await
                     .context("tracker should check transaction status when the nonce changes")?;
                 if let TxStatus::Mined { block_number } = status {
+                    let (gas_limit, gas_used) = self.get_mined_tx_gas_info(tx.tx_hash).await?;
                     out = TrackerUpdate::Mined {
                         tx_hash: tx.tx_hash,
                         nonce: self.nonce,
                         block_number,
                         attempt_number: tx.attempt_number,
+                        gas_limit,
+                        gas_used,
                     };
                     break;
                 }
@@ -321,11 +326,14 @@ where
             TxStatus::Mined { block_number } => {
                 let nonce = self.nonce;
                 self.set_nonce_and_clear_state(nonce + 1);
+                let (gas_limit, gas_used) = self.get_mined_tx_gas_info(last_tx.tx_hash).await?;
                 Some(TrackerUpdate::Mined {
                     tx_hash: last_tx.tx_hash,
                     nonce,
                     block_number,
                     attempt_number: last_tx.attempt_number,
+                    gas_limit,
+                    gas_used,
                 })
             }
             TxStatus::Dropped => {
@@ -379,6 +387,14 @@ where
             TransactionTrackerMetrics::set_current_fees(None);
         }
     }
+
+    async fn get_mined_tx_gas_info(&self, tx_hash: H256) -> anyhow::Result<(U256, U256)> {
+        let (tx, tx_receipt) = tokio::try_join!(
+            self.provider.get_transaction(tx_hash),
+            self.provider.get_transaction_receipt(tx_hash),
+        )?;
+        Ok((tx.unwrap().gas, tx_receipt.unwrap().gas_used.unwrap()))
+    }
 }
 
 struct TransactionTrackerMetrics {}
@@ -417,7 +433,7 @@ impl TransactionTrackerMetrics {
 mod tests {
     use std::sync::Arc;
 
-    use ethers::types::{Address, Eip1559TransactionRequest};
+    use ethers::types::{Address, Eip1559TransactionRequest, Transaction, TransactionReceipt};
     use mockall::Sequence;
     use rundler_provider::MockProvider;
 
@@ -732,6 +748,22 @@ mod tests {
             .expect_get_block_number()
             .returning(move || Ok(1))
             .times(1);
+
+        provider.expect_get_transaction().returning(|_: H256| {
+            Ok(Some(Transaction {
+                gas: U256::from(0),
+                ..Default::default()
+            }))
+        });
+
+        provider
+            .expect_get_transaction_receipt()
+            .returning(|_: H256| {
+                Ok(Some(TransactionReceipt {
+                    gas_used: Some(U256::from(0)),
+                    ..Default::default()
+                }))
+            });
 
         let tracker = create_tracker(sender, provider).await;
 

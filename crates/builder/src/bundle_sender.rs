@@ -262,9 +262,12 @@ where
                 tx_hash,
                 block_number,
                 attempt_number,
+                gas_limit,
+                gas_used,
                 ..
             } => {
                 BuilderMetrics::increment_bundle_txns_success(self.builder_index);
+                BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used);
                 if attempt_number == 0 {
                     info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
                 } else {
@@ -375,6 +378,8 @@ where
                     nonce,
                     block_number,
                     attempt_number,
+                    gas_limit,
+                    gas_used,
                 } => {
                     self.emit(BuilderEvent::transaction_mined(
                         self.builder_index,
@@ -383,6 +388,7 @@ where
                         block_number,
                     ));
                     BuilderMetrics::increment_bundle_txns_success(self.builder_index);
+                    BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used);
                     return Ok(SendBundleResult::Success {
                         block_number,
                         attempt_number,
@@ -543,6 +549,14 @@ impl BuilderMetrics {
 
     fn increment_bundle_txn_fee_increases(builder_index: u64) {
         metrics::increment_counter!("builder_bundle_fee_increases", "builder_index" => builder_index.to_string());
+    }
+
+    fn set_bundle_gas_stats(gas_limit: U256, gas_used: U256) {
+        let gas_limit = gas_limit.as_u128() as f64;
+        let gas_used = gas_used.as_u128() as f64;
+        metrics::gauge!("builder_bundle_gas_limit", gas_limit);
+        metrics::gauge!("builder_bundle_gas_used", gas_used);
+        metrics::gauge!("builder_bundle_gas_utilization", gas_limit / gas_used);
     }
 
     fn set_current_fees(fees: &GasFees) {
