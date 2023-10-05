@@ -258,12 +258,15 @@ where
         };
 
         // Add op to pool
-        let mut state = self.state.write();
-        let hash = state.pool.add_operation(pool_op.clone())?;
-        let bn = state.block_number;
-        if throttled {
-            state.throttled_ops.insert(hash, bn);
-        }
+        let (hash, bn) = {
+            let mut state = self.state.write();
+            let hash = state.pool.add_operation(pool_op.clone())?;
+            let bn = state.block_number;
+            if throttled {
+                state.throttled_ops.insert(hash, bn);
+            }
+            (hash, bn)
+        };
 
         // Update reputation
         pool_op
@@ -271,11 +274,6 @@ where
             .map(|e| e.address)
             .unique()
             .for_each(|a| self.reputation.add_seen(a));
-
-        // If an entity was throttled, track with throttled ops
-        if throttled {
-            state.throttled_ops.insert(hash, bn);
-        }
 
         let op_hash = pool_op.uo.op_hash(self.entry_point, self.chain_id);
         let valid_after = pool_op.valid_time_range.valid_after;
