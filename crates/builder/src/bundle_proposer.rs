@@ -12,6 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
+    cmp,
     collections::{HashMap, HashSet},
     mem,
     sync::Arc,
@@ -29,8 +30,10 @@ use mockall::automock;
 use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
-    gas, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess,
-    Simulator,
+    gas::{
+        self, user_operation_gas_limit, user_operation_pre_verification_gas_limit, GasOverheads,
+    },
+    ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess, Simulator,
 };
 use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
 use rundler_utils::{emit::WithEntryPoint, math};
@@ -409,7 +412,7 @@ where
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
-            context.get_total_gas_limit(self.settings.chain_id),
+            context.get_bundle_gas_limit(self.settings.chain_id),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
         let handle_ops_out = self
@@ -536,7 +539,7 @@ where
         let mut gas_left = U256::from(self.settings.max_bundle_gas);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false);
+            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
@@ -736,8 +739,32 @@ impl ProposalContext {
             .collect()
     }
 
-    fn get_total_gas_limit(&self, chain_id: u64) -> U256 {
-        gas::bundle_gas_limit(self.iter_ops(), chain_id)
+    fn get_bundle_gas_limit(&self, chain_id: u64) -> U256 {
+        let ov = GasOverheads::default();
+        let mut max_gas = U256::zero();
+        let mut gas_spent = U256::zero();
+        for op_with_sim in self.iter_ops_with_simulations() {
+            let op = &op_with_sim.op;
+            let post_exec_req_gas = op
+                .paymaster()
+                .map_or(ov.bundle_transaction_gas_buffer, |_| {
+                    cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
+                });
+            let required_gas = gas_spent
+                + user_operation_pre_verification_gas_limit(op, chain_id, false)
+                + op.verification_gas_limit * 2
+                + op.call_gas_limit
+                + post_exec_req_gas;
+            max_gas = cmp::max(required_gas, max_gas);
+            gas_spent += user_operation_gas_limit(
+                op,
+                chain_id,
+                false,
+                Some(op_with_sim.simulation.requires_post_op),
+            );
+        }
+
+        max_gas + ov.transaction_gas_overhead
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
@@ -757,7 +784,7 @@ mod tests {
     use ethers::{types::H160, utils::parse_units};
     use rundler_pool::MockPoolServer;
     use rundler_provider::{AggregatorSimOut, MockEntryPoint, MockProvider};
-    use rundler_sim::{gas::GasOverheads, MockSimulator, SimulationViolation};
+    use rundler_sim::{MockSimulator, SimulationViolation};
     use rundler_types::ValidTimeRange;
 
     use super::*;

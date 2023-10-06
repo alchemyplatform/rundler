@@ -180,7 +180,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 max_verification_gas,
             ));
         }
-        let total_gas_limit = gas::user_operation_gas_limit(op, chain_id, true);
+        let total_gas_limit = gas::user_operation_gas_limit(op, chain_id, true, None);
         if total_gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 total_gas_limit,
