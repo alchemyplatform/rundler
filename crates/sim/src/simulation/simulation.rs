@@ -71,6 +71,8 @@ pub struct SimulationSuccess {
     pub accessed_addresses: HashSet<Address>,
     /// Expected storage values for all accessed slots during validation
     pub expected_storage: ExpectedStorage,
+    /// Whether the operation requires a post-op
+    pub requires_post_op: bool,
 }
 
 impl SimulationSuccess {
@@ -503,6 +505,7 @@ where
             pre_op_gas,
             valid_after,
             valid_until,
+            paymaster_context,
             ..
         } = return_info;
         Ok(SimulationSuccess {
@@ -516,6 +519,7 @@ where
             account_is_staked,
             accessed_addresses,
             expected_storage: tracer_out.expected_storage,
+            requires_post_op: !paymaster_context.is_empty(),
         })
     }
 }

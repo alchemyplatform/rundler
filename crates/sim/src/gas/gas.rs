@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, sync::Arc};
+use std::sync::Arc;
 
 use ethers::{
     abi::AbiEncode,
@@ -94,44 +94,21 @@ pub async fn calc_pre_verification_gas<P: Provider>(
     Ok(static_gas + dynamic_gas)
 }
 
-/// Compute the gas limit for the bundle composed of the given user operations
-pub fn bundle_gas_limit<'a, I>(iter_ops: I, chain_id: u64) -> U256
-where
-    I: Iterator<Item = &'a UserOperation>,
-{
-    let ov = GasOverheads::default();
-    let mut max_gas = U256::zero();
-    let mut gas_spent = U256::zero();
-    for op in iter_ops {
-        let post_exec_req_gas = op
-            .paymaster()
-            .map_or(ov.bundle_transaction_gas_buffer, |_| {
-                cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
-            });
-        let required_gas = gas_spent
-            + user_operation_pre_verification_gas_limit(op, chain_id, false)
-            + op.verification_gas_limit * 2
-            + op.call_gas_limit
-            + post_exec_req_gas;
-        max_gas = cmp::max(required_gas, max_gas);
-        gas_spent += user_operation_gas_limit(op, chain_id, false);
-    }
-
-    max_gas + ov.transaction_gas_overhead
-}
-
 /// Returns the gas limit for the user operation that applies to bundle transaction's limit
 pub fn user_operation_gas_limit(
     uo: &UserOperation,
     chain_id: u64,
     assume_single_op_bundle: bool,
+    paymaster_post_op: Option<bool>,
 ) -> U256 {
     user_operation_pre_verification_gas_limit(uo, chain_id, assume_single_op_bundle)
         + uo.call_gas_limit
-        + uo.verification_gas_limit * verification_gas_limit_multiplier(uo, assume_single_op_bundle)
+        + uo.verification_gas_limit
+            * verification_gas_limit_multiplier(uo, assume_single_op_bundle, paymaster_post_op)
 }
 
-fn user_operation_pre_verification_gas_limit(
+/// Returns the static pre-verification gas cost of a user operation
+pub fn user_operation_pre_verification_gas_limit(
     uo: &UserOperation,
     chain_id: u64,
     include_fixed_gas_overhead: bool,
@@ -179,13 +156,15 @@ fn calc_static_pre_verification_gas(op: &UserOperation, include_fixed_gas_overhe
         })
 }
 
-fn verification_gas_limit_multiplier(uo: &UserOperation, assume_single_op_bundle: bool) -> u64 {
-    // If using a paymaster, we need to account for potentially 2 postOp
-    // calls (even though it won't be called).
-    // Else the entrypoint expects the gas for 1 postOp call that
-    // uses verification_gas_limit plus the actual verification call
+fn verification_gas_limit_multiplier(
+    uo: &UserOperation,
+    assume_single_op_bundle: bool,
+    paymaster_post_op: Option<bool>,
+) -> u64 {
+    // If using a paymaster that has a postOp, we need to account for potentially 2 postOp calls which can each use up to verification_gas_limit gas.
+    // otherwise the entrypoint expects the gas for 1 postOp call that uses verification_gas_limit plus the actual verification call
     // we only add the additional verification_gas_limit only if we know for sure that this is a single op bundle, which what we do to get a worst-case upper bound
-    if uo.paymaster().is_some() {
+    if uo.paymaster().is_some() && paymaster_post_op.map_or(true, |x| x) {
         3
     } else if assume_single_op_bundle {
         2
@@ -328,69 +307,4 @@ const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
 
 fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
     NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use ethers::types::Bytes;
-
-    use super::*;
-
-    fn create_test_op_with_gas(
-        pre_verification_gas: U256,
-        call_gas_limit: U256,
-        verification_gas_limit: U256,
-        with_paymaster: bool,
-    ) -> UserOperation {
-        UserOperation {
-            pre_verification_gas,
-            call_gas_limit,
-            verification_gas_limit,
-            paymaster_and_data: if with_paymaster {
-                Bytes::from(vec![0; 20])
-            } else {
-                Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn test_bundle_gas_limit() {
-        let op1 = create_test_op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), false);
-        let op2 = create_test_op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
-        let ops = vec![op1.clone(), op2.clone()];
-        let chain_id = 1;
-        let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
-
-        // The gas requirement in the first user operation dominates and determines the expected gas limit
-        let expected_gas_limit = op1.pre_verification_gas
-            + op1.verification_gas_limit * 2
-            + op1.call_gas_limit
-            + 21_000
-            + 5_000;
-
-        assert_eq!(gas_limit, expected_gas_limit);
-    }
-
-    #[tokio::test]
-    async fn test_bundle_gas_limit_with_paymaster_op() {
-        let op1 = create_test_op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), true); // has paymaster
-        let op2 = create_test_op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
-        let ops = vec![op1.clone(), op2.clone()];
-        let chain_id = 1;
-        let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
-
-        // The gas requirement in the second user operation dominates and determines the expected gas limit
-        let expected_gas_limit = op1.pre_verification_gas
-            + op1.verification_gas_limit * 3
-            + op1.call_gas_limit
-            + op2.pre_verification_gas
-            + op2.verification_gas_limit * 2
-            + op2.call_gas_limit
-            + 21_000
-            + 5_000;
-
-        assert_eq!(gas_limit, expected_gas_limit);
-    }
 }
