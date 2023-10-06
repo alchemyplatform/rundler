@@ -508,8 +508,7 @@ mod tests {
 
         fn get_block_by_hash(&self, hash: H256) -> Option<Block<H256>> {
             let blocks = self.blocks.read();
-            let number = blocks.iter().position(|block| block.hash == hash);
-            let Some(number) = number else { return None };
+            let number = blocks.iter().position(|block| block.hash == hash)?;
             let parent_hash = if number > 0 {
                 blocks[number - 1].hash
             } else {

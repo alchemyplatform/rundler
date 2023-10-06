@@ -256,7 +256,6 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
             guess = (max_failure_gas + min_success_gas) / 2;
         }
 
-        let mut min_success_gas = min_success_gas;
         if op.paymaster().is_none() {
             // If not using a paymaster, add the gas for the gas fee transfer.
             min_success_gas += GAS_FEE_TRANSFER_COST;
