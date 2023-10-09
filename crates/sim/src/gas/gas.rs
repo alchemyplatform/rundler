@@ -164,7 +164,7 @@ fn verification_gas_limit_multiplier(
     // If using a paymaster that has a postOp, we need to account for potentially 2 postOp calls which can each use up to verification_gas_limit gas.
     // otherwise the entrypoint expects the gas for 1 postOp call that uses verification_gas_limit plus the actual verification call
     // we only add the additional verification_gas_limit only if we know for sure that this is a single op bundle, which what we do to get a worst-case upper bound
-    if uo.paymaster().is_some() && paymaster_post_op.map_or(true, |x| x) {
+    if uo.paymaster().is_some() && paymaster_post_op.unwrap_or(true) {
         3
     } else if assume_single_op_bundle {
         2
