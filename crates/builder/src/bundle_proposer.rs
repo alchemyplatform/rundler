@@ -745,11 +745,11 @@ impl ProposalContext {
         let mut gas_spent = U256::zero();
         for op_with_sim in self.iter_ops_with_simulations() {
             let op = &op_with_sim.op;
-            let post_exec_req_gas = op
-                .paymaster()
-                .map_or(ov.bundle_transaction_gas_buffer, |_| {
-                    cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
-                });
+            let post_exec_req_gas = if op_with_sim.simulation.requires_post_op {
+                cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
+            } else {
+                ov.bundle_transaction_gas_buffer
+            };
             let required_gas = gas_spent
                 + user_operation_pre_verification_gas_limit(op, chain_id, false)
                 + op.verification_gas_limit * 2
@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bundle_gas_limit() {
+    async fn test_bundle_gas_limit_simple() {
         let op1 = op_with_sender_call_gas_limit(address(1), U256::from(5_000_000));
         let op2 = op_with_sender_call_gas_limit(address(2), U256::from(5_000_000));
         let op3 = op_with_sender_call_gas_limit(address(3), U256::from(10_000_000));
@@ -1226,6 +1226,102 @@ mod tests {
                 BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit() {
+        let op1 = op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), false);
+        let op2 = op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
+        let chain_id = 1;
+        let mut groups_by_aggregator = LinkedHashMap::new();
+        groups_by_aggregator.insert(
+            None,
+            AggregatorGroup {
+                ops_with_simulations: vec![
+                    OpWithSimulation {
+                        op: op1.clone(),
+                        simulation: SimulationSuccess {
+                            requires_post_op: false,
+                            ..Default::default()
+                        },
+                    },
+                    OpWithSimulation {
+                        op: op2.clone(),
+                        simulation: SimulationSuccess {
+                            requires_post_op: false,
+                            ..Default::default()
+                        },
+                    },
+                ],
+                signature: Default::default(),
+            },
+        );
+        let context = ProposalContext {
+            groups_by_aggregator,
+            rejected_ops: vec![],
+            rejected_entities: vec![],
+        };
+
+        // The gas requirement from the execution of the first UO is: g >= p_1 + 2v_1 + c_1 + 5000
+        // The gas requirement from the execution of the second UO is: g >= p_1 + v_1 + c_1 + p_2 + 2v_2 + c_2 + 5000
+        // The first condition dominates and determines the expected gas limit
+        let expected_gas_limit = op1.pre_verification_gas
+            + op1.verification_gas_limit * 2
+            + op1.call_gas_limit
+            + 5_000
+            + 21_000;
+
+        assert_eq!(context.get_bundle_gas_limit(chain_id), expected_gas_limit);
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_with_paymaster_op() {
+        let op1 = op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), true); // has paymaster
+        let op2 = op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
+        let chain_id = 1;
+        let mut groups_by_aggregator = LinkedHashMap::new();
+        groups_by_aggregator.insert(
+            None,
+            AggregatorGroup {
+                ops_with_simulations: vec![
+                    OpWithSimulation {
+                        op: op1.clone(),
+                        simulation: SimulationSuccess {
+                            requires_post_op: true, // uses postOp
+                            ..Default::default()
+                        },
+                    },
+                    OpWithSimulation {
+                        op: op2.clone(),
+                        simulation: SimulationSuccess {
+                            requires_post_op: false,
+                            ..Default::default()
+                        },
+                    },
+                ],
+                signature: Default::default(),
+            },
+        );
+        let context = ProposalContext {
+            groups_by_aggregator,
+            rejected_ops: vec![],
+            rejected_entities: vec![],
+        };
+        let gas_limit = context.get_bundle_gas_limit(chain_id);
+
+        // The gas requirement from the execution of the first UO is: g >= p_1 + 3v_1 + c_1
+        // The gas requirement from the execution of the second UO is: g >= p_1 + 3v_1 + c_1 + p_2 + 2v_2 + c_2 + 5000
+        // The first condition dominates and determines the expected gas limit
+        let expected_gas_limit = op1.pre_verification_gas
+            + op1.verification_gas_limit * 3
+            + op1.call_gas_limit
+            + op2.pre_verification_gas
+            + op2.verification_gas_limit * 2
+            + op2.call_gas_limit
+            + 21_000
+            + 5_000;
+
+        assert_eq!(gas_limit, expected_gas_limit);
     }
 
     struct MockOp {
@@ -1404,6 +1500,25 @@ mod tests {
         UserOperation {
             sender,
             call_gas_limit,
+            ..Default::default()
+        }
+    }
+
+    fn op_with_gas(
+        pre_verification_gas: U256,
+        call_gas_limit: U256,
+        verification_gas_limit: U256,
+        with_paymaster: bool,
+    ) -> UserOperation {
+        UserOperation {
+            pre_verification_gas,
+            call_gas_limit,
+            verification_gas_limit,
+            paymaster_and_data: if with_paymaster {
+                Bytes::from(vec![0; 20])
+            } else {
+                Default::default()
+            },
             ..Default::default()
         }
     }
