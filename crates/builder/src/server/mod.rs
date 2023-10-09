@@ -48,7 +48,7 @@ pub trait BuilderServer: Send + Sync + 'static {
     /// Trigger the builder to send a bundle now, used for debugging.
     ///
     /// Bundling mode must be set to `Manual`, or this will error
-    async fn debug_send_bundle_now(&self) -> BuilderResult<H256>;
+    async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)>;
 
     /// Set the bundling mode
     async fn debug_set_bundling_mode(&self, mode: BundlingMode) -> BuilderResult<()>;

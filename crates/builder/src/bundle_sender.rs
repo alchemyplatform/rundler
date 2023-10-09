@@ -11,12 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 
 use anyhow::{bail, Context};
@@ -31,7 +28,6 @@ use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
     sync::{broadcast, mpsc, oneshot},
-    time,
 };
 use tracing::{error, info, trace, warn};
 
@@ -65,7 +61,6 @@ where
     send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
     chain_id: u64,
     beneficiary: Address,
-    eth_poll_interval: Duration,
     proposer: P,
     entry_point: E,
     transaction_tracker: T,
@@ -141,14 +136,38 @@ where
 
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
+            let mut last_block = None;
 
             if self.manual_bundling_mode.load(Ordering::Relaxed) {
-                tokio::select! {
-                    Some(r) = self.send_bundle_receiver.recv() => {
-                        send_bundle_response = Some(r.responder);
-                    }
-                    _ = time::sleep(self.eth_poll_interval) => {
-                        continue;
+                if let Some(r) = self.send_bundle_receiver.recv().await {
+                    send_bundle_response = Some(r.responder);
+                } else {
+                    error!("Bundle stream closed in manual mode");
+                    bail!("Bundle stream closed in manual mode");
+                }
+            } else {
+                // Wait for new block. Block number doesn't matter as the pool will only notify of new blocks
+                // after the pool has updated its state. The bundle will be formed using the latest pool state
+                // and can land in the next block
+                last_block = rx.recv().await;
+
+                if last_block.is_none() {
+                    error!("Block stream closed");
+                    bail!("Block stream closed");
+                }
+                // Consume any other blocks that may have been buffered up
+                loop {
+                    match rx.try_recv() {
+                        Ok(b) => {
+                            last_block = Some(b);
+                        }
+                        Err(mpsc::error::TryRecvError::Empty) => {
+                            break;
+                        }
+                        Err(mpsc::error::TryRecvError::Disconnected) => {
+                            error!("Block stream closed");
+                            bail!("Block stream closed");
+                        }
                     }
                 }
             }
@@ -156,29 +175,6 @@ where
             // Wait for new block. Block number doesn't matter as the pool will only notify of new blocks
             // after the pool has updated its state. The bundle will be formed using the latest pool state
             // and can land in the next block
-            let mut last_block = match rx.recv().await {
-                Some(b) => b,
-                None => {
-                    error!("Block stream closed");
-                    bail!("Block stream closed");
-                }
-            };
-            // Consume any other blocks that may have been buffered up
-            loop {
-                match rx.try_recv() {
-                    Ok(b) => {
-                        last_block = b;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        break;
-                    }
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        error!("Block stream closed");
-                        bail!("Block stream closed");
-                    }
-                }
-            }
-
             self.check_for_and_log_transaction_update().await;
             let result = self.send_bundle_with_increasing_gas_fees().await;
             match &result {
@@ -192,7 +188,7 @@ where
                     } else {
                         info!("Bundle with hash {tx_hash:?} landed in block {block_number} after increasing gas fees {attempt_number} time(s)");
                     }
-                SendBundleResult::NoOperationsInitially => trace!("No ops to send at block {}", last_block.block_number),
+                SendBundleResult::NoOperationsInitially => trace!("No ops to send at block {}", last_block.unwrap_or_default().block_number),
                 SendBundleResult::NoOperationsAfterFeeIncreases {
                     initial_op_count,
                     attempt_number,
@@ -227,7 +223,6 @@ where
         send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
         chain_id: u64,
         beneficiary: Address,
-        eth_poll_interval: Duration,
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
@@ -241,7 +236,6 @@ where
             send_bundle_receiver,
             chain_id,
             beneficiary,
-            eth_poll_interval,
             proposer,
             entry_point,
             transaction_tracker,

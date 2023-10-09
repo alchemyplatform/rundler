@@ -4070,6 +4070,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "ethers",
+ "futures-util",
  "jsonrpsee",
  "metrics",
  "rundler-builder",
