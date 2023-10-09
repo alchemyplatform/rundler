@@ -102,10 +102,11 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         _request: Request<DebugSendBundleNowRequest>,
     ) -> tonic::Result<Response<DebugSendBundleNowResponse>> {
         let resp = match self.local_builder.debug_send_bundle_now().await {
-            Ok(hash) => DebugSendBundleNowResponse {
+            Ok((hash, block_number)) => DebugSendBundleNowResponse {
                 result: Some(debug_send_bundle_now_response::Result::Success(
                     DebugSendBundleNowSuccess {
                         transaction_hash: hash.as_bytes().to_vec(),
+                        block_number,
                     },
                 )),
             },

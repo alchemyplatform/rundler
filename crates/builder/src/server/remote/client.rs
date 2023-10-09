@@ -69,7 +69,7 @@ impl BuilderServer for RemoteBuilderClient {
             .collect::<Result<_, ConversionError>>()?)
     }
 
-    async fn debug_send_bundle_now(&self) -> BuilderResult<H256> {
+    async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)> {
         let res = self
             .grpc_client
             .clone()
@@ -80,7 +80,7 @@ impl BuilderServer for RemoteBuilderClient {
 
         match res {
             Some(debug_send_bundle_now_response::Result::Success(s)) => {
-                Ok(H256::from_slice(&s.transaction_hash))
+                Ok((H256::from_slice(&s.transaction_hash), s.block_number))
             }
             Some(debug_send_bundle_now_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(BuilderServerError::Other(anyhow::anyhow!(

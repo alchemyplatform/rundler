@@ -113,11 +113,11 @@ impl BuilderServer for LocalBuilderHandle {
         }
     }
 
-    async fn debug_send_bundle_now(&self) -> BuilderResult<H256> {
+    async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)> {
         let req = ServerRequestKind::DebugSendBundleNow;
         let resp = self.send(req).await?;
         match resp {
-            ServerResponse::DebugSendBundleNow { hash } => Ok(hash),
+            ServerResponse::DebugSendBundleNow { hash, block_number } => Ok((hash, block_number)),
             _ => Err(BuilderServerError::UnexpectedResponse),
         }
     }
@@ -197,8 +197,8 @@ impl LocalBuilderServerRunner {
                                 };
 
                                 match result {
-                                    SendBundleResult::Success { tx_hash, .. } => {
-                                        Ok(ServerResponse::DebugSendBundleNow { hash: tx_hash })
+                                    SendBundleResult::Success { tx_hash, block_number, .. } => {
+                                        Ok(ServerResponse::DebugSendBundleNow { hash: tx_hash, block_number })
                                     },
                                     SendBundleResult::NoOperationsInitially => {
                                         Err(anyhow::anyhow!("no ops to send").into())
@@ -242,6 +242,6 @@ struct ServerRequest {
 #[derive(Clone, Debug)]
 enum ServerResponse {
     GetSupportedEntryPoints { entry_points: Vec<Address> },
-    DebugSendBundleNow { hash: H256 },
+    DebugSendBundleNow { hash: H256, block_number: u64 },
     DebugSetBundlingMode,
 }
