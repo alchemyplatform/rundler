@@ -552,11 +552,8 @@ impl BuilderMetrics {
     }
 
     fn set_bundle_gas_stats(gas_limit: U256, gas_used: U256) {
-        let gas_limit = gas_limit.as_u128() as f64;
-        let gas_used = gas_used.as_u128() as f64;
-        metrics::gauge!("builder_bundle_gas_limit", gas_limit);
-        metrics::gauge!("builder_bundle_gas_used", gas_used);
-        metrics::gauge!("builder_bundle_gas_utilization", gas_limit / gas_used);
+        metrics::counter!("builder_bundle_gas_limit", gas_limit.as_u64());
+        metrics::counter!("builder_bundle_gas_used", gas_used.as_u64());
     }
 
     fn set_current_fees(fees: &GasFees) {
