@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 use ethers::types::{Address, H256};
+use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_builder::{BuilderServer, BundlingMode};
 use rundler_pool::PoolServer;
@@ -95,10 +96,36 @@ where
     }
 
     async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
-        self.builder
+        let mut new_heads = self
+            .pool
+            .subscribe_new_heads()
+            .await
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+        let (tx, block_number) = self
+            .builder
             .debug_send_bundle_now()
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+        // After the bundle is sent, we need to make sure that the mempool
+        // has processes the same block that the transaction was mined on.
+        // This removes the potential for an incorrect response from `debug_bundler_dumpMempool`
+        // method.
+        loop {
+            match new_heads.next().await {
+                Some(b) => {
+                    if b.block_number.eq(&block_number) {
+                        break;
+                    }
+                }
+                None => {
+                    return Err(rpc_err(INTERNAL_ERROR_CODE, "Next block not available"));
+                }
+            }
+        }
+
+        Ok(tx)
     }
 
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {

@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
+use std::{cmp, sync::Arc};
 
 use ethers::{
     abi::AbiEncode,
@@ -28,28 +28,28 @@ use tokio::try_join;
 
 use super::polygon::Polygon;
 
-// Gas overheads for user operations
-// used in calculating the pre-verification gas
-// see: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
+/// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
 #[derive(Clone, Copy, Debug)]
-struct GasOverheads {
-    fixed: U256,
+pub struct GasOverheads {
+    /// The Entrypoint requires a gas buffer for the bundle to account for the gas spent outside of the major steps in the processing of UOs
+    pub bundle_transaction_gas_buffer: U256,
+    /// The fixed gas overhead for any EVM transaction
+    pub transaction_gas_overhead: U256,
     per_user_op: U256,
     per_user_op_word: U256,
     zero_byte: U256,
     non_zero_byte: U256,
-    bundle_size: U256,
 }
 
 impl Default for GasOverheads {
     fn default() -> Self {
         Self {
-            fixed: 21000.into(),
-            per_user_op: 18300.into(),
+            bundle_transaction_gas_buffer: 5_000.into(),
+            transaction_gas_overhead: 21_000.into(),
+            per_user_op: 18_300.into(),
             per_user_op_word: 4.into(),
             zero_byte: 4.into(),
             non_zero_byte: 16.into(),
-            bundle_size: 1.into(),
         }
     }
 }
@@ -74,7 +74,7 @@ pub async fn calc_pre_verification_gas<P: Provider>(
     provider: Arc<P>,
     chain_id: u64,
 ) -> anyhow::Result<U256> {
-    let static_gas = calc_static_pre_verification_gas(full_op);
+    let static_gas = calc_static_pre_verification_gas(full_op, true);
     let dynamic_gas = match chain_id {
         _ if ARBITRUM_CHAIN_IDS.contains(&chain_id) => {
             provider
@@ -94,18 +94,56 @@ pub async fn calc_pre_verification_gas<P: Provider>(
     Ok(static_gas + dynamic_gas)
 }
 
+/// Compute the gas limit for the bundle composed of the given user operations
+pub fn bundle_gas_limit<'a, I>(iter_ops: I, chain_id: u64) -> U256
+where
+    I: Iterator<Item = &'a UserOperation>,
+{
+    let ov = GasOverheads::default();
+    let mut max_gas = U256::zero();
+    let mut gas_spent = U256::zero();
+    for op in iter_ops {
+        let post_exec_req_gas = op
+            .paymaster()
+            .map_or(ov.bundle_transaction_gas_buffer, |_| {
+                cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
+            });
+        let required_gas = gas_spent
+            + user_operation_pre_verification_gas_limit(op, chain_id, false)
+            + op.verification_gas_limit * 2
+            + op.call_gas_limit
+            + post_exec_req_gas;
+        max_gas = cmp::max(required_gas, max_gas);
+        gas_spent += user_operation_gas_limit(op, chain_id, false);
+    }
+
+    max_gas + ov.transaction_gas_overhead
+}
+
 /// Returns the gas limit for the user operation that applies to bundle transaction's limit
-pub fn user_operation_gas_limit(uo: &UserOperation, chain_id: u64) -> U256 {
+pub fn user_operation_gas_limit(
+    uo: &UserOperation,
+    chain_id: u64,
+    assume_single_op_bundle: bool,
+) -> U256 {
+    user_operation_pre_verification_gas_limit(uo, chain_id, assume_single_op_bundle)
+        + uo.call_gas_limit
+        + uo.verification_gas_limit * verification_gas_limit_multiplier(uo, assume_single_op_bundle)
+}
+
+fn user_operation_pre_verification_gas_limit(
+    uo: &UserOperation,
+    chain_id: u64,
+    include_fixed_gas_overhead: bool,
+) -> U256 {
     // On some chains (OP bedrock, Arbitrum) the L1 gas fee is charged via pre_verification_gas
     // but this not part of the execution gas limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
-    let pvg = if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
-        calc_static_pre_verification_gas(uo)
+    if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) | ARBITRUM_CHAIN_IDS.contains(&chain_id) {
+        calc_static_pre_verification_gas(uo, include_fixed_gas_overhead)
     } else {
         uo.pre_verification_gas
-    };
-
-    pvg + uo.call_gas_limit + uo.verification_gas_limit * verification_gas_limit_multiplier(uo)
+    }
 }
 
 /// Returns the maximum cost, in wei, of this user operation
@@ -115,7 +153,7 @@ pub fn user_operation_max_gas_cost(uo: &UserOperation) -> U256 {
         * (uo.pre_verification_gas + uo.call_gas_limit + uo.verification_gas_limit * mul)
 }
 
-fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
+fn calc_static_pre_verification_gas(op: &UserOperation, include_fixed_gas_overhead: bool) -> U256 {
     let ov = GasOverheads::default();
     let encoded_op = op.clone().encode();
     let length_in_words = encoded_op.len() / 32; // size of packed user op is always a multiple of 32 bytes
@@ -131,21 +169,28 @@ fn calc_static_pre_verification_gas(op: &UserOperation) -> U256 {
         .reduce(|a, b| a + b)
         .unwrap_or_default();
 
-    ov.fixed / ov.bundle_size
-        + call_data_cost
+    call_data_cost
         + ov.per_user_op
         + ov.per_user_op_word * length_in_words
+        + (if include_fixed_gas_overhead {
+            ov.transaction_gas_overhead
+        } else {
+            0.into()
+        })
 }
 
-fn verification_gas_limit_multiplier(uo: &UserOperation) -> u64 {
+fn verification_gas_limit_multiplier(uo: &UserOperation, assume_single_op_bundle: bool) -> u64 {
     // If using a paymaster, we need to account for potentially 2 postOp
     // calls (even though it won't be called).
     // Else the entrypoint expects the gas for 1 postOp call that
     // uses verification_gas_limit plus the actual verification call
+    // we only add the additional verification_gas_limit only if we know for sure that this is a single op bundle, which what we do to get a worst-case upper bound
     if uo.paymaster().is_some() {
         3
-    } else {
+    } else if assume_single_op_bundle {
         2
+    } else {
+        1
     }
 }
 
@@ -283,4 +328,69 @@ const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
 
 fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
     NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use ethers::types::Bytes;
+
+    use super::*;
+
+    fn create_test_op_with_gas(
+        pre_verification_gas: U256,
+        call_gas_limit: U256,
+        verification_gas_limit: U256,
+        with_paymaster: bool,
+    ) -> UserOperation {
+        UserOperation {
+            pre_verification_gas,
+            call_gas_limit,
+            verification_gas_limit,
+            paymaster_and_data: if with_paymaster {
+                Bytes::from(vec![0; 20])
+            } else {
+                Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit() {
+        let op1 = create_test_op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), false);
+        let op2 = create_test_op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
+        let ops = vec![op1.clone(), op2.clone()];
+        let chain_id = 1;
+        let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
+
+        // The gas requirement in the first user operation dominates and determines the expected gas limit
+        let expected_gas_limit = op1.pre_verification_gas
+            + op1.verification_gas_limit * 2
+            + op1.call_gas_limit
+            + 21_000
+            + 5_000;
+
+        assert_eq!(gas_limit, expected_gas_limit);
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_with_paymaster_op() {
+        let op1 = create_test_op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), true); // has paymaster
+        let op2 = create_test_op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
+        let ops = vec![op1.clone(), op2.clone()];
+        let chain_id = 1;
+        let gas_limit = bundle_gas_limit(ops.iter(), chain_id);
+
+        // The gas requirement in the second user operation dominates and determines the expected gas limit
+        let expected_gas_limit = op1.pre_verification_gas
+            + op1.verification_gas_limit * 3
+            + op1.call_gas_limit
+            + op2.pre_verification_gas
+            + op2.verification_gas_limit * 2
+            + op2.call_gas_limit
+            + 21_000
+            + 5_000;
+
+        assert_eq!(gas_limit, expected_gas_limit);
+    }
 }

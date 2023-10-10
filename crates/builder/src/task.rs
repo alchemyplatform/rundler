@@ -326,7 +326,6 @@ where
             send_bundle_rx,
             self.args.chain_id,
             beneficiary,
-            self.args.eth_poll_interval,
             proposer,
             entry_point,
             transaction_tracker,

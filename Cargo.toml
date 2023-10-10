@@ -4,6 +4,7 @@ members = [
     "crates/*",
 ]
 default-members = ["bin/rundler"]
+resolver = "2"
 
 [workspace.package]
 version = "0.1.0-beta"

@@ -39,6 +39,15 @@ pub struct NewHead {
     pub block_number: u64,
 }
 
+impl Default for NewHead {
+    fn default() -> NewHead {
+        NewHead {
+            block_hash: H256::zero(),
+            block_number: 0,
+        }
+    }
+}
+
 /// Pool server trait
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait]

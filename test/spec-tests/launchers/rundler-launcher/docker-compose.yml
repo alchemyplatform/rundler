@@ -3,12 +3,10 @@ version: "3.8"
 services:
   rundler:
     image: alchemy-platform/rundler:$TAG
-    depends_on:
-      - geth
     ports:
       - "3000:3000"
       - "8080:8080"
-    command: bash -c "sleep 10; /usr/local/bin/rundler node"
+    command: bash -c "/usr/local/bin/rundler node"
     environment:
       - RUST_LOG=debug
       - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
@@ -17,7 +15,7 @@ services:
       - MIN_UNSTAKE_DELAY=2
       - BUILDER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
     healthcheck:
-      test: curl --fail http://localhost:3000/health || exit 1
+      test: curl --fail http://rundler:3000/health || exit 1
       interval: 1s
       timeout: 1s
       retries: 60

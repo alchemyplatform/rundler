@@ -55,6 +55,7 @@ message DebugSendBundleNowResponse {
 }
 message DebugSendBundleNowSuccess {
     bytes transaction_hash = 1;
+    uint64 block_number = 2;
 }
 
 message DebugSetBundlingModeRequest {

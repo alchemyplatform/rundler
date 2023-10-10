@@ -180,7 +180,7 @@ where
         let nonce = provider
             .get_transaction_count(sender.address())
             .await
-            .context("tracker should load initial nonce on construction")?;
+            .unwrap_or(U256::zero());
         Ok(Self {
             provider,
             sender,
