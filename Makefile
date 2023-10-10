@@ -28,4 +28,11 @@ test-spec-integrated: ## Run spec tests in integrated mode
 .PHONY: test-spec-modular
 test-spec-modular: ## Run spec tests in modular mode
 	test/spec-tests/remote/run-spec-tests.sh
-	
+
+.PHONY: test-coverage-all
+test-coverage-all: ## Run tests and display coverage
+	cargo llvm-cov nextest --all-features --open --workspace
+
+.PHONY: test-coverage
+test-coverage: ## Run tests and display coverage for a single package
+	cargo llvm-cov nextest --all-features --open -p $(package)

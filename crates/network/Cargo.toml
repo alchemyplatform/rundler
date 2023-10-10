@@ -1,0 +1,28 @@
+[package]
+name = "rundler-network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rundler-types = { path = "../types" }
+
+ethereum_ssz = "0.5.3"
+ethereum_ssz_derive = "0.5.3"
+ethers.workspace = true
+snap = "1.1.0"
+ssz_types = "0.5.4"
+tokio-util = { workspace = true, features = ["codec", "compat"] }
+thiserror.workspace = true
+tracing.workspace = true
+unsigned-varint = { version = "0.7.2", features = ["codec"] }
+
+[dependencies.libp2p]
+version = "0.52.3"
+default-features = false
+features = ["tokio", "noise", "macros", "tcp", "identify", "yamux", "secp256k1"]
+
+[dev-dependencies]
+rand.workspace = true

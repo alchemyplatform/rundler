@@ -52,3 +52,7 @@ component_management:
       name: utils
       paths:
         - crates/utils/**
+    - component_id: network
+      name: network
+      paths:
+        - crates/network/**
