@@ -156,7 +156,7 @@ impl AllowlistEntry {
                 }
             }
             AllowRule::NotStaked => {
-                if let SimulationViolation::NotStaked(violation_entity, _, _) = violation {
+                if let SimulationViolation::NotStaked(violation_entity) = violation {
                     self.entity.is_allowed(violation_entity)
                 } else {
                     false
@@ -435,24 +435,16 @@ mod tests {
         let entity_addr = Address::random();
         let entry = AllowlistEntry::new(AllowEntity::Address(entity_addr), AllowRule::NotStaked);
 
-        let violation = SimulationViolation::NotStaked(
-            Entity {
-                kind: EntityType::Account,
-                address: entity_addr,
-            },
-            U256::from(0),
-            U256::from(0),
-        );
+        let violation = SimulationViolation::NotStaked(Entity {
+            kind: EntityType::Account,
+            address: entity_addr,
+        });
         assert!(entry.is_allowed(&violation));
 
-        let violation = SimulationViolation::NotStaked(
-            Entity {
-                kind: EntityType::Account,
-                address: Address::random(),
-            },
-            U256::from(0),
-            U256::from(0),
-        );
+        let violation = SimulationViolation::NotStaked(Entity {
+            kind: EntityType::Account,
+            address: Address::random(),
+        });
         assert!(!entry.is_allowed(&violation));
     }
 

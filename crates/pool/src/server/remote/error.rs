@@ -28,7 +28,7 @@ use super::protos::{
     PaymasterDepositTooLow, PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
     SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
+    SimulationViolationError as ProtoSimulationViolationError, StakeTooLow, TotalGasLimitTooHigh,
     UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
     UnsupportedAggregatorError, UsedForbiddenOpcode, UsedForbiddenPrecompile,
     VerificationGasLimitTooHigh, WrongNumberOfPhases,
@@ -455,10 +455,17 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
-            SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
+            SimulationViolation::NotStaked(entity) => ProtoSimulationViolationError {
+                violation: Some(simulation_violation_error::Violation::NotStaked(
+                    NotStaked {
+                        entity: Some((&entity).into()),
+                    },
+                )),
+            },
+            SimulationViolation::StakeTooLow(entity, min_stake, min_unstake_delay) => {
                 ProtoSimulationViolationError {
-                    violation: Some(simulation_violation_error::Violation::NotStaked(
-                        NotStaked {
+                    violation: Some(simulation_violation_error::Violation::StakeTooLow(
+                        StakeTooLow {
                             entity: Some((&entity).into()),
                             min_stake: to_le_bytes(min_stake),
                             min_unstake_delay: to_le_bytes(min_unstake_delay),
@@ -586,6 +593,11 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             }
             Some(simulation_violation_error::Violation::NotStaked(e)) => {
                 SimulationViolation::NotStaked(
+                    (&e.entity.context("should have entity in error")?).try_into()?,
+                )
+            }
+            Some(simulation_violation_error::Violation::StakeTooLow(e)) => {
+                SimulationViolation::StakeTooLow(
                     (&e.entity.context("should have entity in error")?).try_into()?,
                     from_bytes(&e.min_stake)?,
                     from_bytes(&e.min_unstake_delay)?,

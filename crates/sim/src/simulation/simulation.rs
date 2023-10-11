@@ -324,11 +324,7 @@ where
             if needs_stake {
                 entities_needing_stake.push(entity.kind);
                 if !entity_info.is_staked {
-                    violations.push(SimulationViolation::NotStaked(
-                        entity,
-                        self.sim_settings.min_stake_value.into(),
-                        self.sim_settings.min_unstake_delay.into(),
-                    ));
+                    violations.push(SimulationViolation::NotStaked(entity));
                 }
             }
             for slot in banned_slots_accessed {
@@ -359,7 +355,7 @@ where
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             entities_needing_stake.push(EntityType::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
-                violations.push(SimulationViolation::NotStaked(
+                violations.push(SimulationViolation::StakeTooLow(
                     Entity::aggregator(aggregator_info.address),
                     self.sim_settings.min_stake_value.into(),
                     self.sim_settings.min_unstake_delay.into(),
@@ -557,7 +553,10 @@ pub enum SimulationViolation {
     CodeHashChanged,
     /// The user operation contained an entity that accessed storage without being staked
     #[display("{0.kind} must be staked")]
-    NotStaked(Entity, U256, U256),
+    NotStaked(Entity),
+    /// The user operation contained an entity that accessed storage with an insufficient stake    
+    #[display("Entity stake/stake delay too low")]
+    StakeTooLow(Entity, U256, U256),
     /// Simulation reverted with an unintended reason, containing a message
     #[display("reverted while simulating {0} validation: {1}")]
     UnintendedRevertWithMessage(EntityType, String, Option<Address>),

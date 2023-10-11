@@ -436,6 +436,7 @@ message SimulationViolationError {
     CalledBannedEntryPointMethod called_banned_entry_point_method = 14;
     CodeHashChanged code_hash_changed = 15;
     AggregatorValidationFailed aggregator_validation_failed = 16;
+    StakeTooLow stake_too_low = 17;
   }
 }
 
@@ -469,6 +470,10 @@ message InvalidStorageAccess {
 }
 
 message NotStaked {
+  Entity entity = 1;
+}
+
+message StakeTooLow {
   Entity entity = 1;
   bytes min_stake = 2;
   bytes min_unstake_delay = 3;

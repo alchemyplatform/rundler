@@ -239,9 +239,16 @@ type StringSet = Record<string, boolean | undefined>;
       if (!entryPointAddress) {
         entryPointAddress = toHex(log.contract.getAddress());
       }
-      if (log.getGas() < log.getCost()) {
+
+      const opcode = log.op.toString();
+
+      if (log.getGas() < log.getCost() || (
+        // special rule for SSTORE with gas metering
+        opcode === 'SSTORE' && log.getGas() < 2300)    
+      ) {
         currentPhase.ranOutOfGas = true;
       }
+
       if (pendingKeccakAddress) {
         // We just computed what may be an associated address keccak(addr || X),
         // so the result is now on top of the stack. See the comment in the
@@ -255,7 +262,6 @@ type StringSet = Record<string, boolean | undefined>;
         pendingKeccakAddress = "";
       }
 
-      const opcode = log.op.toString();
 
       const entryPointIsExecuting = log.getDepth() === 1;
       if (entryPointIsExecuting) {

@@ -219,6 +219,8 @@ impl From<SimulationViolation> for EthRpcError {
             }
             SimulationViolation::UsedForbiddenPrecompile(_, _, _)
             | SimulationViolation::AccessedUndeployedContract(_, _)
+            | SimulationViolation::OutOfGas(_)
+            | SimulationViolation::NotStaked(_)
             | SimulationViolation::CalledBannedEntryPointMethod(_)
             | SimulationViolation::CallHadValue(_) => Self::OpcodeViolationMap(value),
             SimulationViolation::FactoryCalledCreate2Twice(_) => {
@@ -227,8 +229,12 @@ impl From<SimulationViolation> for EthRpcError {
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
             }
-            SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
-                Self::StakeTooLow(StakeTooLowData::new(entity, min_stake, min_unstake_delay))
+            SimulationViolation::StakeTooLow(entity, minimum_stake, minimum_unstake_delay) => {
+                Self::StakeTooLow(StakeTooLowData {
+                    entity,
+                    minimum_stake,
+                    minimum_unstake_delay,
+                })
             }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             _ => Self::SimulationFailed(value),
