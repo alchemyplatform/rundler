@@ -11,6 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+mod behaviour;
+pub(crate) use behaviour::{Behaviour, Event};
+
 mod handler;
-mod message;
+pub use handler::ConnectionConfig;
+
+pub(crate) mod message;
+
 mod protocol;

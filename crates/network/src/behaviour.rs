@@ -11,14 +11,19 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-mod codec;
-pub(crate) use codec::CodecError;
+use libp2p::{
+    identify,
+    swarm::{keep_alive, NetworkBehaviour},
+};
 
-mod inbound;
-mod outbound;
-mod serde;
-mod snappy;
+use crate::rpc;
 
-#[allow(clippy::module_inception)]
-mod handler;
-pub use handler::*;
+#[derive(NetworkBehaviour)]
+pub(crate) struct Behaviour {
+    // TODO(danc): temp, remove when not needed
+    pub(crate) keep_alive: keep_alive::Behaviour,
+    // Request/response protocol
+    pub(crate) rpc: rpc::Behaviour,
+    // Identity protocol
+    pub(crate) identify: identify::Behaviour,
+}

@@ -45,6 +45,7 @@ allow = [
     "Apache-2.0",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "CC0-1.0",
     "ISC",
     "Unlicense",
     "MPL-2.0",
@@ -54,7 +55,6 @@ allow = [
 # Allow 1 or more licenses on a per-crate basis, so that particular licenses
 # aren't accepted for every possible crate as with the normal allow list
 exceptions = [
-    { allow = ["CC0-1.0"], name = "tiny-keccak" },
     { allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
     { allow = ["OpenSSL"], name = "ring" },
 ]

@@ -11,14 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-mod codec;
-pub(crate) use codec::CodecError;
+/// Network errors
+#[derive(thiserror::Error, Debug)]
+pub enum Error {}
 
-mod inbound;
-mod outbound;
-mod serde;
-mod snappy;
-
-#[allow(clippy::module_inception)]
-mod handler;
-pub use handler::*;
+/// Network result
+pub type Result<T> = std::result::Result<T, Error>;

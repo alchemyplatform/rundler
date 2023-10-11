@@ -15,8 +15,10 @@ use ethers::types::H256;
 use rundler_types::UserOperation;
 use ssz_derive::{Decode, Encode};
 
+/// Maximum length of an error message
 pub(crate) const MAX_ERROR_MESSAGE_LEN: usize = 256;
-pub(crate) const MAX_OPS_PER_REQUEST: usize = 4096;
+/// Maximum number of user ops per request
+pub const MAX_OPS_PER_REQUEST: usize = 4096;
 
 /// Request types
 #[derive(Clone, Debug, PartialEq)]
@@ -61,22 +63,23 @@ pub(crate) type ResponseResult = Result<Response, ResponseError>;
 
 /// Error for a response
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ResponseError {
+pub struct ResponseError {
     /// Kind of error
-    pub(crate) kind: ErrorKind,
+    pub kind: ErrorKind,
     /// Error message, may be empty if could not decode as UTF8 string
-    pub(crate) message: String,
+    pub message: String,
 }
 
 /// Error kinds
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum ErrorKind {
+pub enum ErrorKind {
     /// Request is invalid
     InvalidRequest,
     /// Server error
     ServerError,
     /// Resource unavailable
     ResourceUnavailable,
+    /// Unknown error
     Unknown,
 }
 
@@ -183,32 +186,32 @@ impl From<GoodbyeReason> for u64 {
 
 /// Pooled user op hashes request
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub(crate) struct PooledUserOpHashesRequest {
+pub struct PooledUserOpHashesRequest {
     /// Hash id of the mempool
-    pub(crate) mempool: H256,
+    pub mempool: H256,
     /// Offset into the mempool
-    pub(crate) offset: u64,
+    pub offset: u64,
 }
 
 /// Pooled user op hashes response
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub(crate) struct PooledUserOpHashesResponse {
+pub struct PooledUserOpHashesResponse {
     /// More user ops are available
-    pub(crate) more_flag: bool,
+    pub more_flag: bool,
     /// Hashes of the user ops
-    pub(crate) hashes: Vec<H256>,
+    pub hashes: Vec<H256>,
 }
 
 /// Pooled user ops by hash request
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
-pub(crate) struct PooledUserOpsByHashRequest {
+pub struct PooledUserOpsByHashRequest {
     /// Hashes of the user ops
-    pub(crate) hashes: Vec<H256>,
+    pub hashes: Vec<H256>,
 }
 
 /// Pooled user ops by hash response
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PooledUserOpsByHashResponse {
+pub struct PooledUserOpsByHashResponse {
     /// User ops
-    pub(crate) user_ops: Vec<UserOperation>,
+    pub user_ops: Vec<UserOperation>,
 }

@@ -91,6 +91,10 @@ impl SszChunkResult {
         Self(Err(error))
     }
 
+    pub(crate) fn is_err(&self) -> bool {
+        self.0.is_err()
+    }
+
     /// The code associated with a response chunk
     pub(crate) fn code(&self) -> u8 {
         match self.0 {

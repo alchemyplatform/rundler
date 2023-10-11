@@ -14,6 +14,12 @@ ethereum_ssz_derive = "0.5.3"
 ethers.workspace = true
 snap = "1.1.0"
 ssz_types = "0.5.4"
+discv5 = { version = "0.3.1", features = ["libp2p"] }
+futures.workspace = true
+hex = "0.4.3"
+libp2p-mplex = "0.40.0"
+tokio.workspace = true
+tokio-io-timeout = "1.2.0"
 tokio-util = { workspace = true, features = ["codec", "compat"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -26,3 +32,4 @@ features = ["tokio", "noise", "macros", "tcp", "identify", "yamux", "secp256k1"]
 
 [dev-dependencies]
 rand.workspace = true
+tracing-test = { version = "0.2.4", features = ["no-env-filter"] }

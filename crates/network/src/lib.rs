@@ -24,6 +24,23 @@
 //! Lots of inspiration for the components of this implementation were taken from the Lighthouse implementation
 //! of the Ethereum consensus layer p2p protocol. See [here](https://github.com/sigp/lighthouse/) for more details.
 
-// TODO(danc): remove this before release
-#[allow(dead_code)]
 mod rpc;
+pub use rpc::{
+    message::{
+        ErrorKind as ResponseErrorKind, PooledUserOpHashesRequest, PooledUserOpHashesResponse,
+        PooledUserOpsByHashRequest, PooledUserOpsByHashResponse, MAX_OPS_PER_REQUEST,
+    },
+    ConnectionConfig,
+};
+
+mod behaviour;
+
+mod network;
+pub use network::{
+    Action, AppRequest, AppRequestId, AppResponse, AppResponseResult, Config, Event, Network,
+};
+
+mod enr;
+
+mod error;
+pub use error::{Error, Result};
