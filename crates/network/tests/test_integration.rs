@@ -17,7 +17,7 @@ use discv5::Enr;
 use ethers::types::H256;
 use libp2p::PeerId;
 use rundler_network::{
-    Action, AppRequest, AppRequestId, AppResponse, Config, Event, Network,
+    enr::EnrExt, Action, AppRequest, AppRequestId, AppResponse, Config, Event, Network,
     PooledUserOpHashesRequest, PooledUserOpHashesResponse, PooledUserOpsByHashRequest,
     PooledUserOpsByHashResponse, ResponseErrorKind, Result, MAX_OPS_PER_REQUEST,
 };
@@ -85,6 +85,12 @@ async fn shutdown_node_pair(mut node0: TestNetworkContext, node1: TestNetworkCon
     shutdown(node0).await;
 }
 
+async fn shutdown_nodes(nodes: Vec<TestNetworkContext>) {
+    for node in nodes {
+        shutdown(node).await;
+    }
+}
+
 async fn wait_for_pair_connect(
     node0: &mut TestNetworkContext,
     node1: &mut TestNetworkContext,
@@ -104,9 +110,10 @@ async fn wait_for_pair_connect(
 
 async fn shutdown(mut context: TestNetworkContext) {
     let _ = context.action_sender.send(Action::Shutdown);
-    match context.event_receiver.recv().await {
-        Some(Event::ShutdownComplete) => {}
-        _ => panic!("Expected shutdown event"),
+    loop {
+        if let Some(Event::ShutdownComplete) = context.event_receiver.recv().await {
+            break;
+        }
     }
     let _ = context.handle.await.unwrap();
 }
@@ -284,4 +291,31 @@ async fn test_req_resp_ops_by_hashes_too_many() {
     };
 
     shutdown_node_pair(bootnode, node).await;
+}
+
+#[tokio::test]
+#[traced_test]
+async fn test_discovery() {
+    let (mut bootnode, mut node0) = setup_node_pair().await;
+    wait_for_pair_connect(&mut bootnode, &mut node0).await;
+
+    let mut node1 = setup_network(vec![bootnode.enr.clone()], vec![]).await;
+
+    // node 1 should discover both bootnode and node0
+    for _ in 0..2 {
+        match node1.event_receiver.recv().await {
+            Some(Event::PeerConnected(peer_id)) => {
+                assert!(peer_id == bootnode.enr.peer_id() || peer_id == node0.enr.peer_id())
+            }
+            _ => panic!("Expected discovered peer event"),
+        }
+    }
+
+    // node 0 should discover node 1
+    match node0.event_receiver.recv().await {
+        Some(Event::PeerConnected(peer_id)) => assert_eq!(peer_id, node1.enr.peer_id()),
+        _ => panic!("Expected discovered peer event"),
+    }
+
+    shutdown_nodes(vec![bootnode, node0, node1]).await;
 }

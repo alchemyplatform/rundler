@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::net::SocketAddr;
+use std::{collections::HashSet, net::SocketAddr};
 
 use discv5::Enr;
 use ethers::types::H256;
@@ -22,7 +22,7 @@ use libp2p::{
     identify,
     identity::{secp256k1, Keypair},
     noise,
-    swarm::{keep_alive, SwarmBuilder, SwarmEvent},
+    swarm::{keep_alive, DialError, SwarmBuilder, SwarmEvent},
     tcp, Multiaddr, PeerId, Swarm, Transport,
 };
 use tokio::sync::mpsc;
@@ -30,7 +30,10 @@ use tracing::{debug, error, info};
 
 use crate::{
     behaviour::{Behaviour, BehaviourEvent},
-    enr::{self, EnrExt},
+    discovery::{
+        self,
+        enr::{self, EnrExt},
+    },
     error::Result,
     rpc::{
         self,
@@ -58,6 +61,10 @@ pub struct Config {
     pub supported_mempools: Vec<H256>,
     /// metadata sequence number
     pub metadata_seq_number: u64,
+    /// tick interval for updating internal state
+    pub tick_interval: std::time::Duration,
+    /// target number of peers to connect to
+    pub target_num_peers: usize,
 }
 
 impl Default for Config {
@@ -72,6 +79,8 @@ impl Default for Config {
             network_config: ConnectionConfig::default(),
             supported_mempools: vec![],
             metadata_seq_number: 0,
+            tick_interval: std::time::Duration::from_secs(1),
+            target_num_peers: 16,
         }
     }
 }
@@ -160,6 +169,9 @@ pub struct Network {
 
     event_sender: mpsc::UnboundedSender<Event>,
     action_recv: mpsc::UnboundedReceiver<Action>,
+
+    // TODO move this to peer manager
+    known_peers: HashSet<PeerId>,
 }
 
 impl Network {
@@ -176,7 +188,7 @@ impl Network {
         .into();
         let local_peer_id = PeerId::from(local_key.public());
 
-        let (enr, _enr_key) = enr::build_enr(&config);
+        let (enr, enr_key) = enr::build_enr(&config);
 
         let mplex_config = libp2p_mplex::MplexConfig::new();
         let yamux_config = libp2p::yamux::Config::default();
@@ -191,10 +203,12 @@ impl Network {
             .boxed();
 
         let rpc = rpc::Behaviour::new(config.network_config.clone());
+        let discovery = discovery::Behaviour::new(&config, enr.clone(), enr_key).await?;
 
         let behaviour = Behaviour {
             keep_alive: keep_alive::Behaviour,
             rpc,
+            discovery,
             identify: identify::Behaviour::new(identify::Config::new(
                 "erc4337/0.1.0".into(),
                 local_key.public(),
@@ -223,12 +237,19 @@ impl Network {
             }
         }
 
+        let known_peers = config
+            .bootnodes
+            .iter()
+            .map(|b| b.peer_id())
+            .collect::<HashSet<_>>();
+
         Ok(Self {
             swarm,
             enr,
             config,
             event_sender,
             action_recv,
+            known_peers,
         })
     }
 
@@ -265,6 +286,16 @@ impl Network {
                     match swarm_event {
                         SwarmEvent::NewListenAddr { address, .. } => info!("Listening on {address:?}"),
                         SwarmEvent::Behaviour(BehaviourEvent::Identify(e)) => debug!("Identify: {e:?}"),
+                        SwarmEvent::Behaviour(BehaviourEvent::Discovery(discovered_peers)) => {
+                            for peer in discovered_peers.peers {
+                                if self.known_peers.insert(peer.peer_id()) {
+                                    debug!("Discovered peer {:?}", peer);
+                                    if let Err(e) = dial_tcp(&mut self.swarm, &peer) {
+                                        error!("Failed to dial peer {:?}: {:?}", peer, e);
+                                    }
+                                }
+                            }
+                        }
                         SwarmEvent::Behaviour(BehaviourEvent::Rpc(e)) => self.on_rpc_event(e),
                         SwarmEvent::ConnectionEstablished {
                             peer_id, endpoint, ..
@@ -276,6 +307,7 @@ impl Network {
                         } => {
                             debug!("Connection closed with peer {:?} at endpoint {:?}", peer_id, endpoint);
                             self.send_event(Event::PeerDisconnected(peer_id));
+                            self.known_peers.remove(&peer_id);
                         }
                         e => debug!("Unhandled event: {:?}", e),
                     }
@@ -301,6 +333,12 @@ impl Network {
             ConnectedPoint::Listener { .. } => {}
         }
         self.send_event(Event::PeerConnected(peer));
+
+        // TODO peer manager
+        // peers can discover us first and connect to us
+        if self.known_peers.insert(peer) {
+            debug!("Discovered peer {:?}", peer);
+        }
     }
 
     fn on_rpc_event(&mut self, event: rpc::Event) {
@@ -466,6 +504,18 @@ impl Network {
             }),
         );
     }
+}
+
+fn dial_tcp(swarm: &mut Swarm<Behaviour>, enr: &Enr) -> std::result::Result<(), DialError> {
+    for multi_addr in enr.multiaddr() {
+        if multi_addr.to_string().contains("udp") {
+            continue;
+        }
+        debug!("Dialing bootnode multiaddr {:?}", multi_addr);
+        return swarm.dial(multi_addr);
+    }
+
+    Err(DialError::NoAddresses)
 }
 
 impl From<AppRequest> for Request {

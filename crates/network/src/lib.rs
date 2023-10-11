@@ -24,6 +24,18 @@
 //! Lots of inspiration for the components of this implementation were taken from the Lighthouse implementation
 //! of the Ethereum consensus layer p2p protocol. See [here](https://github.com/sigp/lighthouse/) for more details.
 
+mod behaviour;
+mod discovery;
+pub use discovery::enr;
+
+mod network;
+pub use network::{
+    Action, AppRequest, AppRequestId, AppResponse, AppResponseResult, Config, Event, Network,
+};
+
+mod error;
+pub use error::{Error, Result};
+
 mod rpc;
 pub use rpc::{
     message::{
@@ -32,15 +44,3 @@ pub use rpc::{
     },
     ConnectionConfig,
 };
-
-mod behaviour;
-
-mod network;
-pub use network::{
-    Action, AppRequest, AppRequestId, AppResponse, AppResponseResult, Config, Event, Network,
-};
-
-mod enr;
-
-mod error;
-pub use error::{Error, Result};

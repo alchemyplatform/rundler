@@ -13,7 +13,11 @@
 
 /// Network errors
 #[derive(thiserror::Error, Debug)]
-pub enum Error {}
+pub enum Error {
+    /// Discovery error
+    #[error("Discovery error: {0}")]
+    Discovery(discv5::Discv5Error),
+}
 
 /// Network result
 pub type Result<T> = std::result::Result<T, Error>;

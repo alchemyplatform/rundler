@@ -11,11 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 use clap::Parser;
-use ethers::types::H256;
-use rundler_network::{Config as NetworkConfig, ConnectionConfig, Network};
+use rundler_network::{Config as NetworkConfig, Network};
 use tokio::sync::mpsc;
 
 const PRIVATE_KEY: &str = "b0ddfec7d365b4599ff8367e960f8c4890364f99e2151beac352338cc0cfe1bc";
@@ -45,13 +44,7 @@ async fn main() -> anyhow::Result<()> {
         private_key,
         listen_address,
         bootnodes,
-        network_config: ConnectionConfig {
-            max_chunk_size: 1048576,
-            request_timeout: Duration::from_secs(10),
-            ttfb_timeout: Duration::from_secs(5),
-        },
-        supported_mempools: vec![H256::random()],
-        metadata_seq_number: 0,
+        ..Default::default()
     };
 
     let (_, action_recv) = mpsc::unbounded_channel();

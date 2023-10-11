@@ -11,21 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use libp2p::{
-    identify,
-    swarm::{keep_alive, NetworkBehaviour},
-};
+mod behaviour;
+pub(crate) use behaviour::Behaviour;
 
-use crate::{discovery, rpc};
-
-#[derive(NetworkBehaviour)]
-pub(crate) struct Behaviour {
-    // TODO(danc): temp, remove when not needed
-    pub(crate) keep_alive: keep_alive::Behaviour,
-    // Request/response protocol
-    pub(crate) rpc: rpc::Behaviour,
-    // Discv5 based discovery protocol
-    pub(crate) discovery: discovery::Behaviour,
-    // Identity protocol
-    pub(crate) identify: identify::Behaviour,
-}
+pub mod enr;

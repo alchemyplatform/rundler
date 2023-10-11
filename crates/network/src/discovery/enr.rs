@@ -11,7 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-// Adapted from https://github.com/sigp/lighthouse/blob/stable/beacon_node/lighthouse_network/src/discovery/enr_ext.rs
+//! Utilities for working with Ethereum Network Records (ENRs).
+//!
+//! Adapted from https://github.com/sigp/lighthouse/blob/stable/beacon_node/lighthouse_network/src/discovery/enr_ext.rs
 
 use discv5::{
     enr::{k256, CombinedKey, CombinedPublicKey, EnrBuilder},
@@ -25,7 +27,8 @@ use libp2p::{
 
 use crate::Config;
 
-pub(crate) fn build_enr(config: &Config) -> (Enr, CombinedKey) {
+/// Build an ENR from the given configuration.
+pub fn build_enr(config: &Config) -> (Enr, CombinedKey) {
     let enr_key: CombinedKey =
         k256::ecdsa::SigningKey::from_slice(&hex::decode(&config.private_key).unwrap())
             .unwrap()
@@ -41,9 +44,12 @@ pub(crate) fn build_enr(config: &Config) -> (Enr, CombinedKey) {
     (enr, enr_key)
 }
 
-pub(crate) trait EnrExt {
+/// Extension trait for ENR.
+pub trait EnrExt {
+    /// Returns the multiaddr of the ENR.
     fn multiaddr(&self) -> Vec<Multiaddr>;
 
+    /// Returns the peer id of the ENR.
     fn peer_id(&self) -> PeerId;
 }
 
@@ -70,7 +76,8 @@ impl EnrExt for Enr {
     }
 }
 
-pub(crate) trait CombinedKeyPublicExt {
+/// Extension trait for CombinedPublicKey
+pub trait CombinedKeyPublicExt {
     /// Converts the publickey into a peer id, without consuming the key.
     fn as_peer_id(&self) -> PeerId;
 }
