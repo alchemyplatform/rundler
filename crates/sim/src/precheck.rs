@@ -180,7 +180,10 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 max_verification_gas,
             ));
         }
-        let total_gas_limit = gas::user_operation_gas_limit(op, chain_id, true, None);
+
+        // compute the worst case total gas limit by assuming the UO is in its own bundle and has a postOp call.
+        // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
+        let total_gas_limit = gas::user_operation_gas_limit(op, chain_id, true, true);
         if total_gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 total_gas_limit,
@@ -477,7 +480,7 @@ mod tests {
             res,
             ArrayVec::<PrecheckViolation, 6>::from([
                 PrecheckViolation::VerificationGasLimitTooHigh(10_000_000.into(), 5_000_000.into(),),
-                PrecheckViolation::TotalGasLimitTooHigh(20_009_000.into(), 10_000_000.into(),),
+                PrecheckViolation::TotalGasLimitTooHigh(30_009_000.into(), 10_000_000.into(),),
                 PrecheckViolation::PreVerificationGasTooLow(0.into(), 1_000.into(),),
                 PrecheckViolation::MaxFeePerGasTooLow(5_000.into(), 8_000.into(),),
                 PrecheckViolation::MaxPriorityFeePerGasTooLow(2_000.into(), 4_000.into(),),

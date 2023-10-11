@@ -99,12 +99,12 @@ pub fn user_operation_gas_limit(
     uo: &UserOperation,
     chain_id: u64,
     assume_single_op_bundle: bool,
-    paymaster_post_op: Option<bool>,
+    paymaster_post_op: bool,
 ) -> U256 {
     user_operation_pre_verification_gas_limit(uo, chain_id, assume_single_op_bundle)
         + uo.call_gas_limit
         + uo.verification_gas_limit
-            * verification_gas_limit_multiplier(uo, assume_single_op_bundle, paymaster_post_op)
+            * verification_gas_limit_multiplier(assume_single_op_bundle, paymaster_post_op)
 }
 
 /// Returns the static pre-verification gas cost of a user operation
@@ -157,14 +157,13 @@ fn calc_static_pre_verification_gas(op: &UserOperation, include_fixed_gas_overhe
 }
 
 fn verification_gas_limit_multiplier(
-    uo: &UserOperation,
     assume_single_op_bundle: bool,
-    paymaster_post_op: Option<bool>,
+    paymaster_post_op: bool,
 ) -> u64 {
     // If using a paymaster that has a postOp, we need to account for potentially 2 postOp calls which can each use up to verification_gas_limit gas.
     // otherwise the entrypoint expects the gas for 1 postOp call that uses verification_gas_limit plus the actual verification call
     // we only add the additional verification_gas_limit only if we know for sure that this is a single op bundle, which what we do to get a worst-case upper bound
-    if uo.paymaster().is_some() && paymaster_post_op.unwrap_or(true) {
+    if paymaster_post_op {
         3
     } else if assume_single_op_bundle {
         2
