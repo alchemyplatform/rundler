@@ -30,9 +30,7 @@ use mockall::automock;
 use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
-    gas::{
-        self, user_operation_gas_limit, user_operation_pre_verification_gas_limit, GasOverheads,
-    },
+    gas::{self, GasOverheads},
     ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess, Simulator,
 };
 use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
@@ -132,7 +130,9 @@ where
             self.builder_index,
             ops.len(),
         );
-        let (ops, gas_limit) = self.limit_gas_in_bundle(ops);
+
+        // Do an initial filtering of ops that we want to simulate.
+        let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
         tracing::debug!(
             "Builder index: {}, bundle proposal after limit had {} ops and {:?} gas limit",
             self.builder_index,
@@ -189,10 +189,6 @@ where
             .await;
         while !context.is_empty() {
             let gas_estimate = self.estimate_gas_rejecting_failed_ops(&mut context).await?;
-            let mut expected_storage = ExpectedStorage::default();
-            for op in context.iter_ops_with_simulations() {
-                expected_storage.merge(&op.simulation.expected_storage)?;
-            }
             if let Some(gas_estimate) = gas_estimate {
                 tracing::debug!(
                     "Builder index: {}, bundle proposal succeeded with {} ops and {:?} gas limit",
@@ -200,6 +196,12 @@ where
                     context.iter_ops().count(),
                     gas_estimate
                 );
+
+                let mut expected_storage = ExpectedStorage::default();
+                for op in context.iter_ops_with_simulations() {
+                    expected_storage.merge(&op.simulation.expected_storage)?;
+                }
+
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
@@ -284,6 +286,9 @@ where
         let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
         let mut rejected_ops = Vec::<UserOperation>::new();
         let mut paymasters_to_reject = Vec::<Address>::new();
+
+        let ov = GasOverheads::default();
+        let mut gas_spent = ov.transaction_gas_overhead;
         for (op, simulation) in ops_with_simulations {
             let simulation = match simulation {
                 Ok(simulation) => simulation,
@@ -311,6 +316,18 @@ where
                     },
                 ));
                 rejected_ops.push(op);
+                continue;
+            }
+
+            // Skip this op if the bundle does not have enough remaining gas to execute it.
+            let required_gas = get_gas_required_for_op(
+                gas_spent,
+                self.settings.chain_id,
+                ov,
+                &op,
+                simulation.requires_post_op,
+            );
+            if required_gas > self.settings.max_bundle_gas.into() {
                 continue;
             }
 
@@ -343,6 +360,15 @@ where
                     *balance -= max_cost;
                 }
             }
+
+            // Update the running gas that would need to be be spent to execute the bundle so far.
+            gas_spent += gas::user_operation_gas_limit(
+                &op,
+                self.settings.chain_id,
+                false,
+                simulation.requires_post_op,
+            );
+
             groups_by_aggregator
                 .entry(simulation.aggregator_address())
                 .or_default()
@@ -535,11 +561,17 @@ where
         Ok(())
     }
 
-    fn limit_gas_in_bundle(&self, ops: Vec<PoolOperation>) -> (Vec<PoolOperation>, u64) {
-        let mut gas_left = U256::from(self.settings.max_bundle_gas);
+    fn limit_user_operations_for_simulation(
+        &self,
+        ops: Vec<PoolOperation>,
+    ) -> (Vec<PoolOperation>, u64) {
+        // Make the bundle gas limit 10% higher here so that we simulate more UOs than we need in case that we end up dropping some UOs later so we can still pack a full bundle
+        let mut gas_left = math::increase_by_percent(U256::from(self.settings.max_bundle_gas), 10);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
-            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false, None);
+            // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
+            // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
+            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false, false);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
@@ -741,30 +773,26 @@ impl ProposalContext {
 
     fn get_bundle_gas_limit(&self, chain_id: u64) -> U256 {
         let ov = GasOverheads::default();
+        let mut gas_spent = ov.transaction_gas_overhead;
         let mut max_gas = U256::zero();
-        let mut gas_spent = U256::zero();
         for op_with_sim in self.iter_ops_with_simulations() {
             let op = &op_with_sim.op;
-            let post_exec_req_gas = if op_with_sim.simulation.requires_post_op {
-                cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
-            } else {
-                ov.bundle_transaction_gas_buffer
-            };
-            let required_gas = gas_spent
-                + user_operation_pre_verification_gas_limit(op, chain_id, false)
-                + op.verification_gas_limit * 2
-                + op.call_gas_limit
-                + post_exec_req_gas;
-            max_gas = cmp::max(required_gas, max_gas);
-            gas_spent += user_operation_gas_limit(
+            let required_gas = get_gas_required_for_op(
+                gas_spent,
+                chain_id,
+                ov,
+                op,
+                op_with_sim.simulation.requires_post_op,
+            );
+            max_gas = cmp::max(max_gas, required_gas);
+            gas_spent += gas::user_operation_gas_limit(
                 op,
                 chain_id,
                 false,
-                Some(op_with_sim.simulation.requires_post_op),
+                op_with_sim.simulation.requires_post_op,
             );
         }
-
-        max_gas + ov.transaction_gas_overhead
+        max_gas
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
@@ -776,6 +804,26 @@ impl ProposalContext {
     fn iter_ops(&self) -> impl Iterator<Item = &UserOperation> + '_ {
         self.iter_ops_with_simulations().map(|op| &op.op)
     }
+}
+
+fn get_gas_required_for_op(
+    gas_spent: U256,
+    chain_id: u64,
+    ov: GasOverheads,
+    op: &UserOperation,
+    requires_post_op: bool,
+) -> U256 {
+    let post_exec_req_gas = if requires_post_op {
+        cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
+    } else {
+        ov.bundle_transaction_gas_buffer
+    };
+
+    gas_spent
+        + gas::user_operation_pre_verification_gas_limit(op, chain_id, false)
+        + op.verification_gas_limit * 2
+        + op.call_gas_limit
+        + post_exec_req_gas
 }
 
 #[cfg(test)]
@@ -1178,7 +1226,7 @@ mod tests {
     #[tokio::test]
     async fn test_bundle_gas_limit_simple() {
         let op1 = op_with_sender_call_gas_limit(address(1), U256::from(5_000_000));
-        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(5_000_000));
+        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(4_000_000));
         let op3 = op_with_sender_call_gas_limit(address(3), U256::from(10_000_000));
         let op4 = op_with_sender_call_gas_limit(address(4), U256::from(10_000_000));
         let deposit = parse_units("1", "ether").unwrap().into();
@@ -1222,7 +1270,7 @@ mod tests {
         assert_eq!(
             bundle.gas_estimate,
             U256::from(math::increase_by_percent(
-                10_000_000 + 5_000 + 21_000,
+                9_000_000 + 5_000 + 21_000,
                 BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
             ))
         );
