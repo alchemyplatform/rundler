@@ -66,12 +66,12 @@ where
 
     /// Estimates max and priority gas and converts to U256
     pub(crate) async fn estimate_priority_fee(&self) -> anyhow::Result<U256> {
-        let (provider_estiamte, fee_history_estimate) = try_join!(
+        let (provider_estimate, fee_history_estimate) = try_join!(
             self.provider.get_max_priority_fee().map_err(|e| e.into()),
             self.calculate_fees()
         )?;
 
-        Ok(cmp::max(provider_estiamte, fee_history_estimate))
+        Ok(cmp::max(provider_estimate, fee_history_estimate))
     }
 
     /// Perform a request to the gas price API and deserialize the response.
