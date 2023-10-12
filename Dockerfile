@@ -34,9 +34,9 @@ ENV BUILD_PROFILE $BUILD_PROFILE
 # Builds dependencies
 RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
 
-# Build application
-COPY . .
-
+# Undo the source file changes made by cargo-chef.
+# rsync invalidates the cargo cache for the changed files only, by updating their timestamps.
+# This makes sure the fake empty binaries created by cargo-chef are rebuilt.
 COPY --from=planner /app recipe-original
 RUN rsync --recursive --checksum --itemize-changes --verbose recipe-original/ .
 RUN rm -r recipe-original
