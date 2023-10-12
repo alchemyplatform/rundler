@@ -8,7 +8,7 @@ RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "d
 RUN mkdir -p /etc/apt/keyrings
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
 RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config protobuf-compiler nodejs yarn
+RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config protobuf-compiler nodejs yarn rsync
 
 SHELL ["/bin/bash", "-c"]
 RUN curl -L https://foundry.paradigm.xyz | bash
@@ -36,6 +36,11 @@ RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
 
 # Build application
 COPY . .
+
+COPY --from=planner /app recipe-original
+RUN rsync --recursive --checksum --itemize-changes --verbose recipe-original/ .
+RUN rm -r recipe-original
+
 RUN cargo build --profile $BUILD_PROFILE --locked --bin rundler
 
 # Use Ubuntu as the release image
