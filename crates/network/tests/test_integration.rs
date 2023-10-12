@@ -11,15 +11,19 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::net::{Ipv4Addr, SocketAddr, TcpListener};
+use std::{
+    net::{Ipv4Addr, SocketAddr, TcpListener},
+    time::Duration,
+};
 
 use discv5::Enr;
 use ethers::types::H256;
 use libp2p::PeerId;
 use rundler_network::{
-    enr::EnrExt, Action, AppRequest, AppRequestId, AppResponse, Config, Event, Network,
-    PooledUserOpHashesRequest, PooledUserOpHashesResponse, PooledUserOpsByHashRequest,
-    PooledUserOpsByHashResponse, ResponseErrorKind, Result, MAX_OPS_PER_REQUEST,
+    enr::EnrExt, Action, AppRequest, AppRequestId, AppResponse, Config, Event, GossipMessage,
+    Network, PooledUserOpHashesRequest, PooledUserOpHashesResponse, PooledUserOpsByHashRequest,
+    PooledUserOpsByHashResponse, ResponseErrorKind, Result, UserOperationsWithEntryPoint,
+    MAX_OPS_PER_REQUEST,
 };
 use rundler_types::UserOperation;
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -68,9 +72,9 @@ async fn setup_network(bootnodes: Vec<Enr>, supported_mempools: Vec<H256>) -> Te
     }
 }
 
-async fn setup_node_pair() -> (TestNetworkContext, TestNetworkContext) {
-    let bootnode = setup_network(vec![], vec![]).await;
-    let node = setup_network(vec![bootnode.enr.clone()], vec![]).await;
+async fn setup_node_pair(mempools: Vec<H256>) -> (TestNetworkContext, TestNetworkContext) {
+    let bootnode = setup_network(vec![], mempools.clone()).await;
+    let node = setup_network(vec![bootnode.enr.clone()], mempools.clone()).await;
     (bootnode, node)
 }
 
@@ -78,7 +82,7 @@ async fn shutdown_node_pair(mut node0: TestNetworkContext, node1: TestNetworkCon
     shutdown(node1).await;
 
     match node0.event_receiver.recv().await {
-        Some(Event::PeerDisconnected(_)) => {}
+        Some(Event::PeerDisconnected { .. }) => {}
         _ => panic!("Expected peer disconnected event"),
     }
 
@@ -96,12 +100,12 @@ async fn wait_for_pair_connect(
     node1: &mut TestNetworkContext,
 ) -> (PeerId, PeerId) {
     let peer0 = match node0.event_receiver.recv().await {
-        Some(Event::PeerConnected(peer_id)) => peer_id,
+        Some(Event::PeerConnected { peer_id }) => peer_id,
         _ => panic!("Expected peer connected event"),
     };
 
     let peer1 = match node1.event_receiver.recv().await {
-        Some(Event::PeerConnected(peer_id)) => peer_id,
+        Some(Event::PeerConnected { peer_id }) => peer_id,
         _ => panic!("Expected peer connected event"),
     };
 
@@ -127,15 +131,15 @@ async fn test_shutdown() {
 #[tokio::test]
 #[traced_test]
 async fn test_peer_connect() {
-    let (mut bootnode, mut node) = setup_node_pair().await;
+    let (mut bootnode, mut node) = setup_node_pair(vec![]).await;
 
     match node.event_receiver.recv().await {
-        Some(Event::PeerConnected(_)) => {}
+        Some(Event::PeerConnected { .. }) => {}
         _ => panic!("Expected peer connected event"),
     }
 
     match bootnode.event_receiver.recv().await {
-        Some(Event::PeerConnected(_)) => {}
+        Some(Event::PeerConnected { .. }) => {}
         _ => panic!("Expected peer connected event"),
     }
 
@@ -145,22 +149,29 @@ async fn test_peer_connect() {
 #[tokio::test]
 #[traced_test]
 async fn test_req_resp_op_hashes() {
-    let (mut bootnode, mut node) = setup_node_pair().await;
+    let (mut bootnode, mut node) = setup_node_pair(vec![]).await;
     let (node_peer_id, bootnode_peer_id) = wait_for_pair_connect(&mut bootnode, &mut node).await;
 
     let mempool = H256::random();
 
     bootnode
         .action_sender
-        .send(Action::Request(
-            node_peer_id,
-            AppRequestId(0),
-            AppRequest::PooledUserOpHashes(PooledUserOpHashesRequest { mempool, offset: 0 }),
-        ))
+        .send(Action::Request {
+            peer_id: node_peer_id,
+            request_id: AppRequestId(0),
+            request: AppRequest::PooledUserOpHashes(PooledUserOpHashesRequest {
+                mempool,
+                offset: 0,
+            }),
+        })
         .unwrap();
 
     let request_id = match node.event_receiver.recv().await {
-        Some(Event::RequestReceived(peer_id, request_id, request)) => match request {
+        Some(Event::RequestReceived {
+            peer_id,
+            request_id,
+            request,
+        }) => match request {
             AppRequest::PooledUserOpHashes(r) => {
                 assert_eq!(peer_id, bootnode_peer_id);
                 assert_eq!(r.mempool, mempool);
@@ -175,19 +186,23 @@ async fn test_req_resp_op_hashes() {
     let hashes = vec![H256::random(), H256::random()];
 
     node.action_sender
-        .send(Action::Response(
+        .send(Action::Response {
             request_id,
-            Ok(AppResponse::PooledUserOpHashes(
+            response: Ok(AppResponse::PooledUserOpHashes(
                 PooledUserOpHashesResponse {
                     more_flag: true,
                     hashes: hashes.clone(),
                 },
             )),
-        ))
+        })
         .unwrap();
 
     match bootnode.event_receiver.recv().await {
-        Some(Event::ResponseReceived(peer_id, request_id, request)) => match request {
+        Some(Event::ResponseReceived {
+            peer_id,
+            request_id,
+            response,
+        }) => match response {
             Ok(AppResponse::PooledUserOpHashes(r)) => {
                 assert_eq!(peer_id, node_peer_id);
                 assert_eq!(request_id, AppRequestId(0));
@@ -205,24 +220,28 @@ async fn test_req_resp_op_hashes() {
 #[tokio::test]
 #[traced_test]
 async fn test_req_resp_ops_by_hashes() {
-    let (mut bootnode, mut node) = setup_node_pair().await;
+    let (mut bootnode, mut node) = setup_node_pair(vec![]).await;
     let (node_peer_id, bootnode_peer_id) = wait_for_pair_connect(&mut bootnode, &mut node).await;
 
     let hashes = vec![H256::random(), H256::random()];
 
     bootnode
         .action_sender
-        .send(Action::Request(
-            node_peer_id,
-            AppRequestId(0),
-            AppRequest::PooledUserOpsByHash(PooledUserOpsByHashRequest {
+        .send(Action::Request {
+            peer_id: node_peer_id,
+            request_id: AppRequestId(0),
+            request: AppRequest::PooledUserOpsByHash(PooledUserOpsByHashRequest {
                 hashes: hashes.clone(),
             }),
-        ))
+        })
         .unwrap();
 
     let request_id = match node.event_receiver.recv().await {
-        Some(Event::RequestReceived(peer_id, request_id, request)) => match request {
+        Some(Event::RequestReceived {
+            peer_id,
+            request_id,
+            request,
+        }) => match request {
             AppRequest::PooledUserOpsByHash(r) => {
                 assert_eq!(peer_id, bootnode_peer_id);
                 assert_eq!(r.hashes, hashes);
@@ -234,18 +253,22 @@ async fn test_req_resp_ops_by_hashes() {
     };
 
     node.action_sender
-        .send(Action::Response(
+        .send(Action::Response {
             request_id,
-            Ok(AppResponse::PooledUserOpsByHash(
+            response: Ok(AppResponse::PooledUserOpsByHash(
                 PooledUserOpsByHashResponse {
                     user_ops: vec![UserOperation::default(), UserOperation::default()],
                 },
             )),
-        ))
+        })
         .unwrap();
 
     match bootnode.event_receiver.recv().await {
-        Some(Event::ResponseReceived(peer_id, request_id, request)) => match request {
+        Some(Event::ResponseReceived {
+            peer_id,
+            request_id,
+            response,
+        }) => match response {
             Ok(AppResponse::PooledUserOpsByHash(r)) => {
                 assert_eq!(peer_id, node_peer_id);
                 assert_eq!(request_id, AppRequestId(0));
@@ -262,24 +285,28 @@ async fn test_req_resp_ops_by_hashes() {
 #[tokio::test]
 #[traced_test]
 async fn test_req_resp_ops_by_hashes_too_many() {
-    let (mut bootnode, mut node) = setup_node_pair().await;
+    let (mut bootnode, mut node) = setup_node_pair(vec![]).await;
     let (node_peer_id, _) = wait_for_pair_connect(&mut bootnode, &mut node).await;
 
     let hashes = vec![H256::random(); MAX_OPS_PER_REQUEST + 1];
 
     bootnode
         .action_sender
-        .send(Action::Request(
-            node_peer_id,
-            AppRequestId(0),
-            AppRequest::PooledUserOpsByHash(PooledUserOpsByHashRequest {
+        .send(Action::Request {
+            peer_id: node_peer_id,
+            request_id: AppRequestId(0),
+            request: AppRequest::PooledUserOpsByHash(PooledUserOpsByHashRequest {
                 hashes: hashes.clone(),
             }),
-        ))
+        })
         .unwrap();
 
     match bootnode.event_receiver.recv().await {
-        Some(Event::ResponseReceived(peer_id, request_id, response)) => match response {
+        Some(Event::ResponseReceived {
+            peer_id,
+            request_id,
+            response,
+        }) => match response {
             Err(e) => {
                 assert_eq!(peer_id, node_peer_id);
                 assert_eq!(request_id, AppRequestId(0));
@@ -296,7 +323,7 @@ async fn test_req_resp_ops_by_hashes_too_many() {
 #[tokio::test]
 #[traced_test]
 async fn test_discovery() {
-    let (mut bootnode, mut node0) = setup_node_pair().await;
+    let (mut bootnode, mut node0) = setup_node_pair(vec![]).await;
     wait_for_pair_connect(&mut bootnode, &mut node0).await;
 
     let mut node1 = setup_network(vec![bootnode.enr.clone()], vec![]).await;
@@ -304,7 +331,7 @@ async fn test_discovery() {
     // node 1 should discover both bootnode and node0
     for _ in 0..2 {
         match node1.event_receiver.recv().await {
-            Some(Event::PeerConnected(peer_id)) => {
+            Some(Event::PeerConnected { peer_id }) => {
                 assert!(peer_id == bootnode.enr.peer_id() || peer_id == node0.enr.peer_id())
             }
             _ => panic!("Expected discovered peer event"),
@@ -313,9 +340,124 @@ async fn test_discovery() {
 
     // node 0 should discover node 1
     match node0.event_receiver.recv().await {
-        Some(Event::PeerConnected(peer_id)) => assert_eq!(peer_id, node1.enr.peer_id()),
+        Some(Event::PeerConnected { peer_id }) => assert_eq!(peer_id, node1.enr.peer_id()),
         _ => panic!("Expected discovered peer event"),
     }
 
     shutdown_nodes(vec![bootnode, node0, node1]).await;
+}
+
+#[tokio::test]
+#[traced_test]
+async fn test_gossip() {
+    let mempool = H256::random();
+    let (mut bootnode, mut node0) = setup_node_pair(vec![mempool]).await;
+    wait_for_pair_connect(&mut bootnode, &mut node0).await;
+
+    bootnode
+        .action_sender
+        .send(Action::GossipMessage {
+            mempool_ids: vec![mempool],
+            message: GossipMessage::UserOperationsWithEntryPoint(UserOperationsWithEntryPoint {
+                entry_point_contract: Default::default(),
+                verified_at_block_hash: Default::default(),
+                chain_id: Default::default(),
+                user_operations: vec![UserOperation::default()],
+            }),
+        })
+        .unwrap();
+
+    match node0.event_receiver.recv().await {
+        Some(Event::GossipMessage {
+            id: _,
+            peer_id,
+            mempool_id,
+            message,
+        }) => {
+            assert_eq!(peer_id, bootnode.enr.peer_id());
+            assert_eq!(mempool_id, mempool);
+            match message {
+                GossipMessage::UserOperationsWithEntryPoint(uo) => {
+                    assert_eq!(uo.user_operations.len(), 1);
+                }
+            }
+        }
+        _ => panic!("Expected gossip message received event"),
+    }
+
+    shutdown_node_pair(bootnode, node0).await;
+}
+
+#[tokio::test]
+#[traced_test]
+async fn test_gossip_topics() {
+    let mempool0 = H256::random();
+    let mempool1 = H256::random();
+
+    let mut bootnode = setup_network(vec![], vec![mempool0, mempool1]).await;
+    let mut node0 = setup_network(vec![bootnode.enr.clone()], vec![mempool0]).await;
+    let mut node1 = setup_network(vec![bootnode.enr.clone()], vec![mempool1]).await;
+
+    // TODO: unsure if there is as better way to do this without
+    // surfacing more information.
+    // This waits for the peers to connect, and then to subscribe to the gossip topics.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    // Drain all the events thus far
+    while bootnode.event_receiver.try_recv().is_ok() {}
+    while node0.event_receiver.try_recv().is_ok() {}
+    while node1.event_receiver.try_recv().is_ok() {}
+
+    // Send a message across mempools
+    bootnode
+        .action_sender
+        .send(Action::GossipMessage {
+            mempool_ids: vec![mempool0, mempool1],
+            message: GossipMessage::UserOperationsWithEntryPoint(UserOperationsWithEntryPoint {
+                entry_point_contract: Default::default(),
+                verified_at_block_hash: Default::default(),
+                chain_id: Default::default(),
+                user_operations: vec![UserOperation::default()],
+            }),
+        })
+        .unwrap();
+
+    // Mempool 0 should receive
+    match node0.event_receiver.recv().await {
+        Some(Event::GossipMessage {
+            id: _,
+            peer_id,
+            mempool_id,
+            message,
+        }) => {
+            assert_eq!(peer_id, bootnode.enr.peer_id());
+            assert_eq!(mempool_id, mempool0);
+            match message {
+                GossipMessage::UserOperationsWithEntryPoint(uo) => {
+                    assert_eq!(uo.user_operations.len(), 1);
+                }
+            }
+        }
+        _ => panic!("Expected gossip message received event"),
+    }
+
+    // TODO: libp2p will deduplicate this message before sending to the 2nd mempool topic.
+    // This is an issue with how the spec is defined.
+    // match node1.event_receiver.recv().await {
+    //     Some(Event::GossipMessage {
+    //         id: _,
+    //         peer_id,
+    //         mempool_id,
+    //         message,
+    //     }) => {
+    //         assert_eq!(peer_id, bootnode.enr.peer_id());
+    //         assert_eq!(mempool_id, mempool1);
+    //         match message {
+    //             GossipMessage::UserOperationsWithEntryPoint(uo) => {
+    //                 assert_eq!(uo.user_operations.len(), 1);
+    //             }
+    //         }
+    //     }
+    //     _ => panic!("Expected gossip message received event"),
+    // }
 }

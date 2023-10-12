@@ -23,8 +23,9 @@ use crate::{
     network::PeerRequestId,
     rpc::{
         message::{Request, ResponseResult},
-        protocol::{self, Encoding, Protocol, ProtocolError},
+        protocol::{self, Protocol, ProtocolError},
     },
+    types::Encoding,
 };
 
 #[derive(Debug)]

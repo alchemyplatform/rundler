@@ -17,9 +17,12 @@ use tokio_io_timeout::TimeoutStream;
 use tokio_util::{codec::Framed, compat::FuturesAsyncReadCompatExt};
 
 use super::{codec, serde, ConnectionConfig};
-use crate::rpc::{
-    message::{Request, ResponseResult},
-    protocol::{self, Encoding, Protocol, ProtocolError, ProtocolSchema},
+use crate::{
+    rpc::{
+        message::{Request, ResponseResult},
+        protocol::{self, Protocol, ProtocolError, ProtocolSchema},
+    },
+    types::Encoding,
 };
 
 #[derive(Debug)]

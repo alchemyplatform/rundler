@@ -11,24 +11,21 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use libp2p::{
-    identify,
-    swarm::{keep_alive, NetworkBehaviour},
-};
+pub(crate) mod message;
+mod snappy;
+use libp2p::gossipsub;
+pub(crate) use snappy::SnappyTransform;
+pub(crate) mod topic;
 
-use crate::{discovery, gossip, rpc};
+use crate::Config;
 
-pub(crate) type GossipSub = libp2p::gossipsub::Behaviour<gossip::SnappyTransform>;
-
-#[derive(NetworkBehaviour)]
-pub(crate) struct Behaviour {
-    // TODO(danc): temp, remove when not needed
-    pub(crate) keep_alive: keep_alive::Behaviour,
-    pub(crate) gossipsub: GossipSub,
-    // Request/response protocol
-    pub(crate) rpc: rpc::Behaviour,
-    // Discv5 based discovery protocol
-    pub(crate) discovery: discovery::Behaviour,
-    // Identity protocol
-    pub(crate) identify: identify::Behaviour,
+pub(crate) fn gossipsub_config(config: &Config) -> gossipsub::Config {
+    gossipsub::ConfigBuilder::default()
+        .max_transmit_size(config.gossip_max_size)
+        .validate_messages()
+        .validation_mode(gossipsub::ValidationMode::Anonymous)
+        // TODO fast message id
+        .message_id_fn(message::message_id)
+        .build()
+        .expect("valid gossipsub config")
 }

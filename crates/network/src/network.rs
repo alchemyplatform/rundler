@@ -11,7 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, net::SocketAddr};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+};
 
 use discv5::Enr;
 use ethers::types::H256;
@@ -19,6 +22,7 @@ use futures::StreamExt;
 use libp2p::{
     core,
     core::{transport::upgrade, ConnectedPoint},
+    gossipsub::{self, MessageAcceptance, MessageId, PublishError},
     identify,
     identity::{secp256k1, Keypair},
     noise,
@@ -29,12 +33,13 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
 use crate::{
-    behaviour::{Behaviour, BehaviourEvent},
+    behaviour::{Behaviour, BehaviourEvent, GossipSub},
     discovery::{
         self,
         enr::{self, EnrExt},
     },
     error::Result,
+    gossip::{self, message::Message as GossipMessage, topic, topic::Topic, SnappyTransform},
     rpc::{
         self,
         message::{
@@ -65,6 +70,8 @@ pub struct Config {
     pub tick_interval: std::time::Duration,
     /// target number of peers to connect to
     pub target_num_peers: usize,
+    /// max size of gossip messages
+    pub gossip_max_size: usize,
 }
 
 impl Default for Config {
@@ -81,6 +88,7 @@ impl Default for Config {
             metadata_seq_number: 0,
             tick_interval: std::time::Duration::from_secs(1),
             target_num_peers: 16,
+            gossip_max_size: 1024 * 1024,
         }
     }
 }
@@ -124,16 +132,46 @@ pub struct PeerRequestId(pub u64);
 #[derive(Debug)]
 pub enum Event {
     /// Peer connected, can send requests
-    PeerConnected(PeerId),
+    PeerConnected {
+        /// Peer that connected
+        peer_id: PeerId,
+    },
     /// Peer disconnected, can no longer send requests
-    PeerDisconnected(PeerId),
+    PeerDisconnected {
+        /// Peer that disconnected
+        peer_id: PeerId,
+    },
     /// Network shutdown complete
     ShutdownComplete,
     /// Request from peer
-    RequestReceived(PeerId, PeerRequestId, AppRequest),
+    RequestReceived {
+        /// Peer that sent the request
+        peer_id: PeerId,
+        /// Request ID to associate with response
+        request_id: PeerRequestId,
+        /// The request
+        request: AppRequest,
+    },
     /// Response from peer
-    ResponseReceived(PeerId, AppRequestId, AppResponseResult),
-    // TODO: gossip messages will go here
+    ResponseReceived {
+        /// Peer that sent the response
+        peer_id: PeerId,
+        /// Request ID to associate with response
+        request_id: AppRequestId,
+        /// The response
+        response: AppResponseResult,
+    },
+    /// Gossip messages
+    GossipMessage {
+        /// Message ID
+        id: MessageId,
+        /// Peer that sent the message, not necessarily the original author
+        peer_id: PeerId,
+        /// The mempool id
+        mempool_id: H256,
+        /// The message
+        message: gossip::message::Message,
+    },
 }
 
 /// Actions sent to the network
@@ -146,10 +184,37 @@ pub enum Action {
     /// `ShutdownComplete` event when shutdown is complete.
     Shutdown,
     /// Request to send to peer
-    Request(PeerId, AppRequestId, AppRequest),
+    Request {
+        /// Peer to send request to
+        peer_id: PeerId,
+        /// Request ID to associate with response
+        request_id: AppRequestId,
+        /// The request
+        request: AppRequest,
+    },
     /// Response to send to peer
-    Response(PeerRequestId, AppResponseResult),
-    // TODO: gossip messages will go here
+    Response {
+        /// Request ID to associate with response
+        request_id: PeerRequestId,
+        /// The response
+        response: AppResponseResult,
+    },
+    /// Gossip message to send
+    GossipMessage {
+        /// The mempool ids to gossip on
+        mempool_ids: Vec<H256>,
+        /// The message to gossip
+        message: GossipMessage,
+    },
+    /// Validate gossip message
+    ValidateMessage {
+        /// Peer that sent the message, not necessarily the original author
+        peer_id: PeerId,
+        /// The message ID
+        id: MessageId,
+        /// Validation result
+        result: MessageAcceptance,
+    },
 }
 
 // Requests sent by the network
@@ -172,6 +237,9 @@ pub struct Network {
 
     // TODO move this to peer manager
     known_peers: HashSet<PeerId>,
+    // TODO determine what to do with messages that can't be sent
+    // due to insufficient peers. This is to help testing.
+    gossip_cache: HashMap<Topic, HashSet<Vec<u8>>>,
 }
 
 impl Network {
@@ -202,11 +270,23 @@ impl Network {
             ))
             .boxed();
 
+        let transform = SnappyTransform::new(config.gossip_max_size);
+        let gossipsub = gossipsub::Behaviour::new_with_transform(
+            gossipsub::MessageAuthenticity::Anonymous,
+            gossip::gossipsub_config(&config),
+            // TODO enable metrics
+            None,
+            transform,
+        )
+        .expect("should create gossipsub behaviour");
+
         let rpc = rpc::Behaviour::new(config.network_config.clone());
+
         let discovery = discovery::Behaviour::new(&config, enr.clone(), enr_key).await?;
 
         let behaviour = Behaviour {
             keep_alive: keep_alive::Behaviour,
+            gossipsub,
             rpc,
             discovery,
             identify: identify::Behaviour::new(identify::Config::new(
@@ -243,6 +323,16 @@ impl Network {
             .map(|b| b.peer_id())
             .collect::<HashSet<_>>();
 
+        for mempool in &config.supported_mempools {
+            for topic in topic::mempool_to_topics(*mempool) {
+                swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .subscribe(&topic.into())
+                    .unwrap();
+            }
+        }
+
         Ok(Self {
             swarm,
             enr,
@@ -250,6 +340,7 @@ impl Network {
             event_sender,
             action_recv,
             known_peers,
+            gossip_cache: HashMap::new(),
         })
     }
 
@@ -259,19 +350,6 @@ impl Network {
             tokio::select! {
                 Some(action) = self.action_recv.recv() => {
                     match action {
-                        Action::Request(peer_id, request_id, req) => {
-                            self.swarm.behaviour_mut().rpc.send_request(
-                                &peer_id,
-                                NetworkRequestId::App(request_id),
-                                req.into(),
-                            );
-                        },
-                        Action::Response(request_id, req) => {
-                            self.swarm.behaviour_mut().rpc.send_response(
-                                request_id,
-                                req.map(Into::into),
-                            );
-                        },
                         Action::Shutdown => {
                             info!("Shutting down network");
 
@@ -280,6 +358,50 @@ impl Network {
                             self.send_event(Event::ShutdownComplete);
                             return Ok(());
                         }
+                        Action::Request{peer_id, request_id, request} => {
+                            self.rpc_mut().send_request(
+                                &peer_id,
+                                NetworkRequestId::App(request_id),
+                                request.into(),
+                            );
+                        },
+                        Action::Response{request_id, response} => {
+                            self.rpc_mut().send_response(
+                                request_id,
+                                response.map(Into::into),
+                            );
+                        },
+                        Action::GossipMessage{mempool_ids, message} => {
+                            for mempool in mempool_ids {
+                                let topic = message.topic(mempool);
+                                debug!("Publishing gossip message on topic {:?}", topic);
+                                if let Err(e) = self.gossip_mut().publish(topic, message.clone().encode()) {
+                                    error!("Failed to publish gossip message: {:?}", e);
+
+                                    let encoded = message.clone().encode();
+                                    let topic = message.topic(mempool);
+                                    if let PublishError::InsufficientPeers = e {
+                                        if let Some(c) = self.gossip_cache.get_mut(&topic) {
+                                            c.insert(encoded);
+                                        } else {
+                                            let mut c = HashSet::new();
+                                            c.insert(encoded);
+                                            self.gossip_cache.insert(topic, c);
+                                        }
+                                    }
+
+                                }
+                            }
+                        },
+                        Action::ValidateMessage{peer_id, id, result} => {
+                            if let Err(e) = self.gossip_mut().report_message_validation_result(
+                                &id,
+                                &peer_id,
+                                result,
+                            ) {
+                                error!("Failed to report message validation result: {:?}", e);
+                            }
+                        },
                     }
                 },
                 Some(swarm_event) = self.swarm.next() => {
@@ -296,6 +418,7 @@ impl Network {
                                 }
                             }
                         }
+                        SwarmEvent::Behaviour(BehaviourEvent::Gossipsub(e)) => self.on_gossipsub_event(e),
                         SwarmEvent::Behaviour(BehaviourEvent::Rpc(e)) => self.on_rpc_event(e),
                         SwarmEvent::ConnectionEstablished {
                             peer_id, endpoint, ..
@@ -306,7 +429,7 @@ impl Network {
                             peer_id, endpoint, ..
                         } => {
                             debug!("Connection closed with peer {:?} at endpoint {:?}", peer_id, endpoint);
-                            self.send_event(Event::PeerDisconnected(peer_id));
+                            self.send_event(Event::PeerDisconnected{peer_id});
                             self.known_peers.remove(&peer_id);
                         }
                         e => debug!("Unhandled event: {:?}", e),
@@ -321,23 +444,77 @@ impl Network {
         &self.enr
     }
 
-    fn on_connection_established(&mut self, peer: PeerId, endpoint: ConnectedPoint) {
+    fn on_connection_established(&mut self, peer_id: PeerId, endpoint: ConnectedPoint) {
         info!(
             "Connection established with peer {:?} at endpoint {:?}",
-            peer, endpoint
+            peer_id, endpoint
         );
         match endpoint {
             ConnectedPoint::Dialer { .. } => {
-                self.request_status(peer);
+                self.request_status(peer_id);
             }
             ConnectedPoint::Listener { .. } => {}
         }
-        self.send_event(Event::PeerConnected(peer));
+        self.send_event(Event::PeerConnected { peer_id });
 
         // TODO peer manager
         // peers can discover us first and connect to us
-        if self.known_peers.insert(peer) {
-            debug!("Discovered peer {:?}", peer);
+        if self.known_peers.insert(peer_id) {
+            debug!("Discovered peer {:?}", peer_id);
+        }
+    }
+
+    fn on_gossipsub_event(&mut self, event: gossipsub::Event) {
+        match event {
+            gossipsub::Event::Message {
+                propagation_source: peer_id,
+                message,
+                message_id,
+            } => {
+                let Ok(topic) = message.topic.try_into() else {
+                    error!("Received message on unknown topic");
+                    return;
+                };
+                match GossipMessage::decode(&topic, message.data) {
+                    Ok(message) => {
+                        debug!("Received gossip message: {:?}", message);
+                        self.send_event(Event::GossipMessage {
+                            id: message_id,
+                            peer_id,
+                            mempool_id: topic.mempool_id(),
+                            message,
+                        });
+                    }
+                    Err(e) => {
+                        error!("Failed to decode gossip message: {:?}", e);
+                        if let Err(e) = self.gossip_mut().report_message_validation_result(
+                            &message_id,
+                            &peer_id,
+                            MessageAcceptance::Reject,
+                        ) {
+                            error!("Failed to report message validation result: {:?}", e);
+                        }
+                    }
+                }
+            }
+            gossipsub::Event::Subscribed { topic, .. } => {
+                debug!("Subscribed to topic {:?}", topic);
+                let topic = match Topic::try_from(topic) {
+                    Ok(topic) => topic,
+                    Err(e) => {
+                        error!("Failed to decode topic: {:?}", e);
+                        return;
+                    }
+                };
+                if let Some(c) = self.gossip_cache.remove(&topic) {
+                    for message in c {
+                        if let Err(e) = self.gossip_mut().publish(topic.clone(), message) {
+                            error!("Failed to publish gossip message: {:?}", e);
+                        }
+                    }
+                }
+            }
+            e => debug!("Unhandled gossipsub event: {:?}", e),
         }
     }
 
@@ -346,12 +523,10 @@ impl Network {
             rpc::Event::Request(peer_id, request_id, request) => match request {
                 Request::Status(status) => {
                     debug!("Received status: {:?} from peer {:?}", status, peer_id);
-                    self.swarm.behaviour_mut().rpc.send_response(
-                        request_id,
-                        Ok(Response::Status(Status {
-                            supported_mempools: self.config.supported_mempools.clone(),
-                        })),
-                    );
+                    let response = Ok(Response::Status(Status {
+                        supported_mempools: self.config.supported_mempools.clone(),
+                    }));
+                    self.rpc_mut().send_response(request_id, response);
                     // Notify peer manager to update status
                 }
                 Request::Goodbye(_) => {
@@ -360,32 +535,28 @@ impl Network {
                 }
                 Request::Ping(ping) => {
                     debug!("Received ping: {:?} from peer {:?}", ping, peer_id);
-                    self.swarm.behaviour_mut().rpc.send_response(
-                        request_id,
-                        Ok(Response::Ping(Pong {
-                            metadata_seq_number: self.config.metadata_seq_number,
-                        })),
-                    );
+                    let response = Ok(Response::Ping(Pong {
+                        metadata_seq_number: self.config.metadata_seq_number,
+                    }));
+                    self.rpc_mut().send_response(request_id, response);
                     // Notify peer manager to update ping time
                 }
                 Request::Metadata => {
-                    self.swarm.behaviour_mut().rpc.send_response(
-                        request_id,
-                        Ok(Response::Metadata(Metadata {
-                            seq_number: self.config.metadata_seq_number,
-                        })),
-                    );
+                    let response = Ok(Response::Metadata(Metadata {
+                        seq_number: self.config.metadata_seq_number,
+                    }));
+                    self.rpc_mut().send_response(request_id, response);
                 }
                 Request::PooledUserOpHashes(r) => {
-                    self.send_event(Event::RequestReceived(
+                    self.send_event(Event::RequestReceived {
                         peer_id,
                         request_id,
-                        AppRequest::PooledUserOpHashes(r),
-                    ));
+                        request: AppRequest::PooledUserOpHashes(r),
+                    });
                 }
                 Request::PooledUserOpsByHash(r) => {
                     if r.hashes.len() > MAX_OPS_PER_REQUEST {
-                        self.swarm.behaviour_mut().rpc.send_response(
+                        self.rpc_mut().send_response(
                             request_id,
                             Err(ResponseError {
                                 kind: ErrorKind::InvalidRequest,
@@ -399,11 +570,11 @@ impl Network {
                         // Notify peer manager to update metadata
                     } else {
                         // Send request to network manager
-                        self.send_event(Event::RequestReceived(
+                        self.send_event(Event::RequestReceived {
                             peer_id,
                             request_id,
-                            AppRequest::PooledUserOpsByHash(r),
-                        ));
+                            request: AppRequest::PooledUserOpsByHash(r),
+                        });
                     }
                 }
             },
@@ -421,7 +592,7 @@ impl Network {
                     // Notify peer manager to update metadata
                 }
                 Ok(Response::PooledUserOpHashes(r)) => {
-                    let NetworkRequestId::App(id) = request_id else {
+                    let NetworkRequestId::App(request_id) = request_id else {
                         error!(
                             "Received unexpected request id for PooledUserOpHashes: {:?}",
                             request_id
@@ -430,14 +601,14 @@ impl Network {
                     };
 
                     // Send response to network manager
-                    self.send_event(Event::ResponseReceived(
+                    self.send_event(Event::ResponseReceived {
                         peer_id,
-                        id,
-                        Ok(AppResponse::PooledUserOpHashes(r)),
-                    ));
+                        request_id,
+                        response: Ok(AppResponse::PooledUserOpHashes(r)),
+                    });
                 }
                 Ok(Response::PooledUserOpsByHash(r)) => {
-                    let NetworkRequestId::App(id) = request_id else {
+                    let NetworkRequestId::App(request_id) = request_id else {
                         error!(
                             "Received unexpected request id for PooledUserOpsByHash: {:?}",
                             request_id
@@ -446,17 +617,21 @@ impl Network {
                     };
 
                     // Send response to network manager
-                    self.send_event(Event::ResponseReceived(
+                    self.send_event(Event::ResponseReceived {
                         peer_id,
-                        id,
-                        Ok(AppResponse::PooledUserOpsByHash(r)),
-                    ));
+                        request_id,
+                        response: Ok(AppResponse::PooledUserOpsByHash(r)),
+                    });
                 }
                 Err(e) => {
                     error!("Received response error: {:?}", e);
                     // If external request, return error to network manager
-                    if let NetworkRequestId::App(id) = request_id {
-                        self.send_event(Event::ResponseReceived(peer_id, id, Err(e)));
+                    if let NetworkRequestId::App(request_id) = request_id {
+                        self.send_event(Event::ResponseReceived {
+                            peer_id,
+                            request_id,
+                            response: Err(e),
+                        });
                     }
                 }
             },
@@ -471,38 +646,46 @@ impl Network {
 
     // A status request is sent in response to a new dialed connection
     // and at a regular interval to all peers.
-    fn request_status(&mut self, peer: PeerId) {
-        debug!("Requesting status from peer {:?}", peer);
-        self.swarm.behaviour_mut().rpc.send_request(
-            &peer,
-            NetworkRequestId::Internal,
-            Request::Status(Status {
-                supported_mempools: self.config.supported_mempools.clone(),
-            }),
-        );
+    fn request_status(&mut self, peer_id: PeerId) {
+        debug!("Requesting status from peer {:?}", peer_id);
+        let request = Request::Status(Status {
+            supported_mempools: self.config.supported_mempools.clone(),
+        });
+        self.send_internal_request(peer_id, request)
     }
 
     // A metadata request is sent when a ping/pong is received with a different
     // metadata sequence number than the local cached version.
-    fn _request_metadata(&mut self, peer: PeerId) {
-        debug!("Sending metadata request to peer {:?}", peer);
-        self.swarm.behaviour_mut().rpc.send_request(
-            &peer,
-            NetworkRequestId::Internal,
-            Request::Metadata,
-        );
+    fn _request_metadata(&mut self, peer_id: PeerId) {
+        debug!("Sending metadata request to peer {:?}", peer_id);
+        self.send_internal_request(peer_id, Request::Metadata)
     }
 
     // A ping request is sent at a regular interval to all peers.
     fn _ping(&mut self, peer: PeerId) {
         debug!("Sending ping to peer {:?}", peer);
-        self.swarm.behaviour_mut().rpc.send_request(
-            &peer,
-            NetworkRequestId::Internal,
-            Request::Ping(Ping {
-                metadata_seq_number: self.config.metadata_seq_number,
-            }),
-        );
+        let request = Request::Ping(Ping {
+            metadata_seq_number: self.config.metadata_seq_number,
+        });
+        self.rpc_mut()
+            .send_request(&peer, NetworkRequestId::Internal, request);
+    }
+
+    fn gossip_mut(&mut self) -> &mut GossipSub {
+        &mut self.swarm.behaviour_mut().gossipsub
+    }
+
+    fn rpc_mut(&mut self) -> &mut rpc::Behaviour {
+        &mut self.swarm.behaviour_mut().rpc
+    }
+
+    fn _discovery_mut(&mut self) -> &mut discovery::Behaviour {
+        &mut self.swarm.behaviour_mut().discovery
+    }
+
+    fn send_internal_request(&mut self, peer_id: PeerId, request: Request) {
+        self.rpc_mut()
+            .send_request(&peer_id, NetworkRequestId::Internal, request);
     }
 }
 

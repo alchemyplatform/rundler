@@ -218,13 +218,15 @@ mod test {
     use rundler_types::UserOperation;
 
     use super::*;
-    use crate::rpc::{
-        handler::serde::{CodedError, PooledUserOpsByHashChunkSsz, SszChunk, UserOperationSsz},
-        message::{
-            ErrorKind, Goodbye, GoodbyeReason, Metadata, Ping, Pong, PooledUserOpHashesRequest,
-            PooledUserOpHashesResponse, PooledUserOpsByHashRequest, ResponseError, Status,
+    use crate::{
+        rpc::{
+            handler::serde::{CodedError, PooledUserOpsByHashChunkSsz, SszChunk},
+            message::{
+                ErrorKind, Goodbye, GoodbyeReason, Metadata, Ping, Pong, PooledUserOpHashesRequest,
+                PooledUserOpHashesResponse, PooledUserOpsByHashRequest, ResponseError, Status,
+            },
         },
-        protocol::Encoding,
+        types::{Encoding, UserOperationSsz},
     };
 
     const MAX_CHUNK_SIZE: usize = 1048576;

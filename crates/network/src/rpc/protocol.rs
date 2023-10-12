@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use super::handler::CodecError;
-use crate::rpc::message::Request;
+use crate::{rpc::message::Request, types::Encoding};
 
 const PROTOCOL_PREFIX: &str = "/account_abstraction/req";
 
@@ -51,14 +51,6 @@ impl Protocol {
             id,
         }
     }
-}
-
-/// The encoding of a protocol.
-///
-/// Currently only SSZSnappy is supported.
-#[derive(Clone, Debug)]
-pub(crate) enum Encoding {
-    SSZSnappy,
 }
 
 impl AsRef<str> for Encoding {

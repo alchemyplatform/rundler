@@ -36,6 +36,9 @@ pub use network::{
 mod error;
 pub use error::{Error, Result};
 
+mod gossip;
+pub use gossip::message::{Message as GossipMessage, UserOperationsWithEntryPoint};
+
 mod rpc;
 pub use rpc::{
     message::{
@@ -44,3 +47,5 @@ pub use rpc::{
     },
     ConnectionConfig,
 };
+
+mod types;

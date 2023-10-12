@@ -12,12 +12,13 @@ rundler-types = { path = "../types" }
 ethereum_ssz = "0.5.3"
 ethereum_ssz_derive = "0.5.3"
 ethers.workspace = true
-snap = "1.1.0"
-ssz_types = "0.5.4"
 discv5 = { version = "0.3.1", features = ["libp2p"] }
 futures.workspace = true
 hex = "0.4.3"
 libp2p-mplex = "0.40.0"
+sha2 = "0.10.8"
+snap = "1.1.0"
+ssz_types = "0.5.4"
 tokio.workspace = true
 tokio-io-timeout = "1.2.0"
 tokio-util = { workspace = true, features = ["codec", "compat"] }
@@ -25,10 +26,13 @@ thiserror.workspace = true
 tracing.workspace = true
 unsigned-varint = { version = "0.7.2", features = ["codec"] }
 
+# required version by gossipsub
+getrandom = "0.2.10"
+
 [dependencies.libp2p]
 version = "0.52.3"
 default-features = false
-features = ["tokio", "noise", "macros", "tcp", "identify", "yamux", "secp256k1"]
+features = ["tokio", "noise", "macros", "tcp", "identify", "yamux", "secp256k1", "gossipsub"]
 
 [dev-dependencies]
 rand.workspace = true
