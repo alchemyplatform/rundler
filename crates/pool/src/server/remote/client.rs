@@ -67,7 +67,7 @@ impl RemotePoolClient {
     }
 
     // Handler for the new block subscription. This will attempt to resubscribe if the gRPC
-    // connection disconnects using expenential backoff.
+    // connection disconnects using exponential backoff.
     async fn new_heads_subscription_handler(
         client: OpPoolClient<Channel>,
         tx: mpsc::UnboundedSender<NewHead>,

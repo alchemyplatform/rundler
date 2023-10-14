@@ -97,7 +97,16 @@ impl PoolInner {
         }
     }
 
-    pub(crate) fn check_replacement_fees(&self, op: &UserOperation) -> MempoolResult<()> {
+    /// Returns hash of operation to replace if operation is a replacement
+    pub(crate) fn check_replacement(&self, op: &UserOperation) -> MempoolResult<Option<H256>> {
+        // Check if operation already known
+        if self
+            .by_hash
+            .contains_key(&op.op_hash(self.config.entry_point, self.config.chain_id))
+        {
+            return Err(MempoolError::OperationAlreadyKnown);
+        }
+
         if let Some(pool_op) = self.by_id.get(&op.id()) {
             let (replacement_priority_fee, replacement_fee) =
                 self.get_min_replacement_fees(pool_op.uo());
@@ -106,12 +115,19 @@ impl PoolInner {
                 || op.max_fee_per_gas < replacement_fee
             {
                 return Err(MempoolError::ReplacementUnderpriced(
-                    replacement_priority_fee,
-                    replacement_fee,
+                    pool_op.uo().max_priority_fee_per_gas,
+                    pool_op.uo().max_fee_per_gas,
                 ));
             }
+
+            Ok(Some(
+                pool_op
+                    .uo()
+                    .op_hash(self.config.entry_point, self.config.chain_id),
+            ))
+        } else {
+            Ok(None)
         }
-        Ok(())
     }
 
     pub(crate) fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
@@ -226,34 +242,10 @@ impl PoolInner {
         op: Arc<PoolOperation>,
         submission_id: Option<u64>,
     ) -> MempoolResult<H256> {
-        // Check if operation already known
-        if self
-            .by_hash
-            .contains_key(&op.uo.op_hash(self.config.entry_point, self.config.chain_id))
-        {
-            return Err(MempoolError::OperationAlreadyKnown);
-        }
-
-        // Check for replacement by ID
-        if let Some(pool_op) = self.by_id.get(&op.uo.id()) {
-            let (replacement_priority_fee, replacement_fee) =
-                self.get_min_replacement_fees(pool_op.uo());
-
-            // replace only if higher gas
-            if op.uo.max_priority_fee_per_gas >= replacement_priority_fee
-                && op.uo.max_fee_per_gas >= replacement_fee
-            {
-                self.remove_operation_by_hash(
-                    pool_op
-                        .uo()
-                        .op_hash(self.config.entry_point, self.config.chain_id),
-                );
-            } else {
-                return Err(MempoolError::ReplacementUnderpriced(
-                    pool_op.uo().max_priority_fee_per_gas,
-                    pool_op.uo().max_fee_per_gas,
-                ));
-            }
+        // Check if operation already known or replacing an existing operation
+        // if replacing, remove the existing operation
+        if let Some(hash) = self.check_replacement(&op.uo)? {
+            self.remove_operation_by_hash(hash);
         }
 
         // Check sender count in mempool. If sender has too many operations, must be staked
