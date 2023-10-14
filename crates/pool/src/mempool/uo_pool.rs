@@ -232,8 +232,9 @@ where
             );
         }
 
-        // Check if op is replacing another op, and if so, ensure its fees are high enough
-        self.state.read().pool.check_replacement_fees(&op)?;
+        // Check if op is already known or replacing another, and if so, ensure its fees are high enough
+        // do this before simulation to save resources
+        self.state.read().pool.check_replacement(&op)?;
 
         // Prechecks
         self.prechecker.check(&op).await?;
@@ -720,6 +721,69 @@ mod tests {
             _ => panic!("Expected DidNotRevert error"),
         }
         assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_already_known() {
+        let op = create_op(Address::random(), 0, 0);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        let err = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, MempoolError::OperationAlreadyKnown));
+
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+    }
+
+    #[tokio::test]
+    async fn test_replacement_underpriced() {
+        let op = create_op(Address::random(), 0, 100);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        let mut replacement = op.op.clone();
+        replacement.max_fee_per_gas = replacement.max_fee_per_gas + 1;
+
+        let err = pool
+            .add_operation(OperationOrigin::Local, replacement)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, MempoolError::ReplacementUnderpriced(_, _)));
+
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+    }
+
+    #[tokio::test]
+    async fn test_replacement() {
+        let op = create_op(Address::random(), 0, 5);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        let mut replacement = op.op.clone();
+        replacement.max_fee_per_gas = replacement.max_fee_per_gas + 1;
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, replacement.clone())
+            .await
+            .unwrap();
+
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
     }
 
     #[derive(Clone, Debug)]
