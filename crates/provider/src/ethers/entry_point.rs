@@ -74,7 +74,7 @@ where
         if let ContractError::Revert(revert_data) = &error {
             if let Ok(FailedOp { op_index, reason }) = FailedOp::decode(revert_data) {
                 match &reason[..4] {
-                    "AA95" => anyhow::bail!("Handle ops called with insufficent gas"),
+                    "AA95" => anyhow::bail!("Handle ops called with insufficient gas"),
                     _ => return Ok(HandleOpsOut::FailedOp(op_index.as_usize(), reason)),
                 }
             }

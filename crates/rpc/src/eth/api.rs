@@ -507,7 +507,7 @@ mod tests {
     const UO_OP_TOPIC: &str = "user-op-event-topic";
 
     #[test]
-    fn test_filter_receipt_logs_when_at_begining_of_list() {
+    fn test_filter_receipt_logs_when_at_beginning_of_list() {
         let reference_log = given_log(UO_OP_TOPIC, "moldy-hash");
         let receipt = given_receipt(vec![
             given_log("other-topic", "some-hash"),
