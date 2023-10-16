@@ -76,6 +76,7 @@ Options for logging:
   - env: *LOG_FILE*
 - `--log.json`: If set, logs will be written in JSON format.
   - env: *LOG_JSON*
+- env: *RUST_LOG* : Available verbosity levels of the logger, RUST_LOG=[Error,Warn, Info, Debug,Trace].
 
 ## RPC Options
 
