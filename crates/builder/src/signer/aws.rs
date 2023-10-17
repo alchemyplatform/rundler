@@ -16,7 +16,7 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Context;
 use ethers::providers::Middleware;
 use ethers_signers::{AwsSigner, Signer};
-use rslock::{LockGuard, LockManager};
+use rslock::{Lock, LockGuard, LockManager};
 use rundler_utils::handle::SpawnGuard;
 use rusoto_core::Region;
 use rusoto_kms::KmsClient;
@@ -73,43 +73,58 @@ impl KmsSigner {
 
         let mut lock = None;
         let mut kid = None;
+        let mut locked_id = None;
         let lock_context = key_ids
             .into_iter()
             .map(|id| (format!("{chain_id}:{id}"), id))
             .collect::<Vec<_>>();
 
         for (lock_id, key_id) in lock_context.iter() {
-            match lm.lock(lock_id.as_bytes(), ttl_millis as usize).await {
-                Ok(l) => {
-                    lock = Some(l);
-                    kid = Some(key_id.clone());
-                    tracing::info!("locked key_id {key_id}");
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!("could not lock key_id {key_id}: {e:?}");
-                    continue;
-                }
+            if let Some(l) = try_lock(&lm, lock_id, ttl_millis as usize).await {
+                lock = Some(l);
+                kid = Some(key_id.clone());
+                locked_id = Some(lock_id.clone());
+                break;
             }
         }
         if lock.is_none() {
             return;
         }
-        let _ = locked_tx.send(kid.unwrap());
 
-        let lg = LockGuard {
+        let lock_id = locked_id.unwrap();
+        let _ = locked_tx.send(kid.unwrap());
+        let mut lg_opt = Some(LockGuard {
             lock: lock.unwrap(),
-        };
+        });
+
         loop {
             sleep(Duration::from_millis(ttl_millis / 10)).await;
-            match lm.extend(&lg.lock, ttl_millis as usize).await {
-                Ok(_) => {
-                    tracing::debug!("extended lock");
+
+            if let Some(lg) = &lg_opt {
+                match lm.extend(&lg.lock, ttl_millis as usize).await {
+                    Ok(_) => {
+                        tracing::debug!("extended lock");
+                    }
+                    Err(e) => {
+                        tracing::error!("could not extend lock: {e:?}");
+                        lg_opt.take();
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("could not extend lock: {e:?}");
-                }
+            } else if let Some(l) = try_lock(&lm, &lock_id, ttl_millis as usize).await {
+                lg_opt = Some(LockGuard { lock: l });
+            } else {
+                tracing::error!("could not re-lock key_id {lock_id}");
             }
+        }
+    }
+}
+
+async fn try_lock<'a>(lm: &'a LockManager, lock_id: &str, ttl_millis: usize) -> Option<Lock<'a>> {
+    match lm.lock(lock_id.as_bytes(), ttl_millis).await {
+        Ok(l) => Some(l),
+        Err(e) => {
+            tracing::warn!("could not lock key_id {lock_id}: {e:?}");
+            None
         }
     }
 }
