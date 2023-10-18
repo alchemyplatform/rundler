@@ -16,9 +16,9 @@ use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
 mod builder;
 mod json;
+mod metrics;
 mod node;
 mod pool;
-mod prometheus_exporter;
 mod rpc;
 mod tracing;
 
@@ -41,8 +41,7 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
-    prometheus_exporter::initialize(metrics_addr, &opt.metrics.tags)
-        .context("metrics server should start")?;
+    metrics::initialize(metrics_addr, &opt.metrics.tags).context("metrics server should start")?;
 
     match opt.command {
         Command::Node(args) => node::run(*args, opt.common).await?,
