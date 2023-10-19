@@ -255,7 +255,8 @@ impl<P: Provider> FeeEstimator<P> {
     /// bundle has already been submitted and its fees must at least be a certain amount above the
     /// already submitted fees.
     pub async fn required_bundle_fees(&self, min_fees: Option<GasFees>) -> anyhow::Result<GasFees> {
-        let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
+        let (base_fee, priority_fee) =
+            try_join!(self.get_base_fee(), self.get_priority_fee().await)?;
 
         let required_fees = min_fees.unwrap_or_default();
 
