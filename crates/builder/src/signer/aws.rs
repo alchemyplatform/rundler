@@ -55,9 +55,15 @@ impl KmsSigner {
                 .await
                 .context("should create signer")?
         } else {
-            AwsSigner::new(client, key_ids.first().unwrap(), chain_id)
-                .await
-                .context("should create signer")?
+            AwsSigner::new(
+                client,
+                key_ids
+                    .first()
+                    .expect("There should be at least one kms key"),
+                chain_id,
+            )
+            .await
+            .context("should create signer")?
         };
 
         let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
