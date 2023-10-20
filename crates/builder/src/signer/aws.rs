@@ -28,7 +28,7 @@ use super::monitor_account_balance;
 #[derive(Debug)]
 pub(crate) struct KmsSigner {
     pub(crate) signer: AwsSigner,
-    _kms_guard: SpawnGuard,
+    _kms_guard: Option<SpawnGuard>,
     _monitor_guard: SpawnGuard,
 }
 
@@ -41,15 +41,25 @@ impl KmsSigner {
         redis_uri: String,
         ttl_millis: u64,
     ) -> anyhow::Result<Self> {
-        let (tx, rx) = oneshot::channel::<String>();
-        let kms_guard = SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
-            redis_uri, key_ids, chain_id, ttl_millis, tx,
-        ));
-        let key_id = rx.await.context("should lock key_id")?;
         let client = KmsClient::new(region);
-        let signer = AwsSigner::new(client, key_id, chain_id)
-            .await
-            .context("should create signer")?;
+        let mut kms_guard = None;
+
+        let signer = if key_ids.len() > 1 {
+            let (tx, rx) = oneshot::channel::<String>();
+            kms_guard = Some(SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
+                redis_uri, key_ids, chain_id, ttl_millis, tx,
+            )));
+            let key_id = rx.await.context("should lock key_id")?;
+
+            AwsSigner::new(client, key_id, chain_id)
+                .await
+                .context("should create signer")?
+        } else {
+            AwsSigner::new(client, key_ids.first().unwrap(), chain_id)
+                .await
+                .context("should create signer")?
+        };
+
         let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
             signer.address(),
             provider.clone(),
