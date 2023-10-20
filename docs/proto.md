@@ -13,4 +13,4 @@ Rundler builds on [Tonic](https://github.com/hyperium/tonic) to power lightning 
 
 ## Style Guide
 
-Rundler largely relies on the canonical [protobuf style guide](https://protobuf.dev/programming-guides/style/). There are a few minor differences captured in `buf.yaml` to support Tonic best practices. Rundler use [buf](https://buf.build/) to lint the `.proto` files. To use `buf` run `buf lint protos/.`. To install `buf` on Macs, run `brew install bufbuild/buf/buf`.
+Rundler largely relies on the canonical [protobuf style guide](https://protobuf.dev/programming-guides/style/). There are a few minor differences captured in `buf.yaml` to support Tonic best practices. Rundler uses [buf](https://buf.build/) to lint the `.proto` files. To use `buf` run `buf lint protos/.`. To install `buf` on Macs, run `brew install bufbuild/buf/buf`.

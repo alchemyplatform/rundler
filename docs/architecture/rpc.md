@@ -40,7 +40,7 @@ Method defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account-
 
 ### `rundler_` Namespace
 
-Rundler specifc methods that are not specified by the ERC-4337 spec.
+Rundler specific methods that are not specified by the ERC-4337 spec.
 
 | Method | Supported |
 | ------ | :-----------: |
