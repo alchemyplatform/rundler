@@ -43,28 +43,24 @@ impl KmsSigner {
     ) -> anyhow::Result<Self> {
         let client = KmsClient::new(region);
         let mut kms_guard = None;
+        let key_id;
 
-        let signer = if key_ids.len() > 1 {
+        if key_ids.len() > 1 {
             let (tx, rx) = oneshot::channel::<String>();
             kms_guard = Some(SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
                 redis_uri, key_ids, chain_id, ttl_millis, tx,
             )));
-            let key_id = rx.await.context("should lock key_id")?;
-
-            AwsSigner::new(client, key_id, chain_id)
-                .await
-                .context("should create signer")?
+            key_id = rx.await.context("should lock key_id")?;
         } else {
-            AwsSigner::new(
-                client,
-                key_ids
-                    .first()
-                    .expect("There should be at least one kms key"),
-                chain_id,
-            )
-            .await
-            .context("should create signer")?
+            key_id = key_ids
+                .first()
+                .expect("There should be at least one kms key")
+                .to_owned();
         };
+
+        let signer = AwsSigner::new(client, key_id, chain_id)
+            .await
+            .context("should create signer")?;
 
         let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
             signer.address(),
