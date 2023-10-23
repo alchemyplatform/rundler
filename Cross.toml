@@ -3,5 +3,5 @@ pre-build = [
     "apt-get update && apt-get install --assume-yes --no-install-recommends libclang-dev pkg-config protobuf-compiler nodejs yarn",
     "curl -L https://foundry.paradigm.xyz | bash",
     'export PATH="/root/.foundry/bin:${PATH}"',
-    "foundryup"
+    "foundryup -b master"
 ]
