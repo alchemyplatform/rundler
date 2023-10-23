@@ -54,4 +54,4 @@ RUN apt-get -y update; apt-get -y install curl
 COPY --from=builder /app/target/release/rundler /usr/local/bin
 
 EXPOSE 3000 8080
-CMD ["/usr/local/bin/rundler", "node"]
+ENTRYPOINT ["/usr/local/bin/rundler"]
