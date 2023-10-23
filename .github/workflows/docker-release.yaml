@@ -2,6 +2,7 @@ name: Docker release
 
 on:
   workflow_dispatch: {}
+  pull_request:
   push:
     tags:
       - v*
