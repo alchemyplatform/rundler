@@ -53,6 +53,14 @@ define build_docker_image
 		--platform linux/amd64,linux/arm64 \
 		--tag $(DOCKER_IMAGE_NAME):$(1) \
 		--tag $(DOCKER_IMAGE_NAME):$(2) \
-		--provenance=false \
-		--push
+		--provenance=false 
 endef
+
+
+
+# docker buildx build --file ./Dockerfile.cross . \
+# 	--platform linux/amd64,linux/arm64 \
+# 	--tag $(DOCKER_IMAGE_NAME):$(1) \
+# 	--tag $(DOCKER_IMAGE_NAME):$(2) \
+# 	--provenance=false \
+# 	--push
