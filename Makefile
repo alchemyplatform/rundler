@@ -28,6 +28,11 @@ test-spec-integrated: ## Run spec tests in integrated mode
 .PHONY: test-spec-modular
 test-spec-modular: ## Run spec tests in modular mode
 	test/spec-tests/remote/run-spec-tests.sh
+
+# Note: The additional rustc compiler flags are for intrinsics needed by MDBX.
+# See: https://github.com/cross-rs/cross/wiki/FAQ#undefined-reference-with-build-std
+build-%:
+	cross build --bin reth --target $* --profile "$(PROFILE)"
 	
 # Note: This requires a buildx builder with emulation support. For example:
 .PHONY: docker-build-latest
