@@ -6,7 +6,7 @@ services:
     ports:
       - "3000:3000"
       - "8080:8080"
-    command: bash -c "/usr/local/bin/rundler node"
+    command: bash -c "node"
     environment:
       - RUST_LOG=debug
       - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
