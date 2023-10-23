@@ -50,7 +50,7 @@ WORKDIR /app
 # install curl for healthcheck
 RUN apt-get -y update; apt-get -y install curl
 
-# Copy reth over from the build stage
+# Copy rundler over from the build stage
 COPY --from=builder /app/target/release/rundler /usr/local/bin
 
 EXPOSE 3000 8080

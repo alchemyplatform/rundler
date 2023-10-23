@@ -32,7 +32,7 @@ test-spec-modular: ## Run spec tests in modular mode
 # Note: The additional rustc compiler flags are for intrinsics needed by MDBX.
 # See: https://github.com/cross-rs/cross/wiki/FAQ#undefined-reference-with-build-std
 build-%:
-	cross build --bin reth --target $* --profile "$(PROFILE)"
+	cross build --bin rundler --target $* --profile "$(PROFILE)"
 	
 # Note: This requires a buildx builder with emulation support. For example:
 .PHONY: docker-build-latest
@@ -43,11 +43,11 @@ docker-build-latest: ## Build and push a cross-arch Docker image tagged with the
 define build_docker_image
 	$(MAKE) build-x86_64-unknown-linux-gnu
 	mkdir -p $(BIN_DIR)/amd64
-	cp $(BUILD_PATH)/x86_64-unknown-linux-gnu/$(PROFILE)/reth $(BIN_DIR)/amd64/reth
+	cp $(BUILD_PATH)/x86_64-unknown-linux-gnu/$(PROFILE)/rundler $(BIN_DIR)/amd64/rundler
 
 	$(MAKE) build-aarch64-unknown-linux-gnu
 	mkdir -p $(BIN_DIR)/arm64
-	cp $(BUILD_PATH)/aarch64-unknown-linux-gnu/$(PROFILE)/reth $(BIN_DIR)/arm64/reth
+	cp $(BUILD_PATH)/aarch64-unknown-linux-gnu/$(PROFILE)/rundler $(BIN_DIR)/arm64/rundler
 
 	docker buildx build --file ./Dockerfile.cross . \
 		--platform linux/amd64,linux/arm64 \
