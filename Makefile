@@ -29,3 +29,25 @@ test-spec-integrated: ## Run spec tests in integrated mode
 test-spec-modular: ## Run spec tests in modular mode
 	test/spec-tests/remote/run-spec-tests.sh
 	
+# Note: This requires a buildx builder with emulation support. For example:
+.PHONY: docker-build-latest
+docker-build-latest: ## Build and push a cross-arch Docker image tagged with the latest git tag and `latest`.
+	$(call build_docker_image,$(GIT_TAG),latest)
+
+# Create a cross-arch Docker image with the given tags and push it
+define build_docker_image
+	$(MAKE) build-x86_64-unknown-linux-gnu
+	mkdir -p $(BIN_DIR)/amd64
+	cp $(BUILD_PATH)/x86_64-unknown-linux-gnu/$(PROFILE)/reth $(BIN_DIR)/amd64/reth
+
+	$(MAKE) build-aarch64-unknown-linux-gnu
+	mkdir -p $(BIN_DIR)/arm64
+	cp $(BUILD_PATH)/aarch64-unknown-linux-gnu/$(PROFILE)/reth $(BIN_DIR)/arm64/reth
+
+	docker buildx build --file ./Dockerfile.cross . \
+		--platform linux/amd64,linux/arm64 \
+		--tag $(DOCKER_IMAGE_NAME):$(1) \
+		--tag $(DOCKER_IMAGE_NAME):$(2) \
+		--provenance=false \
+		--push
+endef
