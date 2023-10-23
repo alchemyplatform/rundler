@@ -13,7 +13,7 @@ env:
 jobs:
   build:
     name: build and push
-    runs-on: ubuntu:latest
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
