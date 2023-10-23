@@ -1,7 +1,9 @@
 [build]
 pre-build = [
-    "apt-get update && apt-get install --assume-yes --no-install-recommends llvm-dev libclang-6.0-dev clang-6.0",
+    "apt-get update && apt-get install --assume-yes --no-install-recommends protobuf-compiler llvm-dev libclang-6.0-dev clang-6.0",
     "curl -L https://foundry.paradigm.xyz | bash",
     'export PATH="/root/.foundry/bin:${PATH}"',
+    "eval `ssh-agent -s`",
+    "ssh-add",
     "foundryup"
 ]
