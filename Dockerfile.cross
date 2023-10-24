@@ -2,7 +2,7 @@
 # This image is meant to enable cross-architecture builds.
 # It assumes the rundler binary has already been compiled for `$TARGETPLATFORM` and is
 # locatable in `./dist/bin/$TARGETARCH`
-FROM --platform=$TARGETPLATFORM ubuntu:20.04
+FROM --platform=$TARGETPLATFORM ubuntu:22.04
 
 LABEL org.opencontainers.image.source=https://github.com/alchemyplatform/rundler
 LABEL org.opencontainers.image.licenses="GNU General Public License v3.0"
