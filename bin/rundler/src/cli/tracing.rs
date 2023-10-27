@@ -16,6 +16,7 @@ use std::io;
 pub use tracing::*;
 use tracing::{subscriber, subscriber::Interest, Metadata, Subscriber};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_log::LogTracer;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, FmtSubscriber, Layer};
 
 use super::LogsArgs;
@@ -45,6 +46,9 @@ pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
                 .with(TargetBlacklistLayer),
         )?;
     }
+
+    // Redirect logs from external crates using `log` to the tracing subscriber
+    LogTracer::init()?;
 
     Ok(guard)
 }

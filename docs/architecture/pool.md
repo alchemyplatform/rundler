@@ -50,7 +50,7 @@ The `Pool` supports a very simple sharding scheme in its `best_operations` inter
 
 User operations are assigned to a shard by their sender address modulo the number of shards.
 
-Callers can use this feature to unsure that multiple callers are returned a disjoint set of user operations by sender. Callers should ensure that there is exactly 1 caller assigned to each shard index, else risk bundle invalidations (> 1 assigned) or orphaned user operations (0 assigned).
+Callers can use this feature to ensure that multiple callers are returned a disjoint set of user operations by sender. Callers should ensure that there is exactly 1 caller assigned to each shard index, else risk bundle invalidations (> 1 assigned) or orphaned user operations (0 assigned).
 
 ## Alternative Mempools (in preview)
 
