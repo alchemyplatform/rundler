@@ -26,7 +26,7 @@ pub use local::{LocalPoolBuilder, LocalPoolHandle};
 use mockall::automock;
 pub(crate) use remote::spawn_remote_mempool_server;
 pub use remote::RemotePoolClient;
-use rundler_types::{Entity, UserOperation};
+use rundler_types::{Entity, EntityUpdate, UserOperation};
 
 use crate::mempool::{PoolOperation, Reputation};
 
@@ -71,6 +71,13 @@ pub trait PoolServer: Send + Sync + 'static {
 
     /// Remove operations associated with entities from the pool
     async fn remove_entities(&self, entry_point: Address, entities: Vec<Entity>) -> PoolResult<()>;
+
+    /// Update operations associated with entities from the pool
+    async fn update_entities(
+        &self,
+        entry_point: Address,
+        entities: Vec<EntityUpdate>,
+    ) -> PoolResult<()>;
 
     /// Subscribe to new chain heads from the pool.
     ///

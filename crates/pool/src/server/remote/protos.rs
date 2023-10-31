@@ -15,8 +15,9 @@ use anyhow::Context;
 use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::{
-    Entity as RundlerEntity, EntityType as RundlerEntityType,
-    UserOperation as RundlerUserOperation, ValidTimeRange,
+    Entity as RundlerEntity, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
+    EntityUpdateType as RundlerEntityUpdateType, UserOperation as RundlerUserOperation,
+    ValidTimeRange,
 };
 
 use crate::{
@@ -83,6 +84,25 @@ impl TryFrom<EntityType> for RundlerEntityType {
     }
 }
 
+pub const MISSING_ENTITY_ERR_STR: &str = "Entity update should contain entity";
+impl TryFrom<&EntityUpdate> for RundlerEntityUpdate {
+    type Error = anyhow::Error;
+
+    fn try_from(entity_update: &EntityUpdate) -> Result<Self, Self::Error> {
+        let entity = (&(entity_update
+            .entity
+            .clone()
+            .context(MISSING_ENTITY_ERR_STR)?))
+            .try_into()?;
+        let update_type = RundlerEntityUpdateType::try_from(entity_update.update_type)
+            .map_err(|_| ConversionError::InvalidEnumValue(entity_update.update_type))?;
+        Ok(RundlerEntityUpdate {
+            entity,
+            update_type,
+        })
+    }
+}
+
 impl From<RundlerEntityType> for EntityType {
     fn from(entity: RundlerEntityType) -> Self {
         match entity {
@@ -112,6 +132,24 @@ impl From<&RundlerEntity> for Entity {
         Entity {
             kind: EntityType::from(entity.kind).into(),
             address: entity.address.as_bytes().to_vec(),
+        }
+    }
+}
+
+impl From<RundlerEntityUpdateType> for EntityUpdateType {
+    fn from(update_type: RundlerEntityUpdateType) -> Self {
+        match update_type {
+            RundlerEntityUpdateType::UnstakedInvalidation => EntityUpdateType::UnstakedInvalidation,
+            RundlerEntityUpdateType::StakedInvalidation => EntityUpdateType::StakedInvalidation,
+        }
+    }
+}
+
+impl From<&RundlerEntityUpdate> for EntityUpdate {
+    fn from(entity_update: &RundlerEntityUpdate) -> Self {
+        EntityUpdate {
+            entity: Some(Entity::from(&entity_update.entity)),
+            update_type: EntityUpdateType::from(entity_update.update_type).into(),
         }
     }
 }

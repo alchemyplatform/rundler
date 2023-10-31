@@ -32,7 +32,7 @@ use ethers::types::{Address, H256};
 #[cfg(test)]
 use mockall::automock;
 use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
-use rundler_types::{Entity, EntityType, UserOperation, ValidTimeRange};
+use rundler_types::{Entity, EntityType, EntityUpdate, UserOperation, ValidTimeRange};
 use strum::IntoEnumIterator;
 use tonic::async_trait;
 pub(crate) use uo_pool::UoPool;
@@ -62,6 +62,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Removes all operations associated with a given entity from the pool.
     fn remove_entity(&self, entity: Entity);
+
+    /// Updates the reputation of an entity.
+    fn update_entity(&self, entity_update: EntityUpdate);
 
     /// Returns the best operations from the pool.
     ///

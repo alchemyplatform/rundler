@@ -62,6 +62,19 @@ message Entity {
   bytes address = 2;
 }
 
+// The type of update to perform on an entity
+enum EntityUpdateType {
+  ENTITY_UPDATE_TYPE_UNSPECIFIED = 0;
+  ENTITY_UPDATE_TYPE_UNSTAKED_INVALIDATION = 1;
+  ENTITY_UPDATE_TYPE_STAKED_INVALIDATION = 2;
+}
+
+// A tuple consisting of an entity and what kind of update to perform on it
+message EntityUpdate {
+  Entity entity = 1;
+  EntityUpdateType update_type = 2;
+}
+
 // Defines a UserOperation persisted in a local mempool
 message MempoolOp {
   UserOperation uo = 1;
@@ -118,6 +131,9 @@ service OpPool {
   // For each Entity, remove all UserOperations that interface with that entity
   // from the mempool
   rpc RemoveEntities(RemoveEntitiesRequest) returns (RemoveEntitiesResponse);
+
+  // Handles a list of updates to be performed on entities
+  rpc UpdateEntities(UpdateEntitiesRequest) returns (UpdateEntitiesResponse);
 
   // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
@@ -207,6 +223,21 @@ message RemoveEntitiesResponse {
   }
 }
 message RemoveEntitiesSuccess {}
+
+message UpdateEntitiesRequest {
+  // The serilaized entry point address
+  bytes entry_point = 1;
+
+  // A list of updates that should be performed on the entities
+  repeated EntityUpdate entity_updates = 2;
+}
+message UpdateEntitiesResponse {
+  oneof result {
+    UpdateEntitiesSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message UpdateEntitiesSuccess {}
 
 message DebugClearStateRequest {}
 message DebugClearStateResponse {
