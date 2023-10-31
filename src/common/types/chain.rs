@@ -8,6 +8,7 @@ pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
 ];
 
 // TODO use chain from ethers types once my PR is merged into ethers
+// https://github.com/gakonst/ethers-rs/pull/2657
 pub const ARBITRUM_CHAIN_IDS: &[u64] =
     &[Chain::Arbitrum as u64, Chain::ArbitrumGoerli as u64, 421614];
 
