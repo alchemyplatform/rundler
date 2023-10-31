@@ -63,7 +63,7 @@ impl FromStr for EntityType {
 /// An entity associated with a user operation
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Entity {
-    /// The tpe of entity
+    /// The type of entity
     pub kind: EntityType,
     /// The address of the entity
     pub address: Address,
@@ -108,4 +108,38 @@ impl Serialize for Entity {
         e.serialize_field(self.kind.to_str(), &to_checksum(&self.address, None))?;
         e.end()
     }
+}
+
+/// Updates that can be applied to an entity
+#[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
+#[display(style = "camelCase")]
+#[serde(rename_all = "camelCase")]
+pub enum EntityUpdateType {
+    /// UREP-030
+    UnstakedInvalidation,
+    /// SREP-050
+    StakedInvalidation,
+}
+
+impl TryFrom<i32> for EntityUpdateType {
+    type Error = anyhow::Error;
+
+    fn try_from(update_type: i32) -> Result<Self, Self::Error> {
+        match update_type {
+            x if x == EntityUpdateType::UnstakedInvalidation as i32 => {
+                Ok(Self::UnstakedInvalidation)
+            }
+            x if x == EntityUpdateType::StakedInvalidation as i32 => Ok(Self::StakedInvalidation),
+            _ => bail!("Invalid entity update type: {update_type}"),
+        }
+    }
+}
+
+/// A update that needs to be applied to an entity
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct EntityUpdate {
+    /// The entity to update
+    pub entity: Entity,
+    /// The kind of update to perform for the entity
+    pub update_type: EntityUpdateType,
 }

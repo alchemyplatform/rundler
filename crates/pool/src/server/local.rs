@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
-use rundler_types::{Entity, UserOperation};
+use rundler_types::{Entity, EntityUpdate, UserOperation};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -170,6 +170,22 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
+    async fn update_entities(
+        &self,
+        entry_point: Address,
+        entity_updates: Vec<EntityUpdate>,
+    ) -> PoolResult<()> {
+        let req = ServerRequestKind::UpdateEntities {
+            entry_point,
+            entity_updates,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::UpdateEntities => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
     async fn debug_clear_state(&self) -> Result<(), PoolServerError> {
         let req = ServerRequestKind::DebugClearState;
         let resp = self.send(req).await?;
@@ -307,6 +323,18 @@ where
         Ok(())
     }
 
+    fn update_entities<'a>(
+        &self,
+        entry_point: Address,
+        entity_updates: impl IntoIterator<Item = &'a EntityUpdate>,
+    ) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        for update in entity_updates {
+            mempool.update_entity(*update);
+        }
+        Ok(())
+    }
+
     fn debug_clear_state(&self) -> PoolResult<()> {
         for mempool in self.mempools.values() {
             mempool.clear();
@@ -407,6 +435,12 @@ where
                                 Err(e) => Err(e),
                             }
                         },
+                        ServerRequestKind::UpdateEntities { entry_point, entity_updates } => {
+                            match self.update_entities(entry_point, &entity_updates) {
+                                Ok(_) => Ok(ServerResponse::UpdateEntities),
+                                Err(e) => Err(e),
+                            }
+                        },
                         ServerRequestKind::DebugClearState => {
                             match self.debug_clear_state() {
                                 Ok(_) => Ok(ServerResponse::DebugClearState),
@@ -473,6 +507,10 @@ enum ServerRequestKind {
         entry_point: Address,
         entities: Vec<Entity>,
     },
+    UpdateEntities {
+        entry_point: Address,
+        entity_updates: Vec<EntityUpdate>,
+    },
     DebugClearState,
     DebugDumpMempool {
         entry_point: Address,
@@ -500,6 +538,7 @@ enum ServerResponse {
     },
     RemoveOps,
     RemoveEntities,
+    UpdateEntities,
     DebugClearState,
     DebugDumpMempool {
         ops: Vec<PoolOperation>,

@@ -19,7 +19,7 @@ use rundler_task::{
     grpc::protos::{from_bytes, ConversionError},
     server::{HealthCheck, ServerStatus},
 };
-use rundler_types::{Entity, UserOperation};
+use rundler_types::{Entity, EntityUpdate, UserOperation};
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -35,10 +35,10 @@ use tonic_health::{
 use super::protos::{
     self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
-    op_pool_client::OpPoolClient, remove_entities_response, remove_ops_response, AddOpRequest,
-    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpsRequest, RemoveEntitiesRequest, RemoveOpsRequest,
-    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
+    op_pool_client::OpPoolClient, remove_entities_response, remove_ops_response,
+    update_entities_response, AddOpRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest, RemoveEntitiesRequest,
+    RemoveOpsRequest, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
     mempool::{PoolOperation, Reputation},
@@ -222,6 +222,34 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(remove_entities_response::Result::Success(_)) => Ok(()),
             Some(remove_entities_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn update_entities(
+        &self,
+        entry_point: Address,
+        entity_updates: Vec<EntityUpdate>,
+    ) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .update_entities(UpdateEntitiesRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+                entity_updates: entity_updates
+                    .iter()
+                    .map(protos::EntityUpdate::from)
+                    .collect(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(update_entities_response::Result::Success(_)) => Ok(()),
+            Some(update_entities_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

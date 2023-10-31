@@ -20,7 +20,7 @@ use ethers::types::{Address, H256, U256};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use rundler_sim::{Prechecker, Simulator};
-use rundler_types::{Entity, UserOperation};
+use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 use tonic::async_trait;
@@ -326,6 +326,18 @@ where
         }
         UoPoolMetrics::increment_removed_operations(count, self.entry_point);
         UoPoolMetrics::increment_removed_entities(self.entry_point);
+    }
+
+    fn update_entity(&self, update: EntityUpdate) {
+        let entity = update.entity;
+        match update.update_type {
+            EntityUpdateType::UnstakedInvalidation => {
+                self.reputation.handle_urep_030_penalty(entity.address);
+            }
+            EntityUpdateType::StakedInvalidation => {
+                self.reputation.handle_srep_050_penalty(entity.address);
+            }
+        }
     }
 
     fn best_operations(
@@ -897,6 +909,10 @@ mod tests {
 
     #[derive(Default, Clone)]
     struct MockReputationManager {
+        bundle_invalidation_ops_seen_staked_penalty: u64,
+        bundle_invalidation_ops_seen_unstaked_penalty: u64,
+        same_unstaked_entity_mempool_count: u64,
+        inclusion_rate_factor: u64,
         throttling_slack: u64,
         ban_slack: u64,
         counts: Arc<RwLock<Counts>>,
@@ -938,6 +954,16 @@ mod tests {
             *self.counts.write().seen.entry(address).or_default() += 1;
         }
 
+        fn handle_srep_050_penalty(&self, address: Address) {
+            *self.counts.write().seen.entry(address).or_default() =
+                self.bundle_invalidation_ops_seen_staked_penalty;
+        }
+
+        fn handle_urep_030_penalty(&self, address: Address) {
+            *self.counts.write().seen.entry(address).or_default() +=
+                self.bundle_invalidation_ops_seen_unstaked_penalty;
+        }
+
         fn add_included(&self, address: Address) {
             *self.counts.write().included.entry(address).or_default() += 1;
         }
@@ -966,6 +992,21 @@ mod tests {
             let mut counts = self.counts.write();
             counts.seen.insert(address, ops_seen);
             counts.included.insert(address, ops_included);
+        }
+
+        fn get_ops_allowed(&self, address: Address) -> u64 {
+            let counts = self.counts.read();
+            let seen = *counts.seen.get(&address).unwrap();
+            let included = *counts.included.get(&address).unwrap();
+            let inclusion_based_count = if seen == 0 {
+                // make sure we aren't dividing by 0
+                0
+            } else {
+                included * self.inclusion_rate_factor / seen + std::cmp::min(included, 10_000)
+            };
+
+            // return ops allowed, as defined by UREP-020
+            self.same_unstaked_entity_mempool_count + inclusion_based_count
         }
     }
 }

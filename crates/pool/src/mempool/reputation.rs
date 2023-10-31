@@ -88,6 +88,12 @@ pub(crate) trait ReputationManager: Send + Sync + 'static {
     /// pool
     fn add_seen(&self, address: Address);
 
+    /// Called by mempool when an unstaked entity causes the invalidation of a bundle
+    fn handle_urep_030_penalty(&self, address: Address);
+
+    /// Called by mempool when a staked entity causes the invalidation of a bundle
+    fn handle_srep_050_penalty(&self, address: Address);
+
     /// Called by the mempool when an operation that requires stake is removed
     /// from the pool
     fn add_included(&self, address: Address);
@@ -101,6 +107,9 @@ pub(crate) trait ReputationManager: Send + Sync + 'static {
 
     /// Called by debug API
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
+
+    /// Get the ops allowed for an unstaked entity
+    fn get_ops_allowed(&self, address: Address) -> u64;
 }
 
 #[derive(Debug)]
@@ -142,6 +151,14 @@ impl ReputationManager for HourlyMovingAverageReputation {
         self.reputation.write().add_seen(address);
     }
 
+    fn handle_urep_030_penalty(&self, address: Address) {
+        self.reputation.write().handle_urep_030_penalty(address);
+    }
+
+    fn handle_srep_050_penalty(&self, address: Address) {
+        self.reputation.write().handle_srep_050_penalty(address);
+    }
+
     fn add_included(&self, address: Address) {
         self.reputation.write().add_included(address);
     }
@@ -169,30 +186,47 @@ impl ReputationManager for HourlyMovingAverageReputation {
             .write()
             .set_reputation(address, ops_seen, ops_included)
     }
+
+    fn get_ops_allowed(&self, address: Address) -> u64 {
+        self.reputation.read().get_ops_allowed(address)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReputationParams {
+    bundle_invalidation_ops_seen_staked_penalty: u64,
+    bundle_invalidation_ops_seen_unstaked_penalty: u64,
+    same_unstaked_entity_mempool_count: u64,
     min_inclusion_rate_denominator: u64,
+    inclusion_rate_factor: u64,
     throttling_slack: u64,
     ban_slack: u64,
 }
 
-impl ReputationParams {
-    pub(crate) fn bundler_default() -> Self {
+impl Default for ReputationParams {
+    fn default() -> Self {
         Self {
+            bundle_invalidation_ops_seen_staked_penalty: 10_000,
+            bundle_invalidation_ops_seen_unstaked_penalty: 1_000,
+            same_unstaked_entity_mempool_count: 10,
             min_inclusion_rate_denominator: 10,
+            inclusion_rate_factor: 10,
             throttling_slack: 10,
             ban_slack: 50,
         }
+    }
+}
+
+impl ReputationParams {
+    pub(crate) fn bundler_default() -> Self {
+        Self::default()
     }
 
     #[allow(dead_code)]
     pub(crate) fn client_default() -> Self {
         Self {
             min_inclusion_rate_denominator: 100,
-            throttling_slack: 10,
-            ban_slack: 50,
+            ..Self::default()
         }
     }
 }
@@ -252,6 +286,17 @@ impl AddressReputation {
         count.ops_seen += 1;
     }
 
+    fn handle_urep_030_penalty(&mut self, address: Address) {
+        let count = self.counts.entry(address).or_default();
+        count.ops_seen += self.params.bundle_invalidation_ops_seen_unstaked_penalty;
+    }
+
+    fn handle_srep_050_penalty(&mut self, address: Address) {
+        let count = self.counts.entry(address).or_default();
+        // According to the spec we set ops_seen here instead of incrementing it
+        count.ops_seen = self.params.bundle_invalidation_ops_seen_staked_penalty;
+    }
+
     fn add_included(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_included += 1;
@@ -266,6 +311,23 @@ impl AddressReputation {
         let count = self.counts.entry(address).or_default();
         count.ops_seen = ops_seen;
         count.ops_included = ops_included;
+    }
+
+    fn get_ops_allowed(&self, address: Address) -> u64 {
+        let (seen, included) = self
+            .counts
+            .get(&address)
+            .map_or((0, 0), |c| (c.ops_seen, c.ops_included));
+
+        let inclusion_based_count = if seen == 0 {
+            // make sure we aren't dividing by 0
+            0
+        } else {
+            included * self.params.inclusion_rate_factor / seen + std::cmp::min(included, 10_000)
+        };
+
+        // return ops allowed, as defined by UREP-020
+        self.params.same_unstaked_entity_mempool_count + inclusion_based_count
     }
 
     fn hourly_update(&mut self) {

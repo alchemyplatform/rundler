@@ -31,7 +31,7 @@ pub mod contracts;
 pub use contracts::shared_types::{UserOperation, UserOpsPerAggregator};
 
 mod entity;
-pub use entity::{Entity, EntityType};
+pub use entity::{Entity, EntityType, EntityUpdate, EntityUpdateType};
 
 mod gas;
 pub use gas::GasFees;
