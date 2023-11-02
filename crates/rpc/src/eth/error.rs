@@ -73,7 +73,7 @@ pub enum EthRpcError {
     #[error("entity throttled or banned")]
     ThrottledOrBanned(Entity),
     /// Entity stake/unstake delay too low
-    #[error("entity stake/unstake delay too low")]
+    #[error("{} stake/unstake delay too low", .0.entity.kind)]
     StakeTooLow(StakeTooLowData),
     /// Unsupported aggregator
     #[error("unsupported aggregator")]
