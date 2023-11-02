@@ -313,7 +313,7 @@ where
                     });
                     match restriction {
                         StorageRestriction::Allowed => {}
-                        StorageRestriction::NeedsStake => needs_stake = true,
+                        StorageRestriction::NeedsStake(_) => needs_stake = true,
                         StorageRestriction::Banned => {
                             banned_slots_accessed.insert(StorageSlot {
                                 address,
@@ -684,7 +684,7 @@ fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StorageRestriction {
     Allowed,
-    NeedsStake,
+    NeedsStake(EntityType),
     Banned,
 }
 
@@ -715,15 +715,18 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs<'_>) -> StorageRestri
     } else if slots_by_address.is_associated_slot(sender_address, slot) {
         // Allow entities to access the sender's associated storage unless its during an unstaked wallet creation
         // Can always access the entry point's associated storage (note only depositTo is allowed to be called)
-        if accessed_address == entry_point_address || !is_unstaked_wallet_creation {
+        if entity_address == sender_address
+            || accessed_address == entry_point_address
+            || !is_unstaked_wallet_creation
+        {
             StorageRestriction::Allowed
         } else {
-            StorageRestriction::NeedsStake
+            StorageRestriction::NeedsStake(EntityType::Factory)
         }
     } else if accessed_address == entity_address
         || slots_by_address.is_associated_slot(entity_address, slot)
     {
-        StorageRestriction::NeedsStake
+        StorageRestriction::NeedsStake(EntityType::Account)
     } else {
         StorageRestriction::Banned
     }
