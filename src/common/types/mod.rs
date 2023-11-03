@@ -30,6 +30,9 @@ pub use violations::*;
 use super::gas;
 pub use crate::common::contracts::shared_types::UserOperation;
 
+/// Number of bytes in the fixed size portion of an ABI encoded user operation
+const PACKED_USER_OPERATION_FIXED_LEN: usize = 480;
+
 /// Unique identifier for a user operation from a given sender
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct UserOperationId {
@@ -44,7 +47,7 @@ impl UserOperation {
     /// It does not include the signature field.
     pub fn op_hash(&self, entry_point: Address, chain_id: u64) -> H256 {
         keccak256(encode(&[
-            Token::FixedBytes(keccak256(self.pack()).to_vec()),
+            Token::FixedBytes(keccak256(self.pack_for_hash()).to_vec()),
             Token::Address(entry_point),
             Token::Uint(chain_id.into()),
         ]))
@@ -78,7 +81,25 @@ impl UserOperation {
         }
     }
 
-    pub fn pack(&self) -> Bytes {
+    /// Efficient calculation of the size of a packed user operation
+    pub fn abi_encoded_size(&self) -> usize {
+        PACKED_USER_OPERATION_FIXED_LEN
+            + pad_len(&self.init_code)
+            + pad_len(&self.call_data)
+            + pad_len(&self.paymaster_and_data)
+            + pad_len(&self.signature)
+    }
+
+    /// Compute the amount of heap memory the UserOperation takes up.
+    pub fn heap_size(&self) -> usize {
+        self.init_code.len()
+            + self.call_data.len()
+            + self.paymaster_and_data.len()
+            + self.signature.len()
+    }
+
+    /// Gets the byte array representation of the user operation to be used in the signature
+    pub fn pack_for_hash(&self) -> Bytes {
         let hash_init_code = keccak256(self.init_code.clone());
         let hash_call_data = keccak256(self.call_data.clone());
         let hash_paymaster_and_data = keccak256(self.paymaster_and_data.clone());
@@ -269,8 +290,20 @@ impl ExpectedStorage {
     }
 }
 
+/// Calculates the size a byte array padded to the next largest multiple of 32
+fn pad_len(b: &Bytes) -> usize {
+    (b.len() + 31) & !31
+}
+
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
+    use ethers::{
+        abi::AbiEncode,
+        types::{Bytes, U256},
+    };
+
     use super::*;
 
     #[test]
@@ -394,6 +427,30 @@ mod tests {
             "0x0123456789abcdef0123456789abcdef01234567"
                 .parse()
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_abi_encoded_size() {
+        let user_operation = UserOperation {
+            sender: "0xe29a7223a7e040d70b5cd460ef2f4ac6a6ab304d"
+                .parse()
+                .unwrap(),
+            nonce: U256::from_dec_str("3937668929043450082210854285941660524781292117276598730779").unwrap(),
+            init_code: Bytes::default(),
+            call_data: Bytes::from_str("0x5194544700000000000000000000000058440a3e78b190e5bd07905a08a60e30bb78cb5b000000000000000000000000000000000000000000000000000009184e72a000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap(),
+            call_gas_limit: 40_960.into(),
+            verification_gas_limit: 75_099.into(),
+            pre_verification_gas: 46_330.into(),
+            max_fee_per_gas: 105_000_000.into(),
+            max_priority_fee_per_gas: 105_000_000.into(),
+            paymaster_and_data: Bytes::from_str("0xc03aac639bb21233e0139381970328db8bceeb6700006508996f000065089a9b0000000000000000000000000000000000000000ca7517be4e51ca2cde69bc44c4c3ce00ff7f501ce4ee1b3c6b2a742f579247292e4f9a672522b15abee8eaaf1e1487b8e3121d61d42ba07a47f5ccc927aa7eb61b").unwrap(),
+            signature: Bytes::from_str("0x00000000f8a0655423f2dfbb104e0ff906b7b4c64cfc12db0ac5ef0fb1944076650ce92a1a736518e5b6cd46c6ff6ece7041f2dae199fb4c8e7531704fbd629490b712dc1b").unwrap(),
+        };
+
+        assert_eq!(
+            user_operation.clone().encode().len(),
+            user_operation.abi_encoded_size()
         );
     }
 }

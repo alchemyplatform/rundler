@@ -490,13 +490,13 @@ mod tests {
 
         let u_o = user_op.max_fill(&settings);
 
-        let u_o_packed = u_o.pack();
-        let length_in_words = (u_o_packed.len() + 31) / 32;
+        let u_o_encoded = u_o.encode();
+        let length_in_words = (u_o_encoded.len() + 31) / 32;
 
         //computed by mapping through the calldata bytes
         //and adding to the value either 4 or 16 depending
         //if the byte is non-zero
-        let call_data_cost = 4316;
+        let call_data_cost = 3936;
 
         let result = U256::from(FIXED) / U256::from(BUNDLE_SIZE)
             + call_data_cost
@@ -531,13 +531,13 @@ mod tests {
 
         let u_o = user_op.max_fill(&settings);
 
-        let u_o_packed = u_o.pack();
-        let length_in_words = (u_o_packed.len() + 31) / 32;
+        let u_o_encoded = u_o.encode();
+        let length_in_words = (u_o_encoded.len() + 31) / 32;
 
         //computed by mapping through the calldata bytes
         //and adding to the value either 4 or 16 depending
         //if the byte is non-zero
-        let call_data_cost = 4316;
+        let call_data_cost = 3936;
 
         let result = U256::from(FIXED) / U256::from(BUNDLE_SIZE)
             + call_data_cost
@@ -574,13 +574,13 @@ mod tests {
 
         let u_o = user_op.max_fill(&settings);
 
-        let u_o_packed = u_o.pack();
-        let length_in_words = (u_o_packed.len() + 31) / 32;
+        let u_o_encoded: Bytes = u_o.encode().into();
+        let length_in_words = (u_o_encoded.len() + 31) / 32;
 
         //computed by mapping through the calldata bytes
         //and adding to the value either 4 or 16 depending
         //if the byte is non-zero
-        let call_data_cost = 4316;
+        let call_data_cost = 3936;
 
         let result = U256::from(FIXED) / U256::from(BUNDLE_SIZE)
             + call_data_cost
@@ -1135,7 +1135,7 @@ mod tests {
         let estimation = estimator.estimate_op_gas(user_op).await.unwrap();
 
         // this number uses the same logic as the pre_verification tests
-        assert_eq!(estimation.pre_verification_gas, U256::from(43656));
+        assert_eq!(estimation.pre_verification_gas, U256::from(43296));
 
         // 30000 GAS_FEE_TRANSER_COST increased by default 10%
         assert_eq!(estimation.verification_gas_limit, U256::from(33000));
