@@ -23,8 +23,11 @@ pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
     Chain::BaseGoerli as u64,
 ];
 
-/// Known chain IDs that use the Arbitrum stack
-pub const ARBITRUM_CHAIN_IDS: &[u64] = &[Chain::Arbitrum as u64, Chain::ArbitrumGoerli as u64];
+// TODO use chain from ethers types once my PR is merged into ethers
+// https://github.com/gakonst/ethers-rs/pull/2657
+/// Known chain IDs for the Base ecosystem
+pub const ARBITRUM_CHAIN_IDS: &[u64] =
+    &[Chain::Arbitrum as u64, Chain::ArbitrumGoerli as u64, 421614];
 
 /// Known chain IDs for the Base ecosystem
 pub const BASE_CHAIN_IDS: &[u64] = &[8453, Chain::BaseGoerli as u64];
