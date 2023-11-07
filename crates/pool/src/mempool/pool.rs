@@ -71,7 +71,7 @@ pub(crate) struct PoolInner {
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
-    /// Count of operations by sender
+    /// Count of operations by entity address
     count_by_address: HashMap<Address, usize>,
     /// Submission ID counter
     submission_id: u64,

@@ -45,7 +45,7 @@ pub async fn run() -> anyhow::Result<()> {
         .context("metrics server should start")?;
 
     match opt.command {
-        Command::Node(args) => node::run(args, opt.common).await?,
+        Command::Node(args) => node::run(*args, opt.common).await?,
         Command::Pool(args) => pool::run(args, opt.common).await?,
         Command::Rpc(args) => rpc::run(args, opt.common).await?,
         Command::Builder(args) => builder::run(args, opt.common).await?,
@@ -62,7 +62,7 @@ enum Command {
     ///
     /// Runs the Pool, Builder, and RPC servers in a single process.
     #[command(name = "node")]
-    Node(NodeCliArgs),
+    Node(Box<NodeCliArgs>),
 
     /// Rpc command
     ///

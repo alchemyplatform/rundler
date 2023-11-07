@@ -124,6 +124,10 @@ pub struct PoolConfig {
     /// operations. The mempool is divided into shards by taking the hash of the operation
     /// and modding it by the number of shards.
     pub num_shards: u64,
+    /// the maximum number of user operations with a throttled entity that can stay in the mempool
+    pub throttled_entity_mempool_count: u64,
+    /// The maximum number of blocks a user operation with a throttled entity can stay in the mempool
+    pub throttled_entity_live_blocks: u64,
 }
 
 /// Origin of an operation.

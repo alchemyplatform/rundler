@@ -101,6 +101,22 @@ pub struct PoolArgs {
         env = "POOL_CHAIN_UPDATE_CHANNEL_CAPACITY"
     )]
     pub chain_update_channel_capacity: Option<usize>,
+
+    #[arg(
+        long = "pool.throttled_entity_mempool_count",
+        name = "pool.throttled_entity_mempool_count",
+        env = "POOL_THROTTLED_ENTITY_MEMPOOL_COUNT",
+        default_value = "4"
+    )]
+    pub throttled_entity_mempool_count: u64,
+
+    #[arg(
+        long = "pool.throttled_entity_live_blocks",
+        name = "pool.throttled_entity_live_blocks",
+        env = "POOL_THROTTLED_ENTITY_LIVE_BLOCKS",
+        default_value = "4"
+    )]
+    pub throttled_entity_live_blocks: u64,
 }
 
 impl PoolArgs {
@@ -149,6 +165,8 @@ impl PoolArgs {
                     precheck_settings: common.try_into()?,
                     sim_settings: common.try_into()?,
                     mempool_channel_configs: mempool_channel_configs.clone(),
+                    throttled_entity_mempool_count: self.throttled_entity_mempool_count,
+                    throttled_entity_live_blocks: self.throttled_entity_live_blocks,
                 })
             })
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
