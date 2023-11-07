@@ -37,18 +37,13 @@ use crate::{
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
 };
 
-/// The number of blocks that a throttled operation is allowed to be in the mempool
-const THROTTLED_OPS_BLOCK_LIMIT: u64 = 10;
-
 /// User Operation Mempool
 ///
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
 pub(crate) struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator> {
-    entry_point: Address,
-    chain_id: u64,
-    num_shards: u64,
+    config: PoolConfig,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
@@ -76,9 +71,7 @@ where
         simulator: S,
     ) -> Self {
         Self {
-            entry_point: config.entry_point,
-            chain_id: config.chain_id,
-            num_shards: config.num_shards,
+            config: config.clone(),
             reputation,
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(config.into()),
@@ -93,7 +86,7 @@ where
 
     fn emit(&self, event: OpPoolEvent) {
         let _ = self.event_sender.send(WithEntryPoint {
-            entry_point: self.entry_point,
+            entry_point: self.config.entry_point,
             event,
         });
     }
@@ -112,15 +105,15 @@ where
         let mined_ops = deduped_ops
             .mined_ops
             .iter()
-            .filter(|op| op.entry_point == self.entry_point);
+            .filter(|op| op.entry_point == self.config.entry_point);
         let unmined_ops = deduped_ops
             .unmined_ops
             .iter()
-            .filter(|op| op.entry_point == self.entry_point);
+            .filter(|op| op.entry_point == self.config.entry_point);
         let mut mined_op_count = 0;
         let mut unmined_op_count = 0;
         for op in mined_ops {
-            if op.entry_point != self.entry_point {
+            if op.entry_point != self.config.entry_point {
                 continue;
             }
 
@@ -138,7 +131,7 @@ where
             }
         }
         for op in unmined_ops {
-            if op.entry_point != self.entry_point {
+            if op.entry_point != self.config.entry_point {
                 continue;
             }
 
@@ -153,7 +146,7 @@ where
         if mined_op_count > 0 {
             info!(
                 "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.entry_point,
+                self.config.entry_point,
                 update.latest_block_number,
                 update.latest_block_hash,
             );
@@ -161,16 +154,16 @@ where
         if unmined_op_count > 0 {
             info!(
                 "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.entry_point,
+                self.config.entry_point,
                 update.latest_block_number,
                 update.latest_block_hash,
             );
         }
         UoPoolMetrics::update_ops_seen(
             mined_op_count as isize - unmined_op_count as isize,
-            self.entry_point,
+            self.config.entry_point,
         );
-        UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.entry_point);
+        UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.config.entry_point);
 
         state
             .pool
@@ -178,7 +171,7 @@ where
         // Remove throttled ops that are too old
         let mut to_remove = HashSet::new();
         for (hash, block) in state.throttled_ops.iter() {
-            if update.latest_block_number - block > THROTTLED_OPS_BLOCK_LIMIT {
+            if update.latest_block_number - block > self.config.throttled_entity_live_blocks {
                 to_remove.insert(*hash);
             }
         }
@@ -190,7 +183,7 @@ where
     }
 
     fn entry_point(&self) -> Address {
-        self.entry_point
+        self.config.entry_point
     }
 
     async fn add_operation(
@@ -202,7 +195,7 @@ where
         // TODO(danc) catch ops with aggregators prior to simulation and reject
 
         // Check reputation of entities in involved in the operation
-        // If throttled, entity can have 1 inflight operation at a time, else reject
+        // If throttled, entity can have THROTTLED_ENTITY_MEMPOOL_COUNT inflight operation at a time, else reject
         // If banned, reject
         let mut entity_summary = EntitySummary::default();
         let mut throttled = false;
@@ -211,7 +204,9 @@ where
             let reputation = match self.reputation.status(address) {
                 ReputationStatus::Ok => EntityReputation::Ok,
                 ReputationStatus::Throttled => {
-                    if self.state.read().pool.address_count(address) > 0 {
+                    if self.state.read().pool.address_count(address)
+                        >= self.config.throttled_entity_mempool_count as usize
+                    {
                         return Err(MempoolError::EntityThrottled(entity));
                     } else {
                         throttled = true;
@@ -276,7 +271,9 @@ where
             .unique()
             .for_each(|a| self.reputation.add_seen(a));
 
-        let op_hash = pool_op.uo.op_hash(self.entry_point, self.chain_id);
+        let op_hash = pool_op
+            .uo
+            .op_hash(self.config.entry_point, self.config.chain_id);
         let valid_after = pool_op.valid_time_range.valid_after;
         let valid_until = pool_op.valid_time_range.valid_until;
         self.emit(OpPoolEvent::ReceivedOp {
@@ -311,7 +308,7 @@ where
                 reason: OpRemovalReason::Requested,
             })
         }
-        UoPoolMetrics::increment_removed_operations(count, self.entry_point);
+        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
     }
 
     fn remove_entity(&self, entity: Entity) {
@@ -324,8 +321,8 @@ where
                 reason: OpRemovalReason::EntityRemoved { entity },
             })
         }
-        UoPoolMetrics::increment_removed_operations(count, self.entry_point);
-        UoPoolMetrics::increment_removed_entities(self.entry_point);
+        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
+        UoPoolMetrics::increment_removed_entities(self.config.entry_point);
     }
 
     fn update_entity(&self, update: EntityUpdate) {
@@ -338,6 +335,10 @@ where
                 self.reputation.handle_srep_050_penalty(entity.address);
             }
         }
+
+        if self.reputation.status(entity.address) == ReputationStatus::Banned {
+            self.remove_entity(entity);
+        }
     }
 
     fn best_operations(
@@ -345,7 +346,7 @@ where
         max: usize,
         shard_index: u64,
     ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
-        if shard_index >= self.num_shards {
+        if shard_index >= self.config.num_shards {
             Err(anyhow::anyhow!("Invalid shard ID"))?;
         }
 
@@ -358,9 +359,9 @@ where
             .into_iter()
             .filter(|op| {
                 // short-circuit the mod if there is only 1 shard
-                ((self.num_shards == 1) ||
+                ((self.config.num_shards == 1) ||
                 (U256::from_little_endian(op.uo.sender.as_bytes())
-                        .div_mod(self.num_shards.into())
+                        .div_mod(self.config.num_shards.into())
                         .1
                         == shard_index.into())) &&
                 // filter out ops from senders we've already seen
@@ -498,8 +499,8 @@ mod tests {
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
-                entry_point: pool.entry_point,
-                hash: uos[0].op_hash(pool.entry_point, 1),
+                entry_point: pool.config.entry_point,
+                hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
@@ -525,8 +526,8 @@ mod tests {
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
-                entry_point: pool.entry_point,
-                hash: uos[0].op_hash(pool.entry_point, 1),
+                entry_point: pool.config.entry_point,
+                hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
@@ -544,8 +545,8 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![],
             unmined_ops: vec![MinedOp {
-                entry_point: pool.entry_point,
-                hash: uos[0].op_hash(pool.entry_point, 1),
+                entry_point: pool.config.entry_point,
+                hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
@@ -570,7 +571,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: Address::random(),
-                hash: uos[0].op_hash(pool.entry_point, 1),
+                hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
@@ -604,8 +605,8 @@ mod tests {
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
-                entry_point: pool.entry_point,
-                hash: uos[0].op_hash(pool.entry_point, 1),
+                entry_point: pool.config.entry_point,
+                hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
@@ -623,25 +624,37 @@ mod tests {
     async fn test_throttled_account() {
         let address = Address::random();
 
-        let ops = vec![
-            create_op_with_errors(address, 0, 2, None, None, true),
-            create_op_with_errors(address, 1, 2, None, None, true),
-        ];
+        let mut ops = Vec::new();
+        for i in 0..5 {
+            ops.push(create_op_with_errors(address, i, 2, None, None, true));
+        }
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
         // Past throttle slack
         pool.set_reputation(address, 1 + THROTTLE_SLACK, 0);
 
-        // First op should be included
-        pool.add_operation(OperationOrigin::Local, uos[0].clone())
-            .await
-            .unwrap();
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![uos[0].clone()]);
+        // Ops 0 through 3 should be included
+        for uo in uos.iter().take(4) {
+            pool.add_operation(OperationOrigin::Local, uo.clone())
+                .await
+                .unwrap();
+        }
+
+        check_ops(
+            pool.all_operations(4),
+            vec![
+                uos[0].clone(),
+                uos[1].clone(),
+                uos[2].clone(),
+                uos[3].clone(),
+            ],
+        );
 
         // Second op should be throttled
         let ret = pool
-            .add_operation(OperationOrigin::Local, uos[1].clone())
+            .add_operation(OperationOrigin::Local, uos[4].clone())
             .await;
+
         assert!(ret.is_err());
         match ret.unwrap_err() {
             MempoolError::EntityThrottled(entity) => {
@@ -658,8 +671,8 @@ mod tests {
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
-                entry_point: pool.entry_point,
-                hash: uos[0].op_hash(pool.entry_point, 1),
+                entry_point: pool.config.entry_point,
+                hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
@@ -667,10 +680,18 @@ mod tests {
         });
 
         // Second op should be included
-        pool.add_operation(OperationOrigin::Local, uos[1].clone())
+        pool.add_operation(OperationOrigin::Local, uos[4].clone())
             .await
             .unwrap();
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![uos[1].clone()]);
+        check_ops(
+            pool.all_operations(4),
+            vec![
+                uos[1].clone(),
+                uos[2].clone(),
+                uos[3].clone(),
+                uos[4].clone(),
+            ],
+        );
     }
 
     #[tokio::test]
@@ -846,6 +867,8 @@ mod tests {
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
             num_shards: 1,
+            throttled_entity_mempool_count: 4,
+            throttled_entity_live_blocks: 10,
         };
         let (event_sender, _) = broadcast::channel(4);
         UoPool::new(args, reputation, event_sender, prechecker, simulator)
