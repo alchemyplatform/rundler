@@ -41,7 +41,12 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
-    metrics::initialize(metrics_addr, &opt.metrics.tags).context("metrics server should start")?;
+    metrics::initialize(
+        opt.metrics.sample_interval_millis,
+        metrics_addr,
+        &opt.metrics.tags,
+    )
+    .context("metrics server should start")?;
 
     match opt.command {
         Command::Node(args) => node::run(*args, opt.common).await?,
@@ -340,6 +345,16 @@ pub struct MetricsArgs {
         global = true
     )]
     tags: Vec<String>,
+
+    /// Sample interval for sampling metrics
+    #[arg(
+        long = "metrics.sample_interval_millis",
+        name = "metrics.sample_interval_millis",
+        env = "METRICS_HOST",
+        default_value = "1000",
+        global = true
+    )]
+    sample_interval_millis: u64,
 }
 
 /// CLI options for logging

@@ -20,6 +20,7 @@ use metrics_process::Collector;
 use metrics_util::layers::{PrefixLayer, Stack};
 
 pub fn initialize<'a>(
+    sample_interval_millis: u64,
     listen_addr: SocketAddr,
     tags: impl IntoIterator<Item = &'a String>,
 ) -> anyhow::Result<()> {
@@ -39,16 +40,16 @@ pub fn initialize<'a>(
         .push(PrefixLayer::new("rundler"))
         .install()?;
 
-    tokio::spawn(async {
+    tokio::spawn(async move {
         let collector = Collector::default();
         loop {
             collector.collect();
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            tokio::time::sleep(Duration::from_millis(sample_interval_millis)).await;
         }
     });
 
     let handle = tokio::runtime::Handle::current();
-    let frequency = std::time::Duration::from_millis(500);
+    let frequency = std::time::Duration::from_millis(sample_interval_millis);
     let runtime_metrics = handle.metrics();
     let runtime_monitor = tokio_metrics::RuntimeMonitor::new(&handle);
     tokio::spawn(async move {

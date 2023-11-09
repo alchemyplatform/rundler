@@ -67,6 +67,8 @@ Options for the metrics server:
   - env: *METRICS_HOST*
 - `--metrics.tags`: Tags for metrics in the format `key1=value1,key2=value2,...`.
   - env: *METRICS_TAGS*
+- `--metrics.sample_interval_millis`: Sample interval to use for sampling metrics. default: `1000`.
+  - env: *METRICS_SAMPLE_INTERVAL_MILLIS*
 
 ## Logging Options
 
