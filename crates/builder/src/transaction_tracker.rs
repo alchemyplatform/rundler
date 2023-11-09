@@ -20,7 +20,7 @@ use rundler_provider::Provider;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use tokio::time;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::sender::{TransactionSender, TxStatus};
 
@@ -74,8 +74,8 @@ pub(crate) enum TrackerUpdate {
         nonce: U256,
         block_number: u64,
         attempt_number: u64,
-        gas_limit: U256,
-        gas_used: U256,
+        gas_limit: Option<U256>,
+        gas_used: Option<U256>,
     },
     StillPendingAfterWait,
     LatestTxDropped {
@@ -388,12 +388,26 @@ where
         }
     }
 
-    async fn get_mined_tx_gas_info(&self, tx_hash: H256) -> anyhow::Result<(U256, U256)> {
+    async fn get_mined_tx_gas_info(
+        &self,
+        tx_hash: H256,
+    ) -> anyhow::Result<(Option<U256>, Option<U256>)> {
         let (tx, tx_receipt) = tokio::try_join!(
             self.provider.get_transaction(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
         )?;
-        Ok((tx.unwrap().gas, tx_receipt.unwrap().gas_used.unwrap()))
+        let gas_limit = tx.map(|t| t.gas).or_else(|| {
+            warn!("failed to fetch transaction data for tx: {}", tx_hash);
+            None
+        });
+        let gas_used = match tx_receipt {
+            Some(r) => r.gas_used,
+            None => {
+                warn!("failed to fetch transaction receipt for tx: {}", tx_hash);
+                None
+            }
+        };
+        Ok((gas_limit, gas_used))
     }
 }
 
