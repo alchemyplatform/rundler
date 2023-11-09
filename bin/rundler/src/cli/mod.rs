@@ -350,7 +350,7 @@ pub struct MetricsArgs {
     #[arg(
         long = "metrics.sample_interval_millis",
         name = "metrics.sample_interval_millis",
-        env = "METRICS_HOST",
+        env = "METRICS_SAMPLE_INTERVAL_MILLIS",
         default_value = "1000",
         global = true
     )]

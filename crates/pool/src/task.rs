@@ -15,9 +15,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::providers::{
-    Http, HttpRateLimitRetryPolicy, JsonRpcClient, Provider, RetryClientBuilder,
-};
+use ethers::providers::{JsonRpcClient, Provider};
 use rundler_sim::{
     Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
 };
@@ -26,7 +24,6 @@ use rundler_types::contracts::i_entry_point::IEntryPoint;
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
-use url::Url;
 
 use super::mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams};
 use crate::{
@@ -82,22 +79,10 @@ impl Task for PoolTask {
                 .map(|config| config.entry_point)
                 .collect(),
         };
-        let provider = eth::new_provider(&self.args.http_url, self.args.http_poll_interval)?;
-        let chain = Chain::new(provider, chain_settings);
+        let provider = eth::new_provider(&self.args.http_url, Some(self.args.http_poll_interval))?;
+        let chain = Chain::new(provider.clone(), chain_settings);
         let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
         let chain_handle = chain.spawn_watcher(update_sender.clone(), shutdown_token.clone());
-
-        let parsed_url = Url::parse(&self.args.http_url).context("Invalid RPC URL")?;
-        let http = Http::new(parsed_url);
-        // this retry policy will retry on 429ish errors OR connectivity errors
-        let client = RetryClientBuilder::default()
-            // these retries are if the server returns a 429
-            .rate_limit_retries(10)
-            // these retries are if the connection is dubious
-            .timeout_retries(3)
-            .initial_backoff(Duration::from_millis(500))
-            .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-        let provider = Arc::new(Provider::new(client));
 
         // create mempools
         let mut mempools = HashMap::new();

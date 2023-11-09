@@ -13,10 +13,10 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use async_trait::async_trait;
 use ethers::{
-    providers::{Http, HttpRateLimitRetryPolicy, Provider, RetryClient, RetryClientBuilder},
+    providers::{Http, Provider, RetryClient},
     types::Address,
 };
 use jsonrpsee::{
@@ -32,9 +32,9 @@ use rundler_task::{
     Task,
 };
 use rundler_types::contracts::i_entry_point::IEntryPoint;
+use rundler_utils::eth;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use url::Url;
 
 use crate::{
     debug::{DebugApi, DebugApiServer},
@@ -94,19 +94,7 @@ where
             bail!("No entry points provided");
         }
 
-        let parsed_url = Url::parse(&self.args.rpc_url).context("Invalid RPC URL")?;
-        let http = Http::new(parsed_url);
-
-        // right now this retry policy will retry only on 429ish errors OR connectivity errors
-        let client = RetryClientBuilder::default()
-            // these retries are if the server returns a 429
-            .rate_limit_retries(10)
-            // these retries are if the connection is dubious
-            .timeout_retries(3)
-            .initial_backoff(Duration::from_millis(500))
-            .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-
-        let provider = Arc::new(Provider::new(client));
+        let provider = eth::new_provider(&self.args.rpc_url, None)?;
         let entry_points = self
             .args
             .entry_points
