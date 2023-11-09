@@ -11,6 +11,7 @@ anyhow.workspace = true
 ethers.workspace = true
 futures.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
