@@ -132,7 +132,7 @@ where
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         info!("Mempool config: {:?}", self.args.mempool_configs);
 
-        let provider = eth::new_provider(&self.args.rpc_url, self.args.eth_poll_interval)?;
+        let provider = eth::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
         let manual_bundling_mode = Arc::new(AtomicBool::new(false));
 
         let mut sender_handles = vec![];
@@ -283,7 +283,7 @@ where
         );
 
         let submit_provider =
-            eth::new_provider(&self.args.submit_url, self.args.eth_poll_interval)?;
+            eth::new_provider(&self.args.submit_url, Some(self.args.eth_poll_interval))?;
 
         let transaction_sender = self.args.sender_type.into_sender(
             submit_provider,

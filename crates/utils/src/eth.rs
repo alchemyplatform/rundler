@@ -56,7 +56,7 @@ pub fn parse_revert_message(revert_data: &[u8]) -> Option<String> {
 /// Creates a provider with a retry client that retries 10 times, with an initial backoff of 500ms.
 pub fn new_provider(
     url: &str,
-    poll_interval: Duration,
+    poll_interval: Option<Duration>,
 ) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
     let parsed_url = Url::parse(url).context("provider url should be valid")?;
 
@@ -73,7 +73,13 @@ pub fn new_provider(
         .timeout_retries(3)
         .initial_backoff(Duration::from_millis(500))
         .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-    Ok(Arc::new(Provider::new(client).interval(poll_interval)))
+
+    let mut provider = Provider::new(client);
+    if let Some(poll_interval) = poll_interval {
+        provider = provider.interval(poll_interval);
+    }
+
+    Ok(Arc::new(provider))
 }
 
 /// Converts an ethers `Log` into an ethabi `RawLog`.
