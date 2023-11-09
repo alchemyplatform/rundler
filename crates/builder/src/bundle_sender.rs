@@ -551,9 +551,13 @@ impl BuilderMetrics {
         metrics::increment_counter!("builder_bundle_fee_increases", "builder_index" => builder_index.to_string());
     }
 
-    fn set_bundle_gas_stats(gas_limit: U256, gas_used: U256) {
-        metrics::counter!("builder_bundle_gas_limit", gas_limit.as_u64());
-        metrics::counter!("builder_bundle_gas_used", gas_used.as_u64());
+    fn set_bundle_gas_stats(gas_limit: Option<U256>, gas_used: Option<U256>) {
+        if let Some(limit) = gas_limit {
+            metrics::counter!("builder_bundle_gas_limit", limit.as_u64());
+        }
+        if let Some(used) = gas_used {
+            metrics::counter!("builder_bundle_gas_used", used.as_u64());
+        }
     }
 
     fn set_current_fees(fees: &GasFees) {
