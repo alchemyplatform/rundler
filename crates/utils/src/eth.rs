@@ -59,7 +59,13 @@ pub fn new_provider(
     poll_interval: Duration,
 ) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
     let parsed_url = Url::parse(url).context("provider url should be valid")?;
-    let http = Http::new(parsed_url);
+
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .build()
+        .context("failed to build reqwest client")?;
+    let http = Http::new_with_client(parsed_url, http_client);
+
     let client = RetryClientBuilder::default()
         // these retries are if the server returns a 429
         .rate_limit_retries(10)
