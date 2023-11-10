@@ -506,7 +506,7 @@ message NotStaked {
 }
 
 message UnintendedRevert {
-  EntityType entity_type = 1;
+  Entity entity = 1;
 }
 
 message DidNotRevert {}

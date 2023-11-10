@@ -31,9 +31,9 @@ use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
     gas::{self, GasOverheads},
-    ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess, Simulator,
+    ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess, Simulator, SimulationViolation,
 };
-use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
+use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator, EntityUpdateType, EntityUpdate};
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
 use tracing::{error, info};
@@ -53,6 +53,7 @@ pub(crate) struct Bundle {
     pub(crate) expected_storage: ExpectedStorage,
     pub(crate) rejected_ops: Vec<UserOperation>,
     pub(crate) rejected_entities: Vec<Entity>,
+    pub(crate) entity_updates: Vec<EntityUpdate>,    
 }
 
 impl Bundle {
@@ -123,6 +124,7 @@ where
                 .map_err(anyhow::Error::from),
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
+
 
         // Limit the amount of gas in the bundle
         tracing::debug!(
@@ -209,6 +211,7 @@ where
                     expected_storage,
                     rejected_ops: context.rejected_ops,
                     rejected_entities: context.rejected_entities,
+                    entity_updates: context.entity_updates,
                 });
             }
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
@@ -285,6 +288,7 @@ where
             .collect();
         let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
         let mut rejected_ops = Vec::<UserOperation>::new();
+        let mut entity_updates = Vec::<EntityUpdate>::new();
         let mut paymasters_to_reject = Vec::<Address>::new();
 
         let ov = GasOverheads::default();
@@ -296,8 +300,72 @@ where
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_index,
                         self.op_hash(&op),
-                        OpRejectionReason::FailedRevalidation { error },
+                        OpRejectionReason::FailedRevalidation { error: error.clone() },
                     ));
+                    match error { 
+                        SimulationError::Violations(violations) => {
+                            for violation in violations {
+                                match violation {
+                                    SimulationViolation::UsedForbiddenOpcode(entity, address, violation_op_code) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::UsedForbiddenPrecompile(entity, contract, precompile) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::AccessedUndeployedContract(entity, address) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::InvalidStorageAccess(entity, storage_slot) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::CalledBannedEntryPointMethod(entity) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::CallHadValue(entity) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::NotStaked(entity, _, _) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    SimulationViolation::UnintendedRevertWithMessage(entity_type, _, address) => {
+                                        if let Some(entity_address) = address {
+                                            entity_updates.push(EntityUpdate {
+                                                entity: Entity {
+                                                    address: entity_address,
+                                                    kind: entity_type,
+                                                },
+                                                update_type: EntityUpdateType::StakedInvalidation
+                                            }) 
+                                        }
+                                    },
+                                    SimulationViolation::UnintendedRevert(entity_type, address) => {
+                                        if let Some(entity_address) = address {
+                                            entity_updates.push(EntityUpdate {
+                                                entity: Entity {
+                                                    address: entity_address,
+                                                    kind: entity_type,
+                                                },
+                                                update_type: EntityUpdateType::StakedInvalidation
+                                            }) 
+                                        }
+                                    },
+                                    SimulationViolation::OutOfGas(entity) => entity_updates.push(EntityUpdate {
+                                        entity,
+                                        update_type: EntityUpdateType::StakedInvalidation
+                                    }),
+                                    _ =>  continue,
+                                }
+                            }
+                        }
+                        SimulationError::Other(_) => {}
+                    }
                     rejected_ops.push(op);
                     continue;
                 }
@@ -379,6 +447,7 @@ where
             groups_by_aggregator,
             rejected_ops,
             rejected_entities: Vec::new(),
+            entity_updates: Vec::new(),
         };
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
@@ -628,6 +697,7 @@ struct ProposalContext {
     groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
     rejected_ops: Vec<UserOperation>,
     rejected_entities: Vec<Entity>,
+    entity_updates: Vec<EntityUpdate>,
 }
 
 #[derive(Debug, Default)]
@@ -713,6 +783,10 @@ impl ProposalContext {
             _ => vec![],
         };
         self.rejected_entities.push(entity);
+        self.entity_updates.push(EntityUpdate {
+            entity,
+            update_type: EntityUpdateType::StakedInvalidation,
+        });
         ret
     }
 
@@ -1308,6 +1382,7 @@ mod tests {
             groups_by_aggregator,
             rejected_ops: vec![],
             rejected_entities: vec![],
+            entity_updates: vec![],
         };
 
         // The gas requirement from the execution of the first UO is: g >= p_1 + 2v_1 + c_1 + 5000
@@ -1354,6 +1429,7 @@ mod tests {
             groups_by_aggregator,
             rejected_ops: vec![],
             rejected_entities: vec![],
+            entity_updates: vec![],
         };
         let gas_limit = context.get_bundle_gas_limit(chain_id);
 

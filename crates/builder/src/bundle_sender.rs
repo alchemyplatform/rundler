@@ -23,7 +23,7 @@ use futures_util::StreamExt;
 use rundler_pool::PoolServer;
 use rundler_provider::EntryPoint;
 use rundler_sim::ExpectedStorage;
-use rundler_types::{Entity, GasFees, UserOperation};
+use rundler_types::{EntityUpdate, GasFees, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
@@ -447,15 +447,15 @@ where
                 error!("Failed to remove rejected ops from pool: {error}");
             }
         };
-        let remove_entities_future = async {
+        let update_entities_future = async {
             let result = self
-                .remove_entities_from_pool(&bundle.rejected_entities)
+                .update_entities_in_pool(&bundle.entity_updates)
                 .await;
             if let Err(error) = result {
-                error!("Failed to remove rejected entities from pool: {error}");
+                error!("Failed to update entities in pool: {error}");
             }
         };
-        join!(remove_ops_future, remove_entities_future);
+        join!(remove_ops_future, update_entities_future);
         if bundle.is_empty() {
             if !bundle.rejected_ops.is_empty() || !bundle.rejected_entities.is_empty() {
                 info!(
@@ -499,9 +499,9 @@ where
             .context("builder should remove rejected ops from pool")
     }
 
-    async fn remove_entities_from_pool(&self, entities: &[Entity]) -> anyhow::Result<()> {
+    async fn update_entities_in_pool(&self, entity_updates: &[EntityUpdate]) -> anyhow::Result<()> {
         self.pool
-            .remove_entities(self.entry_point.address(), entities.to_vec())
+            .update_entities(self.entry_point.address(), entity_updates.to_vec())
             .await
             .context("builder should remove rejected entities from pool")
     }

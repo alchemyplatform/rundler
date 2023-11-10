@@ -466,10 +466,14 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
-            SimulationViolation::UnintendedRevert(et) => ProtoSimulationViolationError {
+            SimulationViolation::UnintendedRevert(et, maybe_address) => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::UnintendedRevert(
                     UnintendedRevert {
-                        entity_type: EntityType::from(et) as i32,
+                        entity: Some(Entity {
+                            kind: EntityType::from(et) as i32,
+                            address: maybe_address
+                                .map_or(vec![], |addr| addr.as_bytes().to_vec()),
+                        }),
                     },
                 )),
             },
@@ -592,9 +596,12 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 )
             }
             Some(simulation_violation_error::Violation::UnintendedRevert(e)) => {
-                SimulationViolation::UnintendedRevert(rundler_types::EntityType::try_from(
-                    EntityType::try_from(e.entity_type).context("unknown entity type")?,
-                )?)
+                SimulationViolation::UnintendedRevert(
+                    rundler_types::EntityType::try_from(
+                        EntityType::try_from(e.entity.clone().unwrap().kind).context("unknown entity type")?,
+                    )?, 
+                    Some(from_bytes(&e.entity.unwrap().address)?)
+                )
             }
             Some(simulation_violation_error::Violation::DidNotRevert(_)) => {
                 SimulationViolation::DidNotRevert
@@ -668,12 +675,14 @@ mod tests {
     fn test_simulation_error() {
         let error = MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
             rundler_types::EntityType::Aggregator,
+            None,
         ));
         let proto_error: ProtoMempoolError = error.into();
         let error2 = proto_error.try_into().unwrap();
         match error2 {
             MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
                 rundler_types::EntityType::Aggregator,
+                None,
             )) => {}
             _ => panic!("wrong error type"),
         }

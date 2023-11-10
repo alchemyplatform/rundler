@@ -15,7 +15,7 @@ use std::{ops::Deref, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
-    abi::AbiDecode,
+    abi::{AbiDecode, Detokenize},
     contract::{ContractError, FunctionCall},
     providers::{spoof, Middleware, RawCall},
     types::{
@@ -26,7 +26,7 @@ use ethers::{
 use rundler_types::{
     contracts::{
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
-        shared_types::UserOpsPerAggregator,
+        shared_types::UserOpsPerAggregator, verifying_paymaster::DepositInfo,
     },
     GasFees, UserOperation,
 };
@@ -97,6 +97,24 @@ where
             .call()
             .await
             .context("entry point should return balance")
+    }
+
+    async fn get_deposit_info(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>
+    ) -> anyhow::Result<DepositInfo> {
+        // let fo0 =self.get_deposit_info(address);
+        {
+            let boxy: Box<dyn Detokenize> = Box::new(DepositInfo::default());
+        }
+        block_id
+            .map_or(self.get_deposit_info(address), |bid| {
+                self.get_deposit_info(address).block(bid)
+            })
+            .call()
+            .await
+            .context("entry point should return deposit info")
     }
 
     async fn call_spoofed_simulate_op(

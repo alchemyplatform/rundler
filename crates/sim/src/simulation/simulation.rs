@@ -176,23 +176,33 @@ where
         let Some(ref revert_data) = tracer_out.revert_data else {
             Err(vec![SimulationViolation::DidNotRevert])?
         };
-        let last_entity = entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
+        let last_entity_type =
+            entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
 
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
-            let entity_addr = match last_entity {
+            let entity_addr = match last_entity_type {
                 EntityType::Factory => factory_address,
                 EntityType::Paymaster => paymaster_address,
                 EntityType::Account => Some(sender_address),
                 _ => None,
             };
             Err(vec![SimulationViolation::UnintendedRevertWithMessage(
-                last_entity,
+                last_entity_type,
                 failed_op.reason,
                 entity_addr,
             )])?
         }
         let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
-            Err(vec![SimulationViolation::UnintendedRevert(last_entity)])?
+            let entity_addr = match last_entity_type {
+                EntityType::Factory => factory_address,
+                EntityType::Paymaster => paymaster_address,
+                EntityType::Account => Some(sender_address),
+                _ => None,
+            };
+            Err(vec![SimulationViolation::UnintendedRevert(
+                last_entity_type,
+                entity_addr,
+            )])?
         };
         let entity_infos = EntityInfos::new(
             factory_address,
@@ -471,6 +481,7 @@ where
             error @ Err(_) => error?,
         };
 
+
         // Gather all violations from the tracer
         let mut violations = self.gather_context_violations(&mut context)?;
         // Sort violations so that the final error message is deterministic
@@ -567,7 +578,7 @@ pub enum SimulationViolation {
     UnintendedRevertWithMessage(EntityType, String, Option<Address>),
     /// Simulation reverted with an unintended reason
     #[display("reverted while simulating {0} validation")]
-    UnintendedRevert(EntityType),
+    UnintendedRevert(EntityType, Option<Address>),
     /// Simulation did not revert, a revert is always expected
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,
