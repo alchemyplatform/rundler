@@ -333,6 +333,8 @@ message MempoolError {
     UnsupportedAggregatorError unsupported_aggregator = 9;
     InvalidSignatureError invalid_signature = 10;
     UnknownEntryPointError unknown_entry_point = 11;
+    MultipleRolesViolation multiple_roles_violation= 12;
+    SenderAddressUsedAsAlternateEntity sender_address_used_as_alternate_entity = 13;
   }
 }
 
@@ -354,6 +356,14 @@ message MaxOperationsReachedError {
 
 message EntityThrottledError {
   Entity entity = 1;
+}
+
+message MultipleRolesViolation {
+  Entity entity = 1;
+}
+
+message SenderAddressUsedAsAlternateEntity {
+  bytes sender_address = 1;
 }
 
 message DiscardedOnInsertError {}

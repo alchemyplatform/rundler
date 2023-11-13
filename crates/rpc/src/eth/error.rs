@@ -57,6 +57,12 @@ pub enum EthRpcError {
     /// Paymaster rejected the operation
     #[error("{}", .0.reason)]
     PaymasterValidationRejected(PaymasterValidationRejectedData),
+    /// Multiple roles violation
+    #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]
+    MultipleRolesViolation(Entity),
+    /// Sender address used as different entity in another UserOperation currently in the mempool.
+    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    SenderAddressUsedAsAlternateEntity(Address),
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
     OpcodeViolation(EntityType, Opcode),
@@ -178,6 +184,12 @@ impl From<MempoolError> for EthRpcError {
                 format!("max operations reached for sender {count} already in pool"),
             ),
             MempoolError::EntityThrottled(entity) => EthRpcError::ThrottledOrBanned(entity),
+            MempoolError::MultipleRolesViolation(entity) => {
+                EthRpcError::MultipleRolesViolation(entity)
+            }
+            MempoolError::SenderAddressUsedAsAlternateEntity(address) => {
+                EthRpcError::SenderAddressUsedAsAlternateEntity(address)
+            }
             MempoolError::DiscardedOnInsert => {
                 EthRpcError::OperationRejected("discarded on insert".to_owned())
             }
@@ -251,6 +263,8 @@ impl From<EthRpcError> for ErrorObjectOwned {
             }
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::OpcodeViolationMap(_)
+            | EthRpcError::MultipleRolesViolation(_)
+            | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)

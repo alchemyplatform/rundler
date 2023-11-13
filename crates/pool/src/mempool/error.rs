@@ -36,6 +36,12 @@ pub enum MempoolError {
     /// Max operations reached for this sender
     #[error("Max operations ({0}) reached for sender {1}")]
     MaxOperationsReached(usize, Address),
+    /// Multiple roles violation
+    #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]
+    MultipleRolesViolation(Entity),
+    /// Sender address used as different entity in another UserOperation currently in the mempool.
+    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    SenderAddressUsedAsAlternateEntity(Address),
     /// An entity associated with the operation is throttled/banned.
     #[error("Entity {0} is throttled/banned")]
     EntityThrottled(Entity),

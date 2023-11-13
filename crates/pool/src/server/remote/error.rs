@@ -24,10 +24,11 @@ use super::protos::{
     EntityThrottledError, EntityType, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
     FactoryIsNotContract, InitCodeTooShort, InvalidSignature, InvalidStorageAccess,
     MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, NotStaked, OperationAlreadyKnownError, OutOfGas,
-    PaymasterDepositTooLow, PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
+    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
+    OperationAlreadyKnownError, OutOfGas, PaymasterDepositTooLow, PaymasterIsNotContract,
+    PaymasterTooShort, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
     UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
     UnsupportedAggregatorError, UsedForbiddenOpcode, UsedForbiddenPrecompile,
@@ -122,6 +123,20 @@ impl From<MempoolError> for ProtoMempoolError {
             MempoolError::OperationAlreadyKnown => ProtoMempoolError {
                 error: Some(mempool_error::Error::OperationAlreadyKnown(
                     OperationAlreadyKnownError {},
+                )),
+            },
+            MempoolError::MultipleRolesViolation(entity) => ProtoMempoolError {
+                error: Some(mempool_error::Error::MultipleRolesViolation(
+                    MultipleRolesViolation {
+                        entity: Some((&entity).into()),
+                    },
+                )),
+            },
+            MempoolError::SenderAddressUsedAsAlternateEntity(addr) => ProtoMempoolError {
+                error: Some(mempool_error::Error::SenderAddressUsedAsAlternateEntity(
+                    SenderAddressUsedAsAlternateEntity {
+                        sender_address: addr.as_bytes().to_vec(),
+                    },
                 )),
             },
             MempoolError::ReplacementUnderpriced(fee, priority_fee) => ProtoMempoolError {

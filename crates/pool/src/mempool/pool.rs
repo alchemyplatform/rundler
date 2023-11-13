@@ -22,7 +22,7 @@ use ethers::{
     abi::Address,
     types::{H256, U256},
 };
-use rundler_types::{Entity, UserOperation, UserOperationId};
+use rundler_types::{Entity, EntityType, UserOperation, UserOperationId};
 use rundler_utils::math;
 use tracing::info;
 
@@ -74,6 +74,8 @@ pub(crate) struct PoolInner {
     mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, usize>,
+    /// Set of known senders in the mempool
+    count_by_sender: HashMap<Address, usize>,
     /// Submission ID counter
     submission_id: u64,
     /// keeps track of the size of the pool in bytes
@@ -91,6 +93,7 @@ impl PoolInner {
             best: BTreeSet::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
+            count_by_sender: HashMap::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -149,6 +152,25 @@ impl PoolInner {
         let ret = self.remove_operation_internal(hash, None);
         self.update_metrics();
         ret
+    }
+
+    pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
+        if self.count_by_address.contains_key(&uo.sender) {
+            return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
+        }
+
+        for e in uo.entities() {
+            match e.kind {
+                EntityType::Factory | EntityType::Paymaster => {
+                    if self.count_by_sender.contains_key(&e.address) {
+                        return Err(MempoolError::MultipleRolesViolation(e));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) fn mine_operation(
@@ -215,6 +237,7 @@ impl PoolInner {
         self.mined_at_block_number_by_hash.clear();
         self.mined_hashes_with_block_numbers.clear();
         self.count_by_address.clear();
+        self.count_by_sender.clear();
         self.pool_size = SizeTracker::default();
         self.cache_size = SizeTracker::default();
         self.update_metrics();
@@ -272,6 +295,11 @@ impl PoolInner {
         };
 
         // update counts
+        *self
+            .count_by_sender
+            .entry(pool_op.po.uo.sender)
+            .or_insert(0) += 1;
+
         for e in pool_op.po.entities() {
             *self.count_by_address.entry(e.address).or_insert(0) += 1;
         }
@@ -312,6 +340,9 @@ impl PoolInner {
             self.mined_hashes_with_block_numbers
                 .insert((block_number, hash));
         }
+
+        self.decrement_sender_count(op.po.uo.sender);
+
         for e in op.po.entities() {
             self.decrement_address_count(e.address);
         }
@@ -322,6 +353,15 @@ impl PoolInner {
 
     fn decrement_address_count(&mut self, address: Address) {
         if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
+            *count_entry.get_mut() -= 1;
+            if *count_entry.get() == 0 {
+                count_entry.remove_entry();
+            }
+        }
+    }
+
+    fn decrement_sender_count(&mut self, address: Address) {
+        if let Entry::Occupied(mut count_entry) = self.count_by_sender.entry(address) {
             *count_entry.get_mut() -= 1;
             if *count_entry.get() == 0 {
                 count_entry.remove_entry();
