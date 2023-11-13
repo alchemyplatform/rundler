@@ -302,6 +302,7 @@ const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
     Chain::Arbitrum as u64,
     Chain::ArbitrumNova as u64,
     Chain::ArbitrumGoerli as u64,
+    421614, // ArbitrumSepolia
 ];
 
 fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
