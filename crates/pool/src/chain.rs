@@ -26,7 +26,7 @@ use ethers::{
 use futures::future;
 use rundler_provider::Provider;
 use rundler_task::block_watcher;
-use rundler_types::contracts::i_entry_point::UserOperationEventFilter;
+use rundler_types::{contracts::i_entry_point::UserOperationEventFilter, UserOperationId};
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
@@ -71,6 +71,15 @@ pub struct MinedOp {
     pub entry_point: Address,
     pub sender: Address,
     pub nonce: U256,
+}
+
+impl MinedOp {
+    pub fn id(&self) -> UserOperationId {
+        UserOperationId {
+            sender: self.sender,
+            nonce: self.nonce,
+        }
+    }
 }
 
 #[derive(Debug)]

@@ -31,6 +31,7 @@ use super::{
     size::SizeTracker,
     PoolConfig, PoolOperation,
 };
+use crate::chain::MinedOp;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -152,9 +153,15 @@ impl PoolInner {
 
     pub(crate) fn mine_operation(
         &mut self,
-        hash: H256,
+        mined_op: &MinedOp,
         block_number: u64,
     ) -> Option<Arc<PoolOperation>> {
+        let tx_in_pool = self.by_id.get(&mined_op.id())?;
+
+        let hash = tx_in_pool
+            .uo()
+            .op_hash(mined_op.entry_point, self.config.chain_id);
+
         let ret = self.remove_operation_internal(hash, Some(block_number));
         self.update_metrics();
         ret
@@ -297,6 +304,7 @@ impl PoolInner {
         let op = self.by_hash.remove(&hash)?;
         self.by_id.remove(&op.uo().id());
         self.best.remove(&op);
+
         if let Some(block_number) = block_number {
             self.cache_size += op.mem_size();
             self.mined_at_block_number_by_hash
@@ -518,6 +526,62 @@ mod tests {
         assert_eq!(pool.by_hash.len(), 3);
 
         pool.remove_entity(Entity::account(account));
+        assert!(pool.by_hash.is_empty());
+        assert!(pool.by_id.is_empty());
+        assert!(pool.best.is_empty());
+    }
+
+    #[test]
+    fn mine_op() {
+        let mut pool = PoolInner::new(conf());
+        let sender = Address::random();
+        let nonce = 0;
+
+        let op = create_op(sender, nonce, 1);
+
+        let hash = op.uo.op_hash(pool.config.entry_point, pool.config.chain_id);
+
+        pool.add_operation(op).unwrap();
+
+        let mined_op = MinedOp {
+            hash,
+            entry_point: pool.config.entry_point,
+            sender,
+            nonce: U256::from(nonce),
+        };
+
+        pool.mine_operation(&mined_op, 1);
+
+        assert!(pool.by_hash.is_empty());
+        assert!(pool.by_id.is_empty());
+        assert!(pool.best.is_empty());
+    }
+
+    #[test]
+    fn mine_op_with_replacement() {
+        let mut pool = PoolInner::new(conf());
+        let sender = Address::random();
+        let nonce = 0;
+
+        let op = create_op(sender, nonce, 1);
+        let op_2 = create_op(sender, nonce, 2);
+
+        let hash = op_2
+            .uo
+            .op_hash(pool.config.entry_point, pool.config.chain_id);
+
+        pool.add_operation(op).unwrap();
+        pool.add_operation(op_2).unwrap();
+
+        let mined_op = MinedOp {
+            hash,
+            entry_point: pool.config.entry_point,
+            sender,
+            nonce: U256::from(nonce),
+        };
+
+        pool.mine_operation(&mined_op, 1);
+
         assert!(pool.by_hash.is_empty());
         assert!(pool.by_id.is_empty());
         assert!(pool.best.is_empty());

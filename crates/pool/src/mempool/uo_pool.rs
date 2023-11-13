@@ -119,10 +119,8 @@ where
 
             // Remove throttled ops that were included in the block
             state.throttled_ops.remove(&op.hash);
-            if let Some(op) = state
-                .pool
-                .mine_operation(op.hash, update.latest_block_number)
-            {
+
+            if let Some(op) = state.pool.mine_operation(op, update.latest_block_number) {
                 // Only account for a staked entity once
                 for entity_addr in op.staked_entities().map(|e| e.address).unique() {
                     self.reputation.add_included(entity_addr);

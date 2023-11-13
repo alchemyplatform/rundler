@@ -29,8 +29,10 @@ const PACKED_USER_OPERATION_FIXED_LEN: usize = 480;
 /// Unique identifier for a user operation from a given sender
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct UserOperationId {
-    sender: Address,
-    nonce: U256,
+    /// sender of user operation
+    pub sender: Address,
+    /// nonce of user operation
+    pub nonce: U256,
 }
 
 impl UserOperation {
