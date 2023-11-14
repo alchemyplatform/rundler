@@ -362,7 +362,7 @@ where
             }
 
             // Update the running gas that would need to be be spent to execute the bundle so far.
-            gas_spent += gas::user_operation_gas_limit(
+            gas_spent += gas::user_operation_execution_gas_limit(
                 &op,
                 self.settings.chain_id,
                 false,
@@ -571,7 +571,12 @@ where
         for op in ops {
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false, false);
+            let gas = gas::user_operation_execution_gas_limit(
+                &op.uo,
+                self.settings.chain_id,
+                false,
+                false,
+            );
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
