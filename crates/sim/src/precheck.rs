@@ -183,10 +183,10 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
 
         // compute the worst case total gas limit by assuming the UO is in its own bundle and has a postOp call.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let total_gas_limit = gas::user_operation_gas_limit(op, chain_id, true, true);
-        if total_gas_limit > max_total_execution_gas {
+        let gas_limit = gas::user_operation_execution_gas_limit(op, chain_id, true, true);
+        if gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
-                total_gas_limit,
+                gas_limit,
                 max_total_execution_gas,
             ))
         }
