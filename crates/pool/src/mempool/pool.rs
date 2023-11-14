@@ -82,9 +82,12 @@ pub(crate) struct PoolInner {
     cache_size: SizeTracker,
 }
 
+/// Object to track count and type of entity in mempool
 #[derive(Debug)]
 struct EntityCount {
+    /// Type of entity
     entity_type: EntityType,
+    /// Number of identical items in mempool
     count: usize,
 }
 
@@ -168,7 +171,7 @@ impl PoolInner {
 
     pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
         if let Some(ec) = self.count_by_address.get(&uo.sender) {
-            if ec.is_sender() {
+            if !ec.is_sender() {
                 return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
             }
         }
@@ -177,7 +180,7 @@ impl PoolInner {
             match e.kind {
                 EntityType::Factory | EntityType::Paymaster => {
                     if let Some(ec) = self.count_by_address.get(&e.address) {
-                        if !ec.is_sender() {
+                        if ec.is_sender() {
                             return Err(MempoolError::MultipleRolesViolation(e));
                         }
                     }
