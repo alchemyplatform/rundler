@@ -73,15 +73,25 @@ pub(crate) struct PoolInner {
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
     /// Count of operations by entity address
-    count_by_address: HashMap<Address, usize>,
-    /// Set of known senders in the mempool
-    count_by_sender: HashMap<Address, usize>,
+    count_by_address: HashMap<Address, EntityCount>,
     /// Submission ID counter
     submission_id: u64,
     /// keeps track of the size of the pool in bytes
     pool_size: SizeTracker,
     /// keeps track of the size of the removed cache in bytes
     cache_size: SizeTracker,
+}
+
+#[derive(Debug)]
+struct EntityCount {
+    entity_type: EntityType,
+    count: usize,
+}
+
+impl EntityCount {
+    fn is_sender(&self) -> bool {
+        self.entity_type.eq(&EntityType::Account)
+    }
 }
 
 impl PoolInner {
@@ -93,7 +103,6 @@ impl PoolInner {
             best: BTreeSet::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
-            count_by_sender: HashMap::new(),
             count_by_address: HashMap::new(),
             submission_id: 0,
             pool_size: SizeTracker::default(),
@@ -144,8 +153,11 @@ impl PoolInner {
         self.best.clone().into_iter().map(|v| v.po)
     }
 
-    pub(crate) fn address_count(&self, address: Address) -> usize {
-        self.count_by_address.get(&address).copied().unwrap_or(0)
+    pub(crate) fn address_count(&self, address: &Address) -> usize {
+        match self.count_by_address.get(address) {
+            Some(ec) => ec.count,
+            None => 0,
+        }
     }
 
     pub(crate) fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
@@ -155,15 +167,19 @@ impl PoolInner {
     }
 
     pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
-        if self.count_by_address.contains_key(&uo.sender) {
-            return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
+        if let Some(ec) = self.count_by_address.get(&uo.sender) {
+            if ec.is_sender() {
+                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
+            }
         }
 
         for e in uo.entities() {
             match e.kind {
                 EntityType::Factory | EntityType::Paymaster => {
-                    if self.count_by_sender.contains_key(&e.address) {
-                        return Err(MempoolError::MultipleRolesViolation(e));
+                    if let Some(ec) = self.count_by_address.get(&e.address) {
+                        if !ec.is_sender() {
+                            return Err(MempoolError::MultipleRolesViolation(e));
+                        }
                     }
                 }
                 _ => {}
@@ -237,7 +253,6 @@ impl PoolInner {
         self.mined_at_block_number_by_hash.clear();
         self.mined_hashes_with_block_numbers.clear();
         self.count_by_address.clear();
-        self.count_by_sender.clear();
         self.pool_size = SizeTracker::default();
         self.cache_size = SizeTracker::default();
         self.update_metrics();
@@ -279,8 +294,7 @@ impl PoolInner {
         }
 
         // Check sender count in mempool. If sender has too many operations, must be staked
-        if *self.count_by_address.get(&op.uo.sender).unwrap_or(&0)
-            >= self.config.max_userops_per_sender
+        if self.address_count(&op.uo.sender) >= self.config.max_userops_per_sender
             && !op.account_is_staked
         {
             return Err(MempoolError::MaxOperationsReached(
@@ -295,13 +309,14 @@ impl PoolInner {
         };
 
         // update counts
-        *self
-            .count_by_sender
-            .entry(pool_op.po.uo.sender)
-            .or_insert(0) += 1;
-
         for e in pool_op.po.entities() {
-            *self.count_by_address.entry(e.address).or_insert(0) += 1;
+            self.count_by_address
+                .entry(e.address)
+                .or_insert(EntityCount {
+                    entity_type: e.kind,
+                    count: 0,
+                })
+                .count += 1;
         }
 
         // create and insert ordered operation
@@ -341,8 +356,6 @@ impl PoolInner {
                 .insert((block_number, hash));
         }
 
-        self.decrement_sender_count(op.po.uo.sender);
-
         for e in op.po.entities() {
             self.decrement_address_count(e.address);
         }
@@ -353,17 +366,8 @@ impl PoolInner {
 
     fn decrement_address_count(&mut self, address: Address) {
         if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
-            *count_entry.get_mut() -= 1;
-            if *count_entry.get() == 0 {
-                count_entry.remove_entry();
-            }
-        }
-    }
-
-    fn decrement_sender_count(&mut self, address: Address) {
-        if let Entry::Occupied(mut count_entry) = self.count_by_sender.entry(address) {
-            *count_entry.get_mut() -= 1;
-            if *count_entry.get() == 0 {
+            count_entry.get_mut().count -= 1;
+            if count_entry.get().count == 0 {
                 count_entry.remove_entry();
             }
         }
@@ -704,19 +708,19 @@ mod tests {
             hashes.push(pool.add_operation(op).unwrap());
         }
 
-        assert_eq!(pool.address_count(sender), 5);
-        assert_eq!(pool.address_count(paymaster), 5);
-        assert_eq!(pool.address_count(factory), 5);
-        assert_eq!(pool.address_count(aggregator), 5);
+        assert_eq!(pool.address_count(&sender), 5);
+        assert_eq!(pool.address_count(&paymaster), 5);
+        assert_eq!(pool.address_count(&factory), 5);
+        assert_eq!(pool.address_count(&aggregator), 5);
 
         for hash in hashes.iter() {
             assert!(pool.remove_operation_by_hash(*hash).is_some());
         }
 
-        assert_eq!(pool.address_count(sender), 0);
-        assert_eq!(pool.address_count(paymaster), 0);
-        assert_eq!(pool.address_count(factory), 0);
-        assert_eq!(pool.address_count(aggregator), 0);
+        assert_eq!(pool.address_count(&sender), 0);
+        assert_eq!(pool.address_count(&paymaster), 0);
+        assert_eq!(pool.address_count(&factory), 0);
+        assert_eq!(pool.address_count(&aggregator), 0);
     }
 
     #[test]
@@ -772,7 +776,7 @@ mod tests {
             _ => panic!("wrong error"),
         }
 
-        assert_eq!(pool.address_count(sender), 1);
+        assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(
             pool.pool_size,
             OrderedPoolOperation {
@@ -792,7 +796,7 @@ mod tests {
         po1.uo.max_priority_fee_per_gas = 10.into();
         po1.uo.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
         let _ = pool.add_operation(po1).unwrap();
-        assert_eq!(pool.address_count(paymaster1), 1);
+        assert_eq!(pool.address_count(&paymaster1), 1);
 
         let paymaster2 = Address::random();
         let mut po2 = create_op(sender, 0, 11);
@@ -800,9 +804,9 @@ mod tests {
         po2.uo.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
         let _ = pool.add_operation(po2.clone()).unwrap();
 
-        assert_eq!(pool.address_count(sender), 1);
-        assert_eq!(pool.address_count(paymaster1), 0);
-        assert_eq!(pool.address_count(paymaster2), 1);
+        assert_eq!(pool.address_count(&sender), 1);
+        assert_eq!(pool.address_count(&paymaster1), 0);
+        assert_eq!(pool.address_count(&paymaster2), 1);
         assert_eq!(
             pool.pool_size,
             OrderedPoolOperation {

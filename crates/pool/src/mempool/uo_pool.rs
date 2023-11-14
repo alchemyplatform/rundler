@@ -202,7 +202,7 @@ where
             let reputation = match self.reputation.status(address) {
                 ReputationStatus::Ok => EntityReputation::Ok,
                 ReputationStatus::Throttled => {
-                    if self.state.read().pool.address_count(address)
+                    if self.state.read().pool.address_count(&address)
                         >= self.config.throttled_entity_mempool_count as usize
                     {
                         return Err(MempoolError::EntityThrottled(entity));
