@@ -750,6 +750,9 @@ where
         op.op_hash(self.entry_point.address(), self.settings.chain_id)
     }
 
+    /// For a given entity that has caused a revert during simulation, determine if the entity was staked or not.
+    /// If it is staked, we push a StakedInvalidation entity update to enforce SREP-050
+    /// If it is not staked, we push an UnstakedInvalidation entity update to enforce UREP-030
     fn get_entity_update_type(
         &self,
         entity: Entity,
@@ -786,7 +789,17 @@ where
                         EntityUpdateType::StakedInvalidation
                     }
                 }
-                _ => EntityUpdateType::StakedInvalidation,
+                EntityType::Aggregator => {
+                    if let Some(aggregator) = infos.aggregator {
+                        if aggregator.is_staked {
+                            EntityUpdateType::StakedInvalidation
+                        } else {
+                            EntityUpdateType::UnstakedInvalidation
+                        }
+                    } else {
+                        EntityUpdateType::StakedInvalidation
+                    }
+                }
             },
             None => EntityUpdateType::StakedInvalidation,
         }

@@ -688,6 +688,8 @@ pub struct EntityInfos {
     pub sender: EntityInfo,
     /// The entity info for the paymaster
     pub paymaster: Option<EntityInfo>,
+    /// The entity infor for the aggregator
+    pub aggregator: Option<EntityInfo>,
 }
 
 impl EntityInfos {
@@ -710,10 +712,19 @@ impl EntityInfos {
             address,
             is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
         });
+
+        let aggregator = entry_point_out
+            .aggregator_info
+            .map(|aggregator_info| EntityInfo {
+                address: aggregator_info.address,
+                is_staked: is_staked(aggregator_info.stake_info, sim_settings),
+            });
+
         Self {
             factory,
             sender,
             paymaster,
+            aggregator,
         }
     }
 
