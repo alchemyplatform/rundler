@@ -35,7 +35,7 @@ Our goals with Rundler:
 
 ## Status
 
-Rundler is under active development. It is used in Alchemy's cloud to power Alchemy's Account Abstraction APIs account abstraction APIs. However, Rundler is rapidly being upgraded, features are being added, interfaces will have breaking changes, and the ERC-4337 spec is evolving from onchain learnings.
+Rundler is under active development. It is used in Alchemy's cloud to power Alchemy's Account Abstraction APIs. However, Rundler is rapidly being upgraded, features are being added, interfaces will have breaking changes, and the ERC-4337 spec is evolving from onchain learnings.
 
 The documentation is work in progress, and we are working to improve it. Please [reach out](#help) with any questions.
 
