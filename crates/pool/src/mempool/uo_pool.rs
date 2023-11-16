@@ -231,6 +231,7 @@ where
             // Check if op is already known or replacing another, and if so, ensure its fees are high enough
             // do this before simulation to save resources
             read_state.pool.check_replacement(&op)?;
+            // Check if op violates the STO-40 spec rule
             read_state.pool.check_multiple_roles_violation(&op)?;
         }
 
