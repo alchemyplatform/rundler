@@ -36,7 +36,7 @@ impl EntityCountTracker {
         self.sender
     }
 
-    pub(crate) fn increment_entity(&mut self, entity: &EntityType) -> Option<usize> {
+    pub(crate) fn increment_entity_count(&mut self, entity: &EntityType) -> Option<usize> {
         match entity {
             EntityType::Account => self.sender.checked_add(1),
             EntityType::Paymaster => self.paymaster.checked_add(1),
@@ -45,7 +45,7 @@ impl EntityCountTracker {
         }
     }
 
-    pub(crate) fn decrement(&mut self, entity: &EntityType) -> Option<usize> {
+    pub(crate) fn decrement_entity_count(&mut self, entity: &EntityType) -> Option<usize> {
         match entity {
             EntityType::Account => self.sender.checked_sub(1),
             EntityType::Paymaster => self.paymaster.checked_sub(1),

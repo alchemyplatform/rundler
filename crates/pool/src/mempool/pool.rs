@@ -305,7 +305,7 @@ impl PoolInner {
                 .entry(e.address)
                 .or_insert(EntityCountTracker::new());
 
-            entity_count.increment_entity(&e.kind);
+            entity_count.increment_entity_count(&e.kind);
         }
 
         // create and insert ordered operation
@@ -355,7 +355,7 @@ impl PoolInner {
 
     fn decrement_address_count(&mut self, address: Address, entity: &EntityType) {
         if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
-            count_entry.get_mut().decrement(entity);
+            count_entry.get_mut().decrement_entity_count(entity);
             if count_entry.get().total() == 0 {
                 count_entry.remove_entry();
             }
