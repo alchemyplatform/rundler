@@ -313,13 +313,19 @@ impl PoolInner {
 
         // update counts
         for e in pool_op.po.entities() {
-            self.count_by_address
+            let entity_count = self
+                .count_by_address
                 .entry(e.address)
                 .or_insert(EntityCount {
                     entity_type: e.kind,
                     count: 0,
-                })
-                .count += 1;
+                });
+
+            if entity_count.entity_type.ne(&e.kind) {
+                return Err(MempoolError::MultipleRolesViolation(e));
+            }
+
+            entity_count.count += 1;
         }
 
         // create and insert ordered operation
