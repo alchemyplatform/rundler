@@ -36,21 +36,21 @@ impl EntityCountTracker {
         self.sender
     }
 
-    pub(crate) fn increment_entity(&mut self, entity: &EntityType) {
+    pub(crate) fn increment_entity(&mut self, entity: &EntityType) -> Option<usize> {
         match entity {
-            EntityType::Account => self.sender += 1,
-            EntityType::Paymaster => self.paymaster += 1,
-            EntityType::Aggregator => self.aggregator += 1,
-            EntityType::Factory => self.factory += 1,
+            EntityType::Account => self.sender.checked_add(1),
+            EntityType::Paymaster => self.paymaster.checked_add(1),
+            EntityType::Aggregator => self.aggregator.checked_add(1),
+            EntityType::Factory => self.factory.checked_add(1),
         }
     }
 
-    pub(crate) fn decrement(&mut self, entity: &EntityType) {
+    pub(crate) fn decrement(&mut self, entity: &EntityType) -> Option<usize> {
         match entity {
-            EntityType::Account => self.sender -= 1,
-            EntityType::Paymaster => self.paymaster -= 1,
-            EntityType::Aggregator => self.aggregator -= 1,
-            EntityType::Factory => self.factory -= 1,
+            EntityType::Account => self.sender.checked_sub(1),
+            EntityType::Paymaster => self.paymaster.checked_sub(1),
+            EntityType::Aggregator => self.aggregator.checked_sub(1),
+            EntityType::Factory => self.factory.checked_sub(1),
         }
     }
 
