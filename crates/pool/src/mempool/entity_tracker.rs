@@ -36,21 +36,21 @@ impl EntityCountTracker {
         self.sender
     }
 
-    pub(crate) fn increment_entity_count(&mut self, entity: &EntityType) -> Option<usize> {
+    pub(crate) fn increment_entity_count(&mut self, entity: &EntityType) {
         match entity {
-            EntityType::Account => self.sender.checked_add(1),
-            EntityType::Paymaster => self.paymaster.checked_add(1),
-            EntityType::Aggregator => self.aggregator.checked_add(1),
-            EntityType::Factory => self.factory.checked_add(1),
+            EntityType::Account => self.sender = self.sender.saturating_add(1),
+            EntityType::Paymaster => self.paymaster = self.paymaster.saturating_add(1),
+            EntityType::Aggregator => self.aggregator = self.aggregator.saturating_add(1),
+            EntityType::Factory => self.factory = self.factory.saturating_add(1),
         }
     }
 
-    pub(crate) fn decrement_entity_count(&mut self, entity: &EntityType) -> Option<usize> {
+    pub(crate) fn decrement_entity_count(&mut self, entity: &EntityType) {
         match entity {
-            EntityType::Account => self.sender.checked_sub(1),
-            EntityType::Paymaster => self.paymaster.checked_sub(1),
-            EntityType::Aggregator => self.aggregator.checked_sub(1),
-            EntityType::Factory => self.factory.checked_sub(1),
+            EntityType::Account => self.sender = self.sender.saturating_sub(1),
+            EntityType::Paymaster => self.paymaster = self.paymaster.saturating_sub(1),
+            EntityType::Aggregator => self.aggregator = self.aggregator.saturating_sub(1),
+            EntityType::Factory => self.factory = self.factory.saturating_sub(1),
         }
     }
 

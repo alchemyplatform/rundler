@@ -300,12 +300,10 @@ impl PoolInner {
 
         // update counts
         for e in pool_op.po.entities() {
-            let entity_count = self
-                .count_by_address
+            self.count_by_address
                 .entry(e.address)
-                .or_insert(EntityCountTracker::new());
-
-            entity_count.increment_entity_count(&e.kind);
+                .or_insert(EntityCountTracker::new())
+                .increment_entity_count(&e.kind);
         }
 
         // create and insert ordered operation
