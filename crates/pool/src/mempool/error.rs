@@ -14,7 +14,9 @@
 use std::mem;
 
 use ethers::{abi::Address, types::U256};
-use rundler_sim::{PrecheckError, PrecheckViolation, SimulationError, SimulationViolation};
+use rundler_sim::{
+    PrecheckError, PrecheckViolation, SimulationError, SimulationViolation, ViolationError,
+};
 use rundler_types::Entity;
 
 /// Mempool result type.
@@ -58,12 +60,13 @@ pub enum MempoolError {
 
 impl From<SimulationError> for MempoolError {
     fn from(mut error: SimulationError) -> Self {
-        let SimulationError::Violations(violations) = &mut error else {
-            return Self::Other(error.into());
+        let (violation_error, _) = &mut error;
+        let ViolationError::Violations(violations) = violation_error else {
+            return Self::Other((*violation_error).clone().into());
         };
 
         let Some(violation) = violations.iter_mut().min() else {
-            return Self::Other(error.into());
+            return Self::Other((*violation_error).clone().into());
         };
 
         // extract violation and replace with dummy

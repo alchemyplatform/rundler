@@ -53,7 +53,10 @@ use std::fmt::{Display, Formatter};
 /// An error that occurs when a user operation violates a spec rule.
 #[derive(Debug, thiserror::Error)]
 pub enum ViolationError<T> {
+    /// A list of known simulation violations
     Violations(Vec<T>),
+
+    /// Other error that occurs during simulation
     Other(#[from] anyhow::Error),
 }
 

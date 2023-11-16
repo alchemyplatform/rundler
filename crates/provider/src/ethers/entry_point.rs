@@ -19,14 +19,14 @@ use ethers::{
     contract::{ContractError, FunctionCall},
     providers::{spoof, Middleware, RawCall},
     types::{
-        transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
-        H256, U256,
+        transaction::eip2718::TypedTransaction, Address, BlockId, BlockNumber, Bytes,
+        Eip1559TransactionRequest, H256, U256,
     },
 };
 use rundler_types::{
     contracts::{
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
-        shared_types::UserOpsPerAggregator,
+        shared_types::{DepositInfo, UserOpsPerAggregator},
     },
     GasFees, UserOperation,
 };
@@ -104,6 +104,18 @@ where
             .call()
             .await
             .context("entry point should return balance")
+    }
+
+    async fn get_deposit_info(
+        &self,
+        address: Address,
+        block_id: Option<BlockId>,
+    ) -> anyhow::Result<DepositInfo> {
+        self.get_deposit_info(address)
+            .block(block_id.unwrap_or(BlockNumber::Latest.into()))
+            .call()
+            .await
+            .context("entry point should return deposit info")
     }
 
     async fn call_spoofed_simulate_op(

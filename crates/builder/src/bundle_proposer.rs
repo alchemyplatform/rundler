@@ -33,9 +33,13 @@ use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
     gas::{self, GasOverheads},
-    ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationSuccess, Simulator,
+    EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
+    SimulationSuccess, SimulationViolation, Simulator, ViolationError,
 };
-use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
+use rundler_types::{
+    Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, Timestamp, UserOperation,
+    UserOpsPerAggregator,
+};
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
 use tracing::{error, info, warn};
@@ -54,7 +58,7 @@ pub(crate) struct Bundle {
     pub(crate) gas_fees: GasFees,
     pub(crate) expected_storage: ExpectedStorage,
     pub(crate) rejected_ops: Vec<UserOperation>,
-    pub(crate) rejected_entities: Vec<Entity>,
+    pub(crate) entity_updates: Vec<EntityUpdate>,
 }
 
 impl Bundle {
@@ -209,14 +213,13 @@ where
                     gas_fees: bundle_fees,
                     expected_storage,
                     rejected_ops: context.rejected_ops,
-                    rejected_entities: context.rejected_entities,
+                    entity_updates: context.entity_updates,
                 });
             }
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
         Ok(Bundle {
             rejected_ops: context.rejected_ops,
-            rejected_entities: context.rejected_entities,
             gas_fees: bundle_fees,
             ..Default::default()
         })
@@ -268,8 +271,8 @@ where
         match result {
             Ok(success) => Ok((op.uo, Ok(success))),
             Err(error) => match error {
-                SimulationError::Violations(_) => Ok((op.uo, Err(error))),
-                SimulationError::Other(error) => Err(error),
+                (ViolationError::Violations(_), _) => Ok((op.uo, Err(error))),
+                (ViolationError::Other(error), _) => Err(error),
             },
         }
     }
@@ -285,6 +288,7 @@ where
             .collect();
         let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
         let mut rejected_ops = Vec::<UserOperation>::new();
+        let mut entity_updates = Vec::<EntityUpdate>::new();
         let mut paymasters_to_reject = Vec::<Address>::new();
 
         let ov = GasOverheads::default();
@@ -296,8 +300,13 @@ where
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_index,
                         self.op_hash(&op),
-                        OpRejectionReason::FailedRevalidation { error },
+                        OpRejectionReason::FailedRevalidation {
+                            error: error.clone(),
+                        },
                     ));
+                    if let (ViolationError::Violations(violations), entity_infos) = error {
+                        self.add_entity_updates(violations, entity_infos, &mut entity_updates);
+                    }
                     rejected_ops.push(op);
                     continue;
                 }
@@ -378,7 +387,7 @@ where
         let mut context = ProposalContext {
             groups_by_aggregator,
             rejected_ops,
-            rejected_entities: Vec::new(),
+            entity_updates: Vec::new(),
         };
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
@@ -740,6 +749,125 @@ where
     fn op_hash(&self, op: &UserOperation) -> H256 {
         op.op_hash(self.entry_point.address(), self.settings.chain_id)
     }
+
+    fn get_entity_update_type(
+        &self,
+        entity: Entity,
+        entity_infos: Option<EntityInfos>,
+    ) -> EntityUpdateType {
+        match entity_infos {
+            Some(infos) => match entity.kind {
+                EntityType::Account => {
+                    if infos.sender.is_staked {
+                        EntityUpdateType::StakedInvalidation
+                    } else {
+                        EntityUpdateType::UnstakedInvalidation
+                    }
+                }
+                EntityType::Paymaster => {
+                    if let Some(paymaster) = infos.paymaster {
+                        if paymaster.is_staked {
+                            EntityUpdateType::StakedInvalidation
+                        } else {
+                            EntityUpdateType::UnstakedInvalidation
+                        }
+                    } else {
+                        EntityUpdateType::StakedInvalidation
+                    }
+                }
+                EntityType::Factory => {
+                    if let Some(factory) = infos.factory {
+                        if factory.is_staked {
+                            EntityUpdateType::StakedInvalidation
+                        } else {
+                            EntityUpdateType::UnstakedInvalidation
+                        }
+                    } else {
+                        EntityUpdateType::StakedInvalidation
+                    }
+                }
+                _ => EntityUpdateType::StakedInvalidation,
+            },
+            None => EntityUpdateType::StakedInvalidation,
+        }
+    }
+
+    fn add_entity_updates(
+        &self,
+        violations: Vec<SimulationViolation>,
+        entity_infos: Option<EntityInfos>,
+        entity_updates: &mut Vec<EntityUpdate>,
+    ) {
+        for violation in violations {
+            match violation {
+                SimulationViolation::UsedForbiddenOpcode(entity, _, _) => {
+                    entity_updates.push(EntityUpdate {
+                        entity,
+                        update_type: self.get_entity_update_type(entity, entity_infos),
+                    })
+                }
+                SimulationViolation::UsedForbiddenPrecompile(entity, _, _) => {
+                    entity_updates.push(EntityUpdate {
+                        entity,
+                        update_type: self.get_entity_update_type(entity, entity_infos),
+                    })
+                }
+                SimulationViolation::AccessedUndeployedContract(entity, _) => {
+                    entity_updates.push(EntityUpdate {
+                        entity,
+                        update_type: self.get_entity_update_type(entity, entity_infos),
+                    })
+                }
+                SimulationViolation::InvalidStorageAccess(entity, _) => {
+                    entity_updates.push(EntityUpdate {
+                        entity,
+                        update_type: self.get_entity_update_type(entity, entity_infos),
+                    })
+                }
+                SimulationViolation::CalledBannedEntryPointMethod(entity) => {
+                    entity_updates.push(EntityUpdate {
+                        entity,
+                        update_type: self.get_entity_update_type(entity, entity_infos),
+                    })
+                }
+                SimulationViolation::CallHadValue(entity) => entity_updates.push(EntityUpdate {
+                    entity,
+                    update_type: self.get_entity_update_type(entity, entity_infos),
+                }),
+                SimulationViolation::NotStaked(entity, _, _) => entity_updates.push(EntityUpdate {
+                    entity,
+                    update_type: self.get_entity_update_type(entity, entity_infos),
+                }),
+                SimulationViolation::UnintendedRevertWithMessage(entity_type, _, address) => {
+                    if let Some(entity_address) = address {
+                        entity_updates.push(EntityUpdate {
+                            entity: Entity {
+                                address: entity_address,
+                                kind: entity_type,
+                            },
+                            update_type: EntityUpdateType::StakedInvalidation,
+                        })
+                    }
+                }
+                SimulationViolation::UnintendedRevert(entity_type, address) => {
+                    if let Some(entity_address) = address {
+                        entity_updates.push(EntityUpdate {
+                            entity: Entity {
+                                address: entity_address,
+                                kind: entity_type,
+                            },
+                            update_type: EntityUpdateType::StakedInvalidation,
+                        })
+                    }
+                }
+                SimulationViolation::OutOfGas(entity) => entity_updates.push(EntityUpdate {
+                    entity,
+                    update_type: EntityUpdateType::StakedInvalidation,
+                }),
+                _ => continue,
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -766,7 +894,7 @@ impl OpWithSimulation {
 struct ProposalContext {
     groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
     rejected_ops: Vec<UserOperation>,
-    rejected_entities: Vec<Entity>,
+    entity_updates: Vec<EntityUpdate>,
 }
 
 #[derive(Debug, Default)]
@@ -851,7 +979,10 @@ impl ProposalContext {
             EntityType::Factory => self.reject_factory(entity.address),
             _ => vec![],
         };
-        self.rejected_entities.push(entity);
+        self.entity_updates.push(EntityUpdate {
+            entity,
+            update_type: EntityUpdateType::StakedInvalidation,
+        });
         ret
     }
 
@@ -971,7 +1102,7 @@ mod tests {
     use ethers::{types::H160, utils::parse_units};
     use rundler_pool::MockPoolServer;
     use rundler_provider::{AggregatorSimOut, MockEntryPoint, MockProvider};
-    use rundler_sim::{MockSimulator, SimulationViolation};
+    use rundler_sim::{MockSimulator, SimulationViolation, ViolationError};
     use rundler_types::ValidTimeRange;
 
     use super::*;
@@ -1017,7 +1148,7 @@ mod tests {
         let op = UserOperation::default();
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
-            simulation_result: Box::new(|| Err(SimulationError::Violations(vec![]))),
+            simulation_result: Box::new(|| Err((ViolationError::Violations(vec![]), None))),
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1030,7 +1161,7 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
-                Err(SimulationError::Other(anyhow!("simulation failed")))
+                Err((ViolationError::Other(anyhow!("simulation failed")), None))
             }),
         }])
         .await;
@@ -1044,9 +1175,10 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
-                Err(SimulationError::Violations(vec![
-                    SimulationViolation::InvalidSignature,
-                ]))
+                Err((
+                    ViolationError::Violations(vec![SimulationViolation::InvalidSignature]),
+                    None,
+                ))
             }),
         }])
         .await;
@@ -1349,8 +1481,17 @@ mod tests {
         .await;
 
         assert_eq!(
-            bundle.rejected_entities,
-            vec![Entity::paymaster(address(1)), Entity::factory(address(3)),]
+            bundle.entity_updates,
+            vec![
+                EntityUpdate {
+                    entity: Entity::paymaster(address(1)),
+                    update_type: EntityUpdateType::StakedInvalidation,
+                },
+                EntityUpdate {
+                    entity: Entity::factory(address(3)),
+                    update_type: EntityUpdateType::StakedInvalidation,
+                },
+            ]
         );
         assert_eq!(bundle.rejected_ops, vec![]);
         assert_eq!(
@@ -1397,7 +1538,7 @@ mod tests {
         )
         .await;
 
-        assert_eq!(bundle.rejected_entities, vec![]);
+        assert_eq!(bundle.entity_updates, vec![]);
         assert_eq!(bundle.rejected_ops, vec![]);
         assert_eq!(
             bundle.ops_per_aggregator,
@@ -1446,7 +1587,7 @@ mod tests {
         let context = ProposalContext {
             groups_by_aggregator,
             rejected_ops: vec![],
-            rejected_entities: vec![],
+            entity_updates: vec![],
         };
 
         // The gas requirement from the execution of the first UO is: g >= p_1 + 2v_1 + c_1 + 5000
@@ -1492,7 +1633,7 @@ mod tests {
         let context = ProposalContext {
             groups_by_aggregator,
             rejected_ops: vec![],
-            rejected_entities: vec![],
+            entity_updates: vec![],
         };
         let gas_limit = context.get_bundle_gas_limit(chain_id);
 

@@ -51,12 +51,12 @@ mod simulation;
 #[cfg(feature = "test-utils")]
 pub use simulation::MockSimulator;
 pub use simulation::{
-    MempoolConfig, Settings as SimulationSettings, SimulateValidationTracer,
-    SimulateValidationTracerImpl, SimulationError, SimulationSuccess, SimulationViolation,
-    Simulator, SimulatorImpl, ViolationOpCode,
+    EntityInfo, EntityInfos, MempoolConfig, Settings as SimulationSettings,
+    SimulateValidationTracer, SimulateValidationTracerImpl, SimulationError, SimulationSuccess,
+    SimulationViolation, Simulator, SimulatorImpl, ViolationOpCode,
 };
 
 mod types;
-pub use types::ExpectedStorage;
+pub use types::{ExpectedStorage, ViolationError};
 
 mod utils;
