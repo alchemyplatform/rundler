@@ -466,13 +466,19 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
-            SimulationViolation::UnintendedRevert(et) => ProtoSimulationViolationError {
-                violation: Some(simulation_violation_error::Violation::UnintendedRevert(
-                    UnintendedRevert {
-                        entity_type: EntityType::from(et) as i32,
-                    },
-                )),
-            },
+            SimulationViolation::UnintendedRevert(et, maybe_address) => {
+                ProtoSimulationViolationError {
+                    violation: Some(simulation_violation_error::Violation::UnintendedRevert(
+                        UnintendedRevert {
+                            entity: Some(Entity {
+                                kind: EntityType::from(et) as i32,
+                                address: maybe_address
+                                    .map_or(vec![], |addr| addr.as_bytes().to_vec()),
+                            }),
+                        },
+                    )),
+                }
+            }
             SimulationViolation::DidNotRevert => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::DidNotRevert(
                     DidNotRevert {},
@@ -592,9 +598,18 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 )
             }
             Some(simulation_violation_error::Violation::UnintendedRevert(e)) => {
-                SimulationViolation::UnintendedRevert(rundler_types::EntityType::try_from(
-                    EntityType::try_from(e.entity_type).context("unknown entity type")?,
-                )?)
+                let address = e.entity.clone().unwrap().address;
+                SimulationViolation::UnintendedRevert(
+                    rundler_types::EntityType::try_from(
+                        EntityType::try_from(e.entity.unwrap().kind)
+                            .context("unknown entity type")?,
+                    )?,
+                    if address.is_empty() {
+                        None
+                    } else {
+                        Some(from_bytes(&address)?)
+                    },
+                )
             }
             Some(simulation_violation_error::Violation::DidNotRevert(_)) => {
                 SimulationViolation::DidNotRevert
@@ -668,12 +683,14 @@ mod tests {
     fn test_simulation_error() {
         let error = MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
             rundler_types::EntityType::Aggregator,
+            None,
         ));
         let proto_error: ProtoMempoolError = error.into();
         let error2 = proto_error.try_into().unwrap();
         match error2 {
             MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
                 rundler_types::EntityType::Aggregator,
+                None,
             )) => {}
             _ => panic!("wrong error type"),
         }
