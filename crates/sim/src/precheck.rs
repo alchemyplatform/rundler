@@ -19,7 +19,8 @@ use ethers::types::{Address, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{EntryPoint, Provider};
-use rundler_types::{GasFees, UserOperation};
+use rundler_types::{chain, GasFees, UserOperation};
+use rundler_utils::math;
 
 use crate::{gas, types::ViolationError};
 
@@ -65,6 +66,8 @@ pub struct Settings {
     pub bundle_priority_fee_overhead_percent: u64,
     /// The priority fee mode to use for calculating required user operation priority fee.
     pub priority_fee_mode: gas::PriorityFeeMode,
+    /// Percentage of the current network fees that a user operation must have to be accepted into the mempool.
+    pub fee_accept_percent: u64,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -77,6 +80,7 @@ impl Default for Settings {
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(0),
             max_total_execution_gas: 10_000_000.into(),
             chain_id: 1,
+            fee_accept_percent: 100,
         }
     }
 }
@@ -190,6 +194,14 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 max_total_execution_gas,
             ))
         }
+
+        // if preVerificationGas is dynamic, then allow for the percentage buffer
+        // and check if the preVerificationGas is at least the minimum.
+        let min_pre_verification_gas = if chain::is_dynamic_pvg(chain_id) {
+            math::percent(min_pre_verification_gas, self.settings.fee_accept_percent)
+        } else {
+            min_pre_verification_gas
+        };
         if op.pre_verification_gas < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas,
@@ -197,18 +209,26 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             ));
         }
 
+        // check that the max fee per gas and max priority fee per gas are at least the required fees
         let required_fees = self.fee_estimator.required_op_fees(bundle_fees);
-
-        if op.max_fee_per_gas < required_fees.max_fee_per_gas {
+        let min_max_fee_per_gas = math::percent(
+            required_fees.max_fee_per_gas,
+            self.settings.fee_accept_percent,
+        );
+        if op.max_fee_per_gas < min_max_fee_per_gas {
             violations.push(PrecheckViolation::MaxFeePerGasTooLow(
                 op.max_fee_per_gas,
-                required_fees.max_fee_per_gas,
+                min_max_fee_per_gas,
             ));
         }
-        if op.max_priority_fee_per_gas < required_fees.max_priority_fee_per_gas {
+        let min_max_priority_fee_per_gas = math::percent(
+            required_fees.max_priority_fee_per_gas,
+            self.settings.fee_accept_percent,
+        );
+        if op.max_priority_fee_per_gas < min_max_priority_fee_per_gas {
             violations.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
                 op.max_priority_fee_per_gas,
-                required_fees.max_priority_fee_per_gas,
+                min_max_priority_fee_per_gas,
             ));
         }
 
@@ -458,6 +478,7 @@ mod tests {
             use_bundle_priority_fee: None,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(100),
+            fee_accept_percent: 100,
         };
         let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, test_settings);
         let op = UserOperation {
@@ -518,5 +539,69 @@ mod tests {
                 2_000_000_000.into(),
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn test_check_fees() {
+        let settings = Settings {
+            fee_accept_percent: 80,
+            priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
+            ..Default::default()
+        };
+        let (provider, entry_point) = create_base_config();
+        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.bundle_fees = GasFees {
+            max_fee_per_gas: 5_000.into(),
+            max_priority_fee_per_gas: 1_000.into(),
+        };
+        async_data.min_pre_verification_gas = 1_000.into();
+
+        let op = UserOperation {
+            max_fee_per_gas: math::percent(5000, settings.fee_accept_percent).into(),
+            max_priority_fee_per_gas: math::percent(1000, settings.fee_accept_percent).into(),
+            pre_verification_gas: 1_000.into(),
+            call_gas_limit: MIN_CALL_GAS_LIMIT,
+            ..Default::default()
+        };
+
+        let res = prechecker.check_gas(&op, get_test_async_data());
+        assert!(res.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_check_fees_too_low() {
+        let settings = Settings {
+            fee_accept_percent: 80,
+            priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
+            ..Default::default()
+        };
+        let (provider, entry_point) = create_base_config();
+        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.bundle_fees = GasFees {
+            max_fee_per_gas: 5_000.into(),
+            max_priority_fee_per_gas: 1_000.into(),
+        };
+        async_data.min_pre_verification_gas = 1_000.into();
+
+        let op = UserOperation {
+            max_fee_per_gas: math::percent(5000, settings.fee_accept_percent).into(),
+            max_priority_fee_per_gas: math::percent(1000, settings.fee_accept_percent - 10).into(),
+            pre_verification_gas: 1_000.into(),
+            call_gas_limit: MIN_CALL_GAS_LIMIT,
+            ..Default::default()
+        };
+
+        let res = prechecker.check_gas(&op, get_test_async_data());
+        let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
+        expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
+            math::percent(1000, settings.fee_accept_percent - 10).into(),
+            math::percent(1000, settings.fee_accept_percent).into(),
+        ));
+
+        assert_eq!(res, expected);
     }
 }
