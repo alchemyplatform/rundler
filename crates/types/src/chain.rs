@@ -44,3 +44,8 @@ pub const BASE_CHAIN_IDS: &[u64] = &[
 
 /// Known chain IDs for the Polygon ecosystem
 pub const POLYGON_CHAIN_IDS: &[u64] = &[Chain::Polygon as u64, Chain::PolygonMumbai as u64];
+
+/// Return true if the chain ID has a dynamic preVerificationGas field
+pub fn is_dynamic_pvg(chain_id: u64) -> bool {
+    ARBITRUM_CHAIN_IDS.contains(&chain_id) || OP_BEDROCK_CHAIN_IDS.contains(&chain_id)
+}
