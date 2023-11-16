@@ -27,6 +27,7 @@ use rundler_utils::math;
 use tracing::info;
 
 use super::{
+    entity_tracker::EntityCountTracker,
     error::{MempoolError, MempoolResult},
     size::SizeTracker,
     PoolConfig, PoolOperation,
@@ -73,28 +74,13 @@ pub(crate) struct PoolInner {
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
     /// Count of operations by entity address
-    count_by_address: HashMap<Address, EntityCount>,
+    count_by_address: HashMap<Address, EntityCountTracker>,
     /// Submission ID counter
     submission_id: u64,
     /// keeps track of the size of the pool in bytes
     pool_size: SizeTracker,
     /// keeps track of the size of the removed cache in bytes
     cache_size: SizeTracker,
-}
-
-/// Object to track count and type of entity in mempool
-#[derive(Debug)]
-struct EntityCount {
-    /// Type of entity
-    entity_type: EntityType,
-    /// Number of identical items in mempool
-    count: usize,
-}
-
-impl EntityCount {
-    fn is_sender(&self) -> bool {
-        self.entity_type.eq(&EntityType::Account)
-    }
 }
 
 impl PoolInner {
@@ -157,10 +143,11 @@ impl PoolInner {
     }
 
     pub(crate) fn address_count(&self, address: &Address) -> usize {
-        match self.count_by_address.get(address) {
-            Some(ec) => ec.count,
-            None => 0,
-        }
+        if let Some(entity) = self.count_by_address.get(address) {
+            return entity.total();
+        };
+
+        0
     }
 
     pub(crate) fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
@@ -171,7 +158,7 @@ impl PoolInner {
 
     pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
         if let Some(ec) = self.count_by_address.get(&uo.sender) {
-            if !ec.is_sender() {
+            if ec.includes_non_sender() {
                 return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
             }
         }
@@ -180,7 +167,7 @@ impl PoolInner {
             match e.kind {
                 EntityType::Factory | EntityType::Paymaster => {
                     if let Some(ec) = self.count_by_address.get(&e.address) {
-                        if ec.is_sender() {
+                        if ec.sender().gt(&0) {
                             return Err(MempoolError::MultipleRolesViolation(e));
                         }
                     }
@@ -316,16 +303,9 @@ impl PoolInner {
             let entity_count = self
                 .count_by_address
                 .entry(e.address)
-                .or_insert(EntityCount {
-                    entity_type: e.kind,
-                    count: 0,
-                });
+                .or_insert(EntityCountTracker::new());
 
-            if entity_count.entity_type.ne(&e.kind) {
-                return Err(MempoolError::MultipleRolesViolation(e));
-            }
-
-            entity_count.count += 1;
+            entity_count.increment_entity(&e.kind);
         }
 
         // create and insert ordered operation
@@ -366,17 +346,17 @@ impl PoolInner {
         }
 
         for e in op.po.entities() {
-            self.decrement_address_count(e.address);
+            self.decrement_address_count(e.address, &e.kind);
         }
 
         self.pool_size -= op.mem_size();
         Some(op.po)
     }
 
-    fn decrement_address_count(&mut self, address: Address) {
+    fn decrement_address_count(&mut self, address: Address, entity: &EntityType) {
         if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
-            count_entry.get_mut().count -= 1;
-            if count_entry.get().count == 0 {
+            count_entry.get_mut().decrement(entity);
+            if count_entry.get().total() == 0 {
                 count_entry.remove_entry();
             }
         }

@@ -14,6 +14,7 @@
 mod error;
 pub use error::MempoolError;
 
+mod entity_tracker;
 mod pool;
 
 mod reputation;
