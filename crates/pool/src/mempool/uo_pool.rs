@@ -252,11 +252,13 @@ where
         // Prechecks
         self.prechecker.check(&op).await?;
 
-        // Simulation
+        // Only let ops with successful simulations through
         let sim_result = self
             .simulator
             .simulate_validation(op.clone(), None, None)
             .await?;
+
+        // No aggregators supported for now
         if let Some(agg) = &sim_result.aggregator {
             return Err(MempoolError::UnsupportedAggregator(agg.address));
         }
@@ -269,6 +271,7 @@ where
             sim_block_hash: sim_result.block_hash,
             entities_needing_stake: sim_result.entities_needing_stake,
             account_is_staked: sim_result.account_is_staked,
+            entity_infos: sim_result.entity_infos,
         };
 
         // Add op to pool

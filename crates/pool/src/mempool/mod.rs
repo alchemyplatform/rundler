@@ -31,7 +31,7 @@ use std::{
 use ethers::types::{Address, H256};
 #[cfg(test)]
 use mockall::automock;
-use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
+use rundler_sim::{EntityInfos, MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{Entity, EntityType, EntityUpdate, UserOperation, ValidTimeRange};
 use strum::IntoEnumIterator;
 use tonic::async_trait;
@@ -160,6 +160,8 @@ pub struct PoolOperation {
     pub entities_needing_stake: Vec<EntityType>,
     /// Whether the account is staked.
     pub account_is_staked: bool,
+    /// Staking information about all the entities.
+    pub entity_infos: EntityInfos,
 }
 
 impl PoolOperation {
@@ -180,7 +182,7 @@ impl PoolOperation {
     /// For staked accounts, this function will always return true. Staked accounts
     /// are able to circumvent the mempool operation limits always need their reputation
     /// checked to prevent them from filling the pool.
-    pub fn is_staked(&self, entity: EntityType) -> bool {
+    pub fn requires_stake(&self, entity: EntityType) -> bool {
         match entity {
             EntityType::Account => self.account_is_staked,
             _ => self.entities_needing_stake.contains(&entity),
@@ -198,7 +200,7 @@ impl PoolOperation {
     /// Returns an iterator over all staked entities that are included in this operation.
     pub fn staked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         EntityType::iter()
-            .filter(|entity| self.is_staked(*entity))
+            .filter(|entity| self.requires_stake(*entity))
             .filter_map(|entity| {
                 self.entity_address(entity)
                     .map(|address| Entity::new(entity, address))
@@ -246,12 +248,13 @@ mod tests {
             sim_block_hash: H256::random(),
             entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
+            entity_infos: EntityInfos::default(),
         };
 
-        assert!(po.is_staked(EntityType::Account));
-        assert!(!po.is_staked(EntityType::Paymaster));
-        assert!(!po.is_staked(EntityType::Factory));
-        assert!(po.is_staked(EntityType::Aggregator));
+        assert!(po.requires_stake(EntityType::Account));
+        assert!(!po.requires_stake(EntityType::Paymaster));
+        assert!(!po.requires_stake(EntityType::Factory));
+        assert!(po.requires_stake(EntityType::Aggregator));
 
         assert_eq!(po.entity_address(EntityType::Account), Some(sender));
         assert_eq!(po.entity_address(EntityType::Paymaster), Some(paymaster));

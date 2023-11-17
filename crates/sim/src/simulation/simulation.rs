@@ -74,6 +74,8 @@ pub struct SimulationSuccess {
     pub expected_storage: ExpectedStorage,
     /// Whether the operation requires a post-op
     pub requires_post_op: bool,
+    /// All the entities used in this operation and their staking state
+    pub entity_infos: EntityInfos,
 }
 
 impl SimulationSuccess {
@@ -83,10 +85,12 @@ impl SimulationSuccess {
     }
 }
 
-pub struct ErrorWrapper(Error);
+struct ErrorWrapper(Error);
 
-/// The result of a failed simulation
+/// The result of a failed simulation. We return a list of the violations that ocurred during the failed simulation
+/// and also information about all the entities used in the op to handle entity penalties
 pub type SimulationError = (ViolationError<SimulationViolation>, Option<EntityInfos>);
+
 impl From<ErrorWrapper> for SimulationError {
     fn from(error: ErrorWrapper) -> Self {
         (ViolationError::Other(error.0), None)
@@ -180,7 +184,6 @@ where
         // mean the entry point is fine if one of the phases fails and it
         // doesn't reach the end of execution.
         if num_phases > 3 {
-            // Err(vec![SimulationViolation::WrongNumberOfPhases(num_phases)])?
             Err((
                 ViolationError::Violations(vec![SimulationViolation::WrongNumberOfPhases(
                     num_phases,
@@ -189,7 +192,6 @@ where
             ))?
         }
         let Some(ref revert_data) = tracer_out.revert_data else {
-            // Err(vec![SimulationViolation::DidNotRevert])?
             Err((
                 ViolationError::Violations(vec![SimulationViolation::DidNotRevert]),
                 None,
@@ -568,6 +570,7 @@ where
             accessed_addresses,
             expected_storage: tracer_out.expected_storage,
             requires_post_op: !paymaster_context.is_empty(),
+            entity_infos: context.entity_infos,
         })
     }
 }
@@ -670,7 +673,7 @@ struct ValidationContext {
     accessed_addresses: HashSet<Address>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// additional context about an entity
 pub struct EntityInfo {
     /// The address of an entity
@@ -679,7 +682,7 @@ pub struct EntityInfo {
     pub is_staked: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// additional context for all the entities used in an op
 pub struct EntityInfos {
     /// The entity info for the factory
@@ -712,7 +715,6 @@ impl EntityInfos {
             address,
             is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
         });
-
         let aggregator = entry_point_out
             .aggregator_info
             .map(|aggregator_info| EntityInfo {
@@ -733,7 +735,7 @@ impl EntityInfos {
             EntityType::Factory => self.factory,
             EntityType::Account => Some(self.sender),
             EntityType::Paymaster => self.paymaster,
-            _ => None,
+            EntityType::Aggregator => self.aggregator,
         }
     }
 

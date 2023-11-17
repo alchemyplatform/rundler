@@ -20,7 +20,9 @@ use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use strum::EnumIter;
 
 /// The type of an entity
-#[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
+#[derive(
+    Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize, Hash,
+)]
 #[display(style = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub enum EntityType {
