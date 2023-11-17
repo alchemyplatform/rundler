@@ -102,7 +102,6 @@ pub(crate) struct Settings {
     pub(crate) max_bundle_size: u64,
     pub(crate) max_bundle_gas: u64,
     pub(crate) beneficiary: Address,
-    pub(crate) use_bundle_priority_fee: Option<bool>,
     pub(crate) bundle_priority_fee_overhead_percent: u64,
     pub(crate) priority_fee_mode: PriorityFeeMode,
 }
@@ -248,7 +247,6 @@ where
                 provider,
                 settings.chain_id,
                 settings.priority_fee_mode,
-                settings.use_bundle_priority_fee,
                 settings.bundle_priority_fee_overhead_percent,
             ),
             settings,
@@ -1485,7 +1483,6 @@ mod tests {
                 max_bundle_size,
                 max_bundle_gas: 10_000_000,
                 beneficiary,
-                use_bundle_priority_fee: Some(true),
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(10),
                 bundle_priority_fee_overhead_percent: 0,
             },

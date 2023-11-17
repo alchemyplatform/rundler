@@ -216,7 +216,6 @@ impl BuilderArgs {
             max_bundle_size: self.max_bundle_size,
             max_bundle_gas: common.max_bundle_gas,
             submit_url,
-            use_bundle_priority_fee: common.use_bundle_priority_fee,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
             sender_type: self.sender_type,
