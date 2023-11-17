@@ -184,8 +184,8 @@ where
             state.block_number = update.latest_block_number;
         }
 
-        // update bundle fee metrics
-        if let Ok(fees) = self.prechecker.get_bundle_fees().await {
+        // update required bundle fees and update metrics
+        if let Ok(fees) = self.prechecker.update_bundle_fees().await {
             let max_fee = match format_units(fees.max_fee_per_gas, "gwei") {
                 Ok(s) => s.parse::<f64>().unwrap_or_default(),
                 Err(_) => 0.0,
@@ -865,7 +865,7 @@ mod tests {
         let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        prechecker.expect_get_bundle_fees().returning(|| {
+        prechecker.expect_update_bundle_fees().returning(|| {
             Ok(GasFees {
                 max_fee_per_gas: 0.into(),
                 max_priority_fee_per_gas: 0.into(),

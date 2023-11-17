@@ -100,20 +100,26 @@ where
 // Calculates the estimate based on the index of inner vector
 // and skips the average if block is empty
 fn calculate_estimate_from_rewards(reward: &[Vec<U256>]) -> U256 {
-    let (sum, count): (U256, U256) = reward
+    let mut values = reward
         .iter()
-        .filter(|b| !b[0].is_zero())
+        .filter(|b| !b.is_empty() && !b[0].is_zero())
         .map(|b| b[0])
-        .fold((0.into(), 0.into()), |(sum, count), val| {
-            (sum.saturating_add(val), count.saturating_add(1.into()))
-        });
-
-    if !count.is_zero() {
-        let (avg, _mod) = sum.div_mod(count);
-        avg
-    } else {
-        U256::zero()
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return U256::zero();
     }
+
+    values.sort();
+
+    let (start, end) = if values.len() < 4 {
+        (0, values.len())
+    } else {
+        (values.len() / 4, 3 * values.len() / 4)
+    };
+    let sum = values[start..end]
+        .iter()
+        .fold(U256::zero(), |acc, x| acc.saturating_add(*x));
+    sum / U256::from(end - start)
 }
 
 /// Oracle that uses the provider to estimate the priority fee
@@ -316,6 +322,40 @@ mod tests {
         oracle.add(ProviderOracle::new(provider));
 
         let fee = oracle.estimate_priority_fee().await.unwrap();
+        assert_eq!(fee, U256::from(200));
+    }
+
+    #[test]
+    fn test_calculate_estimate_from_rewards_small() {
+        let reward = vec![
+            vec![U256::from(300)],
+            vec![U256::from(100)],
+            vec![U256::from(200)],
+        ];
+        let fee = calculate_estimate_from_rewards(&reward);
+        assert_eq!(fee, U256::from(200));
+    }
+
+    #[test]
+    fn test_calculate_estimate_from_rewards_outliers() {
+        let reward = vec![
+            vec![U256::from(300)],
+            vec![U256::from(100)],
+            vec![U256::from(200)],
+            vec![U256::from(300)],
+            vec![U256::from(100)],
+            vec![U256::from(200)],
+            vec![U256::from(2)],
+            vec![U256::from(20000)],
+        ];
+        let fee = calculate_estimate_from_rewards(&reward);
+        assert_eq!(fee, U256::from(200));
+    }
+
+    #[test]
+    fn test_calculate_estimate_from_rewards_single() {
+        let reward = vec![vec![U256::from(200)]];
+        let fee = calculate_estimate_from_rewards(&reward);
         assert_eq!(fee, U256::from(200));
     }
 }

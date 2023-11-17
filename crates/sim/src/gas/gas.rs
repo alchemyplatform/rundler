@@ -335,19 +335,36 @@ impl<P: Provider> FeeEstimator<P> {
 
 // TODO move all of this to ChainSpec
 
-const POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN: u64 = 1_500_000_000;
-const POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN: u64 = 30_000_000_000;
-const OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN: u64 = 1_000_000;
+/// Polygon Mumbai max priority fee min
+pub const POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN: u64 = 1_500_000_000;
+/// Polygon Mainnet max priority fee min
+pub const POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN: u64 = 30_000_000_000;
+/// Optimism Bedrock chains max priority fee min
+pub const OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN: u64 = 1_000_000;
+
+/// Returns the minimum max priority fee per gas for the given chain id.
+pub fn get_min_max_priority_fee_per_gas(chain_id: u64) -> U256 {
+    match chain_id {
+        x if x == Chain::Polygon as u64 => POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
+        x if x == Chain::PolygonMumbai as u64 => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
+        x if x == Chain::Optimism as u64 => OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN.into(),
+        _ => U256::zero(),
+    }
+}
 
 fn get_fee_oracle<P>(chain_id: u64, provider: Arc<P>) -> Arc<Box<dyn FeeOracle>>
 where
     P: Provider + Debug,
 {
+    let minimum_fee = get_min_max_priority_fee_per_gas(chain_id);
+
     if ARBITRUM_CHAIN_IDS.contains(&chain_id) {
         Arc::new(Box::new(ConstantOracle::new(U256::zero())))
     } else if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
         let config = FeeHistoryOracleConfig {
-            minimum_fee: U256::from(OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN),
+            minimum_fee,
+            blocks_history: 16,
+            percentile: 33.3,
             ..Default::default()
         };
         Arc::new(Box::new(FeeHistoryOracle::new(provider, config)))
@@ -355,13 +372,9 @@ where
         let mut max_oracle = MaxOracle::new();
         max_oracle.add(ProviderOracle::new(provider.clone()));
 
-        let min_fee = match chain_id {
-            x if x == Chain::Polygon as u64 => POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
-            x if x == Chain::PolygonMumbai as u64 => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
-            _ => panic!("Invalid chain id"),
-        };
         let config = FeeHistoryOracleConfig {
-            minimum_fee: min_fee,
+            minimum_fee,
+            percentile: 33.0,
             ..Default::default()
         };
         max_oracle.add(FeeHistoryOracle::new(provider, config));
