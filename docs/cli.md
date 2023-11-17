@@ -34,8 +34,6 @@ These options are common to all subcommands and can be used globally:
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
 - `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
   - env: *MAX_SIMULATE_HANDLE_OPS_GAS*
-- `--use_bundle_priority_fee`: Enable bundle priority fee. (default: `true` on known networks that support EIP-1559, else `false`.)
-  - env: *USE_BUNDLE_PRIORITY_FEE*
 - `--bundle_priority_fee_overhead_percent`: bundle transaction priority fee overhead over network value. (default: `0`).
   - env: *BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT*
 - `--priority_fee_mode_kind`: Priority fee mode kind. Possible values are `base_fee_percent` and `priority_fee_increase_percent`. (default: `priority_fee_increase_percent`).

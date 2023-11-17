@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
+use anyhow::Context;
 use ethers::{
     abi::AbiEncode,
-    prelude::gas_oracle::GasCategory,
     types::{Address, Chain, U256},
 };
 use rundler_provider::Provider;
@@ -26,7 +26,9 @@ use rundler_types::{
 use rundler_utils::math;
 use tokio::try_join;
 
-use super::polygon::Polygon;
+use super::oracle::{
+    ConstantOracle, FeeHistoryOracle, FeeHistoryOracleConfig, FeeOracle, MaxOracle, ProviderOracle,
+};
 
 /// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
 #[derive(Clone, Copy, Debug)]
@@ -262,9 +264,8 @@ impl PriorityFeeMode {
 pub struct FeeEstimator<P: Provider> {
     provider: Arc<P>,
     priority_fee_mode: PriorityFeeMode,
-    use_bundle_priority_fee: bool,
     bundle_priority_fee_overhead_percent: u64,
-    chain_id: u64,
+    fee_oracle: Arc<Box<dyn FeeOracle>>,
 }
 
 impl<P: Provider> FeeEstimator<P> {
@@ -272,25 +273,19 @@ impl<P: Provider> FeeEstimator<P> {
     ///
     /// `priority_fee_mode` is used to determine how the required priority fee is calculated.
     ///
-    /// `use_bundle_priority_fee` is used to determine if the bundle priority fee should be used.
-    /// Set to true on EIP-1559 chains, false on non-EIP-1559 chains.
-    ///
     /// `bundle_priority_fee_overhead_percent` is used to determine the overhead percentage to add
     /// to the network returned priority fee to ensure the bundle priority fee is high enough.
     pub fn new(
         provider: Arc<P>,
         chain_id: u64,
         priority_fee_mode: PriorityFeeMode,
-        use_bundle_priority_fee: Option<bool>,
         bundle_priority_fee_overhead_percent: u64,
     ) -> Self {
         Self {
-            provider,
+            provider: provider.clone(),
             priority_fee_mode,
-            use_bundle_priority_fee: use_bundle_priority_fee
-                .unwrap_or_else(|| !is_known_non_eip_1559_chain(chain_id)),
             bundle_priority_fee_overhead_percent,
-            chain_id,
+            fee_oracle: get_fee_oracle(chain_id, provider),
         }
     }
 
@@ -331,25 +326,48 @@ impl<P: Provider> FeeEstimator<P> {
     }
 
     async fn get_priority_fee(&self) -> anyhow::Result<U256> {
-        if POLYGON_CHAIN_IDS.contains(&self.chain_id) {
-            let gas_oracle =
-                Polygon::new(Arc::clone(&self.provider), self.chain_id).category(GasCategory::Fast);
-            Ok(gas_oracle.estimate_priority_fee().await?)
-        } else if self.use_bundle_priority_fee {
-            Ok(self.provider.get_max_priority_fee().await?)
-        } else {
-            Ok(U256::zero())
-        }
+        self.fee_oracle
+            .estimate_priority_fee()
+            .await
+            .context("should get priority fee")
     }
 }
 
-const NON_EIP_1559_CHAIN_IDS: &[u64] = &[
-    Chain::Arbitrum as u64,
-    Chain::ArbitrumNova as u64,
-    Chain::ArbitrumGoerli as u64,
-    421614, // ArbitrumSepolia
-];
+// TODO move all of this to ChainSpec
 
-fn is_known_non_eip_1559_chain(chain_id: u64) -> bool {
-    NON_EIP_1559_CHAIN_IDS.contains(&chain_id)
+const POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN: u64 = 1_500_000_000;
+const POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN: u64 = 30_000_000_000;
+const OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN: u64 = 1_000_000;
+
+fn get_fee_oracle<P>(chain_id: u64, provider: Arc<P>) -> Arc<Box<dyn FeeOracle>>
+where
+    P: Provider + Debug,
+{
+    if ARBITRUM_CHAIN_IDS.contains(&chain_id) {
+        Arc::new(Box::new(ConstantOracle::new(U256::zero())))
+    } else if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+        let config = FeeHistoryOracleConfig {
+            minimum_fee: U256::from(OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN),
+            ..Default::default()
+        };
+        Arc::new(Box::new(FeeHistoryOracle::new(provider, config)))
+    } else if POLYGON_CHAIN_IDS.contains(&chain_id) {
+        let mut max_oracle = MaxOracle::new();
+        max_oracle.add(ProviderOracle::new(provider.clone()));
+
+        let min_fee = match chain_id {
+            x if x == Chain::Polygon as u64 => POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
+            x if x == Chain::PolygonMumbai as u64 => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
+            _ => panic!("Invalid chain id"),
+        };
+        let config = FeeHistoryOracleConfig {
+            minimum_fee: min_fee,
+            ..Default::default()
+        };
+        max_oracle.add(FeeHistoryOracle::new(provider, config));
+
+        Arc::new(Box::new(max_oracle))
+    } else {
+        Arc::new(Box::new(ProviderOracle::new(provider)))
+    }
 }

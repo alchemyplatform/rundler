@@ -42,7 +42,6 @@ where
                 provider,
                 chain_id,
                 settings.priority_fee_mode,
-                settings.use_bundle_priority_fee,
                 settings.bundle_priority_fee_overhead_percent,
             ),
         }

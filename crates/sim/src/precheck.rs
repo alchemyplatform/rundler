@@ -59,10 +59,6 @@ pub struct Settings {
     pub max_verification_gas: U256,
     /// Maximum total execution gas allowed for a user operation
     pub max_total_execution_gas: U256,
-    /// Whether to use a bundle priority fee on the bundle transaction.
-    /// If `None`, the default is to use a bundle priority fee if the
-    /// chain id known to support EIP-1559.
-    pub use_bundle_priority_fee: Option<bool>,
     /// If using a bundle priority fee, the percentage to add to the network/oracle
     /// provided value as a safety margin for fast inclusion.
     pub bundle_priority_fee_overhead_percent: u64,
@@ -77,7 +73,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             max_verification_gas: 5_000_000.into(),
-            use_bundle_priority_fee: None,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(0),
             max_total_execution_gas: 10_000_000.into(),
@@ -127,7 +122,6 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 provider,
                 settings.chain_id,
                 settings.priority_fee_mode,
-                settings.use_bundle_priority_fee,
                 settings.bundle_priority_fee_overhead_percent,
             ),
         }
@@ -481,7 +475,6 @@ mod tests {
             chain_id: 1,
             max_verification_gas: 5_000_000.into(),
             max_total_execution_gas: 10_000_000.into(),
-            use_bundle_priority_fee: None,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(100),
             fee_accept_percent: 100,
