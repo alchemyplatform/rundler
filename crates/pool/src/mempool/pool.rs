@@ -165,7 +165,7 @@ impl PoolInner {
 
         for e in uo.entities() {
             match e.kind {
-                EntityType::Factory | EntityType::Paymaster => {
+                EntityType::Factory | EntityType::Paymaster | EntityType::Aggregator => {
                     if let Some(ec) = self.count_by_address.get(&e.address) {
                         if ec.sender().gt(&0) {
                             return Err(MempoolError::MultipleRolesViolation(e));
