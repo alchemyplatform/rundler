@@ -34,6 +34,8 @@ pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
 pub trait Prechecker: Send + Sync + 'static {
     /// Run the precheck on the given operation and return an error if it fails.
     async fn check(&self, op: &UserOperation) -> Result<(), PrecheckError>;
+    /// Get the current bundle fees
+    async fn get_bundle_fees(&self) -> anyhow::Result<GasFees>;
 }
 
 /// Precheck error
@@ -107,6 +109,10 @@ impl<P: Provider, E: EntryPoint> Prechecker for PrecheckerImpl<P, E> {
             Err(violations)?
         }
         Ok(())
+    }
+
+    async fn get_bundle_fees(&self) -> anyhow::Result<GasFees> {
+        self.fee_estimator.required_bundle_fees(None).await
     }
 }
 
@@ -401,7 +407,7 @@ pub enum PrecheckViolation {
     #[display("sender balance and deposit together is {0} but must be at least {1} to pay for this operation")]
     SenderFundsTooLow(U256, U256),
     /// The provided max fee per gas is too low based on the current network rate.
-    #[display("maxFeePerGas is {0} but must be at least {1}, which is based on the current block base fee")]
+    #[display("maxFeePerGas is {0} but must be at least {1}")]
     MaxFeePerGasTooLow(U256, U256),
     /// The provided max priority fee per gas is too low based on the current network rate.
     #[display("maxPriorityFeePerGas is {0} but must be at least {1}")]
