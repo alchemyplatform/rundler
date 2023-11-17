@@ -255,6 +255,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
             entities_needing_stake,
             sim_block_hash,
             account_is_staked: op.account_is_staked,
+            entity_infos: rundler_sim::EntityInfos::default(),
         })
     }
 }

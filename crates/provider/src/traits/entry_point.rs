@@ -17,10 +17,7 @@ use ethers::types::{
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_types::{
-    contracts::{
-        i_entry_point::ExecutionResult,
-        shared_types::{DepositInfo, UserOpsPerAggregator},
-    },
+    contracts::{i_entry_point::ExecutionResult, shared_types::UserOpsPerAggregator},
     GasFees, UserOperation,
 };
 
@@ -58,13 +55,6 @@ pub trait EntryPoint: Send + Sync + 'static {
     /// Get the balance of an address
     async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
         -> anyhow::Result<U256>;
-
-    /// Get the deposit info of an address
-    async fn get_deposit_info(
-        &self,
-        address: Address,
-        block_id: Option<BlockId>,
-    ) -> anyhow::Result<DepositInfo>;
 
     /// Call the entry point contract's `simulateValidation` function
     async fn simulate_validation(
