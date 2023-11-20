@@ -248,7 +248,7 @@ where
             self.state
                 .read()
                 .pool
-                .check_associated_storage(&sim_result.associated_addresses)?;
+                .check_associated_storage(&sim_result.associated_addresses, &op)?;
         }
 
         let valid_time_range = sim_result.valid_time_range;

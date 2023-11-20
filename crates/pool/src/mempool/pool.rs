@@ -184,10 +184,11 @@ impl PoolInner {
     pub(crate) fn check_associated_storage(
         &self,
         accessed_storage: &HashSet<Address>,
+        uo: &UserOperation,
     ) -> MempoolResult<()> {
         for storage_address in accessed_storage {
             if let Some(ec) = self.count_by_address.get(storage_address) {
-                if ec.sender().gt(&0) {
+                if ec.sender().gt(&0) && uo.sender.ne(storage_address) {
                     return Err(MempoolError::AssociatedStorageIsAlternateSender);
                 }
             }
