@@ -39,6 +39,9 @@ pub enum MempoolError {
     /// Multiple roles violation
     #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]
     MultipleRolesViolation(Entity),
+    /// An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool.
+    #[error("An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool")]
+    AssociatedStorageIsAlternateSender,
     /// Sender address used as different entity in another UserOperation currently in the mempool.
     #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
     SenderAddressUsedAsAlternateEntity(Address),

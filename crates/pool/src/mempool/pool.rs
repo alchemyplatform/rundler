@@ -13,7 +13,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -156,6 +156,7 @@ impl PoolInner {
         ret
     }
 
+    // STO-040
     pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
         if let Some(ec) = self.count_by_address.get(&uo.sender) {
             if ec.includes_non_sender() {
@@ -173,6 +174,22 @@ impl PoolInner {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    // STO-041
+    pub(crate) fn check_associated_storage(
+        &self,
+        accessed_storage: &HashSet<Address>,
+    ) -> MempoolResult<()> {
+        for storage_address in accessed_storage {
+            if let Some(ec) = self.count_by_address.get(storage_address) {
+                if ec.sender().gt(&0) {
+                    return Err(MempoolError::AssociatedStorageIsAlternateSender);
+                }
             }
         }
 

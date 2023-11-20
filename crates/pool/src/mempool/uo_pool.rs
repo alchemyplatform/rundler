@@ -225,15 +225,11 @@ where
             );
         }
 
-        {
-            let read_state = self.state.read();
-
-            // Check if op is already known or replacing another, and if so, ensure its fees are high enough
-            // do this before simulation to save resources
-            read_state.pool.check_replacement(&op)?;
-            // Check if op violates the STO-40 spec rule
-            read_state.pool.check_multiple_roles_violation(&op)?;
-        }
+        // Check if op is already known or replacing another, and if so, ensure its fees are high enough
+        // do this before simulation to save resources
+        self.state.read().pool.check_replacement(&op)?;
+        // Check if op violates the STO-040 spec rule
+        self.state.read().pool.check_multiple_roles_violation(&op)?;
 
         // Prechecks
         self.prechecker.check(&op).await?;
@@ -246,6 +242,13 @@ where
         if let Some(agg) = &sim_result.aggregator {
             return Err(MempoolError::UnsupportedAggregator(agg.address));
         }
+
+        // Check if op violates the STO-041 spec rule
+        self.state
+            .read()
+            .pool
+            .check_associated_storage(&sim_result.accessed_addresses)?;
+
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
             uo: op,
