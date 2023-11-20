@@ -69,6 +69,8 @@ pub struct SimulationSuccess {
     pub account_is_staked: bool,
     /// List of all addresses accessed during validation
     pub accessed_addresses: HashSet<Address>,
+    /// List of accesses associated addresses
+    pub associated_addresses: HashSet<Address>,
     /// Expected storage values for all accessed slots during validation
     pub expected_storage: ExpectedStorage,
     /// Whether the operation requires a post-op
@@ -208,12 +210,16 @@ where
         if num_phases < 3 {
             Err(vec![SimulationViolation::WrongNumberOfPhases(num_phases)])?
         };
+
+        let associated_addresses = tracer_out.associated_slots_by_address.to_set();
+
         Ok(ValidationContext {
             block_id,
             entity_infos,
             tracer_out,
             entry_point_out,
             is_unstaked_wallet_creation,
+            associated_addresses,
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
         })
@@ -493,6 +499,7 @@ where
             is_unstaked_wallet_creation: _,
             entities_needing_stake,
             accessed_addresses,
+            associated_addresses,
             ..
         } = context;
         let ValidationOutput {
@@ -518,6 +525,7 @@ where
             entities_needing_stake,
             account_is_staked,
             accessed_addresses,
+            associated_addresses,
             expected_storage: tracer_out.expected_storage,
             requires_post_op: !paymaster_context.is_empty(),
         })
@@ -620,6 +628,7 @@ struct ValidationContext {
     is_unstaked_wallet_creation: bool,
     entities_needing_stake: Vec<EntityType>,
     accessed_addresses: HashSet<Address>,
+    associated_addresses: HashSet<Address>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1032,6 +1041,7 @@ mod tests {
             });
 
         let mut validation_context = ValidationContext {
+            associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
             entity_infos: EntityInfos::new(
                 Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),

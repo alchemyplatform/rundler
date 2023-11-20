@@ -247,7 +247,7 @@ where
         self.state
             .read()
             .pool
-            .check_associated_storage(&sim_result.accessed_addresses)?;
+            .check_associated_storage(&sim_result.associated_addresses)?;
 
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
