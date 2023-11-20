@@ -19,14 +19,14 @@ use rundler_types::StorageSlot;
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error,
-    AccessedUndeployedContract, AggregatorValidationFailed, CallGasLimitTooLow, CallHadValue,
-    CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
-    EntityThrottledError, EntityType, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
-    FactoryIsNotContract, InitCodeTooShort, InvalidSignature, InvalidStorageAccess,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
-    OperationAlreadyKnownError, OutOfGas, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PaymasterTooShort, PreVerificationGasTooLow,
+    AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
+    CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
+    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, ExistingSenderWithInitCode,
+    FactoryCalledCreate2Twice, FactoryIsNotContract, InitCodeTooShort, InvalidSignature,
+    InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
+    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
+    NotStaked, OperationAlreadyKnownError, OutOfGas, PaymasterDepositTooLow,
+    PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
     SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
@@ -130,6 +130,11 @@ impl From<MempoolError> for ProtoMempoolError {
                     MultipleRolesViolation {
                         entity: Some((&entity).into()),
                     },
+                )),
+            },
+            MempoolError::AssociatedStorageIsAlternateSender => ProtoMempoolError {
+                error: Some(mempool_error::Error::AssociatedStorageIsAlternateSender(
+                    AssociatedStorageIsAlternateSender {},
                 )),
             },
             MempoolError::SenderAddressUsedAsAlternateEntity(addr) => ProtoMempoolError {

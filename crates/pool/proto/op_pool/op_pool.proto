@@ -335,12 +335,15 @@ message MempoolError {
     UnknownEntryPointError unknown_entry_point = 11;
     MultipleRolesViolation multiple_roles_violation = 12;
     SenderAddressUsedAsAlternateEntity sender_address_used_as_alternate_entity = 13;
+    AssociatedStorageIsAlternateSender associated_storage_is_alternate_sender= 14;
   }
 }
 
 message UnknownEntryPointError {
   bytes entry_point = 1;
 }
+
+message AssociatedStorageIsAlternateSender {}
 
 message OperationAlreadyKnownError {}
 
