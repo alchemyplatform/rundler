@@ -188,9 +188,7 @@ where
         hash: H256,
     ) -> EthResult<Option<RichUserOperation>> {
         if hash == H256::zero() {
-            return Err(EthRpcError::InvalidParams(
-                "Missing/invalid userOpHash".to_string(),
-            ));
+            return Err(EthRpcError::InvalidParams("Missing/invalid userOpHash".to_string()));
         }
 
         // Get event associated with hash (need to check all entry point addresses associated with this API)
@@ -251,9 +249,7 @@ where
         hash: H256,
     ) -> EthResult<Option<UserOperationReceipt>> {
         if hash == H256::zero() {
-            return Err(EthRpcError::InvalidParams(
-                "Missing/invalid userOpHash".to_string(),
-            ));
+            return Err(EthRpcError::InvalidParams("Missing/invalid userOpHash".to_string()));
         }
 
         // Get event associated with hash (need to check all entry point addresses associated with this API)
@@ -411,9 +407,9 @@ where
         }
 
         if !is_ref_user_op(&logs[end_idx]) {
-            return Err(EthRpcError::Internal(anyhow::anyhow!(
-                "fatal: no user ops found in tx receipt ({start_idx},{end_idx})"
-            )));
+            return Err(EthRpcError::Internal(
+                anyhow::anyhow!("fatal: no user ops found in tx receipt ({start_idx},{end_idx})")
+            ));
         }
 
         let start_idx = if start_idx == 0 { 0 } else { start_idx + 1 };
@@ -424,17 +420,17 @@ where
         logs: &[Log],
         user_op_hash: H256,
     ) -> EthResult<Option<String>> {
-        let revert_reason_evt: Option<UserOperationRevertReasonFilter> = logs
-            .iter()
-            .filter(|l| l.topics.len() > 1 && l.topics[1] == user_op_hash)
-            .map_while(|l| {
-                UserOperationRevertReasonFilter::decode_log(&RawLog {
-                    topics: l.topics.clone(),
-                    data: l.data.to_vec(),
+        let revert_reason_evt: Option<UserOperationRevertReasonFilter> =
+            logs.iter()
+                .filter(|l| l.topics.len() > 1 && l.topics[1] == user_op_hash)
+                .map_while(|l| {
+                    UserOperationRevertReasonFilter::decode_log(&RawLog {
+                        topics: l.topics.clone(),
+                        data: l.data.to_vec(),
+                    })
+                    .ok()
                 })
-                .ok()
-            })
-            .next();
+                .next();
 
         Ok(revert_reason_evt.map(|r| r.revert_reason.to_string()))
     }
@@ -450,9 +446,7 @@ where
     ) -> EthResult<Option<UserOperation>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
-            tracer: Some(GethDebugTracerType::BuiltInTracer(
-                GethDebugBuiltInTracerType::CallTracer,
-            )),
+            tracer: Some(GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer)),
             ..Default::default()
         };
         let trace = self

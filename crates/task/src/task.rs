@@ -38,15 +38,16 @@ pub async fn spawn_tasks_with_shutdown<T, R, E>(
     let shutdown_token = CancellationToken::new();
     let mut shutdown_scope = Some(shutdown_scope);
 
-    let handles = tasks.into_iter().map(|task| {
-        let st = shutdown_token.clone();
-        let ss = shutdown_scope.clone();
-        async move {
-            let ret = task.run(st).await;
-            drop(ss);
-            ret
-        }
-    });
+    let handles =
+        tasks.into_iter().map(|task| {
+            let st = shutdown_token.clone();
+            let ss = shutdown_scope.clone();
+            async move {
+                let ret = task.run(st).await;
+                drop(ss);
+                ret
+            }
+        });
     tokio::select! {
         res = try_join_all(handles) => {
             error!("Task exited unexpectedly: {res:?}");

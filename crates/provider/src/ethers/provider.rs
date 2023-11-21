@@ -172,11 +172,12 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         gas_cap: u64,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self);
-        let result = aggregator
-            .validate_user_op_signature(user_op)
-            .gas(gas_cap)
-            .call()
-            .await;
+        let result =
+            aggregator
+                .validate_user_op_signature(user_op)
+                .gas(gas_cap)
+                .call()
+                .await;
 
         match result {
             Ok(sig) => Ok(AggregatorOut::SuccessWithInfo(AggregatorSimOut {
@@ -208,10 +209,11 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
             .context("should get calldata for entry point handle ops")?;
 
         let arb_node = NodeInterface::new(ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS, self);
-        let gas = arb_node
-            .gas_estimate_l1_component(entry_point_address, false, data)
-            .call()
-            .await?;
+        let gas =
+            arb_node
+                .gas_estimate_l1_component(entry_point_address, false, data)
+                .call()
+                .await?;
         Ok(U256::from(gas.0))
     }
 

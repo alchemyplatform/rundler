@@ -45,9 +45,7 @@ fn run_command(
         Err(e) => {
             if let ErrorKind::NotFound = e.kind() {
                 let program = command.get_program().to_str().unwrap();
-                Err(format!(
-                    "{program} not installed. See instructions at {install_page_url}"
-                ))?;
+                Err(format!("{program} not installed. See instructions at {install_page_url}"))?;
             }
             Err(e)?
         }

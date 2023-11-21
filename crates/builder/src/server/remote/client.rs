@@ -83,9 +83,9 @@ impl BuilderServer for RemoteBuilderClient {
                 Ok((H256::from_slice(&s.transaction_hash), s.block_number))
             }
             Some(debug_send_bundle_now_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(BuilderServerError::Other(anyhow::anyhow!(
-                "should have received result from builder"
-            )))?,
+            None => Err(BuilderServerError::Other(
+                anyhow::anyhow!("should have received result from builder")
+            ))?,
         }
     }
 
@@ -103,9 +103,9 @@ impl BuilderServer for RemoteBuilderClient {
         match res {
             Some(debug_set_bundling_mode_response::Result::Success(_)) => Ok(()),
             Some(debug_set_bundling_mode_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(BuilderServerError::Other(anyhow::anyhow!(
-                "should have received result from builder"
-            )))?,
+            None => Err(BuilderServerError::Other(
+                anyhow::anyhow!("should have received result from builder")
+            ))?,
         }
     }
 }

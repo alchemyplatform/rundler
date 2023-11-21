@@ -665,10 +665,7 @@ mod tests {
         let tracker = create_tracker(sender, provider).await;
         let tracker_update = tracker.wait_for_update().await.unwrap();
 
-        assert!(matches!(
-            tracker_update,
-            TrackerUpdate::StillPendingAfterWait
-        ));
+        assert!(matches!(tracker_update, TrackerUpdate::StillPendingAfterWait));
     }
 
     #[tokio::test]
@@ -702,10 +699,7 @@ mod tests {
         let _sent_transaction = tracker.send_transaction(tx.into(), &exp).await.unwrap();
         let tracker_update = tracker.wait_for_update().await.unwrap();
 
-        assert!(matches!(
-            tracker_update,
-            TrackerUpdate::LatestTxDropped { .. }
-        ));
+        assert!(matches!(tracker_update, TrackerUpdate::LatestTxDropped { .. }));
     }
 
     #[tokio::test]
@@ -731,10 +725,7 @@ mod tests {
 
         let tracker_update = tracker.wait_for_update().await.unwrap();
 
-        assert!(matches!(
-            tracker_update,
-            TrackerUpdate::NonceUsedForOtherTx { .. }
-        ));
+        assert!(matches!(tracker_update, TrackerUpdate::NonceUsedForOtherTx { .. }));
     }
 
     #[tokio::test]

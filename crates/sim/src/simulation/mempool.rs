@@ -312,13 +312,14 @@ mod tests {
         let addr = Address::random();
         let contract = Address::random();
         let precompile = Address::random();
-        let entry = AllowlistEntry::new(
-            AllowEntity::Address(addr),
-            AllowRule::ForbiddenPrecompile {
-                contract,
-                precompile,
-            },
-        );
+        let entry =
+            AllowlistEntry::new(
+                AllowEntity::Address(addr),
+                AllowRule::ForbiddenPrecompile {
+                    contract,
+                    precompile,
+                },
+            );
 
         let violation = SimulationViolation::UsedForbiddenPrecompile(
             Entity {
@@ -368,13 +369,14 @@ mod tests {
             },
         );
 
-        let violation = SimulationViolation::InvalidStorageAccess(
-            Entity {
-                kind: EntityType::Account,
-                address: entity_addr,
-            },
-            slot,
-        );
+        let violation =
+            SimulationViolation::InvalidStorageAccess(
+                Entity {
+                    kind: EntityType::Account,
+                    address: entity_addr,
+                },
+                slot,
+            );
         assert!(entry.is_allowed(&violation));
 
         let violation = SimulationViolation::InvalidStorageAccess(
@@ -417,10 +419,11 @@ mod tests {
         let entry =
             AllowlistEntry::new(AllowEntity::Address(entity_addr), AllowRule::CallWithValue);
 
-        let violation = SimulationViolation::CallHadValue(Entity {
-            kind: EntityType::Account,
-            address: entity_addr,
-        });
+        let violation =
+            SimulationViolation::CallHadValue(Entity {
+                kind: EntityType::Account,
+                address: entity_addr,
+            });
         assert!(entry.is_allowed(&violation));
 
         let violation = SimulationViolation::CallHadValue(Entity {
@@ -570,76 +573,78 @@ mod tests {
         let mempool1 = H256::random();
         let mempool2 = H256::random();
         let contract = Address::random();
-        let mempools = HashMap::from([
-            (mempool0, MempoolConfig::default()),
-            (
-                mempool1,
-                MempoolConfig {
-                    allowlist: vec![
-                        AllowlistEntry::new(
-                            AllowEntity::Type(EntityType::Account),
-                            AllowRule::ForbiddenOpcode {
-                                contract,
-                                opcode: Opcode::GAS,
-                            },
-                        ),
-                        AllowlistEntry::new(
-                            AllowEntity::Type(EntityType::Account),
-                            AllowRule::ForbiddenOpcode {
-                                contract,
-                                opcode: Opcode::BASEFEE,
-                            },
-                        ),
-                    ],
-                },
-            ),
-            (
-                mempool2,
-                MempoolConfig {
-                    allowlist: vec![
-                        AllowlistEntry::new(
-                            AllowEntity::Type(EntityType::Account),
-                            AllowRule::ForbiddenOpcode {
-                                contract,
-                                opcode: Opcode::BLOCKHASH,
-                            },
-                        ),
-                        AllowlistEntry::new(
-                            AllowEntity::Type(EntityType::Account),
-                            AllowRule::ForbiddenOpcode {
-                                contract,
-                                opcode: Opcode::GAS,
-                            },
-                        ),
-                        AllowlistEntry::new(
-                            AllowEntity::Type(EntityType::Account),
-                            AllowRule::ForbiddenOpcode {
-                                contract,
-                                opcode: Opcode::BASEFEE,
-                            },
-                        ),
-                    ],
-                },
-            ),
-        ]);
-        let violations = [
-            SimulationViolation::UsedForbiddenOpcode(
-                Entity {
-                    kind: EntityType::Account,
-                    address: Address::random(),
-                },
-                contract,
-                ViolationOpCode(Opcode::GAS),
-            ),
-            SimulationViolation::UsedForbiddenOpcode(
-                Entity {
-                    kind: EntityType::Account,
-                    address: Address::random(),
-                },
-                contract,
-                ViolationOpCode(Opcode::BASEFEE),
-            ),
-        ];
+        let mempools =
+            HashMap::from([
+                (mempool0, MempoolConfig::default()),
+                (
+                    mempool1,
+                    MempoolConfig {
+                        allowlist: vec![
+                            AllowlistEntry::new(
+                                AllowEntity::Type(EntityType::Account),
+                                AllowRule::ForbiddenOpcode {
+                                    contract,
+                                    opcode: Opcode::GAS,
+                                },
+                            ),
+                            AllowlistEntry::new(
+                                AllowEntity::Type(EntityType::Account),
+                                AllowRule::ForbiddenOpcode {
+                                    contract,
+                                    opcode: Opcode::BASEFEE,
+                                },
+                            ),
+                        ],
+                    },
+                ),
+                (
+                    mempool2,
+                    MempoolConfig {
+                        allowlist: vec![
+                            AllowlistEntry::new(
+                                AllowEntity::Type(EntityType::Account),
+                                AllowRule::ForbiddenOpcode {
+                                    contract,
+                                    opcode: Opcode::BLOCKHASH,
+                                },
+                            ),
+                            AllowlistEntry::new(
+                                AllowEntity::Type(EntityType::Account),
+                                AllowRule::ForbiddenOpcode {
+                                    contract,
+                                    opcode: Opcode::GAS,
+                                },
+                            ),
+                            AllowlistEntry::new(
+                                AllowEntity::Type(EntityType::Account),
+                                AllowRule::ForbiddenOpcode {
+                                    contract,
+                                    opcode: Opcode::BASEFEE,
+                                },
+                            ),
+                        ],
+                    },
+                ),
+            ]);
+        let violations =
+            [
+                SimulationViolation::UsedForbiddenOpcode(
+                    Entity {
+                        kind: EntityType::Account,
+                        address: Address::random(),
+                    },
+                    contract,
+                    ViolationOpCode(Opcode::GAS),
+                ),
+                SimulationViolation::UsedForbiddenOpcode(
+                    Entity {
+                        kind: EntityType::Account,
+                        address: Address::random(),
+                    },
+                    contract,
+                    ViolationOpCode(Opcode::BASEFEE),
+                ),
+            ];
 
         match match_mempools(&mempools, &violations) {
             MempoolMatchResult::Matches(mempools) => {

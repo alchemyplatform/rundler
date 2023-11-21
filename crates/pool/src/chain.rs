@@ -136,12 +136,13 @@ impl<P: Provider> Chain<P> {
             .map(|block| block.hash)
             .unwrap_or_default();
         loop {
-            let (hash, block) = block_watcher::wait_for_new_block(
-                &*self.provider,
-                block_hash,
-                self.settings.poll_interval,
-            )
-            .await;
+            let (hash, block) =
+                block_watcher::wait_for_new_block(
+                    &*self.provider,
+                    block_hash,
+                    self.settings.poll_interval,
+                )
+                .await;
             block_hash = hash;
             let update = self.sync_to_block(block).await;
             match update {
@@ -205,19 +206,20 @@ impl<P: Provider> Chain<P> {
         current_block_number: u64,
         added_blocks: VecDeque<BlockSummary>,
     ) -> ChainUpdate {
-        let mined_ops: Vec<_> = added_blocks
-            .iter()
-            .flat_map(|block| &block.ops)
-            .copied()
-            .collect();
+        let mined_ops: Vec<_> =
+            added_blocks
+                .iter()
+                .flat_map(|block| &block.ops)
+                .copied()
+                .collect();
         let reorg_depth = current_block_number + 1 - added_blocks[0].number;
-        let unmined_ops: Vec<_> = self
-            .blocks
-            .iter()
-            .skip(self.blocks.len() - reorg_depth as usize)
-            .flat_map(|block| &block.ops)
-            .copied()
-            .collect();
+        let unmined_ops: Vec<_> =
+            self.blocks
+                .iter()
+                .skip(self.blocks.len() - reorg_depth as usize)
+                .flat_map(|block| &block.ops)
+                .copied()
+                .collect();
         for _ in 0..reorg_depth {
             self.blocks.pop_back();
         }
@@ -518,11 +520,12 @@ mod tests {
         fn get_block_by_hash(&self, hash: H256) -> Option<Block<H256>> {
             let blocks = self.blocks.read();
             let number = blocks.iter().position(|block| block.hash == hash)?;
-            let parent_hash = if number > 0 {
-                blocks[number - 1].hash
-            } else {
-                H256::zero()
-            };
+            let parent_hash =
+                if number > 0 {
+                    blocks[number - 1].hash
+                } else {
+                    H256::zero()
+                };
             Some(Block {
                 hash: Some(hash),
                 parent_hash,
@@ -812,9 +815,7 @@ mod tests {
         Log {
             address: ENTRY_POINT_ADDRESS,
             topics: vec![
-                H256::from(utils::keccak256(
-                    UserOperationEventFilter::abi_signature().as_bytes(),
-                )),
+                H256::from(utils::keccak256(UserOperationEventFilter::abi_signature().as_bytes())),
                 op_hash,
                 H256::zero(), // sender
                 H256::zero(), // paymaster

@@ -142,13 +142,13 @@ where
         reputations: Vec<RpcReputation>,
         entry_point: Address,
     ) -> RpcResult<String> {
-        let _ = self
-            .pool
-            .debug_set_reputations(
-                entry_point,
-                reputations.into_iter().map(Into::into).collect(),
-            )
-            .await;
+        let _ =
+            self.pool
+                .debug_set_reputations(
+                    entry_point,
+                    reputations.into_iter().map(Into::into).collect(),
+                )
+                .await;
 
         Ok("ok".to_string())
     }

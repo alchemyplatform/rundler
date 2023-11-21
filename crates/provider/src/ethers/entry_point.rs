@@ -160,11 +160,12 @@ fn get_handle_ops_call<M: Middleware>(
     beneficiary: Address,
     gas: U256,
 ) -> FunctionCall<Arc<M>, M, ()> {
-    let call =
-        if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::zero() {
-            entry_point.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)
-        } else {
-            entry_point.handle_aggregated_ops(ops_per_aggregator, beneficiary)
-        };
+    let call = if ops_per_aggregator.len() == 1
+        && ops_per_aggregator[0].aggregator == Address::zero()
+    {
+        entry_point.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)
+    } else {
+        entry_point.handle_aggregated_ops(ops_per_aggregator, beneficiary)
+    };
     call.gas(gas)
 }

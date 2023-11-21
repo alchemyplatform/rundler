@@ -148,9 +148,9 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(add_op_response::Result::Success(s)) => Ok(H256::from_slice(&s.hash)),
             Some(add_op_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -180,9 +180,9 @@ impl PoolServer for RemotePoolClient {
                 .map(|res| res.map_err(PoolServerError::from))
                 .collect(),
             Some(get_ops_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -201,9 +201,9 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(remove_ops_response::Result::Success(_)) => Ok(()),
             Some(remove_ops_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -222,9 +222,9 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(remove_entities_response::Result::Success(_)) => Ok(()),
             Some(remove_entities_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -250,9 +250,9 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(update_entities_response::Result::Success(_)) => Ok(()),
             Some(update_entities_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -268,22 +268,22 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(debug_clear_state_response::Result::Success(_)) => Ok(()),
             Some(debug_clear_state_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
     async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
-        let res = self
-            .op_pool_client
-            .clone()
-            .debug_dump_mempool(DebugDumpMempoolRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .result;
+        let res =
+            self.op_pool_client
+                .clone()
+                .debug_dump_mempool(DebugDumpMempoolRequest {
+                    entry_point: entry_point.as_bytes().to_vec(),
+                })
+                .await?
+                .into_inner()
+                .result;
 
         match res {
             Some(debug_dump_mempool_response::Result::Success(s)) => s
@@ -293,9 +293,9 @@ impl PoolServer for RemotePoolClient {
                 .map(|res| res.map_err(PoolServerError::from))
                 .collect(),
             Some(debug_dump_mempool_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -321,9 +321,9 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(debug_set_reputation_response::Result::Success(_)) => Ok(()),
             Some(debug_set_reputation_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 
@@ -346,9 +346,9 @@ impl PoolServer for RemotePoolClient {
                 .map(|res| res.map_err(PoolServerError::from))
                 .collect(),
             Some(debug_dump_reputation_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
+            None => Err(
+                PoolServerError::Other(anyhow::anyhow!("should have received result from op pool"))
+            )?,
         }
     }
 

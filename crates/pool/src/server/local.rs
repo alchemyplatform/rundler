@@ -119,11 +119,12 @@ impl PoolServer for LocalPoolHandle {
     }
 
     async fn add_op(&self, entry_point: Address, op: UserOperation) -> PoolResult<H256> {
-        let req = ServerRequestKind::AddOp {
-            entry_point,
-            op,
-            origin: OperationOrigin::Local,
-        };
+        let req =
+            ServerRequestKind::AddOp {
+                entry_point,
+                op,
+                origin: OperationOrigin::Local,
+            };
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::AddOp { hash } => Ok(hash),
@@ -286,9 +287,9 @@ where
     }
 
     fn get_pool(&self, entry_point: Address) -> PoolResult<&Arc<M>> {
-        self.mempools.get(&entry_point).ok_or_else(|| {
-            PoolServerError::MempoolError(MempoolError::UnknownEntryPoint(entry_point))
-        })
+        self.mempools.get(&entry_point).ok_or_else(
+            || PoolServerError::MempoolError(MempoolError::UnknownEntryPoint(entry_point))
+        )
     }
 
     fn get_ops(
@@ -572,11 +573,12 @@ mod tests {
         let ep = Address::random();
         let state = setup(HashMap::from([(ep, Arc::new(mock_pool))]));
 
-        let hash1 = state
-            .handle
-            .add_op(ep, UserOperation::default())
-            .await
-            .unwrap();
+        let hash1 =
+            state
+                .handle
+                .add_op(ep, UserOperation::default())
+                .await
+                .unwrap();
         assert_eq!(hash0, hash1);
     }
 

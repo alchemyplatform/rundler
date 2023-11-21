@@ -327,11 +327,12 @@ mod tests {
 
     #[test]
     fn test_calculate_estimate_from_rewards_small() {
-        let reward = vec![
-            vec![U256::from(300)],
-            vec![U256::from(100)],
-            vec![U256::from(200)],
-        ];
+        let reward =
+            vec![
+                vec![U256::from(300)],
+                vec![U256::from(100)],
+                vec![U256::from(200)],
+            ];
         let fee = calculate_estimate_from_rewards(&reward);
         assert_eq!(fee, U256::from(200));
     }

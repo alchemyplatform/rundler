@@ -31,12 +31,13 @@ pub async fn wait_for_new_block(
     poll_interval: Duration,
 ) -> (H256, Block<H256>) {
     loop {
-        let block = retry::with_unlimited_retries(
-            "watch latest block",
-            || provider.get_block(BlockNumber::Latest),
-            UnlimitedRetryOpts::default(),
-        )
-        .await;
+        let block =
+            retry::with_unlimited_retries(
+                "watch latest block",
+                || provider.get_block(BlockNumber::Latest),
+                UnlimitedRetryOpts::default(),
+            )
+            .await;
         let Some(block) = block else {
             error!("Latest block should be present when waiting for new block.");
             continue;
@@ -62,12 +63,13 @@ pub async fn wait_for_new_block_number(
     poll_interval: Duration,
 ) -> u64 {
     loop {
-        let block_number = retry::with_unlimited_retries(
-            "watch latest block number",
-            || provider.get_block_number(),
-            UnlimitedRetryOpts::default(),
-        )
-        .await;
+        let block_number =
+            retry::with_unlimited_retries(
+                "watch latest block number",
+                || provider.get_block_number(),
+                UnlimitedRetryOpts::default(),
+            )
+            .await;
         if last_block_number < block_number {
             return block_number;
         }

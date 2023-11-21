@@ -59,11 +59,13 @@ impl From<PoolServerError> for ProtoMempoolError {
     fn from(value: PoolServerError) -> Self {
         match value {
             PoolServerError::MempoolError(e) => e.into(),
-            PoolServerError::UnexpectedResponse => ProtoMempoolError {
-                error: Some(mempool_error::Error::Internal(
-                    "unexpected response from pool server".to_string(),
-                )),
-            },
+            PoolServerError::UnexpectedResponse => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::Internal(
+                        "unexpected response from pool server".to_string(),
+                    )),
+                }
+            }
             PoolServerError::Other(e) => ProtoMempoolError {
                 error: Some(mempool_error::Error::Internal(e.to_string())),
             },
@@ -119,11 +121,13 @@ impl From<MempoolError> for ProtoMempoolError {
             MempoolError::Other(e) => ProtoMempoolError {
                 error: Some(mempool_error::Error::Internal(e.to_string())),
             },
-            MempoolError::OperationAlreadyKnown => ProtoMempoolError {
-                error: Some(mempool_error::Error::OperationAlreadyKnown(
-                    OperationAlreadyKnownError {},
-                )),
-            },
+            MempoolError::OperationAlreadyKnown => {
+                ProtoMempoolError {
+                    error: Some(
+                        mempool_error::Error::OperationAlreadyKnown(OperationAlreadyKnownError {})
+                    ),
+                }
+            }
             MempoolError::ReplacementUnderpriced(fee, priority_fee) => ProtoMempoolError {
                 error: Some(mempool_error::Error::ReplacementUnderpriced(
                     ReplacementUnderpricedError {
@@ -132,25 +136,27 @@ impl From<MempoolError> for ProtoMempoolError {
                     },
                 )),
             },
-            MempoolError::MaxOperationsReached(ops, addr) => ProtoMempoolError {
-                error: Some(mempool_error::Error::MaxOperationsReached(
-                    MaxOperationsReachedError {
-                        num_ops: ops as u64,
-                        sender_address: addr.as_bytes().to_vec(),
-                    },
-                )),
-            },
-            MempoolError::EntityThrottled(entity) => ProtoMempoolError {
-                error: Some(mempool_error::Error::EntityThrottled(
-                    EntityThrottledError {
-                        entity: Some((&entity).into()),
-                    },
-                )),
-            },
+            MempoolError::MaxOperationsReached(ops, addr) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::MaxOperationsReached(
+                        MaxOperationsReachedError {
+                            num_ops: ops as u64,
+                            sender_address: addr.as_bytes().to_vec(),
+                        },
+                    )),
+                }
+            }
+            MempoolError::EntityThrottled(entity) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::EntityThrottled(
+                        EntityThrottledError {
+                            entity: Some((&entity).into()),
+                        },
+                    )),
+                }
+            }
             MempoolError::DiscardedOnInsert => ProtoMempoolError {
-                error: Some(mempool_error::Error::DiscardedOnInsert(
-                    DiscardedOnInsertError {},
-                )),
+                error: Some(mempool_error::Error::DiscardedOnInsert(DiscardedOnInsertError {})),
             },
             MempoolError::PrecheckViolation(violation) => ProtoMempoolError {
                 error: Some(mempool_error::Error::PrecheckViolation(violation.into())),
@@ -197,15 +203,17 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     ),
                 }
             }
-            PrecheckViolation::ExistingSenderWithInitCode(addr) => ProtoPrecheckViolationError {
-                violation: Some(
-                    precheck_violation_error::Violation::ExistingSenderWithInitCode(
-                        ExistingSenderWithInitCode {
-                            sender_address: addr.as_bytes().to_vec(),
-                        },
+            PrecheckViolation::ExistingSenderWithInitCode(addr) => {
+                ProtoPrecheckViolationError {
+                    violation: Some(
+                        precheck_violation_error::Violation::ExistingSenderWithInitCode(
+                            ExistingSenderWithInitCode {
+                                sender_address: addr.as_bytes().to_vec(),
+                            },
+                        ),
                     ),
-                ),
-            },
+                }
+            }
             PrecheckViolation::FactoryIsNotContract(addr) => ProtoPrecheckViolationError {
                 violation: Some(precheck_violation_error::Violation::FactoryIsNotContract(
                     FactoryIsNotContract {
@@ -389,9 +397,9 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
     fn from(value: SimulationViolation) -> Self {
         match value {
             SimulationViolation::InvalidSignature => ProtoSimulationViolationError {
-                violation: Some(simulation_violation_error::Violation::InvalidSignature(
-                    InvalidSignature {},
-                )),
+                violation: Some(
+                    simulation_violation_error::Violation::InvalidSignature(InvalidSignature {})
+                ),
             },
             SimulationViolation::UnintendedRevertWithMessage(et, reason, maybe_address) => {
                 ProtoSimulationViolationError {
@@ -424,26 +432,30 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                 entity,
                 contract_addr,
                 precompile_addr,
-            ) => ProtoSimulationViolationError {
-                violation: Some(
-                    simulation_violation_error::Violation::UsedForbiddenPrecompile(
-                        UsedForbiddenPrecompile {
-                            entity: Some((&entity).into()),
-                            contract_address: contract_addr.as_bytes().to_vec(),
-                            precompile_address: precompile_addr.as_bytes().to_vec(),
-                        },
+            ) => {
+                ProtoSimulationViolationError {
+                    violation: Some(
+                        simulation_violation_error::Violation::UsedForbiddenPrecompile(
+                            UsedForbiddenPrecompile {
+                                entity: Some((&entity).into()),
+                                contract_address: contract_addr.as_bytes().to_vec(),
+                                precompile_address: precompile_addr.as_bytes().to_vec(),
+                            },
+                        ),
                     ),
-                ),
-            },
-            SimulationViolation::FactoryCalledCreate2Twice(addr) => ProtoSimulationViolationError {
-                violation: Some(
-                    simulation_violation_error::Violation::FactoryCalledCreate2Twice(
-                        FactoryCalledCreate2Twice {
-                            factory_address: addr.as_bytes().to_vec(),
-                        },
+                }
+            }
+            SimulationViolation::FactoryCalledCreate2Twice(addr) => {
+                ProtoSimulationViolationError {
+                    violation: Some(
+                        simulation_violation_error::Violation::FactoryCalledCreate2Twice(
+                            FactoryCalledCreate2Twice {
+                                factory_address: addr.as_bytes().to_vec(),
+                            },
+                        ),
                     ),
-                ),
-            },
+                }
+            }
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 ProtoSimulationViolationError {
                     violation: Some(simulation_violation_error::Violation::InvalidStorageAccess(
@@ -473,11 +485,13 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     },
                 )),
             },
-            SimulationViolation::DidNotRevert => ProtoSimulationViolationError {
-                violation: Some(simulation_violation_error::Violation::DidNotRevert(
-                    DidNotRevert {},
-                )),
-            },
+            SimulationViolation::DidNotRevert => {
+                ProtoSimulationViolationError {
+                    violation: Some(
+                        simulation_violation_error::Violation::DidNotRevert(DidNotRevert {})
+                    ),
+                }
+            }
             SimulationViolation::WrongNumberOfPhases(num_phases) => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::WrongNumberOfPhases(
                     WrongNumberOfPhases { num_phases },
@@ -519,9 +533,9 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                 }
             }
             SimulationViolation::CodeHashChanged => ProtoSimulationViolationError {
-                violation: Some(simulation_violation_error::Violation::CodeHashChanged(
-                    CodeHashChanged {},
-                )),
+                violation: Some(
+                    simulation_violation_error::Violation::CodeHashChanged(CodeHashChanged {})
+                ),
             },
             SimulationViolation::AggregatorValidationFailed => ProtoSimulationViolationError {
                 violation: Some(
@@ -666,15 +680,15 @@ mod tests {
 
     #[test]
     fn test_simulation_error() {
-        let error = MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
-            rundler_types::EntityType::Aggregator,
-        ));
+        let error = MempoolError::SimulationViolation(
+            SimulationViolation::UnintendedRevert(rundler_types::EntityType::Aggregator)
+        );
         let proto_error: ProtoMempoolError = error.into();
         let error2 = proto_error.try_into().unwrap();
         match error2 {
-            MempoolError::SimulationViolation(SimulationViolation::UnintendedRevert(
-                rundler_types::EntityType::Aggregator,
-            )) => {}
+            MempoolError::SimulationViolation(
+                SimulationViolation::UnintendedRevert(rundler_types::EntityType::Aggregator)
+            ) => {}
             _ => panic!("wrong error type"),
         }
     }

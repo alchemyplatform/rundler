@@ -179,12 +179,13 @@ where
         let last_entity = entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
 
         if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
-            let entity_addr = match last_entity {
-                EntityType::Factory => factory_address,
-                EntityType::Paymaster => paymaster_address,
-                EntityType::Account => Some(sender_address),
-                _ => None,
-            };
+            let entity_addr =
+                match last_entity {
+                    EntityType::Factory => factory_address,
+                    EntityType::Paymaster => paymaster_address,
+                    EntityType::Account => Some(sender_address),
+                    _ => None,
+                };
             Err(vec![SimulationViolation::UnintendedRevertWithMessage(
                 last_entity,
                 failed_op.reason,
@@ -194,13 +195,14 @@ where
         let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
             Err(vec![SimulationViolation::UnintendedRevert(last_entity)])?
         };
-        let entity_infos = EntityInfos::new(
-            factory_address,
-            sender_address,
-            paymaster_address,
-            &entry_point_out,
-            self.sim_settings,
-        );
+        let entity_infos =
+            EntityInfos::new(
+                factory_address,
+                sender_address,
+                paymaster_address,
+                &entry_point_out,
+                self.sim_settings,
+            );
         let is_unstaked_wallet_creation = entity_infos
             .get(EntityType::Factory)
             .filter(|factory| !factory.is_staked)
@@ -291,9 +293,9 @@ where
 
             for precompile in &phase.forbidden_precompiles_used {
                 let (contract, precompile) = parse_combined_tracer_str(precompile)?;
-                violations.push(SimulationViolation::UsedForbiddenPrecompile(
-                    entity, contract, precompile,
-                ));
+                violations.push(
+                    SimulationViolation::UsedForbiddenPrecompile(entity, contract, precompile)
+                );
             }
             let mut needs_stake = entity.kind == EntityType::Paymaster
                 && !entry_point_out.return_info.paymaster_context.is_empty();
@@ -352,9 +354,7 @@ where
                 violations.push(SimulationViolation::OutOfGas(entity));
             }
             for &address in &phase.undeployed_contract_accesses {
-                violations.push(SimulationViolation::AccessedUndeployedContract(
-                    entity, address,
-                ))
+                violations.push(SimulationViolation::AccessedUndeployedContract(entity, address))
             }
         }
 
@@ -372,16 +372,15 @@ where
             let factory = entity_infos.get(EntityType::Factory);
             match factory {
                 Some(factory) => {
-                    violations.push(SimulationViolation::FactoryCalledCreate2Twice(
-                        factory.address,
-                    ));
+                    violations
+                        .push(SimulationViolation::FactoryCalledCreate2Twice(factory.address));
                 }
                 None => {
                     // weird case where CREATE2 is called > 1, but there isn't a factory
                     // defined. This should never happen, blame the violation on the entry point.
-                    violations.push(SimulationViolation::FactoryCalledCreate2Twice(
-                        self.entry_point_address,
-                    ));
+                    violations.push(
+                        SimulationViolation::FactoryCalledCreate2Twice(self.entry_point_address)
+                    );
                 }
             }
         }
@@ -428,14 +427,15 @@ where
                 violations.push(SimulationViolation::CodeHashChanged)
             }
         }
-        let aggregator = match aggregator_out {
-            AggregatorOut::NotNeeded => None,
-            AggregatorOut::SuccessWithInfo(info) => Some(info),
-            AggregatorOut::ValidationReverted => {
-                violations.push(SimulationViolation::AggregatorValidationFailed);
-                None
-            }
-        };
+        let aggregator =
+            match aggregator_out {
+                AggregatorOut::NotNeeded => None,
+                AggregatorOut::SuccessWithInfo(info) => Some(info),
+                AggregatorOut::ValidationReverted => {
+                    violations.push(SimulationViolation::AggregatorValidationFailed);
+                    None
+                }
+            };
 
         if !violations.is_empty() {
             return Err(violations.into());

@@ -133,9 +133,9 @@ impl TransactionSenderType {
     ) -> Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
         let sender = match self {
             Self::Raw => TransactionSenderEnum::Raw(RawTransactionSender::new(client, signer)),
-            Self::Conditional => TransactionSenderEnum::Conditional(
-                ConditionalTransactionSender::new(client, signer),
-            ),
+            Self::Conditional => {
+                TransactionSenderEnum::Conditional(ConditionalTransactionSender::new(client, signer))
+            }
             Self::Flashbots => {
                 if chain_id != Chain::Mainnet as u64 {
                     return Err(SenderConstructorErrors::InvalidChainForSender(

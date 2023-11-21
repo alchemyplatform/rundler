@@ -153,12 +153,13 @@ where
         );
 
         let builder_handle = self.builder_builder.get_handle();
-        let builder_runnder_handle = self.builder_builder.run(
-            manual_bundling_mode,
-            send_bundle_txs,
-            vec![self.args.entry_point_address],
-            shutdown_token.clone(),
-        );
+        let builder_runnder_handle =
+            self.builder_builder.run(
+                manual_bundling_mode,
+                send_bundle_txs,
+                vec![self.args.entry_point_address],
+                shutdown_token.clone(),
+            );
 
         let remote_handle = match self.args.remote_address {
             Some(addr) => {

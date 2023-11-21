@@ -113,18 +113,19 @@ impl OpPool for OpPoolImpl {
         &self,
         _request: Request<GetSupportedEntryPointsRequest>,
     ) -> Result<Response<GetSupportedEntryPointsResponse>> {
-        let resp = match self.local_pool.get_supported_entry_points().await {
-            Ok(entry_points) => GetSupportedEntryPointsResponse {
-                chain_id: self.chain_id,
-                entry_points: entry_points
-                    .into_iter()
-                    .map(|ep| ep.as_bytes().to_vec())
-                    .collect(),
-            },
-            Err(e) => {
-                return Err(Status::internal(format!("Failed to get entry points: {e}")));
-            }
-        };
+        let resp =
+            match self.local_pool.get_supported_entry_points().await {
+                Ok(entry_points) => GetSupportedEntryPointsResponse {
+                    chain_id: self.chain_id,
+                    entry_points: entry_points
+                        .into_iter()
+                        .map(|ep| ep.as_bytes().to_vec())
+                        .collect(),
+                },
+                Err(e) => {
+                    return Err(Status::internal(format!("Failed to get entry points: {e}")));
+                }
+            };
 
         Ok(Response::new(resp))
     }
@@ -136,16 +137,18 @@ impl OpPool for OpPoolImpl {
         let proto_op = req
             .op
             .ok_or_else(|| Status::invalid_argument("Operation is required in AddOpRequest"))?;
-        let uo = proto_op.try_into().map_err(|e| {
-            Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
-        })?;
+        let uo = proto_op.try_into().map_err(
+            |e| Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
+        )?;
 
         let resp = match self.local_pool.add_op(ep, uo).await {
-            Ok(hash) => AddOpResponse {
-                result: Some(add_op_response::Result::Success(AddOpSuccess {
-                    hash: hash.as_bytes().to_vec(),
-                })),
-            },
+            Ok(hash) => {
+                AddOpResponse {
+                    result: Some(add_op_response::Result::Success(AddOpSuccess {
+                        hash: hash.as_bytes().to_vec(),
+                    })),
+                }
+            }
             Err(error) => AddOpResponse {
                 result: Some(add_op_response::Result::Failure(error.into())),
             },
@@ -221,9 +224,7 @@ impl OpPool for OpPoolImpl {
 
         let resp = match self.local_pool.remove_entities(ep, entities).await {
             Ok(_) => RemoveEntitiesResponse {
-                result: Some(remove_entities_response::Result::Success(
-                    RemoveEntitiesSuccess {},
-                )),
+                result: Some(remove_entities_response::Result::Success(RemoveEntitiesSuccess {})),
             },
             Err(error) => RemoveEntitiesResponse {
                 result: Some(remove_entities_response::Result::Failure(error.into())),
@@ -244,15 +245,13 @@ impl OpPool for OpPoolImpl {
             .iter()
             .map(|eu| eu.try_into())
             .collect::<Result<Vec<EntityUpdate>, _>>()
-            .map_err(|e| {
-                Status::internal(format!("Failed to convert to proto entity update: {}", e))
-            })?;
+            .map_err(
+                |e| Status::internal(format!("Failed to convert to proto entity update: {}", e))
+            )?;
 
         let resp = match self.local_pool.update_entities(ep, entity_updates).await {
             Ok(_) => UpdateEntitiesResponse {
-                result: Some(update_entities_response::Result::Success(
-                    UpdateEntitiesSuccess {},
-                )),
+                result: Some(update_entities_response::Result::Success(UpdateEntitiesSuccess {})),
             },
             Err(error) => UpdateEntitiesResponse {
                 result: Some(update_entities_response::Result::Failure(error.into())),
@@ -266,16 +265,17 @@ impl OpPool for OpPoolImpl {
         &self,
         _request: Request<DebugClearStateRequest>,
     ) -> Result<Response<DebugClearStateResponse>> {
-        let resp = match self.local_pool.debug_clear_state().await {
-            Ok(_) => DebugClearStateResponse {
-                result: Some(debug_clear_state_response::Result::Success(
-                    DebugClearStateSuccess {},
-                )),
-            },
-            Err(error) => DebugClearStateResponse {
-                result: Some(debug_clear_state_response::Result::Failure(error.into())),
-            },
-        };
+        let resp =
+            match self.local_pool.debug_clear_state().await {
+                Ok(_) => DebugClearStateResponse {
+                    result: Some(
+                        debug_clear_state_response::Result::Success(DebugClearStateSuccess {})
+                    ),
+                },
+                Err(error) => DebugClearStateResponse {
+                    result: Some(debug_clear_state_response::Result::Failure(error.into())),
+                },
+            };
 
         Ok(Response::new(resp))
     }
@@ -311,9 +311,9 @@ impl OpPool for OpPoolImpl {
         let ep = self.get_entry_point(&req.entry_point)?;
 
         let reps = if req.reputations.is_empty() {
-            return Err(Status::invalid_argument(
-                "Reputation is required in DebugSetReputationRequest",
-            ));
+            return Err(
+                Status::invalid_argument("Reputation is required in DebugSetReputationRequest")
+            );
         } else {
             req.reputations
         };
@@ -322,16 +322,18 @@ impl OpPool for OpPoolImpl {
             .into_iter()
             .map(|r| r.try_into())
             .collect::<Result<Vec<Reputation>, _>>()
-            .map_err(|e| {
-                Status::internal(format!("Failed to convert from proto reputation {e}"))
-            })?;
+            .map_err(
+                |e| Status::internal(format!("Failed to convert from proto reputation {e}")),
+            )?;
 
         let resp = match self.local_pool.debug_set_reputations(ep, reps).await {
-            Ok(_) => DebugSetReputationResponse {
-                result: Some(debug_set_reputation_response::Result::Success(
-                    DebugSetReputationSuccess {},
-                )),
-            },
+            Ok(_) => {
+                DebugSetReputationResponse {
+                    result: Some(debug_set_reputation_response::Result::Success(
+                        DebugSetReputationSuccess {},
+                    )),
+                }
+            }
             Err(error) => DebugSetReputationResponse {
                 result: Some(debug_set_reputation_response::Result::Failure(error.into())),
             },
@@ -356,9 +358,7 @@ impl OpPool for OpPoolImpl {
                 )),
             },
             Err(error) => DebugDumpReputationResponse {
-                result: Some(debug_dump_reputation_response::Result::Failure(
-                    error.into(),
-                )),
+                result: Some(debug_dump_reputation_response::Result::Failure(error.into())),
             },
         };
 
@@ -385,9 +385,7 @@ impl OpPool for OpPoolImpl {
             Ok(new_heads) => new_heads,
             Err(error) => {
                 tracing::error!("Failed to subscribe to new blocks: {error}");
-                return Err(Status::internal(format!(
-                    "Failed to subscribe to new blocks: {error}"
-                )));
+                return Err(Status::internal(format!("Failed to subscribe to new blocks: {error}")));
             }
         };
 

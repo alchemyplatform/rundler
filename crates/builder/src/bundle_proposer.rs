@@ -595,10 +595,11 @@ where
     }
 
     fn emit(&self, event: BuilderEvent) {
-        let _ = self.event_sender.send(WithEntryPoint {
-            entry_point: self.entry_point.address(),
-            event,
-        });
+        let _ =
+            self.event_sender.send(WithEntryPoint {
+                entry_point: self.entry_point.address(),
+                event,
+            });
     }
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
@@ -893,9 +894,9 @@ mod tests {
         let op = UserOperation::default();
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
-            simulation_result: Box::new(|| {
-                Err(SimulationError::Other(anyhow!("simulation failed")))
-            }),
+            simulation_result: Box::new(
+                || Err(SimulationError::Other(anyhow!("simulation failed")))
+            ),
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -905,15 +906,14 @@ mod tests {
     #[tokio::test]
     async fn test_rejects_on_signature_failure() {
         let op = UserOperation::default();
-        let bundle = simple_make_bundle(vec![MockOp {
-            op: op.clone(),
-            simulation_result: Box::new(|| {
-                Err(SimulationError::Violations(vec![
-                    SimulationViolation::InvalidSignature,
-                ]))
-            }),
-        }])
-        .await;
+        let bundle =
+            simple_make_bundle(vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(
+                    || Err(SimulationError::Violations(vec![SimulationViolation::InvalidSignature]))
+                ),
+            }])
+            .await;
         assert!(bundle.ops_per_aggregator.is_empty());
         assert_eq!(bundle.rejected_ops, vec![op]);
     }

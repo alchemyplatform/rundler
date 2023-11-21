@@ -116,13 +116,14 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-        let server = ServerBuilder::default()
-            .set_logger(RpcMetricsLogger)
-            .set_middleware(service_builder)
-            .max_connections(self.args.max_connections)
-            .http_only()
-            .build(addr)
-            .await?;
+        let server =
+            ServerBuilder::default()
+                .set_logger(RpcMetricsLogger)
+                .set_middleware(service_builder)
+                .max_connections(self.args.max_connections)
+                .http_only()
+                .build(addr)
+                .await?;
         let handle = server.start(module);
 
         info!("Started RPC server");

@@ -153,11 +153,12 @@ impl PoolTask {
     ) -> anyhow::Result<UoPool<HourlyMovingAverageReputation, impl Prechecker, impl Simulator>>
     {
         // Reputation manager
-        let reputation = Arc::new(HourlyMovingAverageReputation::new(
-            ReputationParams::bundler_default(),
-            pool_config.blocklist.clone(),
-            pool_config.allowlist.clone(),
-        ));
+        let reputation =
+            Arc::new(HourlyMovingAverageReputation::new(
+                ReputationParams::bundler_default(),
+                pool_config.blocklist.clone(),
+                pool_config.allowlist.clone(),
+            ));
         // Start reputation manager
         let reputation_runner = Arc::clone(&reputation);
         tokio::spawn(async move { reputation_runner.run().await });

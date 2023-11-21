@@ -372,11 +372,12 @@ where
         let mut max_oracle = MaxOracle::new();
         max_oracle.add(ProviderOracle::new(provider.clone()));
 
-        let config = FeeHistoryOracleConfig {
-            minimum_fee,
-            percentile: 33.0,
-            ..Default::default()
-        };
+        let config =
+            FeeHistoryOracleConfig {
+                minimum_fee,
+                percentile: 33.0,
+                ..Default::default()
+            };
         max_oracle.add(FeeHistoryOracle::new(provider, config));
 
         Arc::new(Box::new(max_oracle))

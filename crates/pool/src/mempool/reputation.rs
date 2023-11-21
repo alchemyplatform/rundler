@@ -266,10 +266,11 @@ impl AddressReputation {
             return ReputationStatus::Ok;
         }
 
-        let count = match self.counts.get(&address) {
-            Some(count) => count,
-            None => return ReputationStatus::Ok,
-        };
+        let count =
+            match self.counts.get(&address) {
+                Some(count) => count,
+                None => return ReputationStatus::Ok,
+            };
 
         let min_expected_included = count.ops_seen / self.params.min_inclusion_rate_denominator;
         if min_expected_included <= (count.ops_included + self.params.throttling_slack) {

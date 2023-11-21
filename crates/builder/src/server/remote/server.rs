@@ -102,14 +102,16 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         _request: Request<DebugSendBundleNowRequest>,
     ) -> tonic::Result<Response<DebugSendBundleNowResponse>> {
         let resp = match self.local_builder.debug_send_bundle_now().await {
-            Ok((hash, block_number)) => DebugSendBundleNowResponse {
-                result: Some(debug_send_bundle_now_response::Result::Success(
-                    DebugSendBundleNowSuccess {
-                        transaction_hash: hash.as_bytes().to_vec(),
-                        block_number,
-                    },
-                )),
-            },
+            Ok((hash, block_number)) => {
+                DebugSendBundleNowResponse {
+                    result: Some(debug_send_bundle_now_response::Result::Success(
+                        DebugSendBundleNowSuccess {
+                            transaction_hash: hash.as_bytes().to_vec(),
+                            block_number,
+                        },
+                    )),
+                }
+            }
             Err(e) => {
                 return Err(Status::internal(format!("Failed to send bundle: {e}")));
             }
@@ -124,9 +126,9 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
     ) -> tonic::Result<Response<DebugSetBundlingModeResponse>> {
         let resp = match self
             .local_builder
-            .debug_set_bundling_mode(request.into_inner().mode.try_into().map_err(|e| {
-                Status::internal(format!("Failed to convert from proto reputation {e}"))
-            })?)
+            .debug_set_bundling_mode(request.into_inner().mode.try_into().map_err(
+                |e| Status::internal(format!("Failed to convert from proto reputation {e}"))
+            )?)
             .await
         {
             Ok(()) => DebugSetBundlingModeResponse {
@@ -135,9 +137,7 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
                 )),
             },
             Err(e) => {
-                return Err(Status::internal(format!(
-                    "Failed to set bundling mode: {e}"
-                )));
+                return Err(Status::internal(format!("Failed to set bundling mode: {e}")));
             }
         };
 

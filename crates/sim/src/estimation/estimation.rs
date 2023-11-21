@@ -200,9 +200,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         .await
         .context("failed to run initial guess")?;
         if gas_used.success {
-            Err(anyhow!(
-                "simulateHandleOp succeeded, but should always revert"
-            ))?;
+            Err(anyhow!("simulateHandleOp succeeded, but should always revert"))?;
         }
         if let Some(message) = self
             .entry_point
@@ -349,18 +347,14 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
                 {
                     // This should never happen, but if it does, bail so we
                     // don't end up in an infinite loop!
-                    Err(anyhow!(
-                        "estimateCallGas should make progress each time it is called"
-                    ))?;
+                    Err(anyhow!("estimateCallGas should make progress each time it is called"))?;
                 }
                 is_continuation = true;
                 min_gas = min_gas.max(continuation.min_gas);
                 max_gas = max_gas.min(continuation.max_gas);
                 num_rounds += continuation.num_rounds;
             } else {
-                Err(anyhow!(
-                    "estimateCallGas revert should be a Result or a Continuation"
-                ))?;
+                Err(anyhow!("estimateCallGas revert should be a Result or a Continuation"))?;
             }
         }
     }
@@ -624,13 +618,14 @@ mod tests {
             });
 
         provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+            let result_data: Bytes =
+                GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: false,
+                    result: Bytes::new(),
+                }
+                .encode()
+                .into();
 
             let json_rpc_error = JsonRpcError {
                 code: -32000,
@@ -642,10 +637,11 @@ mod tests {
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
-        let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
-            .await
-            .unwrap();
+        let estimation =
+            estimator
+                .binary_search_verification_gas(&user_op, H256::zero())
+                .await
+                .unwrap();
 
         let pre_op_gas: U256 = 10000.into();
         let gas_used: U256 = 20000.into();
@@ -713,10 +709,7 @@ mod tests {
             .await
             .err();
 
-        assert!(matches!(
-            estimation,
-            Some(GasEstimationError::RevertInValidation(..))
-        ));
+        assert!(matches!(estimation, Some(GasEstimationError::RevertInValidation(..))));
     }
 
     #[tokio::test]
@@ -754,13 +747,14 @@ mod tests {
         // the success field should not be true as the
         // call should always revert
         provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: true,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+            let result_data: Bytes =
+                GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: true,
+                    result: Bytes::new(),
+                }
+                .encode()
+                .into();
 
             let json_rpc_error = JsonRpcError {
                 code: -32000,
@@ -804,13 +798,14 @@ mod tests {
             });
 
         provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+            let result_data: Bytes =
+                GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: false,
+                    result: Bytes::new(),
+                }
+                .encode()
+                .into();
 
             let json_rpc_error = JsonRpcError {
                 code: -32000,
@@ -853,13 +848,14 @@ mod tests {
             .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error")));
 
         provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+            let result_data: Bytes =
+                GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: false,
+                    result: Bytes::new(),
+                }
+                .encode()
+                .into();
 
             let json_rpc_error = JsonRpcError {
                 code: -32000,
@@ -987,16 +983,14 @@ mod tests {
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
-        let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero())
-            .await
-            .err()
-            .unwrap();
+        let estimation =
+            estimator
+                .estimate_call_gas(&user_op, H256::zero())
+                .await
+                .err()
+                .unwrap();
 
-        assert!(matches!(
-            estimation,
-            GasEstimationError::RevertInCallWithBytes(_)
-        ));
+        assert!(matches!(estimation, GasEstimationError::RevertInCallWithBytes(_)));
     }
 
     #[tokio::test]
@@ -1092,13 +1086,14 @@ mod tests {
             .expect_get_latest_block_hash()
             .returning(|| Ok(H256::zero()));
         provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(100000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+            let result_data: Bytes =
+                GasUsedResult {
+                    gas_used: U256::from(100000),
+                    success: false,
+                    result: Bytes::new(),
+                }
+                .encode()
+                .into();
 
             let json_rpc_error = JsonRpcError {
                 code: -32000,
@@ -1163,13 +1158,14 @@ mod tests {
             .expect_get_latest_block_hash()
             .returning(|| Ok(H256::zero()));
         provider.expect_call().returning(|_a, _b| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(100000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+            let result_data: Bytes =
+                GasUsedResult {
+                    gas_used: U256::from(100000),
+                    success: false,
+                    result: Bytes::new(),
+                }
+                .encode()
+                .into();
 
             let json_rpc_error = JsonRpcError {
                 code: -32000,
@@ -1192,9 +1188,6 @@ mod tests {
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator.estimate_op_gas(user_op).await.err();
 
-        assert!(matches!(
-            estimation,
-            Some(GasEstimationError::RevertInValidation(..))
-        ));
+        assert!(matches!(estimation, Some(GasEstimationError::RevertInValidation(..))));
     }
 }

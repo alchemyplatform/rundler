@@ -157,17 +157,13 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         let len = op.init_code.len();
         if len == 0 {
             if !sender_exists {
-                violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
-                    op.sender,
-                ));
+                violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(op.sender));
             }
         } else {
             if len < 20 {
                 violations.push(PrecheckViolation::InitCodeTooShort(len));
             } else if !factory_exists {
-                violations.push(PrecheckViolation::FactoryIsNotContract(
-                    op.factory().unwrap(),
-                ))
+                violations.push(PrecheckViolation::FactoryIsNotContract(op.factory().unwrap()))
             }
             if sender_exists {
                 violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender));
@@ -213,11 +209,12 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
 
         // if preVerificationGas is dynamic, then allow for the percentage buffer
         // and check if the preVerificationGas is at least the minimum.
-        let min_pre_verification_gas = if chain::is_dynamic_pvg(chain_id) {
-            math::percent(min_pre_verification_gas, self.settings.fee_accept_percent)
-        } else {
-            min_pre_verification_gas
-        };
+        let min_pre_verification_gas =
+            if chain::is_dynamic_pvg(chain_id) {
+                math::percent(min_pre_verification_gas, self.settings.fee_accept_percent)
+            } else {
+                min_pre_verification_gas
+            };
         if op.pre_verification_gas < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas,
@@ -268,9 +265,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         } = async_data;
         if !op.paymaster_and_data.is_empty() {
             let Some(paymaster) = op.paymaster() else {
-                return Some(PrecheckViolation::PaymasterTooShort(
-                    op.paymaster_and_data.len(),
-                ));
+                return Some(PrecheckViolation::PaymasterTooShort(op.paymaster_and_data.len()));
             };
             if !paymaster_exists {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
@@ -641,14 +636,15 @@ mod tests {
         };
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let op = UserOperation {
-            max_fee_per_gas: math::percent(5000, settings.fee_accept_percent).into(),
-            max_priority_fee_per_gas: get_min_max_priority_fee_per_gas(Chain::Optimism as u64)
-                - U256::from(1),
-            pre_verification_gas: 1_000.into(),
-            call_gas_limit: MIN_CALL_GAS_LIMIT,
-            ..Default::default()
-        };
+        let op =
+            UserOperation {
+                max_fee_per_gas: math::percent(5000, settings.fee_accept_percent).into(),
+                max_priority_fee_per_gas: get_min_max_priority_fee_per_gas(Chain::Optimism as u64)
+                    - U256::from(1),
+                pre_verification_gas: 1_000.into(),
+                call_gas_limit: MIN_CALL_GAS_LIMIT,
+                ..Default::default()
+            };
 
         let res = prechecker.check_gas(&op, get_test_async_data());
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();

@@ -88,10 +88,11 @@ where
     }
 
     fn emit(&self, event: OpPoolEvent) {
-        let _ = self.event_sender.send(WithEntryPoint {
-            entry_point: self.config.entry_point,
-            event,
-        });
+        let _ =
+            self.event_sender.send(WithEntryPoint {
+                entry_point: self.config.entry_point,
+                event,
+            });
     }
 }
 
@@ -750,14 +751,15 @@ mod tests {
 
     #[tokio::test]
     async fn precheck_error() {
-        let op = create_op_with_errors(
-            Address::random(),
-            0,
-            0,
-            Some(PrecheckViolation::InitCodeTooShort(0)),
-            None,
-            false,
-        );
+        let op =
+            create_op_with_errors(
+                Address::random(),
+                0,
+                0,
+                Some(PrecheckViolation::InitCodeTooShort(0)),
+                None,
+                false,
+            );
         let ops = vec![op.clone()];
         let pool = create_pool(ops);
 

@@ -45,9 +45,7 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "Paymaster private signing key: 0x{}",
-        hex::encode(rundler_dev::test_signing_key_bytes(
-            PAYMASTER_SIGNER_ACCOUNT_ID
-        ))
+        hex::encode(rundler_dev::test_signing_key_bytes(PAYMASTER_SIGNER_ACCOUNT_ID))
     );
     Ok(())
 }

@@ -163,13 +163,14 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     )
     .await?;
 
-    let builder = connect_with_retries_shutdown(
-        "builder from rpc",
-        &builder_url,
-        RemoteBuilderClient::connect,
-        tokio::signal::ctrl_c(),
-    )
-    .await?;
+    let builder =
+        connect_with_retries_shutdown(
+            "builder from rpc",
+            &builder_url,
+            RemoteBuilderClient::connect,
+            tokio::signal::ctrl_c(),
+        )
+        .await?;
 
     spawn_tasks_with_shutdown(
         [RpcTask::new(task_args, pool, builder).boxed()],

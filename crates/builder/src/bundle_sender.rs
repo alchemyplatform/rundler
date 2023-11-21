@@ -507,10 +507,11 @@ where
     }
 
     fn emit(&self, event: BuilderEvent) {
-        let _ = self.event_sender.send(WithEntryPoint {
-            entry_point: self.entry_point.address(),
-            event,
-        });
+        let _ =
+            self.event_sender.send(WithEntryPoint {
+                entry_point: self.entry_point.address(),
+                event,
+            });
     }
 
     fn op_hash(&self, op: &UserOperation) -> H256 {

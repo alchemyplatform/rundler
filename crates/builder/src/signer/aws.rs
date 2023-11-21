@@ -47,9 +47,9 @@ impl KmsSigner {
 
         if key_ids.len() > 1 {
             let (tx, rx) = oneshot::channel::<String>();
-            kms_guard = Some(SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
-                redis_uri, key_ids, chain_id, ttl_millis, tx,
-            )));
+            kms_guard = Some(SpawnGuard::spawn_with_guard(
+                Self::lock_manager_loop(redis_uri, key_ids, chain_id, ttl_millis, tx)
+            ));
             key_id = rx.await.context("should lock key_id")?;
         } else {
             key_id = key_ids
@@ -62,10 +62,9 @@ impl KmsSigner {
             .await
             .context("should create signer")?;
 
-        let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
-            signer.address(),
-            provider.clone(),
-        ));
+        let monitor_guard = SpawnGuard::spawn_with_guard(
+            monitor_account_balance(signer.address(), provider.clone())
+        );
 
         Ok(Self {
             signer,
@@ -105,9 +104,10 @@ impl KmsSigner {
 
         let lock_id = locked_id.unwrap();
         let _ = locked_tx.send(kid.unwrap());
-        let mut lg_opt = Some(LockGuard {
-            lock: lock.unwrap(),
-        });
+        let mut lg_opt =
+            Some(LockGuard {
+                lock: lock.unwrap(),
+            });
 
         loop {
             sleep(Duration::from_millis(ttl_millis / 10)).await;

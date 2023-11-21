@@ -82,9 +82,6 @@ impl From<PrecheckError> for MempoolError {
         };
 
         // extract violation and replace with dummy
-        Self::PrecheckViolation(mem::replace(
-            violation,
-            PrecheckViolation::InitCodeTooShort(0),
-        ))
+        Self::PrecheckViolation(mem::replace(violation, PrecheckViolation::InitCodeTooShort(0)))
     }
 }

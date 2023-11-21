@@ -45,9 +45,7 @@ impl From<BuilderServerError> for ProtoBuilderError {
     fn from(value: BuilderServerError) -> Self {
         match value {
             BuilderServerError::UnexpectedResponse => ProtoBuilderError {
-                error: Some(builder_error::Error::Internal(
-                    "Unexpected response".to_string(),
-                )),
+                error: Some(builder_error::Error::Internal("Unexpected response".to_string())),
             },
             BuilderServerError::Other(e) => ProtoBuilderError {
                 error: Some(builder_error::Error::Internal(e.to_string())),

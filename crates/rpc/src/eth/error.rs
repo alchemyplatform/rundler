@@ -207,10 +207,12 @@ impl From<SimulationViolation> for EthRpcError {
                 EntityType::Paymaster,
                 reason,
                 Some(paymaster),
-            ) => Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
-                paymaster,
-                reason,
-            }),
+            ) => {
+                Self::PaymasterValidationRejected(PaymasterValidationRejectedData {
+                    paymaster,
+                    reason,
+                })
+            }
             SimulationViolation::UnintendedRevertWithMessage(_, reason, _) => {
                 Self::EntryPointValidationRejected(reason)
             }
