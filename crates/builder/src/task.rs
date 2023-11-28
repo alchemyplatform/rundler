@@ -80,9 +80,6 @@ pub struct Args {
     pub max_bundle_gas: u64,
     /// URL to submit bundles too
     pub submit_url: String,
-    /// Whether to use bundle priority fee
-    /// If unset, will use the default value of true for known EIP-1559 chains
-    pub use_bundle_priority_fee: Option<bool>,
     /// Percentage to add to the the network priority fee for the bundle priority fee
     pub bundle_priority_fee_overhead_percent: u64,
     /// Priority fee mode to use for operation priority fee minimums
@@ -266,7 +263,6 @@ where
             max_bundle_size: self.args.max_bundle_size,
             max_bundle_gas: self.args.max_bundle_gas,
             beneficiary,
-            use_bundle_priority_fee: self.args.use_bundle_priority_fee,
             priority_fee_mode: self.args.priority_fee_mode,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };

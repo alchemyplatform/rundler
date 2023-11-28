@@ -14,7 +14,9 @@
 use std::{
     cmp,
     collections::{HashMap, HashSet},
+    future::Future,
     mem,
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -36,7 +38,7 @@ use rundler_sim::{
 use rundler_types::{Entity, EntityType, GasFees, Timestamp, UserOperation, UserOpsPerAggregator};
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 
@@ -102,7 +104,6 @@ pub(crate) struct Settings {
     pub(crate) max_bundle_size: u64,
     pub(crate) max_bundle_gas: u64,
     pub(crate) beneficiary: Address,
-    pub(crate) use_bundle_priority_fee: Option<bool>,
     pub(crate) bundle_priority_fee_overhead_percent: u64,
     pub(crate) priority_fee_mode: PriorityFeeMode,
 }
@@ -248,7 +249,6 @@ where
                 provider,
                 settings.chain_id,
                 settings.priority_fee_mode,
-                settings.use_bundle_priority_fee,
                 settings.bundle_priority_fee_overhead_percent,
             ),
             settings,
@@ -362,7 +362,7 @@ where
             }
 
             // Update the running gas that would need to be be spent to execute the bundle so far.
-            gas_spent += gas::user_operation_gas_limit(
+            gas_spent += gas::user_operation_execution_gas_limit(
                 &op,
                 self.settings.chain_id,
                 false,
@@ -441,6 +441,8 @@ where
             context.get_bundle_gas_limit(self.settings.chain_id),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
+
+        // call handle ops with the bundle to filter any rejected ops before sending
         let handle_ops_out = self
             .entry_point
             .call_handle_ops(
@@ -449,7 +451,7 @@ where
                 gas,
             )
             .await
-            .context("should estimate gas for proposed bundle")?;
+            .context("should call handle ops with candidate bundle")?;
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas)),
             HandleOpsOut::FailedOp(index, message) => {
@@ -467,6 +469,11 @@ where
                 info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
                 self.reject_entity(context, Entity::aggregator(aggregator))
                     .await;
+                Ok(None)
+            }
+            HandleOpsOut::PostOpRevert => {
+                warn!("PostOpShortRevert error during gas estimation due to bug in the 0.6 entry point contract. Removing the offending op from the bundle.");
+                self.process_post_op_revert(context, gas).await?;
                 Ok(None)
             }
         }
@@ -561,6 +568,133 @@ where
         Ok(())
     }
 
+    // This function is called when a postOpRevert error is encountered during gas estimation.
+    // This is due to a bug in the 0.6 entry point and needs to be handled else the bundle transaction will revert on chain.
+    //
+    // This function attempts to remove any offending user ops. If it can't identify the offending user ops, it will remove all user ops
+    // from the bundle and from the pool.
+    async fn process_post_op_revert(
+        &self,
+        context: &mut ProposalContext,
+        gas: U256,
+    ) -> anyhow::Result<()> {
+        let agg_groups = context.to_ops_per_aggregator();
+        let mut op_index = 0;
+        let mut futures: Vec<Pin<Box<dyn Future<Output = Vec<usize>> + Send>>> = vec![];
+
+        for agg_group in agg_groups {
+            // For non-aggregated ops, re-simulate each op individually
+            if agg_group.aggregator.is_zero() {
+                for op in agg_group.user_ops {
+                    futures.push(Box::pin(
+                        self.check_for_post_op_revert_single_op(op, gas, op_index),
+                    ));
+                    op_index += 1;
+                }
+            } else {
+                // For aggregated ops, re-simulate the group
+                let len = agg_group.user_ops.len();
+                futures.push(Box::pin(
+                    self.check_for_post_op_revert_agg_ops(agg_group, gas, op_index),
+                ));
+                op_index += len;
+            }
+        }
+
+        let results = future::join_all(futures).await;
+        let mut to_remove = results.into_iter().flatten().collect::<Vec<_>>();
+        if to_remove.is_empty() {
+            // if we can't identify the offending user ops, remove all user ops from the bundle and from the pool
+            error!(
+                "Failed to identify offending user ops, removing all user ops from bundle and pool"
+            );
+            to_remove.extend(0..op_index);
+        }
+
+        // iterate in reverse so that we can remove ops without affecting the index of the next op to remove
+        for index in to_remove.into_iter().rev() {
+            self.emit(BuilderEvent::rejected_op(
+                self.builder_index,
+                self.op_hash(context.get_op_at(index)?),
+                OpRejectionReason::FailedInBundle {
+                    message: Arc::new("post op reverted leading to entry point revert".to_owned()),
+                },
+            ));
+            self.reject_index(context, index).await;
+        }
+
+        Ok(())
+    }
+
+    async fn check_for_post_op_revert_single_op(
+        &self,
+        op: UserOperation,
+        gas: U256,
+        op_index: usize,
+    ) -> Vec<usize> {
+        let op_hash = self.op_hash(&op);
+        let bundle = vec![UserOpsPerAggregator {
+            aggregator: Address::zero(),
+            signature: Bytes::new(),
+            user_ops: vec![op],
+        }];
+        let ret = self
+            .entry_point
+            .call_handle_ops(bundle, self.settings.beneficiary, gas)
+            .await;
+        match ret {
+            Ok(out) => {
+                if let HandleOpsOut::PostOpRevert = out {
+                    warn!(
+                        "PostOpRevert error found, removing {:?} from bundle",
+                        op_hash
+                    );
+                    vec![op_index]
+                } else {
+                    vec![]
+                }
+            }
+            Err(e) => {
+                // If we get an error here, we can't be sure if the op is the offending op or not, so we remove it to be safe
+                error!("Failed to call handle ops: {e} during postOpRevert handling, removing op");
+                vec![op_index]
+            }
+        }
+    }
+
+    async fn check_for_post_op_revert_agg_ops(
+        &self,
+        group: UserOpsPerAggregator,
+        gas: U256,
+        start_index: usize,
+    ) -> Vec<usize> {
+        let len = group.user_ops.len();
+        let agg = group.aggregator;
+        let bundle = vec![group];
+        let ret = self
+            .entry_point
+            .call_handle_ops(bundle, self.settings.beneficiary, gas)
+            .await;
+        match ret {
+            Ok(out) => {
+                if let HandleOpsOut::PostOpRevert = out {
+                    warn!(
+                        "PostOpRevert error found, removing all ops with aggregator {:?}",
+                        agg
+                    );
+                    (start_index..start_index + len).collect()
+                } else {
+                    vec![]
+                }
+            }
+            Err(e) => {
+                // If we get an error here, we can't be sure if the op is the offending op or not, so we remove it to be safe
+                error!("Failed to call handle ops: {e} during postOpRevert handling, removing all ops from aggregator {:?}", agg);
+                (start_index..start_index + len).collect()
+            }
+        }
+    }
+
     fn limit_user_operations_for_simulation(
         &self,
         ops: Vec<PoolOperation>,
@@ -571,7 +705,12 @@ where
         for op in ops {
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = gas::user_operation_gas_limit(&op.uo, self.settings.chain_id, false, false);
+            let gas = gas::user_operation_execution_gas_limit(
+                &op.uo,
+                self.settings.chain_id,
+                false,
+                false,
+            );
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
@@ -1372,6 +1511,136 @@ mod tests {
         assert_eq!(gas_limit, expected_gas_limit);
     }
 
+    #[tokio::test]
+    async fn test_post_op_revert() {
+        let op1 = op_with_sender(address(1));
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op1.clone(),
+                simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+            }],
+            vec![],
+            vec![HandleOpsOut::PostOpRevert, HandleOpsOut::PostOpRevert],
+            vec![],
+            U256::zero(),
+            U256::zero(),
+        )
+        .await;
+
+        assert!(bundle.rejected_entities.is_empty());
+        assert_eq!(bundle.rejected_ops, vec![op1]);
+        assert!(bundle.ops_per_aggregator.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_post_op_revert_two() {
+        let op1 = op_with_sender(address(1));
+        let op2 = op_with_sender(address(2));
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+            ],
+            vec![],
+            vec![
+                HandleOpsOut::PostOpRevert,
+                HandleOpsOut::PostOpRevert,
+                HandleOpsOut::Success,
+                HandleOpsOut::Success,
+            ],
+            vec![],
+            U256::zero(),
+            U256::zero(),
+        )
+        .await;
+
+        assert!(bundle.rejected_entities.is_empty());
+        assert_eq!(bundle.rejected_ops, vec![op1]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op2],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_post_op_revert_agg() {
+        let unaggregated_op = op_with_sender(address(1));
+        let aggregated_op_a1 = op_with_sender(address(2));
+        let aggregated_op_a2 = op_with_sender(address(3));
+        let aggregator_a_address = address(10);
+        let op_a1_aggregated_sig = 11;
+        let op_a2_aggregated_sig = 12;
+        let aggregator_a_signature = 101;
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: unaggregated_op.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: aggregated_op_a1.clone(),
+                    simulation_result: Box::new(move || {
+                        Ok(SimulationSuccess {
+                            aggregator: Some(AggregatorSimOut {
+                                address: aggregator_a_address,
+                                signature: bytes(op_a1_aggregated_sig),
+                            }),
+                            ..Default::default()
+                        })
+                    }),
+                },
+                MockOp {
+                    op: aggregated_op_a2.clone(),
+                    simulation_result: Box::new(move || {
+                        Ok(SimulationSuccess {
+                            aggregator: Some(AggregatorSimOut {
+                                address: aggregator_a_address,
+                                signature: bytes(op_a2_aggregated_sig),
+                            }),
+                            ..Default::default()
+                        })
+                    }),
+                },
+            ],
+            vec![MockAggregator {
+                address: aggregator_a_address,
+                signature: Box::new(move || Ok(Some(bytes(aggregator_a_signature)))),
+            }],
+            vec![
+                HandleOpsOut::PostOpRevert, // bundle
+                HandleOpsOut::Success,      // unaggregated check
+                HandleOpsOut::PostOpRevert, // aggregated check
+                HandleOpsOut::Success,      // after remove
+            ],
+            vec![],
+            U256::zero(),
+            U256::zero(),
+        )
+        .await;
+
+        assert!(bundle.rejected_entities.is_empty());
+        assert_eq!(
+            bundle.rejected_ops,
+            vec![aggregated_op_a2, aggregated_op_a1]
+        );
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![unaggregated_op],
+                ..Default::default()
+            }]
+        );
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result:
@@ -1480,7 +1749,6 @@ mod tests {
                 max_bundle_size,
                 max_bundle_gas: 10_000_000,
                 beneficiary,
-                use_bundle_priority_fee: Some(true),
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(10),
                 bundle_priority_fee_overhead_percent: 0,
             },

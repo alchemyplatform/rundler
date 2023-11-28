@@ -383,7 +383,7 @@ where
                         // its bundle building process will want to be able to query the mempool
                         // and only receive operations that have not yet been mined.
                         for mempool in self.mempools.values() {
-                            mempool.on_chain_update(&chain_update);
+                            mempool.on_chain_update(&chain_update).await;
                         }
 
                         let _ = self.block_sender.send(NewHead {

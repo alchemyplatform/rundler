@@ -30,6 +30,9 @@ pub enum HandleOpsOut {
     FailedOp(usize, String),
     /// Call failed due to a signature validation failure
     SignatureValidationFailed(Address),
+    /// Call failed due to a bug in the 0.6 entry point contract https://github.com/eth-infinitism/account-abstraction/pull/325.
+    /// Special handling is required to remove the offending operation from the bundle.
+    PostOpRevert,
 }
 
 /// Trait for interacting with an entry point contract.

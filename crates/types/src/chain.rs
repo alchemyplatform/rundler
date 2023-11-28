@@ -19,18 +19,33 @@ use ethers::types::Chain;
 pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
     Chain::Optimism as u64,
     Chain::OptimismGoerli as u64,
-    8453, // Base
+    11155420, // OptimismSepolia
+    Chain::Base as u64,
     Chain::BaseGoerli as u64,
+    84532, // BaseSepolia
 ];
 
 // TODO use chain from ethers types once my PR is merged into ethers
 // https://github.com/gakonst/ethers-rs/pull/2657
 /// Known chain IDs for the Base ecosystem
-pub const ARBITRUM_CHAIN_IDS: &[u64] =
-    &[Chain::Arbitrum as u64, Chain::ArbitrumGoerli as u64, 421614];
+pub const ARBITRUM_CHAIN_IDS: &[u64] = &[
+    Chain::Arbitrum as u64,
+    Chain::ArbitrumGoerli as u64,
+    421614, /* ArbitrumSepolia */
+    Chain::ArbitrumNova as u64,
+];
 
 /// Known chain IDs for the Base ecosystem
-pub const BASE_CHAIN_IDS: &[u64] = &[8453, Chain::BaseGoerli as u64];
+pub const BASE_CHAIN_IDS: &[u64] = &[
+    Chain::Base as u64,
+    Chain::BaseGoerli as u64,
+    84532, /* BaseSepolia */
+];
 
 /// Known chain IDs for the Polygon ecosystem
 pub const POLYGON_CHAIN_IDS: &[u64] = &[Chain::Polygon as u64, Chain::PolygonMumbai as u64];
+
+/// Return true if the chain ID has a dynamic preVerificationGas field
+pub fn is_dynamic_pvg(chain_id: u64) -> bool {
+    ARBITRUM_CHAIN_IDS.contains(&chain_id) || OP_BEDROCK_CHAIN_IDS.contains(&chain_id)
+}

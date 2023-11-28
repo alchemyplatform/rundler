@@ -46,7 +46,7 @@ use super::chain::ChainUpdate;
 /// In-memory operation pool
 pub trait Mempool: Send + Sync + 'static {
     /// Call to update the mempool with a new chain update
-    fn on_chain_update(&self, update: &ChainUpdate);
+    async fn on_chain_update(&self, update: &ChainUpdate);
 
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;

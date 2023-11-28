@@ -16,7 +16,10 @@ use std::{
     sync::Arc,
 };
 
-use ethers::types::{Address, H256, U256};
+use ethers::{
+    types::{Address, H256, U256},
+    utils::format_units,
+};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use rundler_sim::{Prechecker, Simulator};
@@ -99,85 +102,102 @@ where
     P: Prechecker,
     S: Simulator,
 {
-    fn on_chain_update(&self, update: &ChainUpdate) {
-        let mut state = self.state.write();
-        let deduped_ops = update.deduped_ops();
-        let mined_ops = deduped_ops
-            .mined_ops
-            .iter()
-            .filter(|op| op.entry_point == self.config.entry_point);
-        let unmined_ops = deduped_ops
-            .unmined_ops
-            .iter()
-            .filter(|op| op.entry_point == self.config.entry_point);
-        let mut mined_op_count = 0;
-        let mut unmined_op_count = 0;
-        for op in mined_ops {
-            if op.entry_point != self.config.entry_point {
-                continue;
-            }
-
-            // Remove throttled ops that were included in the block
-            state.throttled_ops.remove(&op.hash);
-
-            if let Some(op) = state.pool.mine_operation(op, update.latest_block_number) {
-                // Only account for a staked entity once
-                for entity_addr in op.staked_entities().map(|e| e.address).unique() {
-                    self.reputation.add_included(entity_addr);
+    async fn on_chain_update(&self, update: &ChainUpdate) {
+        {
+            let mut state = self.state.write();
+            let deduped_ops = update.deduped_ops();
+            let mined_ops = deduped_ops
+                .mined_ops
+                .iter()
+                .filter(|op| op.entry_point == self.config.entry_point);
+            let unmined_ops = deduped_ops
+                .unmined_ops
+                .iter()
+                .filter(|op| op.entry_point == self.config.entry_point);
+            let mut mined_op_count = 0;
+            let mut unmined_op_count = 0;
+            for op in mined_ops {
+                if op.entry_point != self.config.entry_point {
+                    continue;
                 }
-                mined_op_count += 1;
-            }
-        }
-        for op in unmined_ops {
-            if op.entry_point != self.config.entry_point {
-                continue;
-            }
 
-            if let Some(op) = state.pool.unmine_operation(op.hash) {
-                // Only account for a staked entity once
-                for entity_addr in op.staked_entities().map(|e| e.address).unique() {
-                    self.reputation.add_included(entity_addr);
+                // Remove throttled ops that were included in the block
+                state.throttled_ops.remove(&op.hash);
+
+                if let Some(op) = state.pool.mine_operation(op, update.latest_block_number) {
+                    // Only account for a staked entity once
+                    for entity_addr in op.staked_entities().map(|e| e.address).unique() {
+                        self.reputation.add_included(entity_addr);
+                    }
+                    mined_op_count += 1;
                 }
-                unmined_op_count += 1;
             }
-        }
-        if mined_op_count > 0 {
-            info!(
+            for op in unmined_ops {
+                if op.entry_point != self.config.entry_point {
+                    continue;
+                }
+
+                if let Some(op) = state.pool.unmine_operation(op.hash) {
+                    // Only account for a staked entity once
+                    for entity_addr in op.staked_entities().map(|e| e.address).unique() {
+                        self.reputation.add_included(entity_addr);
+                    }
+                    unmined_op_count += 1;
+                }
+            }
+            if mined_op_count > 0 {
+                info!(
                 "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
                 self.config.entry_point,
                 update.latest_block_number,
                 update.latest_block_hash,
             );
-        }
-        if unmined_op_count > 0 {
-            info!(
+            }
+            if unmined_op_count > 0 {
+                info!(
                 "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
                 self.config.entry_point,
                 update.latest_block_number,
                 update.latest_block_hash,
             );
-        }
-        UoPoolMetrics::update_ops_seen(
-            mined_op_count as isize - unmined_op_count as isize,
-            self.config.entry_point,
-        );
-        UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.config.entry_point);
-
-        state
-            .pool
-            .forget_mined_operations_before_block(update.earliest_remembered_block_number);
-        // Remove throttled ops that are too old
-        let mut to_remove = HashSet::new();
-        for (hash, block) in state.throttled_ops.iter() {
-            if update.latest_block_number - block > self.config.throttled_entity_live_blocks {
-                to_remove.insert(*hash);
             }
+            UoPoolMetrics::update_ops_seen(
+                mined_op_count as isize - unmined_op_count as isize,
+                self.config.entry_point,
+            );
+            UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.config.entry_point);
+
+            state
+                .pool
+                .forget_mined_operations_before_block(update.earliest_remembered_block_number);
+            // Remove throttled ops that are too old
+            let mut to_remove = HashSet::new();
+            for (hash, block) in state.throttled_ops.iter() {
+                if update.latest_block_number - block > self.config.throttled_entity_live_blocks {
+                    to_remove.insert(*hash);
+                }
+            }
+            for hash in to_remove {
+                state.pool.remove_operation_by_hash(hash);
+                state.throttled_ops.remove(&hash);
+            }
+            state.block_number = update.latest_block_number;
         }
-        for hash in to_remove {
-            state.pool.remove_operation_by_hash(hash);
-            state.throttled_ops.remove(&hash);
+
+        // update required bundle fees and update metrics
+        if let Ok(fees) = self.prechecker.update_bundle_fees().await {
+            let max_fee = match format_units(fees.max_fee_per_gas, "gwei") {
+                Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                Err(_) => 0.0,
+            };
+            UoPoolMetrics::current_max_fee_gwei(max_fee);
+
+            let max_priority_fee = match format_units(fees.max_priority_fee_per_gas, "gwei") {
+                Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                Err(_) => 0.0,
+            };
+            UoPoolMetrics::current_max_priority_fee_gwei(max_priority_fee);
         }
-        state.block_number = update.latest_block_number;
     }
 
     fn entry_point(&self) -> Address {
@@ -416,6 +436,14 @@ impl UoPoolMetrics {
     fn increment_removed_entities(entry_point: Address) {
         metrics::increment_counter!("op_pool_removed_entities", "entrypoint" => entry_point.to_string());
     }
+
+    fn current_max_fee_gwei(fee: f64) {
+        metrics::gauge!("op_pool_current_max_fee_gwei", fee);
+    }
+
+    fn current_max_priority_fee_gwei(fee: f64) {
+        metrics::gauge!("op_pool_current_max_priority_fee_gwei", fee);
+    }
 }
 
 #[cfg(test)]
@@ -424,7 +452,7 @@ mod tests {
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
         SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,
     };
-    use rundler_types::EntityType;
+    use rundler_types::{EntityType, GasFees};
 
     use super::*;
     use crate::chain::MinedOp;
@@ -514,7 +542,8 @@ mod tests {
                 nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
-        });
+        })
+        .await;
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos[1..].to_vec());
     }
@@ -541,7 +570,8 @@ mod tests {
                 nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
-        });
+        })
+        .await;
         check_ops(
             pool.best_operations(3, 0).unwrap(),
             uos.clone()[1..].to_vec(),
@@ -559,7 +589,8 @@ mod tests {
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
             }],
-        });
+        })
+        .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
@@ -585,7 +616,8 @@ mod tests {
                 nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
-        });
+        })
+        .await;
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
@@ -620,7 +652,8 @@ mod tests {
                 nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
-        });
+        })
+        .await;
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -686,7 +719,8 @@ mod tests {
                 nonce: uos[0].nonce,
             }],
             unmined_ops: vec![],
-        });
+        })
+        .await;
 
         // Second op should be included
         pool.add_operation(OperationOrigin::Local, uos[4].clone())
@@ -842,6 +876,12 @@ mod tests {
         let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
+        prechecker.expect_update_bundle_fees().returning(|| {
+            Ok(GasFees {
+                max_fee_per_gas: 0.into(),
+                max_priority_fee_per_gas: 0.into(),
+            })
+        });
         for op in ops {
             prechecker.expect_check().returning(move |_| {
                 if let Some(error) = &op.precheck_error {

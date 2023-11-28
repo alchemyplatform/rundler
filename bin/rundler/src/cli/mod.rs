@@ -177,13 +177,6 @@ pub struct CommonArgs {
     max_simulate_handle_ops_gas: u64,
 
     #[arg(
-        long = "use_bundle_priority_fee",
-        name = "use_bundle_priority_fee",
-        env = "USE_BUNDLE_PRIORITY_FEE"
-    )]
-    use_bundle_priority_fee: Option<bool>,
-
-    #[arg(
         long = "bundle_priority_fee_overhead_percent",
         name = "bundle_priority_fee_overhead_percent",
         env = "BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT",
@@ -207,6 +200,14 @@ pub struct CommonArgs {
         default_value = "0"
     )]
     priority_fee_mode_value: u64,
+
+    #[arg(
+        long = "fee_accept_percent",
+        name = "fee_accept_percent",
+        env = "FEE_ACCEPT_PERCENT",
+        default_value = "100"
+    )]
+    fee_accept_percent: u64,
 
     /// Interval at which the builder polls an Eth node for new blocks and
     /// mined transactions.
@@ -282,12 +283,12 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
             chain_id: value.chain_id,
             max_verification_gas: value.max_verification_gas.into(),
             max_total_execution_gas: value.max_bundle_gas.into(),
-            use_bundle_priority_fee: value.use_bundle_priority_fee,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),
                 value.priority_fee_mode_value,
             )?,
+            fee_accept_percent: value.fee_accept_percent,
         })
     }
 }

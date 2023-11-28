@@ -81,6 +81,13 @@ where
             if let Ok(failure) = SignatureValidationFailed::decode(revert_data) {
                 return Ok(HandleOpsOut::SignatureValidationFailed(failure.aggregator));
             }
+            // Special handling for a bug in the 0.6 entry point contract to detect the bug where
+            // the `returndatacopy` opcode reverts due to a postOp revert and the revert data is too short.
+            // See https://github.com/eth-infinitism/account-abstraction/pull/325 for more details.
+            // NOTE: this error message is copied directly from Geth and assumes it will not change.
+            if error.to_string().contains("return data out of bounds") {
+                return Ok(HandleOpsOut::PostOpRevert);
+            }
         }
         Err(error)?
     }

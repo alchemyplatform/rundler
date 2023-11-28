@@ -53,7 +53,7 @@ pub type ProviderResult<T> = Result<T, ProviderError>;
 /// Trait for interacting with chain data and contracts.
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait::async_trait]
-pub trait Provider: Send + Sync + 'static {
+pub trait Provider: Send + Sync + Debug + 'static {
     /// Make an arbitrary JSON RPC request to the provider
     async fn request<T, R>(&self, method: &str, params: T) -> ProviderResult<R>
     where
