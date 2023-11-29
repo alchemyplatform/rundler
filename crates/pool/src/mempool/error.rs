@@ -60,7 +60,9 @@ pub enum MempoolError {
 
 impl From<SimulationError> for MempoolError {
     fn from(mut error: SimulationError) -> Self {
-        let (violation_error, _) = &mut error;
+        let SimulationError {
+            violation_error, ..
+        } = &mut error;
         let ViolationError::Violations(violations) = violation_error else {
             return Self::Other((*violation_error).clone().into());
         };
