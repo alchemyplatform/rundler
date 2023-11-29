@@ -13,7 +13,7 @@
 
 use std::{
     cmp,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     future::Future,
     mem,
     pin::Pin,
@@ -33,7 +33,7 @@ use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
     gas::{self, GasOverheads},
-    EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
+    EntityInfo, EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
     SimulationSuccess, SimulationViolation, Simulator, ViolationError,
 };
 use rundler_types::{
@@ -212,14 +212,15 @@ where
                     gas_estimate,
                     gas_fees: bundle_fees,
                     expected_storage,
-                    rejected_ops: context.rejected_ops,
-                    entity_updates: context.entity_updates,
+                    rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+                    entity_updates: context.entity_updates.into_values().collect(),
                 });
             }
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
         Ok(Bundle {
-            rejected_ops: context.rejected_ops,
+            rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+            entity_updates: context.entity_updates.into_values().collect(),
             gas_fees: bundle_fees,
             ..Default::default()
         })
@@ -271,8 +272,14 @@ where
         match result {
             Ok(success) => Ok((op, Ok(success))),
             Err(error) => match error {
-                (ViolationError::Violations(_), _) => Ok((op, Err(error))),
-                (ViolationError::Other(error), _) => Err(error),
+                SimulationError {
+                    violation_error: ViolationError::Violations(_),
+                    entity_infos: _,
+                } => Ok((op, Err(error))),
+                SimulationError {
+                    violation_error: ViolationError::Other(error),
+                    entity_infos: _,
+                } => Err(error),
             },
         }
     }
@@ -287,14 +294,14 @@ where
             .map(|(op, _)| op.uo.sender)
             .collect();
         let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
-        let mut rejected_ops = Vec::<UserOperation>::new();
-        let mut entity_updates = Vec::<EntityUpdate>::new();
-        let mut paymasters_to_reject = Vec::<Address>::new();
+        let mut rejected_ops = Vec::<(UserOperation, EntityInfos)>::new();
+        let mut entity_updates: BTreeMap<Address, EntityUpdate> = BTreeMap::new();
+        let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
         let ov = GasOverheads::default();
         let mut gas_spent = ov.transaction_gas_overhead;
         for (po, simulation) in ops_with_simulations {
-            let op = po.uo;
+            let op = po.clone().uo;
             let simulation = match simulation {
                 Ok(simulation) => simulation,
                 Err(error) => {
@@ -305,11 +312,15 @@ where
                             error: error.clone(),
                         },
                     ));
-                    if let (ViolationError::Violations(violations), entity_infos) = error {
+                    if let SimulationError {
+                        violation_error: ViolationError::Violations(violations),
+                        entity_infos,
+                    } = error
+                    {
                         // try to use EntityInfos from the latest simulation, but if it doesn't exist use the EntityInfos from the previous simulation
                         let infos = entity_infos.map_or(po.entity_infos, |e| e);
-                        self.add_entity_updates(violations, infos, &mut entity_updates);
-                        rejected_ops.push(op);
+                        ProposalContext::add_entity_updates(violations, infos, &mut entity_updates);
+                        rejected_ops.push((op, po.entity_infos));
                     }
                     continue;
                 }
@@ -327,7 +338,7 @@ where
                         valid_range: simulation.valid_time_range,
                     },
                 ));
-                rejected_ops.push(op);
+                rejected_ops.push((op, po.entity_infos));
                 continue;
             }
 
@@ -366,7 +377,7 @@ where
                 let max_cost = gas::user_operation_max_gas_cost(&op);
                 if *balance < max_cost {
                     info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
-                    paymasters_to_reject.push(paymaster);
+                    paymasters_to_reject.push(po.entity_infos.paymaster.unwrap());
                     continue;
                 } else {
                     *balance -= max_cost;
@@ -390,11 +401,12 @@ where
         let mut context = ProposalContext {
             groups_by_aggregator,
             rejected_ops,
-            entity_updates: Vec::new(),
+            entity_updates,
         };
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
-            let _ = context.reject_entity(Entity::paymaster(paymaster));
+            let _ =
+                context.reject_entity(Entity::paymaster(paymaster.address), paymaster.is_staked);
         }
         self.compute_all_aggregator_signatures(&mut context).await;
         context
@@ -406,8 +418,8 @@ where
             .await;
     }
 
-    async fn reject_entity(&self, context: &mut ProposalContext, entity: Entity) {
-        let changed_aggregators = context.reject_entity(entity);
+    async fn reject_entity(&self, context: &mut ProposalContext, entity: Entity, is_staked: bool) {
+        let changed_aggregators = context.reject_entity(entity, is_staked);
         self.compute_aggregator_signatures(context, &changed_aggregators)
             .await;
     }
@@ -469,7 +481,7 @@ where
             HandleOpsOut::FailedOp(index, message) => {
                 self.emit(BuilderEvent::rejected_op(
                     self.builder_index,
-                    self.op_hash(context.get_op_at(index)?),
+                    self.op_hash(&context.get_op_at(index)?.op),
                     OpRejectionReason::FailedInBundle {
                         message: Arc::new(message.clone()),
                     },
@@ -479,7 +491,7 @@ where
             }
             HandleOpsOut::SignatureValidationFailed(aggregator) => {
                 info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
-                self.reject_entity(context, Entity::aggregator(aggregator))
+                self.reject_entity(context, Entity::aggregator(aggregator), false)
                     .await;
                 Ok(None)
             }
@@ -552,21 +564,38 @@ where
             // Entrypoint error codes that we want to reject the factory for.
             // AA10 is an internal error and is ignored
             "AA13" | "AA14" | "AA15" => {
-                let op = context.get_op_at(index)?;
-                let factory = op.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
+                let op_with_sim = context.get_op_at(index)?;
+                let factory = op_with_sim.op.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
                 info!("Rejected op because it failed during gas estimation with factory {factory:?} error {message}.");
-                self.reject_entity(context, Entity::factory(factory)).await;
+                self.reject_entity(
+                    context,
+                    Entity::factory(factory),
+                    op_with_sim
+                        .simulation
+                        .entity_infos
+                        .factory
+                        .map_or(false, |f| f.is_staked),
+                )
+                .await;
             }
             // Entrypoint error codes that we want to reject the paymaster for.
             // Note: AA32 is not included as this is a time expiry error.
             "AA30" | "AA31" | "AA33" | "AA34" => {
-                let op = context.get_op_at(index)?;
-                let paymaster = op.paymaster().context(
+                let op_with_sim = context.get_op_at(index)?;
+                let paymaster = op_with_sim.op.paymaster().context(
                     "op failed during gas estimation with {message}, but had no paymaster",
                 )?;
                 info!("Rejected op because it failed during gas estimation with a paymaster {paymaster:?} error {message}.");
-                self.reject_entity(context, Entity::paymaster(paymaster))
-                    .await;
+                self.reject_entity(
+                    context,
+                    Entity::paymaster(paymaster),
+                    op_with_sim
+                        .simulation
+                        .entity_infos
+                        .paymaster
+                        .map_or(false, |p| p.is_staked),
+                )
+                .await;
             }
             _ => {
                 info!(
@@ -627,7 +656,7 @@ where
         for index in to_remove.into_iter().rev() {
             self.emit(BuilderEvent::rejected_op(
                 self.builder_index,
-                self.op_hash(context.get_op_at(index)?),
+                self.op_hash(&context.get_op_at(index)?.op),
                 OpRejectionReason::FailedInBundle {
                     message: Arc::new("post op reverted leading to entry point revert".to_owned()),
                 },
@@ -752,163 +781,6 @@ where
     fn op_hash(&self, op: &UserOperation) -> H256 {
         op.op_hash(self.entry_point.address(), self.settings.chain_id)
     }
-
-    /// For a given entity that has caused a revert during simulation, determine if the entity was staked or not.
-    /// If it is staked, we push a StakedInvalidation entity update to enforce [SREP-050]
-    /// If it is not staked, we push an UnstakedInvalidation entity update to enforce [UREP-030]
-    fn get_entity_update_type(
-        &self,
-        entity_type: EntityType,
-        entity_infos: EntityInfos,
-    ) -> EntityUpdateType {
-        match entity_type {
-            EntityType::Account => {
-                if entity_infos.sender.is_staked {
-                    EntityUpdateType::StakedInvalidation
-                } else {
-                    EntityUpdateType::UnstakedInvalidation
-                }
-            }
-            EntityType::Paymaster => {
-                if let Some(paymaster) = entity_infos.paymaster {
-                    if paymaster.is_staked {
-                        EntityUpdateType::StakedInvalidation
-                    } else {
-                        EntityUpdateType::UnstakedInvalidation
-                    }
-                } else {
-                    EntityUpdateType::StakedInvalidation
-                }
-            }
-            EntityType::Factory => {
-                if let Some(factory) = entity_infos.factory {
-                    if factory.is_staked {
-                        EntityUpdateType::StakedInvalidation
-                    } else {
-                        EntityUpdateType::UnstakedInvalidation
-                    }
-                } else {
-                    EntityUpdateType::StakedInvalidation
-                }
-            }
-            EntityType::Aggregator => {
-                if let Some(aggregator) = entity_infos.aggregator {
-                    if aggregator.is_staked {
-                        EntityUpdateType::StakedInvalidation
-                    } else {
-                        EntityUpdateType::UnstakedInvalidation
-                    }
-                } else {
-                    EntityUpdateType::StakedInvalidation
-                }
-            }
-        }
-    }
-
-    // Go through the simulation violations for a given op and add all entity updates to pass to the mempool in entity_updates
-    fn add_entity_updates(
-        &self,
-        violations: Vec<SimulationViolation>,
-        entity_infos: EntityInfos,
-        entity_updates: &mut Vec<EntityUpdate>,
-    ) {
-        // [EREP-020] When there is a staked factory any error in validation is attributed to it.
-        if entity_infos.factory.map_or(false, |f| f.is_staked) {
-            let factory = entity_infos.factory.unwrap();
-            entity_updates.push(EntityUpdate {
-                entity: Entity {
-                    kind: EntityType::Factory,
-                    address: factory.address,
-                },
-                update_type: EntityUpdateType::StakedInvalidation,
-            });
-            return;
-        }
-
-        // [EREP-030] When there is a staked sender (without a staked factory) any error in validation is attributed to it.
-        if entity_infos.sender.is_staked {
-            entity_updates.push(EntityUpdate {
-                entity: Entity {
-                    kind: EntityType::Account,
-                    address: entity_infos.sender.address,
-                },
-                update_type: EntityUpdateType::StakedInvalidation,
-            });
-            return;
-        }
-
-        // If not a staked factory or sender, attribute errors to each entity directly.
-        // For a given op, there can only be a single update per entity so we don't double count the [UREP-030] throttle penalty.
-        let mut updates_map: HashMap<EntityType, EntityUpdate> = HashMap::new();
-        for violation in violations {
-            match violation {
-                SimulationViolation::UsedForbiddenOpcode(entity, _, _) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::UsedForbiddenPrecompile(entity, _, _) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::AccessedUndeployedContract(entity, _) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::InvalidStorageAccess(entity, _) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::CalledBannedEntryPointMethod(entity) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::CallHadValue(entity) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::NotStaked(entity, _, _) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                SimulationViolation::UnintendedRevertWithMessage(entity_type, _, address) => {
-                    if let Some(entity_address) = address {
-                        self.add_entity_update(
-                            Entity {
-                                kind: entity_type,
-                                address: entity_address,
-                            },
-                            entity_infos,
-                            &mut updates_map,
-                        );
-                    }
-                }
-                SimulationViolation::UnintendedRevert(entity_type, address) => {
-                    if let Some(entity_address) = address {
-                        self.add_entity_update(
-                            Entity {
-                                kind: entity_type,
-                                address: entity_address,
-                            },
-                            entity_infos,
-                            &mut updates_map,
-                        );
-                    }
-                }
-                SimulationViolation::OutOfGas(entity) => {
-                    self.add_entity_update(entity, entity_infos, &mut updates_map)
-                }
-                _ => continue,
-            }
-        }
-        entity_updates.extend(updates_map.values());
-    }
-
-    // Add an entity update for the entity
-    fn add_entity_update(
-        &self,
-        entity: Entity,
-        entity_infos: EntityInfos,
-        update_map: &mut HashMap<EntityType, EntityUpdate>,
-    ) {
-        let entity_update = EntityUpdate {
-            entity,
-            update_type: self.get_entity_update_type(entity.kind, entity_infos),
-        };
-        update_map.insert(entity.kind, entity_update);
-    }
 }
 
 #[derive(Debug)]
@@ -934,8 +806,9 @@ impl OpWithSimulation {
 #[derive(Debug)]
 struct ProposalContext {
     groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
-    rejected_ops: Vec<UserOperation>,
-    entity_updates: Vec<EntityUpdate>,
+    rejected_ops: Vec<(UserOperation, EntityInfos)>,
+    // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is determinisitic, mainly for tests
+    entity_updates: BTreeMap<Address, EntityUpdate>,
 }
 
 #[derive(Debug, Default)]
@@ -964,11 +837,11 @@ impl ProposalContext {
         }
     }
 
-    fn get_op_at(&self, index: usize) -> anyhow::Result<&UserOperation> {
+    fn get_op_at(&self, index: usize) -> anyhow::Result<&OpWithSimulation> {
         let mut remaining_i = index;
         for group in self.groups_by_aggregator.values() {
             if remaining_i < group.ops_with_simulations.len() {
-                return Ok(&group.ops_with_simulations[remaining_i].op);
+                return Ok(&group.ops_with_simulations[remaining_i]);
             }
             remaining_i -= group.ops_with_simulations.len();
         }
@@ -984,7 +857,8 @@ impl ProposalContext {
         for (&aggregator, group) in &mut self.groups_by_aggregator {
             if remaining_i < group.ops_with_simulations.len() {
                 let rejected = group.ops_with_simulations.remove(remaining_i);
-                self.rejected_ops.push(rejected.op);
+                self.rejected_ops
+                    .push((rejected.op, rejected.simulation.entity_infos));
                 found_aggregator = Some(aggregator);
                 break;
             }
@@ -1007,10 +881,9 @@ impl ProposalContext {
         }
     }
 
-    /// Returns the addresses of any aggregators whose signature may need to be
-    /// recomputed.
+    /// Returns the addresses of any aggregators whose signature may need to be recomputed.
     #[must_use = "rejected entity but did not update aggregator signatures"]
-    fn reject_entity(&mut self, entity: Entity) -> Vec<Address> {
+    fn reject_entity(&mut self, entity: Entity, is_staked: bool) -> Vec<Address> {
         let ret = match entity.kind {
             EntityType::Aggregator => {
                 self.reject_aggregator(entity.address);
@@ -1020,10 +893,17 @@ impl ProposalContext {
             EntityType::Factory => self.reject_factory(entity.address),
             _ => vec![],
         };
-        self.entity_updates.push(EntityUpdate {
-            entity,
-            update_type: EntityUpdateType::StakedInvalidation,
-        });
+        self.entity_updates.insert(
+            entity.address,
+            EntityUpdate {
+                entity,
+                update_type: if is_staked {
+                    EntityUpdateType::StakedInvalidation
+                } else {
+                    EntityUpdateType::UnstakedInvalidation
+                },
+            },
+        );
         ret
     }
 
@@ -1115,6 +995,164 @@ impl ProposalContext {
     fn iter_ops(&self) -> impl Iterator<Item = &UserOperation> + '_ {
         self.iter_ops_with_simulations().map(|op| &op.op)
     }
+
+    // Go through the simulation violations for a given op and add all entity updates to pass to the mempool in entity_updates
+    fn add_entity_updates(
+        violations: Vec<SimulationViolation>,
+        entity_infos: EntityInfos,
+        entity_updates: &mut BTreeMap<Address, EntityUpdate>,
+    ) {
+        // [EREP-020] When there is a staked factory any error in validation is attributed to it.
+        if entity_infos.factory.map_or(false, |f| f.is_staked) {
+            let factory = entity_infos.factory.unwrap();
+            entity_updates.insert(
+                factory.address,
+                EntityUpdate {
+                    entity: Entity {
+                        kind: EntityType::Factory,
+                        address: factory.address,
+                    },
+                    update_type: EntityUpdateType::StakedInvalidation,
+                },
+            );
+            return;
+        }
+
+        // [EREP-030] When there is a staked sender (without a staked factory) any error in validation is attributed to it.
+        if entity_infos.sender.is_staked {
+            entity_updates.insert(
+                entity_infos.sender.address,
+                EntityUpdate {
+                    entity: Entity {
+                        kind: EntityType::Account,
+                        address: entity_infos.sender.address,
+                    },
+                    update_type: EntityUpdateType::StakedInvalidation,
+                },
+            );
+            return;
+        }
+
+        // If not a staked factory or sender, attribute errors to each entity directly.
+        // For a given op, there can only be a single update per entity so we don't double count the [UREP-030] throttle penalty.
+        for violation in violations {
+            match violation {
+                SimulationViolation::UsedForbiddenOpcode(entity, _, _) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::UsedForbiddenPrecompile(entity, _, _) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::AccessedUndeployedContract(entity, _) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::InvalidStorageAccess(entity, _) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::CalledBannedEntryPointMethod(entity) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::CallHadValue(entity) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::NotStaked(entity, _, _) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                SimulationViolation::UnintendedRevertWithMessage(entity_type, _, address) => {
+                    if let Some(entity_address) = address {
+                        ProposalContext::add_entity_update(
+                            Entity {
+                                kind: entity_type,
+                                address: entity_address,
+                            },
+                            entity_infos,
+                            entity_updates,
+                        );
+                    }
+                }
+                SimulationViolation::UnintendedRevert(entity_type, address) => {
+                    if let Some(entity_address) = address {
+                        ProposalContext::add_entity_update(
+                            Entity {
+                                kind: entity_type,
+                                address: entity_address,
+                            },
+                            entity_infos,
+                            entity_updates,
+                        );
+                    }
+                }
+                SimulationViolation::OutOfGas(entity) => {
+                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    // Add an entity update for the entity
+    fn add_entity_update(
+        entity: Entity,
+        entity_infos: EntityInfos,
+        update_map: &mut BTreeMap<Address, EntityUpdate>,
+    ) {
+        let entity_update = EntityUpdate {
+            entity,
+            update_type: ProposalContext::get_entity_update_type(entity.kind, entity_infos),
+        };
+        update_map.insert(entity.address, entity_update);
+    }
+
+    // For a given entity that has caused a revert during simulation, determine if the entity was staked or not.
+    // If it is staked, we push a StakedInvalidation entity update to enforce [SREP-050]
+    // If it is not staked, we push an UnstakedInvalidation entity update to enforce [UREP-030]
+    fn get_entity_update_type(
+        entity_type: EntityType,
+        entity_infos: EntityInfos,
+    ) -> EntityUpdateType {
+        match entity_type {
+            EntityType::Account => {
+                if entity_infos.sender.is_staked {
+                    EntityUpdateType::StakedInvalidation
+                } else {
+                    EntityUpdateType::UnstakedInvalidation
+                }
+            }
+            EntityType::Paymaster => {
+                if let Some(paymaster) = entity_infos.paymaster {
+                    if paymaster.is_staked {
+                        EntityUpdateType::StakedInvalidation
+                    } else {
+                        EntityUpdateType::UnstakedInvalidation
+                    }
+                } else {
+                    EntityUpdateType::StakedInvalidation
+                }
+            }
+            EntityType::Factory => {
+                if let Some(factory) = entity_infos.factory {
+                    if factory.is_staked {
+                        EntityUpdateType::StakedInvalidation
+                    } else {
+                        EntityUpdateType::UnstakedInvalidation
+                    }
+                } else {
+                    EntityUpdateType::StakedInvalidation
+                }
+            }
+            EntityType::Aggregator => {
+                if let Some(aggregator) = entity_infos.aggregator {
+                    if aggregator.is_staked {
+                        EntityUpdateType::StakedInvalidation
+                    } else {
+                        EntityUpdateType::UnstakedInvalidation
+                    }
+                } else {
+                    EntityUpdateType::StakedInvalidation
+                }
+            }
+        }
+    }
 }
 
 fn get_gas_required_for_op(
@@ -1189,7 +1227,12 @@ mod tests {
         let op = UserOperation::default();
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
-            simulation_result: Box::new(|| Err((ViolationError::Violations(vec![]), None))),
+            simulation_result: Box::new(|| {
+                Err(SimulationError {
+                    violation_error: ViolationError::Violations(vec![]),
+                    entity_infos: None,
+                })
+            }),
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1202,7 +1245,10 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
-                Err((ViolationError::Other(anyhow!("simulation failed")), None))
+                Err(SimulationError {
+                    violation_error: ViolationError::Other(anyhow!("simulation failed")),
+                    entity_infos: None,
+                })
             }),
         }])
         .await;
@@ -1216,10 +1262,12 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
-                Err((
-                    ViolationError::Violations(vec![SimulationViolation::InvalidSignature]),
-                    None,
-                ))
+                Err(SimulationError {
+                    violation_error: ViolationError::Violations(vec![
+                        SimulationViolation::InvalidSignature,
+                    ]),
+                    entity_infos: None,
+                })
             }),
         }])
         .await;
@@ -1526,11 +1574,11 @@ mod tests {
             vec![
                 EntityUpdate {
                     entity: Entity::paymaster(address(1)),
-                    update_type: EntityUpdateType::StakedInvalidation,
+                    update_type: EntityUpdateType::UnstakedInvalidation,
                 },
                 EntityUpdate {
                     entity: Entity::factory(address(3)),
-                    update_type: EntityUpdateType::StakedInvalidation,
+                    update_type: EntityUpdateType::UnstakedInvalidation,
                 },
             ]
         );
@@ -1628,7 +1676,7 @@ mod tests {
         let context = ProposalContext {
             groups_by_aggregator,
             rejected_ops: vec![],
-            entity_updates: vec![],
+            entity_updates: BTreeMap::new(),
         };
 
         // The gas requirement from the execution of the first UO is: g >= p_1 + 2v_1 + c_1 + 5000
@@ -1674,7 +1722,7 @@ mod tests {
         let context = ProposalContext {
             groups_by_aggregator,
             rejected_ops: vec![],
-            entity_updates: vec![],
+            entity_updates: BTreeMap::new(),
         };
         let gas_limit = context.get_bundle_gas_limit(chain_id);
 
@@ -1709,7 +1757,6 @@ mod tests {
         )
         .await;
 
-        assert!(bundle.rejected_entities.is_empty());
         assert_eq!(bundle.rejected_ops, vec![op1]);
         assert!(bundle.ops_per_aggregator.is_empty());
     }
@@ -1742,7 +1789,6 @@ mod tests {
         )
         .await;
 
-        assert!(bundle.rejected_entities.is_empty());
         assert_eq!(bundle.rejected_ops, vec![op1]);
         assert_eq!(
             bundle.ops_per_aggregator,
@@ -1809,7 +1855,6 @@ mod tests {
         )
         .await;
 
-        assert!(bundle.rejected_entities.is_empty());
         assert_eq!(
             bundle.rejected_ops,
             vec![aggregated_op_a2, aggregated_op_a1]

@@ -85,15 +85,22 @@ impl SimulationSuccess {
     }
 }
 
-struct ErrorWrapper(Error);
-
 /// The result of a failed simulation. We return a list of the violations that ocurred during the failed simulation
 /// and also information about all the entities used in the op to handle entity penalties
-pub type SimulationError = (ViolationError<SimulationViolation>, Option<EntityInfos>);
+#[derive(Clone, Debug)]
+pub struct SimulationError {
+    /// A list of violations that occurred during simulation, or some other error that occurred not directly related to simulation rules
+    pub violation_error: ViolationError<SimulationViolation>,
+    /// The addresses and staking states of all the entities involved in an op. This value is None when simulation fails at a point where we are no
+    pub entity_infos: Option<EntityInfos>,
+}
 
-impl From<ErrorWrapper> for SimulationError {
-    fn from(error: ErrorWrapper) -> Self {
-        (ViolationError::Other(error.0), None)
+impl From<Error> for SimulationError {
+    fn from(error: Error) -> Self {
+        SimulationError {
+            violation_error: ViolationError::Other(error),
+            entity_infos: None,
+        }
     }
 }
 
@@ -175,8 +182,7 @@ where
         let tracer_out = self
             .simulate_validation_tracer
             .trace_simulate_validation(op.clone(), block_id, self.sim_settings.max_verification_gas)
-            .await
-            .map_err(ErrorWrapper)?;
+            .await?;
         let num_phases = tracer_out.phases.len() as u32;
         // Check if there are too many phases here, then check too few at the
         // end. We are detecting cases where the entry point is broken. Too many
@@ -184,18 +190,20 @@ where
         // mean the entry point is fine if one of the phases fails and it
         // doesn't reach the end of execution.
         if num_phases > 3 {
-            Err((
-                ViolationError::Violations(vec![SimulationViolation::WrongNumberOfPhases(
-                    num_phases,
-                )]),
-                None,
-            ))?
+            Err(SimulationError {
+                violation_error: ViolationError::Violations(vec![
+                    SimulationViolation::WrongNumberOfPhases(num_phases),
+                ]),
+                entity_infos: None,
+            })?
         }
         let Some(ref revert_data) = tracer_out.revert_data else {
-            Err((
-                ViolationError::Violations(vec![SimulationViolation::DidNotRevert]),
-                None,
-            ))?
+            Err(SimulationError {
+                violation_error: ViolationError::Violations(vec![
+                    SimulationViolation::DidNotRevert,
+                ]),
+                entity_infos: None,
+            })?
         };
         let last_entity_type =
             entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
@@ -207,14 +215,16 @@ where
                 EntityType::Account => Some(sender_address),
                 _ => None,
             };
-            Err((
-                ViolationError::Violations(vec![SimulationViolation::UnintendedRevertWithMessage(
-                    last_entity_type,
-                    failed_op.reason,
-                    entity_addr,
-                )]),
-                None,
-            ))?
+            Err(SimulationError {
+                violation_error: ViolationError::Violations(vec![
+                    SimulationViolation::UnintendedRevertWithMessage(
+                        last_entity_type,
+                        failed_op.reason,
+                        entity_addr,
+                    ),
+                ]),
+                entity_infos: None,
+            })?
         }
         let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
             let entity_addr = match last_entity_type {
@@ -223,13 +233,12 @@ where
                 EntityType::Account => Some(sender_address),
                 _ => None,
             };
-            Err((
-                ViolationError::Violations(vec![SimulationViolation::UnintendedRevert(
-                    last_entity_type,
-                    entity_addr,
-                )]),
-                None,
-            ))?
+            Err(SimulationError {
+                violation_error: ViolationError::Violations(vec![
+                    SimulationViolation::UnintendedRevert(last_entity_type, entity_addr),
+                ]),
+                entity_infos: None,
+            })?
         };
         let entity_infos = EntityInfos::new(
             factory_address,
@@ -243,12 +252,12 @@ where
             .filter(|factory| !factory.is_staked)
             .is_some();
         if num_phases < 3 {
-            Err((
-                ViolationError::Violations(vec![SimulationViolation::WrongNumberOfPhases(
-                    num_phases,
-                )]),
-                Some(entity_infos),
-            ))?
+            Err(SimulationError {
+                violation_error: ViolationError::Violations(vec![
+                    SimulationViolation::WrongNumberOfPhases(num_phases),
+                ]),
+                entity_infos: Some(entity_infos),
+            })?
         };
         Ok(ValidationContext {
             block_id,
@@ -463,8 +472,7 @@ where
         );
 
         let (code_hash, aggregator_out) =
-            tokio::try_join!(code_hash_future, aggregator_signature_future)
-                .map_err(ErrorWrapper)?;
+            tokio::try_join!(code_hash_future, aggregator_signature_future)?;
 
         if let Some(expected_code_hash) = expected_code_hash {
             if expected_code_hash != code_hash {
@@ -481,7 +489,10 @@ where
         };
 
         if !violations.is_empty() {
-            return Err((ViolationError::Violations(violations), None));
+            return Err(SimulationError {
+                violation_error: ViolationError::Violations(violations),
+                entity_infos: None,
+            });
         }
 
         Ok((code_hash, aggregator))
@@ -506,7 +517,7 @@ where
                 .provider
                 .get_latest_block_hash()
                 .await
-                .map_err(|e| ErrorWrapper(anyhow::Error::from(e)))?,
+                .map_err(anyhow::Error::from)?,
         };
         let block_id = block_hash.into();
         let mut context = match self.create_context(op.clone(), block_id).await {
@@ -515,19 +526,17 @@ where
         };
 
         // Gather all violations from the tracer
-        let mut violations = self
-            .gather_context_violations(&mut context)
-            .map_err(ErrorWrapper)?;
+        let mut violations = self.gather_context_violations(&mut context)?;
         // Sort violations so that the final error message is deterministic
         violations.sort();
         // Check violations against mempool rules, find supporting mempools, error if none found
         let mempools = match match_mempools(&self.mempool_configs, &violations) {
             MempoolMatchResult::Matches(pools) => pools,
             MempoolMatchResult::NoMatch(i) => {
-                return Err((
-                    ViolationError::Violations(vec![violations[i].clone()]),
-                    Some(context.entity_infos),
-                ))
+                return Err(SimulationError {
+                    violation_error: ViolationError::Violations(vec![violations[i].clone()]),
+                    entity_infos: Some(context.entity_infos),
+                })
             }
         };
 
@@ -691,7 +700,7 @@ pub struct EntityInfos {
     pub sender: EntityInfo,
     /// The entity info for the paymaster
     pub paymaster: Option<EntityInfo>,
-    /// The entity infor for the aggregator
+    /// The entity info for the aggregator
     pub aggregator: Option<EntityInfo>,
 }
 
@@ -1062,7 +1071,7 @@ mod tests {
 
         assert!(matches!(
             res,
-            Err((ViolationError::Violations(violations), None)) if matches!(
+            Err(SimulationError { violation_error: ViolationError::Violations(violations), entity_infos: None}) if matches!(
                 violations.get(0),
                 Some(&SimulationViolation::UnintendedRevertWithMessage(
                     EntityType::Paymaster,

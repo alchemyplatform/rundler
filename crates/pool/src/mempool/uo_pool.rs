@@ -442,7 +442,8 @@ impl UoPoolMetrics {
 mod tests {
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
-        SimulationSettings, SimulationSuccess, SimulationViolation, ViolationError,
+        SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,
+        ViolationError,
     };
     use rundler_types::{EntityType, GasFees};
 
@@ -886,7 +887,10 @@ mod tests {
                 .expect_simulate_validation()
                 .returning(move |_, _, _| {
                     if let Some(error) = &op.simulation_error {
-                        Err((ViolationError::Violations(vec![error.clone()]), None))
+                        Err(SimulationError {
+                            violation_error: ViolationError::Violations(vec![error.clone()]),
+                            entity_infos: None,
+                        })
                     } else {
                         Ok(SimulationSuccess {
                             account_is_staked: op.staked,
