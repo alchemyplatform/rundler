@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
-use rundler_types::{Entity, EntityUpdate, UserOperation};
+use rundler_types::{EntityUpdate, UserOperation};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -154,18 +154,6 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::RemoveOps => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
-        }
-    }
-
-    async fn remove_entities(&self, entry_point: Address, entities: Vec<Entity>) -> PoolResult<()> {
-        let req = ServerRequestKind::RemoveEntities {
-            entry_point,
-            entities,
-        };
-        let resp = self.send(req).await?;
-        match resp {
-            ServerResponse::RemoveEntities => Ok(()),
             _ => Err(PoolServerError::UnexpectedResponse),
         }
     }
@@ -311,18 +299,6 @@ where
         Ok(())
     }
 
-    fn remove_entities<'a>(
-        &self,
-        entry_point: Address,
-        entities: impl IntoIterator<Item = &'a Entity>,
-    ) -> PoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        for entity in entities {
-            mempool.remove_entity(*entity);
-        }
-        Ok(())
-    }
-
     fn update_entities<'a>(
         &self,
         entry_point: Address,
@@ -429,12 +405,6 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::RemoveEntities { entry_point, entities } => {
-                            match self.remove_entities(entry_point, &entities) {
-                                Ok(_) => Ok(ServerResponse::RemoveEntities),
-                                Err(e) => Err(e),
-                            }
-                        },
                         ServerRequestKind::UpdateEntities { entry_point, entity_updates } => {
                             match self.update_entities(entry_point, &entity_updates) {
                                 Ok(_) => Ok(ServerResponse::UpdateEntities),
@@ -503,10 +473,6 @@ enum ServerRequestKind {
         entry_point: Address,
         ops: Vec<H256>,
     },
-    RemoveEntities {
-        entry_point: Address,
-        entities: Vec<Entity>,
-    },
     UpdateEntities {
         entry_point: Address,
         entity_updates: Vec<EntityUpdate>,
@@ -537,7 +503,6 @@ enum ServerResponse {
         ops: Vec<PoolOperation>,
     },
     RemoveOps,
-    RemoveEntities,
     UpdateEntities,
     DebugClearState,
     DebugDumpMempool {

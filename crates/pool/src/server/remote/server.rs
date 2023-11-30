@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use rundler_task::grpc::{metrics::GrpcMetricsLayer, protos::from_bytes};
-use rundler_types::{Entity, EntityUpdate};
+use rundler_types::EntityUpdate;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -33,17 +33,15 @@ use super::protos::{
     add_op_response, debug_clear_state_response, debug_dump_mempool_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
     op_pool_server::{OpPool, OpPoolServer},
-    remove_entities_response, remove_ops_response, update_entities_response, AddOpRequest,
-    AddOpResponse, AddOpSuccess, DebugClearStateRequest, DebugClearStateResponse,
-    DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
-    DebugDumpMempoolSuccess, DebugDumpReputationRequest, DebugDumpReputationResponse,
-    DebugDumpReputationSuccess, DebugSetReputationRequest, DebugSetReputationResponse,
-    DebugSetReputationSuccess, GetOpsRequest, GetOpsResponse, GetOpsSuccess,
-    GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse, MempoolOp,
-    RemoveEntitiesRequest, RemoveEntitiesResponse, RemoveEntitiesSuccess, RemoveOpsRequest,
-    RemoveOpsResponse, RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
-    UpdateEntitiesRequest, UpdateEntitiesResponse, UpdateEntitiesSuccess,
-    OP_POOL_FILE_DESCRIPTOR_SET,
+    remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
+    DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
+    DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
+    DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
+    DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
+    GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetSupportedEntryPointsRequest,
+    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
+    RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
     mempool::Reputation,
@@ -200,33 +198,6 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => RemoveOpsResponse {
                 result: Some(remove_ops_response::Result::Failure(error.into())),
-            },
-        };
-
-        Ok(Response::new(resp))
-    }
-
-    async fn remove_entities(
-        &self,
-        request: Request<RemoveEntitiesRequest>,
-    ) -> Result<Response<RemoveEntitiesResponse>> {
-        let req = request.into_inner();
-        let ep = self.get_entry_point(&req.entry_point)?;
-        let entities = req
-            .entities
-            .iter()
-            .map(|et| et.try_into())
-            .collect::<Result<Vec<Entity>, _>>()
-            .map_err(|e| Status::internal(format!("Failed to convert to proto entity: {e}")))?;
-
-        let resp = match self.local_pool.remove_entities(ep, entities).await {
-            Ok(_) => RemoveEntitiesResponse {
-                result: Some(remove_entities_response::Result::Success(
-                    RemoveEntitiesSuccess {},
-                )),
-            },
-            Err(error) => RemoveEntitiesResponse {
-                result: Some(remove_entities_response::Result::Failure(error.into())),
             },
         };
 
