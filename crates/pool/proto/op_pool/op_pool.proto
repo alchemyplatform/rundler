@@ -128,10 +128,6 @@ service OpPool {
   // Removes UserOperations from the mempool
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
 
-  // For each Entity, remove all UserOperations that interface with that entity
-  // from the mempool
-  rpc RemoveEntities(RemoveEntitiesRequest) returns (RemoveEntitiesResponse);
-
   // Handles a list of updates to be performed on entities
   rpc UpdateEntities(UpdateEntitiesRequest) returns (UpdateEntitiesResponse);
 
@@ -208,21 +204,6 @@ message RemoveOpsResponse {
   }
 }
 message RemoveOpsSuccess {}
-
-message RemoveEntitiesRequest {
-  // The serilaized entry point address
-  bytes entry_point = 1;
-  // The set of entities for which any UserOperations referencing the entity
-  // should be removed from the mempool
-  repeated Entity entities = 2;
-}
-message RemoveEntitiesResponse {
-  oneof result {
-    RemoveEntitiesSuccess success = 1;
-    MempoolError failure = 2;
-  }
-}
-message RemoveEntitiesSuccess {}
 
 message UpdateEntitiesRequest {
   // The serilaized entry point address

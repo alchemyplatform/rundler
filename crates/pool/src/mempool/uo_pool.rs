@@ -11,10 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use ethers::{
     types::{Address, H256, U256},
@@ -56,7 +53,7 @@ pub(crate) struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator> {
 
 struct UoPoolState {
     pool: PoolInner,
-    throttled_ops: HashMap<H256, u64>,
+    throttled_ops: HashSet<H256>,
     block_number: u64,
 }
 
@@ -78,7 +75,7 @@ where
             reputation,
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(config.into()),
-                throttled_ops: HashMap::new(),
+                throttled_ops: HashSet::new(),
                 block_number: 0,
             }),
             event_sender,
@@ -92,6 +89,38 @@ where
             entry_point: self.config.entry_point,
             event,
         });
+    }
+
+    fn throttle_entity(&self, entity: Entity) {
+        let mut state = self.state.write();
+        let block_number = state.block_number;
+        let removed_op_hashes = state.pool.throttle_entity(entity, block_number);
+
+        let count = removed_op_hashes.len();
+        self.emit(OpPoolEvent::RemovedEntity { entity });
+
+        for op_hash in removed_op_hashes {
+            self.emit(OpPoolEvent::RemovedOp {
+                op_hash,
+                reason: OpRemovalReason::EntityRemoved { entity },
+            })
+        }
+        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
+        UoPoolMetrics::increment_removed_entities(self.config.entry_point);
+    }
+
+    fn remove_entity(&self, entity: Entity) {
+        let removed_op_hashes = self.state.write().pool.remove_entity(entity);
+        let count = removed_op_hashes.len();
+        self.emit(OpPoolEvent::RemovedEntity { entity });
+        for op_hash in removed_op_hashes {
+            self.emit(OpPoolEvent::RemovedOp {
+                op_hash,
+                reason: OpRemovalReason::EntityRemoved { entity },
+            })
+        }
+        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
+        UoPoolMetrics::increment_removed_entities(self.config.entry_point);
     }
 }
 
@@ -172,9 +201,16 @@ where
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
-            for (hash, block) in state.throttled_ops.iter() {
-                if update.latest_block_number - block > self.config.throttled_entity_live_blocks {
-                    to_remove.insert(*hash);
+            for hash in state.throttled_ops.iter() {
+                let block_seen = state
+                    .pool
+                    .get_operation_by_hash(*hash)
+                    .map(|po| po.block_seen);
+                if let Some(block) = block_seen {
+                    if update.latest_block_number - block > self.config.throttled_entity_live_blocks
+                    {
+                        to_remove.insert(*hash);
+                    }
                 }
             }
             for hash in to_remove {
@@ -263,7 +299,7 @@ where
             return Err(MempoolError::UnsupportedAggregator(agg.address));
         }
         let valid_time_range = sim_result.valid_time_range;
-        let pool_op = PoolOperation {
+        let mut pool_op = PoolOperation {
             uo: op,
             aggregator: None,
             valid_time_range,
@@ -272,25 +308,30 @@ where
             entities_needing_stake: sim_result.entities_needing_stake,
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
+            block_seen: 0,
         };
 
         // Add op to pool
         let (hash, bn) = {
             let mut state = self.state.write();
-            let hash = state.pool.add_operation(pool_op.clone())?;
             let bn = state.block_number;
+            pool_op.block_seen = bn;
+            let hash = state.pool.add_operation(pool_op.clone())?;
             if throttled {
-                state.throttled_ops.insert(hash, bn);
+                state.throttled_ops.insert(hash);
             }
             (hash, bn)
         };
 
         // Update reputation
-        pool_op
-            .staked_entities()
-            .map(|e| e.address)
-            .unique()
-            .for_each(|a| self.reputation.add_seen(a));
+        pool_op.entities().unique().for_each(|e| {
+            self.reputation.add_seen(e.address);
+            if self.reputation.status(e.address) == ReputationStatus::Throttled {
+                self.throttle_entity(e);
+            } else if self.reputation.status(e.address) == ReputationStatus::Banned {
+                self.remove_entity(e);
+            }
+        });
 
         let op_hash = pool_op
             .uo
@@ -330,20 +371,6 @@ where
             })
         }
         UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
-    }
-
-    fn remove_entity(&self, entity: Entity) {
-        let removed_op_hashes = self.state.write().pool.remove_entity(entity);
-        let count = removed_op_hashes.len();
-        self.emit(OpPoolEvent::RemovedEntity { entity });
-        for op_hash in removed_op_hashes {
-            self.emit(OpPoolEvent::RemovedOp {
-                op_hash,
-                reason: OpRemovalReason::EntityRemoved { entity },
-            })
-        }
-        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
-        UoPoolMetrics::increment_removed_entities(self.config.entry_point);
     }
 
     fn update_entity(&self, update: EntityUpdate) {
@@ -440,6 +467,8 @@ impl UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
         SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,

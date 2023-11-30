@@ -63,7 +63,7 @@ impl FromStr for EntityType {
 }
 
 /// An entity associated with a user operation
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Entity {
     /// The type of entity
     pub kind: EntityType,

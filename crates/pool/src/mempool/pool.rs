@@ -40,6 +40,8 @@ pub(crate) struct PoolInnerConfig {
     max_userops_per_sender: usize,
     max_size_of_pool_bytes: usize,
     min_replacement_fee_increase_percentage: u64,
+    throttled_entity_mempool_count: u64,
+    throttled_entity_live_blocks: u64,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -50,6 +52,8 @@ impl From<PoolConfig> for PoolInnerConfig {
             max_userops_per_sender: config.max_userops_per_sender,
             max_size_of_pool_bytes: config.max_size_of_pool_bytes,
             min_replacement_fee_increase_percentage: config.min_replacement_fee_increase_percentage,
+            throttled_entity_mempool_count: config.throttled_entity_mempool_count,
+            throttled_entity_live_blocks: config.throttled_entity_live_blocks,
         }
     }
 }
@@ -145,6 +149,10 @@ impl PoolInner {
         self.count_by_address.get(&address).copied().unwrap_or(0)
     }
 
+    pub(crate) fn get_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
+        self.by_hash.get(&hash).map(|o| o.po.clone())
+    }
+
     pub(crate) fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
         let ret = self.remove_operation_internal(hash, None);
         self.update_metrics();
@@ -176,6 +184,39 @@ impl PoolInner {
         };
         self.update_metrics();
         Some(op.po)
+    }
+
+    /// Remove all but THROTTLED_ENTITY_MEMPOOL_COUNT operations that are within THROTTLED_ENTITY_LIVE_BLOCKS of head
+    /// using the given entity, returning the hashes of the removed operations.
+    pub(crate) fn throttle_entity(
+        &mut self,
+        entity: Entity,
+        current_block_number: u64,
+    ) -> Vec<H256> {
+        let mut uos_kept = self.config.throttled_entity_mempool_count;
+        let to_remove = self
+            .by_hash
+            .iter()
+            .filter(|(_, uo)| {
+                // We want to remove ops that use the throttled entity and are older than THROTTLED_ENTITY_LIVE_BLOCKS behind head, or if we already have kept THROTTLED_ENTITY_MEMPOOL_COUNT ops
+                if uo.po.contains_entity(&entity) {
+                    if uo.po.block_seen + self.config.throttled_entity_live_blocks
+                        < current_block_number
+                        || uos_kept == 0
+                    {
+                        return true;
+                    }
+                    uos_kept = uos_kept.saturating_sub(1);
+                }
+                false
+            })
+            .map(|(hash, _)| *hash)
+            .collect::<Vec<_>>();
+        for &hash in &to_remove {
+            self.remove_operation_internal(hash, None);
+        }
+        self.update_metrics();
+        to_remove
     }
 
     /// Removes all operations using the given entity, returning the hashes of
@@ -796,6 +837,8 @@ mod tests {
             max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
+            throttled_entity_mempool_count: 4,
+            throttled_entity_live_blocks: 10,
         }
     }
 

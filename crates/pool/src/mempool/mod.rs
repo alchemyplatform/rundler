@@ -60,9 +60,6 @@ pub trait Mempool: Send + Sync + 'static {
     /// Removes a set of operations from the pool.
     fn remove_operations(&self, hashes: &[H256]);
 
-    /// Removes all operations associated with a given entity from the pool.
-    fn remove_entity(&self, entity: Entity);
-
     /// Updates the reputation of an entity.
     fn update_entity(&self, entity_update: EntityUpdate);
 
@@ -162,6 +159,8 @@ pub struct PoolOperation {
     pub account_is_staked: bool,
     /// Staking information about all the entities.
     pub entity_infos: EntityInfos,
+    /// The block number at which the operation first entered the pool
+    pub block_seen: u64,
 }
 
 impl PoolOperation {
@@ -249,6 +248,7 @@ mod tests {
             entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
+            block_seen: 0,
         };
 
         assert!(po.requires_stake(EntityType::Account));

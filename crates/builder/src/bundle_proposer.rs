@@ -293,9 +293,11 @@ where
             .iter()
             .map(|(op, _)| op.uo.sender)
             .collect();
-        let mut groups_by_aggregator = LinkedHashMap::<Option<Address>, AggregatorGroup>::new();
-        let mut rejected_ops = Vec::<(UserOperation, EntityInfos)>::new();
-        let mut entity_updates: BTreeMap<Address, EntityUpdate> = BTreeMap::new();
+        let mut context = ProposalContext {
+            groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup>::new(),
+            rejected_ops: Vec::<(UserOperation, EntityInfos)>::new(),
+            entity_updates: BTreeMap::new(),
+        };
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
         let ov = GasOverheads::default();
@@ -319,8 +321,8 @@ where
                     {
                         // try to use EntityInfos from the latest simulation, but if it doesn't exist use the EntityInfos from the previous simulation
                         let infos = entity_infos.map_or(po.entity_infos, |e| e);
-                        ProposalContext::add_entity_updates(violations, infos, &mut entity_updates);
-                        rejected_ops.push((op, po.entity_infos));
+                        context.process_simulation_violations(violations, infos);
+                        context.rejected_ops.push((op, po.entity_infos));
                     }
                     continue;
                 }
@@ -338,7 +340,7 @@ where
                         valid_range: simulation.valid_time_range,
                     },
                 ));
-                rejected_ops.push((op, po.entity_infos));
+                context.rejected_ops.push((op, po.entity_infos));
                 continue;
             }
 
@@ -392,17 +394,13 @@ where
                 simulation.requires_post_op,
             );
 
-            groups_by_aggregator
+            context
+                .groups_by_aggregator
                 .entry(simulation.aggregator_address())
                 .or_default()
                 .ops_with_simulations
                 .push(OpWithSimulation { op, simulation });
         }
-        let mut context = ProposalContext {
-            groups_by_aggregator,
-            rejected_ops,
-            entity_updates,
-        };
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
             let _ =
@@ -997,15 +995,15 @@ impl ProposalContext {
     }
 
     // Go through the simulation violations for a given op and add all entity updates to pass to the mempool in entity_updates
-    fn add_entity_updates(
+    fn process_simulation_violations(
+        &mut self,
         violations: Vec<SimulationViolation>,
         entity_infos: EntityInfos,
-        entity_updates: &mut BTreeMap<Address, EntityUpdate>,
     ) {
         // [EREP-020] When there is a staked factory any error in validation is attributed to it.
         if entity_infos.factory.map_or(false, |f| f.is_staked) {
             let factory = entity_infos.factory.unwrap();
-            entity_updates.insert(
+            self.entity_updates.insert(
                 factory.address,
                 EntityUpdate {
                     entity: Entity {
@@ -1020,7 +1018,7 @@ impl ProposalContext {
 
         // [EREP-030] When there is a staked sender (without a staked factory) any error in validation is attributed to it.
         if entity_infos.sender.is_staked {
-            entity_updates.insert(
+            self.entity_updates.insert(
                 entity_infos.sender.address,
                 EntityUpdate {
                     entity: Entity {
@@ -1038,52 +1036,50 @@ impl ProposalContext {
         for violation in violations {
             match violation {
                 SimulationViolation::UsedForbiddenOpcode(entity, _, _) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::UsedForbiddenPrecompile(entity, _, _) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::AccessedUndeployedContract(entity, _) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::InvalidStorageAccess(entity, _) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::CalledBannedEntryPointMethod(entity) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::CallHadValue(entity) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::NotStaked(entity, _, _) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::UnintendedRevertWithMessage(entity_type, _, address) => {
                     if let Some(entity_address) = address {
-                        ProposalContext::add_entity_update(
+                        self.add_entity_update(
                             Entity {
                                 kind: entity_type,
                                 address: entity_address,
                             },
                             entity_infos,
-                            entity_updates,
                         );
                     }
                 }
                 SimulationViolation::UnintendedRevert(entity_type, address) => {
                     if let Some(entity_address) = address {
-                        ProposalContext::add_entity_update(
+                        self.add_entity_update(
                             Entity {
                                 kind: entity_type,
                                 address: entity_address,
                             },
                             entity_infos,
-                            entity_updates,
                         );
                     }
                 }
                 SimulationViolation::OutOfGas(entity) => {
-                    ProposalContext::add_entity_update(entity, entity_infos, entity_updates)
+                    self.add_entity_update(entity, entity_infos)
                 }
                 _ => continue,
             }
@@ -1091,16 +1087,12 @@ impl ProposalContext {
     }
 
     // Add an entity update for the entity
-    fn add_entity_update(
-        entity: Entity,
-        entity_infos: EntityInfos,
-        update_map: &mut BTreeMap<Address, EntityUpdate>,
-    ) {
+    fn add_entity_update(&mut self, entity: Entity, entity_infos: EntityInfos) {
         let entity_update = EntityUpdate {
             entity,
             update_type: ProposalContext::get_entity_update_type(entity.kind, entity_infos),
         };
-        update_map.insert(entity.address, entity_update);
+        self.entity_updates.insert(entity.address, entity_update);
     }
 
     // For a given entity that has caused a revert during simulation, determine if the entity was staked or not.
