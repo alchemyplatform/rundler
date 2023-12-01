@@ -121,10 +121,10 @@ where
     C: PoolServer,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
-        let (ops, block_hash, bundle_fees) = try_join!(
+        let (ops, (block_hash, _), bundle_fees) = try_join!(
             self.get_ops_from_pool(),
             self.provider
-                .get_latest_block_hash()
+                .get_latest_block_hash_and_number()
                 .map_err(anyhow::Error::from),
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
@@ -293,11 +293,7 @@ where
             .iter()
             .map(|(op, _)| op.uo.sender)
             .collect();
-        let mut context = ProposalContext {
-            groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup>::new(),
-            rejected_ops: Vec::<(UserOperation, EntityInfos)>::new(),
-            entity_updates: BTreeMap::new(),
-        };
+        let mut context = ProposalContext::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
         let ov = GasOverheads::default();
@@ -816,6 +812,14 @@ struct AggregatorGroup {
 }
 
 impl ProposalContext {
+    fn new() -> Self {
+        Self {
+            groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup>::new(),
+            rejected_ops: Vec::<(UserOperation, EntityInfos)>::new(),
+            entity_updates: BTreeMap::new(),
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.groups_by_aggregator.is_empty()
     }
@@ -1170,7 +1174,10 @@ fn get_gas_required_for_op(
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use ethers::{types::H160, utils::parse_units};
+    use ethers::{
+        types::{H160, U64},
+        utils::parse_units,
+    };
     use rundler_pool::MockPoolServer;
     use rundler_provider::{AggregatorSimOut, MockEntryPoint, MockProvider};
     use rundler_sim::{MockSimulator, SimulationViolation, ViolationError};
@@ -1945,8 +1952,8 @@ mod tests {
             .collect();
         let mut provider = MockProvider::new();
         provider
-            .expect_get_latest_block_hash()
-            .returning(move || Ok(current_block_hash));
+            .expect_get_latest_block_hash_and_number()
+            .returning(move || Ok((current_block_hash, U64::zero())));
         provider
             .expect_get_base_fee()
             .returning(move || Ok(base_fee));

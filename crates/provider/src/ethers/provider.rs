@@ -122,15 +122,19 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         Ok(Middleware::get_balance(self, address, block).await?)
     }
 
-    async fn get_latest_block_hash(&self) -> ProviderResult<H256> {
-        Ok(
-            Middleware::get_block(self, BlockId::Number(BlockNumber::Latest))
-                .await
-                .context("should load block to get hash")?
-                .context("block should exist to get latest hash")?
+    async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(H256, U64)> {
+        let latest_block = Middleware::get_block(self, BlockId::Number(BlockNumber::Latest))
+            .await
+            .context("should load block to get hash")?
+            .context("block should exist to get latest hash")?;
+        Ok((
+            latest_block
                 .hash
                 .context("hash should be present on block")?,
-        )
+            latest_block
+                .number
+                .context("number should be present on block")?,
+        ))
     }
 
     async fn get_base_fee(&self) -> ProviderResult<U256> {

@@ -205,7 +205,7 @@ where
                 let block_seen = state
                     .pool
                     .get_operation_by_hash(*hash)
-                    .map(|po| po.block_seen);
+                    .map(|po| po.sim_block_number);
                 if let Some(block) = block_seen {
                     if update.latest_block_number - block > self.config.throttled_entity_live_blocks
                     {
@@ -299,28 +299,26 @@ where
             return Err(MempoolError::UnsupportedAggregator(agg.address));
         }
         let valid_time_range = sim_result.valid_time_range;
-        let mut pool_op = PoolOperation {
+        let pool_op = PoolOperation {
             uo: op,
             aggregator: None,
             valid_time_range,
             expected_code_hash: sim_result.code_hash,
             sim_block_hash: sim_result.block_hash,
+            sim_block_number: sim_result.block_number.unwrap(), // simulation always returns a block number when called without a specified block_hash
             entities_needing_stake: sim_result.entities_needing_stake,
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
-            block_seen: 0,
         };
 
         // Add op to pool
-        let (hash, bn) = {
+        let hash = {
             let mut state = self.state.write();
-            let bn = state.block_number;
-            pool_op.block_seen = bn;
             let hash = state.pool.add_operation(pool_op.clone())?;
             if throttled {
                 state.throttled_ops.insert(hash);
             }
-            (hash, bn)
+            hash
         };
 
         // Update reputation
@@ -341,7 +339,7 @@ where
         self.emit(OpPoolEvent::ReceivedOp {
             op_hash,
             op: pool_op.uo,
-            block_number: bn,
+            block_number: pool_op.sim_block_number,
             origin,
             valid_after,
             valid_until,
@@ -923,6 +921,7 @@ mod tests {
                     } else {
                         Ok(SimulationSuccess {
                             account_is_staked: op.staked,
+                            block_number: Some(0),
                             ..SimulationSuccess::default()
                         })
                     }

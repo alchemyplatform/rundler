@@ -195,12 +195,12 @@ impl PoolInner {
     ) -> Vec<H256> {
         let mut uos_kept = self.config.throttled_entity_mempool_count;
         let to_remove = self
-            .by_hash
+            .best
             .iter()
-            .filter(|(_, uo)| {
+            .filter(|o| {
                 // We want to remove ops that use the throttled entity and are older than THROTTLED_ENTITY_LIVE_BLOCKS behind head, or if we already have kept THROTTLED_ENTITY_MEMPOOL_COUNT ops
-                if uo.po.contains_entity(&entity) {
-                    if uo.po.block_seen + self.config.throttled_entity_live_blocks
+                if o.po.contains_entity(&entity) {
+                    if o.po.sim_block_number + self.config.throttled_entity_live_blocks
                         < current_block_number
                         || uos_kept == 0
                     {
@@ -210,7 +210,10 @@ impl PoolInner {
                 }
                 false
             })
-            .map(|(hash, _)| *hash)
+            .map(|o| {
+                o.po.uo
+                    .op_hash(self.config.entry_point, self.config.chain_id)
+            })
             .collect::<Vec<_>>();
         for &hash in &to_remove {
             self.remove_operation_internal(hash, None);

@@ -53,6 +53,8 @@ pub struct SimulationSuccess {
     pub mempools: Vec<H256>,
     /// Block hash this operation was simulated against
     pub block_hash: H256,
+    /// Block number this operation was simulated against
+    pub block_number: Option<u64>,
     /// Gas used in the pre-op phase of simulation measured
     /// by the entry point
     pub pre_op_gas: U256,
@@ -530,13 +532,17 @@ where
         block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationSuccess, SimulationError> {
-        let block_hash = match block_hash {
-            Some(block_hash) => block_hash,
-            None => self
-                .provider
-                .get_latest_block_hash()
-                .await
-                .map_err(anyhow::Error::from)?,
+        let (block_hash, block_number) = match block_hash {
+            // If we are given a block_hash, we return a None block number, avoiding an extra call
+            Some(block_hash) => (block_hash, None),
+            None => {
+                let hash_and_num = self
+                    .provider
+                    .get_latest_block_hash_and_number()
+                    .await
+                    .map_err(anyhow::Error::from)?;
+                (hash_and_num.0, Some(hash_and_num.1.as_u64()))
+            }
         };
         let block_id = block_hash.into();
         let mut context = match self.create_context(op.clone(), block_id).await {
@@ -589,6 +595,7 @@ where
         Ok(SimulationSuccess {
             mempools,
             block_hash,
+            block_number,
             pre_op_gas,
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
             aggregator,
@@ -895,7 +902,7 @@ mod tests {
     use ethers::{
         abi::AbiEncode,
         providers::JsonRpcError,
-        types::{Address, BlockNumber, Bytes},
+        types::{Address, BlockNumber, Bytes, U64},
         utils::hex,
     };
     use rundler_provider::{AggregatorOut, MockProvider, ProviderError};
@@ -1016,14 +1023,17 @@ mod tests {
     async fn test_simulate_validation() {
         let (mut provider, mut tracer) = create_base_config();
 
-        provider.expect_get_latest_block_hash().returning(|| {
-            Ok(
-                H256::from_str(
-                    "0x38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d",
-                )
-                .unwrap(),
-            )
-        });
+        provider
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| {
+                Ok((
+                    H256::from_str(
+                        "0x38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d",
+                    )
+                    .unwrap(),
+                    U64::zero(),
+                ))
+            });
 
         tracer
             .expect_trace_simulate_validation()

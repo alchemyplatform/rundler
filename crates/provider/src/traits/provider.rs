@@ -18,7 +18,7 @@ use std::{fmt::Debug, sync::Arc};
 use ethers::types::{
     transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
     FeeHistory, Filter, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log,
-    Transaction, TransactionReceipt, TxHash, H256, U256,
+    Transaction, TransactionReceipt, TxHash, H256, U256, U64,
 };
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -110,8 +110,8 @@ pub trait Provider: Send + Sync + Debug + 'static {
         trace_options: GethDebugTracingCallOptions,
     ) -> ProviderResult<GethTrace>;
 
-    /// Get the latest block hash
-    async fn get_latest_block_hash(&self) -> ProviderResult<H256>;
+    /// Get the latest block hash and number
+    async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(H256, U64)>;
 
     /// Get the base fee per gas of the pending block
     async fn get_base_fee(&self) -> ProviderResult<U256>;
