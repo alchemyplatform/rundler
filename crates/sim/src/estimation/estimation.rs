@@ -113,8 +113,8 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
             provider, settings, ..
         } = self;
 
-        let block_hash = provider
-            .get_latest_block_hash()
+        let (block_hash, _) = provider
+            .get_latest_block_hash_and_number()
             .await
             .map_err(anyhow::Error::from)?;
 
@@ -393,7 +393,7 @@ mod tests {
     use ethers::{
         abi::{AbiEncode, Address},
         providers::JsonRpcError,
-        types::Chain,
+        types::{Chain, U64},
         utils::hex,
     };
     use rundler_provider::{MockEntryPoint, MockProvider, ProviderError};
@@ -1089,8 +1089,8 @@ mod tests {
             .expect_get_code()
             .returning(|_a, _b| Ok(Bytes::new()));
         provider
-            .expect_get_latest_block_hash()
-            .returning(|| Ok(H256::zero()));
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((H256::zero(), U64::zero())));
         provider.expect_call().returning(|_a, _b| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(100000),
@@ -1160,8 +1160,8 @@ mod tests {
             .expect_get_code()
             .returning(|_a, _b| Ok(Bytes::new()));
         provider
-            .expect_get_latest_block_hash()
-            .returning(|| Ok(H256::zero()));
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((H256::zero(), U64::zero())));
         provider.expect_call().returning(|_a, _b| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(100000),

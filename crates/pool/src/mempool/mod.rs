@@ -153,14 +153,14 @@ pub struct PoolOperation {
     pub expected_code_hash: H256,
     /// The block hash simulation was completed at
     pub sim_block_hash: H256,
+    /// The block number simulation was completed at
+    pub sim_block_number: u64,
     /// List of entities that need to stake for this operation.
     pub entities_needing_stake: Vec<EntityType>,
     /// Whether the account is staked.
     pub account_is_staked: bool,
     /// Staking information about all the entities.
     pub entity_infos: EntityInfos,
-    /// The block number at which the operation first entered the pool
-    pub block_seen: u64,
 }
 
 impl PoolOperation {
@@ -245,10 +245,10 @@ mod tests {
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
+            sim_block_number: 0,
             entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
-            block_seen: 0,
         };
 
         assert!(po.requires_stake(EntityType::Account));
