@@ -125,8 +125,8 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
     async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(H256, U64)> {
         let latest_block = Middleware::get_block(self, BlockId::Number(BlockNumber::Latest))
             .await
-            .context("should load block to get hash")?
-            .context("block should exist to get latest hash")?;
+            .context("should load block to get hash and number")?
+            .context("block should exist to get latest hash and number")?;
         Ok((
             latest_block
                 .hash
