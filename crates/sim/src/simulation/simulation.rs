@@ -311,7 +311,7 @@ where
         }
 
         let sender_address = entity_infos.sender_address();
-        let mut entity_type_storage_restrictions: HashMap<EntityType, Entity> = HashMap::new();
+        let mut entity_types_needing_stake: HashMap<EntityType, Entity> = HashMap::new();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let kind = entity_type_from_simulation_phase(index).unwrap();
@@ -352,8 +352,8 @@ where
                 && !entry_point_out.return_info.paymaster_context.is_empty()
                 && !entity_info.is_staked
             {
-                entity_type_requires_stake(
-                    &mut entity_type_storage_restrictions,
+                entity_type_needs_stake(
+                    &mut entity_types_needing_stake,
                     EntityType::Paymaster,
                     entity_infos,
                 );
@@ -377,8 +377,8 @@ where
                         StorageRestriction::Allowed => {}
                         StorageRestriction::NeedsStake(e) => {
                             if !entity_info.is_staked {
-                                entity_type_requires_stake(
-                                    &mut entity_type_storage_restrictions,
+                                entity_type_needs_stake(
+                                    &mut entity_types_needing_stake,
                                     e,
                                     entity_infos,
                                 );
@@ -421,15 +421,15 @@ where
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
-                entity_type_requires_stake(
-                    &mut entity_type_storage_restrictions,
+                entity_type_needs_stake(
+                    &mut entity_types_needing_stake,
                     EntityType::Aggregator,
                     entity_infos,
                 );
             }
         }
 
-        for ent in entity_type_storage_restrictions.values() {
+        for ent in entity_types_needing_stake.values() {
             entities_needing_stake.push(ent.kind);
             violations.push(SimulationViolation::NotStaked(
                 *ent,
@@ -777,7 +777,7 @@ fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
         && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
 }
 
-fn entity_type_requires_stake(
+fn entity_type_needs_stake(
     storage_restictions: &mut HashMap<EntityType, Entity>,
     entity: EntityType,
     entity_infos: &EntityInfos,
