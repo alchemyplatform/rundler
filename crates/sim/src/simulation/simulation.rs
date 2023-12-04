@@ -311,6 +311,7 @@ where
         }
 
         let sender_address = entity_infos.sender_address();
+        let mut entity_type_storage_restrictions: HashMap<EntityType, Entity> = HashMap::new();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let kind = entity_type_from_simulation_phase(index).unwrap();
@@ -346,8 +347,18 @@ where
                     entity, contract, precompile,
                 ));
             }
-            let mut needs_stake = entity.kind == EntityType::Paymaster
-                && !entry_point_out.return_info.paymaster_context.is_empty();
+
+            if entity.kind == EntityType::Paymaster
+                && !entry_point_out.return_info.paymaster_context.is_empty()
+                && !entity_info.is_staked
+            {
+                entity_type_requires_stake(
+                    &mut entity_type_storage_restrictions,
+                    EntityType::Paymaster,
+                    entity_infos,
+                );
+            }
+
             let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
             for StorageAccess { address, slots } in &phase.storage_accesses {
                 let address = *address;
@@ -357,14 +368,22 @@ where
                         slots_by_address: &tracer_out.associated_slots_by_address,
                         is_unstaked_wallet_creation,
                         entry_point_address: self.entry_point_address,
-                        entity_address: entity_info.address,
+                        entity,
                         sender_address,
                         accessed_address: address,
                         slot: *slot,
                     });
                     match restriction {
                         StorageRestriction::Allowed => {}
-                        StorageRestriction::NeedsStake => needs_stake = true,
+                        StorageRestriction::NeedsStake(e) => {
+                            if !entity_info.is_staked {
+                                entity_type_requires_stake(
+                                    &mut entity_type_storage_restrictions,
+                                    e,
+                                    entity_infos,
+                                );
+                            }
+                        }
                         StorageRestriction::Banned => {
                             banned_slots_accessed.insert(StorageSlot {
                                 address,
@@ -374,16 +393,7 @@ where
                     }
                 }
             }
-            if needs_stake {
-                entities_needing_stake.push(entity.kind);
-                if !entity_info.is_staked {
-                    violations.push(SimulationViolation::NotStaked(
-                        entity,
-                        self.sim_settings.min_stake_value.into(),
-                        self.sim_settings.min_unstake_delay.into(),
-                    ));
-                }
-            }
+
             for slot in banned_slots_accessed {
                 violations.push(SimulationViolation::InvalidStorageAccess(entity, slot));
             }
@@ -410,15 +420,24 @@ where
         }
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
-            entities_needing_stake.push(EntityType::Aggregator);
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
-                violations.push(SimulationViolation::NotStaked(
-                    Entity::aggregator(aggregator_info.address),
-                    self.sim_settings.min_stake_value.into(),
-                    self.sim_settings.min_unstake_delay.into(),
-                ));
+                entity_type_requires_stake(
+                    &mut entity_type_storage_restrictions,
+                    EntityType::Aggregator,
+                    entity_infos,
+                );
             }
         }
+
+        for ent in entity_type_storage_restrictions.values() {
+            entities_needing_stake.push(ent.kind);
+            violations.push(SimulationViolation::NotStaked(
+                *ent,
+                self.sim_settings.min_stake_value.into(),
+                self.sim_settings.min_unstake_delay.into(),
+            ));
+        }
+
         if tracer_out.factory_called_create2_twice {
             let factory = entity_infos.get(EntityType::Factory);
             match factory {
@@ -758,10 +777,26 @@ fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
         && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
 }
 
+fn entity_type_requires_stake(
+    storage_restictions: &mut HashMap<EntityType, Entity>,
+    entity: EntityType,
+    entity_infos: &EntityInfos,
+) {
+    let entity_info = entity_infos.get(entity).unwrap_or_default();
+
+    storage_restictions.insert(
+        entity,
+        Entity {
+            kind: entity,
+            address: entity_info.address,
+        },
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StorageRestriction {
     Allowed,
-    NeedsStake,
+    NeedsStake(EntityType),
     Banned,
 }
 
@@ -770,7 +805,7 @@ struct GetStorageRestrictionArgs<'a> {
     slots_by_address: &'a AssociatedSlotsByAddress,
     is_unstaked_wallet_creation: bool,
     entry_point_address: Address,
-    entity_address: Address,
+    entity: Entity,
     sender_address: Address,
     accessed_address: Address,
     slot: U256,
@@ -781,7 +816,7 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs<'_>) -> StorageRestri
         slots_by_address,
         is_unstaked_wallet_creation,
         entry_point_address,
-        entity_address,
+        entity,
         sender_address,
         accessed_address,
         slot,
@@ -795,12 +830,12 @@ fn get_storage_restriction(args: GetStorageRestrictionArgs<'_>) -> StorageRestri
         if accessed_address == entry_point_address || !is_unstaked_wallet_creation {
             StorageRestriction::Allowed
         } else {
-            StorageRestriction::NeedsStake
+            StorageRestriction::NeedsStake(EntityType::Factory)
         }
-    } else if accessed_address == entity_address
-        || slots_by_address.is_associated_slot(entity_address, slot)
+    } else if accessed_address == entity.address
+        || slots_by_address.is_associated_slot(entity.address, slot)
     {
-        StorageRestriction::NeedsStake
+        StorageRestriction::NeedsStake(entity.kind)
     } else {
         StorageRestriction::Banned
     }
