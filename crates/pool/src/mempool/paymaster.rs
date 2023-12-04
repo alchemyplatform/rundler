@@ -271,6 +271,7 @@ mod tests {
             account_is_staked: true,
             paymaster_metadata: Some(paymaster_meta),
             entity_infos: EntityInfos::default(),
+            sim_block_number: 0,
         }
     }
 
