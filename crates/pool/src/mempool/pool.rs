@@ -31,7 +31,7 @@ use super::{
     error::{MempoolError, MempoolResult},
     paymaster::PaymasterTracker,
     size::SizeTracker,
-    PoolConfig, PoolOperation,
+    PaymasterMetadata, PoolConfig, PoolOperation,
 };
 use crate::chain::MinedOp;
 
@@ -140,8 +140,12 @@ impl PoolInner {
         }
     }
 
-    pub(crate) fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
-        let ret = self.add_operation_internal(Arc::new(op), None);
+    pub(crate) fn add_operation(
+        &mut self,
+        op: PoolOperation,
+        paymaster_meta: Option<PaymasterMetadata>,
+    ) -> MempoolResult<H256> {
+        let ret = self.add_operation_internal(Arc::new(op), None, paymaster_meta);
         self.update_metrics();
         ret
     }
@@ -367,13 +371,14 @@ impl PoolInner {
     }
 
     fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<H256> {
-        self.add_operation_internal(op.po, Some(op.submission_id))
+        self.add_operation_internal(op.po, Some(op.submission_id), None)
     }
 
     fn add_operation_internal(
         &mut self,
         op: Arc<PoolOperation>,
         submission_id: Option<u64>,
+        paymaster_meta: Option<PaymasterMetadata>,
     ) -> MempoolResult<H256> {
         // Check if operation already known or replacing an existing operation
         // if replacing, remove the existing operation
@@ -392,8 +397,9 @@ impl PoolInner {
         }
 
         // check or update paymaster balance
-        if op.paymaster_metadata.is_some() {
-            self.paymaster_balances.add_or_update_balance(&op)?;
+        if let Some(paymaster_meta) = paymaster_meta {
+            self.paymaster_balances
+                .add_or_update_balance(&op, &paymaster_meta)?;
         }
 
         let pool_op = OrderedPoolOperation {
@@ -559,7 +565,7 @@ mod tests {
     fn add_single_op() {
         let mut pool = PoolInner::new(conf());
         let op = create_op(Address::random(), 0, 1);
-        let hash = pool.add_operation(op.clone()).unwrap();
+        let hash = pool.add_operation(op.clone(), None).unwrap();
 
         check_map_entry(pool.by_hash.get(&hash), Some(&op));
         check_map_entry(pool.by_id.get(&op.uo.id()), Some(&op));
@@ -577,7 +583,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone()).unwrap());
+            hashes.push(pool.add_operation(op.clone(), None).unwrap());
         }
 
         for (hash, op) in hashes.iter().zip(&ops) {
@@ -603,7 +609,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone()).unwrap());
+            hashes.push(pool.add_operation(op.clone(), None).unwrap());
         }
 
         // best should be sorted by gas, then by submission id
@@ -624,7 +630,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone()).unwrap());
+            hashes.push(pool.add_operation(op.clone(), None).unwrap());
         }
 
         assert!(pool.remove_operation_by_hash(hashes[0]).is_some());
@@ -655,7 +661,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(account);
-            pool.add_operation(op.clone()).unwrap();
+            pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -675,7 +681,7 @@ mod tests {
 
         let hash = op.uo.op_hash(pool.config.entry_point, pool.config.chain_id);
 
-        pool.add_operation(op).unwrap();
+        pool.add_operation(op, None).unwrap();
 
         let mined_op = MinedOp {
             paymaster: None,
@@ -706,8 +712,8 @@ mod tests {
             .uo
             .op_hash(pool.config.entry_point, pool.config.chain_id);
 
-        pool.add_operation(op).unwrap();
-        pool.add_operation(op_2).unwrap();
+        pool.add_operation(op, None).unwrap();
+        pool.add_operation(op_2, None).unwrap();
 
         let mined_op = MinedOp {
             paymaster: None,
@@ -736,7 +742,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(agg);
-            pool.add_operation(op.clone()).unwrap();
+            pool.add_operation(op, None.clone()).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -757,7 +763,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
-            pool.add_operation(op.clone()).unwrap();
+            pool.add_operation(op, None.clone()).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -774,11 +780,11 @@ mod tests {
         let addr = Address::random();
         for i in 0..args.max_userops_per_sender {
             let op = create_op(addr, i, 1);
-            pool.add_operation(op).unwrap();
+            pool.add_operation(op, None).unwrap();
         }
 
         let op = create_op(addr, args.max_userops_per_sender, 1);
-        assert!(pool.add_operation(op).is_err());
+        assert!(pool.add_operation(op, None).is_err());
     }
 
     #[test]
@@ -799,7 +805,7 @@ mod tests {
         for i in 0..count {
             let mut op = op.clone();
             op.uo.nonce = i.into();
-            hashes.push(pool.add_operation(op).unwrap());
+            hashes.push(pool.add_operation(op, None).unwrap());
         }
 
         assert_eq!(pool.address_count(&sender), 5);
@@ -823,12 +829,12 @@ mod tests {
         let mut pool = PoolInner::new(args.clone());
         for i in 0..20 {
             let op = create_op(Address::random(), i, i + 1);
-            pool.add_operation(op).unwrap();
+            pool.add_operation(op, None).unwrap();
         }
 
         // on greater gas, new op should win
         let op = create_op(Address::random(), args.max_size_of_pool_bytes, 2);
-        let result = pool.add_operation(op);
+        let result = pool.add_operation(op, None);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -838,15 +844,15 @@ mod tests {
         let mut pool = PoolInner::new(args.clone());
         for i in 0..20 {
             let op = create_op(Address::random(), i, i + 1);
-            pool.add_operation(op).unwrap();
+            pool.add_operation(op, None).unwrap();
         }
 
         let op = create_op(Address::random(), args.max_userops_per_sender, 1);
-        assert!(pool.add_operation(op).is_err());
+        assert!(pool.add_operation(op, None).is_err());
 
         // on equal gas, worst should remain because it came first
         let op = create_op(Address::random(), args.max_userops_per_sender, 2);
-        let result = pool.add_operation(op);
+        let result = pool.add_operation(op, None);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -856,11 +862,11 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 100);
         po1.uo.max_priority_fee_per_gas = 100.into();
-        let _ = pool.add_operation(po1.clone()).unwrap();
+        let _ = pool.add_operation(po1, None.clone()).unwrap();
 
         let mut po2 = create_op(sender, 0, 101);
         po2.uo.max_priority_fee_per_gas = 101.into();
-        let res = pool.add_operation(po2);
+        let res = pool.add_operation(po2, None);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::ReplacementUnderpriced(a, b) => {
@@ -889,14 +895,14 @@ mod tests {
         let mut po1 = create_op(sender, 0, 10);
         po1.uo.max_priority_fee_per_gas = 10.into();
         po1.uo.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
-        let _ = pool.add_operation(po1).unwrap();
+        let _ = pool.add_operation(po1, None).unwrap();
         assert_eq!(pool.address_count(&paymaster1), 1);
 
         let paymaster2 = Address::random();
         let mut po2 = create_op(sender, 0, 11);
         po2.uo.max_priority_fee_per_gas = 11.into();
         po2.uo.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
-        let _ = pool.add_operation(po2.clone()).unwrap();
+        let _ = pool.add_operation(po2, None.clone()).unwrap();
 
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(pool.address_count(&paymaster1), 0);
@@ -917,9 +923,9 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         po1.uo.max_priority_fee_per_gas = 10.into();
-        let _ = pool.add_operation(po1.clone()).unwrap();
+        let _ = pool.add_operation(po1, None.clone()).unwrap();
 
-        let res = pool.add_operation(po1);
+        let res = pool.add_operation(po1, None);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::OperationAlreadyKnown => (),

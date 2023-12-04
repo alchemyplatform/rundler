@@ -107,13 +107,13 @@ impl PaymasterTracker {
         U256::zero()
     }
 
-    pub(crate) fn add_or_update_balance(&mut self, po: &PoolOperation) -> MempoolResult<()> {
+    pub(crate) fn add_or_update_balance(
+        &mut self,
+        po: &PoolOperation,
+        paymaster_metadata: &PaymasterMetadata,
+    ) -> MempoolResult<()> {
         let id = po.uo.id();
         let max_op_cost = po.uo.max_op_cost();
-
-        let paymaster_metadata = &po
-            .paymaster_metadata
-            .context("UserOperation needs paymaster to update balance")?;
 
         if paymaster_metadata.exists_in_pool {
             return self.update_paymaster_balance(&id, paymaster_metadata.address, max_op_cost);
@@ -269,7 +269,6 @@ mod tests {
             sim_block_hash: H256::random(),
             entities_needing_stake: vec![],
             account_is_staked: true,
-            paymaster_metadata: Some(paymaster_meta),
             entity_infos: EntityInfos::default(),
             sim_block_number: 0,
         }
@@ -299,7 +298,7 @@ mod tests {
 
         let po = demo_pool_op(uo, paymaster_meta);
 
-        let res = paymaster_tracker.add_or_update_balance(&po);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_ok());
         assert_eq!(
             paymaster_tracker
@@ -342,7 +341,7 @@ mod tests {
 
         let po = demo_pool_op(uo, paymaster_meta);
 
-        let res = paymaster_tracker.add_or_update_balance(&po);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_err());
     }
 
@@ -379,7 +378,7 @@ mod tests {
 
         let po = demo_pool_op(uo, paymaster_meta);
 
-        let res = paymaster_tracker.add_or_update_balance(&po);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_err());
     }
 
@@ -416,7 +415,7 @@ mod tests {
         };
 
         let po = demo_pool_op(uo, paymaster_meta);
-        let res = paymaster_tracker.add_or_update_balance(&po);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
 
         assert!(res.is_ok());
         assert_eq!(
@@ -493,7 +492,7 @@ mod tests {
 
         let po = demo_pool_op(uo, paymaster_meta);
 
-        let res = paymaster_tracker.add_or_update_balance(&po);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_ok());
         assert_eq!(
             paymaster_tracker

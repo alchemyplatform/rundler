@@ -168,8 +168,6 @@ pub struct PoolOperation {
     pub account_is_staked: bool,
     /// Staking information about all the entities.
     pub entity_infos: EntityInfos,
-    /// paymaster metadata
-    pub paymaster_metadata: Option<PaymasterMetadata>,
 }
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Copy)]

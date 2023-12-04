@@ -370,13 +370,14 @@ where
             entities_needing_stake: sim_result.entities_needing_stake,
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
-            paymaster_metadata,
         };
 
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
-            let hash = state.pool.add_operation(pool_op.clone())?;
+            let hash = state
+                .pool
+                .add_operation(pool_op.clone(), paymaster_metadata)?;
             if throttled {
                 state.throttled_ops.insert(hash);
             }
