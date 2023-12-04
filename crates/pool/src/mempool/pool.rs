@@ -13,7 +13,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -22,12 +22,14 @@ use ethers::{
     abi::Address,
     types::{H256, U256},
 };
-use rundler_types::{Entity, UserOperation, UserOperationId};
+use rundler_types::{Entity, EntityType, UserOperation, UserOperationId};
 use rundler_utils::math;
 use tracing::info;
 
 use super::{
+    entity_tracker::EntityCounter,
     error::{MempoolError, MempoolResult},
+    paymaster::PaymasterTracker,
     size::SizeTracker,
     PoolConfig, PoolOperation,
 };
@@ -77,9 +79,11 @@ pub(crate) struct PoolInner {
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
     /// Count of operations by entity address
-    count_by_address: HashMap<Address, usize>,
+    count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
     submission_id: u64,
+    /// A field that kees track of paymaster balances across the mempool
+    paymaster_balances: PaymasterTracker,
     /// keeps track of the size of the pool in bytes
     pool_size: SizeTracker,
     /// keeps track of the size of the removed cache in bytes
@@ -93,6 +97,7 @@ impl PoolInner {
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
+            paymaster_balances: PaymasterTracker::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
             count_by_address: HashMap::new(),
@@ -145,8 +150,12 @@ impl PoolInner {
         self.best.clone().into_iter().map(|v| v.po)
     }
 
-    pub(crate) fn address_count(&self, address: Address) -> usize {
-        self.count_by_address.get(&address).copied().unwrap_or(0)
+    pub(crate) fn address_count(&self, address: &Address) -> usize {
+        if let Some(entity) = self.count_by_address.get(address) {
+            return entity.total();
+        };
+
+        0
     }
 
     pub(crate) fn get_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
@@ -157,6 +166,47 @@ impl PoolInner {
         let ret = self.remove_operation_internal(hash, None);
         self.update_metrics();
         ret
+    }
+
+    // STO-040
+    pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
+        if let Some(ec) = self.count_by_address.get(&uo.sender) {
+            if ec.includes_non_sender() {
+                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
+            }
+        }
+
+        for e in uo.entities() {
+            match e.kind {
+                EntityType::Factory | EntityType::Paymaster | EntityType::Aggregator => {
+                    if let Some(ec) = self.count_by_address.get(&e.address) {
+                        if ec.sender().gt(&0) {
+                            return Err(MempoolError::MultipleRolesViolation(e));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    // STO-041
+    pub(crate) fn check_associated_storage(
+        &self,
+        accessed_storage: &HashSet<Address>,
+        uo: &UserOperation,
+    ) -> MempoolResult<()> {
+        for storage_address in accessed_storage {
+            if let Some(ec) = self.count_by_address.get(storage_address) {
+                if ec.sender().gt(&0) && uo.sender.ne(storage_address) {
+                    return Err(MempoolError::AssociatedStorageIsAlternateSender);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub(crate) fn mine_operation(
@@ -252,6 +302,38 @@ impl PoolInner {
         self.update_metrics();
     }
 
+    pub(crate) fn paymaster_balance(&self, paymaster: Address) -> U256 {
+        self.paymaster_balances.paymaster_balance(paymaster)
+    }
+
+    pub(crate) fn paymaster_exists(&self, paymaster: Address) -> bool {
+        self.paymaster_balances.paymaster_exists(paymaster)
+    }
+
+    pub(crate) fn update_paymaster_balance_after_mine(&mut self, mined_op: &MinedOp) {
+        self.paymaster_balances
+            .update_paymaster_balance_from_mined_op(mined_op)
+    }
+
+    pub(crate) fn update_paymaster_balance_after_unmine(&mut self, unmined_op: &MinedOp) {
+        self.paymaster_balances
+            .update_paymaster_balance_from_unmined_op(unmined_op)
+    }
+
+    pub(crate) fn update_paymaster_balance_after_deposit(
+        &mut self,
+        address: Address,
+        amount: U256,
+    ) {
+        self.paymaster_balances
+            .update_paymaster_balance_from_deposit(address, amount)
+    }
+
+    pub(crate) fn update_paymaster_balance_after_reorg(&mut self, address: Address, amount: U256) {
+        self.paymaster_balances
+            .update_paymaster_balance_after_reorg(address, amount)
+    }
+
     pub(crate) fn clear(&mut self) {
         self.by_hash.clear();
         self.by_id.clear();
@@ -300,14 +382,18 @@ impl PoolInner {
         }
 
         // Check sender count in mempool. If sender has too many operations, must be staked
-        if *self.count_by_address.get(&op.uo.sender).unwrap_or(&0)
-            >= self.config.max_userops_per_sender
+        if self.address_count(&op.uo.sender) >= self.config.max_userops_per_sender
             && !op.account_is_staked
         {
             return Err(MempoolError::MaxOperationsReached(
                 self.config.max_userops_per_sender,
                 op.uo.sender,
             ));
+        }
+
+        // check or update paymaster balance
+        if op.paymaster_metadata.is_some() {
+            self.paymaster_balances.add_or_update_balance(&op)?;
         }
 
         let pool_op = OrderedPoolOperation {
@@ -317,7 +403,10 @@ impl PoolInner {
 
         // update counts
         for e in pool_op.po.entities() {
-            *self.count_by_address.entry(e.address).or_insert(0) += 1;
+            self.count_by_address
+                .entry(e.address)
+                .or_default()
+                .increment_entity_count(&e.kind);
         }
 
         // create and insert ordered operation
@@ -356,18 +445,19 @@ impl PoolInner {
             self.mined_hashes_with_block_numbers
                 .insert((block_number, hash));
         }
+
         for e in op.po.entities() {
-            self.decrement_address_count(e.address);
+            self.decrement_address_count(e.address, &e.kind);
         }
 
         self.pool_size -= op.mem_size();
         Some(op.po)
     }
 
-    fn decrement_address_count(&mut self, address: Address) {
+    fn decrement_address_count(&mut self, address: Address, entity: &EntityType) {
         if let Entry::Occupied(mut count_entry) = self.count_by_address.entry(address) {
-            *count_entry.get_mut() -= 1;
-            if *count_entry.get() == 0 {
+            count_entry.get_mut().decrement_entity_count(entity);
+            if count_entry.get().total() == 0 {
                 count_entry.remove_entry();
             }
         }
@@ -588,6 +678,8 @@ mod tests {
         pool.add_operation(op).unwrap();
 
         let mined_op = MinedOp {
+            paymaster: None,
+            actual_gas_cost: U256::zero(),
             hash,
             entry_point: pool.config.entry_point,
             sender,
@@ -618,6 +710,8 @@ mod tests {
         pool.add_operation(op_2).unwrap();
 
         let mined_op = MinedOp {
+            paymaster: None,
+            actual_gas_cost: U256::zero(),
             hash,
             entry_point: pool.config.entry_point,
             sender,
@@ -708,19 +802,19 @@ mod tests {
             hashes.push(pool.add_operation(op).unwrap());
         }
 
-        assert_eq!(pool.address_count(sender), 5);
-        assert_eq!(pool.address_count(paymaster), 5);
-        assert_eq!(pool.address_count(factory), 5);
-        assert_eq!(pool.address_count(aggregator), 5);
+        assert_eq!(pool.address_count(&sender), 5);
+        assert_eq!(pool.address_count(&paymaster), 5);
+        assert_eq!(pool.address_count(&factory), 5);
+        assert_eq!(pool.address_count(&aggregator), 5);
 
         for hash in hashes.iter() {
             assert!(pool.remove_operation_by_hash(*hash).is_some());
         }
 
-        assert_eq!(pool.address_count(sender), 0);
-        assert_eq!(pool.address_count(paymaster), 0);
-        assert_eq!(pool.address_count(factory), 0);
-        assert_eq!(pool.address_count(aggregator), 0);
+        assert_eq!(pool.address_count(&sender), 0);
+        assert_eq!(pool.address_count(&paymaster), 0);
+        assert_eq!(pool.address_count(&factory), 0);
+        assert_eq!(pool.address_count(&aggregator), 0);
     }
 
     #[test]
@@ -776,7 +870,7 @@ mod tests {
             _ => panic!("wrong error"),
         }
 
-        assert_eq!(pool.address_count(sender), 1);
+        assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(
             pool.pool_size,
             OrderedPoolOperation {
@@ -796,7 +890,7 @@ mod tests {
         po1.uo.max_priority_fee_per_gas = 10.into();
         po1.uo.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
         let _ = pool.add_operation(po1).unwrap();
-        assert_eq!(pool.address_count(paymaster1), 1);
+        assert_eq!(pool.address_count(&paymaster1), 1);
 
         let paymaster2 = Address::random();
         let mut po2 = create_op(sender, 0, 11);
@@ -804,9 +898,9 @@ mod tests {
         po2.uo.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
         let _ = pool.add_operation(po2.clone()).unwrap();
 
-        assert_eq!(pool.address_count(sender), 1);
-        assert_eq!(pool.address_count(paymaster1), 0);
-        assert_eq!(pool.address_count(paymaster2), 1);
+        assert_eq!(pool.address_count(&sender), 1);
+        assert_eq!(pool.address_count(&paymaster1), 0);
+        assert_eq!(pool.address_count(&paymaster2), 1);
         assert_eq!(
             pool.pool_size,
             OrderedPoolOperation {

@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use anyhow::Context;
-use ethers::types::{Address, H256};
+use ethers::types::{Address, H256, U256};
 use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::{
     Entity as RundlerEntity, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
@@ -22,7 +22,8 @@ use rundler_types::{
 
 use crate::{
     mempool::{
-        PoolOperation, Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
+        PaymasterMetadata as PaymasterMetadataFromPool, PoolOperation,
+        Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
     },
     server::NewHead as PoolNewHead,
 };
@@ -216,6 +217,14 @@ impl From<&PoolOperation> for MempoolOp {
                 .map(|e| EntityType::from(*e).into())
                 .collect(),
             account_is_staked: op.account_is_staked,
+            paymaster_metadata: op
+                .paymaster_metadata
+                .as_ref()
+                .map(|meta| PaymasterMetadata {
+                    balance: to_le_bytes(meta.balance),
+                    address: meta.address.as_bytes().to_vec(),
+                    exists_in_pool: meta.exists_in_pool,
+                }),
         }
     }
 }
@@ -255,6 +264,13 @@ impl TryFrom<MempoolOp> for PoolOperation {
             entities_needing_stake,
             sim_block_hash,
             sim_block_number: 0,
+            paymaster_metadata: op.paymaster_metadata.as_ref().map(|meta| {
+                PaymasterMetadataFromPool {
+                    balance: U256::from_little_endian(&meta.balance),
+                    address: from_bytes(&meta.address).unwrap(),
+                    exists_in_pool: meta.exists_in_pool,
+                }
+            }),
             account_is_staked: op.account_is_staked,
             entity_infos: rundler_sim::EntityInfos::default(),
         })

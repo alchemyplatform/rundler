@@ -19,15 +19,16 @@ use rundler_types::StorageSlot;
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error,
-    AccessedUndeployedContract, AggregatorValidationFailed, CallGasLimitTooLow, CallHadValue,
-    CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
-    EntityThrottledError, EntityType, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
-    FactoryIsNotContract, InitCodeTooShort, InvalidSignature, InvalidStorageAccess,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, NotStaked, OperationAlreadyKnownError, OutOfGas,
+    AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
+    CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
+    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, ExistingSenderWithInitCode,
+    FactoryCalledCreate2Twice, FactoryIsNotContract, InitCodeTooShort, InvalidSignature,
+    InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
+    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
+    NotStaked, OperationAlreadyKnownError, OutOfGas, PaymasterBalanceTooLow,
     PaymasterDepositTooLow, PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
     UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
     UnsupportedAggregatorError, UsedForbiddenOpcode, UsedForbiddenPrecompile,
@@ -124,6 +125,25 @@ impl From<MempoolError> for ProtoMempoolError {
                     OperationAlreadyKnownError {},
                 )),
             },
+            MempoolError::MultipleRolesViolation(entity) => ProtoMempoolError {
+                error: Some(mempool_error::Error::MultipleRolesViolation(
+                    MultipleRolesViolation {
+                        entity: Some((&entity).into()),
+                    },
+                )),
+            },
+            MempoolError::AssociatedStorageIsAlternateSender => ProtoMempoolError {
+                error: Some(mempool_error::Error::AssociatedStorageIsAlternateSender(
+                    AssociatedStorageIsAlternateSender {},
+                )),
+            },
+            MempoolError::SenderAddressUsedAsAlternateEntity(addr) => ProtoMempoolError {
+                error: Some(mempool_error::Error::SenderAddressUsedAsAlternateEntity(
+                    SenderAddressUsedAsAlternateEntity {
+                        sender_address: addr.as_bytes().to_vec(),
+                    },
+                )),
+            },
             MempoolError::ReplacementUnderpriced(fee, priority_fee) => ProtoMempoolError {
                 error: Some(mempool_error::Error::ReplacementUnderpriced(
                     ReplacementUnderpricedError {
@@ -152,6 +172,16 @@ impl From<MempoolError> for ProtoMempoolError {
                     DiscardedOnInsertError {},
                 )),
             },
+            MempoolError::PaymasterBalanceTooLow(current_balance, required_balance) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::PaymasterBalanceTooLow(
+                        PaymasterBalanceTooLow {
+                            current_balance: to_le_bytes(current_balance),
+                            required_balance: to_le_bytes(required_balance),
+                        },
+                    )),
+                }
+            }
             MempoolError::PrecheckViolation(violation) => ProtoMempoolError {
                 error: Some(mempool_error::Error::PrecheckViolation(violation.into())),
             },

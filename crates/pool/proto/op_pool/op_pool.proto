@@ -75,6 +75,12 @@ message EntityUpdate {
   EntityUpdateType update_type = 2;
 }
 
+message PaymasterMetadata {
+  bytes address = 1;
+  bytes balance = 2;
+  bool exists_in_pool = 3;
+}
+
 // Defines a UserOperation persisted in a local mempool
 message MempoolOp {
   UserOperation uo = 1;
@@ -110,7 +116,12 @@ message MempoolOp {
   // multiple UserOperations in the mempool, otherwise just one UserOperation is
   // permitted
   bool account_is_staked = 8;
+  // Metadata about the paymaster and if it is present already within the local
+  // data structure
+  PaymasterMetadata paymaster_metadata = 9;
 }
+
+
 
 // Defines the gRPC endpoints for a UserOperation mempool service
 service OpPool {
@@ -314,6 +325,10 @@ message MempoolError {
     UnsupportedAggregatorError unsupported_aggregator = 9;
     InvalidSignatureError invalid_signature = 10;
     UnknownEntryPointError unknown_entry_point = 11;
+    MultipleRolesViolation multiple_roles_violation = 12;
+    SenderAddressUsedAsAlternateEntity sender_address_used_as_alternate_entity = 13;
+    AssociatedStorageIsAlternateSender associated_storage_is_alternate_sender = 14;
+    PaymasterBalanceTooLow paymaster_balance_too_low = 15;
   }
 }
 
@@ -321,11 +336,18 @@ message UnknownEntryPointError {
   bytes entry_point = 1;
 }
 
+message AssociatedStorageIsAlternateSender {}
+
 message OperationAlreadyKnownError {}
 
 message ReplacementUnderpricedError {
   bytes current_fee = 1;
   bytes current_priority_fee = 2;
+}
+
+message PaymasterBalanceTooLow {
+  bytes current_balance = 1;
+  bytes required_balance = 2;
 }
 
 message MaxOperationsReachedError {
@@ -335,6 +357,14 @@ message MaxOperationsReachedError {
 
 message EntityThrottledError {
   Entity entity = 1;
+}
+
+message MultipleRolesViolation {
+  Entity entity = 1;
+}
+
+message SenderAddressUsedAsAlternateEntity {
+  bytes sender_address = 1;
 }
 
 message DiscardedOnInsertError {}

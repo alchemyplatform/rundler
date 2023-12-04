@@ -57,6 +57,18 @@ pub enum EthRpcError {
     /// Paymaster rejected the operation
     #[error("{}", .0.reason)]
     PaymasterValidationRejected(PaymasterValidationRejectedData),
+    /// Multiple roles violation
+    #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]
+    MultipleRolesViolation(Entity),
+    /// Paymaster balance too low
+    #[error("Paymaster balance too low. Required balance: {0}. Current balance {1}")]
+    PaymasterBalanceTooLow(U256, U256),
+    /// An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool.
+    #[error("An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool")]
+    AssociatedStorageIsAlternateSender,
+    /// Sender address used as different entity in another UserOperation currently in the mempool.
+    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    SenderAddressUsedAsAlternateEntity(Address),
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
     OpcodeViolation(EntityType, Opcode),
@@ -178,6 +190,18 @@ impl From<MempoolError> for EthRpcError {
                 format!("max operations reached for sender {count} already in pool"),
             ),
             MempoolError::EntityThrottled(entity) => EthRpcError::ThrottledOrBanned(entity),
+            MempoolError::MultipleRolesViolation(entity) => {
+                EthRpcError::MultipleRolesViolation(entity)
+            }
+            MempoolError::PaymasterBalanceTooLow(current_balance, required_balance) => {
+                EthRpcError::PaymasterBalanceTooLow(current_balance, required_balance)
+            }
+            MempoolError::AssociatedStorageIsAlternateSender => {
+                EthRpcError::AssociatedStorageIsAlternateSender
+            }
+            MempoolError::SenderAddressUsedAsAlternateEntity(address) => {
+                EthRpcError::SenderAddressUsedAsAlternateEntity(address)
+            }
             MempoolError::DiscardedOnInsert => {
                 EthRpcError::OperationRejected("discarded on insert".to_owned())
             }
@@ -251,6 +275,10 @@ impl From<EthRpcError> for ErrorObjectOwned {
             }
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::OpcodeViolationMap(_)
+            | EthRpcError::MultipleRolesViolation(_)
+            | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
+            | EthRpcError::PaymasterBalanceTooLow(_, _)
+            | EthRpcError::AssociatedStorageIsAlternateSender
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)
@@ -258,17 +286,17 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::ThrottledOrBanned(data) => {
                 rpc_err_with_data(THROTTLED_OR_BANNED_CODE, msg, data)
             }
-            EthRpcError::StakeTooLow(data) => rpc_err_with_data(STAKE_TOO_LOW_CODE, msg, data),
             EthRpcError::UnsupportedAggregator(data) => {
                 rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, msg, data)
             }
             EthRpcError::ReplacementUnderpriced(data) => {
                 rpc_err_with_data(INVALID_PARAMS_CODE, msg, data)
             }
+            EthRpcError::StakeTooLow(data) => rpc_err_with_data(STAKE_TOO_LOW_CODE, msg, data),
+            EthRpcError::SimulationFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::OperationAlreadyKnown => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
-            EthRpcError::SimulationFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
         }

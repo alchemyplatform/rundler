@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     convert::TryFrom,
     fmt::Debug,
     sync::Arc,
@@ -91,6 +91,10 @@ impl AssociatedSlotsByAddress {
             return false;
         };
         slot - next_smallest_slot < 128.into()
+    }
+
+    pub(crate) fn to_set(&self) -> HashSet<Address> {
+        self.0.clone().into_keys().collect()
     }
 }
 

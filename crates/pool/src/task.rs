@@ -15,7 +15,8 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::providers::{JsonRpcClient, Provider};
+use ethers::providers::Middleware;
+use rundler_provider::{EntryPoint, Provider};
 use rundler_sim::{
     Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
 };
@@ -146,12 +147,13 @@ impl PoolTask {
         Box::new(self)
     }
 
-    async fn create_mempool<C: JsonRpcClient + 'static>(
+    async fn create_mempool<P: Provider + Middleware>(
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: Arc<Provider<C>>,
-    ) -> anyhow::Result<UoPool<HourlyMovingAverageReputation, impl Prechecker, impl Simulator>>
-    {
+        provider: Arc<P>,
+    ) -> anyhow::Result<
+        UoPool<HourlyMovingAverageReputation, impl Prechecker, impl Simulator, impl EntryPoint>,
+    > {
         // Reputation manager
         let reputation = Arc::new(HourlyMovingAverageReputation::new(
             ReputationParams::bundler_default(),
@@ -184,6 +186,7 @@ impl PoolTask {
             event_sender,
             prechecker,
             simulator,
+            i_entry_point,
         ))
     }
 }

@@ -30,6 +30,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("IEntryPoint")?,
         abigen_of("EntryPoint")?,
         abigen_of("IAggregator")?,
+        abigen_of("IStakeManager")?,
         abigen_of("GetCodeHashes")?,
         abigen_of("GetGasUsed")?,
         abigen_of("CallGasEstimationProxy")?,

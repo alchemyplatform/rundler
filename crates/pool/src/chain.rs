@@ -21,12 +21,15 @@ use anyhow::{ensure, Context};
 use ethers::{
     contract,
     prelude::EthEvent,
-    types::{Address, Block, Filter, H256, U256},
+    types::{Address, Block, Filter, Log, H256, U256},
 };
 use futures::future;
 use rundler_provider::Provider;
 use rundler_task::block_watcher;
-use rundler_types::{contracts::i_entry_point::UserOperationEventFilter, UserOperationId};
+use rundler_types::{
+    contracts::entry_point::{DepositedFilter, UserOperationEventFilter},
+    UserOperationId,
+};
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
@@ -63,6 +66,8 @@ pub struct ChainUpdate {
     pub reorg_depth: u64,
     pub mined_ops: Vec<MinedOp>,
     pub unmined_ops: Vec<MinedOp>,
+    pub entity_deposits: Vec<DepositInfo>,
+    pub unmined_entity_deposits: Vec<DepositInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,6 +76,15 @@ pub struct MinedOp {
     pub entry_point: Address,
     pub sender: Address,
     pub nonce: U256,
+    pub actual_gas_cost: U256,
+    pub paymaster: Option<Address>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DepositInfo {
+    pub address: Address,
+    pub entrypoint: Address,
+    pub amount: U256,
 }
 
 impl MinedOp {
@@ -95,6 +109,7 @@ struct BlockSummary {
     hash: H256,
     parent_hash: H256,
     ops: Vec<MinedOp>,
+    entity_deposits: Vec<DepositInfo>,
 }
 
 impl<P: Provider> Chain<P> {
@@ -194,7 +209,14 @@ impl<P: Provider> Chain<P> {
             .flat_map(|block| &block.ops)
             .copied()
             .collect();
-        Ok(self.new_update(0, mined_ops, vec![]))
+
+        let entity_deposits: Vec<_> = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.entity_deposits)
+            .copied()
+            .collect();
+        Ok(self.new_update(0, mined_ops, vec![], entity_deposits, vec![]))
     }
 
     /// Given a collection of blocks to add to the chain, whose numbers may
@@ -210,6 +232,12 @@ impl<P: Provider> Chain<P> {
             .flat_map(|block| &block.ops)
             .copied()
             .collect();
+
+        let entity_deposits: Vec<_> = added_blocks
+            .iter()
+            .flat_map(|block| &block.entity_deposits)
+            .copied()
+            .collect();
         let reorg_depth = current_block_number + 1 - added_blocks[0].number;
         let unmined_ops: Vec<_> = self
             .blocks
@@ -218,6 +246,15 @@ impl<P: Provider> Chain<P> {
             .flat_map(|block| &block.ops)
             .copied()
             .collect();
+
+        let entity_deposit_reverts: Vec<_> = self
+            .blocks
+            .iter()
+            .skip(self.blocks.len() - reorg_depth as usize)
+            .flat_map(|block| &block.entity_deposits)
+            .copied()
+            .collect();
+
         for _ in 0..reorg_depth {
             self.blocks.pop_back();
         }
@@ -232,7 +269,13 @@ impl<P: Provider> Chain<P> {
             ChainMetrics::increment_total_reorg_depth(reorg_depth);
         }
 
-        self.new_update(reorg_depth, mined_ops, unmined_ops)
+        self.new_update(
+            reorg_depth,
+            mined_ops,
+            unmined_ops,
+            entity_deposits,
+            entity_deposit_reverts,
+        )
     }
 
     async fn load_added_blocks_connecting_to_existing_chain(
@@ -324,39 +367,86 @@ impl<P: Provider> Chain<P> {
         let opses = future::try_join_all(future_opses)
             .await
             .context("should load ops for new blocks")?;
-        for (i, ops) in opses.into_iter().enumerate() {
+        for (i, (ops, deposits)) in opses.into_iter().enumerate() {
             blocks[i].ops = ops;
+            blocks[i].entity_deposits = deposits;
         }
         Ok(())
     }
 
-    async fn load_ops_in_block_with_hash(&self, block_hash: H256) -> anyhow::Result<Vec<MinedOp>> {
+    async fn load_ops_in_block_with_hash(
+        &self,
+        block_hash: H256,
+    ) -> anyhow::Result<(Vec<MinedOp>, Vec<DepositInfo>)> {
         let _permit = self
             .load_ops_semaphore
             .acquire()
             .await
             .expect("semaphore should not be closed");
+
+        let deposit = DepositedFilter::abi_signature();
+        let uo_filter = UserOperationEventFilter::abi_signature();
+        let events: Vec<&str> = vec![&deposit, &uo_filter];
+
         let filter = Filter::new()
             .address(self.settings.entry_point_addresses.clone())
-            .event(&UserOperationEventFilter::abi_signature())
+            .events(events)
             .at_block_hash(block_hash);
         let logs = self
             .provider
             .get_logs(&filter)
             .await
             .context("chain state should load user operation events")?;
-        logs.into_iter()
-            .map(|log| {
-                let entry_point = log.address;
-                let event = contract::parse_log::<UserOperationEventFilter>(log)?;
-                Ok(MinedOp {
+
+        let deposits = self.load_entity_deposits(&logs);
+        let mined_ops = self.load_mined_ops(&logs);
+
+        Ok((mined_ops, deposits))
+    }
+
+    fn load_mined_ops(&self, logs: &Vec<Log>) -> Vec<MinedOp> {
+        let mut mined_ops = vec![];
+        for log in logs {
+            let entry_point = log.address;
+            if let Ok(event) = contract::parse_log::<UserOperationEventFilter>(log.clone()) {
+                let paymaster = if event.paymaster.is_zero() {
+                    None
+                } else {
+                    Some(event.paymaster)
+                };
+
+                let mined = MinedOp {
                     hash: event.user_op_hash.into(),
                     entry_point,
                     sender: event.sender,
                     nonce: event.nonce,
-                })
-            })
-            .collect()
+                    actual_gas_cost: event.actual_gas_cost,
+                    paymaster,
+                };
+
+                mined_ops.push(mined);
+            }
+        }
+
+        mined_ops
+    }
+
+    fn load_entity_deposits(&self, logs: &Vec<Log>) -> Vec<DepositInfo> {
+        let mut deposits = vec![];
+        for log in logs {
+            let entrypoint = log.address;
+            if let Ok(event) = contract::parse_log::<DepositedFilter>(log.clone()) {
+                let info = DepositInfo {
+                    entrypoint,
+                    address: event.account,
+                    amount: event.total_deposit,
+                };
+
+                deposits.push(info);
+            }
+        }
+
+        deposits
     }
 
     fn block_with_number(&self, number: u64) -> Option<&BlockSummary> {
@@ -372,6 +462,8 @@ impl<P: Provider> Chain<P> {
         reorg_depth: u64,
         mined_ops: Vec<MinedOp>,
         unmined_ops: Vec<MinedOp>,
+        entity_deposits: Vec<DepositInfo>,
+        unmined_entity_deposits: Vec<DepositInfo>,
     ) -> ChainUpdate {
         let latest_block = self
             .blocks
@@ -384,6 +476,8 @@ impl<P: Provider> Chain<P> {
             reorg_depth,
             mined_ops,
             unmined_ops,
+            entity_deposits,
+            unmined_entity_deposits,
         }
     }
 }
@@ -417,6 +511,7 @@ impl BlockSummary {
             hash: block.hash.context("block hash should exist")?,
             parent_hash: block.parent_hash,
             ops: Vec::new(),
+            entity_deposits: Vec::new(),
         })
     }
 }
@@ -473,6 +568,7 @@ mod tests {
 
     use ethers::{
         abi::AbiEncode,
+        prelude::EthEvent,
         types::{FilterBlockOption, Log, H160},
         utils,
     };
@@ -561,6 +657,8 @@ mod tests {
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(103), fake_mined_op(104), fake_mined_op(105),],
                 unmined_ops: vec![],
+                entity_deposits: vec![],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -588,6 +686,8 @@ mod tests {
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(106)],
                 unmined_ops: vec![],
+                entity_deposits: vec![],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -621,6 +721,8 @@ mod tests {
                 reorg_depth: 1,
                 mined_ops: vec![fake_mined_op(112), fake_mined_op(113), fake_mined_op(114)],
                 unmined_ops: vec![fake_mined_op(102)],
+                entity_deposits: vec![],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -648,12 +750,14 @@ mod tests {
         assert_eq!(
             update,
             ChainUpdate {
+                entity_deposits: vec![],
                 latest_block_number: 2,
                 latest_block_hash: hash(12),
                 earliest_remembered_block_number: 0,
                 reorg_depth: 2,
                 mined_ops: vec![fake_mined_op(111), fake_mined_op(112)],
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102)],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -679,11 +783,13 @@ mod tests {
             update,
             ChainUpdate {
                 latest_block_number: 1,
+                entity_deposits: vec![],
                 latest_block_hash: hash(11),
                 earliest_remembered_block_number: 0,
                 reorg_depth: 2,
                 mined_ops: vec![fake_mined_op(111)],
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102)],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -709,12 +815,14 @@ mod tests {
         assert_eq!(
             update,
             ChainUpdate {
+                entity_deposits: vec![],
                 latest_block_number: 3,
                 latest_block_hash: hash(13),
                 earliest_remembered_block_number: 1,
                 reorg_depth: 3,
                 mined_ops: vec![fake_mined_op(111), fake_mined_op(112), fake_mined_op(113)],
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102), fake_mined_op(103)],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -742,8 +850,10 @@ mod tests {
                 latest_block_hash: hash(16),
                 earliest_remembered_block_number: 4,
                 reorg_depth: 0,
+                entity_deposits: vec![],
                 mined_ops: vec![fake_mined_op(104), fake_mined_op(105), fake_mined_op(106)],
                 unmined_ops: vec![],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -765,8 +875,10 @@ mod tests {
                 latest_block_hash: hash(1),
                 earliest_remembered_block_number: 0,
                 reorg_depth: 0,
+                entity_deposits: vec![],
                 mined_ops: vec![fake_mined_op(101), fake_mined_op(102), fake_mined_op(103),],
                 unmined_ops: vec![],
+                unmined_entity_deposits: vec![],
             }
         );
     }
@@ -836,6 +948,8 @@ mod tests {
             entry_point: ENTRY_POINT_ADDRESS,
             sender: Address::zero(),
             nonce: U256::zero(),
+            actual_gas_cost: U256::zero(),
+            paymaster: None,
         }
     }
 
