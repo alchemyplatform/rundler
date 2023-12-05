@@ -554,6 +554,7 @@ impl UoPoolMetrics {
 mod tests {
     use std::collections::HashMap;
 
+    use ethers::types::Bytes;
     use rundler_provider::MockEntryPoint;
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
@@ -570,7 +571,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_single_op() {
-        let op = create_op(Address::random(), 0, 0);
+        let op = create_op(Address::random(), 0, 0, None);
         let ops = vec![op.clone()];
         let uos = vec![op.op.clone()];
         let pool = create_pool(ops);
@@ -587,9 +588,9 @@ mod tests {
     #[tokio::test]
     async fn add_multiple_ops() {
         let ops = vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ];
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
@@ -610,9 +611,9 @@ mod tests {
     #[tokio::test]
     async fn clear() {
         let ops = vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ];
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
@@ -631,9 +632,9 @@ mod tests {
     #[tokio::test]
     async fn chain_update_mine() {
         let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ])
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -663,9 +664,9 @@ mod tests {
     #[tokio::test]
     async fn chain_update_mine_unmine() {
         let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ])
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -717,9 +718,9 @@ mod tests {
     #[tokio::test]
     async fn chain_update_wrong_ep() {
         let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ])
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -933,7 +934,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_already_known() {
-        let op = create_op(Address::random(), 0, 0);
+        let op = create_op(Address::random(), 0, 0, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -952,7 +953,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replacement_underpriced() {
-        let op = create_op(Address::random(), 0, 100);
+        let op = create_op(Address::random(), 0, 100, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -975,7 +976,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replacement() {
-        let op = create_op(Address::random(), 0, 5);
+        let op = create_op(Address::random(), 0, 5, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -1082,12 +1083,24 @@ mod tests {
         (pool, uos)
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> OpWithErrors {
+    fn create_op(
+        sender: Address,
+        nonce: usize,
+        max_fee_per_gas: usize,
+        paymaster: Option<Address>,
+    ) -> OpWithErrors {
+        let mut paymaster_and_data = Bytes::new();
+
+        if let Some(paymaster) = paymaster {
+            paymaster_and_data = paymaster.to_fixed_bytes().into();
+        }
+
         OpWithErrors {
             op: UserOperation {
                 sender,
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
+                paymaster_and_data,
                 ..UserOperation::default()
             },
             precheck_error: None,
