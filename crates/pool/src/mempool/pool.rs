@@ -742,7 +742,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(agg);
-            pool.add_operation(op, None.clone()).unwrap();
+            pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -763,7 +763,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
-            pool.add_operation(op, None.clone()).unwrap();
+            pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
