@@ -976,7 +976,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_replacement() {
-        let op = create_op(Address::random(), 0, 5, None);
+        let paymaster = Address::random();
+
+        let op = create_op(Address::random(), 0, 5, Some(paymaster));
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -993,6 +995,9 @@ mod tests {
             .unwrap();
 
         check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
+
+        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
+        assert_eq!(paymaster_balance, U256::from(970));
     }
 
     #[derive(Clone, Debug)]
@@ -1009,13 +1014,18 @@ mod tests {
         let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        let entrypoint = MockEntryPoint::new();
+        let mut entrypoint = MockEntryPoint::new();
         prechecker.expect_update_bundle_fees().returning(|| {
             Ok(GasFees {
                 max_fee_per_gas: 0.into(),
                 max_priority_fee_per_gas: 0.into(),
             })
         });
+
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+
         for op in ops {
             prechecker.expect_check().returning(move |_| {
                 if let Some(error) = &op.precheck_error {
@@ -1101,6 +1111,9 @@ mod tests {
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
                 paymaster_and_data,
+                call_gas_limit: 10.into(),
+                pre_verification_gas: 10.into(),
+                verification_gas_limit: 10.into(),
                 ..UserOperation::default()
             },
             precheck_error: None,
