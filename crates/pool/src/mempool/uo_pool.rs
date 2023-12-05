@@ -893,6 +893,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_paymaster_balance_insufficient() {
+        let paymaster = Address::random();
+        let mut op = create_op(Address::random(), 0, 0, Some(paymaster));
+        op.op.call_gas_limit = 1000.into();
+        op.op.verification_gas_limit = 1000.into();
+        op.op.pre_verification_gas = 1000.into();
+
+        let uo = op.op.clone();
+        let pool = create_pool(vec![op]);
+
+        let ret = pool
+            .add_operation(OperationOrigin::Local, uo.clone())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(ret, MempoolError::PaymasterBalanceTooLow(_, _)));
+    }
+
+    #[tokio::test]
     async fn precheck_error() {
         let op = create_op_with_errors(
             Address::random(),
@@ -978,7 +997,11 @@ mod tests {
     async fn test_replacement() {
         let paymaster = Address::random();
 
-        let op = create_op(Address::random(), 0, 5, Some(paymaster));
+        let mut op = create_op(Address::random(), 0, 5, Some(paymaster));
+        op.op.call_gas_limit = 10.into();
+        op.op.verification_gas_limit = 10.into();
+        op.op.pre_verification_gas = 10.into();
+
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -1111,9 +1134,6 @@ mod tests {
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
                 paymaster_and_data,
-                call_gas_limit: 10.into(),
-                pre_verification_gas: 10.into(),
-                verification_gas_limit: 10.into(),
                 ..UserOperation::default()
             },
             precheck_error: None,
