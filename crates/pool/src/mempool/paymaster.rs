@@ -260,7 +260,7 @@ mod tests {
         PoolOperation,
     };
 
-    fn demo_pool_op(uo: UserOperation, paymaster_meta: PaymasterMetadata) -> PoolOperation {
+    fn demo_pool_op(uo: UserOperation) -> PoolOperation {
         PoolOperation {
             uo,
             aggregator: None,
@@ -296,7 +296,7 @@ mod tests {
             exists_in_pool: false,
         };
 
-        let po = demo_pool_op(uo, paymaster_meta);
+        let po = demo_pool_op(uo);
 
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_ok());
@@ -339,7 +339,7 @@ mod tests {
             exists_in_pool: false,
         };
 
-        let po = demo_pool_op(uo, paymaster_meta);
+        let po = demo_pool_op(uo);
 
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_err());
@@ -376,7 +376,7 @@ mod tests {
             exists_in_pool: true,
         };
 
-        let po = demo_pool_op(uo, paymaster_meta);
+        let po = demo_pool_op(uo);
 
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_err());
@@ -414,7 +414,7 @@ mod tests {
             exists_in_pool: true,
         };
 
-        let po = demo_pool_op(uo, paymaster_meta);
+        let po = demo_pool_op(uo);
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
 
         assert!(res.is_ok());
@@ -490,7 +490,7 @@ mod tests {
 
         let max_op_cost = uo.clone().max_op_cost();
 
-        let po = demo_pool_op(uo, paymaster_meta);
+        let po = demo_pool_op(uo);
 
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_ok());

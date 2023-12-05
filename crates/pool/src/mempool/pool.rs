@@ -862,7 +862,7 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 100);
         po1.uo.max_priority_fee_per_gas = 100.into();
-        let _ = pool.add_operation(po1, None.clone()).unwrap();
+        let _ = pool.add_operation(po1.clone(), None).unwrap();
 
         let mut po2 = create_op(sender, 0, 101);
         po2.uo.max_priority_fee_per_gas = 101.into();
@@ -902,7 +902,7 @@ mod tests {
         let mut po2 = create_op(sender, 0, 11);
         po2.uo.max_priority_fee_per_gas = 11.into();
         po2.uo.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
-        let _ = pool.add_operation(po2, None.clone()).unwrap();
+        let _ = pool.add_operation(po2.clone(), None).unwrap();
 
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(pool.address_count(&paymaster1), 0);
@@ -923,7 +923,7 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         po1.uo.max_priority_fee_per_gas = 10.into();
-        let _ = pool.add_operation(po1, None.clone()).unwrap();
+        let _ = pool.add_operation(po1.clone(), None).unwrap();
 
         let res = pool.add_operation(po1, None);
         assert!(res.is_err());

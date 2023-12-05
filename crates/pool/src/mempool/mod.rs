@@ -263,7 +263,6 @@ mod tests {
             entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
-            paymaster_metadata: None,
         };
 
         assert!(po.requires_stake(EntityType::Account));
