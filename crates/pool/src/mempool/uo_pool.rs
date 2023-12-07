@@ -663,14 +663,28 @@ mod tests {
 
     #[tokio::test]
     async fn chain_update_mine_unmine() {
-        let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3, None),
-            create_op(Address::random(), 0, 2, None),
-            create_op(Address::random(), 0, 1, None),
-        ])
-        .await;
+        let paymaster = Address::random();
+
+        let mut ops = vec![
+            create_op(Address::random(), 0, 3, Some(paymaster)),
+            create_op(Address::random(), 0, 2, Some(paymaster)),
+            create_op(Address::random(), 0, 1, Some(paymaster)),
+        ];
+
+        // add pending max cost of 30 for each uo
+        for op in &mut ops {
+            op.op.call_gas_limit = 10.into();
+            op.op.verification_gas_limit = 10.into();
+            op.op.pre_verification_gas = 10.into();
+        }
+
+        let (pool, uos) = create_pool_insert_ops(ops).await;
+        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
+
+        assert_eq!(paymaster_balance, 910.into());
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
+        // mine the first op with actual gas cost of 10
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
@@ -681,18 +695,22 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
-                actual_gas_cost: U256::zero(),
-                paymaster: None,
+                actual_gas_cost: 10.into(),
+                paymaster: Some(paymaster),
             }],
             unmined_ops: vec![],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
         })
         .await;
+
         check_ops(
             pool.best_operations(3, 0).unwrap(),
             uos.clone()[1..].to_vec(),
         );
+
+        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
+        assert_eq!(paymaster_balance, 930.into());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -705,13 +723,17 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
-                actual_gas_cost: U256::zero(),
+                actual_gas_cost: 10.into(),
                 paymaster: None,
             }],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
         })
         .await;
+
+        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
+        assert_eq!(paymaster_balance, 930.into());
+
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
