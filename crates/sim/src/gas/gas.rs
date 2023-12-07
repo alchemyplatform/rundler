@@ -363,7 +363,7 @@ where
     } else if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
         let config = FeeHistoryOracleConfig {
             minimum_fee,
-            blocks_history: 16,
+            blocks_history: 32,
             percentile: 33.3,
             ..Default::default()
         };
