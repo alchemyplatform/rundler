@@ -113,12 +113,21 @@ impl PaymasterTracker {
         &mut self,
         po: &PoolOperation,
         paymaster_metadata: &PaymasterMetadata,
+        unmined_op: Option<&MinedOp>,
     ) -> MempoolResult<()> {
         let id = po.uo.id();
         let max_op_cost = po.uo.max_op_cost();
 
         if paymaster_metadata.exists_in_pool {
-            return self.update_paymaster_balance(&id, paymaster_metadata.address, max_op_cost);
+            let mut op_cost = max_op_cost;
+
+            // If update is from an unmined op, we need to make sure the op calculation
+            // does not include the previous subtraction of the actual gas cost
+            if let Some(mined) = unmined_op {
+                op_cost = op_cost.saturating_sub(mined.actual_gas_cost);
+            }
+
+            return self.update_paymaster_balance(&id, paymaster_metadata.address, op_cost);
         }
 
         self.add_paymaster_balance(&id, paymaster_metadata, max_op_cost)
@@ -300,7 +309,7 @@ mod tests {
 
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta, None);
         assert!(res.is_ok());
         assert_eq!(
             paymaster_tracker
@@ -343,7 +352,7 @@ mod tests {
 
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta, None);
         assert!(res.is_err());
     }
 
@@ -380,7 +389,7 @@ mod tests {
 
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta, None);
         assert!(res.is_err());
     }
 
@@ -417,7 +426,7 @@ mod tests {
         };
 
         let po = demo_pool_op(uo);
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta, None);
 
         assert!(res.is_ok());
         assert_eq!(
@@ -494,7 +503,7 @@ mod tests {
 
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta, None);
         assert!(res.is_ok());
         assert_eq!(
             paymaster_tracker

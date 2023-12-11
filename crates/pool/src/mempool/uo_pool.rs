@@ -200,7 +200,7 @@ where
                     continue;
                 }
 
-                if let Some(op) = state.pool.unmine_operation(op.hash) {
+                if let Some(op) = state.pool.unmine_operation(op) {
                     // Only account for a staked entity once
                     for entity_addr in op.staked_entities().map(|e| e.address).unique() {
                         self.reputation.add_included(entity_addr);
@@ -722,7 +722,7 @@ mod tests {
         .await;
 
         let metadata = pool.state.read().pool.paymaster_metadata(paymaster);
-        assert_eq!(metadata.balance, 930.into());
+        assert_eq!(metadata.balance, 910.into());
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }

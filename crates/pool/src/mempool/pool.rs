@@ -145,7 +145,7 @@ impl PoolInner {
         op: PoolOperation,
         paymaster_meta: Option<PaymasterMetadata>,
     ) -> MempoolResult<H256> {
-        let ret = self.add_operation_internal(Arc::new(op), None, paymaster_meta);
+        let ret = self.add_operation_internal(Arc::new(op), None, paymaster_meta, None);
         self.update_metrics();
         ret
     }
@@ -229,17 +229,13 @@ impl PoolInner {
         ret
     }
 
-    pub(crate) fn unmine_operation(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn unmine_operation(&mut self, mined_op: &MinedOp) -> Option<Arc<PoolOperation>> {
+        let hash = mined_op.hash;
         let (op, block_number) = self.mined_at_block_number_by_hash.remove(&hash)?;
         self.mined_hashes_with_block_numbers
             .remove(&(block_number, hash));
 
-        let mut paymaster_meta = None;
-        if let Some(paymaster) = op.uo().paymaster() {
-            paymaster_meta = Some(self.paymaster_balances.paymaster_metadata(paymaster))
-        }
-
-        if let Err(error) = self.put_back_unmined_operation(op.clone(), paymaster_meta) {
+        if let Err(error) = self.put_back_unmined_operation(op.clone(), mined_op) {
             info!("Could not put back unmined operation: {error}");
         };
         self.update_metrics();
@@ -374,13 +370,19 @@ impl PoolInner {
     fn put_back_unmined_operation(
         &mut self,
         op: OrderedPoolOperation,
-        paymaster_meta: Option<PaymasterMetadata>,
+        mined_op: &MinedOp,
     ) -> MempoolResult<H256> {
-        if let Some(paymaster_meta) = paymaster_meta {
-            self.paymaster_balances
-                .add_or_update_balance(&op.po, &paymaster_meta)?;
+        // TODO make sure mined op cost is not added incorrectly
+        let mut paymaster_meta = None;
+        if let Some(paymaster) = op.uo().paymaster() {
+            paymaster_meta = Some(self.paymaster_metadata(paymaster));
         }
-        self.add_operation_internal(op.po, Some(op.submission_id), None)
+        self.add_operation_internal(
+            op.po,
+            Some(op.submission_id),
+            paymaster_meta,
+            Some(mined_op),
+        )
     }
 
     fn add_operation_internal(
@@ -388,6 +390,7 @@ impl PoolInner {
         op: Arc<PoolOperation>,
         submission_id: Option<u64>,
         paymaster_meta: Option<PaymasterMetadata>,
+        unmined_op: Option<&MinedOp>,
     ) -> MempoolResult<H256> {
         // Check if operation already known or replacing an existing operation
         // if replacing, remove the existing operation
@@ -408,7 +411,7 @@ impl PoolInner {
         // check or update paymaster balance
         if let Some(paymaster_meta) = paymaster_meta {
             self.paymaster_balances
-                .add_or_update_balance(&op, &paymaster_meta)?;
+                .add_or_update_balance(&op, &paymaster_meta, unmined_op)?;
         }
 
         let pool_op = OrderedPoolOperation {
