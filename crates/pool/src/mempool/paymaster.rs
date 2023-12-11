@@ -60,20 +60,14 @@ impl PaymasterTracker {
         }
     }
 
-    pub(crate) fn update_paymaster_balance_from_unmined_op(&mut self, unmined_op: &MinedOp) {
-        let id = unmined_op.id();
-
-        if let Some(op_fee) = self.user_op_fees.get(&id) {
+    pub(crate) fn remove_operation(&mut self, id: &UserOperationId) {
+        if let Some(op_fee) = self.user_op_fees.get(id) {
             if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&op_fee.paymaster) {
-                paymaster_balance.confirmed = paymaster_balance
-                    .confirmed
-                    .saturating_add(unmined_op.actual_gas_cost);
-
                 paymaster_balance.pending =
-                    paymaster_balance.pending.saturating_add(op_fee.max_op_cost);
+                    paymaster_balance.pending.saturating_sub(op_fee.max_op_cost);
             }
 
-            self.user_op_fees.remove(&id);
+            self.user_op_fees.remove(id);
         }
     }
 
@@ -99,12 +93,20 @@ impl PaymasterTracker {
         }
     }
 
-    pub(crate) fn paymaster_balance(&self, paymaster: Address) -> U256 {
+    pub(crate) fn paymaster_metadata(&self, paymaster: Address) -> PaymasterMetadata {
         if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
-            return paymaster_balance.pending_balance();
+            return PaymasterMetadata {
+                balance: paymaster_balance.pending_balance(),
+                address: paymaster,
+                exists_in_pool: true,
+            };
         }
 
-        U256::zero()
+        PaymasterMetadata {
+            balance: U256::zero(),
+            address: paymaster,
+            exists_in_pool: false,
+        }
     }
 
     pub(crate) fn add_or_update_balance(

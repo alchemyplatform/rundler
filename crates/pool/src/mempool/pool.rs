@@ -233,7 +233,13 @@ impl PoolInner {
         let (op, block_number) = self.mined_at_block_number_by_hash.remove(&hash)?;
         self.mined_hashes_with_block_numbers
             .remove(&(block_number, hash));
-        if let Err(error) = self.put_back_unmined_operation(op.clone()) {
+
+        let mut paymaster_meta = None;
+        if let Some(paymaster) = op.uo().paymaster() {
+            paymaster_meta = Some(self.paymaster_balances.paymaster_metadata(paymaster))
+        }
+
+        if let Err(error) = self.put_back_unmined_operation(op.clone(), paymaster_meta) {
             info!("Could not put back unmined operation: {error}");
         };
         self.update_metrics();
@@ -306,8 +312,8 @@ impl PoolInner {
         self.update_metrics();
     }
 
-    pub(crate) fn paymaster_balance(&self, paymaster: Address) -> U256 {
-        self.paymaster_balances.paymaster_balance(paymaster)
+    pub(crate) fn paymaster_metadata(&self, paymaster: Address) -> PaymasterMetadata {
+        self.paymaster_balances.paymaster_metadata(paymaster)
     }
 
     pub(crate) fn paymaster_exists(&self, paymaster: Address) -> bool {
@@ -317,11 +323,6 @@ impl PoolInner {
     pub(crate) fn update_paymaster_balance_after_mine(&mut self, mined_op: &MinedOp) {
         self.paymaster_balances
             .update_paymaster_balance_from_mined_op(mined_op)
-    }
-
-    pub(crate) fn update_paymaster_balance_after_unmine(&mut self, unmined_op: &MinedOp) {
-        self.paymaster_balances
-            .update_paymaster_balance_from_unmined_op(unmined_op)
     }
 
     pub(crate) fn update_paymaster_balance_after_deposit(
@@ -370,7 +371,15 @@ impl PoolInner {
         Ok(removed)
     }
 
-    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<H256> {
+    fn put_back_unmined_operation(
+        &mut self,
+        op: OrderedPoolOperation,
+        paymaster_meta: Option<PaymasterMetadata>,
+    ) -> MempoolResult<H256> {
+        if let Some(paymaster_meta) = paymaster_meta {
+            self.paymaster_balances
+                .add_or_update_balance(&op.po, &paymaster_meta)?;
+        }
         self.add_operation_internal(op.po, Some(op.submission_id), None)
     }
 
@@ -441,8 +450,10 @@ impl PoolInner {
         block_number: Option<u64>,
     ) -> Option<Arc<PoolOperation>> {
         let op = self.by_hash.remove(&hash)?;
-        self.by_id.remove(&op.uo().id());
+        let id = &op.po.uo.id();
+        self.by_id.remove(id);
         self.best.remove(&op);
+        self.paymaster_balances.remove_operation(id);
 
         if let Some(block_number) = block_number {
             self.cache_size += op.mem_size();

@@ -289,6 +289,7 @@ where
                     .get_transaction_status(tx.tx_hash)
                     .await
                     .context("tracker should check transaction status when the nonce changes")?;
+
                 if let TxStatus::Mined { block_number } = status {
                     let (gas_limit, gas_used) = self.get_mined_tx_gas_info(tx.tx_hash).await?;
                     out = TrackerUpdate::Mined {

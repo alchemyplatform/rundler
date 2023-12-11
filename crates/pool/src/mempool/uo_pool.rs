@@ -200,9 +200,6 @@ where
                     continue;
                 }
 
-                // update paymaster balances
-                state.pool.update_paymaster_balance_after_unmine(op);
-
                 if let Some(op) = state.pool.unmine_operation(op.hash) {
                     // Only account for a staked entity once
                     for entity_addr in op.staked_entities().map(|e| e.address).unique() {
@@ -452,15 +449,8 @@ where
 
     async fn paymaster_balance(&self, paymaster: Address) -> ProviderResult<PaymasterMetadata> {
         if self.state.read().pool.paymaster_exists(paymaster) {
-            let balance = self.state.read().pool.paymaster_balance(paymaster);
-
-            let paymaster_meta = PaymasterMetadata {
-                address: paymaster,
-                balance,
-                exists_in_pool: true,
-            };
-
-            return Ok(paymaster_meta);
+            let meta = self.state.read().pool.paymaster_metadata(paymaster);
+            return Ok(meta);
         }
 
         let balance = self.entrypoint.balance_of(paymaster, None).await?;
@@ -679,9 +669,9 @@ mod tests {
         }
 
         let (pool, uos) = create_pool_insert_ops(ops).await;
-        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
+        let metadata = pool.state.read().pool.paymaster_metadata(paymaster);
 
-        assert_eq!(paymaster_balance, 910.into());
+        assert_eq!(metadata.balance, 910.into());
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
         // mine the first op with actual gas cost of 10
@@ -709,8 +699,8 @@ mod tests {
             uos.clone()[1..].to_vec(),
         );
 
-        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
-        assert_eq!(paymaster_balance, 930.into());
+        let metadata = pool.state.read().pool.paymaster_metadata(paymaster);
+        assert_eq!(metadata.balance, 930.into());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -731,8 +721,8 @@ mod tests {
         })
         .await;
 
-        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
-        assert_eq!(paymaster_balance, 930.into());
+        let metadata = pool.state.read().pool.paymaster_metadata(paymaster);
+        assert_eq!(metadata.balance, 930.into());
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
@@ -1041,8 +1031,8 @@ mod tests {
 
         check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
 
-        let paymaster_balance = pool.state.read().pool.paymaster_balance(paymaster);
-        assert_eq!(paymaster_balance, U256::from(970));
+        let paymaster_balance = pool.state.read().pool.paymaster_metadata(paymaster);
+        assert_eq!(paymaster_balance.balance, U256::from(970));
     }
 
     #[derive(Clone, Debug)]
