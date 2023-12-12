@@ -233,13 +233,17 @@ type StringSet = Record<string, boolean | undefined>;
       };
     },
 
-    fault(_log, _db): void {},
+    fault(_log, _db): void { },
 
     step(log, db): void {
       if (!entryPointAddress) {
         entryPointAddress = toHex(log.contract.getAddress());
       }
-      if (log.getGas() < log.getCost()) {
+      const opcode = log.op.toString();
+
+      if (log.getGas() < log.getCost() || (
+        opcode === 'SSTORE' && log.getGas() < 2300
+      )) {
         currentPhase.ranOutOfGas = true;
       }
       if (pendingKeccakAddress) {
@@ -255,7 +259,6 @@ type StringSet = Record<string, boolean | undefined>;
         pendingKeccakAddress = "";
       }
 
-      const opcode = log.op.toString();
 
       const entryPointIsExecuting = log.getDepth() === 1;
       if (entryPointIsExecuting) {
@@ -403,6 +406,6 @@ type StringSet = Record<string, boolean | undefined>;
       }
     },
 
-    exit(_frame) {},
+    exit(_frame) { },
   };
 })();
