@@ -30,7 +30,7 @@ interface Output {
 interface Phase {
   forbiddenOpcodesUsed: string[];
   forbiddenPrecompilesUsed: string[];
-  storageAccesses: StorageAccess[];
+  storageAccesses: Record<string, AccessInfo>;
   calledBannedEntryPointMethod: boolean;
   addressesCallingWithValue: string[];
   calledNonEntryPointWithValue: boolean;
@@ -39,9 +39,11 @@ interface Phase {
   extCodeAccessInfo: Record<string, string>;
 }
 
-interface StorageAccess {
-  address: string;
-  slots: string[];
+interface AccessInfo {
+  // slot value, just prior this operation
+  reads: { [slot: string]: string }
+  // count of writes.
+  writes: { [slot: string]: number }
 }
 
 interface RelevantStepData {
@@ -59,7 +61,7 @@ type InternalPhase = Omit<
 > & {
   forbiddenOpcodesUsed: StringSet;
   forbiddenPrecompilesUsed: StringSet;
-  storageAccesses: Record<string, StringSet>;
+  storageAccesses: Record<string, AccessInfo>;
   addressesCallingWithValue: StringSet;
   undeployedContractAccesses: StringSet;
 };
@@ -100,6 +102,8 @@ type StringSet = Record<string, boolean | undefined>;
   // If you add any opcodes to this list, make sure they take the contract
   // address as their *first* argument, or modify the handling below.
   const EXT_OPCODES = stringSet(["EXTCODECOPY", "EXTCODEHASH", "EXTCODESIZE"]);
+
+  const READ_WRITE_OPCODES = stringSet(["SSTORE", "SLOAD"]);
   // Whitelisted precompile addresses.
   const PRECOMPILE_WHITELIST = stringSet([
     "0x0000000000000000000000000000000000000001", // ecRecover
@@ -156,16 +160,11 @@ type StringSet = Record<string, boolean | undefined>;
     const undeployedContractAccesses = Object.keys(
       currentPhase.undeployedContractAccesses
     );
-    const storageAccesses: StorageAccess[] = [];
-    Object.keys(currentPhase.storageAccesses).forEach((address) => {
-      const slotsSet = currentPhase.storageAccesses[address];
-      storageAccesses.push({ address, slots: Object.keys(slotsSet) });
-    });
 
     const phase: Phase = {
       forbiddenOpcodesUsed,
       forbiddenPrecompilesUsed,
-      storageAccesses,
+      storageAccesses: currentPhase.storageAccesses,
       calledBannedEntryPointMethod,
       addressesCallingWithValue,
       calledNonEntryPointWithValue,
@@ -197,6 +196,10 @@ type StringSet = Record<string, boolean | undefined>;
 
   function getContractCombinedKey(log: LogStep, key: string): string {
     return [toHex(log.contract.getAddress()), key].join(":");
+  }
+
+  function countSlot(list: { [key: string]: number | undefined }, key: any) {
+    list[key] = (list[key] ?? 0) + 1;
   }
 
   return {
@@ -233,13 +236,19 @@ type StringSet = Record<string, boolean | undefined>;
       };
     },
 
-    fault(_log, _db): void {},
+
+    fault(_log, _db): void { },
 
     step(log, db): void {
       if (!entryPointAddress) {
         entryPointAddress = toHex(log.contract.getAddress());
       }
-      if (log.getGas() < log.getCost()) {
+
+      const opcode = log.op.toString();
+
+      if (log.getGas() < log.getCost() || (
+        opcode === 'SSTORE' && log.getGas() < 2300
+      )) {
         currentPhase.ranOutOfGas = true;
       }
       if (pendingKeccakAddress) {
@@ -254,8 +263,6 @@ type StringSet = Record<string, boolean | undefined>;
         )[keccakResult] = true;
         pendingKeccakAddress = "";
       }
-
-      const opcode = log.op.toString();
 
       const entryPointIsExecuting = log.getDepth() === 1;
       if (entryPointIsExecuting) {
@@ -312,19 +319,33 @@ type StringSet = Record<string, boolean | undefined>;
             pendingKeccakAddress = "0x" + keccakInputWord.slice(26);
           }
         }
-      } else if (opcode === "SLOAD" || opcode === "SSTORE") {
+      } else if (READ_WRITE_OPCODES[opcode]) {
         const address = log.contract.getAddress();
         const addressHex = toHex(address);
         const slot = toWord(log.stack.peek(0).toString(16));
         const slotHex = toHex(slot);
+        let access = computeIfAbsent(
+          currentPhase.storageAccesses,
+          addressHex,
+          (): AccessInfo => ({
+            reads: {},
+            writes: {},
+          }));
+
         if (!entryPointIsExecuting) {
+
           // The entry point can access whatever it wants, but otherwise track
           // access for this phase so we can check validity later.
-          computeIfAbsent(
-            currentPhase.storageAccesses,
-            addressHex,
-            (): StringSet => ({})
-          )[slotHex] = true;
+          if (opcode == "SLOAD") {
+            // Read access
+            if (access.reads[slotHex] == null && access.writes[slotHex] == null) {
+              access.reads[slotHex] = toHex(db.getState(address, slot));
+            }
+
+          } else {
+            // Write access
+            countSlot(access.writes, slotHex)
+          }
         }
         let initialValuesBySlot = computeIfAbsent(
           allStorageAccesses,
@@ -403,6 +424,6 @@ type StringSet = Record<string, boolean | undefined>;
       }
     },
 
-    exit(_frame) {},
+    exit(_frame) { },
   };
 })();
