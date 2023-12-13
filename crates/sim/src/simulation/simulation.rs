@@ -36,8 +36,8 @@ use rundler_types::{
 use super::{
     mempool::{match_mempools, MempoolConfig, MempoolMatchResult},
     tracer::{
-        parse_combined_tracer_str, AssociatedSlotsByAddress, SimulateValidationTracer,
-        SimulationTracerOutput, StorageAccess,
+        parse_combined_tracer_str, AccessInfo, AssociatedSlotsByAddress, SimulateValidationTracer,
+        SimulationTracerOutput,
     },
     validation_results::{StakeInfo, ValidationOutput, ValidationReturnInfo},
 };
@@ -249,10 +249,6 @@ where
             &entry_point_out,
             self.sim_settings,
         );
-        let is_unstaked_wallet_creation = entity_infos
-            .get(EntityType::Factory)
-            .filter(|factory| !factory.is_staked)
-            .is_some();
         if num_phases < 3 {
             Err(SimulationError {
                 violation_error: ViolationError::Violations(vec![
@@ -266,9 +262,9 @@ where
             entity_infos,
             tracer_out,
             entry_point_out,
-            is_unstaked_wallet_creation,
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
+            initcode_length: op.init_code.len(),
         })
     }
 
@@ -300,9 +296,9 @@ where
             ref entity_infos,
             ref tracer_out,
             ref entry_point_out,
-            is_unstaked_wallet_creation,
             ref mut entities_needing_stake,
             ref mut accessed_addresses,
+            initcode_length,
             ..
         } = context;
 
@@ -362,36 +358,34 @@ where
             }
 
             let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
-            for StorageAccess { address, slots } in &phase.storage_accesses {
-                let address = *address;
+            for (addr, access_info) in &phase.storage_accesses {
+                let address = *addr;
                 accessed_addresses.insert(address);
-                for slot in slots {
-                    let restriction = get_storage_restriction(GetStorageRestrictionArgs {
-                        slots_by_address: &tracer_out.associated_slots_by_address,
-                        is_unstaked_wallet_creation,
-                        entry_point_address: self.entry_point_address,
-                        entity,
-                        sender_address,
-                        accessed_address: address,
-                        slot: *slot,
-                    });
-                    match restriction {
-                        StorageRestriction::Allowed => {}
-                        StorageRestriction::NeedsStake(e) => {
-                            if !entity_info.is_staked {
-                                entity_type_needs_stake(
-                                    &mut entity_types_needing_stake,
-                                    e,
-                                    entity_infos,
-                                );
-                            }
+
+                let violation = parse_storage_accesses(ParseStorageAccess {
+                    access_info,
+                    slots_by_address: &tracer_out.associated_slots_by_address,
+                    address,
+                    sender: sender_address,
+                    entrypoint: self.entry_point_address,
+                    initcode_length,
+                    entity,
+                    entity_infos,
+                })?;
+
+                match violation {
+                    StorageRestriction::Allowed => {}
+                    StorageRestriction::NeedsStake(e) => {
+                        if !entity_info.is_staked {
+                            entity_type_needs_stake(
+                                &mut entity_types_needing_stake,
+                                e,
+                                entity_infos,
+                            );
                         }
-                        StorageRestriction::Banned => {
-                            banned_slots_accessed.insert(StorageSlot {
-                                address,
-                                slot: *slot,
-                            });
-                        }
+                    }
+                    StorageRestriction::Banned(slot) => {
+                        banned_slots_accessed.insert(StorageSlot { address, slot });
                     }
                 }
             }
@@ -574,7 +568,6 @@ where
         let ValidationContext {
             tracer_out,
             entry_point_out,
-            is_unstaked_wallet_creation: _,
             entities_needing_stake,
             accessed_addresses,
             ..
@@ -703,9 +696,9 @@ struct ValidationContext {
     entity_infos: EntityInfos,
     tracer_out: SimulationTracerOutput,
     entry_point_out: ValidationOutput,
-    is_unstaked_wallet_creation: bool,
     entities_needing_stake: Vec<EntityType>,
     accessed_addresses: HashSet<Address>,
+    initcode_length: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -804,48 +797,79 @@ fn entity_type_needs_stake(
 enum StorageRestriction {
     Allowed,
     NeedsStake(EntityType),
-    Banned,
+    Banned(U256),
 }
 
-#[derive(Clone, Copy, Debug)]
-struct GetStorageRestrictionArgs<'a> {
+#[derive(Clone, Debug)]
+struct ParseStorageAccess<'a> {
+    access_info: &'a AccessInfo,
     slots_by_address: &'a AssociatedSlotsByAddress,
-    is_unstaked_wallet_creation: bool,
-    entry_point_address: Address,
+    address: Address,
+    sender: Address,
+    entrypoint: Address,
+    initcode_length: usize,
     entity: Entity,
-    sender_address: Address,
-    accessed_address: Address,
-    slot: U256,
+    entity_infos: &'a EntityInfos,
 }
 
-fn get_storage_restriction(args: GetStorageRestrictionArgs<'_>) -> StorageRestriction {
-    let GetStorageRestrictionArgs {
+fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestriction, Error> {
+    let ParseStorageAccess {
+        access_info,
+        address,
+        sender,
+        entrypoint,
         slots_by_address,
-        is_unstaked_wallet_creation,
-        entry_point_address,
+        initcode_length,
         entity,
-        sender_address,
-        accessed_address,
-        slot,
-        ..
+        entity_infos,
     } = args;
-    if accessed_address == sender_address {
-        StorageRestriction::Allowed
-    } else if slots_by_address.is_associated_slot(sender_address, slot) {
-        // Allow entities to access the sender's associated storage unless its during an unstaked wallet creation
-        // Can always access the entry point's associated storage (note only depositTo is allowed to be called)
-        if accessed_address == entry_point_address || !is_unstaked_wallet_creation {
-            StorageRestriction::Allowed
-        } else {
-            StorageRestriction::NeedsStake(EntityType::Factory)
-        }
-    } else if accessed_address == entity.address
-        || slots_by_address.is_associated_slot(entity.address, slot)
-    {
-        StorageRestriction::NeedsStake(entity.kind)
-    } else {
-        StorageRestriction::Banned
+
+    if address.eq(&sender) || address.eq(&entrypoint) {
+        return Ok(StorageRestriction::Allowed);
     }
+
+    let mut required_stake_slot = None;
+    let mut slots: Vec<&U256> = vec![];
+
+    for k in access_info.reads.keys() {
+        slots.push(k);
+    }
+
+    for k in access_info.writes.keys() {
+        slots.push(k);
+    }
+
+    for slot in slots {
+        if slots_by_address.is_associated_slot(sender, *slot) {
+            if initcode_length > 2 {
+                // special case: account.validateUserOp is allowed to use assoc storage if factory is staked.
+                // [STO-022], [STO-021]
+                if !(entity.address.eq(&sender)
+                    && entity_infos.factory.expect("Needs factory").is_staked)
+                {
+                    required_stake_slot = Some(slot);
+                }
+            }
+        } else if slots_by_address.is_associated_slot(entity.address, *slot) {
+            // [STO-032]
+            required_stake_slot = Some(slot);
+        } else if address.eq(&entity.address) {
+            // [STO-031]
+            required_stake_slot = Some(slot);
+        } else if !access_info.writes.contains_key(slot) {
+            // [STO-033]
+            required_stake_slot = Some(slot);
+        } else {
+            return Ok(StorageRestriction::Banned(*slot));
+        }
+    }
+
+    if let Some(_required_stake) = required_stake_slot {
+        // TODO get entity type from the slot
+        return Ok(StorageRestriction::NeedsStake(entity.kind));
+    }
+
+    Ok(StorageRestriction::Allowed)
 }
 
 /// Simulation Settings
@@ -951,7 +975,7 @@ mod tests {
                     forbidden_opcodes_used: vec![],
                     forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
-                    storage_accesses: vec![],
+                    storage_accesses: HashMap::new(),
                     undeployed_contract_accesses: vec![],
                     ext_code_access_info: HashMap::new(),
                 },
@@ -987,7 +1011,7 @@ mod tests {
                     forbidden_opcodes_used: vec![],
                     forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
-                    storage_accesses: vec![],
+                    storage_accesses: HashMap::new(),
                     undeployed_contract_accesses: vec![],
                     ext_code_access_info: HashMap::new(),
                 }
@@ -1154,6 +1178,7 @@ mod tests {
             });
 
         let mut validation_context = ValidationContext {
+            initcode_length: 10,
             block_id: BlockId::Number(BlockNumber::Latest),
             entity_infos: EntityInfos::new(
                 Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
@@ -1190,7 +1215,6 @@ mod tests {
                 paymaster_info: StakeInfo::from((U256::default(), U256::default())),
                 aggregator_info: None,
             },
-            is_unstaked_wallet_creation: false,
 
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
