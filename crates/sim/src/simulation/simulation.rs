@@ -767,6 +767,32 @@ impl EntityInfos {
         }
     }
 
+    fn type_from_address(self, address: Address) -> Option<EntityType> {
+        if address.eq(&self.sender.address) {
+            return Some(EntityType::Account);
+        }
+
+        if let Some(factory) = self.factory {
+            if address.eq(&factory.address) {
+                return Some(EntityType::Factory);
+            }
+        }
+
+        if let Some(paymaster) = self.paymaster {
+            if address.eq(&paymaster.address) {
+                return Some(EntityType::Paymaster);
+            }
+        }
+
+        if let Some(aggregator) = self.aggregator {
+            if address.eq(&aggregator.address) {
+                return Some(EntityType::Aggregator);
+            }
+        }
+
+        None
+    }
+
     fn sender_address(self) -> Address {
         self.sender.address
     }
@@ -829,15 +855,12 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
     }
 
     let mut required_stake_slot = None;
-    let mut slots: Vec<&U256> = vec![];
 
-    for k in access_info.reads.keys() {
-        slots.push(k);
-    }
-
-    for k in access_info.writes.keys() {
-        slots.push(k);
-    }
+    let slots: Vec<&U256> = access_info
+        .reads
+        .keys()
+        .chain(access_info.writes.keys())
+        .collect();
 
     for slot in slots {
         if slots_by_address.is_associated_slot(sender, *slot) {
@@ -845,7 +868,10 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
                 // special case: account.validateUserOp is allowed to use assoc storage if factory is staked.
                 // [STO-022], [STO-021]
                 if !(entity.address.eq(&sender)
-                    && entity_infos.factory.expect("Needs factory").is_staked)
+                    && entity_infos
+                        .factory
+                        .expect("Factory needs to be present and staked")
+                        .is_staked)
                 {
                     required_stake_slot = Some(slot);
                 }
@@ -864,9 +890,10 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
         }
     }
 
-    if let Some(_required_stake) = required_stake_slot {
-        // TODO get entity type from the slot
-        return Ok(StorageRestriction::NeedsStake(entity.kind));
+    if let Some(_required_stake_slot) = required_stake_slot {
+        if let Some(entity_type) = entity_infos.type_from_address(address) {
+            return Ok(StorageRestriction::NeedsStake(entity_type));
+        }
     }
 
     Ok(StorageRestriction::Allowed)
