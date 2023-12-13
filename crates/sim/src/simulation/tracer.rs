@@ -60,7 +60,7 @@ impl TryFrom<GethTrace> for SimulationTracerOutput {
 pub(crate) struct Phase {
     pub(crate) forbidden_opcodes_used: Vec<String>,
     pub(crate) forbidden_precompiles_used: Vec<String>,
-    pub(crate) storage_accesses: Vec<StorageAccess>,
+    pub(crate) storage_accesses: HashMap<Address, AccessInfo>,
     pub(crate) called_banned_entry_point_method: bool,
     pub(crate) addresses_calling_with_value: Vec<Address>,
     pub(crate) called_non_entry_point_with_value: bool,
@@ -71,9 +71,9 @@ pub(crate) struct Phase {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct StorageAccess {
-    pub(crate) address: Address,
-    pub(crate) slots: Vec<U256>,
+pub(crate) struct AccessInfo {
+    pub(crate) reads: HashMap<U256, String>,
+    pub(crate) writes: HashMap<U256, u32>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

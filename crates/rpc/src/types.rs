@@ -161,6 +161,7 @@ pub struct UserOperationReceipt {
 
 /// Reputation of an entity
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RpcReputation {
     /// Entity address
     pub address: Address,
@@ -169,7 +170,7 @@ pub struct RpcReputation {
     /// Number of operations included in this interval
     pub ops_included: U256,
     /// Reputation status
-    pub status: ReputationStatus,
+    pub status: Option<ReputationStatus>,
 }
 
 impl From<RpcReputation> for Reputation {
@@ -178,7 +179,7 @@ impl From<RpcReputation> for Reputation {
             address: rpc_reputation.address,
             ops_seen: rpc_reputation.ops_seen.as_u64(),
             ops_included: rpc_reputation.ops_included.as_u64(),
-            status: rpc_reputation.status,
+            status: rpc_reputation.status.unwrap_or(ReputationStatus::Ok),
         }
     }
 }
@@ -191,7 +192,7 @@ impl TryFrom<Reputation> for RpcReputation {
             address: reputation.address,
             ops_seen: reputation.ops_seen.into(),
             ops_included: reputation.ops_included.into(),
-            status: reputation.status,
+            status: Some(reputation.status),
         })
     }
 }

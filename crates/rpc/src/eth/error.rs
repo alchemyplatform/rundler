@@ -35,7 +35,7 @@ const PAYMASTER_VALIDATION_REJECTED_CODE: i32 = -32501;
 const OPCODE_VIOLATION_CODE: i32 = -32502;
 const OUT_OF_TIME_RANGE_CODE: i32 = -32503;
 const THROTTLED_OR_BANNED_CODE: i32 = -32504;
-const STAKE_TOO_LOW_CODE: i32 = -32505;
+const _STAKE_TOO_LOW_CODE: i32 = -32505;
 const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
 const EXECUTION_REVERTED: i32 = -32521;
@@ -82,7 +82,7 @@ pub enum EthRpcError {
     #[error("operation is out of time range")]
     OutOfTimeRange(OutOfTimeRangeData),
     /// Entity throttled or banned
-    #[error("entity throttled or banned")]
+    #[error("{} {:#032x} throttled or banned", .0.kind, .0.address)]
     ThrottledOrBanned(Entity),
     /// Entity stake/unstake delay too low
     #[error("entity stake/unstake delay too low")]
@@ -278,6 +278,8 @@ impl From<EthRpcError> for ErrorObjectOwned {
             | EthRpcError::MultipleRolesViolation(_)
             | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
             | EthRpcError::PaymasterBalanceTooLow(_, _)
+            | EthRpcError::StakeTooLow(_)
+            | EthRpcError::SimulationFailed(_)
             | EthRpcError::AssociatedStorageIsAlternateSender
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
@@ -292,8 +294,6 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::ReplacementUnderpriced(data) => {
                 rpc_err_with_data(INVALID_PARAMS_CODE, msg, data)
             }
-            EthRpcError::StakeTooLow(data) => rpc_err_with_data(STAKE_TOO_LOW_CODE, msg, data),
-            EthRpcError::SimulationFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::OperationAlreadyKnown => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
