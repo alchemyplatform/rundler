@@ -26,6 +26,10 @@ jobs:
 
       - name: Setup PDM
         uses: pdm-project/setup-pdm@v3
+              
+      - run: pip install jq yq
+
+      - run: which xq
 
       - name: Build local docker image
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
