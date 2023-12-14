@@ -24,6 +24,9 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
+      - name: Setup PDM
+        uses: pdm-project/setup-pdm@v3
+
       - name: Build local docker image
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
 
