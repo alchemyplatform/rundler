@@ -35,4 +35,4 @@ jobs:
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
 
       - name: Run test executor
-        run: ./bundler-test-executors/runall.sh ./bundlers/rundler/rundler.yml
+        run: ./bundler-test-executors/runall.sh ./bundler-test-executors/bundlers/rundler/rundler.yml
