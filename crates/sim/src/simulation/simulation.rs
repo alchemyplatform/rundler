@@ -849,24 +849,22 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
     }
 
     for slot in slots {
-        if slots_by_address.is_associated_slot(sender, *slot) {
-            if initcode_length > 2 {
-                // special case: account.validateUserOp is allowed to use assoc storage if factory is staked.
-                // [STO-022], [STO-021]
-                if !(entity.address.eq(&sender)
-                    && entity_infos.factory.expect("Needs factory").is_staked)
-                {
-                    required_stake_slot = Some(slot);
-                }
+        let is_sender_associated = slots_by_address.is_associated_slot(sender, *slot);
+        let is_entity_associated = slots_by_address.is_associated_slot(entity.address, *slot);
+        let is_same_address = address.eq(&entity.address);
+        let is_write_permission = access_info.writes.contains_key(slot);
+
+        if is_sender_associated {
+            if initcode_length > 2
+                && !(entity.address.eq(&sender)
+                    && entity_infos
+                        .factory
+                        .expect("Factory needs to be present and staked")
+                        .is_staked)
+            {
+                required_stake_slot = Some(slot);
             }
-        } else if slots_by_address.is_associated_slot(entity.address, *slot) {
-            // [STO-032]
-            required_stake_slot = Some(slot);
-        } else if address.eq(&entity.address) {
-            // [STO-031]
-            required_stake_slot = Some(slot);
-        } else if !access_info.writes.contains_key(slot) {
-            // [STO-033]
+        } else if is_entity_associated || is_same_address || !is_write_permission {
             required_stake_slot = Some(slot);
         } else {
             return Ok(StorageRestriction::Banned(*slot));
