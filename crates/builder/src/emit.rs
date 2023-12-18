@@ -13,7 +13,7 @@
 
 use std::{fmt::Display, sync::Arc};
 
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use rundler_sim::SimulationError;
 use rundler_types::{GasFees, ValidTimeRange};
 use rundler_utils::strs;
@@ -176,8 +176,17 @@ pub enum SkipReason {
         required_fees: GasFees,
         actual_fees: GasFees,
     },
+    /// Insufficient pre-verification gas for the operation at the given base fee
+    InsufficientPreVerificationGas {
+        base_fee: U256,
+        op_fees: GasFees,
+        required_pvg: U256,
+        actual_pvg: U256,
+    },
     /// Bundle ran out of space by gas limit to include the operation
     GasLimit,
+    /// Other reason, typically internal errors
+    Other { reason: Arc<String> },
 }
 
 /// Reason for rejecting an operation from a bundle

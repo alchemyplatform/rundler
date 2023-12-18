@@ -54,7 +54,7 @@ where
     P: Provider,
 {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
-        let bundle_fees = self
+        let (bundle_fees, _) = self
             .fee_estimator
             .required_bundle_fees(None)
             .await
