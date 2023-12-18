@@ -88,6 +88,9 @@ pub trait Mempool: Send + Sync + 'static {
     /// Dumps the mempool's reputation tracking
     fn dump_reputation(&self) -> Vec<Reputation>;
 
+    /// Dumps the mempool's reputation tracking
+    fn get_reputation_status(&self, address: Address) -> ReputationStatus;
+
     /// Overwrites the mempool's reputation for an address
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
 }

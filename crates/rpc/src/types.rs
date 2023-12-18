@@ -162,7 +162,19 @@ pub struct UserOperationReceipt {
 /// Reputation of an entity
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RpcReputation {
+pub struct RpcReputationInput {
+    /// Entity address
+    pub address: Address,
+    /// Number of operations seen in this interval
+    pub ops_seen: U256,
+    /// Number of operations included in this interval
+    pub ops_included: U256,
+}
+
+/// Reputation of an entity
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcReputationOutput {
     /// Entity address
     pub address: Address,
     /// Number of operations seen in this interval
@@ -170,29 +182,27 @@ pub struct RpcReputation {
     /// Number of operations included in this interval
     pub ops_included: U256,
     /// Reputation status
-    pub status: Option<ReputationStatus>,
+    pub status: ReputationStatus,
 }
 
-impl From<RpcReputation> for Reputation {
-    fn from(rpc_reputation: RpcReputation) -> Self {
+impl From<RpcReputationInput> for Reputation {
+    fn from(rpc_reputation: RpcReputationInput) -> Self {
         Reputation {
             address: rpc_reputation.address,
             ops_seen: rpc_reputation.ops_seen.as_u64(),
             ops_included: rpc_reputation.ops_included.as_u64(),
-            status: rpc_reputation.status.unwrap_or(ReputationStatus::Ok),
         }
     }
 }
 
-impl TryFrom<Reputation> for RpcReputation {
+impl TryFrom<Reputation> for RpcReputationInput {
     type Error = anyhow::Error;
 
     fn try_from(reputation: Reputation) -> Result<Self, Self::Error> {
-        Ok(RpcReputation {
+        Ok(RpcReputationInput {
             address: reputation.address,
             ops_seen: reputation.ops_seen.into(),
             ops_included: reputation.ops_included.into(),
-            status: Some(reputation.status),
         })
     }
 }

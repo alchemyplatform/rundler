@@ -429,6 +429,10 @@ where
         self.reputation.dump_reputation()
     }
 
+    fn get_reputation_status(&self, address: Address) -> ReputationStatus {
+        self.reputation.status(address)
+    }
+
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64) {
         self.reputation
             .set_reputation(address, ops_seen, ops_included)
@@ -1079,7 +1083,6 @@ mod tests {
                     address: *address,
                     ops_seen: *ops_seen,
                     ops_included: *self.counts.read().included.get(address).unwrap_or(&0),
-                    status: self.status(*address),
                 })
                 .collect()
         }

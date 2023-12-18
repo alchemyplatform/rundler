@@ -140,7 +140,10 @@ service OpPool {
   // Returns the reputation data of all observed addresses. Returns an array of
   // reputation objects, each with the fields described above in
   // debug_bundler_setReputation
-  rpc DebugDumpReputation (DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
+  rpc DebugDumpReputation(DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
+
+  // Get reputation status of address
+  rpc GetReputationStatus(GetReputationStatusRequest) returns (GetReputationStatusResponse);
 
   // Streaming API to subscribe to be updated upon a new block being added to (or reorged onto)
   // the chain. 
@@ -189,6 +192,22 @@ message GetOpsResponse {
 }
 message GetOpsSuccess {
   repeated MempoolOp ops = 1;
+}
+
+message GetReputationStatusResponse {
+  oneof result {
+    GetReputationStatusSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message GetReputationStatusRequest {
+  bytes entry_point = 1;
+  bytes address = 2;
+}
+
+message GetReputationStatusSuccess {
+  ReputationStatus status = 1;
 }
 
 message RemoveOpsRequest {
@@ -285,12 +304,10 @@ message NewHead {
 message Reputation {
   // The (serialized) address to set the reputation for
   bytes address = 1;
-  // The status of the address in the bundler
-  ReputationStatus status = 2;
   // number of times a user operations with that entity was seen and added to the mempool
-  uint64 ops_seen = 3;
+  uint64 ops_seen = 2;
   // number of times a user operations that uses this entity was included on-chain
-  uint64 ops_included = 4;
+  uint64 ops_included = 3;
 }
 
 enum ReputationStatus {

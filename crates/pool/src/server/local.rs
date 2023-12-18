@@ -31,6 +31,7 @@ use crate::{
     chain::ChainUpdate,
     mempool::{Mempool, MempoolError, OperationOrigin, PoolOperation},
     server::{NewHead, PoolServer, Reputation},
+    ReputationStatus,
 };
 
 /// Local pool server builder
@@ -217,6 +218,22 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
+    async fn get_reputation_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<ReputationStatus> {
+        let req = ServerRequestKind::GetReputationStatus {
+            entry_point,
+            address,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetReputationStatus { status } => Ok(status),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
     async fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
         let req = ServerRequestKind::SubscribeNewHeads;
         let resp = self.send(req).await?;
@@ -344,6 +361,15 @@ where
         Ok(mempool.dump_reputation())
     }
 
+    fn get_reputation_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<ReputationStatus> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool.get_reputation_status(address))
+    }
+
     async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         loop {
             tokio::select! {
@@ -435,6 +461,12 @@ where
                                 Err(e) => Err(e),
                             }
                         },
+                        ServerRequestKind::GetReputationStatus{ entry_point, address } => {
+                            match self.get_reputation_status(entry_point, address) {
+                                Ok(status) => Ok(ServerResponse::GetReputationStatus {  status }),
+                                Err(e) => Err(e),
+                            }
+                        },
                         ServerRequestKind::SubscribeNewHeads => {
                             Ok(ServerResponse::SubscribeNewHeads { new_heads: self.block_sender.subscribe() } )
                         }
@@ -488,6 +520,10 @@ enum ServerRequestKind {
     DebugDumpReputation {
         entry_point: Address,
     },
+    GetReputationStatus {
+        entry_point: Address,
+        address: Address,
+    },
     SubscribeNewHeads,
 }
 
@@ -511,6 +547,9 @@ enum ServerResponse {
     DebugSetReputations,
     DebugDumpReputation {
         reputations: Vec<Reputation>,
+    },
+    GetReputationStatus {
+        status: ReputationStatus,
     },
     SubscribeNewHeads {
         new_heads: broadcast::Receiver<NewHead>,

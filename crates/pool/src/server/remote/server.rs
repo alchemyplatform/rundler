@@ -32,13 +32,15 @@ use tonic::{transport::Server, Request, Response, Result, Status};
 use super::protos::{
     add_op_response, debug_clear_state_response, debug_dump_mempool_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
+    get_reputation_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
     DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
     DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
-    GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetSupportedEntryPointsRequest,
+    GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetReputationStatusRequest,
+    GetReputationStatusResponse, GetReputationStatusSuccess, GetSupportedEntryPointsRequest,
     GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
     RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
@@ -102,6 +104,10 @@ impl OpPoolImpl {
     fn get_entry_point(&self, req_entry_point: &[u8]) -> Result<Address> {
         from_bytes(req_entry_point)
             .map_err(|e| Status::invalid_argument(format!("Invalid entry point: {e}")))
+    }
+
+    fn get_address(&self, address: &[u8]) -> Result<Address> {
+        from_bytes(address).map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))
     }
 }
 
@@ -305,6 +311,37 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => DebugSetReputationResponse {
                 result: Some(debug_set_reputation_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_reputation_status(
+        &self,
+        request: Request<GetReputationStatusRequest>,
+    ) -> Result<Response<GetReputationStatusResponse>> {
+        let req = request.into_inner();
+
+        let address = self.get_address(&req.address)?;
+        let entry_point = self.get_entry_point(&req.entry_point)?;
+
+        let resp = match self
+            .local_pool
+            .get_reputation_status(entry_point, address)
+            .await
+        {
+            Ok(status) => GetReputationStatusResponse {
+                result: Some(get_reputation_status_response::Result::Success(
+                    GetReputationStatusSuccess {
+                        status: status as i32,
+                    },
+                )),
+            },
+            Err(error) => GetReputationStatusResponse {
+                result: Some(get_reputation_status_response::Result::Failure(
+                    error.into(),
+                )),
             },
         };
 

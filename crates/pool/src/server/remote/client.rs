@@ -35,14 +35,16 @@ use tonic_health::{
 use super::protos::{
     self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
-    op_pool_client::OpPoolClient, remove_ops_response, update_entities_response, AddOpRequest,
-    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpsRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
+    get_reputation_status_response, op_pool_client::OpPoolClient, remove_ops_response,
+    update_entities_response, AddOpRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
+    GetReputationStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
     SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
     mempool::{PoolOperation, Reputation},
     server::{error::PoolServerError, NewHead, PoolResult, PoolServer},
+    ReputationStatus,
 };
 
 /// Remote pool client
@@ -325,6 +327,33 @@ impl PoolServer for RemotePoolClient {
                 .map(|res| res.map_err(PoolServerError::from))
                 .collect(),
             Some(debug_dump_reputation_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_reputation_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<ReputationStatus> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_reputation_status(GetReputationStatusRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+                address: address.as_bytes().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_reputation_status_response::Result::Success(s)) => {
+                Ok(ReputationStatus::try_from(s.status)?)
+            }
+            Some(get_reputation_status_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

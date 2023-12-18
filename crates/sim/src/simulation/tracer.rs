@@ -72,7 +72,9 @@ pub(crate) struct Phase {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AccessInfo {
+    // slot value, just prior this current operation
     pub(crate) reads: HashMap<U256, String>,
+    // count of writes.
     pub(crate) writes: HashMap<U256, u32>,
 }
 

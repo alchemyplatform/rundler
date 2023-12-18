@@ -28,7 +28,10 @@ pub(crate) use remote::spawn_remote_mempool_server;
 pub use remote::RemotePoolClient;
 use rundler_types::{EntityUpdate, UserOperation};
 
-use crate::mempool::{PoolOperation, Reputation};
+use crate::{
+    mempool::{PoolOperation, Reputation},
+    ReputationStatus,
+};
 
 /// Result type for pool server operations.
 pub type PoolResult<T> = std::result::Result<T, PoolServerError>;
@@ -94,6 +97,13 @@ pub trait PoolServer: Send + Sync + 'static {
         entry_point: Address,
         reputations: Vec<Reputation>,
     ) -> PoolResult<()>;
+
+    /// Get reputation status given entrypoint and address
+    async fn get_reputation_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<ReputationStatus>;
 
     /// Dump reputations for entities, used for debug methods
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;

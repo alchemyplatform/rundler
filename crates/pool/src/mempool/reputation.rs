@@ -67,8 +67,6 @@ impl<'de> Deserialize<'de> for ReputationStatus {
 pub struct Reputation {
     /// The entity's address
     pub address: Address,
-    /// The entity's reputation status
-    pub status: ReputationStatus,
     /// Number of ops seen in the current interval
     pub ops_seen: u64,
     /// Number of ops included in the current interval
@@ -174,7 +172,6 @@ impl ReputationManager for HourlyMovingAverageReputation {
             .iter()
             .map(|(address, count)| Reputation {
                 address: *address,
-                status: reputation.status(*address),
                 ops_seen: count.ops_seen,
                 ops_included: count.ops_included,
             })

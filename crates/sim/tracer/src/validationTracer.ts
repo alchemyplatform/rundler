@@ -76,6 +76,7 @@ type StringSet = Record<string, boolean | undefined>;
   }
 
   const DEPOSIT_TO_SELECTOR = "0xb760faf9";
+  const SSTORE_REQUIRED_GAS = 2300;
   const FORBIDDEN_OPCODES = stringSet([
     "GASPRICE",
     "GASLIMIT",
@@ -247,7 +248,7 @@ type StringSet = Record<string, boolean | undefined>;
       const opcode = log.op.toString();
 
       if (log.getGas() < log.getCost() || (
-        opcode === 'SSTORE' && log.getGas() < 2300
+        opcode === 'SSTORE' && log.getGas() < SSTORE_REQUIRED_GAS
       )) {
         currentPhase.ranOutOfGas = true;
       }
