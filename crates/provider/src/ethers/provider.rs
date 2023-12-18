@@ -223,6 +223,7 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         self: Arc<Self>,
         entry_point_address: Address,
         op: UserOperation,
+        gas_price: U256,
     ) -> ProviderResult<U256> {
         let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&self));
         let data = entry_point
@@ -246,16 +247,8 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         let gas_oracle =
             GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, Arc::clone(&self));
 
-        let (l1_fee, l2_base_fee, l2_priority_fee) = tokio::try_join!(
-            async {
-                let l1_gas = gas_oracle.get_l1_fee(tx).call().await?;
-                Ok(l1_gas)
-            },
-            self.get_base_fee(),
-            self.get_max_priority_fee(),
-        )?;
-
-        Ok(l1_fee / (l2_base_fee + l2_priority_fee))
+        let l1_fee = gas_oracle.get_l1_fee(tx).call().await?;
+        Ok(l1_fee.checked_div(gas_price).unwrap_or(U256::MAX))
     }
 }
 

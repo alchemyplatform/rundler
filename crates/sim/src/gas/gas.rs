@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{fmt::Debug, sync::Arc};
+use std::{cmp, fmt::Debug, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
@@ -28,6 +28,7 @@ use tokio::try_join;
 
 use super::oracle::{
     ConstantOracle, FeeHistoryOracle, FeeHistoryOracleConfig, FeeOracle, MaxOracle, ProviderOracle,
+    UsageBasedFeeOracle, UsageBasedFeeOracleConfig,
 };
 
 /// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
@@ -69,12 +70,13 @@ impl Default for GasOverheads {
 ///
 /// Networks that require dynamic pre_verification_gas are typically those that charge extra calldata fees
 /// that can scale based on dynamic gas prices.
-pub async fn calc_pre_verification_gas<P: Provider>(
+pub async fn estimate_pre_verification_gas<P: Provider>(
     full_op: &UserOperation,
     random_op: &UserOperation,
     entry_point: Address,
     provider: Arc<P>,
     chain_id: u64,
+    gas_price: U256,
 ) -> anyhow::Result<U256> {
     let static_gas = calc_static_pre_verification_gas(full_op, true);
     let dynamic_gas = match chain_id {
@@ -87,7 +89,39 @@ pub async fn calc_pre_verification_gas<P: Provider>(
         _ if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) => {
             provider
                 .clone()
-                .calc_optimism_l1_gas(entry_point, random_op.clone())
+                .calc_optimism_l1_gas(entry_point, random_op.clone(), gas_price)
+                .await?
+        }
+        _ => U256::zero(),
+    };
+
+    Ok(static_gas + dynamic_gas)
+}
+
+/// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
+///
+/// The effective gas price is calculated as min(base_fee + max_priority_fee_per_gas, max_fee_per_gas)
+pub async fn calc_required_pre_verification_gas<P: Provider>(
+    op: &UserOperation,
+    entry_point: Address,
+    provider: Arc<P>,
+    chain_id: u64,
+    base_fee: U256,
+) -> anyhow::Result<U256> {
+    let static_gas = calc_static_pre_verification_gas(op, true);
+    let dynamic_gas = match chain_id {
+        _ if ARBITRUM_CHAIN_IDS.contains(&chain_id) => {
+            provider
+                .clone()
+                .calc_arbitrum_l1_gas(entry_point, op.clone())
+                .await?
+        }
+        _ if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) => {
+            let gas_price = cmp::min(base_fee + op.max_priority_fee_per_gas, op.max_fee_per_gas);
+
+            provider
+                .clone()
+                .calc_optimism_l1_gas(entry_point, op.clone(), gas_price)
                 .await?
         }
         _ => U256::zero(),
@@ -257,11 +291,29 @@ impl PriorityFeeMode {
             max_priority_fee_per_gas,
         }
     }
+
+    /// Calculate the minimum priority fee given the current bundle fees and network configured
+    /// settings
+    pub fn minimum_priority_fee(
+        &self,
+        base_fee: U256,
+        base_fee_accept_percent: u64,
+        min_max_priority_fee_per_gas: U256,
+    ) -> U256 {
+        match *self {
+            PriorityFeeMode::BaseFeePercent(percent) => {
+                math::percent(math::percent(base_fee, base_fee_accept_percent), percent)
+            }
+            PriorityFeeMode::PriorityFeeIncreasePercent(percent) => {
+                math::increase_by_percent(min_max_priority_fee_per_gas, percent)
+            }
+        }
+    }
 }
 
 /// Gas fee estimator for a 4337 user operation.
 #[derive(Debug, Clone)]
-pub struct FeeEstimator<P: Provider> {
+pub struct FeeEstimator<P> {
     provider: Arc<P>,
     priority_fee_mode: PriorityFeeMode,
     bundle_priority_fee_overhead_percent: u64,
@@ -294,7 +346,12 @@ impl<P: Provider> FeeEstimator<P> {
     /// `min_fees` is used to set the minimum fees to use for the bundle. Typically used if a
     /// bundle has already been submitted and its fees must at least be a certain amount above the
     /// already submitted fees.
-    pub async fn required_bundle_fees(&self, min_fees: Option<GasFees>) -> anyhow::Result<GasFees> {
+    ///
+    /// Returns the required fees and the current base fee.
+    pub async fn required_bundle_fees(
+        &self,
+        min_fees: Option<GasFees>,
+    ) -> anyhow::Result<(GasFees, U256)> {
         let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
 
         let required_fees = min_fees.unwrap_or_default();
@@ -310,10 +367,13 @@ impl<P: Provider> FeeEstimator<P> {
         let max_fee_per_gas = required_fees
             .max_fee_per_gas
             .max(base_fee + max_priority_fee_per_gas);
-        Ok(GasFees {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-        })
+        Ok((
+            GasFees {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+            },
+            base_fee,
+        ))
     }
 
     /// Returns the required operation fees for the given bundle fees.
@@ -334,20 +394,22 @@ impl<P: Provider> FeeEstimator<P> {
 }
 
 // TODO move all of this to ChainSpec
-
+/// ETHEREUM_MAINNET_MAX_PRIORITY_FEE_MIN
+pub const ETHEREUM_MAINNET_MAX_PRIORITY_FEE_MIN: u64 = 100_000_000;
 /// Polygon Mumbai max priority fee min
 pub const POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN: u64 = 1_500_000_000;
 /// Polygon Mainnet max priority fee min
 pub const POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN: u64 = 30_000_000_000;
 /// Optimism Bedrock chains max priority fee min
-pub const OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN: u64 = 1_000_000;
+pub const OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN: u64 = 100_000;
 
 /// Returns the minimum max priority fee per gas for the given chain id.
 pub fn get_min_max_priority_fee_per_gas(chain_id: u64) -> U256 {
     match chain_id {
+        x if x == Chain::Mainnet as u64 => ETHEREUM_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
         x if x == Chain::Polygon as u64 => POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
         x if x == Chain::PolygonMumbai as u64 => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
-        x if x == Chain::Optimism as u64 => OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN.into(),
+        x if OP_BEDROCK_CHAIN_IDS.contains(&x) => OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN.into(),
         _ => U256::zero(),
     }
 }
@@ -361,13 +423,11 @@ where
     if ARBITRUM_CHAIN_IDS.contains(&chain_id) {
         Arc::new(Box::new(ConstantOracle::new(U256::zero())))
     } else if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
-        let config = FeeHistoryOracleConfig {
+        let config = UsageBasedFeeOracleConfig {
             minimum_fee,
-            blocks_history: 32,
-            percentile: 33.3,
             ..Default::default()
         };
-        Arc::new(Box::new(FeeHistoryOracle::new(provider, config)))
+        Arc::new(Box::new(UsageBasedFeeOracle::new(provider, config)))
     } else if POLYGON_CHAIN_IDS.contains(&chain_id) {
         let mut max_oracle = MaxOracle::new();
         max_oracle.add(ProviderOracle::new(provider.clone()));

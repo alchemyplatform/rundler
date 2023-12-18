@@ -175,6 +175,7 @@ where
                         self.pool.clone(),
                         self.args.eth_api_settings,
                         self.args.estimation_settings,
+                        self.args.precheck_settings,
                     )
                     .into_rpc(),
                 )?,
