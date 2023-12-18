@@ -221,18 +221,25 @@ where
         }
 
         // update required bundle fees and update metrics
-        if let Ok(fees) = self.prechecker.update_bundle_fees().await {
-            let max_fee = match format_units(fees.max_fee_per_gas, "gwei") {
+        if let Ok((bundle_fees, base_fee)) = self.prechecker.update_fees().await {
+            let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
                 Ok(s) => s.parse::<f64>().unwrap_or_default(),
                 Err(_) => 0.0,
             };
             UoPoolMetrics::current_max_fee_gwei(max_fee);
 
-            let max_priority_fee = match format_units(fees.max_priority_fee_per_gas, "gwei") {
+            let max_priority_fee = match format_units(bundle_fees.max_priority_fee_per_gas, "gwei")
+            {
                 Ok(s) => s.parse::<f64>().unwrap_or_default(),
                 Err(_) => 0.0,
             };
             UoPoolMetrics::current_max_priority_fee_gwei(max_priority_fee);
+
+            let base_fee = match format_units(base_fee, "gwei") {
+                Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                Err(_) => 0.0,
+            };
+            UoPoolMetrics::current_base_fee(base_fee);
         }
     }
 
@@ -464,6 +471,10 @@ impl UoPoolMetrics {
 
     fn current_max_priority_fee_gwei(fee: f64) {
         metrics::gauge!("op_pool_current_max_priority_fee_gwei", fee);
+    }
+
+    fn current_base_fee(fee: f64) {
+        metrics::gauge!("op_pool_current_base_fee", fee);
     }
 }
 
@@ -900,11 +911,14 @@ mod tests {
         let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        prechecker.expect_update_bundle_fees().returning(|| {
-            Ok(GasFees {
-                max_fee_per_gas: 0.into(),
-                max_priority_fee_per_gas: 0.into(),
-            })
+        prechecker.expect_update_fees().returning(|| {
+            Ok((
+                GasFees {
+                    max_fee_per_gas: 0.into(),
+                    max_priority_fee_per_gas: 0.into(),
+                },
+                0.into(),
+            ))
         });
         for op in ops {
             prechecker.expect_check().returning(move |_| {

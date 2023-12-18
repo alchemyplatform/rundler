@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{ops::Deref, sync::Arc};
+use std::{cmp, ops::Deref, sync::Arc};
 
 use anyhow::{anyhow, Context};
 use ethers::{
@@ -39,7 +39,7 @@ use rundler_utils::{eth, math};
 use tokio::join;
 
 use super::types::{GasEstimate, Settings, UserOperationOptionalGas};
-use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, utils};
+use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, utils, FeeEstimator};
 
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary
@@ -101,6 +101,7 @@ pub struct GasEstimatorImpl<P, E> {
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
+    fee_estimator: FeeEstimator<P>,
 }
 
 #[async_trait::async_trait]
@@ -118,8 +119,17 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
             .await
             .map_err(anyhow::Error::from)?;
 
-        // Estimate pre verification gas
-        let pre_verification_gas = self.calc_pre_verification_gas(&op).await?;
+        // Estimate pre verification gas at the current fees
+        // If the user provides fees, use them, otherwise use the current bundle fees
+        let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
+        let gas_price = if let (Some(max_fee), Some(prio_fee)) =
+            (op.max_fee_per_gas, op.max_priority_fee_per_gas)
+        {
+            cmp::min(max_fee, base_fee + prio_fee)
+        } else {
+            base_fee + bundle_fees.max_priority_fee_per_gas
+        };
+        let pre_verification_gas = self.estimate_pre_verification_gas(&op, gas_price).await?;
 
         // We deviate from the spec here always ignoring `max_fee_per_gas` and setting to zero.
         // If not using a paymaster, the bundler will automatically add 21K to the verification
@@ -164,12 +174,19 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
 
 impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
     /// Create a new gas estimator
-    pub fn new(chain_id: u64, provider: Arc<P>, entry_point: E, settings: Settings) -> Self {
+    pub fn new(
+        chain_id: u64,
+        provider: Arc<P>,
+        entry_point: E,
+        settings: Settings,
+        fee_estimator: FeeEstimator<P>,
+    ) -> Self {
         Self {
             chain_id,
             provider,
             entry_point,
             settings,
+            fee_estimator,
         }
     }
 
@@ -365,16 +382,18 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         }
     }
 
-    async fn calc_pre_verification_gas(
+    async fn estimate_pre_verification_gas(
         &self,
         op: &UserOperationOptionalGas,
+        gas_price: U256,
     ) -> Result<U256, GasEstimationError> {
-        Ok(gas::calc_pre_verification_gas(
+        Ok(gas::estimate_pre_verification_gas(
             &op.max_fill(&self.settings),
             &op.random_fill(&self.settings),
             self.entry_point.address(),
             self.provider.clone(),
             self.chain_id,
+            gas_price,
         )
         .await?)
     }
@@ -400,6 +419,7 @@ mod tests {
     use rundler_types::contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult};
 
     use super::*;
+    use crate::PriorityFeeMode;
 
     // Gas overhead defaults
     const FIXED: u32 = 21000;
@@ -417,6 +437,10 @@ mod tests {
         (entry, provider)
     }
 
+    fn create_fee_estimator(provider: Arc<MockProvider>) -> FeeEstimator<MockProvider> {
+        FeeEstimator::new(provider, 0, PriorityFeeMode::BaseFeePercent(0), 0)
+    }
+
     fn create_estimator(
         entry: MockEntryPoint,
         provider: MockProvider,
@@ -426,9 +450,14 @@ mod tests {
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
         };
-
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
-            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
+        let provider = Arc::new(provider);
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+            0,
+            provider.clone(),
+            entry,
+            settings,
+            create_fee_estimator(provider),
+        );
 
         (estimator, settings)
     }
@@ -484,7 +513,10 @@ mod tests {
 
         let (estimator, settings) = create_estimator(entry, provider);
         let user_op = demo_user_op_optional_gas();
-        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+        let estimation = estimator
+            .estimate_pre_verification_gas(&user_op, U256::zero())
+            .await
+            .unwrap();
 
         let u_o = user_op.max_fill(&settings);
 
@@ -521,11 +553,20 @@ mod tests {
         };
 
         // Chose arbitrum
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
-            GasEstimatorImpl::new(Chain::Arbitrum as u64, Arc::new(provider), entry, settings);
+        let provider = Arc::new(provider);
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+            Chain::Arbitrum as u64,
+            provider.clone(),
+            entry,
+            settings,
+            create_fee_estimator(provider),
+        );
 
         let user_op = demo_user_op_optional_gas();
-        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+        let estimation = estimator
+            .estimate_pre_verification_gas(&user_op, U256::zero())
+            .await
+            .unwrap();
 
         let u_o = user_op.max_fill(&settings);
 
@@ -555,7 +596,7 @@ mod tests {
         entry.expect_address().return_const(Address::zero());
         provider
             .expect_calc_optimism_l1_gas()
-            .returning(|_a, _b| Ok(U256::from(1000)));
+            .returning(|_a, _b, _c| Ok(U256::from(1000)));
 
         let settings = Settings {
             max_verification_gas: 10000000000,
@@ -564,11 +605,20 @@ mod tests {
         };
 
         // Chose OP
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
-            GasEstimatorImpl::new(Chain::Optimism as u64, Arc::new(provider), entry, settings);
+        let provider = Arc::new(provider);
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+            Chain::Optimism as u64,
+            provider.clone(),
+            entry,
+            settings,
+            create_fee_estimator(provider),
+        );
 
         let user_op = demo_user_op_optional_gas();
-        let estimation = estimator.calc_pre_verification_gas(&user_op).await.unwrap();
+        let estimation = estimator
+            .estimate_pre_verification_gas(&user_op, U256::zero())
+            .await
+            .unwrap();
 
         let u_o = user_op.max_fill(&settings);
 
@@ -1107,6 +1157,12 @@ mod tests {
             };
             Err(ProviderError::JsonRpcError(json_rpc_error))
         });
+        provider
+            .expect_get_base_fee()
+            .returning(|| Ok(U256::from(1000)));
+        provider
+            .expect_get_max_priority_fee()
+            .returning(|| Ok(U256::from(1000)));
 
         let (estimator, _) = create_estimator(entry, provider);
 
@@ -1178,6 +1234,12 @@ mod tests {
             };
             Err(ProviderError::JsonRpcError(json_rpc_error))
         });
+        provider
+            .expect_get_base_fee()
+            .returning(|| Ok(U256::from(1000)));
+        provider
+            .expect_get_max_priority_fee()
+            .returning(|| Ok(U256::from(1000)));
 
         //max_call_gas is less than MIN_CALL_GAS_LIMIT
 
@@ -1187,8 +1249,14 @@ mod tests {
             max_simulate_handle_ops_gas: 10,
         };
 
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> =
-            GasEstimatorImpl::new(0, Arc::new(provider), entry, settings);
+        let provider = Arc::new(provider);
+        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+            0,
+            provider.clone(),
+            entry,
+            settings,
+            create_fee_estimator(provider),
+        );
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator.estimate_op_gas(user_op).await.err();
 

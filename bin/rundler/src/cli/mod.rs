@@ -202,12 +202,20 @@ pub struct CommonArgs {
     priority_fee_mode_value: u64,
 
     #[arg(
-        long = "fee_accept_percent",
-        name = "fee_accept_percent",
-        env = "FEE_ACCEPT_PERCENT",
-        default_value = "100"
+        long = "base_fee_accept_percent",
+        name = "base_fee_accept_percent",
+        env = "BASE_FEE_ACCEPT_PERCENT",
+        default_value = "50"
     )]
-    fee_accept_percent: u64,
+    base_fee_accept_percent: u64,
+
+    #[arg(
+        long = "pre_verification_gas_accept_percent",
+        name = "pre_verification_gas_accept_percent",
+        env = "PRE_VERIFICATION_GAS_ACCEPT_PERCENT",
+        default_value = "50"
+    )]
+    pre_verification_gas_accept_percent: u64,
 
     /// Interval at which the builder polls an Eth node for new blocks and
     /// mined transactions.
@@ -288,7 +296,8 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
                 value.priority_fee_mode_kind.as_str(),
                 value.priority_fee_mode_value,
             )?,
-            fee_accept_percent: value.fee_accept_percent,
+            base_fee_accept_percent: value.base_fee_accept_percent,
+            pre_verification_gas_accept_percent: value.pre_verification_gas_accept_percent,
         })
     }
 }
