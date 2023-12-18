@@ -155,5 +155,6 @@ pub trait Provider: Send + Sync + Debug + 'static {
         self: Arc<Self>,
         entry_point_address: Address,
         op: UserOperation,
+        gas_price: U256,
     ) -> ProviderResult<U256>;
 }

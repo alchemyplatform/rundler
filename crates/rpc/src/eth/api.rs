@@ -30,8 +30,8 @@ use ethers::{
 use rundler_pool::PoolServer;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_sim::{
-    EstimationSettings, GasEstimate, GasEstimationError, GasEstimator, GasEstimatorImpl,
-    UserOperationOptionalGas,
+    EstimationSettings, FeeEstimator, GasEstimate, GasEstimationError, GasEstimator,
+    GasEstimatorImpl, PrecheckSettings, UserOperationOptionalGas,
 };
 use rundler_types::{
     contracts::i_entry_point::{
@@ -76,12 +76,18 @@ where
         provider: Arc<P>,
         entry_point: E,
         estimation_settings: EstimationSettings,
+        fee_estimator: FeeEstimator<P>,
     ) -> Self
     where
         E: Clone, // Add Clone trait bound for E
     {
-        let gas_estimator =
-            GasEstimatorImpl::new(chain_id, provider, entry_point.clone(), estimation_settings);
+        let gas_estimator = GasEstimatorImpl::new(
+            chain_id,
+            provider,
+            entry_point.clone(),
+            estimation_settings,
+            fee_estimator,
+        );
         Self { gas_estimator }
     }
 }
@@ -108,6 +114,7 @@ where
         pool: PS,
         settings: Settings,
         estimation_settings: EstimationSettings,
+        precheck_settings: PrecheckSettings,
     ) -> Self
     where
         E: Clone,
@@ -122,6 +129,12 @@ where
                         Arc::clone(&provider),
                         entry_point,
                         estimation_settings,
+                        FeeEstimator::new(
+                            Arc::clone(&provider),
+                            chain_id,
+                            precheck_settings.priority_fee_mode,
+                            precheck_settings.bundle_priority_fee_overhead_percent,
+                        ),
                     ),
                 )
             })

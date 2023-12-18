@@ -117,7 +117,7 @@ where
     C: PoolServer,
 {
     async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
-        let (ops, block_hash, bundle_fees) = try_join!(
+        let (ops, block_hash, (bundle_fees, base_fee)) = try_join!(
             self.get_ops_from_pool(),
             self.provider
                 .get_latest_block_hash()
@@ -141,35 +141,20 @@ where
             gas_limit
         );
 
-        // Determine fees required for ops to be included in a bundle, and filter out ops that don't
-        // meet the requirements. Simulate unfiltered ops.
+        // Determine fees required for ops to be included in a bundle
         let required_op_fees = self.fee_estimator.required_op_fees(bundle_fees);
-        let simulation_futures = ops
+        let all_paymaster_addresses = ops
             .iter()
-            .filter(|op| {
-                if op.uo.max_fee_per_gas >= required_op_fees.max_fee_per_gas
-                    && op.uo.max_priority_fee_per_gas >= required_op_fees.max_priority_fee_per_gas
-                {
-                    true
-                } else {
-                    self.emit(BuilderEvent::skipped_op(
-                        self.builder_index,
-                        self.op_hash(&op.uo),
-                        SkipReason::InsufficientFees {
-                            required_fees: required_op_fees,
-                            actual_fees: GasFees {
-                                max_fee_per_gas: op.uo.max_fee_per_gas,
-                                max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas,
-                            },
-                        },
-                    ));
-                    false
-                }
-            })
-            .cloned()
-            .map(|op| self.simulate_validation(op, block_hash));
+            .filter_map(|op| op.uo.paymaster())
+            .collect::<Vec<Address>>();
+
+        // Filter ops and simulate
+        let simulation_futures = ops
+            .into_iter()
+            .map(|op| self.filter_and_simulate(op, block_hash, base_fee, required_op_fees))
+            .collect::<Vec<_>>();
+
         let ops_with_simulations_future = future::join_all(simulation_futures);
-        let all_paymaster_addresses = ops.iter().filter_map(|op| op.uo.paymaster());
         let balances_by_paymaster_future =
             self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);
         let (ops_with_simulations, balances_by_paymaster) =
@@ -177,13 +162,7 @@ where
         let balances_by_paymaster = balances_by_paymaster?;
         let ops_with_simulations = ops_with_simulations
             .into_iter()
-            .filter_map(|result| match result {
-                Ok(success) => Some(success),
-                Err(error) => {
-                    error!("Failed to resimulate op: {error:?}");
-                    None
-                }
-            })
+            .flatten()
             .collect::<Vec<_>>();
         let mut context = self
             .assemble_context(ops_with_simulations, balances_by_paymaster)
@@ -256,22 +235,100 @@ where
         }
     }
 
-    async fn simulate_validation(
+    // Filter and simulate a single op. Returns None if the op should be skipped.
+    //
+    // Filters on:
+    // - gas fees
+    // - pre-verification gas
+    // - any errors
+    async fn filter_and_simulate(
         &self,
         op: PoolOperation,
         block_hash: H256,
-    ) -> anyhow::Result<(UserOperation, Result<SimulationSuccess, SimulationError>)> {
+        base_fee: U256,
+        required_op_fees: GasFees,
+    ) -> Option<(UserOperation, Result<SimulationSuccess, SimulationError>)> {
+        // filter by fees
+        if op.uo.max_fee_per_gas < required_op_fees.max_fee_per_gas
+            || op.uo.max_priority_fee_per_gas < required_op_fees.max_priority_fee_per_gas
+        {
+            self.emit(BuilderEvent::skipped_op(
+                self.builder_index,
+                self.op_hash(&op.uo),
+                SkipReason::InsufficientFees {
+                    required_fees: required_op_fees,
+                    actual_fees: GasFees {
+                        max_fee_per_gas: op.uo.max_fee_per_gas,
+                        max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas,
+                    },
+                },
+            ));
+            return None;
+        }
+
+        // Check if the pvg is enough
+        let required_pvg = gas::calc_required_pre_verification_gas(
+            &op.uo,
+            self.entry_point.address(),
+            self.provider.clone(),
+            self.settings.chain_id,
+            base_fee,
+        )
+        .await
+        .map_err(|e| {
+            self.emit(BuilderEvent::skipped_op(
+                self.builder_index,
+                self.op_hash(&op.uo),
+                SkipReason::Other {
+                    reason: Arc::new(format!(
+                        "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
+                    )),
+                },
+            ));
+            e
+        })
+        .ok()?;
+
+        if op.uo.pre_verification_gas < required_pvg {
+            self.emit(BuilderEvent::skipped_op(
+                self.builder_index,
+                self.op_hash(&op.uo),
+                SkipReason::InsufficientPreVerificationGas {
+                    base_fee,
+                    op_fees: GasFees {
+                        max_fee_per_gas: op.uo.max_fee_per_gas,
+                        max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas,
+                    },
+                    required_pvg,
+                    actual_pvg: op.uo.pre_verification_gas,
+                },
+            ));
+            return None;
+        }
+
+        // Simulate
         let result = self
             .simulator
             .simulate_validation(op.uo.clone(), Some(block_hash), Some(op.expected_code_hash))
             .await;
-        match result {
-            Ok(success) => Ok((op.uo, Ok(success))),
+        let result = match result {
+            Ok(success) => (op.uo, Ok(success)),
             Err(error) => match error {
-                SimulationError::Violations(_) => Ok((op.uo, Err(error))),
-                SimulationError::Other(error) => Err(error),
+                SimulationError::Violations(_) => (op.uo, Err(error)),
+                SimulationError::Other(error) => {
+                    self.emit(BuilderEvent::skipped_op(
+                        self.builder_index,
+                        self.op_hash(&op.uo),
+                        SkipReason::Other {
+                            reason: Arc::new(format!("Failed to simulate op: {error:?}, skipping")),
+                        },
+                    ));
+                    return None;
+                }
             },
-        }
+        };
+
+        Some(result)
     }
 
     async fn assemble_context(
@@ -497,10 +554,10 @@ where
 
     async fn get_balances_by_paymaster(
         &self,
-        addresses: impl Iterator<Item = Address>,
+        addresses: impl IntoIterator<Item = Address>,
         block_hash: H256,
     ) -> anyhow::Result<HashMap<Address, U256>> {
-        let futures = addresses.map(|address| async move {
+        let futures = addresses.into_iter().map(|address| async move {
             let deposit = self
                 .entry_point
                 .balance_of(address, Some(BlockId::Hash(block_hash)))
@@ -979,7 +1036,7 @@ mod tests {
     #[tokio::test]
     async fn test_singleton_valid_bundle() {
         let op = UserOperation {
-            pre_verification_gas: 1000.into(),
+            pre_verification_gas: DEFAULT_PVG.into(),
             verification_gas_limit: 10000.into(),
             call_gas_limit: 100000.into(),
             ..Default::default()
@@ -1014,7 +1071,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rejects_on_violation() {
-        let op = UserOperation::default();
+        let op = default_op();
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| Err(SimulationError::Violations(vec![]))),
@@ -1026,7 +1083,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drops_but_not_rejects_on_simulation_failure() {
-        let op = UserOperation::default();
+        let op = default_op();
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
@@ -1040,7 +1097,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rejects_on_signature_failure() {
-        let op = UserOperation::default();
+        let op = default_op();
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| {
@@ -1061,7 +1118,7 @@ mod tests {
             ValidTimeRange::new(Timestamp::MIN, Timestamp::now() + Duration::from_secs(5)),
         ];
         for time_range in invalid_time_ranges {
-            let op = UserOperation::default();
+            let op = default_op();
             let bundle = simple_make_bundle(vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(move || {
@@ -1153,6 +1210,48 @@ mod tests {
         let base_fee = U256::from(1000);
         let max_priority_fee_per_gas = U256::from(50);
         let op1 = op_with_sender_and_fees(address(1), 1054.into(), 55.into());
+        let op2 = op_with_sender_and_fees(address(2), 1055.into(), 55.into());
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            base_fee,
+            max_priority_fee_per_gas,
+        )
+        .await;
+        assert_eq!(
+            bundle.gas_fees,
+            GasFees {
+                max_fee_per_gas: 1050.into(),
+                max_priority_fee_per_gas: 50.into(),
+            }
+        );
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op2],
+                ..Default::default()
+            }],
+        );
+        assert!(bundle.rejected_ops.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_drops_but_not_rejects_op_with_too_low_pvg() {
+        let base_fee = U256::from(1000);
+        let max_priority_fee_per_gas = U256::from(50);
+        let mut op1 = op_with_sender_and_fees(address(1), 1054.into(), 55.into());
+        op1.pre_verification_gas = 0.into(); // Should be dropped but not rejected
         let op2 = op_with_sender_and_fees(address(2), 1055.into(), 55.into());
         let bundle = mock_make_bundle(
             vec![
@@ -1364,8 +1463,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_bundle_gas_limit_simple() {
-        let op1 = op_with_sender_call_gas_limit(address(1), U256::from(5_000_000));
-        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(4_000_000));
+        // Limit is 10M
+        // Each OP has 1M pre_verification_gas, 0 verification_gas_limit, call_gas_limit is passed in
+        let op1 = op_with_sender_call_gas_limit(address(1), U256::from(4_000_000));
+        let op2 = op_with_sender_call_gas_limit(address(2), U256::from(3_000_000));
+        // these two shouldn't be included in the bundle
         let op3 = op_with_sender_call_gas_limit(address(3), U256::from(10_000_000));
         let op4 = op_with_sender_call_gas_limit(address(4), U256::from(10_000_000));
         let deposit = parse_units("1", "ether").unwrap().into();
@@ -1776,9 +1878,13 @@ mod tests {
         Bytes::from([n])
     }
 
+    // UOs require PVG to pass the PVG check even when fees are 0
+    const DEFAULT_PVG: u64 = 1_000_000;
+
     fn op_with_sender(sender: Address) -> UserOperation {
         UserOperation {
             sender,
+            pre_verification_gas: U256::from(DEFAULT_PVG),
             ..Default::default()
         }
     }
@@ -1787,6 +1893,7 @@ mod tests {
         UserOperation {
             sender,
             paymaster_and_data: paymaster.as_bytes().to_vec().into(),
+            pre_verification_gas: U256::from(DEFAULT_PVG),
             ..Default::default()
         }
     }
@@ -1795,6 +1902,7 @@ mod tests {
         UserOperation {
             sender,
             init_code: factory.as_bytes().to_vec().into(),
+            pre_verification_gas: U256::from(DEFAULT_PVG),
             ..Default::default()
         }
     }
@@ -1808,6 +1916,14 @@ mod tests {
             sender,
             max_fee_per_gas,
             max_priority_fee_per_gas,
+            pre_verification_gas: U256::from(DEFAULT_PVG),
+            ..Default::default()
+        }
+    }
+
+    fn default_op() -> UserOperation {
+        UserOperation {
+            pre_verification_gas: U256::from(DEFAULT_PVG),
             ..Default::default()
         }
     }
@@ -1816,6 +1932,7 @@ mod tests {
         UserOperation {
             sender,
             call_gas_limit,
+            pre_verification_gas: U256::from(DEFAULT_PVG),
             ..Default::default()
         }
     }

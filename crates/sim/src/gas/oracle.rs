@@ -36,6 +36,102 @@ pub(crate) trait FeeOracle: Send + Sync + Debug {
     async fn estimate_priority_fee(&self) -> Result<U256>;
 }
 
+/// UsageBasedFeeOracle config
+#[derive(Clone, Debug)]
+pub(crate) struct UsageBasedFeeOracleConfig {
+    /// Minimum fee to return, returned if the chain is not congested
+    pub(crate) minimum_fee: U256,
+    /// Maximum fee to return, clamped to this value when calculating the average fee
+    /// during congestion
+    pub(crate) maximum_fee: U256,
+    /// Congestion trigger usage ratio threshold, a block with gas usage over this ratio
+    /// is considered congested.
+    pub(crate) congestion_trigger_usage_ratio_threshold: f64,
+    /// Number of congested blocks in a row to trigger the congestion logic
+    pub(crate) congestion_trigger_num_blocks: u64,
+    /// When congested, this percentile is used to calculate the average fee
+    /// from the last N blocks as the priority fee to return
+    pub(crate) congestion_fee_percentile: f64,
+}
+
+impl Default for UsageBasedFeeOracleConfig {
+    fn default() -> Self {
+        Self {
+            minimum_fee: U256::zero(),
+            maximum_fee: U256::MAX,
+            congestion_trigger_usage_ratio_threshold: 0.75,
+            congestion_trigger_num_blocks: 5,
+            congestion_fee_percentile: 33.0,
+        }
+    }
+}
+
+/// Fee oracle that takes into account the gas usage of the last N blocks
+///
+/// For most chains, priority fee above a minimum value doesn't impact the transaction
+/// inclusion probability unless the chain is congested. This oracle uses the gas usage
+/// of a configurable amount of blocks to determine if the chain is congested and only
+/// returns a priority fee above the minimum if the chain is congested.
+#[derive(Debug)]
+pub(crate) struct UsageBasedFeeOracle<P> {
+    provider: Arc<P>,
+    config: UsageBasedFeeOracleConfig,
+}
+
+impl<P> UsageBasedFeeOracle<P>
+where
+    P: Provider,
+{
+    pub(crate) fn new(provider: Arc<P>, config: UsageBasedFeeOracleConfig) -> Self {
+        Self { provider, config }
+    }
+}
+
+#[async_trait]
+impl<P> FeeOracle for UsageBasedFeeOracle<P>
+where
+    P: Provider + Debug,
+{
+    async fn estimate_priority_fee(&self) -> Result<U256> {
+        let fee_history = self
+            .provider
+            .fee_history(
+                self.config.congestion_trigger_num_blocks,
+                BlockNumber::Latest,
+                &[self.config.congestion_fee_percentile],
+            )
+            .await
+            .map_err(|e| FeeOracleError::Other(e.into()))?;
+
+        // Chain is congested if the usage ratio is above the threshold for the last N blocks
+        if !fee_history
+            .gas_used_ratio
+            .iter()
+            .all(|x| x >= &self.config.congestion_trigger_usage_ratio_threshold)
+        {
+            // Chain is not congested, return minimum fee
+            return Ok(self.config.minimum_fee);
+        }
+
+        // Chain is congested, return the average of the last N blocks at configured percentile
+        let values = fee_history
+            .reward
+            .iter()
+            .filter(|b| !b.is_empty() && !b[0].is_zero())
+            .map(|b| b[0])
+            .collect::<Vec<_>>();
+        if values.is_empty() {
+            Ok(self.config.minimum_fee)
+        } else {
+            let fee: U256 = values
+                .iter()
+                .fold(U256::zero(), |acc, x| acc.saturating_add(*x))
+                / values.len();
+            Ok(fee.clamp(self.config.minimum_fee, self.config.maximum_fee))
+        }
+    }
+}
+
 /// Configuration for the fee history oracle
 #[derive(Clone, Debug)]
 pub(crate) struct FeeHistoryOracleConfig {
@@ -206,6 +302,78 @@ mod tests {
     use rundler_provider::MockProvider;
 
     use super::*;
+
+    #[tokio::test]
+    async fn test_usage_oracle_non_congested() {
+        let mut mock = MockProvider::default();
+        mock.expect_fee_history()
+            .times(1)
+            .returning(|_: u64, _, _| {
+                Ok(FeeHistory {
+                    base_fee_per_gas: vec![],
+                    gas_used_ratio: vec![0.75, 0.75, 0.75, 0.75, 0.74],
+                    oldest_block: U256::zero(),
+                    reward: vec![
+                        vec![U256::from(100)],
+                        vec![U256::from(200)],
+                        vec![U256::from(300)],
+                        vec![U256::from(400)],
+                        vec![U256::from(500)],
+                    ],
+                })
+            });
+
+        let oracle = UsageBasedFeeOracle::new(
+            Arc::new(mock),
+            UsageBasedFeeOracleConfig {
+                congestion_trigger_num_blocks: 5,
+                congestion_trigger_usage_ratio_threshold: 0.75,
+                minimum_fee: U256::from(100),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            oracle.estimate_priority_fee().await.unwrap(),
+            U256::from(100)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_usage_oracle_congested() {
+        let mut mock = MockProvider::default();
+        mock.expect_fee_history()
+            .times(1)
+            .returning(|_: u64, _, _| {
+                Ok(FeeHistory {
+                    base_fee_per_gas: vec![],
+                    gas_used_ratio: vec![0.75, 0.75, 0.75, 0.75, 0.75],
+                    oldest_block: U256::zero(),
+                    reward: vec![
+                        vec![U256::from(100)],
+                        vec![U256::from(200)],
+                        vec![U256::from(300)],
+                        vec![U256::from(400)],
+                        vec![U256::from(500)],
+                    ],
+                })
+            });
+
+        let oracle = UsageBasedFeeOracle::new(
+            Arc::new(mock),
+            UsageBasedFeeOracleConfig {
+                congestion_trigger_num_blocks: 5,
+                congestion_trigger_usage_ratio_threshold: 0.75,
+                minimum_fee: U256::from(100),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            oracle.estimate_priority_fee().await.unwrap(),
+            U256::from(300)
+        );
+    }
 
     #[tokio::test]
     async fn test_fee_history_oracle() {
