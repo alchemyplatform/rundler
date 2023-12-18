@@ -20,7 +20,7 @@ use rundler_pool::PoolServer;
 
 use crate::{
     error::rpc_err,
-    types::{RpcReputation, RpcUserOperation},
+    types::{RpcReputationInput, RpcReputationOutput, RpcUserOperation},
 };
 
 /// Debug API
@@ -48,13 +48,16 @@ pub trait DebugApi {
     #[method(name = "bundler_setReputation")]
     async fn bundler_set_reputation(
         &self,
-        reputations: Vec<RpcReputation>,
+        reputations: Vec<RpcReputationInput>,
         entry_point: Address,
     ) -> RpcResult<String>;
 
     /// Dumps the reputations of entities from the given entry point.
     #[method(name = "bundler_dumpReputation")]
-    async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>>;
+    async fn bundler_dump_reputation(
+        &self,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcReputationOutput>>;
 }
 
 pub(crate) struct DebugApi<P, B> {
@@ -139,7 +142,7 @@ where
 
     async fn bundler_set_reputation(
         &self,
-        reputations: Vec<RpcReputation>,
+        reputations: Vec<RpcReputationInput>,
         entry_point: Address,
     ) -> RpcResult<String> {
         let _ = self
@@ -153,17 +156,34 @@ where
         Ok("ok".to_string())
     }
 
-    async fn bundler_dump_reputation(&self, entry_point: Address) -> RpcResult<Vec<RpcReputation>> {
+    async fn bundler_dump_reputation(
+        &self,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcReputationOutput>> {
         let result = self
             .pool
             .debug_dump_reputation(entry_point)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
-        result
-            .into_iter()
-            .map(|r| r.try_into())
-            .collect::<Result<Vec<_>, anyhow::Error>>()
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))
+        let mut results = Vec::new();
+        for r in result {
+            let status = self
+                .pool
+                .get_reputation_status(entry_point, r.address)
+                .await
+                .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+            let reputation = RpcReputationOutput {
+                address: r.address,
+                ops_seen: r.ops_seen.into(),
+                ops_included: r.ops_included.into(),
+                status,
+            };
+
+            results.push(reputation);
+        }
+
+        Ok(results)
     }
 }

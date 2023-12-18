@@ -369,7 +369,7 @@ where
                     sender: sender_address,
                     entrypoint: self.entry_point_address,
                     initcode_length,
-                    entity,
+                    entity: &entity,
                     entity_infos,
                 })?;
 
@@ -834,7 +834,7 @@ struct ParseStorageAccess<'a> {
     sender: Address,
     entrypoint: Address,
     initcode_length: usize,
-    entity: Entity,
+    entity: &'a Entity,
     entity_infos: &'a EntityInfos,
 }
 
@@ -844,10 +844,11 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
         address,
         sender,
         entrypoint,
+        entity_infos,
+        entity,
         slots_by_address,
         initcode_length,
-        entity,
-        entity_infos,
+        ..
     } = args;
 
     if address.eq(&sender) || address.eq(&entrypoint) {
@@ -863,27 +864,27 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
         .collect();
 
     for slot in slots {
-        if slots_by_address.is_associated_slot(sender, *slot) {
-            if initcode_length > 2 {
+        let is_sender_associated = slots_by_address.is_associated_slot(sender, *slot);
+        // [STO-032]
+        let is_entity_associated = slots_by_address.is_associated_slot(entity.address, *slot);
+        // [STO-031]
+        let is_same_address = address.eq(&entity.address);
+        // [STO-033]
+        let is_read_permission = !access_info.writes.contains_key(slot);
+
+        if is_sender_associated {
+            if initcode_length > 2
                 // special case: account.validateUserOp is allowed to use assoc storage if factory is staked.
                 // [STO-022], [STO-021]
-                if !(entity.address.eq(&sender)
+                && !(entity.address.eq(&sender)
                     && entity_infos
                         .factory
                         .expect("Factory needs to be present and staked")
                         .is_staked)
-                {
-                    required_stake_slot = Some(slot);
-                }
+            {
+                required_stake_slot = Some(slot);
             }
-        } else if slots_by_address.is_associated_slot(entity.address, *slot) {
-            // [STO-032]
-            required_stake_slot = Some(slot);
-        } else if address.eq(&entity.address) {
-            // [STO-031]
-            required_stake_slot = Some(slot);
-        } else if !access_info.writes.contains_key(slot) {
-            // [STO-033]
+        } else if is_entity_associated || is_same_address || is_read_permission {
             required_stake_slot = Some(slot);
         } else {
             return Ok(StorageRestriction::Banned(*slot));
@@ -1013,21 +1014,7 @@ mod tests {
                     forbidden_opcodes_used: vec![],
                     forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
-                    storage_accesses: vec![
-                        StorageAccess {
-                            address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                            slots: vec![
-                                U256::from_str("0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc").unwrap(),
-                                U256::from_str("0x0000000000000000000000000000000000000000000000000000000000000000").unwrap()
-                            ],
-                        },
-                        StorageAccess {
-                            address: Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                            slots: vec![
-                                U256::from_str("0xf5357e1da3acf909ceaed3492183cbad85a3c9e1f0076495f66d3eed05219bd5").unwrap()
-                            ],
-                        }
-                    ],
+                    storage_accesses:  HashMap::new(),
                     undeployed_contract_accesses: vec![],
                     ext_code_access_info: HashMap::new(),
                 },
@@ -1194,15 +1181,23 @@ mod tests {
         )];
 
         // add a storage access for a random unrelated address
-        tracer_output.phases[1]
-            .storage_accesses
-            .push(StorageAccess {
-                address: Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6").unwrap(),
-                slots: vec![U256::from_str(
-                    "0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b",
-                )
-                .unwrap()],
-            });
+        let mut writes = HashMap::new();
+
+        writes.insert(
+            H256::from_str("0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b")
+                .unwrap()
+                .to_fixed_bytes()
+                .into(),
+            1,
+        );
+
+        tracer_output.phases[1].storage_accesses.insert(
+            Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6").unwrap(),
+            AccessInfo {
+                reads: HashMap::new(),
+                writes,
+            },
+        );
 
         let mut validation_context = ValidationContext {
             initcode_length: 10,
@@ -1242,7 +1237,6 @@ mod tests {
                 paymaster_info: StakeInfo::from((U256::default(), U256::default())),
                 aggregator_info: None,
             },
-
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
         };
@@ -1295,7 +1289,7 @@ mod tests {
                         )
                         .unwrap()
                     }
-                )
+                ),
             ]
         );
     }

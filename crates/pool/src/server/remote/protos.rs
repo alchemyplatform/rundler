@@ -168,7 +168,6 @@ impl From<PoolReputation> for Reputation {
     fn from(rep: PoolReputation) -> Self {
         Reputation {
             address: rep.address.as_bytes().to_vec(),
-            status: ReputationStatus::from(rep.status).into(),
             ops_seen: rep.ops_seen,
             ops_included: rep.ops_included,
         }
@@ -194,7 +193,6 @@ impl TryFrom<Reputation> for PoolReputation {
     fn try_from(op: Reputation) -> Result<Self, Self::Error> {
         Ok(Self {
             address: from_bytes(&op.address)?,
-            status: PoolReputationStatus::try_from(op.status)?,
             ops_seen: op.ops_seen,
             ops_included: op.ops_included,
         })
