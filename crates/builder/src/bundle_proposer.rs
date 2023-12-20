@@ -1060,15 +1060,21 @@ impl ProposalContext {
                 SimulationViolation::NotStaked(entity, _, _) => {
                     self.add_entity_update(entity, entity_infos)
                 }
-                SimulationViolation::UnintendedRevertWithMessage(entity_type, _, address) => {
-                    if let Some(entity_address) = address {
-                        self.add_entity_update(
-                            Entity {
-                                kind: entity_type,
-                                address: entity_address,
-                            },
-                            entity_infos,
-                        );
+                SimulationViolation::UnintendedRevertWithMessage(entity_type, message, address) => {
+                    match &message[..4] {
+                        // do not penalize an entity for invalid account nonces, which can occur without malicious intent from the sender
+                        "AA25" => {}
+                        _ => {
+                            if let Some(entity_address) = address {
+                                self.add_entity_update(
+                                    Entity {
+                                        kind: entity_type,
+                                        address: entity_address,
+                                    },
+                                    entity_infos,
+                                );
+                            }
+                        }
                     }
                 }
                 SimulationViolation::UnintendedRevert(entity_type, address) => {
