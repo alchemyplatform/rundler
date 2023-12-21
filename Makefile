@@ -53,6 +53,10 @@ fmt: ## format code with nightly rust
 docker-build-latest: ## Build and push a cross-arch Docker image tagged with the latest git tag and `latest`.
 	$(call build_docker_image,$(GIT_TAG),latest)
 
+.PHONY: docker-build
+docker-build: ## Build and push a cross-arch Docker image 
+	$(call build_docker_image,$(GIT_TAG))
+
 # Create a cross-arch Docker image with the given tags and push it
 define build_docker_image
 	$(MAKE) build-aarch64-unknown-linux-gnu
@@ -66,7 +70,7 @@ define build_docker_image
 	docker buildx build --file ./Dockerfile.cross . \
 		--platform linux/arm64,linux/amd64 \
 		--tag $(DOCKER_IMAGE_NAME):$(1) \
-		--tag $(DOCKER_IMAGE_NAME):$(2) \
+		$(if $(2),--tag $(DOCKER_IMAGE_NAME):$(2)) \
 		--provenance=false 
 endef
 
