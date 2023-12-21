@@ -16,3 +16,6 @@
 *.profraw
 .DS_Store
 .helix
+
+# Release artifacts
+dist/
