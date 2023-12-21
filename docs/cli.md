@@ -74,6 +74,8 @@ Options for the metrics server:
 
 Options for logging:
 
+- `RUST_LOG` environment variable is used for controlling log level see: [env_logger](https://docs.rs/env_logger/0.10.1/env_logger/#enabling-logging).
+Only `level` is supported.
 - `--log.file`: Log file. If not provided, logs will be written to stdout.
   - env: *LOG_FILE*
 - `--log.json`: If set, logs will be written in JSON format.
