@@ -15,3 +15,4 @@
 
 mod entry_point;
 mod provider;
+mod stake_manager;

@@ -32,7 +32,7 @@ use tonic::{transport::Server, Request, Response, Result, Status};
 use super::protos::{
     add_op_response, debug_clear_state_response, debug_dump_mempool_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
-    get_reputation_status_response,
+    get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
     DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
@@ -40,7 +40,8 @@ use super::protos::{
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
     DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
     GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetReputationStatusRequest,
-    GetReputationStatusResponse, GetReputationStatusSuccess, GetSupportedEntryPointsRequest,
+    GetReputationStatusResponse, GetReputationStatusSuccess, GetStakeStatusRequest,
+    GetStakeStatusResponse, GetStakeStatusSuccess, GetSupportedEntryPointsRequest,
     GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
     RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
@@ -342,6 +343,31 @@ impl OpPool for OpPoolImpl {
                 result: Some(get_reputation_status_response::Result::Failure(
                     error.into(),
                 )),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_stake_status(
+        &self,
+        request: Request<GetStakeStatusRequest>,
+    ) -> Result<Response<GetStakeStatusResponse>> {
+        let req = request.into_inner();
+
+        let address = self.get_address(&req.address)?;
+        let entry_point = self.get_entry_point(&req.entry_point)?;
+
+        let resp = match self.local_pool.get_stake_status(entry_point, address).await {
+            Ok(status) => GetStakeStatusResponse {
+                result: Some(get_stake_status_response::Result::Success(
+                    GetStakeStatusSuccess {
+                        status: Some(status.into()),
+                    },
+                )),
+            },
+            Err(error) => GetStakeStatusResponse {
+                result: Some(get_stake_status_response::Result::Failure(error.into())),
             },
         };
 

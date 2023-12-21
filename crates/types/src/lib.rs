@@ -28,7 +28,7 @@ pub mod chain;
 #[allow(clippy::all)]
 #[allow(missing_docs)]
 pub mod contracts;
-pub use contracts::shared_types::{UserOperation, UserOpsPerAggregator};
+pub use contracts::shared_types::{DepositInfo, UserOperation, UserOpsPerAggregator};
 
 mod entity;
 pub use entity::{Entity, EntityType, EntityUpdate, EntityUpdateType};

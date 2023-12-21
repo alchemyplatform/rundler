@@ -11,22 +11,18 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Traits for the provider module.
+use anyhow::Result;
+use ethers::{providers::Middleware, types::Address};
+use rundler_types::{contracts::i_stake_manager::IStakeManager, DepositInfo};
 
-mod error;
-pub use error::ProviderError;
+use crate::StakeManager;
 
-mod entry_point;
-#[cfg(feature = "test-utils")]
-pub use entry_point::MockEntryPoint;
-pub use entry_point::{EntryPoint, HandleOpsOut};
-
-mod provider;
-#[cfg(feature = "test-utils")]
-pub use provider::MockProvider;
-pub use provider::{AggregatorOut, AggregatorSimOut, Provider, ProviderResult};
-
-mod stake_manager;
-#[cfg(feature = "test-utils")]
-pub use stake_manager::MockStakeManager;
-pub use stake_manager::StakeManager;
+#[async_trait::async_trait]
+impl<M> StakeManager for IStakeManager<M>
+where
+    M: Middleware + 'static,
+{
+    async fn get_deposit_info(&self, address: Address) -> Result<DepositInfo> {
+        Ok(IStakeManager::get_deposit_info(self, address).await?)
+    }
+}

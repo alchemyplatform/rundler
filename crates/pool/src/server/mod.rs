@@ -29,7 +29,7 @@ pub use remote::RemotePoolClient;
 use rundler_types::{EntityUpdate, UserOperation};
 
 use crate::{
-    mempool::{PoolOperation, Reputation},
+    mempool::{PoolOperation, Reputation, StakeStatus},
     ReputationStatus,
 };
 
@@ -104,6 +104,13 @@ pub trait PoolServer: Send + Sync + 'static {
         entry_point: Address,
         address: Address,
     ) -> PoolResult<ReputationStatus>;
+
+    /// Get stake status given entrypoint and address
+    async fn get_stake_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<StakeStatus>;
 
     /// Dump reputations for entities, used for debug methods
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;

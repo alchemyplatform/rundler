@@ -93,6 +93,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Overwrites the mempool's reputation for an address
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
+
+    /// Get stake status for address
+    async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus>;
 }
 
 /// Config for the mempool
@@ -128,6 +131,23 @@ pub struct PoolConfig {
     pub throttled_entity_mempool_count: u64,
     /// The maximum number of blocks a user operation with a throttled entity can stay in the mempool
     pub throttled_entity_live_blocks: u64,
+}
+
+/// Stake status structure
+#[derive(Debug, Clone, Copy)]
+pub struct StakeStatus {
+    /// Address is staked
+    pub is_staked: bool,
+    /// Stake information about address
+    pub stake_info: StakeInfo,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StakeInfo {
+    /// Stake ammount
+    pub stake: u128,
+    /// Unstake delay in seconds
+    pub unstake_delay_sec: u32,
 }
 
 /// Origin of an operation.
