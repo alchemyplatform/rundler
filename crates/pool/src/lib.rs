@@ -25,7 +25,9 @@ mod emit;
 pub use emit::OpPoolEvent as PoolEvent;
 
 mod mempool;
-pub use mempool::{MempoolError, PoolConfig, PoolOperation, Reputation, ReputationStatus};
+pub use mempool::{
+    MempoolError, PoolConfig, PoolOperation, Reputation, ReputationStatus, StakeStatus,
+};
 
 mod server;
 #[cfg(feature = "test-utils")]

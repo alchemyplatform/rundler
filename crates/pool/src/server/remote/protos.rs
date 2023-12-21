@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::{
@@ -23,6 +23,7 @@ use rundler_types::{
 use crate::{
     mempool::{
         PoolOperation, Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
+        StakeInfo as RundlerStakeInfo, StakeStatus as RundlerStakeStatus,
     },
     server::NewHead as PoolNewHead,
 };
@@ -196,6 +197,36 @@ impl TryFrom<Reputation> for PoolReputation {
             ops_seen: op.ops_seen,
             ops_included: op.ops_included,
         })
+    }
+}
+
+const EMPTY_STAKE_INFO_ERROR: &str = "Stake info cannot be empty";
+impl TryFrom<StakeStatus> for RundlerStakeStatus {
+    type Error = anyhow::Error;
+    fn try_from(stake_status: StakeStatus) -> Result<Self, Self::Error> {
+        if let Some(stake_info) = stake_status.stake_info {
+            return Ok(RundlerStakeStatus {
+                is_staked: stake_status.is_staked,
+                stake_info: RundlerStakeInfo {
+                    stake: stake_info.stake.into(),
+                    unstake_delay_sec: stake_info.unstake_delay_sec,
+                },
+            });
+        }
+
+        Err(anyhow!(EMPTY_STAKE_INFO_ERROR))
+    }
+}
+
+impl From<RundlerStakeStatus> for StakeStatus {
+    fn from(stake_status: RundlerStakeStatus) -> Self {
+        StakeStatus {
+            is_staked: stake_status.is_staked,
+            stake_info: Some(StakeInfo {
+                stake: stake_status.stake_info.stake as u64,
+                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec,
+            }),
+        }
     }
 }
 

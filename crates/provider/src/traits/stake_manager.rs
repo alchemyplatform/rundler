@@ -11,22 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Traits for the provider module.
-
-mod error;
-pub use error::ProviderError;
-
-mod entry_point;
+use ethers::types::Address;
 #[cfg(feature = "test-utils")]
-pub use entry_point::MockEntryPoint;
-pub use entry_point::{EntryPoint, HandleOpsOut};
+use mockall::automock;
+use rundler_types::contracts::i_stake_manager::DepositInfo;
 
-mod provider;
-#[cfg(feature = "test-utils")]
-pub use provider::MockProvider;
-pub use provider::{AggregatorOut, AggregatorSimOut, Provider, ProviderResult};
-
-mod stake_manager;
-#[cfg(feature = "test-utils")]
-pub use stake_manager::MockStakeManager;
-pub use stake_manager::StakeManager;
+/// Trait for interacting with an stake manager contract.
+/// Implemented for the v0.6 version of the stake manager contract.
+/// [Contracts can be found here](https://github.com/eth-infinitism/account-abstraction/tree/v0.6.0).
+#[cfg_attr(feature = "test-utils", automock)]
+#[async_trait::async_trait]
+pub trait StakeManager: Send + Sync + 'static {
+    /// Get the deposit info from address
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
+}

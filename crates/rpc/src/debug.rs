@@ -20,7 +20,9 @@ use rundler_pool::PoolServer;
 
 use crate::{
     error::rpc_err,
-    types::{RpcReputationInput, RpcReputationOutput, RpcUserOperation},
+    types::{
+        RpcReputationInput, RpcReputationOutput, RpcStakeInfo, RpcStakeStatus, RpcUserOperation,
+    },
 };
 
 /// Debug API
@@ -58,6 +60,14 @@ pub trait DebugApi {
         &self,
         entry_point: Address,
     ) -> RpcResult<Vec<RpcReputationOutput>>;
+
+    /// Returns stake status given an address and entrypoint
+    #[method(name = "bundler_getStakeStatus")]
+    async fn bundler_get_stake_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> RpcResult<RpcStakeStatus>;
 }
 
 pub(crate) struct DebugApi<P, B> {
@@ -185,5 +195,26 @@ where
         }
 
         Ok(results)
+    }
+
+    async fn bundler_get_stake_status(
+        &self,
+        address: Address,
+        entry_point: Address,
+    ) -> RpcResult<RpcStakeStatus> {
+        let result = self
+            .pool
+            .get_stake_status(entry_point, address)
+            .await
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+        Ok(RpcStakeStatus {
+            is_staked: result.is_staked,
+            stake_info: RpcStakeInfo {
+                addr: address,
+                stake: result.stake_info.stake,
+                unstake_delay_sec: result.stake_info.unstake_delay_sec,
+            },
+        })
     }
 }

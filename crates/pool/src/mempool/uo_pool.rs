@@ -19,6 +19,7 @@ use ethers::{
 };
 use itertools::Itertools;
 use parking_lot::RwLock;
+use rundler_provider::StakeManager;
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
@@ -30,7 +31,7 @@ use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
     reputation::{Reputation, ReputationManager, ReputationStatus},
-    Mempool, OperationOrigin, PoolConfig, PoolOperation,
+    Mempool, OperationOrigin, PoolConfig, PoolOperation, StakeInfo, StakeStatus,
 };
 use crate::{
     chain::ChainUpdate,
@@ -42,13 +43,14 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator> {
+pub(crate) struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator, SM: StakeManager> {
     config: PoolConfig,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
     simulator: S,
+    stake_manager: SM,
 }
 
 struct UoPoolState {
@@ -57,11 +59,12 @@ struct UoPoolState {
     block_number: u64,
 }
 
-impl<R, P, S> UoPool<R, P, S>
+impl<R, P, S, SM> UoPool<R, P, S, SM>
 where
     R: ReputationManager,
     P: Prechecker,
     S: Simulator,
+    SM: StakeManager,
 {
     pub(crate) fn new(
         config: PoolConfig,
@@ -69,6 +72,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
+        stake_manager: SM,
     ) -> Self {
         Self {
             config: config.clone(),
@@ -81,6 +85,7 @@ where
             event_sender,
             prechecker,
             simulator,
+            stake_manager,
         }
     }
 
@@ -125,11 +130,12 @@ where
 }
 
 #[async_trait]
-impl<R, P, S> Mempool for UoPool<R, P, S>
+impl<R, P, S, SM> Mempool for UoPool<R, P, S, SM>
 where
     R: ReputationManager,
     P: Prechecker,
     S: Simulator,
+    SM: StakeManager,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
         {
@@ -440,6 +446,27 @@ where
         self.reputation.status(address)
     }
 
+    async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
+        let deposit_info = self.stake_manager.get_deposit_info(address).await?;
+
+        let is_staked = deposit_info
+            .stake
+            .ge(&self.config.sim_settings.min_stake_value)
+            && deposit_info
+                .unstake_delay_sec
+                .ge(&self.config.sim_settings.min_unstake_delay);
+
+        let stake_status = StakeStatus {
+            stake_info: StakeInfo {
+                stake: deposit_info.stake,
+                unstake_delay_sec: deposit_info.unstake_delay_sec,
+            },
+            is_staked,
+        };
+
+        Ok(stake_status)
+    }
+
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64) {
         self.reputation
             .set_reputation(address, ops_seen, ops_included)
@@ -482,12 +509,13 @@ impl UoPoolMetrics {
 mod tests {
     use std::collections::HashMap;
 
+    use rundler_provider::MockStakeManager;
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
         SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,
         ViolationError,
     };
-    use rundler_types::{EntityType, GasFees};
+    use rundler_types::{DepositInfo, EntityType, GasFees};
 
     use super::*;
     use crate::chain::MinedOp;
@@ -877,6 +905,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_stake_status_staked() {
+        let mut pool = create_pool(vec![]);
+
+        pool.config.sim_settings.min_stake_value = 9999;
+        pool.config.sim_settings.min_unstake_delay = 99;
+
+        let status = pool.get_stake_status(Address::random()).await.unwrap();
+
+        assert!(status.is_staked);
+    }
+
+    #[tokio::test]
+    async fn test_stake_status_not_staked() {
+        let mut pool = create_pool(vec![]);
+
+        pool.config.sim_settings.min_stake_value = 10001;
+        pool.config.sim_settings.min_unstake_delay = 101;
+
+        let status = pool.get_stake_status(Address::random()).await.unwrap();
+
+        assert!(!status.is_staked);
+    }
+
+    #[tokio::test]
     async fn test_replacement() {
         let op = create_op(Address::random(), 0, 5);
         let pool = create_pool(vec![op.clone()]);
@@ -907,10 +959,11 @@ mod tests {
 
     fn create_pool(
         ops: Vec<OpWithErrors>,
-    ) -> UoPool<impl ReputationManager, impl Prechecker, impl Simulator> {
+    ) -> UoPool<impl ReputationManager, impl Prechecker, impl Simulator, impl StakeManager> {
         let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
+        let mut stake_manager = MockStakeManager::new();
         prechecker.expect_update_fees().returning(|| {
             Ok((
                 GasFees {
@@ -920,6 +973,17 @@ mod tests {
                 0.into(),
             ))
         });
+
+        stake_manager.expect_get_deposit_info().returning(|_| {
+            Ok(DepositInfo {
+                deposit: 1000,
+                staked: true,
+                stake: 10000,
+                unstake_delay_sec: 100,
+                withdraw_time: 10,
+            })
+        });
+
         for op in ops {
             prechecker.expect_check().returning(move |_| {
                 if let Some(error) = &op.precheck_error {
@@ -962,13 +1026,21 @@ mod tests {
             throttled_entity_live_blocks: 10,
         };
         let (event_sender, _) = broadcast::channel(4);
-        UoPool::new(args, reputation, event_sender, prechecker, simulator)
+
+        UoPool::new(
+            args,
+            reputation,
+            event_sender,
+            prechecker,
+            simulator,
+            stake_manager,
+        )
     }
 
     async fn create_pool_insert_ops(
         ops: Vec<OpWithErrors>,
     ) -> (
-        UoPool<impl ReputationManager, impl Prechecker, impl Simulator>,
+        UoPool<impl ReputationManager, impl Prechecker, impl Simulator, impl StakeManager>,
         Vec<UserOperation>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();

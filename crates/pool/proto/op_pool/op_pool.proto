@@ -145,6 +145,9 @@ service OpPool {
   // Get reputation status of address
   rpc GetReputationStatus(GetReputationStatusRequest) returns (GetReputationStatusResponse);
 
+  // Get stake status of address
+  rpc GetStakeStatus(GetStakeStatusRequest) returns (GetStakeStatusResponse);
+
   // Streaming API to subscribe to be updated upon a new block being added to (or reorged onto)
   // the chain. 
   rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
@@ -208,6 +211,32 @@ message GetReputationStatusRequest {
 
 message GetReputationStatusSuccess {
   ReputationStatus status = 1;
+}
+
+message GetStakeStatusResponse {
+  oneof result {
+    GetStakeStatusSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message GetStakeStatusRequest {
+  bytes entry_point = 1;
+  bytes address = 2;
+}
+
+message GetStakeStatusSuccess {
+  StakeStatus status = 1;
+}
+
+message StakeInfo { 
+  uint64 stake = 1;
+  uint32 unstake_delay_sec= 2;
+}
+
+message StakeStatus {
+  bool is_staked = 1;
+  StakeInfo stake_info = 2;
 }
 
 message RemoveOpsRequest {

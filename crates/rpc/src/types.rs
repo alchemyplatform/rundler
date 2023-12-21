@@ -62,6 +62,22 @@ impl From<Address> for RpcAddress {
     }
 }
 
+/// Stake info definition for RPC
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcStakeStatus {
+    pub is_staked: bool,
+    pub stake_info: RpcStakeInfo,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcStakeInfo {
+    pub addr: Address,
+    pub stake: u128,
+    pub unstake_delay_sec: u32,
+}
+
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

@@ -35,14 +35,14 @@ use tonic_health::{
 use super::protos::{
     self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
-    get_reputation_status_response, op_pool_client::OpPoolClient, remove_ops_response,
-    update_entities_response, AddOpRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
-    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
-    GetReputationStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
+    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
+    remove_ops_response, update_entities_response, AddOpRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
+    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
     SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
-    mempool::{PoolOperation, Reputation},
+    mempool::{PoolOperation, Reputation, StakeStatus},
     server::{error::PoolServerError, NewHead, PoolResult, PoolServer},
     ReputationStatus,
 };
@@ -354,6 +354,33 @@ impl PoolServer for RemotePoolClient {
                 Ok(ReputationStatus::try_from(s.status)?)
             }
             Some(get_reputation_status_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_stake_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<StakeStatus> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_stake_status(GetStakeStatusRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+                address: address.as_bytes().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_stake_status_response::Result::Success(s)) => {
+                Ok(s.status.unwrap_or_default().try_into()?)
+            }
+            Some(get_stake_status_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

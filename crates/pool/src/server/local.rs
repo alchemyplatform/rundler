@@ -29,7 +29,7 @@ use tracing::error;
 use super::{PoolResult, PoolServerError};
 use crate::{
     chain::ChainUpdate,
-    mempool::{Mempool, MempoolError, OperationOrigin, PoolOperation},
+    mempool::{Mempool, MempoolError, OperationOrigin, PoolOperation, StakeStatus},
     server::{NewHead, PoolServer, Reputation},
     ReputationStatus,
 };
@@ -214,6 +214,22 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugDumpReputation { reputations } => Ok(reputations),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_stake_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<StakeStatus> {
+        let req = ServerRequestKind::GetStakeStatus {
+            entry_point,
+            address,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetStakeStatus { status } => Ok(status),
             _ => Err(PoolServerError::UnexpectedResponse),
         }
     }
@@ -467,6 +483,24 @@ where
                                 Err(e) => Err(e),
                             }
                         },
+                        ServerRequestKind::GetStakeStatus { entry_point, address }=> {
+                            match self.get_pool(entry_point) {
+                                Ok(mempool) => {
+                                    let mempool = Arc::clone(mempool);
+                                    tokio::spawn(async move {
+                                        let resp = match mempool.get_stake_status(address).await {
+                                            Ok(status) => Ok(ServerResponse::GetStakeStatus { status }),
+                                            Err(e) => Err(e.into()),
+                                        };
+                                        if let Err(e) = req.response.send(resp) {
+                                            tracing::error!("Failed to send response: {:?}", e);
+                                        }
+                                    });
+                                    continue;
+                                },
+                                Err(e) => Err(e),
+                            }
+                        },
                         ServerRequestKind::SubscribeNewHeads => {
                             Ok(ServerResponse::SubscribeNewHeads { new_heads: self.block_sender.subscribe() } )
                         }
@@ -524,6 +558,10 @@ enum ServerRequestKind {
         entry_point: Address,
         address: Address,
     },
+    GetStakeStatus {
+        entry_point: Address,
+        address: Address,
+    },
     SubscribeNewHeads,
 }
 
@@ -550,6 +588,9 @@ enum ServerResponse {
     },
     GetReputationStatus {
         status: ReputationStatus,
+    },
+    GetStakeStatus {
+        status: StakeStatus,
     },
     SubscribeNewHeads {
         new_heads: broadcast::Receiver<NewHead>,
