@@ -6,9 +6,9 @@ The `Pool` task is responsible for receiving, validating, sorting, and storing u
 
 Upon each `add_operation` call the `Pool` will preforms a series of checks.
 
-1. Run a series of [prechecks](https://github.com/eth-infinitism/account-abstraction/blob/develop/eip/EIPS/eip-4337.md#client-behavior-upon-receiving-a-useroperation) to catch any reasons why the UO may not be mined. 
+1. Run a series of [prechecks](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#client-behavior-upon-receiving-a-useroperation) to catch any reasons why the UO may not be mined.
 
-2. Simulate the UO via a `debug_traceCall` as per the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/eip/EIPS/eip-4337.md#simulation).
+2. Simulate the UO via a `debug_traceCall` as per the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#simulation).
 
 If violations are found, the UO is rejected. Else, the UO is added to the pool. 
 
@@ -18,7 +18,7 @@ A typescript based tracer is used to collect relevant information from the `debu
 
 ## Reputation
 
-The `Pool` tracks the reputation of entities as per the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/eip/EIPS/eip-4337.md#reputation-scoring-and-throttlingbanning-for-global-entities).
+The `Pool` tracks the reputation of entities as per the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#reputation-scoring-and-throttlingbanning-for-global-entities).
 
 
 ### Allowlist/Blocklist
