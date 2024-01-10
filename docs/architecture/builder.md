@@ -42,7 +42,7 @@ Once a candidate bundle is constructed, each UO is re-simulated and validation r
 
 After 2nd simulation the entire bundle is validated via an `eth_call`, and ops that fail validation are again removed from the bundle. This process is repeated until the entire bundle passes validation.
 
-NOTE: This procedure implements an old version of the spec and will be updated to conform soon. See [here](https://github.com/eth-infinitism/account-abstraction/blob/develop/eip/EIPS/eip-4337.md#bundling) for more details on the new implementation.
+NOTE: This procedure implements an old version of the spec and will be updated to conform soon. See [here](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#bundling) for more details on the new implementation.
 
 ## Transaction Signers
 
