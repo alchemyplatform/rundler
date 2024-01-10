@@ -27,8 +27,7 @@ use rundler_utils::math;
 use tokio::try_join;
 
 use super::oracle::{
-    ConstantOracle, FeeHistoryOracle, FeeHistoryOracleConfig, FeeOracle, MaxOracle, ProviderOracle,
-    UsageBasedFeeOracle, UsageBasedFeeOracleConfig,
+    ConstantOracle, FeeOracle, ProviderOracle, UsageBasedFeeOracle, UsageBasedFeeOracleConfig,
 };
 
 /// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
@@ -422,24 +421,12 @@ where
 
     if ARBITRUM_CHAIN_IDS.contains(&chain_id) {
         Arc::new(Box::new(ConstantOracle::new(U256::zero())))
-    } else if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) {
+    } else if OP_BEDROCK_CHAIN_IDS.contains(&chain_id) || POLYGON_CHAIN_IDS.contains(&chain_id) {
         let config = UsageBasedFeeOracleConfig {
             minimum_fee,
             ..Default::default()
         };
         Arc::new(Box::new(UsageBasedFeeOracle::new(provider, config)))
-    } else if POLYGON_CHAIN_IDS.contains(&chain_id) {
-        let mut max_oracle = MaxOracle::new();
-        max_oracle.add(ProviderOracle::new(provider.clone()));
-
-        let config = FeeHistoryOracleConfig {
-            minimum_fee,
-            percentile: 33.0,
-            ..Default::default()
-        };
-        max_oracle.add(FeeHistoryOracle::new(provider, config));
-
-        Arc::new(Box::new(max_oracle))
     } else {
         Arc::new(Box::new(ProviderOracle::new(provider)))
     }
