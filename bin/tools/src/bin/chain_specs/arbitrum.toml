@@ -1,0 +1,4 @@
+id = 42161
+supports_eip1559 = false
+l1_gas_oracle_contract_type = "ArbitrumNitro"
+l1_gas_oracle_contract_address = "0x00000000000000000000000000000000000000C8"

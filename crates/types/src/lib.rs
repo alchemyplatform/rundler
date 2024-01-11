@@ -44,3 +44,9 @@ pub use user_operation::UserOperationId;
 
 mod storage;
 pub use storage::StorageSlot;
+
+mod chain_spec;
+pub use chain_spec::{ChainSpec, OptionalChainSpec};
+
+mod chain_spec_config;
+pub use chain_spec_config::{ChainSpecConfig, L1GasOracleContractType};

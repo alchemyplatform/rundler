@@ -12,6 +12,7 @@ Rundler tools
 [dependencies]
 rundler-dev = { path = "../../crates/dev" }
 rundler-rpc = { path = "../../crates/rpc" }
+rundler-types = { path = "../../crates/types" }
 
 anyhow = "1.0.70"
 clap = { version = "4.2.4", features = ["derive", "env"] }
@@ -22,3 +23,9 @@ rusoto_core = { version = "0.48.0", default-features = false, features = ["rustl
 rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }
 serde_json = "1.0.96"
 tokio.workspace = true
+
+envy = "0.4"
+serde_derive = "1.0"
+serde_yaml = "0.9"
+config = "0.13.4"
+paste = "1.0"

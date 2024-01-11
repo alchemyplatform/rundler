@@ -1,0 +1,6 @@
+id = 137
+
+use_fee_history_oracle = true
+fee_history_oracle_blocks = 30
+fee_history_oracle_percentile = 33.3
+max_with_provider_fee = true
