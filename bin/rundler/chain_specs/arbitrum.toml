@@ -1,0 +1,8 @@
+name = "Arbitrum"
+id = 42161
+
+calldata_pre_verification_gas = true 
+l1_gas_oracle_contract_type = "ARBITRUM_NITRO"
+l1_gas_oracle_contract_address = "0x00000000000000000000000000000000000000C8"
+
+supports_eip1559 = false

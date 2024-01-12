@@ -20,8 +20,8 @@ rundler-types = { path = "../../crates/types" }
 rundler-utils = { path = "../../crates/utils" }
 
 # CLI dependencies
-alloy-chains.workspace = true
 anyhow.workspace = true
+config = "0.14.0"
 clap = { version = "4.4.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
 ethers.workspace = true
@@ -30,6 +30,7 @@ metrics = "0.21.0"
 metrics-exporter-prometheus = "0.12.0"
 metrics-process = "1.0.10"
 metrics-util = "0.15.0"
+paste = "1.0"
 rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
 rusoto_s3 = { version = "0.48.0", default-features = false, features = ["rustls"] }
 serde.workspace = true

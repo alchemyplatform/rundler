@@ -17,7 +17,6 @@ mod flashbots;
 mod raw;
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use alloy_chains::NamedChain;
 use anyhow::{bail, Context, Error};
 use async_trait::async_trait;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
@@ -36,6 +35,7 @@ pub(crate) use flashbots::FlashbotsTransactionSender;
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
 use rundler_sim::ExpectedStorage;
+use rundler_types::chain::ChainSpec;
 use serde::Serialize;
 
 #[derive(Debug)]
@@ -138,9 +138,9 @@ impl TransactionSenderType {
 
     pub(crate) fn into_sender<C: JsonRpcClient + 'static, S: Signer + 'static>(
         self,
+        chain_spec: &ChainSpec,
         client: Arc<Provider<C>>,
         signer: S,
-        chain_id: u64,
         eth_poll_interval: Duration,
         bloxroute_header: &Option<String>,
     ) -> std::result::Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
@@ -150,9 +150,9 @@ impl TransactionSenderType {
                 ConditionalTransactionSender::new(client, signer),
             ),
             Self::Flashbots => {
-                if chain_id != NamedChain::Mainnet as u64 {
+                if !chain_spec.flashbots_enabled {
                     return Err(SenderConstructorErrors::InvalidChainForSender(
-                        chain_id,
+                        chain_spec.id,
                         self.into_snake_case(),
                     ));
                 }
@@ -160,9 +160,9 @@ impl TransactionSenderType {
             }
             Self::PolygonBloxroute => {
                 if let Some(header) = bloxroute_header {
-                    if chain_id == NamedChain::Polygon as u64 {
+                    if !chain_spec.bloxroute_enabled {
                         return Err(SenderConstructorErrors::InvalidChainForSender(
-                            chain_id,
+                            chain_spec.id,
                             self.into_snake_case(),
                         ));
                     }

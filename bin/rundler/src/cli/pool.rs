@@ -13,13 +13,13 @@
 
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-use alloy_chains::NamedChain;
 use anyhow::Context;
 use clap::Args;
 use ethers::types::H256;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfig;
 use rundler_task::spawn_tasks_with_shutdown;
+use rundler_types::chain::ChainSpec;
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
@@ -141,6 +141,7 @@ impl PoolArgs {
     /// common and op pool specific arguments.
     pub async fn to_args(
         &self,
+        chain_spec: ChainSpec,
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
     ) -> anyhow::Result<PoolTaskArgs> {
@@ -163,66 +164,37 @@ impl PoolArgs {
         };
         tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
 
-        let pool_configs = common
-            .entry_points
-            .iter()
-            .map(|ep| {
-                let entry_point = ep.parse().context("Invalid entry_points argument")?;
-                Ok(PoolConfig {
-                    entry_point,
-                    chain_id: common.chain_id,
-                    // Currently use the same shard count as the number of builders
-                    num_shards: common.num_builders,
-                    same_sender_mempool_count: self.same_sender_mempool_count,
-                    min_replacement_fee_increase_percentage: self
-                        .min_replacement_fee_increase_percentage,
-                    max_size_of_pool_bytes: self.max_size_in_bytes,
-                    blocklist: blocklist.clone(),
-                    allowlist: allowlist.clone(),
-                    precheck_settings: common.try_into()?,
-                    sim_settings: common.into(),
-                    mempool_channel_configs: mempool_channel_configs.clone(),
-                    throttled_entity_mempool_count: self.throttled_entity_mempool_count,
-                    throttled_entity_live_blocks: self.throttled_entity_live_blocks,
-                    paymaster_tracking_enabled: self.paymaster_tracking_enabled,
-                    reputation_tracking_enabled: self.reputation_tracking_enabled,
-                })
-            })
-            .collect::<anyhow::Result<Vec<PoolConfig>>>()?;
+        let chain_id = chain_spec.id;
+        let pool_config = PoolConfig {
+            entry_point: chain_spec.entry_point_address,
+            chain_id,
+            // Currently use the same shard count as the number of builders
+            num_shards: common.num_builders,
+            same_sender_mempool_count: self.same_sender_mempool_count,
+            min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
+            max_size_of_pool_bytes: self.max_size_in_bytes,
+            blocklist: blocklist.clone(),
+            allowlist: allowlist.clone(),
+            precheck_settings: common.try_into()?,
+            sim_settings: common.into(),
+            mempool_channel_configs: mempool_channel_configs.clone(),
+            throttled_entity_mempool_count: self.throttled_entity_mempool_count,
+            throttled_entity_live_blocks: self.throttled_entity_live_blocks,
+            paymaster_tracking_enabled: self.paymaster_tracking_enabled,
+            reputation_tracking_enabled: self.reputation_tracking_enabled,
+        };
 
         Ok(PoolTaskArgs {
-            chain_id: common.chain_id,
-            chain_history_size: self
-                .chain_history_size
-                .unwrap_or_else(|| default_chain_history_size(common.chain_id)),
+            chain_spec,
             http_url: common
                 .node_http
                 .clone()
                 .context("pool requires node_http arg")?,
             http_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
-            pool_configs,
+            pool_configs: vec![pool_config],
             remote_address,
             chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
         })
-    }
-}
-
-const SMALL_HISTORY_SIZE: u64 = 16;
-const LARGE_HISTORY_SIZE: u64 = 128;
-
-// Mainnets that are known to not have large reorgs can use the small history
-// size. Use the large history size for all testnets because I don't trust them.
-const SMALL_HISTORY_CHAIN_IDS: &[u64] = &[
-    NamedChain::Mainnet as u64,
-    NamedChain::Arbitrum as u64,
-    NamedChain::Optimism as u64,
-];
-
-fn default_chain_history_size(chain_id: u64) -> u64 {
-    if SMALL_HISTORY_CHAIN_IDS.contains(&chain_id) {
-        SMALL_HISTORY_SIZE
-    } else {
-        LARGE_HISTORY_SIZE
     }
 }
 
@@ -233,11 +205,16 @@ pub struct PoolCliArgs {
     pool: PoolArgs,
 }
 
-pub async fn run(pool_args: PoolCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
+pub async fn run(
+    chain_spec: ChainSpec,
+    pool_args: PoolCliArgs,
+    common_args: CommonArgs,
+) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
     let task_args = pool_args
         .to_args(
+            chain_spec,
             &common_args,
             Some(format!("{}:{}", pool_args.host, pool_args.port).parse()?),
         )

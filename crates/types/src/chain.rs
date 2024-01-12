@@ -11,52 +11,110 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Grouped/Labeled chain IDs for various networks
+//! Chain specification for Rundler
 
-use alloy_chains::NamedChain;
-use constcat::concat_slices;
+use std::str::FromStr;
 
-/// Known chain IDs that use the Optimism Bedrock stack
-pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
-    NamedChain::Optimism as u64,
-    NamedChain::OptimismGoerli as u64,
-    NamedChain::OptimismSepolia as u64,
-    NamedChain::Base as u64,
-    NamedChain::BaseGoerli as u64,
-    NamedChain::BaseSepolia as u64,
-];
+use ethers::types::{Address, U256};
+use serde::{Deserialize, Serialize};
 
-// TODO use chain from ethers types once my PR is merged into ethers
-// https://github.com/gakonst/ethers-rs/pull/2657
-/// Known chain IDs for the Base ecosystem
-pub const ARBITRUM_CHAIN_IDS: &[u64] = &[
-    NamedChain::Arbitrum as u64,
-    NamedChain::ArbitrumGoerli as u64,
-    NamedChain::ArbitrumSepolia as u64,
-    NamedChain::ArbitrumNova as u64,
-];
+const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 
-/// Known chain IDs for the Base ecosystem
-pub const BASE_CHAIN_IDS: &[u64] = &[
-    NamedChain::Base as u64,
-    NamedChain::BaseGoerli as u64,
-    NamedChain::BaseSepolia as u64,
-];
+/// Chain specification for Rundler
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ChainSpec {
+    /*
+     * Chain constants
+     */
+    /// name for logging purposes, e.g. "Ethereum", no logic is performed on this
+    pub name: String,
+    /// chain id
+    pub id: u64,
+    /// entry point address
+    pub entry_point_address: Address,
 
-/// Known chain IDs for the Polygon ecosystem
-pub const POLYGON_CHAIN_IDS: &[u64] =
-    concat_slices!([u64]: POLYGON_TESTNET_CHAIN_IDS, POLYGON_MAINNET_CHAIN_IDS);
+    /*
+     * Gas estimation
+     */
+    /// true if calldata is priced in preVerificationGas
+    pub calldata_pre_verification_gas: bool,
+    /// type of gas oracle contract for pricing calldata in preVerificationGas
+    /// If calldata_pre_verification_gas is true, this must not be None
+    pub l1_gas_oracle_contract_type: L1GasOracleContractType,
+    /// address of gas oracle contract for pricing calldata in preVerificationGas
+    pub l1_gas_oracle_contract_address: Address,
+    /// true if L1 calldata gas should be included in the gas limit
+    /// only applies when calldata_pre_verification_gas is true
+    pub include_l1_gas_in_gas_limit: bool,
 
-/// Known chain IDs for the Polygon ecosystem
-pub const POLYGON_TESTNET_CHAIN_IDS: &[u64] = &[
-    NamedChain::PolygonMumbai as u64,
-    80002, // PolygonAmoy - Change to named chain once there is a new release on alloy-rs/chains
-];
+    /*
+     * Fee estimation
+     */
+    /// true if eip1559 is enabled, and thus priority fees are used
+    pub eip1559_enabled: bool,
+    /// Type of oracle for estimating priority fees
+    pub priority_fee_oracle_type: PriorityFeeOracleType,
+    /// Minimum max priority fee per gas for the network
+    pub min_max_priority_fee_per_gas: U256,
+    /// Maximum max priority fee per gas for the network
+    pub max_max_priority_fee_per_gas: U256,
 
-/// Known chain IDs for the Polygon ecosystem
-pub const POLYGON_MAINNET_CHAIN_IDS: &[u64] = &[NamedChain::Polygon as u64];
+    /*
+     * Senders
+     */
+    /// True if the flashbots sender is enabled on this chain
+    pub flashbots_enabled: bool,
+    /// True if the bloxroute sender is enabled on this chain
+    pub bloxroute_enabled: bool,
 
-/// Return true if the chain ID has a dynamic preVerificationGas field
-pub fn is_dynamic_pvg(chain_id: u64) -> bool {
-    ARBITRUM_CHAIN_IDS.contains(&chain_id) || OP_BEDROCK_CHAIN_IDS.contains(&chain_id)
+    /*
+     * Pool
+     */
+    /// Size of the chain history to keep to handle reorgs
+    pub chain_history_size: u64,
+}
+
+/// Type of gas oracle contract for pricing calldata in preVerificationGas
+#[derive(Clone, Copy, Debug, Deserialize, Default, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum L1GasOracleContractType {
+    /// No gas oracle contract
+    #[default]
+    None,
+    /// Arbitrum Nitro type gas oracle contract
+    ArbitrumNitro,
+    /// Optimism Bedrock type gas oracle contract
+    OptimismBedrock,
+}
+
+/// Type of oracle for estimating priority fees
+#[derive(Clone, Debug, Deserialize, Default, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PriorityFeeOracleType {
+    /// Use eth_maxPriorityFeePerGas on the provider
+    #[default]
+    Provider,
+    /// Use the usage based oracle
+    UsageBased,
+}
+
+impl Default for ChainSpec {
+    fn default() -> Self {
+        Self {
+            name: "Unknown".to_string(),
+            id: 0,
+            entry_point_address: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
+            eip1559_enabled: true,
+            calldata_pre_verification_gas: false,
+            l1_gas_oracle_contract_type: L1GasOracleContractType::default(),
+            l1_gas_oracle_contract_address: Address::zero(),
+            include_l1_gas_in_gas_limit: true,
+            priority_fee_oracle_type: PriorityFeeOracleType::default(),
+            min_max_priority_fee_per_gas: U256::zero(),
+            max_max_priority_fee_per_gas: U256::MAX,
+            flashbots_enabled: false,
+            bloxroute_enabled: false,
+            chain_history_size: 64,
+        }
+    }
 }

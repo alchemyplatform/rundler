@@ -34,6 +34,7 @@ use rundler_sim::{
     GasEstimatorImpl, PrecheckSettings, UserOperationOptionalGas,
 };
 use rundler_types::{
+    chain::ChainSpec,
     contracts::i_entry_point::{
         IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
@@ -72,14 +73,14 @@ where
     E: EntryPoint,
 {
     fn new(
-        chain_id: u64,
+        chain_spec: ChainSpec,
         provider: Arc<P>,
         entry_point: E,
         estimation_settings: EstimationSettings,
         fee_estimator: FeeEstimator<P>,
     ) -> Self {
         let gas_estimator = GasEstimatorImpl::new(
-            chain_id,
+            chain_spec,
             provider,
             entry_point,
             estimation_settings,
@@ -93,7 +94,7 @@ where
 pub(crate) struct EthApi<P, E, PS> {
     contexts_by_entry_point: HashMap<Address, EntryPointContext<P, E>>,
     provider: Arc<P>,
-    chain_id: u64,
+    chain_spec: ChainSpec,
     pool: PS,
     settings: Settings,
 }
@@ -105,9 +106,9 @@ where
     PS: PoolServer,
 {
     pub(crate) fn new(
+        chain_spec: ChainSpec,
         provider: Arc<P>,
         entry_points: Vec<E>,
-        chain_id: u64,
         pool: PS,
         settings: Settings,
         estimation_settings: EstimationSettings,
@@ -122,13 +123,13 @@ where
                 (
                     entry_point.address(),
                     EntryPointContext::new(
-                        chain_id,
+                        chain_spec.clone(),
                         Arc::clone(&provider),
                         entry_point,
                         estimation_settings,
                         FeeEstimator::new(
+                            &chain_spec,
                             Arc::clone(&provider),
-                            chain_id,
                             precheck_settings.priority_fee_mode,
                             precheck_settings.bundle_priority_fee_overhead_percent,
                         ),
@@ -141,7 +142,7 @@ where
             settings,
             contexts_by_entry_point,
             provider,
-            chain_id,
+            chain_spec,
             pool,
         }
     }
@@ -306,7 +307,7 @@ where
     }
 
     pub(crate) async fn chain_id(&self) -> EthResult<U64> {
-        Ok(self.chain_id.into())
+        Ok(self.chain_spec.id.into())
     }
 
     async fn get_mined_user_operation_by_hash(
@@ -345,7 +346,7 @@ where
         let user_operation = if self.contexts_by_entry_point.contains_key(&to) {
             self.get_user_operations_from_tx_data(tx.input)
                 .into_iter()
-                .find(|op| op.op_hash(to, self.chain_id) == hash)
+                .find(|op| op.op_hash(to, self.chain_spec.id) == hash)
                 .context("matching user operation should be found in tx data")?
         } else {
             self.trace_find_user_operation(transaction_hash, hash)
@@ -542,7 +543,7 @@ where
                 if let Some(uo) = self
                     .get_user_operations_from_tx_data(call_frame.input)
                     .into_iter()
-                    .find(|op| op.op_hash(*to, self.chain_id) == user_op_hash)
+                    .find(|op| op.op_hash(*to, self.chain_spec.id) == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }
@@ -856,10 +857,14 @@ mod tests {
     ) -> EthApi<MockProvider, MockEntryPoint, MockPoolServer> {
         let mut contexts_by_entry_point = HashMap::new();
         let provider = Arc::new(provider);
+        let chain_spec = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
         contexts_by_entry_point.insert(
             ep.address(),
             EntryPointContext::new(
-                1,
+                chain_spec.clone(),
                 Arc::clone(&provider),
                 ep,
                 EstimationSettings {
@@ -869,8 +874,8 @@ mod tests {
                     validation_estimation_gas_fee: 1_000_000_000_000,
                 },
                 FeeEstimator::new(
+                    &chain_spec,
                     Arc::clone(&provider),
-                    1,
                     PriorityFeeMode::BaseFeePercent(0),
                     0,
                 ),
@@ -879,7 +884,7 @@ mod tests {
         EthApi {
             contexts_by_entry_point,
             provider,
-            chain_id: 1,
+            chain_spec,
             pool,
             settings: Settings::new(None),
         }

@@ -16,6 +16,7 @@ use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
 use rundler_rpc::RpcTask;
 use rundler_task::spawn_tasks_with_shutdown;
+use rundler_types::chain::ChainSpec;
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
@@ -43,16 +44,25 @@ pub struct NodeCliArgs {
     rpc: RpcArgs,
 }
 
-pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
+pub async fn run(
+    chain_spec: ChainSpec,
+    bundler_args: NodeCliArgs,
+    common_args: CommonArgs,
+) -> anyhow::Result<()> {
     let NodeCliArgs {
         pool: pool_args,
         builder: builder_args,
         rpc: rpc_args,
     } = bundler_args;
 
-    let pool_task_args = pool_args.to_args(&common_args, None).await?;
-    let builder_task_args = builder_args.to_args(&common_args, None).await?;
+    let pool_task_args = pool_args
+        .to_args(chain_spec.clone(), &common_args, None)
+        .await?;
+    let builder_task_args = builder_args
+        .to_args(chain_spec.clone(), &common_args, None)
+        .await?;
     let rpc_task_args = rpc_args.to_args(
+        chain_spec,
         &common_args,
         (&common_args).try_into()?,
         (&common_args).into(),

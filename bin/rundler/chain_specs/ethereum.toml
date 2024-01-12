@@ -1,0 +1,4 @@
+name = "Ethereum"
+id = 1
+
+flashbots_enabled = true

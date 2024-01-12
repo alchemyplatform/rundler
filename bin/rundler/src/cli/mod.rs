@@ -15,6 +15,7 @@ use anyhow::Context;
 use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
 mod builder;
+mod chain_spec;
 mod json;
 mod metrics;
 mod node;
@@ -48,11 +49,14 @@ pub async fn run() -> anyhow::Result<()> {
     )
     .context("metrics server should start")?;
 
+    let cs = chain_spec::resolve_chain_spec(&opt.common.network, &opt.common.chain_spec);
+    tracing::info!("Chain spec: {:#?}", cs);
+
     match opt.command {
-        Command::Node(args) => node::run(*args, opt.common).await?,
-        Command::Pool(args) => pool::run(args, opt.common).await?,
-        Command::Rpc(args) => rpc::run(args, opt.common).await?,
-        Command::Builder(args) => builder::run(args, opt.common).await?,
+        Command::Node(args) => node::run(cs, *args, opt.common).await?,
+        Command::Pool(args) => pool::run(cs, args, opt.common).await?,
+        Command::Rpc(args) => rpc::run(cs, args, opt.common).await?,
+        Command::Builder(args) => builder::run(cs, args, opt.common).await?,
     }
 
     tracing::info!("Shutdown, goodbye");
@@ -91,26 +95,24 @@ enum Command {
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Common")]
 pub struct CommonArgs {
-    /// Entry point address to target
+    /// Network flag
     #[arg(
-        long = "entry_points",
-        name = "entry_points",
-        env = "ENTRY_POINTS",
-        default_values_t = Vec::<String>::new(), // required or will error
-        value_delimiter = ',',
-        global = true
-    )]
-    entry_points: Vec<String>,
+        long = "network",
+        name = "network",
+        env = "NETWORK",
+        value_parser = PossibleValuesParser::new(chain_spec::HARDCODED_CHAIN_SPECS),
+        global = true)
+    ]
+    network: Option<String>,
 
-    /// Chain ID to target
+    /// Chain spec file path
     #[arg(
-        long = "chain_id",
-        name = "chain_id",
-        env = "CHAIN_ID",
-        default_value = "1337",
+        long = "chain_spec",
+        name = "chain_spec",
+        env = "CHAIN_SPEC",
         global = true
     )]
-    chain_id: u64,
+    chain_spec: Option<String>,
 
     /// ETH Node HTTP URL to connect to
     #[arg(
@@ -298,7 +300,6 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
 
     fn try_from(value: &CommonArgs) -> anyhow::Result<Self> {
         Ok(Self {
-            chain_id: value.chain_id,
             max_verification_gas: value.max_verification_gas.into(),
             max_total_execution_gas: value.max_bundle_gas.into(),
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,

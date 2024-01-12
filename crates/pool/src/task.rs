@@ -21,8 +21,11 @@ use rundler_sim::{
     Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
 };
 use rundler_task::Task;
-use rundler_types::contracts::{
-    i_entry_point::IEntryPoint, paymaster_helper::PaymasterHelper as PaymasterHelperContract,
+use rundler_types::{
+    chain::ChainSpec,
+    contracts::{
+        i_entry_point::IEntryPoint, paymaster_helper::PaymasterHelper as PaymasterHelperContract,
+    },
 };
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use tokio::{sync::broadcast, try_join};
@@ -39,14 +42,12 @@ use crate::{
 /// Arguments for the pool task.
 #[derive(Debug)]
 pub struct Args {
+    /// Chain specification.
+    pub chain_spec: ChainSpec,
     /// HTTP URL for the full node.
     pub http_url: String,
     /// Poll interval for full node requests.
     pub http_poll_interval: Duration,
-    /// ID of the chain this pool is tracking
-    pub chain_id: u64,
-    /// Number of blocks to keep in the chain history.
-    pub chain_history_size: u64,
     /// Pool configurations.
     pub pool_configs: Vec<PoolConfig>,
     /// Address to bind the remote mempool server to, if any.
@@ -67,13 +68,13 @@ pub struct PoolTask {
 #[async_trait]
 impl Task for PoolTask {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let chain_id = self.args.chain_id;
+        let chain_id = self.args.chain_spec.id;
         tracing::info!("Chain id: {chain_id}");
         tracing::info!("Http url: {:?}", self.args.http_url);
 
         // create chain
         let chain_settings = chain::Settings {
-            history_size: self.args.chain_history_size,
+            history_size: self.args.chain_spec.chain_history_size,
             poll_interval: self.args.http_poll_interval,
             entry_point_addresses: self
                 .args
@@ -90,10 +91,14 @@ impl Task for PoolTask {
         // create mempools
         let mut mempools = HashMap::new();
         for pool_config in &self.args.pool_configs {
-            let pool =
-                PoolTask::create_mempool(pool_config, self.event_sender.clone(), provider.clone())
-                    .await
-                    .context("should have created mempool")?;
+            let pool = PoolTask::create_mempool(
+                self.args.chain_spec.clone(),
+                pool_config,
+                self.event_sender.clone(),
+                provider.clone(),
+            )
+            .await
+            .context("should have created mempool")?;
 
             mempools.insert(pool_config.entry_point, Arc::new(pool));
         }
@@ -105,8 +110,13 @@ impl Task for PoolTask {
 
         let remote_handle = match self.args.remote_address {
             Some(addr) => {
-                spawn_remote_mempool_server(self.args.chain_id, pool_handle, addr, shutdown_token)
-                    .await?
+                spawn_remote_mempool_server(
+                    self.args.chain_spec.id,
+                    pool_handle,
+                    addr,
+                    shutdown_token,
+                )
+                .await?
             }
             None => tokio::spawn(async { Ok(()) }),
         };
@@ -150,6 +160,7 @@ impl PoolTask {
     }
 
     async fn create_mempool<P: Provider + Middleware>(
+        chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
@@ -179,6 +190,7 @@ impl PoolTask {
         let simulate_validation_tracer =
             SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
         let prechecker = PrecheckerImpl::new(
+            chain_spec,
             Arc::clone(&provider),
             i_entry_point.clone(),
             pool_config.precheck_settings,

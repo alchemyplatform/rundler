@@ -15,10 +15,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use async_trait::async_trait;
-use ethers::{
-    providers::{Http, Provider, RetryClient},
-    types::Address,
-};
+use ethers::providers::{Http, Provider, RetryClient};
 use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
@@ -31,7 +28,7 @@ use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
 };
-use rundler_types::contracts::i_entry_point::IEntryPoint;
+use rundler_types::{chain::ChainSpec, contracts::i_entry_point::IEntryPoint};
 use rundler_utils::eth;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -49,14 +46,12 @@ use crate::{
 /// RPC server arguments.
 #[derive(Debug)]
 pub struct Args {
+    /// Chain spec
+    pub chain_spec: ChainSpec,
     /// Port to listen on.
     pub port: u16,
     /// Host to listen on.
     pub host: String,
-    /// List of supported entry points.
-    pub entry_points: Vec<Address>,
-    /// Chain ID.
-    pub chain_id: u64,
     /// List of API namespaces to enable.
     pub api_namespaces: Vec<ApiNamespace>,
     /// Full node RPC URL to use.
@@ -91,20 +86,12 @@ where
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
 
-        if self.args.entry_points.is_empty() {
-            bail!("No entry points provided");
-        }
-
         let provider = eth::new_provider(&self.args.rpc_url, None)?;
-        let entry_points = self
-            .args
-            .entry_points
-            .iter()
-            .map(|addr| IEntryPoint::new(*addr, provider.clone()))
-            .collect();
+        let entry_point =
+            IEntryPoint::new(self.args.chain_spec.entry_point_address, provider.clone());
 
         let mut module = RpcModule::new(());
-        self.attach_namespaces(provider, entry_points, &mut module)?;
+        self.attach_namespaces(provider, entry_point, &mut module)?;
 
         let servers: Vec<Box<dyn HealthCheck>> =
             vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];
@@ -163,16 +150,17 @@ where
     fn attach_namespaces<E: EntryPoint + Clone>(
         &self,
         provider: Arc<Provider<RetryClient<Http>>>,
-        entry_points: Vec<E>,
+        entry_point: E,
         module: &mut RpcModule<()>,
     ) -> anyhow::Result<()> {
         for api in &self.args.api_namespaces {
             match api {
                 ApiNamespace::Eth => module.merge(
                     EthApi::new(
+                        self.args.chain_spec.clone(),
                         provider.clone(),
-                        entry_points.clone(),
-                        self.args.chain_id,
+                        // TODO: support multiple entry points
+                        vec![entry_point.clone()],
                         self.pool.clone(),
                         self.args.eth_api_settings,
                         self.args.estimation_settings,
@@ -185,8 +173,8 @@ where
                 ApiNamespace::Admin => module.merge(AdminApi::new(self.pool.clone()).into_rpc())?,
                 ApiNamespace::Rundler => module.merge(
                     RundlerApi::new(
+                        &self.args.chain_spec,
                         provider.clone(),
-                        self.args.chain_id,
                         self.args.precheck_settings,
                     )
                     .into_rpc(),

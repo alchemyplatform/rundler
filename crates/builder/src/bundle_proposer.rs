@@ -37,8 +37,8 @@ use rundler_sim::{
     SimulationResult, SimulationViolation, Simulator, ViolationError,
 };
 use rundler_types::{
-    Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, Timestamp, UserOperation,
-    UserOpsPerAggregator,
+    chain::ChainSpec, Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, Timestamp,
+    UserOperation, UserOpsPerAggregator,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -108,7 +108,7 @@ where
 
 #[derive(Debug)]
 pub(crate) struct Settings {
-    pub(crate) chain_id: u64,
+    pub(crate) chain_spec: ChainSpec,
     pub(crate) max_bundle_size: u64,
     pub(crate) max_bundle_gas: u64,
     pub(crate) beneficiary: Address,
@@ -242,8 +242,8 @@ where
             entry_point,
             provider: provider.clone(),
             fee_estimator: FeeEstimator::new(
+                &settings.chain_spec,
                 provider,
-                settings.chain_id,
                 settings.priority_fee_mode,
                 settings.bundle_priority_fee_overhead_percent,
             ),
@@ -285,10 +285,9 @@ where
 
         // Check if the pvg is enough
         let required_pvg = gas::calc_required_pre_verification_gas(
-            &op.uo,
-            self.entry_point.address(),
+            &self.settings.chain_spec,
             self.provider.clone(),
-            self.settings.chain_id,
+            &op.uo,
             base_fee,
         )
         .await
@@ -412,8 +411,8 @@ where
 
             // Skip this op if the bundle does not have enough remaining gas to execute it.
             let required_gas = get_gas_required_for_op(
+                &self.settings.chain_spec,
                 gas_spent,
-                self.settings.chain_id,
                 ov,
                 &op,
                 simulation.requires_post_op,
@@ -454,8 +453,8 @@ where
 
             // Update the running gas that would need to be be spent to execute the bundle so far.
             gas_spent += gas::user_operation_execution_gas_limit(
+                &self.settings.chain_spec,
                 &op,
-                self.settings.chain_id,
                 false,
                 simulation.requires_post_op,
             );
@@ -526,7 +525,7 @@ where
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
-            context.get_bundle_gas_limit(self.settings.chain_id),
+            context.get_bundle_gas_limit(&self.settings.chain_spec),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
@@ -811,8 +810,8 @@ where
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
             let gas = gas::user_operation_execution_gas_limit(
+                &self.settings.chain_spec,
                 &op.uo,
-                self.settings.chain_id,
                 false,
                 false,
             );
@@ -843,7 +842,7 @@ where
     }
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
-        op.op_hash(self.entry_point.address(), self.settings.chain_id)
+        op.op_hash(self.entry_point.address(), self.settings.chain_spec.id)
     }
 }
 
@@ -1034,23 +1033,23 @@ impl ProposalContext {
             .collect()
     }
 
-    fn get_bundle_gas_limit(&self, chain_id: u64) -> U256 {
+    fn get_bundle_gas_limit(&self, chain_spec: &ChainSpec) -> U256 {
         let ov = GasOverheads::default();
         let mut gas_spent = ov.transaction_gas_overhead;
         let mut max_gas = U256::zero();
         for op_with_sim in self.iter_ops_with_simulations() {
             let op = &op_with_sim.op;
             let required_gas = get_gas_required_for_op(
+                chain_spec,
                 gas_spent,
-                chain_id,
                 ov,
                 op,
                 op_with_sim.simulation.requires_post_op,
             );
             max_gas = cmp::max(max_gas, required_gas);
             gas_spent += gas::user_operation_gas_limit(
+                chain_spec,
                 op,
-                chain_id,
                 false,
                 op_with_sim.simulation.requires_post_op,
             );
@@ -1228,8 +1227,8 @@ impl ProposalContext {
 }
 
 fn get_gas_required_for_op(
+    chain_spec: &ChainSpec,
     gas_spent: U256,
-    chain_id: u64,
     ov: GasOverheads,
     op: &UserOperation,
     requires_post_op: bool,
@@ -1241,7 +1240,7 @@ fn get_gas_required_for_op(
     };
 
     gas_spent
-        + gas::user_operation_pre_verification_gas_limit(op, chain_id, false)
+        + gas::user_operation_pre_verification_gas_limit(chain_spec, op, false)
         + op.verification_gas_limit * 2
         + op.call_gas_limit
         + post_exec_req_gas
@@ -1767,9 +1766,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_bundle_gas_limit() {
+        let cs = ChainSpec::default();
         let op1 = op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), false);
         let op2 = op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
-        let chain_id = 1;
         let mut groups_by_aggregator = LinkedHashMap::new();
         groups_by_aggregator.insert(
             None,
@@ -1808,14 +1807,14 @@ mod tests {
             + 5_000
             + 21_000;
 
-        assert_eq!(context.get_bundle_gas_limit(chain_id), expected_gas_limit);
+        assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
     }
 
     #[tokio::test]
     async fn test_bundle_gas_limit_with_paymaster_op() {
+        let cs = ChainSpec::default();
         let op1 = op_with_gas(100_000.into(), 100_000.into(), 1_000_000.into(), true); // has paymaster
         let op2 = op_with_gas(100_000.into(), 100_000.into(), 200_000.into(), false);
-        let chain_id = 1;
         let mut groups_by_aggregator = LinkedHashMap::new();
         groups_by_aggregator.insert(
             None,
@@ -1844,7 +1843,7 @@ mod tests {
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
         };
-        let gas_limit = context.get_bundle_gas_limit(chain_id);
+        let gas_limit = context.get_bundle_gas_limit(&cs);
 
         // The gas requirement from the execution of the first UO is: g >= p_1 + 3v_1 + c_1
         // The gas requirement from the execution of the second UO is: g >= p_1 + 3v_1 + c_1 + p_2 + 2v_2 + c_2 + 5000
@@ -2091,7 +2090,7 @@ mod tests {
             entry_point,
             Arc::new(provider),
             Settings {
-                chain_id: 0,
+                chain_spec: ChainSpec::default(),
                 max_bundle_size,
                 max_bundle_gas: 10_000_000,
                 beneficiary,
