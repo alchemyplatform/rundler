@@ -24,7 +24,7 @@ use rundler_sim::ExpectedStorage;
 use serde_json::json;
 use tonic::async_trait;
 
-use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
+use super::{fill_and_sign, Result, SentTxInfo, TransactionSender, TxStatus};
 
 pub(crate) struct ConditionalTransactionSender<C, S>
 where
@@ -47,7 +47,7 @@ where
         &self,
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<SentTxInfo> {
+    ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
         let tx_hash = self
@@ -57,13 +57,12 @@ where
                 "eth_sendRawTransactionConditional",
                 (raw_tx, json!({ "knownAccounts": expected_storage })),
             )
-            .await
-            .context("should send conditional raw transaction to node")?;
+            .await?;
 
         Ok(SentTxInfo { nonce, tx_hash })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
         let tx = self
             .provider
             .get_transaction(tx_hash)
@@ -80,10 +79,10 @@ where
         })
     }
 
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
-        PendingTransaction::new(tx_hash, self.provider.inner())
+    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
+        Ok(PendingTransaction::new(tx_hash, self.provider.inner())
             .await
-            .context("should wait for transaction to be mined or dropped")
+            .context("should wait for transaction to be mined or dropped")?)
     }
 
     fn address(&self) -> Address {

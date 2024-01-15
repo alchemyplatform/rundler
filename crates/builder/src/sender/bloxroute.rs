@@ -34,7 +34,7 @@ use serde_json::value::RawValue;
 use tokio::time;
 use tonic::async_trait;
 
-use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
+use super::{fill_and_sign, Result, SentTxInfo, TransactionSender, TxStatus};
 
 pub(crate) struct PolygonBloxrouteTransactionSender<C, S>
 where
@@ -57,17 +57,13 @@ where
         &self,
         tx: TypedTransaction,
         _expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<SentTxInfo> {
+    ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
-        let tx_hash = self
-            .client
-            .send_transaction(raw_tx)
-            .await
-            .context("should send bloxroute polygon private tx")?;
+        let tx_hash = self.client.send_transaction(raw_tx).await?;
         Ok(SentTxInfo { nonce, tx_hash })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
         let tx = self
             .provider
             .get_transaction(tx_hash)
@@ -84,9 +80,13 @@ where
             .unwrap_or(TxStatus::Pending))
     }
 
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
-        Self::wait_until_mined_no_drop(tx_hash, Arc::clone(&self.raw_provider), self.poll_interval)
-            .await
+    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
+        Ok(Self::wait_until_mined_no_drop(
+            tx_hash,
+            Arc::clone(&self.raw_provider),
+            self.poll_interval,
+        )
+        .await?)
     }
 
     fn address(&self) -> Address {
@@ -104,7 +104,7 @@ where
         signer: S,
         poll_interval: Duration,
         auth_header: &str,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self> {
         Ok(Self {
             provider: SignerMiddleware::new(Arc::clone(&provider), signer),
             raw_provider: provider,
@@ -117,7 +117,7 @@ where
         tx_hash: H256,
         provider: Arc<Provider<C>>,
         poll_interval: Duration,
-    ) -> anyhow::Result<Option<TransactionReceipt>> {
+    ) -> Result<Option<TransactionReceipt>> {
         loop {
             let tx = provider
                 .get_transaction(tx_hash)
@@ -154,7 +154,7 @@ impl PolygonBloxrouteClient {
         Ok(Self { client })
     }
 
-    async fn send_transaction(&self, raw_tx: Bytes) -> anyhow::Result<TxHash> {
+    async fn send_transaction(&self, raw_tx: Bytes) -> Result<TxHash> {
         let request = BloxrouteRequest {
             transaction: hex::encode(raw_tx),
         };
@@ -171,7 +171,7 @@ struct BloxrouteRequest {
 }
 
 impl ToRpcParams for BloxrouteRequest {
-    fn to_rpc_params(self) -> Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
+    fn to_rpc_params(self) -> std::result::Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
         let s = String::from_utf8(serde_json::to_vec(&self)?).expect("Valid UTF8 format");
         RawValue::from_string(s)
             .map(Some)

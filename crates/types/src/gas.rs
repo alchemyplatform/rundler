@@ -39,8 +39,8 @@ impl GasFees {
     /// Increase the gas fees by a percentage
     pub fn increase_by_percent(self, percent: u64) -> Self {
         Self {
-            max_fee_per_gas: math::increase_by_percent(self.max_fee_per_gas, percent),
-            max_priority_fee_per_gas: math::increase_by_percent(
+            max_fee_per_gas: math::increase_by_percent_ceil(self.max_fee_per_gas, percent),
+            max_priority_fee_per_gas: math::increase_by_percent_ceil(
                 self.max_priority_fee_per_gas,
                 percent,
             ),
