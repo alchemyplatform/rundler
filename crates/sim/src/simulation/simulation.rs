@@ -995,7 +995,7 @@ mod tests {
         assert!(matches!(
             res,
             Err(ViolationError::Violations(violations)) if matches!(
-                violations.get(0),
+                violations.first(),
                 Some(&SimulationViolation::UnintendedRevertWithMessage(
                     EntityType::Paymaster,
                     ref reason,
