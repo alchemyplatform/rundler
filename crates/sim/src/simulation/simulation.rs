@@ -1155,7 +1155,7 @@ mod tests {
         assert!(matches!(
             res,
             Err(SimulationError { violation_error: ViolationError::Violations(violations), entity_infos: None}) if matches!(
-                violations.get(0),
+                violations.first(),
                 Some(&SimulationViolation::UnintendedRevertWithMessage(
                     EntityType::Paymaster,
                     ref reason,
