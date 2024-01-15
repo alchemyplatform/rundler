@@ -113,6 +113,11 @@ pub enum OpRemovalReason {
         /// The removed entity
         entity: Entity,
     },
+    /// Op was removed because it expired
+    Expired {
+        /// Op was valid until this timestamp
+        valid_until: Timestamp,
+    },
 }
 
 impl EntitySummary {

@@ -222,7 +222,24 @@ where
             for hash in to_remove {
                 state.pool.remove_operation_by_hash(hash);
                 state.throttled_ops.remove(&hash);
+                self.emit(OpPoolEvent::RemovedOp {
+                    op_hash: hash,
+                    reason: OpRemovalReason::ThrottledAndOld {
+                        added_at_block_number: state.block_number,
+                        current_block_number: update.latest_block_number,
+                    },
+                })
             }
+
+            // expire old UOs
+            let expired = state.pool.remove_expired(update.latest_block_timestamp);
+            for (hash, until) in expired {
+                self.emit(OpPoolEvent::RemovedOp {
+                    op_hash: hash,
+                    reason: OpRemovalReason::Expired { valid_until: until },
+                })
+            }
+
             state.block_number = update.latest_block_number;
         }
 
@@ -515,7 +532,7 @@ mod tests {
         SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,
         ViolationError,
     };
-    use rundler_types::{DepositInfo, EntityType, GasFees};
+    use rundler_types::{DepositInfo, EntityType, GasFees, ValidTimeRange};
 
     use super::*;
     use crate::chain::MinedOp;
@@ -596,6 +613,7 @@ mod tests {
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
+            latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
@@ -624,6 +642,7 @@ mod tests {
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
+            latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
@@ -643,6 +662,7 @@ mod tests {
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
+            latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![],
@@ -670,6 +690,7 @@ mod tests {
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
+            latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
@@ -706,6 +727,7 @@ mod tests {
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
+            latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
@@ -773,6 +795,7 @@ mod tests {
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
+            latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
@@ -949,9 +972,35 @@ mod tests {
         check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
     }
 
+    #[tokio::test]
+    async fn test_expiry() {
+        let mut op = create_op(Address::random(), 0, 0);
+        op.valid_time_range = ValidTimeRange {
+            valid_after: 0.into(),
+            valid_until: 10.into(),
+        };
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op.clone()]);
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_timestamp: 11.into(),
+            ..ChainUpdate::default()
+        })
+        .await;
+
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![]);
+    }
+
     #[derive(Clone, Debug)]
     struct OpWithErrors {
         op: UserOperation,
+        valid_time_range: ValidTimeRange,
         precheck_error: Option<PrecheckViolation>,
         simulation_error: Option<SimulationViolation>,
         staked: bool,
@@ -1004,6 +1053,7 @@ mod tests {
                         Ok(SimulationSuccess {
                             account_is_staked: op.staked,
                             block_number: Some(0),
+                            valid_time_range: op.valid_time_range,
                             ..SimulationSuccess::default()
                         })
                     }
@@ -1059,6 +1109,7 @@ mod tests {
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
+            valid_time_range: ValidTimeRange::default(),
             precheck_error: None,
             simulation_error: None,
             staked: false,
@@ -1080,6 +1131,7 @@ mod tests {
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
             },
+            valid_time_range: ValidTimeRange::default(),
             precheck_error,
             simulation_error,
             staked,
