@@ -21,7 +21,7 @@ use std::{
     task::{Context as TaskContext, Poll},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, Context};
 use ethers::{
     middleware::SignerMiddleware,
     providers::{interval, JsonRpcClient, Middleware, Provider},
@@ -42,7 +42,9 @@ use serde::{de, Deserialize, Serialize};
 use serde_json::{value::RawValue, Value};
 use tonic::async_trait;
 
-use super::{fill_and_sign, ExpectedStorage, SentTxInfo, TransactionSender, TxStatus};
+use super::{
+    fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
+};
 
 #[derive(Debug)]
 pub(crate) struct FlashbotsTransactionSender<C, S>
@@ -64,19 +66,15 @@ where
         &self,
         tx: TypedTransaction,
         _expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<SentTxInfo> {
+    ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
-        let tx_hash = self
-            .client
-            .send_transaction(raw_tx)
-            .await
-            .context("should send raw transaction to node")?;
+        let tx_hash = self.client.send_transaction(raw_tx).await?;
 
         Ok(SentTxInfo { nonce, tx_hash })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
         let status = self.client.status(tx_hash).await?;
         Ok(match status.status {
             FlashbotsAPITransactionStatus::Pending => TxStatus::Pending,
@@ -99,17 +97,17 @@ where
                 TxStatus::Pending
             }
             FlashbotsAPITransactionStatus::Failed | FlashbotsAPITransactionStatus::Unknown => {
-                bail!(
+                return Err(TxSenderError::Other(anyhow!(
                     "Transaction {tx_hash:?} failed in Flashbots with status {:?}",
                     status.status,
-                );
+                )));
             }
             FlashbotsAPITransactionStatus::Cancelled => TxStatus::Dropped,
         })
     }
 
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
-        PendingFlashbotsTransaction::new(tx_hash, self.provider.inner(), &self.client).await
+    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
+        Ok(PendingFlashbotsTransaction::new(tx_hash, self.provider.inner(), &self.client).await?)
     }
 
     fn address(&self) -> Address {
@@ -178,12 +176,12 @@ struct FlashbotsClient {
 }
 
 impl FlashbotsClient {
-    fn new() -> Result<Self> {
+    fn new() -> anyhow::Result<Self> {
         let client = HttpClientBuilder::default().build("https://rpc.flashbots.net")?;
         Ok(Self { client })
     }
 
-    async fn status(&self, tx_hash: H256) -> Result<FlashbotsAPIResponse> {
+    async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
         let url = format!("https://protect.flashbots.net/tx/{:?}", tx_hash);
         let resp = reqwest::get(&url).await?;
         resp.json::<FlashbotsAPIResponse>()
@@ -191,7 +189,7 @@ impl FlashbotsClient {
             .context("should deserialize FlashbotsAPIResponse")
     }
 
-    async fn send_transaction(&self, raw_tx: Bytes) -> anyhow::Result<TxHash> {
+    async fn send_transaction(&self, raw_tx: Bytes) -> Result<TxHash> {
         let response: FlashbotsResponse = self
             .client
             .request("eth_sendRawTransaction", (raw_tx,))
@@ -206,7 +204,7 @@ struct FlashbotsRequest {
 }
 
 impl ToRpcParams for FlashbotsRequest {
-    fn to_rpc_params(self) -> Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
+    fn to_rpc_params(self) -> std::result::Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
         let s = String::from_utf8(serde_json::to_vec(&self)?).expect("Valid UTF8 format");
         RawValue::from_string(s)
             .map(Some)
@@ -332,7 +330,7 @@ impl<'a, P: JsonRpcClient> Future for PendingFlashbotsTransaction<'a, P> {
     }
 }
 
-fn deserialize_u64<'de, D>(deserializer: D) -> Result<U64, D::Error>
+fn deserialize_u64<'de, D>(deserializer: D) -> std::result::Result<U64, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -354,7 +352,7 @@ where
     })
 }
 
-fn deserialize_optional_u256<'de, D>(deserializer: D) -> Result<Option<U256>, D::Error>
+fn deserialize_optional_u256<'de, D>(deserializer: D) -> std::result::Result<Option<U256>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -379,7 +377,9 @@ where
     })
 }
 
-fn deserialize_optional_address<'de, D>(deserializer: D) -> Result<Option<Address>, D::Error>
+fn deserialize_optional_address<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Address>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
