@@ -18,7 +18,7 @@ pub use api::Settings as EthApiSettings;
 mod error;
 mod server;
 
-use ethers::types::{Address, H256, U64};
+use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_sim::{GasEstimate, UserOperationOptionalGas};
 
@@ -42,6 +42,7 @@ pub trait EthApi {
         &self,
         op: UserOperationOptionalGas,
         entry_point: Address,
+        state_override: Option<spoof::State>,
     ) -> RpcResult<GasEstimate>;
 
     /// Returns the user operation with the given hash.

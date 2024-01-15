@@ -1119,7 +1119,7 @@ mod tests {
             .returning(move |_, _, _| Ok(get_test_tracer_output()));
 
         // The underlying eth_call when getting the code hash in check_contracts
-        provider.expect_call().returning(|_, _| {
+        provider.expect_call().returning(|_, _, _| {
             let json_rpc_error = JsonRpcError {
                 code: -32000,
                 message: "execution reverted".to_string(),

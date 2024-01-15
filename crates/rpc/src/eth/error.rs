@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Address, Opcode, U256};
+use ethers::types::{Address, Bytes, Opcode, U256};
 use jsonrpsee::types::{
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
     ErrorObjectOwned,
@@ -93,6 +93,8 @@ pub enum EthRpcError {
     SimulationFailed(SimulationViolation),
     #[error("{0}")]
     ExecutionReverted(String),
+    #[error("execution reverted")]
+    ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData),
     #[error("operation rejected by mempool: {0}")]
     OperationRejected(String),
 }
@@ -149,6 +151,12 @@ impl ReplacementUnderpricedData {
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct UnsupportedAggregatorData {
     pub aggregator: Address,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionRevertedWithBytesData {
+    pub revert_data: Bytes,
 }
 
 impl From<PoolServerError> for EthRpcError {
@@ -270,6 +278,9 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
+            EthRpcError::ExecutionRevertedWithBytes(data) => {
+                rpc_err_with_data(EXECUTION_REVERTED, msg, data)
+            }
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
         }
     }

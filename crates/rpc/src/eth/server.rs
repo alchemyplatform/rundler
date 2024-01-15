@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use async_trait::async_trait;
-use ethers::types::{Address, H256, U64};
+use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_pool::PoolServer;
 use rundler_provider::{EntryPoint, Provider};
@@ -40,8 +40,9 @@ where
         &self,
         op: UserOperationOptionalGas,
         entry_point: Address,
+        state_override: Option<spoof::State>,
     ) -> RpcResult<GasEstimate> {
-        Ok(EthApi::estimate_user_operation_gas(self, op, entry_point).await?)
+        Ok(EthApi::estimate_user_operation_gas(self, op, entry_point, state_override).await?)
     }
 
     async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>> {

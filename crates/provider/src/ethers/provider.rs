@@ -18,10 +18,11 @@ use ethers::{
     contract::ContractError,
     prelude::ContractError as EthersContractError,
     providers::{
-        JsonRpcClient, Middleware, Provider as EthersProvider, ProviderError as EthersProviderError,
+        JsonRpcClient, Middleware, Provider as EthersProvider,
+        ProviderError as EthersProviderError, RawCall,
     },
     types::{
-        transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
+        spoof, transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
         Eip1559TransactionRequest, FeeHistory, Filter, GethDebugTracingCallOptions,
         GethDebugTracingOptions, GethTrace, Log, Transaction, TransactionReceipt, TxHash, H160,
         H256, U256, U64,
@@ -60,8 +61,17 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         Ok(EthersProvider::request(self, method, params).await?)
     }
 
-    async fn call(&self, tx: &TypedTransaction, block: Option<BlockId>) -> ProviderResult<Bytes> {
-        Ok(Middleware::call(self, tx, block).await?)
+    async fn call(
+        &self,
+        tx: &TypedTransaction,
+        block: Option<BlockId>,
+        state_overrides: &spoof::State,
+    ) -> ProviderResult<Bytes> {
+        let mut call = self.call_raw(tx).state(state_overrides);
+        if let Some(block) = block {
+            call = call.block(block);
+        }
+        Ok(call.await?)
     }
 
     async fn fee_history<T: Into<U256> + Send + Sync + Serialize + 'static>(

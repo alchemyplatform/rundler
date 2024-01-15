@@ -177,6 +177,15 @@ pub struct CommonArgs {
     max_simulate_handle_ops_gas: u64,
 
     #[arg(
+        long = "validation_estimation_gas_fee",
+        name = "validation_estimation_gas_fee",
+        env = "VALIDATION_ESTIMATION_GAS_FEE",
+        default_value = "1000000000000", // 10K gwei
+        global = true
+    )]
+    validation_estimation_gas_fee: u64,
+
+    #[arg(
         long = "bundle_priority_fee_overhead_percent",
         name = "bundle_priority_fee_overhead_percent",
         env = "BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT",
@@ -279,6 +288,7 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
             max_verification_gas: value.max_verification_gas,
             max_call_gas,
             max_simulate_handle_ops_gas: value.max_simulate_handle_ops_gas,
+            validation_estimation_gas_fee: value.validation_estimation_gas_fee,
         })
     }
 }
