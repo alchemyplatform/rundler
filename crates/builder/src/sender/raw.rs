@@ -23,6 +23,7 @@ use ethers::{
 use ethers_signers::Signer;
 use rundler_sim::ExpectedStorage;
 
+use super::Result;
 use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
 
 #[derive(Debug)]
@@ -47,19 +48,18 @@ where
         &self,
         tx: TypedTransaction,
         _expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<SentTxInfo> {
+    ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
         let tx_hash = self
             .provider
             .provider()
             .request("eth_sendRawTransaction", (raw_tx,))
-            .await
-            .context("should send raw transaction to node")?;
+            .await?;
         Ok(SentTxInfo { nonce, tx_hash })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
         let tx = self
             .provider
             .get_transaction(tx_hash)
@@ -76,10 +76,10 @@ where
         })
     }
 
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>> {
-        PendingTransaction::new(tx_hash, self.provider.inner())
+    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
+        Ok(PendingTransaction::new(tx_hash, self.provider.inner())
             .await
-            .context("should wait for transaction to be mined or dropped")
+            .context("should wait for transaction to be mined or dropped")?)
     }
 
     fn address(&self) -> Address {

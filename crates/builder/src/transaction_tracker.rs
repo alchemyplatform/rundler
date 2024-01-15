@@ -22,7 +22,7 @@ use rundler_types::GasFees;
 use tokio::time;
 use tracing::{info, warn};
 
-use crate::sender::{TransactionSender, TxStatus};
+use crate::sender::{TransactionSender, TxSenderError, TxStatus};
 
 /// Keeps track of pending transactions in order to suggest nonces and
 /// replacement fees and ensure that transactions do not get stalled. All sent
@@ -85,6 +85,7 @@ pub(crate) enum TrackerUpdate {
     NonceUsedForOtherTx {
         nonce: U256,
     },
+    ReplacementUnderpriced,
 }
 
 #[derive(Debug)]
@@ -240,16 +241,23 @@ where
     /// When we fail to send a transaction, it may be because another
     /// transaction has mined before it could be sent, invalidating the nonce.
     /// Thus, do one last check for an update before returning the error.
-    async fn handle_send_error(&mut self, error: anyhow::Error) -> anyhow::Result<TrackerUpdate> {
+    async fn handle_send_error(&mut self, error: TxSenderError) -> anyhow::Result<TrackerUpdate> {
+        match &error {
+            TxSenderError::ReplacementUnderpriced => {
+                return Ok(TrackerUpdate::ReplacementUnderpriced)
+            }
+            TxSenderError::Other(_error) => {}
+        }
+
         let update = self.check_for_update_now().await?;
         let Some(update) = update else {
-            return Err(error);
+            return Err(error.into());
         };
         match &update {
-            TrackerUpdate::Mined { .. } | TrackerUpdate::NonceUsedForOtherTx { .. } => Ok(update),
             TrackerUpdate::StillPendingAfterWait | TrackerUpdate::LatestTxDropped { .. } => {
-                Err(error)
+                Err(error.into())
             }
+            _ => Ok(update),
         }
     }
 
