@@ -24,7 +24,7 @@ pub(crate) use conditional::ConditionalTransactionSender;
 use enum_dispatch::enum_dispatch;
 use ethers::{
     prelude::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider},
+    providers::{JsonRpcClient, Middleware, Provider, ProviderError},
     types::{
         transaction::eip2718::TypedTransaction, Address, Bytes, Chain, TransactionReceipt, H256,
         U256,
@@ -51,6 +51,19 @@ pub(crate) enum TxStatus {
     Dropped,
 }
 
+/// Errors from transaction senders
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum TxSenderError {
+    /// Replacement transaction was underpriced
+    #[error("replacement transaction underpriced")]
+    ReplacementUnderpriced,
+    /// All other errors
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
+
 #[async_trait]
 #[enum_dispatch(TransactionSenderEnum<_C,_S>)]
 #[cfg_attr(test, automock)]
@@ -59,11 +72,11 @@ pub(crate) trait TransactionSender: Send + Sync + 'static {
         &self,
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
-    ) -> anyhow::Result<SentTxInfo>;
+    ) -> Result<SentTxInfo>;
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> anyhow::Result<TxStatus>;
+    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus>;
 
-    async fn wait_until_mined(&self, tx_hash: H256) -> anyhow::Result<Option<TransactionReceipt>>;
+    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>>;
 
     fn address(&self) -> Address;
 }
@@ -101,7 +114,7 @@ pub enum TransactionSenderType {
 impl FromStr for TransactionSenderType {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "raw" => Ok(TransactionSenderType::Raw),
             "conditional" => Ok(TransactionSenderType::Conditional),
@@ -130,7 +143,7 @@ impl TransactionSenderType {
         chain_id: u64,
         eth_poll_interval: Duration,
         bloxroute_header: &Option<String>,
-    ) -> Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
+    ) -> std::result::Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
         let sender = match self {
             Self::Raw => TransactionSenderEnum::Raw(RawTransactionSender::new(client, signer)),
             Self::Conditional => TransactionSenderEnum::Conditional(
@@ -172,9 +185,9 @@ impl TransactionSenderType {
 /// Custom errors for the sender constructor
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SenderConstructorErrors {
-    /// Anyhow error fallback
+    /// Error fallback
     #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    Internal(#[from] TxSenderError),
     /// Invalid Chain ID error for sender
     #[error("Chain ID: {0} cannot be used with the {1} sender")]
     InvalidChainForSender(u64, String),
@@ -204,4 +217,35 @@ where
         .await
         .context("should sign transaction before sending")?;
     Ok((tx.rlp_signed(&signature), nonce))
+}
+
+impl From<ProviderError> for TxSenderError {
+    fn from(value: ProviderError) -> Self {
+        match &value {
+            ProviderError::JsonRpcClientError(e) => {
+                if let Some(e) = e.as_error_response() {
+                    if e.message.contains("replacement transaction underpriced") {
+                        return TxSenderError::ReplacementUnderpriced;
+                    }
+                }
+                TxSenderError::Other(value.into())
+            }
+            _ => TxSenderError::Other(value.into()),
+        }
+    }
+}
+
+impl From<jsonrpsee::core::Error> for TxSenderError {
+    fn from(value: jsonrpsee::core::Error) -> Self {
+        match &value {
+            jsonrpsee::core::Error::Call(e) => {
+                if e.message().contains("replacement transaction underpriced") {
+                    TxSenderError::ReplacementUnderpriced
+                } else {
+                    TxSenderError::Other(value.into())
+                }
+            }
+            _ => TxSenderError::Other(value.into()),
+        }
+    }
 }

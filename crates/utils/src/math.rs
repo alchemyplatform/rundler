@@ -13,7 +13,7 @@
 
 //! Math utilities
 
-use std::ops::{Div, Mul};
+use std::ops::{Add, Div, Mul};
 
 /// Increases a number by a percentage
 pub fn increase_by_percent<T>(n: T, percent: u64) -> T
@@ -23,10 +23,28 @@ where
     n * (100 + percent) / 100
 }
 
+/// Increases a number by a percentage, rounding up
+pub fn increase_by_percent_ceil<T>(n: T, percent: u64) -> T
+where
+    T: Add<u64, Output = T> + Mul<u64, Output = T> + Div<u64, Output = T>,
+{
+    (n * (100 + percent) + 99) / 100
+}
+
 /// Take a percentage of a number
 pub fn percent<T>(n: T, percent: u64) -> T
 where
     T: Mul<u64, Output = T> + Div<u64, Output = T>,
 {
     n * percent / 100
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_increase_by_percent_ceil() {
+        assert_eq!(increase_by_percent_ceil(3, 10), 4);
+    }
 }

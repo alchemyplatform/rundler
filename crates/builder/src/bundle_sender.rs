@@ -291,6 +291,10 @@ where
                 BuilderMetrics::increment_bundle_txns_nonce_used(self.builder_index);
                 info!("Nonce used by external transaction")
             }
+            TrackerUpdate::ReplacementUnderpriced => {
+                BuilderMetrics::increment_bundle_txn_replacement_underpriced(self.builder_index);
+                info!("Replacement transaction underpriced")
+            }
         };
     }
 
@@ -318,6 +322,7 @@ where
     async fn send_bundle_with_increasing_gas_fees_inner(&self) -> anyhow::Result<SendBundleResult> {
         let (nonce, mut required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
         let mut initial_op_count: Option<usize> = None;
+
         for fee_increase_count in 0..=self.settings.max_fee_increases {
             let Some(bundle_tx) = self.get_bundle_tx(nonce, required_fees).await? else {
                 self.emit(BuilderEvent::formed_bundle(
@@ -413,6 +418,12 @@ where
                     ));
                     BuilderMetrics::increment_bundle_txns_nonce_used(self.builder_index);
                     bail!("nonce used by external transaction")
+                }
+                TrackerUpdate::ReplacementUnderpriced => {
+                    BuilderMetrics::increment_bundle_txn_replacement_underpriced(
+                        self.builder_index,
+                    );
+                    info!("Replacement transaction underpriced, increasing fees")
                 }
             };
             info!(
@@ -549,6 +560,10 @@ impl BuilderMetrics {
 
     fn increment_bundle_txn_fee_increases(builder_index: u64) {
         metrics::increment_counter!("builder_bundle_fee_increases", "builder_index" => builder_index.to_string());
+    }
+
+    fn increment_bundle_txn_replacement_underpriced(builder_index: u64) {
+        metrics::increment_counter!("builder_bundle_replacement_underpriced", "builder_index" => builder_index.to_string());
     }
 
     fn set_bundle_gas_stats(gas_limit: Option<U256>, gas_used: Option<U256>) {
