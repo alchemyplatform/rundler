@@ -22,7 +22,7 @@ use ethers::{
     abi::Address,
     types::{H256, U256},
 };
-use rundler_types::{Entity, UserOperation, UserOperationId};
+use rundler_types::{Entity, Timestamp, UserOperation, UserOperationId};
 use rundler_utils::math;
 use tracing::info;
 
@@ -139,6 +139,25 @@ impl PoolInner {
 
     pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
         self.best.clone().into_iter().map(|v| v.po)
+    }
+
+    /// Removes all operations using the given entity, returning the hashes of the removed operations.
+    ///
+    /// NOTE: This method is O(n) where n is the number of operations in the pool.
+    /// It should be called sparingly (e.g. when a block is mined).
+    pub(crate) fn remove_expired(&mut self, expire_before: Timestamp) -> Vec<(H256, Timestamp)> {
+        let mut expired = Vec::new();
+        for (hash, op) in &self.by_hash {
+            if op.po.valid_time_range.valid_until < expire_before {
+                expired.push((*hash, op.po.valid_time_range.valid_until));
+            }
+        }
+
+        for (hash, _) in &expired {
+            self.remove_operation_by_hash(*hash);
+        }
+
+        expired
     }
 
     pub(crate) fn address_count(&self, address: Address) -> usize {
@@ -285,6 +304,7 @@ impl PoolInner {
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
 
+        // TODO(danc): This silently drops UOs from the pool without reporting
         let removed = self
             .enforce_size()
             .context("should have succeeded in resizing the pool")?;
@@ -787,6 +807,44 @@ mod tests {
             MempoolError::OperationAlreadyKnown => (),
             _ => panic!("wrong error"),
         }
+    }
+
+    #[test]
+    fn test_expired() {
+        let conf = conf();
+        let mut pool = PoolInner::new(conf.clone());
+        let sender = Address::random();
+        let mut po1 = create_op(sender, 0, 10);
+        po1.valid_time_range.valid_until = Timestamp::from(1);
+        let _ = pool.add_operation(po1.clone()).unwrap();
+
+        let res = pool.remove_expired(Timestamp::from(2));
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, po1.uo.op_hash(conf.entry_point, conf.chain_id));
+        assert_eq!(res[0].1, Timestamp::from(1));
+    }
+
+    #[test]
+    fn test_multiple_expired() {
+        let conf = conf();
+        let mut pool = PoolInner::new(conf.clone());
+
+        let mut po1 = create_op(Address::random(), 0, 10);
+        po1.valid_time_range.valid_until = 5.into();
+        let _ = pool.add_operation(po1.clone()).unwrap();
+
+        let mut po2 = create_op(Address::random(), 0, 10);
+        po2.valid_time_range.valid_until = 10.into();
+        let _ = pool.add_operation(po2.clone()).unwrap();
+
+        let mut po3 = create_op(Address::random(), 0, 10);
+        po3.valid_time_range.valid_until = 9.into();
+        let _ = pool.add_operation(po3.clone()).unwrap();
+
+        let res = pool.remove_expired(10.into());
+        assert_eq!(res.len(), 2);
+        assert!(res.contains(&(po1.uo.op_hash(conf.entry_point, conf.chain_id), 5.into())));
+        assert!(res.contains(&(po3.uo.op_hash(conf.entry_point, conf.chain_id), 9.into())));
     }
 
     fn conf() -> PoolInnerConfig {
