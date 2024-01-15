@@ -26,7 +26,9 @@ use ethers::{
 use futures::future;
 use rundler_provider::Provider;
 use rundler_task::block_watcher;
-use rundler_types::{contracts::i_entry_point::UserOperationEventFilter, UserOperationId};
+use rundler_types::{
+    contracts::i_entry_point::UserOperationEventFilter, Timestamp, UserOperationId,
+};
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
@@ -57,6 +59,7 @@ pub(crate) struct Chain<P: Provider> {
 pub struct ChainUpdate {
     pub latest_block_number: u64,
     pub latest_block_hash: H256,
+    pub latest_block_timestamp: Timestamp,
     /// Blocks before this number are no longer tracked in this `Chain`, so no
     /// further updates related to them will be sent.
     pub earliest_remembered_block_number: u64,
@@ -93,6 +96,7 @@ pub(crate) struct Settings {
 struct BlockSummary {
     number: u64,
     hash: H256,
+    timestamp: Timestamp,
     parent_hash: H256,
     ops: Vec<MinedOp>,
 }
@@ -380,6 +384,7 @@ impl<P: Provider> Chain<P> {
         ChainUpdate {
             latest_block_number: latest_block.number,
             latest_block_hash: latest_block.hash,
+            latest_block_timestamp: latest_block.timestamp,
             earliest_remembered_block_number: self.blocks[0].number,
             reorg_depth,
             mined_ops,
@@ -415,6 +420,7 @@ impl BlockSummary {
                 .context("block number should be present")?
                 .as_u64(),
             hash: block.hash.context("block hash should exist")?,
+            timestamp: block.timestamp.as_u64().into(),
             parent_hash: block.parent_hash,
             ops: Vec::new(),
         })
@@ -557,6 +563,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 3,
                 latest_block_hash: hash(3),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 1,
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(103), fake_mined_op(104), fake_mined_op(105),],
@@ -584,6 +591,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 4,
                 latest_block_hash: hash(4),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 2,
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(106)],
@@ -617,6 +625,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 4,
                 latest_block_hash: hash(14),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 2,
                 reorg_depth: 1,
                 mined_ops: vec![fake_mined_op(112), fake_mined_op(113), fake_mined_op(114)],
@@ -650,6 +659,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 2,
                 latest_block_hash: hash(12),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 0,
                 reorg_depth: 2,
                 mined_ops: vec![fake_mined_op(111), fake_mined_op(112)],
@@ -680,6 +690,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 1,
                 latest_block_hash: hash(11),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 0,
                 reorg_depth: 2,
                 mined_ops: vec![fake_mined_op(111)],
@@ -711,6 +722,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 3,
                 latest_block_hash: hash(13),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 1,
                 reorg_depth: 3,
                 mined_ops: vec![fake_mined_op(111), fake_mined_op(112), fake_mined_op(113)],
@@ -740,6 +752,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 6,
                 latest_block_hash: hash(16),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 4,
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(104), fake_mined_op(105), fake_mined_op(106)],
@@ -763,6 +776,7 @@ mod tests {
             ChainUpdate {
                 latest_block_number: 1,
                 latest_block_hash: hash(1),
+                latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 0,
                 reorg_depth: 0,
                 mined_ops: vec![fake_mined_op(101), fake_mined_op(102), fake_mined_op(103),],
