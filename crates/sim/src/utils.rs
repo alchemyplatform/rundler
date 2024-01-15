@@ -14,7 +14,7 @@
 use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, AbiEncode},
-    types::{Address, BlockId, Bytes, Eip1559TransactionRequest, Selector, H256, U256},
+    types::{spoof, Address, BlockId, Bytes, Eip1559TransactionRequest, Selector, H256, U256},
 };
 use rundler_provider::{Provider, ProviderError};
 use rundler_types::contracts::{
@@ -41,10 +41,15 @@ pub(crate) async fn get_code_hash<P: Provider>(
     block_id: Option<BlockId>,
 ) -> anyhow::Result<H256> {
     addresses.sort();
-    let out: CodeHashesResult =
-        call_constructor(provider, &GETCODEHASHES_BYTECODE, addresses, block_id)
-            .await
-            .context("should compute code hashes")?;
+    let out: CodeHashesResult = call_constructor(
+        provider,
+        &GETCODEHASHES_BYTECODE,
+        addresses,
+        block_id,
+        &spoof::state(),
+    )
+    .await
+    .context("should compute code hashes")?;
     Ok(H256(out.hash))
 }
 
@@ -54,8 +59,16 @@ pub(crate) async fn get_gas_used<P: Provider>(
     target: Address,
     value: U256,
     data: Bytes,
+    state_overrides: &spoof::State,
 ) -> anyhow::Result<GasUsedResult> {
-    call_constructor(provider, &GETGASUSED_BYTECODE, (target, value, data), None).await
+    call_constructor(
+        provider,
+        &GETGASUSED_BYTECODE,
+        (target, value, data),
+        None,
+        state_overrides,
+    )
+    .await
 }
 
 async fn call_constructor<P: Provider, Args: AbiEncode, Ret: AbiDecode>(
@@ -63,6 +76,7 @@ async fn call_constructor<P: Provider, Args: AbiEncode, Ret: AbiDecode>(
     bytecode: &Bytes,
     args: Args,
     block_id: Option<BlockId>,
+    state_overrides: &spoof::State,
 ) -> anyhow::Result<Ret> {
     let mut data = bytecode.to_vec();
     data.extend(AbiEncode::encode(args));
@@ -71,7 +85,7 @@ async fn call_constructor<P: Provider, Args: AbiEncode, Ret: AbiDecode>(
         ..Default::default()
     };
     let error = provider
-        .call(&tx.into(), block_id)
+        .call(&tx.into(), block_id, state_overrides)
         .await
         .err()
         .context("called constructor should revert")?;

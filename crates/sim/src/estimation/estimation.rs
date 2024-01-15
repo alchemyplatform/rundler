@@ -53,11 +53,6 @@ const GAS_ESTIMATION_ERROR_MARGIN: f64 = 0.1;
 
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 
-/// This accounts for the gas used during a transfer to the entrypoint contract
-/// As well as the cost to initialize a previously 0 storage slot for an account
-/// that has yet to deposit.
-const GAS_FEE_TRANSFER_COST: u64 = 30000;
-
 /// Offset at which the proxy target address appears in the proxy bytecode. Must
 /// be updated whenever `CallGasEstimationProxy.sol` changes.
 ///
@@ -91,6 +86,7 @@ pub trait GasEstimator: Send + Sync + 'static {
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,
+        state_override: spoof::State,
     ) -> Result<GasEstimate, GasEstimationError>;
 }
 
@@ -109,6 +105,7 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,
+        state_override: spoof::State,
     ) -> Result<GasEstimate, GasEstimationError> {
         let Self {
             provider, settings, ..
@@ -131,21 +128,14 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
         };
         let pre_verification_gas = self.estimate_pre_verification_gas(&op, gas_price).await?;
 
-        // We deviate from the spec here always ignoring `max_fee_per_gas` and setting to zero.
-        // If not using a paymaster, the bundler will automatically add 21K to the verification
-        // gas limit to account for the gas fee transfer.
-        // If using a paymaster, the transfer gas will need to be added by the client to the returned limit.
         let op = UserOperation {
             pre_verification_gas,
-            verification_gas_limit: settings.max_verification_gas.into(),
-            call_gas_limit: settings.max_call_gas.into(),
-            max_fee_per_gas: 0.into(),
-            max_priority_fee_per_gas: 0.into(),
             ..op.into_user_operation(settings)
         };
 
-        let verification_future = self.binary_search_verification_gas(&op, block_hash);
-        let call_future = self.estimate_call_gas(&op, block_hash);
+        let verification_future =
+            self.binary_search_verification_gas(&op, block_hash, &state_override);
+        let call_future = self.estimate_call_gas(&op, block_hash, state_override.clone());
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
@@ -194,14 +184,20 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         &self,
         op: &UserOperation,
         block_hash: H256,
+        state_override: &spoof::State,
     ) -> Result<U256, GasEstimationError> {
         let timer = std::time::Instant::now();
         let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
+        let gas_fee = U256::from(self.settings.validation_estimation_gas_fee);
 
-        // Make one attempt at max gas, but zero fees, to see if success is possible.
+        // Make one attempt at max gas, to see if success is possible.
         // Capture the gas usage of this attempt and use as the initial guess in the binary search
+
         let initial_op = UserOperation {
             verification_gas_limit: simulation_gas,
+            max_fee_per_gas: gas_fee
+                .checked_div(simulation_gas + op.pre_verification_gas)
+                .unwrap_or(U256::MAX),
             call_gas_limit: 0.into(),
             ..op.clone()
         };
@@ -213,6 +209,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
                 i_entry_point::SimulateHandleOpCall::selector(),
                 (initial_op, Address::zero(), Bytes::new()),
             ),
+            state_override,
         )
         .await
         .context("failed to run initial guess")?;
@@ -230,7 +227,11 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         }
 
         let run_attempt_returning_error = |gas: u64| async move {
+            let max_fee_per_gas = gas_fee
+                .checked_div(U256::from(gas) + op.pre_verification_gas)
+                .unwrap_or(U256::MAX);
             let op = UserOperation {
+                max_fee_per_gas,
                 verification_gas_limit: gas.into(),
                 call_gas_limit: 0.into(),
                 ..op.clone()
@@ -243,14 +244,31 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
                     Bytes::new(),
                     block_hash,
                     simulation_gas,
-                    &spoof::state(),
+                    state_override,
                 )
                 .await?
                 .err();
-            Result::<_, anyhow::Error>::Ok(error_message)
+
+            if let Some(error_message) = error_message {
+                if error_message.contains("AA13")
+                    || error_message.contains("AA23")
+                    || error_message.contains("AA33")
+                    || error_message.contains("AA40")
+                    || error_message.contains("AA41")
+                {
+                    // This error occurs when out of gas, return false.
+                    Ok(false)
+                } else {
+                    // This is a different error, return it
+                    Err(GasEstimationError::RevertInValidation(error_message))
+                }
+            } else {
+                // This succeeded, return true
+                Ok(true)
+            }
         };
 
-        let mut max_failure_gas = 0;
+        let mut max_failure_gas = 1;
         let mut min_success_gas = self.settings.max_verification_gas;
 
         if gas_used.gas_used.cmp(&U256::from(u64::MAX)).is_gt() {
@@ -264,23 +282,19 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
             > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
         {
             num_rounds += 1;
-            let is_failure = run_attempt_returning_error(guess).await?.is_some();
-            if is_failure {
-                max_failure_gas = guess;
-            } else {
+            if run_attempt_returning_error(guess).await? {
                 min_success_gas = guess;
+            } else {
+                max_failure_gas = guess;
             }
             guess = (max_failure_gas + min_success_gas) / 2;
         }
 
-        if op.paymaster().is_none() {
-            // If not using a paymaster, add the gas for the gas fee transfer.
-            min_success_gas += GAS_FEE_TRANSFER_COST;
-        }
         tracing::debug!(
             "binary search for verification gas took {num_rounds} rounds, {}ms",
             timer.elapsed().as_millis()
         );
+
         Ok(min_success_gas.into())
     }
 
@@ -288,6 +302,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         &self,
         op: &UserOperation,
         block_hash: H256,
+        mut state_override: spoof::State,
     ) -> Result<U256, GasEstimationError> {
         let timer = std::time::Instant::now();
         // For an explanation of what's going on here, see the comment at the
@@ -303,17 +318,20 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         let moved_entry_point_address: Address = rand::thread_rng().gen();
         let estimation_proxy_bytecode =
             estimation_proxy_bytecode_with_target(moved_entry_point_address);
-        let mut spoofed_state = spoof::state();
-        spoofed_state
+        state_override
             .account(moved_entry_point_address)
             .code(entry_point_code);
-        spoofed_state
+        state_override
             .account(self.entry_point.address())
             .code(estimation_proxy_bytecode);
+
         let callless_op = UserOperation {
             call_gas_limit: 0.into(),
+            max_fee_per_gas: 0.into(),
+            verification_gas_limit: self.settings.max_verification_gas.into(),
             ..op.clone()
         };
+
         let mut min_gas = U256::zero();
         let mut max_gas = U256::from(self.settings.max_call_gas);
         let mut is_continuation = false;
@@ -338,7 +356,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
                     target_call_data,
                     block_hash,
                     self.settings.max_simulate_handle_ops_gas.into(),
-                    &spoofed_state,
+                    &state_override,
                 )
                 .await?
                 .map_err(GasEstimationError::RevertInCallWithMessage)?
@@ -449,6 +467,7 @@ mod tests {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
+            validation_estimation_gas_fee: 1_000_000_000_000,
         };
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
@@ -550,6 +569,7 @@ mod tests {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
+            validation_estimation_gas_fee: 1_000_000_000_000,
         };
 
         // Chose arbitrum
@@ -602,6 +622,7 @@ mod tests {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
+            validation_estimation_gas_fee: 1_000_000_000_000,
         };
 
         // Chose OP
@@ -645,6 +666,8 @@ mod tests {
     async fn test_binary_search_verification_gas() {
         let (mut entry, mut provider) = create_base_config();
 
+        let gas_usage = 10_000.into();
+
         entry.expect_address().return_const(Address::zero());
         entry
             .expect_decode_simulate_handle_ops_revert()
@@ -660,11 +683,15 @@ mod tests {
             });
         entry
             .expect_call_spoofed_simulate_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(move |op, _b, _c, _d, _e, _f| {
+                if op.verification_gas_limit < gas_usage {
+                    return Ok(Err("AA23".to_string()));
+                }
+
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
-                        gas_estimate: U256::from(10000),
-                        num_rounds: U256::from(10),
+                        gas_estimate: gas_usage,
+                        num_rounds: 10.into(),
                     }
                     .encode()
                     .into(),
@@ -673,9 +700,9 @@ mod tests {
                 }))
             });
 
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(move |_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
+                gas_used: gas_usage * 2,
                 success: false,
                 result: Bytes::new(),
             }
@@ -693,16 +720,12 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
+            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await
             .unwrap();
 
-        let pre_op_gas: U256 = 10000.into();
-        let gas_used: U256 = 20000.into();
-
-        // result is based on the combination of pre op gas and gas used in loop
-
-        assert_eq!(pre_op_gas + gas_used, estimation);
+        // the estimation should be the same as the gas usage
+        assert_eq!(gas_usage, estimation);
     }
 
     #[tokio::test]
@@ -739,7 +762,7 @@ mod tests {
 
         // this gas used number is larger than a u64 max number so we need to
         // check for this overflow
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(|_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(18446744073709551616_u128),
                 success: false,
@@ -759,7 +782,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
+            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await
             .err();
 
@@ -803,7 +826,7 @@ mod tests {
 
         // the success field should not be true as the
         // call should always revert
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(|_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(20000),
                 success: true,
@@ -823,7 +846,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
+            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -853,7 +876,7 @@ mod tests {
                 }))
             });
 
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(|_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(20000),
                 success: false,
@@ -873,7 +896,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
+            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -902,7 +925,7 @@ mod tests {
             .expect_call_spoofed_simulate_op()
             .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error")));
 
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(|_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(20000),
                 success: false,
@@ -922,7 +945,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
+            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -962,12 +985,14 @@ mod tests {
                 }))
             });
 
-        provider.expect_call().returning(|_a, _b| Ok(Bytes::new()));
+        provider
+            .expect_call()
+            .returning(|_a, _b, _c| Ok(Bytes::new()));
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero())
+            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -1000,7 +1025,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero())
+            .estimate_call_gas(&user_op, H256::zero(), spoof::state())
             .await
             .unwrap();
 
@@ -1038,7 +1063,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero())
+            .estimate_call_gas(&user_op, H256::zero(), spoof::state())
             .await
             .err()
             .unwrap();
@@ -1093,7 +1118,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero())
+            .estimate_call_gas(&user_op, H256::zero(), spoof::state())
             .await
             .unwrap();
 
@@ -1106,11 +1131,16 @@ mod tests {
     #[tokio::test]
     async fn test_estimation_optional_gas_used() {
         let (mut entry, mut provider) = create_base_config();
+        let gas_usage = 10_000.into();
 
         entry.expect_address().return_const(Address::zero());
         entry
             .expect_call_spoofed_simulate_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(move |op, _b, _c, _d, _e, _f| {
+                if op.verification_gas_limit < gas_usage {
+                    return Ok(Err("AA23".to_string()));
+                }
+
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gas_estimate: U256::from(10000),
@@ -1141,9 +1171,9 @@ mod tests {
         provider
             .expect_get_latest_block_hash_and_number()
             .returning(|| Ok((H256::zero(), U64::zero())));
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(move |_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(100000),
+                gas_used: gas_usage,
                 success: false,
                 result: Bytes::new(),
             }
@@ -1168,13 +1198,19 @@ mod tests {
 
         let user_op = demo_user_op_optional_gas();
 
-        let estimation = estimator.estimate_op_gas(user_op).await.unwrap();
+        let estimation = estimator
+            .estimate_op_gas(user_op, spoof::state())
+            .await
+            .unwrap();
 
         // this number uses the same logic as the pre_verification tests
         assert_eq!(estimation.pre_verification_gas, U256::from(43296));
 
-        // 30000 GAS_FEE_TRANSFER_COST increased by default 10%
-        assert_eq!(estimation.verification_gas_limit, U256::from(33000));
+        // gas used increased by 10%
+        assert_eq!(
+            estimation.verification_gas_limit,
+            math::increase_by_percent(gas_usage, 10)
+        );
 
         // input gas limit clamped with the set limit in settings and constant MIN
         assert_eq!(estimation.call_gas_limit, U256::from(10000));
@@ -1218,7 +1254,7 @@ mod tests {
         provider
             .expect_get_latest_block_hash_and_number()
             .returning(|| Ok((H256::zero(), U64::zero())));
-        provider.expect_call().returning(|_a, _b| {
+        provider.expect_call().returning(|_a, _b, _c| {
             let result_data: Bytes = GasUsedResult {
                 gas_used: U256::from(100000),
                 success: false,
@@ -1247,6 +1283,7 @@ mod tests {
             max_verification_gas: 10,
             max_call_gas: 10,
             max_simulate_handle_ops_gas: 10,
+            validation_estimation_gas_fee: 1_000_000_000_000,
         };
 
         let provider = Arc::new(provider);
@@ -1258,7 +1295,10 @@ mod tests {
             create_fee_estimator(provider),
         );
         let user_op = demo_user_op_optional_gas();
-        let estimation = estimator.estimate_op_gas(user_op).await.err();
+        let estimation = estimator
+            .estimate_op_gas(user_op, spoof::state())
+            .await
+            .err();
 
         assert!(matches!(
             estimation,

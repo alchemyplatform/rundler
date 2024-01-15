@@ -16,7 +16,7 @@
 use std::{fmt::Debug, sync::Arc};
 
 use ethers::types::{
-    transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
+    spoof, transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
     FeeHistory, Filter, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log,
     Transaction, TransactionReceipt, TxHash, H256, U256, U64,
 };
@@ -69,7 +69,12 @@ pub trait Provider: Send + Sync + Debug + 'static {
     ) -> Result<FeeHistory, ProviderError>;
 
     /// Simulate a transaction via an eth_call
-    async fn call(&self, tx: &TypedTransaction, block: Option<BlockId>) -> ProviderResult<Bytes>;
+    async fn call(
+        &self,
+        tx: &TypedTransaction,
+        block: Option<BlockId>,
+        state_overrides: &spoof::State,
+    ) -> ProviderResult<Bytes>;
 
     /// Get the current block number
     async fn get_block_number(&self) -> ProviderResult<u64>;

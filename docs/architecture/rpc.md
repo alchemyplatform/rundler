@@ -105,6 +105,25 @@ To estimate `verificationGasLimit` Rundler uses a binary search to find the mini
 
 This approach allows for minimal `eth_call` requests while providing an accurate gas limit.
 
+#### Gas Fee, Token Transfers, and State Overrides
+
+During ERC-4337 verification a transfer of an asset to pay for gas typically occurs. For example:
+
+- When there is no paymaster and the sender's deposit is less than the maximum gas fee, the sender must transfer ETH to the entrypoint.
+- When an ERC20 paymaster is used, there is typically an ERC20 token transfer from the sender to the paymaster.
+
+To correctly capture the gas cost of this transfer, a non-zero gas fee must be used. This fee must be:
+
+- Large enough that it triggers a transfer of tokens.
+  - I.e. USDC only uses 6 decimals, if the gas fee in USDC is < 1e-6 the transfer won't trigger. Its reasonable to assume that users will have a few USD cents worth of their fee token to avoid this case.
+- Small enough that a fee-payer with a small amount of the fee token can pay for the maximum gas.
+
+This value can be controlled by the `validation_estimation_gas_fee` configuration variable. A default value of 10K gwei is provided.
+
+During estimation the gas fee is kept constant by varying the `max_fee_per_gas` based on the current binary search guess. Therefore, as long as the fee-payer can pay for the gas fee initially, Rundler should be able to successfully estimate gas.
+
+What if the fee payer does not own enough of the payment token? A common use case may be to estimate the gas fee prior to transferring the gas token to the fee-payer. In this case, callers should use the state override functionality of `eth_estimateUserOperationGas`. Callers can override the balance (ETH, ERC20, or any arbitrary payment method) such that the fee-payer can pay the `validation_estimation_gas_fee`.
+
 ### `callGasLimit` Estimation
 
 `callGasLimit` estimation is similar to `verificationGasLimit` estimation in that it also uses a binary search. The majority of the binary search, however, is performed in Solidity to limit network calls.

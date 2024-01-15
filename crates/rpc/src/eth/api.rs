@@ -21,7 +21,7 @@ use ethers::{
     abi::{AbiDecode, RawLog},
     prelude::EthEvent,
     types::{
-        Address, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
+        spoof, Address, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
         GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, TransactionReceipt, H256, U256,
         U64,
     },
@@ -42,7 +42,7 @@ use rundler_types::{
 use rundler_utils::{eth::log_to_raw_log, log::LogOnError};
 use tracing::Level;
 
-use super::error::{EthResult, EthRpcError};
+use super::error::{EthResult, EthRpcError, ExecutionRevertedWithBytesData};
 use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
 
 /// Settings for the `eth_` API
@@ -167,6 +167,7 @@ where
         &self,
         op: UserOperationOptionalGas,
         entry_point: Address,
+        state_override: Option<spoof::State>,
     ) -> EthResult<GasEstimate> {
         let context = self
             .contexts_by_entry_point
@@ -177,7 +178,10 @@ where
                 )
             })?;
 
-        let result = context.gas_estimator.estimate_op_gas(op).await;
+        let result = context
+            .gas_estimator
+            .estimate_op_gas(op, state_override.unwrap_or_default())
+            .await;
         match result {
             Ok(estimate) => Ok(estimate),
             Err(GasEstimationError::RevertInValidation(message)) => {
@@ -186,8 +190,10 @@ where
             Err(GasEstimationError::RevertInCallWithMessage(message)) => {
                 Err(EthRpcError::ExecutionReverted(message))?
             }
-            Err(error @ GasEstimationError::RevertInCallWithBytes(_)) => {
-                Err(EthRpcError::ExecutionReverted(error.to_string()))?
+            Err(GasEstimationError::RevertInCallWithBytes(b)) => {
+                Err(EthRpcError::ExecutionRevertedWithBytes(
+                    ExecutionRevertedWithBytesData { revert_data: b },
+                ))?
             }
             Err(GasEstimationError::Other(error)) => Err(error)?,
         }
@@ -860,6 +866,7 @@ mod tests {
                     max_verification_gas: 1_000_000,
                     max_call_gas: 1_000_000,
                     max_simulate_handle_ops_gas: 1_000_000,
+                    validation_estimation_gas_fee: 1_000_000_000_000,
                 },
                 FeeEstimator::new(
                     Arc::clone(&provider),
