@@ -55,7 +55,7 @@ pub async fn run(bundler_args: NodeCliArgs, common_args: CommonArgs) -> anyhow::
     let rpc_task_args = rpc_args.to_args(
         &common_args,
         (&common_args).try_into()?,
-        (&common_args).try_into()?,
+        (&common_args).into(),
         (&common_args).try_into()?,
     )?;
 

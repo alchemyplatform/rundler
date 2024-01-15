@@ -200,7 +200,7 @@ impl BuilderArgs {
             rpc_url,
             entry_point_address: common
                 .entry_points
-                .get(0)
+                .first()
                 .context("should have at least one entry point")?
                 .parse()
                 .context("should parse entry point address")?,
@@ -220,7 +220,7 @@ impl BuilderArgs {
             priority_fee_mode,
             sender_type: self.sender_type,
             eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
-            sim_settings: common.try_into()?,
+            sim_settings: common.into(),
             mempool_configs,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
