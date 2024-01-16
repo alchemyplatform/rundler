@@ -69,6 +69,11 @@ pub trait PoolServer: Send + Sync + 'static {
         shard_index: u64,
     ) -> PoolResult<Vec<PoolOperation>>;
 
+    /// Get an operation from the pool by hash
+    /// Checks each entry point in order until the operation is found
+    /// Returns None if the operation is not found
+    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>>;
+
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()>;
 

@@ -31,20 +31,21 @@ use tonic::{transport::Server, Request, Response, Result, Status};
 
 use super::protos::{
     add_op_response, debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_ops_response,
-    get_reputation_status_response, get_stake_status_response,
+    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
+    get_ops_response, get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
     DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
     DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
-    GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetReputationStatusRequest,
-    GetReputationStatusResponse, GetReputationStatusSuccess, GetStakeStatusRequest,
-    GetStakeStatusResponse, GetStakeStatusSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
-    RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
-    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
+    GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess, GetOpsRequest, GetOpsResponse,
+    GetOpsSuccess, GetReputationStatusRequest, GetReputationStatusResponse,
+    GetReputationStatusSuccess, GetStakeStatusRequest, GetStakeStatusResponse,
+    GetStakeStatusSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, UpdateEntitiesRequest, UpdateEntitiesResponse,
+    UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
     mempool::Reputation,
@@ -175,6 +176,32 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => GetOpsResponse {
                 result: Some(get_ops_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_op_by_hash(
+        &self,
+        request: Request<GetOpByHashRequest>,
+    ) -> Result<Response<GetOpByHashResponse>> {
+        let req = request.into_inner();
+
+        let hash = from_bytes(&req.hash).map_err(|e| {
+            Status::invalid_argument(format!("Invalid hash in GetOpByHashRequest: {e}"))
+        })?;
+
+        let resp = match self.local_pool.get_op_by_hash(hash).await {
+            Ok(op) => GetOpByHashResponse {
+                result: Some(get_op_by_hash_response::Result::Success(
+                    GetOpByHashSuccess {
+                        op: op.map(|op| MempoolOp::from(&op)),
+                    },
+                )),
+            },
+            Err(error) => GetOpByHashResponse {
+                result: Some(get_op_by_hash_response::Result::Failure(error.into())),
             },
         };
 

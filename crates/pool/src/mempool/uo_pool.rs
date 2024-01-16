@@ -331,6 +331,7 @@ where
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
             uo: op,
+            entry_point: self.config.entry_point,
             aggregator: None,
             valid_time_range,
             expected_code_hash: sim_result.code_hash,
@@ -449,6 +450,10 @@ where
 
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
         self.state.read().pool.best_operations().take(max).collect()
+    }
+
+    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
+        self.state.read().pool.get_operation_by_hash(hash)
     }
 
     fn clear(&self) {
@@ -995,6 +1000,34 @@ mod tests {
         .await;
 
         check_ops(pool.best_operations(1, 0).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash() {
+        let op = create_op(Address::random(), 0, 0);
+        let pool = create_pool(vec![op.clone()]);
+
+        let hash = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        let pool_op = pool.get_user_operation_by_hash(hash).unwrap();
+        assert_eq!(pool_op.uo, op.op);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_not_found() {
+        let op = create_op(Address::random(), 0, 0);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        let pool_op = pool.get_user_operation_by_hash(H256::random());
+        assert_eq!(pool_op, None);
     }
 
     #[derive(Clone, Debug)]

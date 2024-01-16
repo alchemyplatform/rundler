@@ -79,7 +79,7 @@ pub struct RpcStakeInfo {
 }
 
 /// User operation definition for RPC
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RpcUserOperation {
     sender: RpcAddress,
@@ -132,7 +132,7 @@ impl From<RpcUserOperation> for UserOperation {
 }
 
 /// User operation with additional metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RichUserOperation {
     /// The full user operation
@@ -140,11 +140,11 @@ pub struct RichUserOperation {
     /// The entry point address this operation was sent to
     pub entry_point: RpcAddress,
     /// The number of the block this operation was included in
-    pub block_number: U256,
+    pub block_number: Option<U256>,
     /// The hash of the block this operation was included in
-    pub block_hash: H256,
+    pub block_hash: Option<H256>,
     /// The hash of the transaction this operation was included in
-    pub transaction_hash: H256,
+    pub transaction_hash: Option<H256>,
 }
 
 /// User operation receipt

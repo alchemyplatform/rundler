@@ -80,6 +80,9 @@ pub trait Mempool: Send + Sync + 'static {
     /// Returns the all operations from the pool up to a max size
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
 
+    /// Looks up a user operation by hash, returns None if not found
+    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>>;
+
     /// Debug methods
 
     /// Clears the mempool
@@ -168,6 +171,8 @@ pub enum OperationOrigin {
 pub struct PoolOperation {
     /// The user operation stored in the pool
     pub uo: UserOperation,
+    /// The entry point address for this operation
+    pub entry_point: Address,
     /// The aggregator address for this operation, if any.
     pub aggregator: Option<Address>,
     /// The valid time range for this operation.
@@ -264,6 +269,7 @@ mod tests {
                 init_code: factory.as_fixed_bytes().into(),
                 ..Default::default()
             },
+            entry_point: Address::random(),
             aggregator: Some(aggregator),
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),
