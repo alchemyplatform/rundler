@@ -234,6 +234,7 @@ impl From<&PoolOperation> for MempoolOp {
     fn from(op: &PoolOperation) -> Self {
         MempoolOp {
             uo: Some(UserOperation::from(&op.uo)),
+            entry_point: op.entry_point.as_bytes().to_vec(),
             aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
             valid_after: op.valid_time_range.valid_after.seconds_since_epoch(),
             valid_until: op.valid_time_range.valid_until.seconds_since_epoch(),
@@ -255,6 +256,8 @@ impl TryFrom<MempoolOp> for PoolOperation {
 
     fn try_from(op: MempoolOp) -> Result<Self, Self::Error> {
         let uo = op.uo.context(MISSING_USER_OP_ERR_STR)?.try_into()?;
+
+        let entry_point = from_bytes(&op.entry_point)?;
 
         let aggregator: Option<Address> = if op.aggregator.is_empty() {
             None
@@ -278,6 +281,7 @@ impl TryFrom<MempoolOp> for PoolOperation {
 
         Ok(PoolOperation {
             uo,
+            entry_point,
             aggregator,
             valid_time_range,
             expected_code_hash,

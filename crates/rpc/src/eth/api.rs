@@ -77,14 +77,11 @@ where
         entry_point: E,
         estimation_settings: EstimationSettings,
         fee_estimator: FeeEstimator<P>,
-    ) -> Self
-    where
-        E: Clone, // Add Clone trait bound for E
-    {
+    ) -> Self {
         let gas_estimator = GasEstimatorImpl::new(
             chain_id,
             provider,
-            entry_point.clone(),
+            entry_point,
             estimation_settings,
             fee_estimator,
         );
@@ -206,57 +203,27 @@ where
             ));
         }
 
-        // Get event associated with hash (need to check all entry point addresses associated with this API)
-        let event = self
-            .get_user_operation_event_by_hash(hash)
-            .await
-            .log_on_error("should have successfully queried for user op events by hash")?;
+        // check for the user operation both in the pool and mined on chain
+        let mined_fut = self.get_mined_user_operation_by_hash(hash);
+        let pending_fut = self.get_pending_user_operation_by_hash(hash);
+        let (mined, pending) = tokio::join!(mined_fut, pending_fut);
 
-        let Some(event) = event else { return Ok(None) };
-
-        // If the event is found, get the TX and entry point
-        let transaction_hash = event
-            .transaction_hash
-            .context("tx_hash should be present")?;
-
-        let tx = self
-            .provider
-            .get_transaction(transaction_hash)
-            .await
-            .context("should have fetched tx from provider")?
-            .context("should have found tx")?;
-
-        // We should return null if the tx isn't included in the block yet
-        if tx.block_hash.is_none() && tx.block_number.is_none() {
-            return Ok(None);
-        }
-        let to = tx
-            .to
-            .context("tx.to should be present on transaction containing user operation event")?;
-
-        // Find first op matching the hash
-        let user_operation = if self.contexts_by_entry_point.contains_key(&to) {
-            self.get_user_operations_from_tx_data(tx.input)
-                .into_iter()
-                .find(|op| op.op_hash(to, self.chain_id) == hash)
-                .context("matching user operation should be found in tx data")?
+        // mined takes precedence over pending
+        if let Ok(Some(mined)) = mined {
+            Ok(Some(mined))
+        } else if let Ok(Some(pending)) = pending {
+            Ok(Some(pending))
+        } else if mined.is_err() || pending.is_err() {
+            // if either futures errored, and the UO was not found, return the errors
+            Err(EthRpcError::Internal(anyhow::anyhow!(
+                "error fetching user operation by hash: mined: {:?}, pending: {:?}",
+                mined.err().map(|e| e.to_string()).unwrap_or_default(),
+                pending.err().map(|e| e.to_string()).unwrap_or_default(),
+            )))
         } else {
-            self.trace_find_user_operation(transaction_hash, hash)
-                .await
-                .context("error running trace")?
-                .context("should have found user operation in trace")?
-        };
-
-        Ok(Some(RichUserOperation {
-            user_operation: user_operation.into(),
-            entry_point: event.address.into(),
-            block_number: tx
-                .block_number
-                .map(|n| U256::from(n.as_u64()))
-                .unwrap_or_default(),
-            block_hash: tx.block_hash.unwrap_or_default(),
-            transaction_hash,
-        }))
+            // not found in either pool or mined
+            Ok(None)
+        }
     }
 
     pub(crate) async fn get_user_operation_receipt(
@@ -334,6 +301,82 @@ where
 
     pub(crate) async fn chain_id(&self) -> EthResult<U64> {
         Ok(self.chain_id.into())
+    }
+
+    async fn get_mined_user_operation_by_hash(
+        &self,
+        hash: H256,
+    ) -> EthResult<Option<RichUserOperation>> {
+        // Get event associated with hash (need to check all entry point addresses associated with this API)
+        let event = self
+            .get_user_operation_event_by_hash(hash)
+            .await
+            .log_on_error("should have successfully queried for user op events by hash")?;
+
+        let Some(event) = event else { return Ok(None) };
+
+        // If the event is found, get the TX and entry point
+        let transaction_hash = event
+            .transaction_hash
+            .context("tx_hash should be present")?;
+
+        let tx = self
+            .provider
+            .get_transaction(transaction_hash)
+            .await
+            .context("should have fetched tx from provider")?
+            .context("should have found tx")?;
+
+        // We should return null if the tx isn't included in the block yet
+        if tx.block_hash.is_none() && tx.block_number.is_none() {
+            return Ok(None);
+        }
+        let to = tx
+            .to
+            .context("tx.to should be present on transaction containing user operation event")?;
+
+        // Find first op matching the hash
+        let user_operation = if self.contexts_by_entry_point.contains_key(&to) {
+            self.get_user_operations_from_tx_data(tx.input)
+                .into_iter()
+                .find(|op| op.op_hash(to, self.chain_id) == hash)
+                .context("matching user operation should be found in tx data")?
+        } else {
+            self.trace_find_user_operation(transaction_hash, hash)
+                .await
+                .context("error running trace")?
+                .context("should have found user operation in trace")?
+        };
+
+        Ok(Some(RichUserOperation {
+            user_operation: user_operation.into(),
+            entry_point: event.address.into(),
+            block_number: Some(
+                tx.block_number
+                    .map(|n| U256::from(n.as_u64()))
+                    .unwrap_or_default(),
+            ),
+            block_hash: Some(tx.block_hash.unwrap_or_default()),
+            transaction_hash: Some(transaction_hash),
+        }))
+    }
+
+    async fn get_pending_user_operation_by_hash(
+        &self,
+        hash: H256,
+    ) -> EthResult<Option<RichUserOperation>> {
+        let res = self
+            .pool
+            .get_op_by_hash(hash)
+            .await
+            .map_err(EthRpcError::from)?;
+        Ok(res.map(|op| RichUserOperation {
+            user_operation: op.uo.into(),
+            entry_point: op.entry_point.into(),
+            block_number: None,
+            block_hash: None,
+            transaction_hash: None,
+        }))
     }
 
     async fn get_user_operation_event_by_hash(&self, hash: H256) -> EthResult<Option<Log>> {
@@ -509,11 +552,15 @@ where
 #[cfg(test)]
 mod tests {
     use ethers::{
-        types::{Log, TransactionReceipt},
+        abi::AbiEncode,
+        types::{Log, Transaction, TransactionReceipt},
         utils::keccak256,
     };
-    use rundler_pool::MockPoolServer;
+    use mockall::predicate::eq;
+    use rundler_pool::{MockPoolServer, PoolOperation};
     use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_sim::PriorityFeeMode;
+    use rundler_types::contracts::i_entry_point::HandleOpsCall;
 
     use super::*;
 
@@ -659,6 +706,126 @@ mod tests {
         assert!(result.is_err(), "{:?}", result.unwrap());
     }
 
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_pending() {
+        let ep = Address::random();
+        let uo = UserOperation::default();
+        let hash = uo.op_hash(ep, 1);
+
+        let po = PoolOperation {
+            uo: uo.clone(),
+            entry_point: ep,
+            ..Default::default()
+        };
+
+        let mut pool = MockPoolServer::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .times(1)
+            .returning(move |_| Ok(Some(po.clone())));
+
+        let mut provider = MockProvider::default();
+        provider.expect_get_logs().returning(move |_| Ok(vec![]));
+        provider.expect_get_block_number().returning(|| Ok(1000));
+
+        let mut entry_point = MockEntryPoint::default();
+        entry_point.expect_address().returning(move || ep);
+
+        let api = create_api(provider, entry_point, pool);
+        let res = api.get_user_operation_by_hash(hash).await.unwrap();
+        let ro = RichUserOperation {
+            user_operation: uo.into(),
+            entry_point: ep.into(),
+            block_number: None,
+            block_hash: None,
+            transaction_hash: None,
+        };
+        assert_eq!(res, Some(ro));
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_mined() {
+        let ep = Address::random();
+        let uo = UserOperation::default();
+        let hash = uo.op_hash(ep, 1);
+        let block_number = 1000;
+        let block_hash = H256::random();
+
+        let mut pool = MockPoolServer::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .returning(move |_| Ok(None));
+
+        let mut provider = MockProvider::default();
+        provider.expect_get_block_number().returning(|| Ok(1000));
+
+        let tx_data: Bytes = IEntryPointCalls::HandleOps(HandleOpsCall {
+            beneficiary: Address::zero(),
+            ops: vec![uo.clone()],
+        })
+        .encode()
+        .into();
+        let tx = Transaction {
+            to: Some(ep),
+            input: tx_data,
+            block_number: Some(block_number.into()),
+            block_hash: Some(block_hash),
+            ..Default::default()
+        };
+        let tx_hash = tx.hash();
+        let log = Log {
+            address: ep,
+            transaction_hash: Some(tx_hash),
+            ..Default::default()
+        };
+
+        provider
+            .expect_get_logs()
+            .returning(move |_| Ok(vec![log.clone()]));
+        provider
+            .expect_get_transaction()
+            .with(eq(tx_hash))
+            .returning(move |_| Ok(Some(tx.clone())));
+
+        let mut entry_point = MockEntryPoint::default();
+        entry_point.expect_address().returning(move || ep);
+
+        let api = create_api(provider, entry_point, pool);
+        let res = api.get_user_operation_by_hash(hash).await.unwrap();
+        let ro = RichUserOperation {
+            user_operation: uo.into(),
+            entry_point: ep.into(),
+            block_number: Some(block_number.into()),
+            block_hash: Some(block_hash),
+            transaction_hash: Some(tx_hash),
+        };
+        assert_eq!(res, Some(ro));
+    }
+
+    #[tokio::test]
+    async fn test_get_user_op_by_hash_not_found() {
+        let ep = Address::random();
+        let uo = UserOperation::default();
+        let hash = uo.op_hash(ep, 1);
+
+        let mut pool = MockPoolServer::default();
+        pool.expect_get_op_by_hash()
+            .with(eq(hash))
+            .times(1)
+            .returning(move |_| Ok(None));
+
+        let mut provider = MockProvider::default();
+        provider.expect_get_logs().returning(move |_| Ok(vec![]));
+        provider.expect_get_block_number().returning(|| Ok(1000));
+
+        let mut entry_point = MockEntryPoint::default();
+        entry_point.expect_address().returning(move || ep);
+
+        let api = create_api(provider, entry_point, pool);
+        let res = api.get_user_operation_by_hash(hash).await.unwrap();
+        assert_eq!(res, None);
+    }
+
     fn given_log(topic_0: &str, topic_1: &str) -> Log {
         Log {
             topics: vec![
@@ -673,6 +840,41 @@ mod tests {
         TransactionReceipt {
             logs,
             ..Default::default()
+        }
+    }
+
+    fn create_api(
+        provider: MockProvider,
+        ep: MockEntryPoint,
+        pool: MockPoolServer,
+    ) -> EthApi<MockProvider, MockEntryPoint, MockPoolServer> {
+        let mut contexts_by_entry_point = HashMap::new();
+        let provider = Arc::new(provider);
+        contexts_by_entry_point.insert(
+            ep.address(),
+            EntryPointContext::new(
+                1,
+                Arc::clone(&provider),
+                ep,
+                EstimationSettings {
+                    max_verification_gas: 1_000_000,
+                    max_call_gas: 1_000_000,
+                    max_simulate_handle_ops_gas: 1_000_000,
+                },
+                FeeEstimator::new(
+                    Arc::clone(&provider),
+                    1,
+                    PriorityFeeMode::BaseFeePercent(0),
+                    0,
+                ),
+            ),
+        );
+        EthApi {
+            contexts_by_entry_point,
+            provider,
+            chain_id: 1,
+            pool,
+            settings: Settings::new(None),
         }
     }
 }

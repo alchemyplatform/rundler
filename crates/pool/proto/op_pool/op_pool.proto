@@ -110,6 +110,8 @@ message MempoolOp {
   // multiple UserOperations in the mempool, otherwise just one UserOperation is
   // permitted
   bool account_is_staked = 8;
+  // The entry point address of this operation
+  bytes entry_point = 9;
 }
 
 // Defines the gRPC endpoints for a UserOperation mempool service
@@ -125,6 +127,9 @@ service OpPool {
   // Get up to `max_ops` from the mempool.
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
 
+  // Get a UserOperation by its hash
+  rpc GetOpByHash (GetOpByHashRequest) returns (GetOpByHashResponse);
+
   // Removes UserOperations from the mempool
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
 
@@ -133,10 +138,13 @@ service OpPool {
 
   // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
+
   // Dumps the current UserOperations mempool
   rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
+
   // Sets reputation of given addresses.
   rpc DebugSetReputation (DebugSetReputationRequest) returns (DebugSetReputationResponse);
+
   // Returns the reputation data of all observed addresses. Returns an array of
   // reputation objects, each with the fields described above in
   // debug_bundler_setReputation
@@ -195,6 +203,20 @@ message GetOpsResponse {
 }
 message GetOpsSuccess {
   repeated MempoolOp ops = 1;
+}
+
+message GetOpByHashRequest {
+  // The serialized UserOperation hash
+  bytes hash = 1;
+}
+message GetOpByHashResponse {
+  oneof result {
+    GetOpByHashSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetOpByHashSuccess {
+  MempoolOp op = 1;
 }
 
 message GetReputationStatusResponse {

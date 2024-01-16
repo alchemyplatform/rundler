@@ -150,6 +150,15 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
+    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+        let req = ServerRequestKind::GetOpByHash { hash };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetOpByHash { op } => Ok(op),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
     async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()> {
         let req = ServerRequestKind::RemoveOps { entry_point, ops };
         let resp = self.send(req).await?;
@@ -326,6 +335,15 @@ where
             .collect())
     }
 
+    fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+        for mempool in self.mempools.values() {
+            if let Some(op) = mempool.get_user_operation_by_hash(hash) {
+                return Ok(Some((*op).clone()));
+            }
+        }
+        Ok(None)
+    }
+
     fn remove_ops(&self, entry_point: Address, ops: &[H256]) -> PoolResult<()> {
         let mempool = self.get_pool(entry_point)?;
         mempool.remove_operations(ops);
@@ -441,6 +459,12 @@ where
                                 Err(e) => Err(e),
                             }
                         },
+                        ServerRequestKind::GetOpByHash { hash } => {
+                            match self.get_op_by_hash(hash) {
+                                Ok(op) => Ok(ServerResponse::GetOpByHash { op }),
+                                Err(e) => Err(e),
+                            }
+                        }
                         ServerRequestKind::RemoveOps { entry_point, ops } => {
                             match self.remove_ops(entry_point, &ops) {
                                 Ok(_) => Ok(ServerResponse::RemoveOps),
@@ -535,6 +559,9 @@ enum ServerRequestKind {
         max_ops: u64,
         shard_index: u64,
     },
+    GetOpByHash {
+        hash: H256,
+    },
     RemoveOps {
         entry_point: Address,
         ops: Vec<H256>,
@@ -575,6 +602,9 @@ enum ServerResponse {
     },
     GetOps {
         ops: Vec<PoolOperation>,
+    },
+    GetOpByHash {
+        op: Option<PoolOperation>,
     },
     RemoveOps,
     UpdateEntities,

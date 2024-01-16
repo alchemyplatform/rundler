@@ -13,7 +13,7 @@
 
 mod client;
 mod error;
-#[allow(non_snake_case, unreachable_pub)]
+#[allow(non_snake_case, unreachable_pub, clippy::large_enum_variant)]
 mod protos;
 mod server;
 

@@ -4069,6 +4069,7 @@ dependencies = [
  "futures-util",
  "jsonrpsee",
  "metrics",
+ "mockall",
  "rundler-builder",
  "rundler-pool",
  "rundler-provider",
