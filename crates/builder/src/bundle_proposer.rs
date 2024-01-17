@@ -29,7 +29,7 @@ use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
-use rundler_pool::{PoolOperation, PoolServer};
+use rundler_pool::{PoolOperation, PoolServer, ReputationStatus::Throttled};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
     gas::{self, GasOverheads},
@@ -50,6 +50,8 @@ use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
+/// Throttled entity bundle count
+const THROTTLED_ENTITY_BUNDLE_COUNT: u64 = 4;
 
 #[derive(Debug, Default)]
 pub(crate) struct Bundle {
@@ -353,6 +355,8 @@ where
         let mut context = ProposalContext::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
+        let mut staked_entity_count = HashMap::new();
+
         let ov = GasOverheads::default();
         let mut gas_spent = ov.transaction_gas_overhead;
         for (po, simulation) in ops_with_simulations {
@@ -380,6 +384,42 @@ where
                     continue;
                 }
             };
+
+            if let Some(paymaster) = po.uo.paymaster() {
+                let status = self
+                    .pool
+                    .get_reputation_status(self.entry_point.address(), paymaster)
+                    .await
+                    .unwrap();
+
+                if status.eq(&Throttled)
+                    && staked_entity_count
+                        .get(&paymaster)
+                        .unwrap_or(&0)
+                        .gt(&THROTTLED_ENTITY_BUNDLE_COUNT)
+                {
+                    info!("skipping throttled paymaster");
+                    continue;
+                }
+            }
+
+            if let Some(factory) = po.uo.factory() {
+                let status = self
+                    .pool
+                    .get_reputation_status(self.entry_point.address(), factory)
+                    .await
+                    .unwrap();
+
+                if status.eq(&Throttled)
+                    && staked_entity_count
+                        .get(&factory)
+                        .unwrap_or(&0)
+                        .gt(&THROTTLED_ENTITY_BUNDLE_COUNT)
+                {
+                    info!("skipping throttled factory");
+                    continue;
+                }
+            }
 
             // filter time range
             if !simulation
@@ -436,6 +476,20 @@ where
                     continue;
                 } else {
                     *balance -= max_cost;
+                }
+
+                if let Some(count) = staked_entity_count.get_mut(&paymaster) {
+                    *count += 1;
+                } else {
+                    staked_entity_count.insert(paymaster, 1);
+                }
+            }
+
+            if let Some(factory) = op.factory() {
+                if let Some(count) = staked_entity_count.get_mut(&factory) {
+                    *count += 1;
+                } else {
+                    staked_entity_count.insert(factory, 1);
                 }
             }
 
