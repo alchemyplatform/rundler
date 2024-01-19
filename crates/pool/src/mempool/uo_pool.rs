@@ -529,8 +529,7 @@ mod tests {
     use rundler_provider::MockStakeManager;
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
-        SimulationError, SimulationSettings, SimulationSuccess, SimulationViolation,
-        ViolationError,
+        SimulationError, SimulationResult, SimulationSettings, SimulationViolation, ViolationError,
     };
     use rundler_types::{DepositInfo, EntityType, GasFees, ValidTimeRange};
 
@@ -1050,11 +1049,11 @@ mod tests {
                             entity_infos: None,
                         })
                     } else {
-                        Ok(SimulationSuccess {
+                        Ok(SimulationResult {
                             account_is_staked: op.staked,
                             block_number: Some(0),
                             valid_time_range: op.valid_time_range,
-                            ..SimulationSuccess::default()
+                            ..SimulationResult::default()
                         })
                     }
                 });
