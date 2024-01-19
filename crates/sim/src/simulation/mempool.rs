@@ -26,12 +26,12 @@ use crate::simulation::SimulationViolation;
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct MempoolConfig {
     /// Allowlist to match violations against.
-    allowlist: Vec<AllowlistEntry>,
+    pub(crate) allowlist: Vec<AllowlistEntry>,
 }
 
 /// The entity allowed by an allowlist entry.
 #[derive(Debug, Copy, Clone)]
-enum AllowEntity {
+pub(crate) enum AllowEntity {
     /// Any entity is allowed.
     Any,
     /// Entity of a specific type is allowed.
@@ -67,9 +67,9 @@ impl AllowEntity {
 }
 
 /// An allowlist rule.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "rule", rename_all = "camelCase")]
-enum AllowRule {
+pub(crate) enum AllowRule {
     /// Allowlist a forbidden opcode on a contract.
     ForbiddenOpcode { contract: Address, opcode: Opcode },
     /// Allowlist a forbidden precompile by its address on a contract
@@ -88,13 +88,14 @@ enum AllowRule {
 /// An allowlist entry
 #[serde_as]
 #[derive(Debug, Clone, Deserialize)]
-struct AllowlistEntry {
+
+pub(crate) struct AllowlistEntry {
     /// The entity allowed by this entry.
     #[serde_as(as = "DisplayFromStr")]
-    entity: AllowEntity,
+    pub(crate) entity: AllowEntity,
     /// The rule allowed by this entry.
     #[serde(flatten)]
-    rule: AllowRule,
+    pub(crate) rule: AllowRule,
 }
 
 impl AllowlistEntry {

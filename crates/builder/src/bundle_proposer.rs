@@ -34,7 +34,7 @@ use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
     gas::{self, GasOverheads},
     EntityInfo, EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
-    SimulationSuccess, SimulationViolation, Simulator, ViolationError,
+    SimulationResult, SimulationViolation, Simulator, ViolationError,
 };
 use rundler_types::{
     Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, Timestamp, UserOperation,
@@ -251,7 +251,7 @@ where
         block_hash: H256,
         base_fee: U256,
         required_op_fees: GasFees,
-    ) -> Option<(PoolOperation, Result<SimulationSuccess, SimulationError>)> {
+    ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
         // filter by fees
         if op.uo.max_fee_per_gas < required_op_fees.max_fee_per_gas
             || op.uo.max_priority_fee_per_gas < required_op_fees.max_priority_fee_per_gas
@@ -343,7 +343,7 @@ where
 
     async fn assemble_context(
         &self,
-        ops_with_simulations: Vec<(PoolOperation, Result<SimulationSuccess, SimulationError>)>,
+        ops_with_simulations: Vec<(PoolOperation, Result<SimulationResult, SimulationError>)>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
@@ -837,7 +837,7 @@ where
 #[derive(Debug)]
 struct OpWithSimulation {
     op: UserOperation,
-    simulation: SimulationSuccess,
+    simulation: SimulationResult,
 }
 
 impl OpWithSimulation {
@@ -1259,7 +1259,7 @@ mod tests {
 
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
-            simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+            simulation_result: Box::new(|| Ok(SimulationResult::default())),
         }])
         .await;
 
@@ -1348,7 +1348,7 @@ mod tests {
             let bundle = simple_make_bundle(vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(move || {
-                    Ok(SimulationSuccess {
+                    Ok(SimulationResult {
                         valid_time_range: time_range,
                         ..Default::default()
                     })
@@ -1368,7 +1368,7 @@ mod tests {
             MockOp {
                 op: op1,
                 simulation_result: Box::new(|| {
-                    Ok(SimulationSuccess {
+                    Ok(SimulationResult {
                         accessed_addresses: [address(1), address(2)].into(),
                         ..Default::default()
                     })
@@ -1377,7 +1377,7 @@ mod tests {
             MockOp {
                 op: op2.clone(),
                 simulation_result: Box::new(|| {
-                    Ok(SimulationSuccess {
+                    Ok(SimulationResult {
                         accessed_addresses: [address(2)].into(),
                         ..Default::default()
                     })
@@ -1407,11 +1407,11 @@ mod tests {
             vec![
                 MockOp {
                     op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![],
@@ -1441,11 +1441,11 @@ mod tests {
             vec![
                 MockOp {
                     op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![],
@@ -1483,11 +1483,11 @@ mod tests {
             vec![
                 MockOp {
                     op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![],
@@ -1533,12 +1533,12 @@ mod tests {
             vec![
                 MockOp {
                     op: unaggregated_op.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(move || {
-                        Ok(SimulationSuccess {
+                        Ok(SimulationResult {
                             aggregator: Some(AggregatorSimOut {
                                 address: aggregator_a_address,
                                 signature: bytes(op_a1_aggregated_sig),
@@ -1550,7 +1550,7 @@ mod tests {
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(move || {
-                        Ok(SimulationSuccess {
+                        Ok(SimulationResult {
                             aggregator: Some(AggregatorSimOut {
                                 address: aggregator_a_address,
                                 signature: bytes(op_a2_aggregated_sig),
@@ -1562,7 +1562,7 @@ mod tests {
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(move || {
-                        Ok(SimulationSuccess {
+                        Ok(SimulationResult {
                             aggregator: Some(AggregatorSimOut {
                                 address: aggregator_b_address,
                                 signature: bytes(op_b_aggregated_sig),
@@ -1638,27 +1638,27 @@ mod tests {
             vec![
                 MockOp {
                     op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op3.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op4.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op5.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op6.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![],
@@ -1711,19 +1711,19 @@ mod tests {
             vec![
                 MockOp {
                     op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op3.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op4.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![],
@@ -1764,14 +1764,14 @@ mod tests {
                 ops_with_simulations: vec![
                     OpWithSimulation {
                         op: op1.clone(),
-                        simulation: SimulationSuccess {
+                        simulation: SimulationResult {
                             requires_post_op: false,
                             ..Default::default()
                         },
                     },
                     OpWithSimulation {
                         op: op2.clone(),
-                        simulation: SimulationSuccess {
+                        simulation: SimulationResult {
                             requires_post_op: false,
                             ..Default::default()
                         },
@@ -1810,14 +1810,14 @@ mod tests {
                 ops_with_simulations: vec![
                     OpWithSimulation {
                         op: op1.clone(),
-                        simulation: SimulationSuccess {
+                        simulation: SimulationResult {
                             requires_post_op: true, // uses postOp
                             ..Default::default()
                         },
                     },
                     OpWithSimulation {
                         op: op2.clone(),
-                        simulation: SimulationSuccess {
+                        simulation: SimulationResult {
                             requires_post_op: false,
                             ..Default::default()
                         },
@@ -1854,7 +1854,7 @@ mod tests {
         let bundle = mock_make_bundle(
             vec![MockOp {
                 op: op1.clone(),
-                simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
             }],
             vec![],
             vec![HandleOpsOut::PostOpRevert, HandleOpsOut::PostOpRevert],
@@ -1876,11 +1876,11 @@ mod tests {
             vec![
                 MockOp {
                     op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![],
@@ -1919,12 +1919,12 @@ mod tests {
             vec![
                 MockOp {
                     op: unaggregated_op.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationSuccess::default())),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(move || {
-                        Ok(SimulationSuccess {
+                        Ok(SimulationResult {
                             aggregator: Some(AggregatorSimOut {
                                 address: aggregator_a_address,
                                 signature: bytes(op_a1_aggregated_sig),
@@ -1936,7 +1936,7 @@ mod tests {
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(move || {
-                        Ok(SimulationSuccess {
+                        Ok(SimulationResult {
                             aggregator: Some(AggregatorSimOut {
                                 address: aggregator_a_address,
                                 signature: bytes(op_a2_aggregated_sig),
@@ -1977,8 +1977,7 @@ mod tests {
 
     struct MockOp {
         op: UserOperation,
-        simulation_result:
-            Box<dyn Fn() -> Result<SimulationSuccess, SimulationError> + Send + Sync>,
+        simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
     }
 
     struct MockAggregator {

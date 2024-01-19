@@ -34,7 +34,7 @@ use rundler_types::{
 };
 
 use super::{
-    mempool::{match_mempools, MempoolConfig, MempoolMatchResult},
+    mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
     tracer::{
         parse_combined_tracer_str, AccessInfo, AssociatedSlotsByAddress, SimulateValidationTracer,
         SimulationTracerOutput,
@@ -48,7 +48,7 @@ use crate::{
 
 /// The result of a successful simulation
 #[derive(Clone, Debug, Default)]
-pub struct SimulationSuccess {
+pub struct SimulationResult {
     /// The mempool IDs that support this operation
     pub mempools: Vec<H256>,
     /// Block hash this operation was simulated against
@@ -80,7 +80,7 @@ pub struct SimulationSuccess {
     pub entity_infos: EntityInfos,
 }
 
-impl SimulationSuccess {
+impl SimulationResult {
     /// Get the aggregator address if one was used
     pub fn aggregator_address(&self) -> Option<Address> {
         self.aggregator.as_ref().map(|agg| agg.address)
@@ -117,7 +117,7 @@ pub trait Simulator: Send + Sync + 'static {
         op: UserOperation,
         block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
-    ) -> Result<SimulationSuccess, SimulationError>;
+    ) -> Result<SimulationResult, SimulationError>;
 }
 
 /// Simulator implementation.
@@ -138,6 +138,7 @@ pub struct SimulatorImpl<P: Provider, T: SimulateValidationTracer> {
     simulate_validation_tracer: T,
     sim_settings: Settings,
     mempool_configs: HashMap<H256, MempoolConfig>,
+    allow_unstaked_addresses: HashSet<Address>,
 }
 
 impl<P, T> SimulatorImpl<P, T>
@@ -157,12 +158,25 @@ where
         sim_settings: Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
+        // Get a list of entities that are allowed to act as staked entities despite being unstaked
+        let mut allow_unstaked_addresses = HashSet::new();
+        for config in mempool_configs.values() {
+            for entry in &config.allowlist {
+                if entry.rule == AllowRule::NotStaked {
+                    if let AllowEntity::Address(address) = entry.entity {
+                        allow_unstaked_addresses.insert(address);
+                    }
+                }
+            }
+        }
+
         Self {
             provider,
             entry_point_address,
             simulate_validation_tracer,
             sim_settings,
             mempool_configs,
+            allow_unstaked_addresses,
         }
     }
 
@@ -525,7 +539,7 @@ where
         op: UserOperation,
         block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
-    ) -> Result<SimulationSuccess, SimulationError> {
+    ) -> Result<SimulationResult, SimulationError> {
         let (block_hash, block_number) = match block_hash {
             // If we are given a block_hash, we return a None block number, avoiding an extra call
             Some(block_hash) => (block_hash, None),
@@ -545,15 +559,17 @@ where
         };
 
         // Gather all violations from the tracer
-        let mut violations = self.gather_context_violations(&mut context)?;
+        let mut overridable_violations = self.gather_context_violations(&mut context)?;
         // Sort violations so that the final error message is deterministic
-        violations.sort();
+        overridable_violations.sort();
         // Check violations against mempool rules, find supporting mempools, error if none found
-        let mempools = match match_mempools(&self.mempool_configs, &violations) {
+        let mempools = match match_mempools(&self.mempool_configs, &overridable_violations) {
             MempoolMatchResult::Matches(pools) => pools,
             MempoolMatchResult::NoMatch(i) => {
                 return Err(SimulationError {
-                    violation_error: ViolationError::Violations(vec![violations[i].clone()]),
+                    violation_error: ViolationError::Violations(vec![
+                        overridable_violations[i].clone()
+                    ]),
                     entity_infos: Some(context.entity_infos),
                 })
             }
@@ -585,7 +601,13 @@ where
             paymaster_context,
             ..
         } = return_info;
-        Ok(SimulationSuccess {
+
+        // Conduct any stake overrides before assigning entity_infos
+        context
+            .entity_infos
+            .override_is_staked(&self.allow_unstaked_addresses);
+
+        Ok(SimulationResult {
             mempools,
             block_hash,
             block_number,
@@ -710,6 +732,12 @@ pub struct EntityInfo {
     pub is_staked: bool,
 }
 
+impl EntityInfo {
+    fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
+        self.is_staked = allow_unstaked_addresses.contains(&self.address) || self.is_staked;
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 /// additional context for all the entities used in an op
 pub struct EntityInfos {
@@ -755,6 +783,19 @@ impl EntityInfos {
             sender,
             paymaster,
             aggregator,
+        }
+    }
+
+    fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
+        if let Some(mut factory) = self.factory {
+            factory.override_is_staked(allow_unstaked_addresses)
+        }
+        self.sender.override_is_staked(allow_unstaked_addresses);
+        if let Some(mut paymaster) = self.paymaster {
+            paymaster.override_is_staked(allow_unstaked_addresses)
+        }
+        if let Some(mut aggregator) = self.aggregator {
+            aggregator.override_is_staked(allow_unstaked_addresses)
         }
     }
 

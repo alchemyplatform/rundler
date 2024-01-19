@@ -52,7 +52,7 @@ mod simulation;
 pub use simulation::MockSimulator;
 pub use simulation::{
     EntityInfo, EntityInfos, MempoolConfig, Settings as SimulationSettings,
-    SimulateValidationTracer, SimulateValidationTracerImpl, SimulationError, SimulationSuccess,
+    SimulateValidationTracer, SimulateValidationTracerImpl, SimulationError, SimulationResult,
     SimulationViolation, Simulator, SimulatorImpl, ViolationOpCode,
 };
 
