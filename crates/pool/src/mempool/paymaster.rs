@@ -281,6 +281,7 @@ mod tests {
     fn demo_pool_op(uo: UserOperation) -> PoolOperation {
         PoolOperation {
             uo,
+            entry_point: Address::random(),
             aggregator: None,
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),

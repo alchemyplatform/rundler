@@ -1206,7 +1206,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash() {
-        let op = create_op(Address::random(), 0, 0);
+        let op = create_op(Address::random(), 0, 0, None);
         let pool = create_pool(vec![op.clone()]);
 
         let hash = pool
@@ -1220,7 +1220,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_not_found() {
-        let op = create_op(Address::random(), 0, 0);
+        let op = create_op(Address::random(), 0, 0, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
