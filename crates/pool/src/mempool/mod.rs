@@ -14,13 +14,17 @@
 mod error;
 pub use error::MempoolError;
 
+mod entity_tracker;
 mod pool;
 
 mod reputation;
 pub(crate) use reputation::{HourlyMovingAverageReputation, ReputationParams};
 pub use reputation::{Reputation, ReputationStatus};
+use rundler_provider::ProviderResult;
 
 mod size;
+
+mod paymaster;
 
 mod uo_pool;
 use std::{
@@ -28,7 +32,7 @@ use std::{
     sync::Arc,
 };
 
-use ethers::types::{Address, H256};
+use ethers::types::{Address, H256, U256};
 #[cfg(test)]
 use mockall::automock;
 use rundler_sim::{EntityInfos, MempoolConfig, PrecheckSettings, SimulationSettings};
@@ -62,6 +66,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Updates the reputation of an entity.
     fn update_entity(&self, entity_update: EntityUpdate);
+
+    /// Returns current paymaster balance
+    async fn paymaster_balance(&self, paymaster: Address) -> ProviderResult<PaymasterMetadata>;
 
     /// Returns the best operations from the pool.
     ///
@@ -99,6 +106,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Get stake status for address
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus>;
+
+    /// Reset paymater state
+    async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()>;
 }
 
 /// Config for the mempool
@@ -189,6 +199,13 @@ pub struct PoolOperation {
     pub account_is_staked: bool,
     /// Staking information about all the entities.
     pub entity_infos: EntityInfos,
+}
+
+#[derive(Debug, Default, Clone, Eq, PartialEq, Copy)]
+pub struct PaymasterMetadata {
+    pub address: Address,
+    pub confirmed_balance: U256,
+    pub balance: U256,
 }
 
 impl PoolOperation {

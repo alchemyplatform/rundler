@@ -38,12 +38,28 @@ pub enum MempoolError {
     /// Max operations reached for this sender
     #[error("Max operations ({0}) reached for sender {1}")]
     MaxOperationsReached(usize, Address),
+    /// Multiple roles violation
+    /// Spec rule: STO-040
+    #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]
+    MultipleRolesViolation(Entity),
+    /// An associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool.
+    /// Spec rule: STO-041
+    #[error("An associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool")]
+    AssociatedStorageIsAlternateSender,
+    /// Sender address used as different entity in another UserOperation currently in the mempool.
+    /// Spec rule: STO-040
+    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    SenderAddressUsedAsAlternateEntity(Address),
     /// An entity associated with the operation is throttled/banned.
     #[error("Entity {0} is throttled/banned")]
     EntityThrottled(Entity),
     /// Operation was discarded on inserting due to size limit
     #[error("Operation was discarded on inserting")]
     DiscardedOnInsert,
+    /// Paymaster balance too low
+    /// Spec rule: EREP-010
+    #[error("Paymaster balance too low. Required balance: {0}. Current balance {1}")]
+    PaymasterBalanceTooLow(U256, U256),
     /// Operation was rejected due to a precheck violation
     #[error("Operation violation during precheck {0}")]
     PrecheckViolation(PrecheckViolation),

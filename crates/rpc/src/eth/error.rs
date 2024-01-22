@@ -57,6 +57,18 @@ pub enum EthRpcError {
     /// Paymaster rejected the operation
     #[error("{}", .0.reason)]
     PaymasterValidationRejected(PaymasterValidationRejectedData),
+    /// Multiple roles violation
+    #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]
+    MultipleRolesViolation(Entity),
+    /// Paymaster balance too low
+    #[error("Paymaster balance too low. Required balance: {0}. Current balance {1}")]
+    PaymasterBalanceTooLow(U256, U256),
+    /// An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool.
+    #[error("An Associated storage slot that is accessed in the UserOperation is being used as a sender by another UserOperation in the mempool")]
+    AssociatedStorageIsAlternateSender,
+    /// Sender address used as different entity in another UserOperation currently in the mempool.
+    #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
+    SenderAddressUsedAsAlternateEntity(Address),
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
     OpcodeViolation(EntityType, Opcode),
@@ -75,6 +87,12 @@ pub enum EthRpcError {
     /// Entity stake/unstake delay too low
     #[error("entity stake/unstake delay too low")]
     StakeTooLow(StakeTooLowData),
+    /// The user operation uses a paymaster that returns a context while being unstaked
+    #[error("Unstaked paymaster must not return context")]
+    UnstakedPaymasterContext,
+    /// The user operation uses an aggregator entity and it is not staked
+    #[error("An aggregator must be staked, regardless of storager usage")]
+    UnstakedAggregator,
     /// Unsupported aggregator
     #[error("unsupported aggregator")]
     UnsupportedAggregator(UnsupportedAggregatorData),
@@ -186,6 +204,18 @@ impl From<MempoolError> for EthRpcError {
                 format!("max operations reached for sender {count} already in pool"),
             ),
             MempoolError::EntityThrottled(entity) => EthRpcError::ThrottledOrBanned(entity),
+            MempoolError::MultipleRolesViolation(entity) => {
+                EthRpcError::MultipleRolesViolation(entity)
+            }
+            MempoolError::PaymasterBalanceTooLow(current_balance, required_balance) => {
+                EthRpcError::PaymasterBalanceTooLow(current_balance, required_balance)
+            }
+            MempoolError::AssociatedStorageIsAlternateSender => {
+                EthRpcError::AssociatedStorageIsAlternateSender
+            }
+            MempoolError::SenderAddressUsedAsAlternateEntity(address) => {
+                EthRpcError::SenderAddressUsedAsAlternateEntity(address)
+            }
             MempoolError::DiscardedOnInsert => {
                 EthRpcError::OperationRejected("discarded on insert".to_owned())
             }
@@ -232,10 +262,12 @@ impl From<SimulationViolation> for EthRpcError {
             SimulationViolation::FactoryCalledCreate2Twice(_) => {
                 Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
             }
+            SimulationViolation::UnstakedPaymasterContext => Self::UnstakedPaymasterContext,
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
             }
-            SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
+            SimulationViolation::NotStaked(stake_data) => {
+                let (entity, _, _, min_stake, min_unstake_delay) = *stake_data;
                 Self::StakeTooLow(StakeTooLowData::new(entity, min_stake, min_unstake_delay))
             }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
@@ -259,8 +291,13 @@ impl From<EthRpcError> for ErrorObjectOwned {
             }
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::OpcodeViolationMap(_)
-            | EthRpcError::StakeTooLow(_)
             | EthRpcError::SimulationFailed(_)
+            | EthRpcError::UnstakedAggregator
+            | EthRpcError::MultipleRolesViolation(_)
+            | EthRpcError::UnstakedPaymasterContext
+            | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
+            | EthRpcError::PaymasterBalanceTooLow(_, _)
+            | EthRpcError::AssociatedStorageIsAlternateSender
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)
@@ -268,6 +305,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::ThrottledOrBanned(data) => {
                 rpc_err_with_data(THROTTLED_OR_BANNED_CODE, msg, data)
             }
+            EthRpcError::StakeTooLow(data) => rpc_err_with_data(OPCODE_VIOLATION_CODE, msg, data),
             EthRpcError::UnsupportedAggregator(data) => {
                 rpc_err_with_data(UNSUPORTED_AGGREGATOR_CODE, msg, data)
             }

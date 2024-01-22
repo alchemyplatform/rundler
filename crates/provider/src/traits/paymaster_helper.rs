@@ -11,9 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Provider implementations using [ethers-rs](https://github.com/gakonst/ethers-rs)
+use ethers::types::{Address, U256};
+#[cfg(feature = "test-utils")]
+use mockall::automock;
+use rundler_types::DepositInfo;
 
-mod entry_point;
-mod paymaster_helper;
-mod provider;
-mod stake_manager;
+/// Trait for interacting with the PaymasterHelper contract
+#[cfg_attr(feature = "test-utils", automock)]
+#[async_trait::async_trait]
+pub trait PaymasterHelper: Send + Sync + 'static {
+    /// Get the deposit info from address
+    async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
+    /// Get deposit info for paymaster
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
+}

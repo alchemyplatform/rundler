@@ -22,7 +22,7 @@ use ethers::{
     providers::{
         Http, HttpRateLimitRetryPolicy, Middleware, Provider, RetryClient, RetryClientBuilder,
     },
-    types::{Bytes, Log},
+    types::{Address, Bytes, Log},
 };
 use url::Url;
 
@@ -89,4 +89,9 @@ pub fn log_to_raw_log(log: Log) -> RawLog {
         topics,
         data: data.to_vec(),
     }
+}
+
+/// Format the ethers address type to string without ellipsis
+pub fn format_address(address: Address) -> String {
+    format!("{:#x}", address).to_string()
 }

@@ -16,12 +16,12 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::providers::Middleware;
-use rundler_provider::{EntryPoint, Provider, StakeManager};
+use rundler_provider::{EntryPoint, PaymasterHelper, Provider};
 use rundler_sim::{
     Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
 };
 use rundler_task::Task;
-use rundler_types::contracts::{i_entry_point::IEntryPoint, i_stake_manager::IStakeManager};
+use rundler_types::contracts::{i_entry_point::IEntryPoint, i_paymaster_helper::IPaymasterHelper};
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -152,7 +152,13 @@ impl PoolTask {
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
     ) -> anyhow::Result<
-        UoPool<HourlyMovingAverageReputation, impl Prechecker, impl Simulator, impl StakeManager>,
+        UoPool<
+            HourlyMovingAverageReputation,
+            impl Prechecker,
+            impl Simulator,
+            impl EntryPoint,
+            impl PaymasterHelper,
+        >,
     > {
         // Reputation manager
         let reputation = Arc::new(HourlyMovingAverageReputation::new(
@@ -165,7 +171,9 @@ impl PoolTask {
         tokio::spawn(async move { reputation_runner.run().await });
 
         let i_entry_point = IEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
-        let i_stake_manager = IStakeManager::new(pool_config.entry_point, Arc::clone(&provider));
+        let i_paymaster_helper =
+            IPaymasterHelper::new(pool_config.entry_point, Arc::clone(&provider));
+
         let simulate_validation_tracer =
             SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
         let prechecker = PrecheckerImpl::new(
@@ -187,7 +195,8 @@ impl PoolTask {
             event_sender,
             prechecker,
             simulator,
-            i_stake_manager,
+            i_entry_point,
+            i_paymaster_helper,
         ))
     }
 }

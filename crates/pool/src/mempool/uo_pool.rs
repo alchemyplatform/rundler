@@ -19,7 +19,7 @@ use ethers::{
 };
 use itertools::Itertools;
 use parking_lot::RwLock;
-use rundler_provider::StakeManager;
+use rundler_provider::{EntryPoint, PaymasterHelper, ProviderResult};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
@@ -31,10 +31,10 @@ use super::{
     error::{MempoolError, MempoolResult},
     pool::PoolInner,
     reputation::{Reputation, ReputationManager, ReputationStatus},
-    Mempool, OperationOrigin, PoolConfig, PoolOperation, StakeInfo, StakeStatus,
+    Mempool, OperationOrigin, PaymasterMetadata, PoolConfig, PoolOperation, StakeInfo, StakeStatus,
 };
 use crate::{
-    chain::ChainUpdate,
+    chain::{ChainUpdate, DepositInfo},
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
 };
 
@@ -43,14 +43,21 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<R: ReputationManager, P: Prechecker, S: Simulator, SM: StakeManager> {
+pub(crate) struct UoPool<
+    R: ReputationManager,
+    P: Prechecker,
+    S: Simulator,
+    E: EntryPoint,
+    PH: PaymasterHelper,
+> {
     config: PoolConfig,
     reputation: Arc<R>,
     state: RwLock<UoPoolState>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
     simulator: S,
-    stake_manager: SM,
+    entry_point: E,
+    paymaster_helper: PH,
 }
 
 struct UoPoolState {
@@ -59,12 +66,13 @@ struct UoPoolState {
     block_number: u64,
 }
 
-impl<R, P, S, SM> UoPool<R, P, S, SM>
+impl<R, P, S, E, PH> UoPool<R, P, S, E, PH>
 where
     R: ReputationManager,
     P: Prechecker,
     S: Simulator,
-    SM: StakeManager,
+    E: EntryPoint,
+    PH: PaymasterHelper,
 {
     pub(crate) fn new(
         config: PoolConfig,
@@ -72,7 +80,8 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
-        stake_manager: SM,
+        entry_point: E,
+        paymaster_helper: PH,
     ) -> Self {
         Self {
             config: config.clone(),
@@ -85,7 +94,8 @@ where
             event_sender,
             prechecker,
             simulator,
-            stake_manager,
+            entry_point,
+            paymaster_helper,
         }
     }
 
@@ -130,27 +140,52 @@ where
 }
 
 #[async_trait]
-impl<R, P, S, SM> Mempool for UoPool<R, P, S, SM>
+impl<R, P, S, E, PH> Mempool for UoPool<R, P, S, E, PH>
 where
     R: ReputationManager,
     P: Prechecker,
     S: Simulator,
-    SM: StakeManager,
+    E: EntryPoint,
+    PH: PaymasterHelper,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
         {
-            let mut state = self.state.write();
             let deduped_ops = update.deduped_ops();
             let mined_ops = deduped_ops
                 .mined_ops
                 .iter()
                 .filter(|op| op.entry_point == self.config.entry_point);
+
+            let deposits: Vec<DepositInfo> = update
+                .entity_deposits
+                .iter()
+                .filter(|d| d.entrypoint == self.config.entry_point)
+                .cloned()
+                .collect();
+
+            let unmined_entity_deposits: Vec<DepositInfo> = update
+                .unmined_entity_deposits
+                .iter()
+                .filter(|d| d.entrypoint == self.config.entry_point)
+                .cloned()
+                .collect();
+
             let unmined_ops = deduped_ops
                 .unmined_ops
                 .iter()
                 .filter(|op| op.entry_point == self.config.entry_point);
             let mut mined_op_count = 0;
             let mut unmined_op_count = 0;
+
+            if update.reorg_larger_than_history {
+                let _ = self.reset_confirmed_paymaster_balances().await;
+            }
+
+            let mut state = self.state.write();
+            state
+                .pool
+                .update_paymaster_balances_after_update(&deposits, &unmined_entity_deposits);
+
             for op in mined_ops {
                 if op.entry_point != self.config.entry_point {
                     continue;
@@ -172,7 +207,7 @@ where
                     continue;
                 }
 
-                if let Some(op) = state.pool.unmine_operation(op.hash) {
+                if let Some(op) = state.pool.unmine_operation(op) {
                     // Only account for a staked entity once
                     for entity_addr in op.staked_entities().map(|e| e.address).unique() {
                         self.reputation.add_included(entity_addr);
@@ -270,6 +305,22 @@ where
         self.config.entry_point
     }
 
+    async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
+        let paymaster_addresses = self.state.read().pool.paymaster_addresses();
+
+        let balances = self
+            .paymaster_helper
+            .get_balances(paymaster_addresses.clone())
+            .await?;
+
+        self.state
+            .write()
+            .pool
+            .set_confirmed_paymaster_balances(&paymaster_addresses, &balances);
+
+        Ok(())
+    }
+
     async fn add_operation(
         &self,
         origin: OperationOrigin,
@@ -288,7 +339,7 @@ where
             let reputation = match self.reputation.status(address) {
                 ReputationStatus::Ok => EntityReputation::Ok,
                 ReputationStatus::Throttled => {
-                    if self.state.read().pool.address_count(address)
+                    if self.state.read().pool.address_count(&address)
                         >= self.config.throttled_entity_mempool_count as usize
                     {
                         return Err(MempoolError::EntityThrottled(entity));
@@ -313,7 +364,22 @@ where
 
         // Check if op is already known or replacing another, and if so, ensure its fees are high enough
         // do this before simulation to save resources
-        self.state.read().pool.check_replacement(&op)?;
+        let replacement = self.state.read().pool.check_replacement(&op)?;
+        // Check if op violates the STO-040 spec rule
+        self.state.read().pool.check_multiple_roles_violation(&op)?;
+
+        // check if paymaster is present and exists in pool
+        // Note: this is super gross but due the fact that we do not want to make
+        // http calls when we hold the readwrite lock its a work around
+        let mut paymaster_metadata = None;
+        if let Some(address) = op.paymaster() {
+            let meta = self
+                .paymaster_balance(address)
+                .await
+                .map_err(|e| MempoolError::Other(e.into()))?;
+
+            paymaster_metadata = Some(meta);
+        }
 
         // Prechecks
         self.prechecker.check(&op).await?;
@@ -328,6 +394,15 @@ where
         if let Some(agg) = &sim_result.aggregator {
             return Err(MempoolError::UnsupportedAggregator(agg.address));
         }
+
+        if replacement.is_none() {
+            // Check if op violates the STO-041 spec rule
+            self.state
+                .read()
+                .pool
+                .check_associated_storage(&sim_result.associated_addresses, &op)?;
+        }
+
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
             uo: op,
@@ -345,7 +420,9 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
-            let hash = state.pool.add_operation(pool_op.clone())?;
+            let hash = state
+                .pool
+                .add_operation(pool_op.clone(), paymaster_metadata)?;
             if throttled {
                 state.throttled_ops.insert(hash);
             }
@@ -418,6 +495,28 @@ where
         }
     }
 
+    async fn paymaster_balance(&self, paymaster: Address) -> ProviderResult<PaymasterMetadata> {
+        if self.state.read().pool.paymaster_exists(paymaster) {
+            let meta = self
+                .state
+                .read()
+                .pool
+                .paymaster_metadata(paymaster)
+                .expect("Paymaster balance should not be empty if address exists in pool");
+            return Ok(meta);
+        }
+
+        let balance = self.entry_point.balance_of(paymaster, None).await?;
+
+        let paymaster_meta = PaymasterMetadata {
+            address: paymaster,
+            balance,
+            confirmed_balance: balance,
+        };
+
+        Ok(paymaster_meta)
+    }
+
     fn best_operations(
         &self,
         max: usize,
@@ -469,7 +568,7 @@ where
     }
 
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
-        let deposit_info = self.stake_manager.get_deposit_info(address).await?;
+        let deposit_info = self.paymaster_helper.get_deposit_info(address).await?;
 
         let is_staked = deposit_info
             .stake
@@ -531,7 +630,8 @@ impl UoPoolMetrics {
 mod tests {
     use std::collections::HashMap;
 
-    use rundler_provider::MockStakeManager;
+    use ethers::types::Bytes;
+    use rundler_provider::{MockEntryPoint, MockPaymasterHelper};
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
         SimulationError, SimulationResult, SimulationSettings, SimulationViolation, ViolationError,
@@ -546,7 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_single_op() {
-        let op = create_op(Address::random(), 0, 0);
+        let op = create_op(Address::random(), 0, 0, None);
         let ops = vec![op.clone()];
         let uos = vec![op.op.clone()];
         let pool = create_pool(ops);
@@ -563,9 +663,9 @@ mod tests {
     #[tokio::test]
     async fn add_multiple_ops() {
         let ops = vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ];
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
@@ -586,9 +686,9 @@ mod tests {
     #[tokio::test]
     async fn clear() {
         let ops = vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ];
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
@@ -607,9 +707,9 @@ mod tests {
     #[tokio::test]
     async fn chain_update_mine() {
         let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ])
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -625,8 +725,13 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
+                actual_gas_cost: U256::zero(),
+                paymaster: None,
             }],
             unmined_ops: vec![],
+            entity_deposits: vec![],
+            unmined_entity_deposits: vec![],
+            reorg_larger_than_history: false,
         })
         .await;
 
@@ -635,14 +740,34 @@ mod tests {
 
     #[tokio::test]
     async fn chain_update_mine_unmine() {
-        let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
-        ])
-        .await;
+        let paymaster = Address::random();
+
+        let mut ops = vec![
+            create_op(Address::random(), 0, 3, Some(paymaster)),
+            create_op(Address::random(), 0, 2, Some(paymaster)),
+            create_op(Address::random(), 0, 1, Some(paymaster)),
+        ];
+
+        // add pending max cost of 30 for each uo
+        for op in &mut ops {
+            op.op.call_gas_limit = 10.into();
+            op.op.verification_gas_limit = 10.into();
+            op.op.pre_verification_gas = 10.into();
+            op.op.max_fee_per_gas = 1.into();
+        }
+
+        let (pool, uos) = create_pool_insert_ops(ops).await;
+        let metadata = pool
+            .state
+            .read()
+            .pool
+            .paymaster_metadata(paymaster)
+            .unwrap();
+
+        assert_eq!(metadata.balance, 910.into());
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
+        // mine the first op with actual gas cost of 10
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
             latest_block_hash: H256::random(),
@@ -654,14 +779,28 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
+                actual_gas_cost: 10.into(),
+                paymaster: Some(paymaster),
             }],
             unmined_ops: vec![],
+            entity_deposits: vec![],
+            unmined_entity_deposits: vec![],
+            reorg_larger_than_history: false,
         })
         .await;
+
         check_ops(
             pool.best_operations(3, 0).unwrap(),
             uos.clone()[1..].to_vec(),
         );
+
+        let metadata = pool
+            .state
+            .read()
+            .pool
+            .paymaster_metadata(paymaster)
+            .unwrap();
+        assert_eq!(metadata.balance, 930.into());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -675,18 +814,32 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
+                actual_gas_cost: 10.into(),
+                paymaster: None,
             }],
+            entity_deposits: vec![],
+            unmined_entity_deposits: vec![],
+            reorg_larger_than_history: false,
         })
         .await;
+
+        let metadata = pool
+            .state
+            .read()
+            .pool
+            .paymaster_metadata(paymaster)
+            .unwrap();
+        assert_eq!(metadata.balance, 910.into());
+
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
     #[tokio::test]
     async fn chain_update_wrong_ep() {
         let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3),
-            create_op(Address::random(), 0, 2),
-            create_op(Address::random(), 0, 1),
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
         ])
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -702,8 +855,13 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
+                actual_gas_cost: U256::zero(),
+                paymaster: None,
             }],
             unmined_ops: vec![],
+            entity_deposits: vec![],
+            unmined_entity_deposits: vec![],
+            reorg_larger_than_history: false,
         })
         .await;
 
@@ -739,8 +897,13 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
+                actual_gas_cost: U256::zero(),
+                paymaster: None,
             }],
             unmined_ops: vec![],
+            entity_deposits: vec![],
+            unmined_entity_deposits: vec![],
+            reorg_larger_than_history: false,
         })
         .await;
 
@@ -807,8 +970,13 @@ mod tests {
                 hash: uos[0].op_hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
+                actual_gas_cost: U256::zero(),
+                paymaster: None,
             }],
+            entity_deposits: vec![],
             unmined_ops: vec![],
+            unmined_entity_deposits: vec![],
+            reorg_larger_than_history: false,
         })
         .await;
 
@@ -847,6 +1015,26 @@ mod tests {
             }
             _ => panic!("Expected throttled error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_paymaster_balance_insufficient() {
+        let paymaster = Address::random();
+        let mut op = create_op(Address::random(), 0, 0, Some(paymaster));
+        op.op.call_gas_limit = 1000.into();
+        op.op.verification_gas_limit = 1000.into();
+        op.op.pre_verification_gas = 1000.into();
+        op.op.max_fee_per_gas = 1.into();
+
+        let uo = op.op.clone();
+        let pool = create_pool(vec![op]);
+
+        let ret = pool
+            .add_operation(OperationOrigin::Local, uo.clone())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(ret, MempoolError::PaymasterBalanceTooLow(_, _)));
     }
 
     #[tokio::test]
@@ -891,7 +1079,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_already_known() {
-        let op = create_op(Address::random(), 0, 0);
+        let op = create_op(Address::random(), 0, 0, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -910,7 +1098,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_replacement_underpriced() {
-        let op = create_op(Address::random(), 0, 100);
+        let op = create_op(Address::random(), 0, 100, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -957,7 +1145,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_replacement() {
-        let op = create_op(Address::random(), 0, 5);
+        let paymaster = Address::random();
+
+        let mut op = create_op(Address::random(), 0, 5, Some(paymaster));
+        op.op.call_gas_limit = 10.into();
+        op.op.verification_gas_limit = 10.into();
+        op.op.pre_verification_gas = 10.into();
+        op.op.max_fee_per_gas = 1.into();
+
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -974,11 +1169,19 @@ mod tests {
             .unwrap();
 
         check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
+
+        let paymaster_balance = pool
+            .state
+            .read()
+            .pool
+            .paymaster_metadata(paymaster)
+            .unwrap();
+        assert_eq!(paymaster_balance.balance, U256::from(940));
     }
 
     #[tokio::test]
     async fn test_expiry() {
-        let mut op = create_op(Address::random(), 0, 0);
+        let mut op = create_op(Address::random(), 0, 0, None);
         op.valid_time_range = ValidTimeRange {
             valid_after: 0.into(),
             valid_until: 10.into(),
@@ -1040,11 +1243,18 @@ mod tests {
 
     fn create_pool(
         ops: Vec<OpWithErrors>,
-    ) -> UoPool<impl ReputationManager, impl Prechecker, impl Simulator, impl StakeManager> {
+    ) -> UoPool<
+        impl ReputationManager,
+        impl Prechecker,
+        impl Simulator,
+        impl EntryPoint,
+        impl PaymasterHelper,
+    > {
         let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        let mut stake_manager = MockStakeManager::new();
+        let mut entrypoint = MockEntryPoint::new();
+        let mut paymaster_helper = MockPaymasterHelper::new();
         prechecker.expect_update_fees().returning(|| {
             Ok((
                 GasFees {
@@ -1055,7 +1265,7 @@ mod tests {
             ))
         });
 
-        stake_manager.expect_get_deposit_info().returning(|_| {
+        paymaster_helper.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
                 deposit: 1000,
                 staked: true,
@@ -1064,6 +1274,10 @@ mod tests {
                 withdraw_time: 10,
             })
         });
+
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
 
         for op in ops {
             prechecker.expect_check().returning(move |_| {
@@ -1115,14 +1329,21 @@ mod tests {
             event_sender,
             prechecker,
             simulator,
-            stake_manager,
+            entrypoint,
+            paymaster_helper,
         )
     }
 
     async fn create_pool_insert_ops(
         ops: Vec<OpWithErrors>,
     ) -> (
-        UoPool<impl ReputationManager, impl Prechecker, impl Simulator, impl StakeManager>,
+        UoPool<
+            impl ReputationManager,
+            impl Prechecker,
+            impl Simulator,
+            impl EntryPoint,
+            impl PaymasterHelper,
+        >,
         Vec<UserOperation>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
@@ -1133,12 +1354,24 @@ mod tests {
         (pool, uos)
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> OpWithErrors {
+    fn create_op(
+        sender: Address,
+        nonce: usize,
+        max_fee_per_gas: usize,
+        paymaster: Option<Address>,
+    ) -> OpWithErrors {
+        let mut paymaster_and_data = Bytes::new();
+
+        if let Some(paymaster) = paymaster {
+            paymaster_and_data = paymaster.to_fixed_bytes().into();
+        }
+
         OpWithErrors {
             op: UserOperation {
                 sender,
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
+                paymaster_and_data,
                 ..UserOperation::default()
             },
             valid_time_range: ValidTimeRange::default(),

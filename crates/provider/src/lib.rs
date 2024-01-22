@@ -25,8 +25,8 @@ mod ethers;
 
 mod traits;
 pub use traits::{
-    AggregatorOut, AggregatorSimOut, EntryPoint, HandleOpsOut, Provider, ProviderError,
-    ProviderResult, StakeManager,
+    AggregatorOut, AggregatorSimOut, EntryPoint, HandleOpsOut, PaymasterHelper, Provider,
+    ProviderError, ProviderResult, StakeManager,
 };
 #[cfg(any(test, feature = "test-utils"))]
-pub use traits::{MockEntryPoint, MockProvider, MockStakeManager};
+pub use traits::{MockEntryPoint, MockPaymasterHelper, MockProvider, MockStakeManager};
