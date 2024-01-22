@@ -32,6 +32,7 @@ fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("IAggregator")?,
         abigen_of("IStakeManager")?,
         abigen_of("GetCodeHashes")?,
+        abigen_of("IPaymasterHelper")?,
         abigen_of("GetGasUsed")?,
         abigen_of("CallGasEstimationProxy")?,
         abigen_of("SimpleAccount")?,

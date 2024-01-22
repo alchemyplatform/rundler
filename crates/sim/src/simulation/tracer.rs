@@ -1,5 +1,4 @@
-// This file is part of Rundler.
-//
+// This file is part of Rundler. //
 // Rundler is free software: you can redistribute it and/or modify it under the
 // terms of the GNU Lesser General Public License as published by the Free Software
 // Foundation, either version 3 of the License, or (at your option) any later version.
@@ -12,7 +11,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     convert::TryFrom,
     fmt::Debug,
     sync::Arc,
@@ -93,6 +92,10 @@ impl AssociatedSlotsByAddress {
             return false;
         };
         slot - next_smallest_slot < 128.into()
+    }
+
+    pub(crate) fn addresses(&self) -> HashSet<Address> {
+        self.0.clone().into_keys().collect()
     }
 }
 

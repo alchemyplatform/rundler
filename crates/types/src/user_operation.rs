@@ -62,6 +62,14 @@ impl UserOperation {
         Self::get_address_from_field(&self.init_code)
     }
 
+    /// Get max amount the user operation will cost
+    pub fn max_op_cost(&self) -> U256 {
+        self.call_gas_limit
+            .saturating_add(self.verification_gas_limit)
+            .saturating_add(self.pre_verification_gas)
+            .saturating_mul(self.max_fee_per_gas)
+    }
+
     /// Get the address of the paymaster entity associated with this user operation, if any
     pub fn paymaster(&self) -> Option<Address> {
         Self::get_address_from_field(&self.paymaster_and_data)

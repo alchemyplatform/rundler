@@ -11,9 +11,24 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Provider implementations using [ethers-rs](https://github.com/gakonst/ethers-rs)
+use anyhow::Result;
+use ethers::{
+    providers::Middleware,
+    types::{Address, U256},
+};
+use rundler_types::{contracts::i_paymaster_helper::IPaymasterHelper, DepositInfo};
 
-mod entry_point;
-mod paymaster_helper;
-mod provider;
-mod stake_manager;
+use crate::PaymasterHelper;
+
+#[async_trait::async_trait]
+impl<M> PaymasterHelper for IPaymasterHelper<M>
+where
+    M: Middleware + 'static,
+{
+    async fn get_balances(&self, addresses: Vec<Address>) -> Result<Vec<U256>> {
+        Ok(IPaymasterHelper::get_balances(self, addresses).await?)
+    }
+    async fn get_deposit_info(&self, address: Address) -> Result<DepositInfo> {
+        Ok(IPaymasterHelper::get_deposit_info(self, address).await?)
+    }
+}

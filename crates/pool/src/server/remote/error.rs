@@ -19,19 +19,20 @@ use rundler_types::StorageSlot;
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error,
-    AccessedUndeployedContract, AggregatorValidationFailed, CallGasLimitTooLow, CallHadValue,
-    CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
-    EntityThrottledError, EntityType, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
-    FactoryIsNotContract, InitCodeTooShort, InvalidSignature, InvalidStorageAccess,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, NotStaked, OperationAlreadyKnownError, OutOfGas,
+    AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
+    CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
+    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, ExistingSenderWithInitCode,
+    FactoryCalledCreate2Twice, FactoryIsNotContract, InitCodeTooShort, InvalidSignature,
+    InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
+    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
+    NotStaked, OperationAlreadyKnownError, OutOfGas, PaymasterBalanceTooLow,
     PaymasterDepositTooLow, PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
-    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnsupportedAggregatorError, UsedForbiddenOpcode, UsedForbiddenPrecompile,
-    VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnstakedAggregator,
+    UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
+    UsedForbiddenPrecompile, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 use crate::{mempool::MempoolError, server::error::PoolServerError};
 
@@ -124,6 +125,25 @@ impl From<MempoolError> for ProtoMempoolError {
                     OperationAlreadyKnownError {},
                 )),
             },
+            MempoolError::MultipleRolesViolation(entity) => ProtoMempoolError {
+                error: Some(mempool_error::Error::MultipleRolesViolation(
+                    MultipleRolesViolation {
+                        entity: Some((&entity).into()),
+                    },
+                )),
+            },
+            MempoolError::AssociatedStorageIsAlternateSender => ProtoMempoolError {
+                error: Some(mempool_error::Error::AssociatedStorageIsAlternateSender(
+                    AssociatedStorageIsAlternateSender {},
+                )),
+            },
+            MempoolError::SenderAddressUsedAsAlternateEntity(addr) => ProtoMempoolError {
+                error: Some(mempool_error::Error::SenderAddressUsedAsAlternateEntity(
+                    SenderAddressUsedAsAlternateEntity {
+                        sender_address: addr.as_bytes().to_vec(),
+                    },
+                )),
+            },
             MempoolError::ReplacementUnderpriced(fee, priority_fee) => ProtoMempoolError {
                 error: Some(mempool_error::Error::ReplacementUnderpriced(
                     ReplacementUnderpricedError {
@@ -152,6 +172,16 @@ impl From<MempoolError> for ProtoMempoolError {
                     DiscardedOnInsertError {},
                 )),
             },
+            MempoolError::PaymasterBalanceTooLow(current_balance, required_balance) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::PaymasterBalanceTooLow(
+                        PaymasterBalanceTooLow {
+                            current_balance: to_le_bytes(current_balance),
+                            required_balance: to_le_bytes(required_balance),
+                        },
+                    )),
+                }
+            }
             MempoolError::PrecheckViolation(violation) => ProtoMempoolError {
                 error: Some(mempool_error::Error::PrecheckViolation(violation.into())),
             },
@@ -393,6 +423,13 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     InvalidSignature {},
                 )),
             },
+            SimulationViolation::UnstakedPaymasterContext => ProtoSimulationViolationError {
+                violation: Some(
+                    simulation_violation_error::Violation::UnstakedPaymasterContext(
+                        UnstakedPaymasterContext {},
+                    ),
+                ),
+            },
             SimulationViolation::UnintendedRevertWithMessage(et, reason, maybe_address) => {
                 ProtoSimulationViolationError {
                     violation: Some(
@@ -455,11 +492,14 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
-            SimulationViolation::NotStaked(entity, min_stake, min_unstake_delay) => {
+            SimulationViolation::NotStaked(stake_data) => {
+                let (entity, accessed, slot, min_stake, min_unstake_delay) = *stake_data;
                 ProtoSimulationViolationError {
                     violation: Some(simulation_violation_error::Violation::NotStaked(
                         NotStaked {
                             entity: Some((&entity).into()),
+                            accessed,
+                            slot: to_le_bytes(slot),
                             min_stake: to_le_bytes(min_stake),
                             min_unstake_delay: to_le_bytes(min_unstake_delay),
                         },
@@ -482,6 +522,11 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
             SimulationViolation::DidNotRevert => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::DidNotRevert(
                     DidNotRevert {},
+                )),
+            },
+            SimulationViolation::UnstakedAggregator => ProtoSimulationViolationError {
+                violation: Some(simulation_violation_error::Violation::UnstakedAggregator(
+                    UnstakedAggregator {},
                 )),
             },
             SimulationViolation::WrongNumberOfPhases(num_phases) => ProtoSimulationViolationError {
@@ -548,6 +593,9 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             Some(simulation_violation_error::Violation::InvalidSignature(_)) => {
                 SimulationViolation::InvalidSignature
             }
+            Some(simulation_violation_error::Violation::UnstakedPaymasterContext(_)) => {
+                SimulationViolation::UnstakedPaymasterContext
+            }
             Some(simulation_violation_error::Violation::UnintendedRevertWithMessage(e)) => {
                 let entity = e.entity.context("should have entity in error")?;
                 let addr = if entity.address.is_empty() {
@@ -591,11 +639,13 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 )
             }
             Some(simulation_violation_error::Violation::NotStaked(e)) => {
-                SimulationViolation::NotStaked(
+                SimulationViolation::NotStaked(Box::new((
                     (&e.entity.context("should have entity in error")?).try_into()?,
+                    e.accessed,
+                    from_bytes(&e.slot)?,
                     from_bytes(&e.min_stake)?,
                     from_bytes(&e.min_unstake_delay)?,
-                )
+                )))
             }
             Some(simulation_violation_error::Violation::UnintendedRevert(e)) => {
                 let address = e.entity.clone().unwrap().address;
@@ -613,6 +663,9 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             }
             Some(simulation_violation_error::Violation::DidNotRevert(_)) => {
                 SimulationViolation::DidNotRevert
+            }
+            Some(simulation_violation_error::Violation::UnstakedAggregator(_)) => {
+                SimulationViolation::UnstakedAggregator
             }
             Some(simulation_violation_error::Violation::WrongNumberOfPhases(e)) => {
                 SimulationViolation::WrongNumberOfPhases(e.num_phases)

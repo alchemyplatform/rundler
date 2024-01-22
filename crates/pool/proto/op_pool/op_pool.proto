@@ -382,6 +382,10 @@ message MempoolError {
     UnsupportedAggregatorError unsupported_aggregator = 9;
     InvalidSignatureError invalid_signature = 10;
     UnknownEntryPointError unknown_entry_point = 11;
+    MultipleRolesViolation multiple_roles_violation = 12;
+    SenderAddressUsedAsAlternateEntity sender_address_used_as_alternate_entity = 13;
+    AssociatedStorageIsAlternateSender associated_storage_is_alternate_sender = 14;
+    PaymasterBalanceTooLow paymaster_balance_too_low = 15;
   }
 }
 
@@ -389,11 +393,18 @@ message UnknownEntryPointError {
   bytes entry_point = 1;
 }
 
+message AssociatedStorageIsAlternateSender {}
+
 message OperationAlreadyKnownError {}
 
 message ReplacementUnderpricedError {
   bytes current_fee = 1;
   bytes current_priority_fee = 2;
+}
+
+message PaymasterBalanceTooLow {
+  bytes current_balance = 1;
+  bytes required_balance = 2;
 }
 
 message MaxOperationsReachedError {
@@ -403,6 +414,14 @@ message MaxOperationsReachedError {
 
 message EntityThrottledError {
   Entity entity = 1;
+}
+
+message MultipleRolesViolation {
+  Entity entity = 1;
+}
+
+message SenderAddressUsedAsAlternateEntity {
+  bytes sender_address = 1;
 }
 
 message DiscardedOnInsertError {}
@@ -516,10 +535,16 @@ message SimulationViolationError {
     CalledBannedEntryPointMethod called_banned_entry_point_method = 14;
     CodeHashChanged code_hash_changed = 15;
     AggregatorValidationFailed aggregator_validation_failed = 16;
+    UnstakedPaymasterContext unstaked_paymaster_context = 17;
+    UnstakedAggregator unstaked_aggregator = 18;
   }
 }
 
 message InvalidSignature {}
+
+message UnstakedAggregator {}
+
+message UnstakedPaymasterContext {}
 
 message UnintendedRevertWithMessage {
   Entity entity = 1;
@@ -550,8 +575,10 @@ message InvalidStorageAccess {
 
 message NotStaked {
   Entity entity = 1;
-  bytes min_stake = 2;
-  bytes min_unstake_delay = 3;
+  string accessed = 2;
+  bytes slot = 3;
+  bytes min_stake = 4;
+  bytes min_unstake_delay = 5;
 }
 
 message UnintendedRevert {

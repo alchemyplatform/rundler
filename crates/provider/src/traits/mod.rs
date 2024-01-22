@@ -30,3 +30,8 @@ mod stake_manager;
 #[cfg(feature = "test-utils")]
 pub use stake_manager::MockStakeManager;
 pub use stake_manager::StakeManager;
+
+mod paymaster_helper;
+#[cfg(feature = "test-utils")]
+pub use paymaster_helper::MockPaymasterHelper;
+pub use paymaster_helper::PaymasterHelper;

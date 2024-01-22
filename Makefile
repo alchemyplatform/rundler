@@ -29,3 +29,7 @@ test-spec-integrated: ## Run spec tests in integrated mode
 test-spec-modular: ## Run spec tests in modular mode
 	test/spec-tests/remote/run-spec-tests.sh
 	
+.PHONY: fmt
+fmt: ## format code with nightly rust
+	cargo +nightly fmt
+

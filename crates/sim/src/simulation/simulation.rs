@@ -32,6 +32,7 @@ use rundler_types::{
     contracts::i_entry_point::FailedOp, Entity, EntityType, StorageSlot, UserOperation,
     ValidTimeRange,
 };
+use rundler_utils::eth::format_address;
 
 use super::{
     mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
@@ -72,6 +73,9 @@ pub struct SimulationResult {
     pub account_is_staked: bool,
     /// List of all addresses accessed during validation
     pub accessed_addresses: HashSet<Address>,
+    /// List of addresses that have associated storage slots
+    /// accessed within the simulation
+    pub associated_addresses: HashSet<Address>,
     /// Expected storage values for all accessed slots during validation
     pub expected_storage: ExpectedStorage,
     /// Whether the operation requires a post-op
@@ -271,11 +275,15 @@ where
                 entity_infos: Some(entity_infos),
             })?
         };
+
+        let associated_addresses = tracer_out.associated_slots_by_address.addresses();
+
         Ok(ValidationContext {
             block_id,
             entity_infos,
             tracer_out,
             entry_point_out,
+            associated_addresses,
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
             initcode_length: op.init_code.len(),
@@ -323,7 +331,7 @@ where
         }
 
         let sender_address = entity_infos.sender_address();
-        let mut entity_types_needing_stake: HashMap<EntityType, Entity> = HashMap::new();
+        let mut entity_types_needing_stake: HashMap<Entity, (String, U256)> = HashMap::new();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let kind = entity_type_from_simulation_phase(index).unwrap();
@@ -364,11 +372,8 @@ where
                 && !entry_point_out.return_info.paymaster_context.is_empty()
                 && !entity_info.is_staked
             {
-                entity_type_needs_stake(
-                    &mut entity_types_needing_stake,
-                    EntityType::Paymaster,
-                    entity_infos,
-                );
+                // [EREP-050]
+                violations.push(SimulationViolation::UnstakedPaymasterContext);
             }
 
             let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
@@ -389,13 +394,9 @@ where
 
                 match violation {
                     StorageRestriction::Allowed => {}
-                    StorageRestriction::NeedsStake(e) => {
+                    StorageRestriction::NeedsStake(e, slot) => {
                         if !entity_info.is_staked {
-                            entity_type_needs_stake(
-                                &mut entity_types_needing_stake,
-                                e,
-                                entity_infos,
-                            );
+                            entity_types_needing_stake.insert(entity, (e, slot));
                         }
                     }
                     StorageRestriction::Banned(slot) => {
@@ -431,21 +432,20 @@ where
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             if !is_staked(aggregator_info.stake_info, self.sim_settings) {
-                entity_type_needs_stake(
-                    &mut entity_types_needing_stake,
-                    EntityType::Aggregator,
-                    entity_infos,
-                );
+                violations.push(SimulationViolation::UnstakedAggregator)
             }
         }
 
-        for ent in entity_types_needing_stake.values() {
+        for (ent, (accessed, slot)) in entity_types_needing_stake {
             entities_needing_stake.push(ent.kind);
-            violations.push(SimulationViolation::NotStaked(
-                *ent,
+
+            violations.push(SimulationViolation::NotStaked(Box::new((
+                ent,
+                accessed,
+                slot,
                 self.sim_settings.min_stake_value.into(),
                 self.sim_settings.min_unstake_delay.into(),
-            ));
+            ))));
         }
 
         if tracer_out.factory_called_create2_twice {
@@ -586,6 +586,7 @@ where
             entry_point_out,
             entities_needing_stake,
             accessed_addresses,
+            associated_addresses,
             ..
         } = context;
         let ValidationOutput {
@@ -618,6 +619,7 @@ where
             entities_needing_stake,
             account_is_staked,
             accessed_addresses,
+            associated_addresses,
             expected_storage: tracer_out.expected_storage,
             requires_post_op: !paymaster_context.is_empty(),
             entity_infos: context.entity_infos,
@@ -661,8 +663,14 @@ pub enum SimulationViolation {
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     /// The user operation contained an entity that accessed storage without being staked
-    #[display("{0.kind} must be staked")]
-    NotStaked(Entity, U256, U256),
+    #[display("Unstaked {0.0.kind} accessed {0.1} slot {0.2}")]
+    NotStaked(Box<(Entity, String, U256, U256, U256)>),
+    /// The user operation uses a paymaster that returns a context while being unstaked
+    #[display("Unstaked paymaster must not return context")]
+    UnstakedPaymasterContext,
+    /// The user operation uses an aggregator entity and it is not staked
+    #[display("An aggregator must be staked, regardless of storager usage")]
+    UnstakedAggregator,
     /// Simulation reverted with an unintended reason, containing a message
     #[display("reverted while simulating {0} validation: {1}")]
     UnintendedRevertWithMessage(EntityType, String, Option<Address>),
@@ -721,6 +729,7 @@ struct ValidationContext {
     entities_needing_stake: Vec<EntityType>,
     accessed_addresses: HashSet<Address>,
     initcode_length: usize,
+    associated_addresses: HashSet<Address>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -844,26 +853,10 @@ fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
         && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
 }
 
-fn entity_type_needs_stake(
-    storage_restictions: &mut HashMap<EntityType, Entity>,
-    entity: EntityType,
-    entity_infos: &EntityInfos,
-) {
-    let entity_info = entity_infos.get(entity).unwrap_or_default();
-
-    storage_restictions.insert(
-        entity,
-        Entity {
-            kind: entity,
-            address: entity_info.address,
-        },
-    );
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum StorageRestriction {
     Allowed,
-    NeedsStake(EntityType),
+    NeedsStake(String, U256),
     Banned(U256),
 }
 
@@ -932,10 +925,18 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
         }
     }
 
-    if let Some(_required_stake_slot) = required_stake_slot {
+    if let Some(required_stake_slot) = required_stake_slot {
         if let Some(entity_type) = entity_infos.type_from_address(address) {
-            return Ok(StorageRestriction::NeedsStake(entity_type));
+            return Ok(StorageRestriction::NeedsStake(
+                entity_type.to_str().to_string(),
+                *required_stake_slot,
+            ));
         }
+
+        return Ok(StorageRestriction::NeedsStake(
+            format_address(address),
+            *required_stake_slot,
+        ));
     }
 
     Ok(StorageRestriction::Allowed)
@@ -1242,6 +1243,7 @@ mod tests {
 
         let mut validation_context = ValidationContext {
             initcode_length: 10,
+            associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
             entity_infos: EntityInfos::new(
                 Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
