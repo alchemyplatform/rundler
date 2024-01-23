@@ -429,7 +429,7 @@ where
                     error!("Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle.");
                     continue;
                 };
-                let max_cost = gas::user_operation_max_gas_cost(&op);
+                let max_cost = op.max_op_cost();
                 if *balance < max_cost {
                     info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
                     paymasters_to_reject.push(po.entity_infos.paymaster.unwrap());
