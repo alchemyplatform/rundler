@@ -115,6 +115,21 @@ impl From<RundlerEntityType> for EntityType {
     }
 }
 
+impl From<Option<RundlerEntityType>> for EntityType {
+    fn from(entity: Option<RundlerEntityType>) -> Self {
+        if let Some(e) = entity {
+            match e {
+                RundlerEntityType::Account => EntityType::Account,
+                RundlerEntityType::Paymaster => EntityType::Paymaster,
+                RundlerEntityType::Aggregator => EntityType::Aggregator,
+                RundlerEntityType::Factory => EntityType::Factory,
+            }
+        } else {
+            EntityType::Unspecified
+        }
+    }
+}
+
 impl TryFrom<&Entity> for RundlerEntity {
     type Error = ConversionError;
 

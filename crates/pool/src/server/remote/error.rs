@@ -13,7 +13,7 @@
 
 use anyhow::{bail, Context};
 use ethers::types::Opcode;
-use rundler_sim::{PrecheckViolation, SimulationViolation, ViolationOpCode};
+use rundler_sim::{NeedsStakeInformation, PrecheckViolation, SimulationViolation, ViolationOpCode};
 use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::StorageSlot;
 
@@ -492,20 +492,18 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
-            SimulationViolation::NotStaked(stake_data) => {
-                let (entity, accessed, slot, min_stake, min_unstake_delay) = *stake_data;
-                ProtoSimulationViolationError {
-                    violation: Some(simulation_violation_error::Violation::NotStaked(
-                        NotStaked {
-                            entity: Some((&entity).into()),
-                            accessed,
-                            slot: to_le_bytes(slot),
-                            min_stake: to_le_bytes(min_stake),
-                            min_unstake_delay: to_le_bytes(min_unstake_delay),
-                        },
-                    )),
-                }
-            }
+            SimulationViolation::NotStaked(stake_data) => ProtoSimulationViolationError {
+                violation: Some(simulation_violation_error::Violation::NotStaked(
+                    NotStaked {
+                        entity: Some((&stake_data.entity).into()),
+                        accessed_address: stake_data.accessed_address.as_bytes().to_vec(),
+                        accessed_entity: EntityType::from(stake_data.accessed_entity) as i32,
+                        slot: to_le_bytes(stake_data.slot),
+                        min_stake: to_le_bytes(stake_data.min_stake),
+                        min_unstake_delay: to_le_bytes(stake_data.min_unstake_delay),
+                    },
+                )),
+            },
             SimulationViolation::UnintendedRevert(et, maybe_address) => {
                 ProtoSimulationViolationError {
                     violation: Some(simulation_violation_error::Violation::UnintendedRevert(
@@ -639,13 +637,21 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 )
             }
             Some(simulation_violation_error::Violation::NotStaked(e)) => {
-                SimulationViolation::NotStaked(Box::new((
-                    (&e.entity.context("should have entity in error")?).try_into()?,
-                    e.accessed,
-                    from_bytes(&e.slot)?,
-                    from_bytes(&e.min_stake)?,
-                    from_bytes(&e.min_unstake_delay)?,
-                )))
+                let accessed_entity = match rundler_types::EntityType::try_from(
+                    EntityType::try_from(e.accessed_entity).context("unknown entity type")?,
+                ) {
+                    Ok(entity_type) => Some(entity_type),
+                    Err(_) => None,
+                };
+
+                SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
+                    entity: (&e.entity.context("should have entity in error")?).try_into()?,
+                    accessed_address: from_bytes(&e.accessed_address)?,
+                    accessed_entity,
+                    slot: from_bytes(&e.slot)?,
+                    min_stake: from_bytes(&e.min_stake)?,
+                    min_unstake_delay: from_bytes(&e.min_unstake_delay)?,
+                }))
             }
             Some(simulation_violation_error::Violation::UnintendedRevert(e)) => {
                 let address = e.entity.clone().unwrap().address;

@@ -158,7 +158,7 @@ impl AllowlistEntry {
             }
             AllowRule::NotStaked => {
                 if let SimulationViolation::NotStaked(stake_data) = violation {
-                    self.entity.is_allowed(&stake_data.0)
+                    self.entity.is_allowed(&stake_data.entity)
                 } else {
                     false
                 }
@@ -204,7 +204,7 @@ mod tests {
     use rundler_types::StorageSlot;
 
     use super::*;
-    use crate::simulation::ViolationOpCode;
+    use crate::simulation::{simulation::NeedsStakeInformation, ViolationOpCode};
 
     #[test]
     fn test_allow_entity_any() {
@@ -436,28 +436,32 @@ mod tests {
         let entity_addr = Address::random();
         let entry = AllowlistEntry::new(AllowEntity::Address(entity_addr), AllowRule::NotStaked);
 
-        let violation = SimulationViolation::NotStaked(Box::new((
-            Entity {
+        let violation = SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
+            entity: Entity {
                 kind: EntityType::Account,
                 address: entity_addr,
             },
-            "paymaster".to_string(),
-            U256::zero(),
-            U256::zero(),
-            U256::zero(),
-        )));
+            accessed_entity: Some(EntityType::Paymaster),
+            accessed_address: Address::random(),
+            slot: U256::zero(),
+            min_stake: U256::zero(),
+            min_unstake_delay: U256::zero(),
+        }));
+
         assert!(entry.is_allowed(&violation));
 
-        let violation = SimulationViolation::NotStaked(Box::new((
-            Entity {
+        let violation = SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
+            entity: Entity {
                 kind: EntityType::Account,
-                address: Address::random(),
+                address: entity_addr,
             },
-            "paymaster".to_string(),
-            U256::zero(),
-            U256::zero(),
-            U256::zero(),
-        )));
+            accessed_entity: Some(EntityType::Paymaster),
+            accessed_address: Address::random(),
+            slot: U256::zero(),
+            min_stake: U256::zero(),
+            min_unstake_delay: U256::zero(),
+        }));
+
         assert!(!entry.is_allowed(&violation));
     }
 

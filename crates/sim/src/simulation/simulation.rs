@@ -11,8 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
+    fmt::{Display, Formatter},
     mem,
     ops::Deref,
     sync::Arc,
@@ -32,7 +34,6 @@ use rundler_types::{
     contracts::i_entry_point::FailedOp, Entity, EntityType, StorageSlot, UserOperation,
     ValidTimeRange,
 };
-use rundler_utils::eth::format_address;
 
 use super::{
     mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
@@ -331,7 +332,8 @@ where
         }
 
         let sender_address = entity_infos.sender_address();
-        let mut entity_types_needing_stake: HashMap<Entity, (String, U256)> = HashMap::new();
+        let mut entity_types_needing_stake: HashMap<Entity, (Address, Option<EntityType>, U256)> =
+            HashMap::new();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let kind = entity_type_from_simulation_phase(index).unwrap();
@@ -394,9 +396,9 @@ where
 
                 match violation {
                     StorageRestriction::Allowed => {}
-                    StorageRestriction::NeedsStake(e, slot) => {
+                    StorageRestriction::NeedsStake(addr, entity_type, slot) => {
                         if !entity_info.is_staked {
-                            entity_types_needing_stake.insert(entity, (e, slot));
+                            entity_types_needing_stake.insert(entity, (addr, entity_type, slot));
                         }
                     }
                     StorageRestriction::Banned(slot) => {
@@ -436,16 +438,19 @@ where
             }
         }
 
-        for (ent, (accessed, slot)) in entity_types_needing_stake {
+        for (ent, (accessed_address, accessed_entity, slot)) in entity_types_needing_stake {
             entities_needing_stake.push(ent.kind);
 
-            violations.push(SimulationViolation::NotStaked(Box::new((
-                ent,
-                accessed,
-                slot,
-                self.sim_settings.min_stake_value.into(),
-                self.sim_settings.min_unstake_delay.into(),
-            ))));
+            violations.push(SimulationViolation::NotStaked(Box::new(
+                NeedsStakeInformation {
+                    entity: ent,
+                    accessed_address,
+                    accessed_entity,
+                    slot,
+                    min_stake: self.sim_settings.min_stake_value.into(),
+                    min_unstake_delay: self.sim_settings.min_unstake_delay.into(),
+                },
+            )));
         }
 
         if tracer_out.factory_called_create2_twice {
@@ -663,8 +668,8 @@ pub enum SimulationViolation {
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     /// The user operation contained an entity that accessed storage without being staked
-    #[display("Unstaked {0.0.kind} accessed {0.1} slot {0.2}")]
-    NotStaked(Box<(Entity, String, U256, U256, U256)>),
+    #[display("{0}")]
+    NotStaked(Box<NeedsStakeInformation>),
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[display("Unstaked paymaster must not return context")]
     UnstakedPaymasterContext,
@@ -856,8 +861,40 @@ fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum StorageRestriction {
     Allowed,
-    NeedsStake(String, U256),
+    NeedsStake(Address, Option<EntityType>, U256),
     Banned(U256),
+}
+
+/// Information about a storage violation based on stake status
+#[derive(Debug, PartialEq, Clone, PartialOrd, Eq, Ord)]
+pub struct NeedsStakeInformation {
+    /// Entity of stake information
+    pub entity: Entity,
+    /// Address that was accessed while unstaked
+    pub accessed_address: Address,
+    /// Type of accessed entity if it is a known entity
+    pub accessed_entity: Option<EntityType>,
+    /// The accessed slot number
+    pub slot: U256,
+    /// Minumum stake
+    pub min_stake: U256,
+    /// Minumum delay after an unstake event
+    pub min_unstake_delay: U256,
+}
+
+impl Display for NeedsStakeInformation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Entity: {:?}, Accessed Address: {}, Accessed Entity: {:?}, Slot: {}, Min Stake: {}, Min Unstake Delay: {}",
+            self.entity,
+            self.accessed_address,
+            self.accessed_entity,
+            self.slot,
+            self.min_stake,
+            self.min_unstake_delay
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -928,13 +965,15 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
     if let Some(required_stake_slot) = required_stake_slot {
         if let Some(entity_type) = entity_infos.type_from_address(address) {
             return Ok(StorageRestriction::NeedsStake(
-                entity_type.to_str().to_string(),
+                address,
+                Some(entity_type),
                 *required_stake_slot,
             ));
         }
 
         return Ok(StorageRestriction::NeedsStake(
-            format_address(address),
+            address,
+            None,
             *required_stake_slot,
         ));
     }
