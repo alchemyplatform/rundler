@@ -63,7 +63,7 @@ impl UserOperation {
     }
 
     /// Returns the maximum cost, in wei, of this user operation
-    pub fn max_op_cost(&self) -> U256 {
+    pub fn max_gas_cost(&self) -> U256 {
         let mul = if self.paymaster().is_some() { 3 } else { 1 };
         self.max_fee_per_gas
             * (self.pre_verification_gas + self.call_gas_limit + self.verification_gas_limit * mul)
