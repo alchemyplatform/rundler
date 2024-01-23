@@ -310,7 +310,7 @@ mod tests {
             ..Default::default()
         };
 
-        let uo_max_cost = uo.clone().max_op_cost();
+        let uo_max_cost = uo.clone().max_gas_cost();
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
             pending_balance: paymaster_balance,
@@ -431,7 +431,7 @@ mod tests {
             ..Default::default()
         };
 
-        let uo_max_cost = uo.clone().max_op_cost();
+        let uo_max_cost = uo.clone().max_gas_cost();
 
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
@@ -514,7 +514,7 @@ mod tests {
             confirmed_balance: paymaster_balance,
         };
 
-        let max_op_cost = uo.clone().max_op_cost();
+        let max_op_cost = uo.clone().max_gas_cost();
 
         let po = demo_pool_op(uo);
 
