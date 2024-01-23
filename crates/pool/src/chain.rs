@@ -67,8 +67,12 @@ pub struct ChainUpdate {
     pub reorg_depth: u64,
     pub mined_ops: Vec<MinedOp>,
     pub unmined_ops: Vec<MinedOp>,
+    /// List of on-chain entity deposits made in the most recent block
     pub entity_deposits: Vec<DepositInfo>,
+    /// List of entity deposits that have been unmined due to a reorg
     pub unmined_entity_deposits: Vec<DepositInfo>,
+    /// Boolean to state if the most recent chain update had a reorg
+    /// that was larger than the existing history that has been tracked
     pub reorg_larger_than_history: bool,
 }
 
