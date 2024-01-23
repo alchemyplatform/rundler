@@ -186,10 +186,6 @@ impl<P: Provider> Chain<P> {
             "new block number {new_block_number} should be greater than start of history (current block: {current_block_number})"
         );
 
-        if new_block_number <= current_block_number.saturating_sub(self.settings.history_size) {
-            return self.reset_and_initialize(new_head).await;
-        }
-
         if current_block_number + self.settings.history_size < new_block_number {
             warn!(
                 "New block {new_block_number} number is {} blocks ahead of the previously known head. Chain history will skip ahead.",
