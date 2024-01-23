@@ -3,7 +3,7 @@ pragma solidity ^0.8.12;
 
 import "account-abstraction/interfaces/IStakeManager.sol";
 
-contract IPaymasterHelper {
+contract PaymasterHelper {
     IStakeManager public stakeManager;
 
     constructor(address _stakeManagerAddress) {

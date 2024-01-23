@@ -16,19 +16,21 @@ use ethers::{
     providers::Middleware,
     types::{Address, U256},
 };
-use rundler_types::{contracts::i_paymaster_helper::IPaymasterHelper, DepositInfo};
+use rundler_types::{
+    contracts::paymaster_helper::PaymasterHelper as PaymasterHelperContract, DepositInfo,
+};
 
 use crate::PaymasterHelper;
 
 #[async_trait::async_trait]
-impl<M> PaymasterHelper for IPaymasterHelper<M>
+impl<M> PaymasterHelper for PaymasterHelperContract<M>
 where
     M: Middleware + 'static,
 {
     async fn get_balances(&self, addresses: Vec<Address>) -> Result<Vec<U256>> {
-        Ok(IPaymasterHelper::get_balances(self, addresses).await?)
+        Ok(PaymasterHelperContract::get_balances(self, addresses).await?)
     }
     async fn get_deposit_info(&self, address: Address) -> Result<DepositInfo> {
-        Ok(IPaymasterHelper::get_deposit_info(self, address).await?)
+        Ok(PaymasterHelperContract::get_deposit_info(self, address).await?)
     }
 }
