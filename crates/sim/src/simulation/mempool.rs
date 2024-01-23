@@ -453,7 +453,7 @@ mod tests {
         let violation = SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
             entity: Entity {
                 kind: EntityType::Account,
-                address: entity_addr,
+                address: Address::random(),
             },
             accessed_entity: Some(EntityType::Paymaster),
             accessed_address: Address::random(),
