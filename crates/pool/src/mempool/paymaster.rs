@@ -136,7 +136,7 @@ impl PaymasterTracker {
         paymaster_metadata: &PaymasterMetadata,
     ) -> MempoolResult<()> {
         let id = po.uo.id();
-        let max_op_cost = po.uo.max_op_cost();
+        let max_op_cost = po.uo.max_gas_cost();
 
         if self.paymaster_exists(paymaster_metadata.address) {
             return self.update_paymaster_balance(&id, paymaster_metadata.address, max_op_cost);

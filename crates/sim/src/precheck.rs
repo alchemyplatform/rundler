@@ -284,7 +284,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
             }
         }
-        let max_gas_cost = op.max_op_cost();
+        let max_gas_cost = op.max_gas_cost();
         if payer_funds < max_gas_cost {
             if op.paymaster_and_data.is_empty() {
                 return Some(PrecheckViolation::SenderFundsTooLow(
