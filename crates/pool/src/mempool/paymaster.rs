@@ -115,7 +115,7 @@ impl PaymasterTracker {
     pub(crate) fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
         if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
             return Some(PaymasterMetadata {
-                balance: paymaster_balance.pending_balance(),
+                pending_balance: paymaster_balance.pending_balance(),
                 confirmed_balance: paymaster_balance.confirmed,
                 address: paymaster,
             });
@@ -151,16 +151,16 @@ impl PaymasterTracker {
         paymaster_metadata: &PaymasterMetadata,
         max_op_cost: U256,
     ) -> MempoolResult<()> {
-        if paymaster_metadata.balance.lt(&max_op_cost) {
+        if paymaster_metadata.pending_balance.lt(&max_op_cost) {
             return Err(MempoolError::PaymasterBalanceTooLow(
                 max_op_cost,
-                paymaster_metadata.balance,
+                paymaster_metadata.pending_balance,
             ));
         }
 
         self.paymaster_balances.insert(
             paymaster_metadata.address,
-            PaymasterBalance::new(paymaster_metadata.balance, max_op_cost),
+            PaymasterBalance::new(paymaster_metadata.pending_balance, max_op_cost),
         );
 
         self.user_op_fees.insert(
@@ -313,7 +313,7 @@ mod tests {
         let uo_max_cost = uo.clone().max_op_cost();
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
-            balance: paymaster_balance,
+            pending_balance: paymaster_balance,
             confirmed_balance,
         };
 
@@ -358,7 +358,7 @@ mod tests {
 
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
-            balance: paymaster_balance,
+            pending_balance: paymaster_balance,
             confirmed_balance,
         };
 
@@ -396,7 +396,7 @@ mod tests {
 
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
-            balance: paymaster_balance,
+            pending_balance: paymaster_balance,
             confirmed_balance: paymaster_balance,
         };
 
@@ -435,7 +435,7 @@ mod tests {
 
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
-            balance: paymaster_balance,
+            pending_balance: paymaster_balance,
             confirmed_balance: paymaster_balance,
         };
 
@@ -510,7 +510,7 @@ mod tests {
 
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
-            balance: paymaster_balance,
+            pending_balance: paymaster_balance,
             confirmed_balance: paymaster_balance,
         };
 

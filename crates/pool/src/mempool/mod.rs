@@ -203,9 +203,13 @@ pub struct PoolOperation {
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Copy)]
 pub struct PaymasterMetadata {
+    /// Paymaster address
     pub address: Address,
+    /// The on-chain balance of the paymaster
     pub confirmed_balance: U256,
-    pub balance: U256,
+    /// The pending balance is the confirm balance subtracted by
+    /// the max cost of all the pending user operations that use the paymaster  
+    pub pending_balance: U256,
 }
 
 impl PoolOperation {

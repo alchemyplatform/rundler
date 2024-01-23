@@ -510,7 +510,7 @@ where
 
         let paymaster_meta = PaymasterMetadata {
             address: paymaster,
-            balance,
+            pending_balance: balance,
             confirmed_balance: balance,
         };
 
@@ -764,7 +764,7 @@ mod tests {
             .paymaster_metadata(paymaster)
             .unwrap();
 
-        assert_eq!(metadata.balance, 910.into());
+        assert_eq!(metadata.pending_balance, 910.into());
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
         // mine the first op with actual gas cost of 10
@@ -800,7 +800,7 @@ mod tests {
             .pool
             .paymaster_metadata(paymaster)
             .unwrap();
-        assert_eq!(metadata.balance, 930.into());
+        assert_eq!(metadata.pending_balance, 930.into());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -829,7 +829,7 @@ mod tests {
             .pool
             .paymaster_metadata(paymaster)
             .unwrap();
-        assert_eq!(metadata.balance, 910.into());
+        assert_eq!(metadata.pending_balance, 910.into());
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
@@ -1176,7 +1176,7 @@ mod tests {
             .pool
             .paymaster_metadata(paymaster)
             .unwrap();
-        assert_eq!(paymaster_balance.balance, U256::from(940));
+        assert_eq!(paymaster_balance.pending_balance, U256::from(940));
     }
 
     #[tokio::test]
