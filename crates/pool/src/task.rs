@@ -21,7 +21,9 @@ use rundler_sim::{
     Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
 };
 use rundler_task::Task;
-use rundler_types::contracts::{i_entry_point::IEntryPoint, i_paymaster_helper::IPaymasterHelper};
+use rundler_types::contracts::{
+    i_entry_point::IEntryPoint, paymaster_helper::PaymasterHelper as PaymasterHelperContract,
+};
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -171,8 +173,8 @@ impl PoolTask {
         tokio::spawn(async move { reputation_runner.run().await });
 
         let i_entry_point = IEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
-        let i_paymaster_helper =
-            IPaymasterHelper::new(pool_config.entry_point, Arc::clone(&provider));
+        let paymaster_helper =
+            PaymasterHelperContract::new(pool_config.entry_point, Arc::clone(&provider));
 
         let simulate_validation_tracer =
             SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
@@ -196,7 +198,7 @@ impl PoolTask {
             prechecker,
             simulator,
             i_entry_point,
-            i_paymaster_helper,
+            paymaster_helper,
         ))
     }
 }
