@@ -1022,14 +1022,14 @@ mod tests {
         }
     }
 
-    /// Helper that makes fake hashes.
+    // Helper that makes fake hashes.
     fn hash(n: u8) -> H256 {
         let mut hash = H256::zero();
         hash.0[0] = n;
         hash
     }
 
-    /// Helper that makes fake addresses.
+    // Helper that makes fake addresses.
     fn addr(n: u8) -> Address {
         let mut address = Address::zero();
         address.0[0] = n;
