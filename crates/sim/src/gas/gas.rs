@@ -203,13 +203,6 @@ pub fn user_operation_pre_verification_gas_limit(
     }
 }
 
-/// Returns the maximum cost, in wei, of this user operation
-pub fn user_operation_max_gas_cost(uo: &UserOperation) -> U256 {
-    let mul = if uo.paymaster().is_some() { 3 } else { 1 };
-    uo.max_fee_per_gas
-        * (uo.pre_verification_gas + uo.call_gas_limit + uo.verification_gas_limit * mul)
-}
-
 fn calc_static_pre_verification_gas(op: &UserOperation, include_fixed_gas_overhead: bool) -> U256 {
     let ov = GasOverheads::default();
     let encoded_op = op.clone().encode();
