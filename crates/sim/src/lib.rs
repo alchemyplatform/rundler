@@ -51,7 +51,7 @@ mod simulation;
 #[cfg(feature = "test-utils")]
 pub use simulation::MockSimulator;
 pub use simulation::{
-    EntityInfo, EntityInfos, MempoolConfig, Settings as SimulationSettings,
+    EntityInfo, EntityInfos, MempoolConfig, NeedsStakeInformation, Settings as SimulationSettings,
     SimulateValidationTracer, SimulateValidationTracerImpl, SimulationError, SimulationResult,
     SimulationViolation, Simulator, SimulatorImpl, ViolationOpCode,
 };

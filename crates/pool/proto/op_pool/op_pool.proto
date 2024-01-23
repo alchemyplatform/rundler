@@ -575,10 +575,11 @@ message InvalidStorageAccess {
 
 message NotStaked {
   Entity entity = 1;
-  string accessed = 2;
-  bytes slot = 3;
-  bytes min_stake = 4;
-  bytes min_unstake_delay = 5;
+  bytes accessed_address = 2;
+  EntityType accessed_entity = 3;
+  bytes slot = 4;
+  bytes min_stake = 5;
+  bytes min_unstake_delay = 6;
 }
 
 message UnintendedRevert {

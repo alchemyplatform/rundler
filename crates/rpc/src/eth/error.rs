@@ -266,10 +266,11 @@ impl From<SimulationViolation> for EthRpcError {
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
             }
-            SimulationViolation::NotStaked(stake_data) => {
-                let (entity, _, _, min_stake, min_unstake_delay) = *stake_data;
-                Self::StakeTooLow(StakeTooLowData::new(entity, min_stake, min_unstake_delay))
-            }
+            SimulationViolation::NotStaked(stake_data) => Self::StakeTooLow(StakeTooLowData::new(
+                stake_data.entity,
+                stake_data.min_stake,
+                stake_data.min_unstake_delay,
+            )),
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             _ => Self::SimulationFailed(value),
         }

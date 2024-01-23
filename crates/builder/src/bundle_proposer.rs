@@ -1115,7 +1115,7 @@ impl ProposalContext {
                     self.add_entity_update(entity, entity_infos)
                 }
                 SimulationViolation::NotStaked(stake_data) => {
-                    self.add_entity_update(stake_data.0, entity_infos)
+                    self.add_entity_update(stake_data.entity, entity_infos)
                 }
                 SimulationViolation::UnintendedRevertWithMessage(entity_type, message, address) => {
                     match &message[..4] {
