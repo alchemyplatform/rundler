@@ -11,10 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use core::fmt;
 use std::{
     collections::{HashMap, HashSet},
-    fmt::{Display, Formatter},
     mem,
     ops::Deref,
     sync::Arc,
@@ -668,7 +666,7 @@ pub enum SimulationViolation {
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     /// The user operation contained an entity that accessed storage without being staked
-    #[display("{}")]
+    #[display("Unstaked {0.entity} accessed {0.accessed_address} ({0.accessed_entity:?}) at slot {0.slot}")]
     NotStaked(Box<NeedsStakeInformation>),
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[display("Unstaked paymaster must not return context")]
@@ -880,21 +878,6 @@ pub struct NeedsStakeInformation {
     pub min_stake: U256,
     /// Minumum delay after an unstake event
     pub min_unstake_delay: U256,
-}
-
-impl Display for NeedsStakeInformation {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Entity: {:?}, Accessed Address: {}, Accessed Entity: {:?}, Slot: {}, Min Stake: {}, Min Unstake Delay: {}",
-            self.entity,
-            self.accessed_address,
-            self.accessed_entity,
-            self.slot,
-            self.min_stake,
-            self.min_unstake_delay
-        )
-    }
 }
 
 #[derive(Clone, Debug)]
