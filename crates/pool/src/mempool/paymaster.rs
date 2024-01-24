@@ -165,7 +165,7 @@ impl PaymasterTracker {
     ) -> MempoolResult<()> {
         let prev_paymaster_balance = self
             .paymaster_balances
-            .get_mut(&paymaster)
+            .get_mut(paymaster)
             .context("Previous paymaster must be valid to update")?;
 
         prev_paymaster_balance.pending = prev_paymaster_balance
