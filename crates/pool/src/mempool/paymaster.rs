@@ -145,19 +145,10 @@ impl PaymasterTracker {
             ));
         }
 
-        self.add_paymaster_balance(&id, paymaster_metadata, max_op_cost)
-    }
-
-    fn add_paymaster_balance(
-        &mut self,
-        id: &UserOperationId,
-        paymaster_metadata: &PaymasterMetadata,
-        max_op_cost: U256,
-    ) -> MempoolResult<()> {
-        if self.is_user_op_replacement(id) {
-            self.replace_existing_user_op(id, paymaster_metadata, max_op_cost)?;
+        if self.is_user_op_replacement(&id) {
+            self.replace_existing_user_op(&id, paymaster_metadata, max_op_cost)?;
         } else {
-            self.add_new_user_op(id, paymaster_metadata, max_op_cost);
+            self.add_new_user_op(&id, paymaster_metadata, max_op_cost);
         }
 
         Ok(())
@@ -178,14 +169,12 @@ impl PaymasterTracker {
             .get_mut(id)
             .context("User op must exist to replace values ")?;
 
+        let prev_limit = existing_user_op.max_op_cost;
+        let prev_paymaster = existing_user_op.paymaster;
+
         if let Some(paymaster_balance) =
             self.paymaster_balances.get_mut(&paymaster_metadata.address)
         {
-            let prev_limit = existing_user_op.max_op_cost;
-            let prev_paymaster = existing_user_op.paymaster;
-
-            *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
-
             // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {
                 paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
@@ -204,11 +193,7 @@ impl PaymasterTracker {
                     .saturating_add(max_op_cost);
             }
         } else {
-            let prev_limit = existing_user_op.max_op_cost;
-            let prev_paymaster = existing_user_op.paymaster;
-
-            *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
-
+            // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {
                 let prev_paymaster_balance = self
                     .paymaster_balances
@@ -224,6 +209,8 @@ impl PaymasterTracker {
                 PaymasterBalance::new(paymaster_metadata.confirmed_balance, max_op_cost),
             );
         }
+
+        *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
 
         Ok(())
     }
