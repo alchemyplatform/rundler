@@ -138,8 +138,11 @@ impl PaymasterTracker {
         let id = po.uo.id();
         let max_op_cost = po.uo.max_gas_cost();
 
-        if self.paymaster_exists(paymaster_metadata.address) {
-            return self.update_paymaster_balance(&id, paymaster_metadata.address, max_op_cost);
+        if paymaster_metadata.pending_balance.lt(&max_op_cost) {
+            return Err(MempoolError::PaymasterBalanceTooLow(
+                max_op_cost,
+                paymaster_metadata.pending_balance,
+            ));
         }
 
         self.add_paymaster_balance(&id, paymaster_metadata, max_op_cost)
@@ -151,53 +154,40 @@ impl PaymasterTracker {
         paymaster_metadata: &PaymasterMetadata,
         max_op_cost: U256,
     ) -> MempoolResult<()> {
-        if paymaster_metadata.pending_balance.lt(&max_op_cost) {
-            return Err(MempoolError::PaymasterBalanceTooLow(
-                max_op_cost,
-                paymaster_metadata.pending_balance,
-            ));
+        if self.is_user_op_replacement(id) {
+            self.replace_existing_user_op(id, paymaster_metadata, max_op_cost)?;
+        } else {
+            self.add_new_user_op(id, paymaster_metadata, max_op_cost);
         }
-
-        self.paymaster_balances.insert(
-            paymaster_metadata.address,
-            PaymasterBalance::new(paymaster_metadata.pending_balance, max_op_cost),
-        );
-
-        self.user_op_fees.insert(
-            *id,
-            UserOpFees::new(paymaster_metadata.address, max_op_cost),
-        );
 
         Ok(())
     }
 
-    fn update_paymaster_balance(
+    fn is_user_op_replacement(&self, id: &UserOperationId) -> bool {
+        self.user_op_fees.contains_key(id)
+    }
+
+    fn replace_existing_user_op(
         &mut self,
         id: &UserOperationId,
-        paymaster: Address,
+        paymaster_metadata: &PaymasterMetadata,
         max_op_cost: U256,
     ) -> MempoolResult<()> {
-        let paymaster_balance = self
-            .paymaster_balances
-            .get_mut(&paymaster)
-            .context("Paymaster must be valid to update")?;
+        let existing_user_op = self
+            .user_op_fees
+            .get_mut(id)
+            .context("User op must exist to replace values ")?;
 
-        // check there is enough balance
-        if !paymaster_balance.validate_user_op_cost(max_op_cost) {
-            return Err(MempoolError::PaymasterBalanceTooLow(
-                max_op_cost,
-                paymaster_balance.pending_balance(),
-            ));
-        }
+        if let Some(paymaster_balance) =
+            self.paymaster_balances.get_mut(&paymaster_metadata.address)
+        {
+            let prev_limit = existing_user_op.max_op_cost;
+            let prev_paymaster = existing_user_op.paymaster;
 
-        // if user op already exists and is being replaced
-        if let Some(replacement) = self.user_op_fees.get_mut(id) {
-            let prev_limit = replacement.max_op_cost;
-            let prev_paymaster = replacement.paymaster;
+            *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
 
-            *replacement = UserOpFees::new(paymaster, max_op_cost);
             // check to see if paymaster has changed
-            if prev_paymaster.ne(&paymaster) {
+            if prev_paymaster.ne(&paymaster_metadata.address) {
                 paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
 
                 //remove previous limit from data
@@ -214,14 +204,51 @@ impl PaymasterTracker {
                     .saturating_add(max_op_cost);
             }
         } else {
-            // add new user op
-            self.user_op_fees
-                .insert(*id, UserOpFees::new(paymaster, max_op_cost));
+            let prev_limit = existing_user_op.max_op_cost;
+            let prev_paymaster = existing_user_op.paymaster;
 
-            paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
+            *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
+
+            if prev_paymaster.ne(&paymaster_metadata.address) {
+                let prev_paymaster_balance = self
+                    .paymaster_balances
+                    .get_mut(&prev_paymaster)
+                    .context("Previous paymaster must be valid to update")?;
+
+                prev_paymaster_balance.pending =
+                    prev_paymaster_balance.pending.saturating_sub(prev_limit);
+            }
+
+            self.paymaster_balances.insert(
+                paymaster_metadata.address,
+                PaymasterBalance::new(paymaster_metadata.confirmed_balance, max_op_cost),
+            );
         }
 
         Ok(())
+    }
+
+    fn add_new_user_op(
+        &mut self,
+        id: &UserOperationId,
+        paymaster_metadata: &PaymasterMetadata,
+        max_op_cost: U256,
+    ) {
+        self.user_op_fees.insert(
+            *id,
+            UserOpFees::new(paymaster_metadata.address, max_op_cost),
+        );
+
+        if let Some(paymaster_balance) =
+            self.paymaster_balances.get_mut(&paymaster_metadata.address)
+        {
+            paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
+        } else {
+            self.paymaster_balances.insert(
+                paymaster_metadata.address,
+                PaymasterBalance::new(paymaster_metadata.confirmed_balance, max_op_cost),
+            );
+        }
     }
 }
 
@@ -253,14 +280,6 @@ impl PaymasterBalance {
 
     pub(crate) fn pending_balance(&self) -> U256 {
         self.confirmed.saturating_sub(self.pending)
-    }
-
-    /// check that new user op cost is within an acceptable range
-    fn validate_user_op_cost(&self, max_op_cost: U256) -> bool {
-        let temp_pending = self.pending.saturating_add(max_op_cost);
-        self.confirmed
-            .saturating_sub(temp_pending)
-            .gt(&U256::zero())
     }
 }
 
@@ -466,6 +485,85 @@ mod tests {
                 .unwrap()
                 .pending_balance(),
             paymaster_balance.saturating_sub(uo_max_cost.saturating_add(pending_paymaster_balance)),
+        );
+    }
+
+    #[test]
+    fn replacement_uo_new_paymaster() {
+        let mut paymaster_tracker = PaymasterTracker::new();
+        let paymaster_0 = Address::random();
+        let paymaster_1 = Address::random();
+
+        let paymaster_balance_0 = U256::from(100000000);
+        let paymaster_balance_1 = U256::from(200000000);
+
+        let sender = Address::random();
+        let uo = UserOperation {
+            sender,
+            call_gas_limit: 10.into(),
+            pre_verification_gas: 10.into(),
+            verification_gas_limit: 10.into(),
+            max_fee_per_gas: 1.into(),
+            ..Default::default()
+        };
+
+        let mut uo_1 = uo.clone();
+        uo_1.max_fee_per_gas = 2.into();
+
+        let max_op_cost_0 = uo.max_gas_cost();
+        let max_op_cost_1 = uo_1.max_gas_cost();
+
+        let paymaster_meta_0 = PaymasterMetadata {
+            address: paymaster_0,
+            pending_balance: paymaster_balance_0,
+            confirmed_balance: paymaster_balance_0,
+        };
+
+        let paymaster_meta_1 = PaymasterMetadata {
+            address: paymaster_1,
+            pending_balance: paymaster_balance_1,
+            confirmed_balance: paymaster_balance_1,
+        };
+
+        let po_0 = demo_pool_op(uo);
+        // Update first paymaster balance with first uo
+        paymaster_tracker
+            .add_or_update_balance(&po_0, &paymaster_meta_0)
+            .unwrap();
+
+        assert_eq!(
+            paymaster_tracker.paymaster_metadata(paymaster_0).unwrap(),
+            PaymasterMetadata {
+                address: paymaster_0,
+                confirmed_balance: paymaster_balance_0,
+                pending_balance: paymaster_balance_0.saturating_sub(max_op_cost_0),
+            }
+        );
+
+        let po_1 = demo_pool_op(uo_1);
+        // send same uo with updated fees and new paymaster
+        paymaster_tracker
+            .add_or_update_balance(&po_1, &paymaster_meta_1)
+            .unwrap();
+
+        // check previous paymaster goes back to normal balance
+        assert_eq!(
+            paymaster_tracker.paymaster_metadata(paymaster_0).unwrap(),
+            PaymasterMetadata {
+                address: paymaster_0,
+                confirmed_balance: paymaster_balance_0,
+                pending_balance: paymaster_balance_0,
+            }
+        );
+
+        // check that new paymaster has been updated correctly
+        assert_eq!(
+            paymaster_tracker.paymaster_metadata(paymaster_1).unwrap(),
+            PaymasterMetadata {
+                address: paymaster_1,
+                confirmed_balance: paymaster_balance_1,
+                pending_balance: paymaster_balance_1.saturating_sub(max_op_cost_1),
+            }
         );
     }
 
