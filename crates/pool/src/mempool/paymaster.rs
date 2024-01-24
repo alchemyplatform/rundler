@@ -158,7 +158,7 @@ impl PaymasterTracker {
         self.user_op_fees.contains_key(id)
     }
 
-    fn decrement_previous_paymaster(
+    fn decrement_previous_paymaster_balance(
         &mut self,
         paymaster: &Address,
         previous_max_op_cost: U256,
@@ -199,7 +199,7 @@ impl PaymasterTracker {
                 paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
 
                 //remove previous limit from data
-                self.decrement_previous_paymaster(&prev_paymaster, prev_max_op_cost)?;
+                self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost)?;
             } else {
                 paymaster_balance.pending = paymaster_balance
                     .pending
@@ -210,7 +210,7 @@ impl PaymasterTracker {
             // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {
                 //remove previous limit from data
-                self.decrement_previous_paymaster(&prev_paymaster, prev_max_op_cost)?;
+                self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost)?;
             }
 
             self.paymaster_balances.insert(
