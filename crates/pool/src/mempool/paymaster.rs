@@ -209,6 +209,7 @@ impl PaymasterTracker {
         } else {
             // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {
+                //remove previous limit from data
                 self.decrement_previous_paymaster(&prev_paymaster, prev_max_op_cost)?;
             }
 
