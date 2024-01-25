@@ -233,11 +233,22 @@ impl PoolInner {
         &self,
         accessed_storage: &HashSet<Address>,
         uo: &UserOperation,
+        replacement: bool,
     ) -> MempoolResult<()> {
         for storage_address in accessed_storage {
             if let Some(ec) = self.count_by_address.get(storage_address) {
-                if ec.sender().gt(&0) && uo.sender.ne(storage_address) {
-                    return Err(MempoolError::AssociatedStorageIsAlternateSender);
+                let mut sender = ec.sender();
+                if replacement && storage_address.eq(&uo.sender) {
+                    sender = sender.saturating_sub(1);
+                }
+
+                if sender.gt(&0) && storage_address.ne(&uo.sender) {
+                    // deny if the sender is also an entity in another user operation
+                    for entity in uo.entities() {
+                        if storage_address.eq(&entity.address) {
+                            return Err(MempoolError::AssociatedStorageIsAlternateSender);
+                        }
+                    }
                 }
             }
         }
@@ -420,6 +431,29 @@ impl PoolInner {
         self.add_operation_internal(op.po, Some(op.submission_id), paymaster_meta)
     }
 
+    pub(crate) fn check_max_userops_per_sender(
+        &self,
+        po: &PoolOperation,
+        replacement: bool,
+    ) -> MempoolResult<()> {
+        // Check sender count in mempool. If sender has too many operations, must be staked
+
+        let mut sender_count = self.address_count(&po.uo.sender);
+
+        if replacement {
+            sender_count = sender_count.saturating_sub(1);
+        }
+
+        if sender_count >= self.config.max_userops_per_sender && !po.account_is_staked {
+            return Err(MempoolError::MaxOperationsReached(
+                self.config.max_userops_per_sender,
+                po.uo.sender,
+            ));
+        }
+
+        Ok(())
+    }
+
     fn add_operation_internal(
         &mut self,
         op: Arc<PoolOperation>,
@@ -430,16 +464,6 @@ impl PoolInner {
         // if replacing, remove the existing operation
         if let Some(hash) = self.check_replacement(&op.uo)? {
             self.remove_operation_by_hash(hash);
-        }
-
-        // Check sender count in mempool. If sender has too many operations, must be staked
-        if self.address_count(&op.uo.sender) >= self.config.max_userops_per_sender
-            && !op.account_is_staked
-        {
-            return Err(MempoolError::MaxOperationsReached(
-                self.config.max_userops_per_sender,
-                op.uo.sender,
-            ));
         }
 
         // check or update paymaster balance
