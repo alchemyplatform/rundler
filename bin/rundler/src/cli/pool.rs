@@ -114,7 +114,7 @@ pub struct PoolArgs {
         long = "pool.throttled_entity_live_blocks",
         name = "pool.throttled_entity_live_blocks",
         env = "POOL_THROTTLED_ENTITY_LIVE_BLOCKS",
-        default_value = "4"
+        default_value = "10"
     )]
     pub throttled_entity_live_blocks: u64,
 }
