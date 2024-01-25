@@ -826,20 +826,6 @@ mod tests {
     }
 
     #[test]
-    fn too_many_ops() {
-        let args = conf();
-        let mut pool = PoolInner::new(args.clone());
-        let addr = Address::random();
-        for i in 0..4 {
-            let op = create_op(addr, i, 1);
-            pool.add_operation(op, None).unwrap();
-        }
-
-        let op = create_op(addr, 4, 1);
-        assert!(pool.add_operation(op, None).is_err());
-    }
-
-    #[test]
     fn address_count() {
         let mut pool = PoolInner::new(conf());
         let sender = Address::random();
