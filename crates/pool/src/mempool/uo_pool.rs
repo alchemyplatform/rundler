@@ -656,7 +656,7 @@ impl UoPoolMetrics {
 mod tests {
     use std::collections::HashMap;
 
-    use ethers::types::Bytes;
+    use ethers::types::{Bytes, H160};
     use rundler_provider::{MockEntryPoint, MockPaymasterHelper};
     use rundler_sim::{
         EntityInfo, EntityInfos, MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings,
@@ -1258,6 +1258,26 @@ mod tests {
         assert_eq!(pool_op, None);
     }
 
+    #[tokio::test]
+    async fn too_many_ops_for_unstaked_sender() {
+        let mut ops = vec![];
+        let addr = H160::random();
+        for i in 0..5 {
+            ops.push(create_op(addr, i, 1, None))
+        }
+        let pool = create_pool(ops.clone());
+
+        for op in ops.iter().take(4) {
+            pool.add_operation(OperationOrigin::Local, op.op.clone())
+                .await
+                .unwrap();
+        }
+        assert!(pool
+            .add_operation(OperationOrigin::Local, ops[4].op.clone())
+            .await
+            .is_err());
+    }
+
     #[derive(Clone, Debug)]
     struct OpWithErrors {
         op: UserOperation,
@@ -1350,7 +1370,7 @@ mod tests {
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
             num_shards: 1,
-            same_sender_mempool_count: 16,
+            same_sender_mempool_count: 4,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
         };
