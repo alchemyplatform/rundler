@@ -86,7 +86,7 @@ pub enum EthRpcError {
     ThrottledOrBanned(Entity),
     /// Entity stake/unstake delay too low
     #[error("entity stake/unstake delay too low")]
-    StakeTooLow(StakeTooLowData),
+    StakeTooLow(Box<StakeTooLowData>),
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[error("Unstaked paymaster must not return context")]
     UnstakedPaymasterContext,
@@ -279,14 +279,16 @@ impl From<SimulationViolation> for EthRpcError {
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
             }
-            SimulationViolation::NotStaked(stake_data) => Self::StakeTooLow(StakeTooLowData::new(
-                stake_data.entity,
-                stake_data.accessed_address,
-                stake_data.accessed_entity,
-                stake_data.slot,
-                stake_data.min_stake,
-                stake_data.min_unstake_delay,
-            )),
+            SimulationViolation::NotStaked(stake_data) => {
+                Self::StakeTooLow(Box::new(StakeTooLowData::new(
+                    stake_data.entity,
+                    stake_data.accessed_address,
+                    stake_data.accessed_entity,
+                    stake_data.slot,
+                    stake_data.min_stake,
+                    stake_data.min_unstake_delay,
+                )))
+            }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             _ => Self::SimulationFailed(value),
         }

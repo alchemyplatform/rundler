@@ -364,7 +364,7 @@ where
 
         // Check if op is already known or replacing another, and if so, ensure its fees are high enough
         // do this before simulation to save resources
-        self.state.read().pool.check_replacement(&op)?;
+        let replacement = self.state.read().pool.check_replacement(&op)?;
         // Check if op violates the STO-040 spec rule
         self.state.read().pool.check_multiple_roles_violation(&op)?;
 
@@ -396,10 +396,11 @@ where
         }
 
         // Check if op violates the STO-041 spec rule
-        self.state
-            .read()
-            .pool
-            .check_associated_storage(&sim_result.associated_addresses, &op)?;
+        self.state.read().pool.check_associated_storage(
+            &sim_result.associated_addresses,
+            &op,
+            replacement.is_some(),
+        )?;
 
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
@@ -414,6 +415,11 @@ where
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
         };
+
+        self.state
+            .read()
+            .pool
+            .check_max_userops_per_sender(&pool_op, replacement.is_some())?;
 
         // Add op to pool
         let hash = {
