@@ -250,17 +250,17 @@ where
                 if let Some(block) = block_seen {
                     if update.latest_block_number - block > self.config.throttled_entity_live_blocks
                     {
-                        to_remove.insert(*hash);
+                        to_remove.insert((*hash, block));
                     }
                 }
             }
-            for hash in to_remove {
+            for (hash, added_at_block) in to_remove {
                 state.pool.remove_operation_by_hash(hash);
                 state.throttled_ops.remove(&hash);
                 self.emit(OpPoolEvent::RemovedOp {
                     op_hash: hash,
                     reason: OpRemovalReason::ThrottledAndOld {
-                        added_at_block_number: state.block_number,
+                        added_at_block_number: added_at_block,
                         current_block_number: update.latest_block_number,
                     },
                 })
