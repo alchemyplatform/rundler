@@ -364,7 +364,7 @@ where
 
         // Check if op is already known or replacing another, and if so, ensure its fees are high enough
         // do this before simulation to save resources
-        let replacement = self.state.read().pool.check_replacement(&op)?;
+        self.state.read().pool.check_replacement(&op)?;
         // Check if op violates the STO-040 spec rule
         self.state.read().pool.check_multiple_roles_violation(&op)?;
 
@@ -396,11 +396,10 @@ where
         }
 
         // Check if op violates the STO-041 spec rule
-        self.state.read().pool.check_associated_storage(
-            &sim_result.associated_addresses,
-            &op,
-            replacement.is_some(),
-        )?;
+        self.state
+            .read()
+            .pool
+            .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {

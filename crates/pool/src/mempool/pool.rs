@@ -233,16 +233,10 @@ impl PoolInner {
         &self,
         accessed_storage: &HashSet<Address>,
         uo: &UserOperation,
-        replacement: bool,
     ) -> MempoolResult<()> {
         for storage_address in accessed_storage {
             if let Some(ec) = self.count_by_address.get(storage_address) {
-                let mut sender = ec.sender();
-                if replacement && storage_address.eq(&uo.sender) {
-                    sender = sender.saturating_sub(1);
-                }
-
-                if sender.gt(&0) && storage_address.ne(&uo.sender) {
+                if ec.sender().gt(&0) && storage_address.ne(&uo.sender) {
                     // Reject UO if the sender is also an entity in another UO in the mempool
                     for entity in uo.entities() {
                         if storage_address.eq(&entity.address) {
