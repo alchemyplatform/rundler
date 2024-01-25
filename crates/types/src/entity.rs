@@ -21,7 +21,18 @@ use strum::EnumIter;
 
 /// The type of an entity
 #[derive(
-    Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize, Hash,
+    Display,
+    Debug,
+    Clone,
+    Ord,
+    Copy,
+    Eq,
+    PartialEq,
+    EnumIter,
+    PartialOrd,
+    Deserialize,
+    Hash,
+    Serialize,
 )]
 #[display(style = "camelCase")]
 #[serde(rename_all = "camelCase")]

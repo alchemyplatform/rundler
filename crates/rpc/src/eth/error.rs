@@ -136,14 +136,27 @@ pub struct OutOfTimeRangeData {
 #[serde(rename_all = "camelCase")]
 pub struct StakeTooLowData {
     entity: Entity,
+    accessed_address: Address,
+    accessed_entity: Option<EntityType>,
+    slot: U256,
     minimum_stake: U256,
     minimum_unstake_delay: U256,
 }
 
 impl StakeTooLowData {
-    pub fn new(entity: Entity, minimum_stake: U256, minimum_unstake_delay: U256) -> Self {
+    pub fn new(
+        entity: Entity,
+        accessed_address: Address,
+        accessed_entity: Option<EntityType>,
+        slot: U256,
+        minimum_stake: U256,
+        minimum_unstake_delay: U256,
+    ) -> Self {
         Self {
             entity,
+            accessed_address,
+            accessed_entity,
+            slot,
             minimum_stake,
             minimum_unstake_delay,
         }
@@ -268,6 +281,9 @@ impl From<SimulationViolation> for EthRpcError {
             }
             SimulationViolation::NotStaked(stake_data) => Self::StakeTooLow(StakeTooLowData::new(
                 stake_data.entity,
+                stake_data.accessed_address,
+                stake_data.accessed_entity,
+                stake_data.slot,
                 stake_data.min_stake,
                 stake_data.min_unstake_delay,
             )),
