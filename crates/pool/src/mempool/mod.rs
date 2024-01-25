@@ -119,7 +119,7 @@ pub struct PoolConfig {
     /// Chain ID this pool targets
     pub chain_id: u64,
     /// The maximum number of operations an unstaked sender can have in the mempool
-    pub max_userops_per_sender: usize,
+    pub same_sender_mempool_count: usize,
     /// The minimum fee bump required to replace an operation in the mempool
     /// Applies to both priority fee and fee. Expressed as an integer percentage value
     pub min_replacement_fee_increase_percentage: u64,
@@ -245,14 +245,42 @@ impl PoolOperation {
         })
     }
 
-    /// Returns an iterator over all staked entities that are included in this operation.
-    pub fn staked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
+    /// Returns an iterator over all entities that need stake in this operation.
+    pub fn entities_requiring_stake(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         EntityType::iter()
             .filter(|entity| self.requires_stake(*entity))
             .filter_map(|entity| {
                 self.entity_address(entity)
                     .map(|address| Entity::new(entity, address))
             })
+    }
+
+    /// Return all the unstaked entities that are used in this operation.
+    pub fn unstaked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
+        let mut unstaked_entities = vec![];
+        if !self.entity_infos.sender.is_staked {
+            unstaked_entities.push(Entity::new(
+                EntityType::Account,
+                self.entity_infos.sender.address,
+            ))
+        }
+        if let Some(factory) = self.entity_infos.factory {
+            if !factory.is_staked {
+                unstaked_entities.push(Entity::new(EntityType::Factory, factory.address))
+            }
+        }
+        if let Some(paymaster) = self.entity_infos.paymaster {
+            if !paymaster.is_staked {
+                unstaked_entities.push(Entity::new(EntityType::Paymaster, paymaster.address))
+            }
+        }
+        if let Some(aggregator) = self.entity_infos.aggregator {
+            if !aggregator.is_staked {
+                unstaked_entities.push(Entity::new(EntityType::Aggregator, aggregator.address))
+            }
+        }
+
+        unstaked_entities.into_iter()
     }
 
     /// Compute the amount of heap memory the PoolOperation takes up.

@@ -409,7 +409,7 @@ message PaymasterBalanceTooLow {
 
 message MaxOperationsReachedError {
   uint64 num_ops = 1;
-  bytes sender_address = 2;
+  bytes entity_address = 2;
 }
 
 message EntityThrottledError {

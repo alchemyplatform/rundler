@@ -39,7 +39,6 @@ use crate::chain::{DepositInfo, MinedOp};
 pub(crate) struct PoolInnerConfig {
     entry_point: Address,
     chain_id: u64,
-    max_userops_per_sender: usize,
     max_size_of_pool_bytes: usize,
     min_replacement_fee_increase_percentage: u64,
     throttled_entity_mempool_count: u64,
@@ -51,7 +50,6 @@ impl From<PoolConfig> for PoolInnerConfig {
         Self {
             entry_point: config.entry_point,
             chain_id: config.chain_id,
-            max_userops_per_sender: config.max_userops_per_sender,
             max_size_of_pool_bytes: config.max_size_of_pool_bytes,
             min_replacement_fee_increase_percentage: config.min_replacement_fee_increase_percentage,
             throttled_entity_mempool_count: config.throttled_entity_mempool_count,
@@ -435,16 +433,6 @@ impl PoolInner {
         // if replacing, remove the existing operation
         if let Some(hash) = self.check_replacement(&op.uo)? {
             self.remove_operation_by_hash(hash);
-        }
-
-        // Check sender count in mempool. If sender has too many operations, must be staked
-        if self.address_count(&op.uo.sender) >= self.config.max_userops_per_sender
-            && !op.account_is_staked
-        {
-            return Err(MempoolError::MaxOperationsReached(
-                self.config.max_userops_per_sender,
-                op.uo.sender,
-            ));
         }
 
         // check or update paymaster balance
@@ -832,12 +820,12 @@ mod tests {
         let args = conf();
         let mut pool = PoolInner::new(args.clone());
         let addr = Address::random();
-        for i in 0..args.max_userops_per_sender {
+        for i in 0..4 {
             let op = create_op(addr, i, 1);
             pool.add_operation(op, None).unwrap();
         }
 
-        let op = create_op(addr, args.max_userops_per_sender, 1);
+        let op = create_op(addr, 4, 1);
         assert!(pool.add_operation(op, None).is_err());
     }
 
@@ -901,11 +889,11 @@ mod tests {
             pool.add_operation(op, None).unwrap();
         }
 
-        let op = create_op(Address::random(), args.max_userops_per_sender, 1);
+        let op = create_op(Address::random(), 4, 1);
         assert!(pool.add_operation(op, None).is_err());
 
         // on equal gas, worst should remain because it came first
-        let op = create_op(Address::random(), args.max_userops_per_sender, 2);
+        let op = create_op(Address::random(), 4, 2);
         let result = pool.add_operation(op, None);
         assert!(result.is_ok(), "{:?}", result.err());
     }
@@ -1029,7 +1017,6 @@ mod tests {
         PoolInnerConfig {
             entry_point: Address::random(),
             chain_id: 1,
-            max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
             throttled_entity_mempool_count: 4,

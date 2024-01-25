@@ -90,7 +90,7 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::MaxOperationsReached(e)) => {
                 MempoolError::MaxOperationsReached(
                     e.num_ops as usize,
-                    from_bytes(&e.sender_address)?,
+                    from_bytes(&e.entity_address)?,
                 )
             }
             Some(mempool_error::Error::EntityThrottled(e)) => MempoolError::EntityThrottled(
@@ -156,7 +156,7 @@ impl From<MempoolError> for ProtoMempoolError {
                 error: Some(mempool_error::Error::MaxOperationsReached(
                     MaxOperationsReachedError {
                         num_ops: ops as u64,
-                        sender_address: addr.as_bytes().to_vec(),
+                        entity_address: addr.as_bytes().to_vec(),
                     },
                 )),
             },

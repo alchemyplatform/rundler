@@ -35,8 +35,8 @@ pub enum MempoolError {
     /// and the replacement operation has lower gas price.
     #[error("Replacement operation underpriced. Existing priority fee: {0}. Existing fee: {1}")]
     ReplacementUnderpriced(U256, U256),
-    /// Max operations reached for this sender
-    #[error("Max operations ({0}) reached for sender {1}")]
+    /// Max operations reached for unstaked sender [UREP-010] or unstaked non-sender entity [UREP-020]
+    #[error("Max operations ({0}) reached for entity {1}")]
     MaxOperationsReached(usize, Address),
     /// Multiple roles violation
     /// Spec rule: STO-040

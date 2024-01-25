@@ -117,8 +117,8 @@ List of command line options for configuring the Pool.
   - *Only required when running in distributed mode* 
 - `--pool.max_size_in_bytes`: Maximum size in bytes for the pool (default: `500000000`, `0.5 GB`)
   - env: *POOL_MAX_SIZE_IN_BYTES*
-- `--pool.max_userops_per_sender`: Maximum number of user operations per sender (default: `4`)
-  - env: *POOL_MAX_USEROPS_PER_SENDER*
+- `--pool.same_sender_mempool_count`: Maximum number of user operations for an unstaked sender (default: `4`)
+  - env: *POOL_SAME_SENDER_MEMPOOL_COUNT*
 - `--pool.min_replacement_fee_increase_percentage`: Minimum replacement fee increase percentage (default: `10`)
   - env: *POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE*
 - `--pool.blocklist_path`: Path to a blocklist file (e.g `blocklist.json`, `s3://my-bucket/blocklist.json`)
