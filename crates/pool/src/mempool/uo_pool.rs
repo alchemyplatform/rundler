@@ -416,11 +416,6 @@ where
             entity_infos: sim_result.entity_infos,
         };
 
-        self.state
-            .read()
-            .pool
-            .check_max_userops_per_sender(&pool_op, replacement.is_some())?;
-
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
