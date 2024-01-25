@@ -93,6 +93,9 @@ pub trait PoolServer: Send + Sync + 'static {
     /// Clear the pool state, used for debug methods
     async fn debug_clear_state(&self) -> PoolResult<()>;
 
+    /// Clear the mempool state, used for debug methods
+    async fn debug_clear_mempool(&self) -> PoolResult<()>;
+
     /// Dump all operations in the pool, used for debug methods
     async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>>;
 

@@ -582,6 +582,15 @@ where
     }
 
     fn clear(&self) {
+        self.clear_mempool();
+        self.clear_reputation();
+    }
+
+    fn clear_reputation(&self) {
+        self.reputation.clear()
+    }
+
+    fn clear_mempool(&self) {
         self.state.write().pool.clear()
     }
 
@@ -1562,6 +1571,11 @@ mod tests {
 
             // return ops allowed, as defined by UREP-020
             self.same_unstaked_entity_mempool_count + inclusion_based_count
+        }
+
+        fn clear(&self) {
+            self.counts.write().seen.clear();
+            self.counts.write().included.clear();
         }
     }
 }

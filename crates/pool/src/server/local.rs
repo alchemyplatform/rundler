@@ -193,6 +193,15 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
+    async fn debug_clear_mempool(&self) -> Result<(), PoolServerError> {
+        let req = ServerRequestKind::DebugClearMempool;
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::DebugClearMempool => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
     async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
         let req = ServerRequestKind::DebugDumpMempool { entry_point };
         let resp = self.send(req).await?;
@@ -369,6 +378,13 @@ where
         Ok(())
     }
 
+    fn debug_clear_mempool(&self) -> PoolResult<()> {
+        for mempool in self.mempools.values() {
+            mempool.clear_mempool();
+        }
+        Ok(())
+    }
+
     fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool
@@ -483,6 +499,12 @@ where
                                 Err(e) => Err(e),
                             }
                         },
+                        ServerRequestKind::DebugClearMempool => {
+                            match self.debug_clear_mempool() {
+                                Ok(_) => Ok(ServerResponse::DebugClearMempool),
+                                Err(e) => Err(e),
+                            }
+                        },
                         ServerRequestKind::DebugDumpMempool { entry_point } => {
                             match self.debug_dump_mempool(entry_point) {
                                 Ok(ops) => Ok(ServerResponse::DebugDumpMempool { ops }),
@@ -571,6 +593,7 @@ enum ServerRequestKind {
         entity_updates: Vec<EntityUpdate>,
     },
     DebugClearState,
+    DebugClearMempool,
     DebugDumpMempool {
         entry_point: Address,
     },
@@ -609,6 +632,7 @@ enum ServerResponse {
     RemoveOps,
     UpdateEntities,
     DebugClearState,
+    DebugClearMempool,
     DebugDumpMempool {
         ops: Vec<PoolOperation>,
     },

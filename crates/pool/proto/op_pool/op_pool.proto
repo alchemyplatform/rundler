@@ -139,6 +139,9 @@ service OpPool {
   // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
   rpc DebugClearState (DebugClearStateRequest) returns (DebugClearStateResponse);
 
+  // Clears the bundler mempool but not reputation data
+  rpc DebugClearMempool (DebugClearMempoolRequest) returns (DebugClearMempoolResponse);
+
   // Dumps the current UserOperations mempool
   rpc DebugDumpMempool (DebugDumpMempoolRequest) returns (DebugDumpMempoolResponse);
 
@@ -298,6 +301,15 @@ message DebugClearStateResponse {
   }
 }
 message DebugClearStateSuccess {}
+
+message DebugClearMempoolRequest {}
+message DebugClearMempoolResponse {
+  oneof result {
+    DebugClearMempoolSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message DebugClearMempoolSuccess {}
 
 message DebugDumpMempoolRequest {
   bytes entry_point = 1;
