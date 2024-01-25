@@ -243,7 +243,7 @@ impl PoolInner {
                 }
 
                 if sender.gt(&0) && storage_address.ne(&uo.sender) {
-                    // deny if the sender is also an entity in another user operation
+                    // Reject UO if the sender is also an entity in another UO in the mempool
                     for entity in uo.entities() {
                         if storage_address.eq(&entity.address) {
                             return Err(MempoolError::AssociatedStorageIsAlternateSender);
