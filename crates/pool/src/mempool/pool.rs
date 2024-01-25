@@ -601,6 +601,8 @@ impl PoolMetrics {
 
 #[cfg(test)]
 mod tests {
+    use rundler_sim::{EntityInfo, EntityInfos};
+
     use super::*;
 
     #[test]
@@ -784,6 +786,10 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(agg);
+            op.entity_infos.aggregator = Some(EntityInfo {
+                address: agg,
+                is_staked: false,
+            });
             pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
@@ -805,6 +811,10 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+            op.entity_infos.paymaster = Some(EntityInfo {
+                address: op.uo.paymaster().unwrap(),
+                is_staked: false,
+            });
             pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
@@ -839,8 +849,20 @@ mod tests {
 
         let mut op = create_op(sender, 0, 1);
         op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+        op.entity_infos.paymaster = Some(EntityInfo {
+            address: op.uo.paymaster().unwrap(),
+            is_staked: false,
+        });
         op.uo.init_code = factory.as_bytes().to_vec().into();
+        op.entity_infos.factory = Some(EntityInfo {
+            address: op.uo.factory().unwrap(),
+            is_staked: false,
+        });
         op.aggregator = Some(aggregator);
+        op.entity_infos.aggregator = Some(EntityInfo {
+            address: aggregator,
+            is_staked: false,
+        });
 
         let count = 5;
         let mut hashes = vec![];
@@ -937,6 +959,10 @@ mod tests {
         let mut po1 = create_op(sender, 0, 10);
         po1.uo.max_priority_fee_per_gas = 10.into();
         po1.uo.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
+        po1.entity_infos.paymaster = Some(EntityInfo {
+            address: po1.uo.paymaster().unwrap(),
+            is_staked: false,
+        });
         let _ = pool.add_operation(po1, None).unwrap();
         assert_eq!(pool.address_count(&paymaster1), 1);
 
@@ -944,6 +970,10 @@ mod tests {
         let mut po2 = create_op(sender, 0, 11);
         po2.uo.max_priority_fee_per_gas = 11.into();
         po2.uo.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
+        po2.entity_infos.paymaster = Some(EntityInfo {
+            address: po2.uo.paymaster().unwrap(),
+            is_staked: false,
+        });
         let _ = pool.add_operation(po2.clone(), None).unwrap();
 
         assert_eq!(pool.address_count(&sender), 1);
@@ -1038,7 +1068,17 @@ mod tests {
                 sender,
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
+
                 ..UserOperation::default()
+            },
+            entity_infos: EntityInfos {
+                factory: None,
+                sender: EntityInfo {
+                    address: sender,
+                    is_staked: false,
+                },
+                paymaster: None,
+                aggregator: None,
             },
             ..PoolOperation::default()
         }

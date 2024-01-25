@@ -32,6 +32,7 @@ use rundler_types::{
     contracts::i_entry_point::FailedOp, Entity, EntityType, StorageSlot, UserOperation,
     ValidTimeRange,
 };
+use strum::IntoEnumIterator;
 
 use super::{
     mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
@@ -798,6 +799,11 @@ impl EntityInfos {
         }
     }
 
+    /// Get iterator over the entities
+    pub fn entities(&'_ self) -> impl Iterator<Item = (EntityType, EntityInfo)> + '_ {
+        EntityType::iter().filter_map(|t| self.get(t).map(|info| (t, info)))
+    }
+
     fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
         if let Some(mut factory) = self.factory {
             factory.override_is_staked(allow_unstaked_addresses)
@@ -811,7 +817,8 @@ impl EntityInfos {
         }
     }
 
-    fn get(self, entity: EntityType) -> Option<EntityInfo> {
+    /// Get the EntityInfo of a specific entity
+    pub fn get(self, entity: EntityType) -> Option<EntityInfo> {
         match entity {
             EntityType::Factory => self.factory,
             EntityType::Account => Some(self.sender),

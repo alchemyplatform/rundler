@@ -27,6 +27,7 @@ reqwest.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 tracing.workspace = true
 url.workspace = true
+strum.workspace = true
 
 mockall = {workspace = true, optional = true }
 
