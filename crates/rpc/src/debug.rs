@@ -111,6 +111,16 @@ where
         Ok("ok".to_string())
     }
 
+    async fn bundler_clear_mempool(&self) -> RpcResult<String> {
+        let _ = self
+            .pool
+            .debug_clear_mempool()
+            .await
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+        Ok("ok".to_string())
+    }
+
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
         Ok(self
             .pool

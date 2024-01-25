@@ -33,13 +33,14 @@ use tonic_health::{
 };
 
 use super::protos::{
-    self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_ops_response, update_entities_response, AddOpRequest,
-    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    self, add_op_response, debug_clear_mempool_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
+    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
+    get_stake_status_response, op_pool_client::OpPoolClient, remove_ops_response,
+    update_entities_response, AddOpRequest, DebugClearMempoolRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
+    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
     mempool::{PoolOperation, Reputation, StakeStatus},
@@ -283,6 +284,24 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(debug_clear_state_response::Result::Success(_)) => Ok(()),
             Some(debug_clear_state_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn debug_clear_mempool(&self) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .debug_clear_mempool(DebugClearMempoolRequest {})
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(debug_clear_mempool_response::Result::Success(_)) => Ok(()),
+            Some(debug_clear_mempool_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
