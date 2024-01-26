@@ -184,7 +184,7 @@ where
             let mut state = self.state.write();
             state
                 .pool
-                .update_paymaster_balances_after_update(&deposits, &unmined_entity_deposits);
+                .update_paymaster_balances_after_updates(&deposits, &unmined_entity_deposits);
 
             for op in mined_ops {
                 if op.entry_point != self.config.entry_point {
@@ -334,6 +334,7 @@ where
         // If banned, reject
         let mut entity_summary = EntitySummary::default();
         let mut throttled = false;
+
         for entity in op.entities() {
             let address = entity.address;
             let reputation = match self.reputation.status(address) {
@@ -588,6 +589,18 @@ where
         if clear_reputation {
             self.reputation.clear()
         }
+    }
+
+    fn clear_paymaster_tracker_state(&self) {
+        self.state.write().pool.clear_paymaster_tracker_state()
+    }
+
+    fn toggle_paymaster_tracker(&self) {
+        self.state.write().pool.toggle_paymaster_tracker()
+    }
+
+    fn toggle_reputation_tracker(&self) {
+        self.reputation.toggle_tracking()
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -1378,6 +1391,8 @@ mod tests {
             same_sender_mempool_count: 4,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
+            paymaster_tracking_enabled: true,
+            reputation_tracking_enabled: true,
         };
         let (event_sender, _) = broadcast::channel(4);
 
@@ -1513,6 +1528,10 @@ mod tests {
 
         fn add_seen(&self, address: Address) {
             *self.counts.write().seen.entry(address).or_default() += 1;
+        }
+
+        fn toggle_tracking(&self) {
+            // only counts are locked for some reason here
         }
 
         fn handle_srep_050_penalty(&self, address: Address) {

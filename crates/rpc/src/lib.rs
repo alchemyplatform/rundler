@@ -22,6 +22,9 @@
 mod debug;
 pub use debug::DebugApiClient;
 
+mod admin;
+pub use admin::AdminApiClient;
+
 mod error;
 
 mod eth;

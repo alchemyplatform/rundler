@@ -123,4 +123,13 @@ pub trait PoolServer: Send + Sync + 'static {
 
     /// Dump reputations for entities, used for debug methods
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;
+
+    /// Toggles the operation of the paymaster tracker
+    async fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()>;
+
+    /// Toggles the operation of the reputation tracker
+    async fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()>;
+
+    /// Clears current state of the paymaster tracker
+    async fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()>;
 }

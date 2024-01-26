@@ -103,6 +103,15 @@ pub trait Mempool: Send + Sync + 'static {
     /// Overwrites the mempool's reputation for an address
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
 
+    /// Toggles the operation of the paymaster tracker for a given pool
+    fn toggle_paymaster_tracker(&self);
+
+    /// Toggles the operation of the reputation tracker for a given pool
+    fn toggle_reputation_tracker(&self);
+
+    /// Clears the paymaster tracker state
+    fn clear_paymaster_tracker_state(&self);
+
     /// Get stake status for address
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus>;
 
@@ -143,6 +152,10 @@ pub struct PoolConfig {
     pub throttled_entity_mempool_count: u64,
     /// The maximum number of blocks a user operation with a throttled entity can stay in the mempool
     pub throttled_entity_live_blocks: u64,
+    /// Boolean field used to toggle the operation of the paymaster tracker
+    pub paymaster_tracking_enabled: bool,
+    /// Boolean field used to toggle the operation of the reputation tracker
+    pub reputation_tracking_enabled: bool,
 }
 
 /// Stake status structure

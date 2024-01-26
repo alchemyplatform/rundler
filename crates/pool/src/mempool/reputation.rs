@@ -205,6 +205,7 @@ pub(crate) struct ReputationParams {
     inclusion_rate_factor: u64,
     throttling_slack: u64,
     ban_slack: u64,
+    tracking_enabled: bool,
 }
 
 impl Default for ReputationParams {
@@ -217,11 +218,24 @@ impl Default for ReputationParams {
             inclusion_rate_factor: 10,
             throttling_slack: 10,
             ban_slack: 50,
+            tracking_enabled: true,
         }
     }
 }
 
 impl ReputationParams {
+    pub(crate) fn new_with_config(tracking_enabled: bool) -> Self {
+        Self {
+            tracking_enabled,
+            ..Default::default()
+        }
+    }
+
+    fn toggle_tracking(&mut self) {
+        self.tracking_enabled = !self.tracking_enabled;
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn bundler_default() -> Self {
         Self::default()
     }
@@ -264,6 +278,10 @@ impl AddressReputation {
     }
 
     fn status(&self, address: Address) -> ReputationStatus {
+        if !self.params.tracking_enabled {
+            return ReputationStatus::Ok;
+        }
+
         if self.blocklist.contains(&address) {
             return ReputationStatus::Banned;
         } else if self.allowlist.contains(&address) {

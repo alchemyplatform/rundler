@@ -33,13 +33,17 @@ use tonic_health::{
 };
 
 use super::protos::{
-    self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_ops_response, update_entities_response, AddOpRequest,
-    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    self, add_op_response, admin_clear_paymaster_tracker_state_response,
+    admin_toggle_paymaster_tracker_response, admin_toggle_reputation_tracker_response,
+    debug_clear_state_response, debug_dump_mempool_response, debug_dump_reputation_response,
+    debug_set_reputation_response, get_op_by_hash_response, get_ops_response,
+    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
+    remove_ops_response, update_entities_response, AddOpRequest,
+    AdminClearPaymasterTrackerStateRequest, AdminTogglePaymasterTrackerRequest,
+    AdminToggleReputationTrackerRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
+    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
     mempool::{PoolOperation, Reputation, StakeStatus},
@@ -283,6 +287,70 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(debug_clear_state_response::Result::Success(_)) => Ok(()),
             Some(debug_clear_state_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .admin_toggle_paymaster_tracker(AdminTogglePaymasterTrackerRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(admin_toggle_paymaster_tracker_response::Result::Success(_)) => Ok(()),
+            Some(admin_toggle_paymaster_tracker_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .admin_toggle_reputation_tracker(AdminToggleReputationTrackerRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(admin_toggle_reputation_tracker_response::Result::Success(_)) => Ok(()),
+            Some(admin_toggle_reputation_tracker_response::Result::Failure(f)) => {
+                Err(f.try_into()?)
+            }
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .admin_clear_paymaster_tracker_state(AdminClearPaymasterTrackerStateRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(admin_clear_paymaster_tracker_state_response::Result::Success(_)) => Ok(()),
+            Some(admin_clear_paymaster_tracker_state_response::Result::Failure(f)) => {
+                Err(f.try_into()?)
+            }
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

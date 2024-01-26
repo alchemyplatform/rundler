@@ -159,6 +159,15 @@ service OpPool {
   // Streaming API to subscribe to be updated upon a new block being added to (or reorged onto)
   // the chain. 
   rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
+
+  // Toggles the operation of the paymaster tracker for a given pool
+  rpc AdminTogglePaymasterTracker(AdminTogglePaymasterTrackerRequest) returns (AdminTogglePaymasterTrackerResponse);
+
+  // Toggles the operation of the reputation tracker for a given pool
+  rpc AdminToggleReputationTracker(AdminToggleReputationTrackerRequest) returns (AdminToggleReputationTrackerResponse);
+
+  // Clears the current state of the paymaster tracker
+  rpc AdminClearPaymasterTrackerState(AdminClearPaymasterTrackerStateRequest) returns (AdminClearPaymasterTrackerStateResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -274,6 +283,45 @@ message RemoveOpsResponse {
   }
 }
 message RemoveOpsSuccess {}
+
+message AdminTogglePaymasterTrackerRequest {
+  // The serialized entry point address
+  bytes entry_point = 1;
+}
+message AdminTogglePaymasterTrackerResponse {
+  oneof result {
+    AdminTogglePaymasterTrackerSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message AdminTogglePaymasterTrackerSuccess {}
+
+message AdminClearPaymasterTrackerStateRequest {
+  // The serialized entry point address
+  bytes entry_point = 1;
+}
+message AdminClearPaymasterTrackerStateResponse {
+  oneof result {
+    AdminClearPaymasterTrackerStateSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message AdminClearPaymasterTrackerStateSuccess {}
+
+message AdminToggleReputationTrackerRequest {
+  // The serialized entry point address
+  bytes entry_point = 1;
+}
+message AdminToggleReputationTrackerResponse {
+  oneof result {
+    AdminToggleReputationTrackerSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+
+message AdminToggleReputationTrackerSuccess {}
 
 message UpdateEntitiesRequest {
   // The serilaized entry point address

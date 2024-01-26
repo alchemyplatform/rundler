@@ -164,7 +164,7 @@ impl PoolTask {
     > {
         // Reputation manager
         let reputation = Arc::new(HourlyMovingAverageReputation::new(
-            ReputationParams::bundler_default(),
+            ReputationParams::new_with_config(pool_config.reputation_tracking_enabled),
             pool_config.blocklist.clone(),
             pool_config.allowlist.clone(),
         ));

@@ -26,6 +26,7 @@ pub enum ApiNamespace {
     Eth,
     Debug,
     Rundler,
+    Admin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

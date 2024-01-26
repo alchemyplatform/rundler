@@ -168,6 +168,33 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
+    async fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()> {
+        let req = ServerRequestKind::AdminTogglePaymasterTracker { entry_point };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::AdminTogglePaymasterTracker => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    async fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()> {
+        let req = ServerRequestKind::AdminToggleReputationTracker { entry_point };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::AdminToggleReputationTracker => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    async fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()> {
+        let req = ServerRequestKind::AdminClearPaymasterTrackerState { entry_point };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::AdminToggleReputationTracker => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
     async fn update_entities(
         &self,
         entry_point: Address,
@@ -402,6 +429,24 @@ where
         Ok(mempool.dump_reputation())
     }
 
+    fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.toggle_paymaster_tracker();
+        Ok(())
+    }
+
+    fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.toggle_reputation_tracker();
+        Ok(())
+    }
+
+    fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.clear_paymaster_tracker_state();
+        Ok(())
+    }
+
     fn get_reputation_status(
         &self,
         entry_point: Address,
@@ -475,6 +520,24 @@ where
                         ServerRequestKind::RemoveOps { entry_point, ops } => {
                             match self.remove_ops(entry_point, &ops) {
                                 Ok(_) => Ok(ServerResponse::RemoveOps),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::AdminTogglePaymasterTracker { entry_point } => {
+                            match self.admin_toggle_paymaster_tracker(entry_point) {
+                                Ok(_) => Ok(ServerResponse::AdminTogglePaymasterTracker),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::AdminToggleReputationTracker { entry_point } => {
+                            match self.admin_toggle_reputation_tracker(entry_point) {
+                                Ok(_) => Ok(ServerResponse::AdminToggleReputationTracker),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::AdminClearPaymasterTrackerState { entry_point } => {
+                            match self.admin_clear_paymaster_tracker_state(entry_point) {
+                                Ok(_) => Ok(ServerResponse::AdminClearPaymasterTrackerState),
                                 Err(e) => Err(e),
                             }
                         },
@@ -599,6 +662,15 @@ enum ServerRequestKind {
         entry_point: Address,
         address: Address,
     },
+    AdminTogglePaymasterTracker {
+        entry_point: Address,
+    },
+    AdminToggleReputationTracker {
+        entry_point: Address,
+    },
+    AdminClearPaymasterTrackerState {
+        entry_point: Address,
+    },
     SubscribeNewHeads,
 }
 
@@ -617,6 +689,9 @@ enum ServerResponse {
         op: Option<PoolOperation>,
     },
     RemoveOps,
+    AdminTogglePaymasterTracker,
+    AdminToggleReputationTracker,
+    AdminClearPaymasterTrackerState,
     UpdateEntities,
     DebugClearState,
     DebugDumpMempool {

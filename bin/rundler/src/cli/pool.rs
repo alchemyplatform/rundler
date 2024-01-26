@@ -117,6 +117,22 @@ pub struct PoolArgs {
         default_value = "10"
     )]
     pub throttled_entity_live_blocks: u64,
+
+    #[arg(
+        long = "pool.paymaster_tracking_enabled",
+        name = "pool.paymaster_tracking_enabled",
+        env = "POOL_PAYMASTER_TRACKING_ENABLED",
+        default_value = "true"
+    )]
+    pub paymaster_tracking_enabled: bool,
+
+    #[arg(
+        long = "pool.reputation_tracking_enabled",
+        name = "pool.reputation_tracking_enabled",
+        env = "POOL_reputation_TRACKING_ENABLED",
+        default_value = "true"
+    )]
+    pub reputation_tracking_enabled: bool,
 }
 
 impl PoolArgs {
@@ -167,6 +183,8 @@ impl PoolArgs {
                     mempool_channel_configs: mempool_channel_configs.clone(),
                     throttled_entity_mempool_count: self.throttled_entity_mempool_count,
                     throttled_entity_live_blocks: self.throttled_entity_live_blocks,
+                    paymaster_tracking_enabled: self.paymaster_tracking_enabled,
+                    reputation_tracking_enabled: self.reputation_tracking_enabled,
                 })
             })
             .collect::<anyhow::Result<Vec<PoolConfig>>>()?;

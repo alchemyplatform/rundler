@@ -52,7 +52,7 @@ pub struct RpcArgs {
         env = "RPC_API",
         default_value = "eth,rundler",
         value_delimiter = ',',
-        value_parser = ["eth", "debug", "rundler"]
+        value_parser = ["eth", "debug", "rundler", "admin"]
     )]
     api: Vec<String>,
 
