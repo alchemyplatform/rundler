@@ -35,7 +35,7 @@ const PAYMASTER_VALIDATION_REJECTED_CODE: i32 = -32501;
 const OPCODE_VIOLATION_CODE: i32 = -32502;
 const OUT_OF_TIME_RANGE_CODE: i32 = -32503;
 const THROTTLED_OR_BANNED_CODE: i32 = -32504;
-const _STAKE_TOO_LOW_CODE: i32 = -32505;
+const STAKE_TOO_LOW_CODE: i32 = -32505;
 const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
 const EXECUTION_REVERTED: i32 = -32521;
@@ -81,6 +81,9 @@ pub enum EthRpcError {
     /// Operation is out of time range
     #[error("operation is out of time range")]
     OutOfTimeRange(OutOfTimeRangeData),
+    /// Max operations reached for this sender
+    #[error("Max operations ({0}) reached for sender {1:#032x} due to being unstaked")]
+    MaxOperationsReached(usize, Address),
     /// Entity throttled or banned
     #[error("{} {:#032x} throttled or banned", .0.kind, .0.address)]
     ThrottledOrBanned(Entity),
@@ -213,9 +216,9 @@ impl From<MempoolError> for EthRpcError {
                     current_max_fee: fee,
                 })
             }
-            MempoolError::MaxOperationsReached(count, _) => EthRpcError::OperationRejected(
-                format!("max operations reached for sender {count} already in pool"),
-            ),
+            MempoolError::MaxOperationsReached(count, address) => {
+                EthRpcError::MaxOperationsReached(count, address)
+            }
             MempoolError::EntityThrottled(entity) => EthRpcError::ThrottledOrBanned(entity),
             MempoolError::MultipleRolesViolation(entity) => {
                 EthRpcError::MultipleRolesViolation(entity)
@@ -332,6 +335,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
                 rpc_err_with_data(INVALID_PARAMS_CODE, msg, data)
             }
             EthRpcError::OperationAlreadyKnown => rpc_err(INVALID_PARAMS_CODE, msg),
+            EthRpcError::MaxOperationsReached(_, _) => rpc_err(STAKE_TOO_LOW_CODE, msg),
             EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
