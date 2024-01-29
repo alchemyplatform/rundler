@@ -392,8 +392,8 @@ where
     fn debug_clear_state(
         &self,
         clear_mempool: bool,
-        clear_reputation: bool,
         clear_paymaster: bool,
+        clear_reputation: bool,
     ) -> PoolResult<()> {
         for mempool in self.mempools.values() {
             mempool.clear_state(clear_mempool, clear_paymaster, clear_reputation);
@@ -526,8 +526,8 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::DebugClearState { clear_mempool, clear_reputation, clear_paymaster } => {
-                            match self.debug_clear_state(clear_mempool, clear_reputation, clear_paymaster) {
+                        ServerRequestKind::DebugClearState { clear_mempool, clear_paymaster, clear_reputation } => {
+                            match self.debug_clear_state(clear_mempool, clear_paymaster, clear_reputation) {
                                 Ok(_) => Ok(ServerResponse::DebugClearState),
                                 Err(e) => Err(e),
                             }
