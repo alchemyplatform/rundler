@@ -129,7 +129,7 @@ pub struct PoolArgs {
     #[arg(
         long = "pool.reputation_tracking_enabled",
         name = "pool.reputation_tracking_enabled",
-        env = "POOL_reputation_TRACKING_ENABLED",
+        env = "POOL_REPUTATION_TRACKING_ENABLED",
         default_value = "true"
     )]
     pub reputation_tracking_enabled: bool,
