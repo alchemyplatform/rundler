@@ -37,7 +37,6 @@ use ethers::types::{Address, H256, U256};
 use mockall::automock;
 use rundler_sim::{EntityInfos, MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{Entity, EntityType, EntityUpdate, UserOperation, ValidTimeRange};
-use strum::IntoEnumIterator;
 use tonic::async_trait;
 pub(crate) use uo_pool::UoPool;
 
@@ -119,7 +118,7 @@ pub struct PoolConfig {
     /// Chain ID this pool targets
     pub chain_id: u64,
     /// The maximum number of operations an unstaked sender can have in the mempool
-    pub max_userops_per_sender: usize,
+    pub same_sender_mempool_count: usize,
     /// The minimum fee bump required to replace an operation in the mempool
     /// Applies to both priority fee and fee. Expressed as an integer percentage value
     pub min_replacement_fee_increase_percentage: u64,
@@ -215,9 +214,11 @@ pub struct PaymasterMetadata {
 impl PoolOperation {
     /// Returns true if the operation contains the given entity.
     pub fn contains_entity(&self, entity: &Entity) -> bool {
-        self.entity_address(entity.kind)
-            .map(|address| address == entity.address)
-            .unwrap_or(false)
+        if let Some(e) = self.entity_infos.get(entity.kind) {
+            e.address == entity.address
+        } else {
+            false
+        }
     }
 
     /// Returns true if the operation requires the given entity to stake.
@@ -239,20 +240,31 @@ impl PoolOperation {
 
     /// Returns an iterator over all entities that are included in this operation.
     pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        EntityType::iter().filter_map(|entity| {
-            self.entity_address(entity)
-                .map(|address| Entity::new(entity, address))
+        self.entity_infos
+            .entities()
+            .map(|(t, entity)| Entity::new(t, entity.address))
+    }
+
+    /// Returns an iterator over all entities that need stake in this operation. This can be a subset of entities that are staked in the operation.
+    pub fn entities_requiring_stake(&'_ self) -> impl Iterator<Item = Entity> + '_ {
+        self.entity_infos.entities().filter_map(|(t, entity)| {
+            if self.requires_stake(t) {
+                Entity::new(t, entity.address).into()
+            } else {
+                None
+            }
         })
     }
 
-    /// Returns an iterator over all staked entities that are included in this operation.
-    pub fn staked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        EntityType::iter()
-            .filter(|entity| self.requires_stake(*entity))
-            .filter_map(|entity| {
-                self.entity_address(entity)
-                    .map(|address| Entity::new(entity, address))
-            })
+    /// Return all the unstaked entities that are used in this operation.
+    pub fn unstaked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
+        self.entity_infos.entities().filter_map(|(t, entity)| {
+            if entity.is_staked {
+                None
+            } else {
+                Entity::new(t, entity.address).into()
+            }
+        })
     }
 
     /// Compute the amount of heap memory the PoolOperation takes up.
@@ -261,19 +273,12 @@ impl PoolOperation {
             + self.uo.heap_size()
             + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
     }
-
-    fn entity_address(&self, entity: EntityType) -> Option<Address> {
-        match entity {
-            EntityType::Account => Some(self.uo.sender),
-            EntityType::Paymaster => self.uo.paymaster(),
-            EntityType::Factory => self.uo.factory(),
-            EntityType::Aggregator => self.aggregator,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use rundler_sim::EntityInfo;
+
     use super::*;
 
     #[test]
@@ -298,18 +303,30 @@ mod tests {
             sim_block_number: 0,
             entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
-            entity_infos: EntityInfos::default(),
+            entity_infos: EntityInfos {
+                factory: Some(EntityInfo {
+                    address: factory,
+                    is_staked: false,
+                }),
+                sender: EntityInfo {
+                    address: sender,
+                    is_staked: false,
+                },
+                paymaster: Some(EntityInfo {
+                    address: paymaster,
+                    is_staked: false,
+                }),
+                aggregator: Some(EntityInfo {
+                    address: aggregator,
+                    is_staked: false,
+                }),
+            },
         };
 
         assert!(po.requires_stake(EntityType::Account));
         assert!(!po.requires_stake(EntityType::Paymaster));
         assert!(!po.requires_stake(EntityType::Factory));
         assert!(po.requires_stake(EntityType::Aggregator));
-
-        assert_eq!(po.entity_address(EntityType::Account), Some(sender));
-        assert_eq!(po.entity_address(EntityType::Paymaster), Some(paymaster));
-        assert_eq!(po.entity_address(EntityType::Factory), Some(factory));
-        assert_eq!(po.entity_address(EntityType::Aggregator), Some(aggregator));
 
         let entities = po.entities().collect::<Vec<_>>();
         assert_eq!(entities.len(), 4);

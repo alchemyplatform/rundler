@@ -320,7 +320,7 @@ impl AddressReputation {
             // make sure we aren't dividing by 0
             0
         } else {
-            included * self.params.inclusion_rate_factor / seen + std::cmp::min(included, 10_000)
+            self.params.inclusion_rate_factor * included / seen + std::cmp::min(included, 10_000)
         };
 
         // return ops allowed, as defined by UREP-020

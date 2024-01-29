@@ -195,8 +195,8 @@ where
                 state.throttled_ops.remove(&op.hash);
 
                 if let Some(op) = state.pool.mine_operation(op, update.latest_block_number) {
-                    // Only account for a staked entity once
-                    for entity_addr in op.staked_entities().map(|e| e.address).unique() {
+                    // Only account for an entity once
+                    for entity_addr in op.entities().map(|e| e.address).unique() {
                         self.reputation.add_included(entity_addr);
                     }
                     mined_op_count += 1;
@@ -208,9 +208,9 @@ where
                 }
 
                 if let Some(op) = state.pool.unmine_operation(op) {
-                    // Only account for a staked entity once
-                    for entity_addr in op.staked_entities().map(|e| e.address).unique() {
-                        self.reputation.add_included(entity_addr);
+                    // Only account for an entity once
+                    for entity_addr in op.entities().map(|e| e.address).unique() {
+                        self.reputation.remove_included(entity_addr);
                     }
                     unmined_op_count += 1;
                 }
@@ -250,17 +250,17 @@ where
                 if let Some(block) = block_seen {
                     if update.latest_block_number - block > self.config.throttled_entity_live_blocks
                     {
-                        to_remove.insert(*hash);
+                        to_remove.insert((*hash, block));
                     }
                 }
             }
-            for hash in to_remove {
+            for (hash, added_at_block) in to_remove {
                 state.pool.remove_operation_by_hash(hash);
                 state.throttled_ops.remove(&hash);
                 self.emit(OpPoolEvent::RemovedOp {
                     op_hash: hash,
                     reason: OpRemovalReason::ThrottledAndOld {
-                        added_at_block_number: state.block_number,
+                        added_at_block_number: added_at_block,
                         current_block_number: update.latest_block_number,
                     },
                 })
@@ -414,6 +414,34 @@ where
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
         };
+
+        // Check sender count in mempool. If sender has too many operations, must be staked
+        {
+            let state = self.state.read();
+            if !pool_op.account_is_staked
+                && state.pool.address_count(&pool_op.uo.sender)
+                    >= self.config.same_sender_mempool_count
+            {
+                return Err(MempoolError::MaxOperationsReached(
+                    self.config.same_sender_mempool_count,
+                    pool_op.uo.sender,
+                ));
+            }
+
+            // Check unstaked non-sender entity counts in the mempool
+            for entity in pool_op
+                .unstaked_entities()
+                .filter(|e| e.address != pool_op.entity_infos.sender.address)
+            {
+                let ops_allowed = self.reputation.get_ops_allowed(entity.address);
+                if state.pool.address_count(&entity.address) >= ops_allowed as usize {
+                    return Err(MempoolError::MaxOperationsReached(
+                        ops_allowed as usize,
+                        entity.address,
+                    ));
+                }
+            }
+        }
 
         // Add op to pool
         let hash = {
@@ -628,11 +656,12 @@ impl UoPoolMetrics {
 mod tests {
     use std::collections::HashMap;
 
-    use ethers::types::Bytes;
+    use ethers::types::{Bytes, H160};
     use rundler_provider::{MockEntryPoint, MockPaymasterHelper};
     use rundler_sim::{
-        MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, PrecheckViolation,
-        SimulationError, SimulationResult, SimulationSettings, SimulationViolation, ViolationError,
+        EntityInfo, EntityInfos, MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings,
+        PrecheckViolation, SimulationError, SimulationResult, SimulationSettings,
+        SimulationViolation, ViolationError,
     };
     use rundler_types::{DepositInfo, EntityType, GasFees, ValidTimeRange};
 
@@ -915,7 +944,6 @@ mod tests {
     #[tokio::test]
     async fn test_throttled_account() {
         let address = Address::random();
-
         let mut ops = Vec::new();
         for i in 0..5 {
             ops.push(create_op_with_errors(address, i, 2, None, None, true));
@@ -1230,6 +1258,26 @@ mod tests {
         assert_eq!(pool_op, None);
     }
 
+    #[tokio::test]
+    async fn too_many_ops_for_unstaked_sender() {
+        let mut ops = vec![];
+        let addr = H160::random();
+        for i in 0..5 {
+            ops.push(create_op(addr, i, 1, None))
+        }
+        let pool = create_pool(ops.clone());
+
+        for op in ops.iter().take(4) {
+            pool.add_operation(OperationOrigin::Local, op.op.clone())
+                .await
+                .unwrap();
+        }
+        assert!(pool
+            .add_operation(OperationOrigin::Local, ops[4].op.clone())
+            .await
+            .is_err());
+    }
+
     #[derive(Clone, Debug)]
     struct OpWithErrors {
         op: UserOperation,
@@ -1298,6 +1346,13 @@ mod tests {
                             account_is_staked: op.staked,
                             block_number: Some(0),
                             valid_time_range: op.valid_time_range,
+                            entity_infos: EntityInfos {
+                                sender: EntityInfo {
+                                    address: op.op.sender,
+                                    is_staked: false,
+                                },
+                                ..EntityInfos::default()
+                            },
                             ..SimulationResult::default()
                         })
                     }
@@ -1307,7 +1362,6 @@ mod tests {
         let args = PoolConfig {
             entry_point: Address::random(),
             chain_id: 1,
-            max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 10000,
             blocklist: None,
@@ -1316,6 +1370,7 @@ mod tests {
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
             num_shards: 1,
+            same_sender_mempool_count: 4,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
         };
@@ -1496,8 +1551,8 @@ mod tests {
 
         fn get_ops_allowed(&self, address: Address) -> u64 {
             let counts = self.counts.read();
-            let seen = *counts.seen.get(&address).unwrap();
-            let included = *counts.included.get(&address).unwrap();
+            let seen = *counts.seen.get(&address).unwrap_or(&0);
+            let included = *counts.included.get(&address).unwrap_or(&0);
             let inclusion_based_count = if seen == 0 {
                 // make sure we aren't dividing by 0
                 0

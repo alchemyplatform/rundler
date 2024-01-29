@@ -39,7 +39,6 @@ use crate::chain::{DepositInfo, MinedOp};
 pub(crate) struct PoolInnerConfig {
     entry_point: Address,
     chain_id: u64,
-    max_userops_per_sender: usize,
     max_size_of_pool_bytes: usize,
     min_replacement_fee_increase_percentage: u64,
     throttled_entity_mempool_count: u64,
@@ -51,7 +50,6 @@ impl From<PoolConfig> for PoolInnerConfig {
         Self {
             entry_point: config.entry_point,
             chain_id: config.chain_id,
-            max_userops_per_sender: config.max_userops_per_sender,
             max_size_of_pool_bytes: config.max_size_of_pool_bytes,
             min_replacement_fee_increase_percentage: config.min_replacement_fee_increase_percentage,
             throttled_entity_mempool_count: config.throttled_entity_mempool_count,
@@ -437,16 +435,6 @@ impl PoolInner {
             self.remove_operation_by_hash(hash);
         }
 
-        // Check sender count in mempool. If sender has too many operations, must be staked
-        if self.address_count(&op.uo.sender) >= self.config.max_userops_per_sender
-            && !op.account_is_staked
-        {
-            return Err(MempoolError::MaxOperationsReached(
-                self.config.max_userops_per_sender,
-                op.uo.sender,
-            ));
-        }
-
         // check or update paymaster balance
         if let Some(paymaster_meta) = paymaster_meta {
             self.paymaster_balances
@@ -613,6 +601,8 @@ impl PoolMetrics {
 
 #[cfg(test)]
 mod tests {
+    use rundler_sim::{EntityInfo, EntityInfos};
+
     use super::*;
 
     #[test]
@@ -796,6 +786,10 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(agg);
+            op.entity_infos.aggregator = Some(EntityInfo {
+                address: agg,
+                is_staked: false,
+            });
             pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
@@ -817,6 +811,10 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+            op.entity_infos.paymaster = Some(EntityInfo {
+                address: op.uo.paymaster().unwrap(),
+                is_staked: false,
+            });
             pool.add_operation(op.clone(), None).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
@@ -825,20 +823,6 @@ mod tests {
         assert!(pool.by_hash.is_empty());
         assert!(pool.by_id.is_empty());
         assert!(pool.best.is_empty());
-    }
-
-    #[test]
-    fn too_many_ops() {
-        let args = conf();
-        let mut pool = PoolInner::new(args.clone());
-        let addr = Address::random();
-        for i in 0..args.max_userops_per_sender {
-            let op = create_op(addr, i, 1);
-            pool.add_operation(op, None).unwrap();
-        }
-
-        let op = create_op(addr, args.max_userops_per_sender, 1);
-        assert!(pool.add_operation(op, None).is_err());
     }
 
     #[test]
@@ -851,8 +835,20 @@ mod tests {
 
         let mut op = create_op(sender, 0, 1);
         op.uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+        op.entity_infos.paymaster = Some(EntityInfo {
+            address: op.uo.paymaster().unwrap(),
+            is_staked: false,
+        });
         op.uo.init_code = factory.as_bytes().to_vec().into();
+        op.entity_infos.factory = Some(EntityInfo {
+            address: op.uo.factory().unwrap(),
+            is_staked: false,
+        });
         op.aggregator = Some(aggregator);
+        op.entity_infos.aggregator = Some(EntityInfo {
+            address: aggregator,
+            is_staked: false,
+        });
 
         let count = 5;
         let mut hashes = vec![];
@@ -901,11 +897,11 @@ mod tests {
             pool.add_operation(op, None).unwrap();
         }
 
-        let op = create_op(Address::random(), args.max_userops_per_sender, 1);
+        let op = create_op(Address::random(), 4, 1);
         assert!(pool.add_operation(op, None).is_err());
 
         // on equal gas, worst should remain because it came first
-        let op = create_op(Address::random(), args.max_userops_per_sender, 2);
+        let op = create_op(Address::random(), 4, 2);
         let result = pool.add_operation(op, None);
         assert!(result.is_ok(), "{:?}", result.err());
     }
@@ -949,6 +945,10 @@ mod tests {
         let mut po1 = create_op(sender, 0, 10);
         po1.uo.max_priority_fee_per_gas = 10.into();
         po1.uo.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
+        po1.entity_infos.paymaster = Some(EntityInfo {
+            address: po1.uo.paymaster().unwrap(),
+            is_staked: false,
+        });
         let _ = pool.add_operation(po1, None).unwrap();
         assert_eq!(pool.address_count(&paymaster1), 1);
 
@@ -956,6 +956,10 @@ mod tests {
         let mut po2 = create_op(sender, 0, 11);
         po2.uo.max_priority_fee_per_gas = 11.into();
         po2.uo.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
+        po2.entity_infos.paymaster = Some(EntityInfo {
+            address: po2.uo.paymaster().unwrap(),
+            is_staked: false,
+        });
         let _ = pool.add_operation(po2.clone(), None).unwrap();
 
         assert_eq!(pool.address_count(&sender), 1);
@@ -1029,7 +1033,6 @@ mod tests {
         PoolInnerConfig {
             entry_point: Address::random(),
             chain_id: 1,
-            max_userops_per_sender: 16,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
             throttled_entity_mempool_count: 4,
@@ -1051,7 +1054,17 @@ mod tests {
                 sender,
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
+
                 ..UserOperation::default()
+            },
+            entity_infos: EntityInfos {
+                factory: None,
+                sender: EntityInfo {
+                    address: sender,
+                    is_staked: false,
+                },
+                paymaster: None,
+                aggregator: None,
             },
             ..PoolOperation::default()
         }

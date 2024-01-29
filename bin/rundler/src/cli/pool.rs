@@ -59,12 +59,12 @@ pub struct PoolArgs {
     pub max_size_in_bytes: usize,
 
     #[arg(
-        long = "pool.max_userops_per_sender",
-        name = "pool.max_userops_per_sender",
-        env = "POOL_MAX_USEROPS_PER_SENDER",
+        long = "pool.same_sender_mempool_count",
+        name = "pool.same_sender_mempool_count",
+        env = "SAME_SENDER_MEMPOOL_COUNT",
         default_value = "4"
     )]
-    pub max_userops_per_sender: usize,
+    pub same_sender_mempool_count: usize,
 
     #[arg(
         long = "pool.min_replacement_fee_increase_percentage",
@@ -114,7 +114,7 @@ pub struct PoolArgs {
         long = "pool.throttled_entity_live_blocks",
         name = "pool.throttled_entity_live_blocks",
         env = "POOL_THROTTLED_ENTITY_LIVE_BLOCKS",
-        default_value = "4"
+        default_value = "10"
     )]
     pub throttled_entity_live_blocks: u64,
 }
@@ -156,7 +156,7 @@ impl PoolArgs {
                     chain_id: common.chain_id,
                     // Currently use the same shard count as the number of builders
                     num_shards: common.num_builders,
-                    max_userops_per_sender: self.max_userops_per_sender,
+                    same_sender_mempool_count: self.same_sender_mempool_count,
                     min_replacement_fee_increase_percentage: self
                         .min_replacement_fee_increase_percentage,
                     max_size_of_pool_bytes: self.max_size_in_bytes,
