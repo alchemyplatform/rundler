@@ -27,7 +27,10 @@ use futures::future;
 use rundler_provider::Provider;
 use rundler_task::block_watcher;
 use rundler_types::{
-    contracts::{entry_point::DepositedFilter, i_entry_point::UserOperationEventFilter},
+    contracts::{
+        entry_point::{DepositedFilter, WithdrawnFilter},
+        i_entry_point::UserOperationEventFilter,
+    },
     Timestamp, UserOperationId,
 };
 use tokio::{
@@ -71,6 +74,10 @@ pub struct ChainUpdate {
     pub entity_deposits: Vec<DepositInfo>,
     /// List of entity deposits that have been unmined due to a reorg
     pub unmined_entity_deposits: Vec<DepositInfo>,
+    /// List of on-chain entity withdrawals made in the most recent block
+    pub entity_withdrawals: Vec<DepositInfo>,
+    /// List of entity withdrawals that have been unmined due to a reorg
+    pub unmined_entity_withdrawals: Vec<DepositInfo>,
     /// Boolean to state if the most recent chain update had a reorg
     /// that was larger than the existing history that has been tracked
     pub reorg_larger_than_history: bool,
@@ -117,6 +124,7 @@ struct BlockSummary {
     parent_hash: H256,
     ops: Vec<MinedOp>,
     entity_deposits: Vec<DepositInfo>,
+    entity_withdrawals: Vec<DepositInfo>,
 }
 
 impl<P: Provider> Chain<P> {
@@ -225,7 +233,24 @@ impl<P: Provider> Chain<P> {
             .flat_map(|block| &block.entity_deposits)
             .copied()
             .collect();
-        Ok(self.new_update(0, mined_ops, vec![], entity_deposits, vec![], false))
+
+        let entity_withdrawals: Vec<_> = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.entity_withdrawals)
+            .copied()
+            .collect();
+
+        Ok(self.new_update(
+            0,
+            mined_ops,
+            vec![],
+            entity_deposits,
+            vec![],
+            entity_withdrawals,
+            vec![],
+            false,
+        ))
     }
 
     /// Given a collection of blocks to add to the chain, whose numbers may
@@ -247,6 +272,13 @@ impl<P: Provider> Chain<P> {
             .flat_map(|block| &block.entity_deposits)
             .copied()
             .collect();
+
+        let entity_withdrawals: Vec<_> = added_blocks
+            .iter()
+            .flat_map(|block| &block.entity_withdrawals)
+            .copied()
+            .collect();
+
         let reorg_depth = current_block_number + 1 - added_blocks[0].number;
         let unmined_ops: Vec<_> = self
             .blocks
@@ -261,6 +293,14 @@ impl<P: Provider> Chain<P> {
             .iter()
             .skip(self.blocks.len() - reorg_depth as usize)
             .flat_map(|block| &block.entity_deposits)
+            .copied()
+            .collect();
+
+        let unmined_entity_withdrawals: Vec<_> = self
+            .blocks
+            .iter()
+            .skip(self.blocks.len() - reorg_depth as usize)
+            .flat_map(|block| &block.entity_withdrawals)
             .copied()
             .collect();
 
@@ -286,6 +326,8 @@ impl<P: Provider> Chain<P> {
             unmined_ops,
             entity_deposits,
             unmined_entity_deposits,
+            entity_withdrawals,
+            unmined_entity_withdrawals,
             is_reorg_larger_than_history,
         )
     }
@@ -379,9 +421,10 @@ impl<P: Provider> Chain<P> {
         let opses = future::try_join_all(future_opses)
             .await
             .context("should load ops for new blocks")?;
-        for (i, (ops, deposits)) in opses.into_iter().enumerate() {
+        for (i, (ops, deposits, withdrawals)) in opses.into_iter().enumerate() {
             blocks[i].ops = ops;
             blocks[i].entity_deposits = deposits;
+            blocks[i].entity_withdrawals = withdrawals;
         }
         Ok(())
     }
@@ -389,7 +432,7 @@ impl<P: Provider> Chain<P> {
     async fn load_ops_in_block_with_hash(
         &self,
         block_hash: H256,
-    ) -> anyhow::Result<(Vec<MinedOp>, Vec<DepositInfo>)> {
+    ) -> anyhow::Result<(Vec<MinedOp>, Vec<DepositInfo>, Vec<DepositInfo>)> {
         let _permit = self
             .load_ops_semaphore
             .acquire()
@@ -410,10 +453,11 @@ impl<P: Provider> Chain<P> {
             .await
             .context("chain state should load user operation events")?;
 
-        let deposits = self.load_entity_deposits(&logs);
         let mined_ops = self.load_mined_ops(&logs);
+        let deposits = self.load_entity_deposits(&logs);
+        let withdrawals = self.load_entity_withdrawals(&logs);
 
-        Ok((mined_ops, deposits))
+        Ok((mined_ops, deposits, withdrawals))
     }
 
     fn load_mined_ops(&self, logs: &Vec<Log>) -> Vec<MinedOp> {
@@ -461,6 +505,24 @@ impl<P: Provider> Chain<P> {
         deposits
     }
 
+    fn load_entity_withdrawals(&self, logs: &Vec<Log>) -> Vec<DepositInfo> {
+        let mut deposits = vec![];
+        for log in logs {
+            let entrypoint = log.address;
+            if let Ok(event) = contract::parse_log::<WithdrawnFilter>(log.clone()) {
+                let info = DepositInfo {
+                    entrypoint,
+                    address: event.account,
+                    amount: event.amount,
+                };
+
+                deposits.push(info);
+            }
+        }
+
+        deposits
+    }
+
     fn block_with_number(&self, number: u64) -> Option<&BlockSummary> {
         let earliest_number = self.blocks.front()?.number;
         if number < earliest_number {
@@ -476,6 +538,8 @@ impl<P: Provider> Chain<P> {
         unmined_ops: Vec<MinedOp>,
         entity_deposits: Vec<DepositInfo>,
         unmined_entity_deposits: Vec<DepositInfo>,
+        entity_withdrawals: Vec<DepositInfo>,
+        unmined_entity_withdrawals: Vec<DepositInfo>,
         reorg_larger_than_history: bool,
     ) -> ChainUpdate {
         let latest_block = self
@@ -492,6 +556,8 @@ impl<P: Provider> Chain<P> {
             unmined_ops,
             entity_deposits,
             unmined_entity_deposits,
+            entity_withdrawals,
+            unmined_entity_withdrawals,
             reorg_larger_than_history,
         }
     }
@@ -528,6 +594,7 @@ impl BlockSummary {
             parent_hash: block.parent_hash,
             ops: Vec::new(),
             entity_deposits: Vec::new(),
+            entity_withdrawals: Vec::new(),
         })
     }
 }
@@ -692,6 +759,8 @@ mod tests {
                 unmined_ops: vec![],
                 entity_deposits: vec![],
                 unmined_entity_deposits: vec![],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );
@@ -723,6 +792,8 @@ mod tests {
                 unmined_ops: vec![],
                 entity_deposits: vec![],
                 unmined_entity_deposits: vec![],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );
@@ -760,6 +831,8 @@ mod tests {
                 unmined_ops: vec![fake_mined_op(102)],
                 entity_deposits: vec![],
                 unmined_entity_deposits: vec![fake_mined_deposit(Address::zero(), 0.into())],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );
@@ -797,6 +870,8 @@ mod tests {
                 mined_ops: vec![fake_mined_op(111), fake_mined_op(112)],
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102)],
                 unmined_entity_deposits: vec![fake_mined_deposit(addr(1), 0.into())],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );
@@ -831,6 +906,8 @@ mod tests {
                 mined_ops: vec![fake_mined_op(111)],
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102)],
                 unmined_entity_deposits: vec![],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );
@@ -866,6 +943,8 @@ mod tests {
                 mined_ops: vec![fake_mined_op(111), fake_mined_op(112), fake_mined_op(113)],
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102), fake_mined_op(103)],
                 unmined_entity_deposits: vec![],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: true,
             }
         );
@@ -899,6 +978,8 @@ mod tests {
                 mined_ops: vec![fake_mined_op(104), fake_mined_op(105), fake_mined_op(106)],
                 unmined_ops: vec![],
                 unmined_entity_deposits: vec![],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );
@@ -926,6 +1007,8 @@ mod tests {
                 mined_ops: vec![fake_mined_op(101), fake_mined_op(102), fake_mined_op(103),],
                 unmined_ops: vec![],
                 unmined_entity_deposits: vec![],
+                entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![],
                 reorg_larger_than_history: false,
             }
         );

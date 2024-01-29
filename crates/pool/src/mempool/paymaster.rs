@@ -119,6 +119,26 @@ impl PaymasterTracker {
         }
     }
 
+    pub(crate) fn update_paymaster_balance_after_withdrawal_reorg(
+        &mut self,
+        paymaster: Address,
+        withdrawal: U256,
+    ) {
+        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
+            paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(withdrawal);
+        }
+    }
+
+    pub(crate) fn update_paymaster_balance_from_withdrawal(
+        &mut self,
+        paymaster: Address,
+        withdrawal: U256,
+    ) {
+        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
+            paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_sub(withdrawal);
+        }
+    }
+
     pub(crate) fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
         if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
             return Some(PaymasterMetadata {

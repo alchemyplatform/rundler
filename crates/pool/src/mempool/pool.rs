@@ -361,6 +361,8 @@ impl PoolInner {
         &mut self,
         deposits: &Vec<DepositInfo>,
         unmined_entity_deposits: &Vec<DepositInfo>,
+        withdrawals: &Vec<DepositInfo>,
+        unmined_entity_withdrawals: &Vec<DepositInfo>,
     ) {
         for deposit in deposits {
             self.paymaster_balances
@@ -372,6 +374,19 @@ impl PoolInner {
                 .update_paymaster_balance_after_deposit_reorg(
                     unmined_deposit.address,
                     unmined_deposit.amount,
+                )
+        }
+
+        for withdrawal in withdrawals {
+            self.paymaster_balances
+                .update_paymaster_balance_from_withdrawal(withdrawal.address, withdrawal.amount)
+        }
+
+        for unmined_withdrawal in unmined_entity_withdrawals {
+            self.paymaster_balances
+                .update_paymaster_balance_after_withdrawal_reorg(
+                    unmined_withdrawal.address,
+                    unmined_withdrawal.amount,
                 )
         }
     }

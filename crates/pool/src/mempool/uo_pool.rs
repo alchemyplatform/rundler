@@ -170,6 +170,20 @@ where
                 .cloned()
                 .collect();
 
+            let withdrawals: Vec<DepositInfo> = update
+                .entity_withdrawals
+                .iter()
+                .filter(|d| d.entrypoint == self.config.entry_point)
+                .cloned()
+                .collect();
+
+            let unmined_entity_withdrawals: Vec<DepositInfo> = update
+                .unmined_entity_withdrawals
+                .iter()
+                .filter(|d| d.entrypoint == self.config.entry_point)
+                .cloned()
+                .collect();
+
             let unmined_ops = deduped_ops
                 .unmined_ops
                 .iter()
@@ -182,9 +196,12 @@ where
             }
 
             let mut state = self.state.write();
-            state
-                .pool
-                .update_paymaster_balances_after_updates(&deposits, &unmined_entity_deposits);
+            state.pool.update_paymaster_balances_after_updates(
+                &deposits,
+                &unmined_entity_deposits,
+                &withdrawals,
+                &unmined_entity_withdrawals,
+            );
 
             for op in mined_ops {
                 if op.entry_point != self.config.entry_point {
@@ -772,6 +789,8 @@ mod tests {
             unmined_ops: vec![],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
+            entity_withdrawals: vec![],
+            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -826,6 +845,8 @@ mod tests {
             unmined_ops: vec![],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
+            entity_withdrawals: vec![],
+            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -860,6 +881,8 @@ mod tests {
             }],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
+            entity_withdrawals: vec![],
+            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -902,6 +925,8 @@ mod tests {
             unmined_ops: vec![],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
+            entity_withdrawals: vec![],
+            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -944,6 +969,8 @@ mod tests {
             unmined_ops: vec![],
             entity_deposits: vec![],
             unmined_entity_deposits: vec![],
+            entity_withdrawals: vec![],
+            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1016,6 +1043,8 @@ mod tests {
             entity_deposits: vec![],
             unmined_ops: vec![],
             unmined_entity_deposits: vec![],
+            entity_withdrawals: vec![],
+            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;
