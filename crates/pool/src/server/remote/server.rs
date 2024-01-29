@@ -30,13 +30,11 @@ use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Result, Status};
 
 use super::protos::{
-    add_op_response, debug_clear_mempool_response, debug_clear_state_response,
-    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
-    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
-    get_stake_status_response,
+    add_op_response, debug_clear_state_response, debug_dump_mempool_response,
+    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
+    get_ops_response, get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
-    DebugClearMempoolRequest, DebugClearMempoolResponse, DebugClearMempoolSuccess,
     DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
@@ -286,24 +284,6 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => DebugClearStateResponse {
                 result: Some(debug_clear_state_response::Result::Failure(error.into())),
-            },
-        };
-
-        Ok(Response::new(resp))
-    }
-
-    async fn debug_clear_mempool(
-        &self,
-        _request: Request<DebugClearMempoolRequest>,
-    ) -> Result<Response<DebugClearMempoolResponse>> {
-        let resp = match self.local_pool.debug_clear_mempool().await {
-            Ok(_) => DebugClearMempoolResponse {
-                result: Some(debug_clear_mempool_response::Result::Success(
-                    DebugClearMempoolSuccess {},
-                )),
-            },
-            Err(error) => DebugClearMempoolResponse {
-                result: Some(debug_clear_mempool_response::Result::Failure(error.into())),
             },
         };
 
