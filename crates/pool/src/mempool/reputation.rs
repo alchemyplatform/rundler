@@ -457,6 +457,18 @@ mod tests {
     }
 
     #[test]
+    fn reputation_banned_tracking_disabled() {
+        let addr = Address::random();
+        let params = ReputationParams::new_with_config(false);
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included = ops_seen / params.min_inclusion_rate_denominator - params.ban_slack - 1;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
+    }
+
+    #[test]
     fn hourly_update() {
         let addr = Address::random();
         let mut reputation = AddressReputation::new(ReputationParams::bundler_default());
