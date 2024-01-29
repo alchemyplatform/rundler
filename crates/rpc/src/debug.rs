@@ -104,7 +104,7 @@ where
     async fn bundler_clear_mempool(&self) -> RpcResult<String> {
         let _ = self
             .pool
-            .debug_clear_state(true, false, true)
+            .debug_clear_state(true, true, false)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 

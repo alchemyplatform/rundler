@@ -276,7 +276,7 @@ impl OpPool for OpPoolImpl {
         let req = request.into_inner();
         let resp = match self
             .local_pool
-            .debug_clear_state(req.clear_mempool, req.clear_reputation, req.clear_paymaster)
+            .debug_clear_state(req.clear_mempool, req.clear_paymaster, req.clear_reputation)
             .await
         {
             Ok(_) => DebugClearStateResponse {

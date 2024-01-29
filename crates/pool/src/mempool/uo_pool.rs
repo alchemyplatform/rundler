@@ -587,15 +587,14 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
-    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool, clear_paymaster: bool) {
-        if clear_mempool {
-            self.state.write().pool.clear()
-        }
+    fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool) {
+        self.state
+            .write()
+            .pool
+            .clear(clear_mempool, clear_paymaster);
+
         if clear_reputation {
             self.reputation.clear()
-        }
-        if clear_paymaster {
-            self.state.write().pool.clear_paymaster_tracker_state();
         }
     }
 

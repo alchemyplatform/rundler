@@ -187,8 +187,8 @@ impl PoolServer for LocalPoolHandle {
     async fn debug_clear_state(
         &self,
         clear_mempool: bool,
-        clear_reputation: bool,
         clear_paymaster: bool,
+        clear_reputation: bool,
     ) -> Result<(), PoolServerError> {
         let req = ServerRequestKind::DebugClearState {
             clear_mempool,
@@ -396,7 +396,7 @@ where
         clear_paymaster: bool,
     ) -> PoolResult<()> {
         for mempool in self.mempools.values() {
-            mempool.clear_state(clear_mempool, clear_reputation, clear_paymaster);
+            mempool.clear_state(clear_mempool, clear_paymaster, clear_reputation);
         }
         Ok(())
     }

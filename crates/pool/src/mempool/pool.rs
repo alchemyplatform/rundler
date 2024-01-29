@@ -376,21 +376,22 @@ impl PoolInner {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.by_hash.clear();
-        self.by_id.clear();
-        self.paymaster_balances.clear();
-        self.best.clear();
-        self.mined_at_block_number_by_hash.clear();
-        self.mined_hashes_with_block_numbers.clear();
-        self.count_by_address.clear();
-        self.pool_size = SizeTracker::default();
-        self.cache_size = SizeTracker::default();
-        self.update_metrics();
-    }
+    pub(crate) fn clear(&mut self, clear_mempool: bool, clear_paymaster: bool) {
+        if clear_mempool {
+            self.by_hash.clear();
+            self.by_id.clear();
+            self.best.clear();
+            self.mined_at_block_number_by_hash.clear();
+            self.mined_hashes_with_block_numbers.clear();
+            self.count_by_address.clear();
+            self.pool_size = SizeTracker::default();
+            self.cache_size = SizeTracker::default();
+            self.update_metrics();
+        }
 
-    pub(crate) fn clear_paymaster_tracker_state(&mut self) {
-        self.paymaster_balances.clear();
+        if clear_paymaster {
+            self.paymaster_balances.clear();
+        }
     }
 
     pub(crate) fn set_tracking(&mut self, paymaster: bool) {
