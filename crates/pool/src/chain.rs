@@ -531,6 +531,7 @@ impl<P: Provider> Chain<P> {
         self.blocks.get((number - earliest_number) as usize)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_update(
         &self,
         reorg_depth: u64,
