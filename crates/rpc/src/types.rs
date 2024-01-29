@@ -223,3 +223,27 @@ impl TryFrom<Reputation> for RpcReputationInput {
         })
     }
 }
+
+/// Reputation of an entity
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcAdminSetTracking {
+    /// Field to set the status for tracking within the paymaster
+    /// module
+    pub paymaster_tracking: bool,
+    /// Field to set the status for tracking within the reputation
+    /// module
+    pub reputation_tracking: bool,
+}
+
+/// Reputation of an entity
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcAdminClearState {
+    /// Field to set whether to clear entire mempool
+    pub clear_mempool: bool,
+    /// Field to set whether to clear paymaster state
+    pub clear_paymaster: bool,
+    /// Field to set whether to clear reputation state
+    pub clear_reputation: bool,
+}

@@ -16,27 +16,24 @@ use ethers::types::Address;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_pool::PoolServer;
 
-use crate::error::rpc_err;
+use crate::{
+    error::rpc_err,
+    types::{RpcAdminClearState, RpcAdminSetTracking},
+};
 
 /// Admin API
 #[rpc(client, server, namespace = "admin")]
 pub trait AdminApi {
     /// Clears the state of the mempool field if name is true
     #[method(name = "clearState")]
-    async fn admin_clear_state(
-        &self,
-        mempool: bool,
-        paymaster: bool,
-        reputation: bool,
-    ) -> RpcResult<String>;
+    async fn admin_clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String>;
 
     /// Clears paymaster tracker state.
     #[method(name = "setTracking")]
     async fn admin_set_tracking(
         &self,
         entrypoint: Address,
-        paymaster: bool,
-        reputation: bool,
+        tracking_info: RpcAdminSetTracking,
     ) -> RpcResult<String>;
 }
 
@@ -55,15 +52,14 @@ impl<P> AdminApiServer for AdminApi<P>
 where
     P: PoolServer,
 {
-    async fn admin_clear_state(
-        &self,
-        mempool: bool,
-        paymaster: bool,
-        reputation: bool,
-    ) -> RpcResult<String> {
+    async fn admin_clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String> {
         let _ = self
             .pool
-            .debug_clear_state(mempool, paymaster, reputation)
+            .debug_clear_state(
+                clear_params.clear_mempool,
+                clear_params.clear_paymaster,
+                clear_params.clear_reputation,
+            )
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
@@ -73,12 +69,15 @@ where
     async fn admin_set_tracking(
         &self,
         entrypoint: Address,
-        paymaster: bool,
-        reputation: bool,
+        tracking_params: RpcAdminSetTracking,
     ) -> RpcResult<String> {
         let _ = self
             .pool
-            .admin_set_tracking(entrypoint, paymaster, reputation)
+            .admin_set_tracking(
+                entrypoint,
+                tracking_params.paymaster_tracking,
+                tracking_params.reputation_tracking,
+            )
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
