@@ -668,14 +668,21 @@ mod tests {
         hash: H256,
         op_hashes: Vec<H256>,
         deposit_addresses: Vec<Address>,
+        withdrawal_addresses: Vec<Address>,
     }
 
     impl MockBlock {
-        fn new(hash: H256, op_hashes: Vec<H256>, deposit_addresses: Vec<Address>) -> Self {
+        fn new(
+            hash: H256,
+            op_hashes: Vec<H256>,
+            deposit_addresses: Vec<Address>,
+            withdrawal_addresses: Vec<Address>,
+        ) -> Self {
             Self {
                 hash,
                 op_hashes,
                 deposit_addresses,
+                withdrawal_addresses,
             }
         }
     }
@@ -731,6 +738,13 @@ mod tests {
                     .copied()
                     .map(fake_deposit_log),
             );
+            joined_logs.extend(
+                block
+                    .deposit_addresses
+                    .iter()
+                    .copied()
+                    .map(fake_withdrawal_log),
+            );
 
             joined_logs
         }
@@ -740,10 +754,10 @@ mod tests {
     async fn test_initial_load() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(101), hash(102)], vec![]),
-            MockBlock::new(hash(1), vec![hash(103)], vec![]),
-            MockBlock::new(hash(2), vec![], vec![]),
-            MockBlock::new(hash(3), vec![hash(104), hash(105)], vec![]),
+            MockBlock::new(hash(0), vec![hash(101), hash(102)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(103)], vec![], vec![]),
+            MockBlock::new(hash(2), vec![], vec![], vec![]),
+            MockBlock::new(hash(3), vec![hash(104), hash(105)], vec![], vec![]),
         ]);
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
         // With a history size of 3, we should get updates from all blocks except the first one.
@@ -770,15 +784,15 @@ mod tests {
     async fn test_simple_advance() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(101), hash(102)], vec![]),
-            MockBlock::new(hash(1), vec![hash(103)], vec![]),
-            MockBlock::new(hash(2), vec![], vec![]),
-            MockBlock::new(hash(3), vec![hash(104), hash(105)], vec![]),
+            MockBlock::new(hash(0), vec![hash(101), hash(102)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(103)], vec![], vec![]),
+            MockBlock::new(hash(2), vec![], vec![], vec![]),
+            MockBlock::new(hash(3), vec![hash(104), hash(105)], vec![], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         controller
             .get_blocks_mut()
-            .push(MockBlock::new(hash(4), vec![hash(106)], vec![]));
+            .push(MockBlock::new(hash(4), vec![hash(106)], vec![], vec![]));
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
         assert_eq!(
             update,
@@ -803,9 +817,9 @@ mod tests {
     async fn test_forward_reorg() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(100)], vec![]),
-            MockBlock::new(hash(1), vec![hash(101)], vec![]),
-            MockBlock::new(hash(2), vec![hash(102)], vec![Address::zero()]),
+            MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(101)], vec![], vec![]),
+            MockBlock::new(hash(2), vec![hash(102)], vec![Address::zero()], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         {
@@ -813,9 +827,9 @@ mod tests {
             let mut blocks = controller.get_blocks_mut();
             blocks.pop();
             blocks.extend([
-                MockBlock::new(hash(12), vec![hash(112)], vec![]),
-                MockBlock::new(hash(13), vec![hash(113)], vec![]),
-                MockBlock::new(hash(14), vec![hash(114)], vec![]),
+                MockBlock::new(hash(12), vec![hash(112)], vec![], vec![]),
+                MockBlock::new(hash(13), vec![hash(113)], vec![], vec![]),
+                MockBlock::new(hash(14), vec![hash(114)], vec![], vec![]),
             ]);
         }
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
@@ -842,9 +856,9 @@ mod tests {
     async fn test_sideways_reorg() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(100)], vec![]),
-            MockBlock::new(hash(1), vec![hash(101)], vec![addr(1)]),
-            MockBlock::new(hash(2), vec![hash(102)], vec![]),
+            MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(101)], vec![addr(1)], vec![]),
+            MockBlock::new(hash(2), vec![hash(102)], vec![], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         {
@@ -853,8 +867,8 @@ mod tests {
             blocks.pop();
             blocks.pop();
             blocks.extend([
-                MockBlock::new(hash(11), vec![hash(111)], vec![addr(2)]),
-                MockBlock::new(hash(12), vec![hash(112)], vec![]),
+                MockBlock::new(hash(11), vec![hash(111)], vec![addr(2)], vec![]),
+                MockBlock::new(hash(12), vec![hash(112)], vec![], vec![]),
             ]);
         }
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
@@ -881,9 +895,9 @@ mod tests {
     async fn test_backwards_reorg() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(100)], vec![]),
-            MockBlock::new(hash(1), vec![hash(101)], vec![]),
-            MockBlock::new(hash(2), vec![hash(102)], vec![]),
+            MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(101)], vec![], vec![]),
+            MockBlock::new(hash(2), vec![hash(102)], vec![], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         {
@@ -891,7 +905,12 @@ mod tests {
             let mut blocks = controller.get_blocks_mut();
             blocks.pop();
             blocks.pop();
-            blocks.push(MockBlock::new(hash(11), vec![hash(111)], vec![addr(1)]));
+            blocks.push(MockBlock::new(
+                hash(11),
+                vec![hash(111)],
+                vec![addr(1)],
+                vec![],
+            ));
         }
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
         assert_eq!(
@@ -917,18 +936,18 @@ mod tests {
     async fn test_reorg_longer_than_history() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(100)], vec![]),
-            MockBlock::new(hash(1), vec![hash(101)], vec![]),
-            MockBlock::new(hash(2), vec![hash(102)], vec![]),
-            MockBlock::new(hash(3), vec![hash(103)], vec![]),
+            MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(101)], vec![], vec![]),
+            MockBlock::new(hash(2), vec![hash(102)], vec![], vec![]),
+            MockBlock::new(hash(3), vec![hash(103)], vec![], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         // The history has size 3, so after this update it's completely unrecognizable.
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(100)], vec![]),
-            MockBlock::new(hash(11), vec![hash(111)], vec![]),
-            MockBlock::new(hash(12), vec![hash(112)], vec![]),
-            MockBlock::new(hash(13), vec![hash(113)], vec![]),
+            MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
+            MockBlock::new(hash(11), vec![hash(111)], vec![], vec![]),
+            MockBlock::new(hash(12), vec![hash(112)], vec![], vec![]),
+            MockBlock::new(hash(13), vec![hash(113)], vec![], vec![]),
         ]);
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
         assert_eq!(
@@ -954,15 +973,20 @@ mod tests {
     async fn test_advance_larger_than_history_size() {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
-            MockBlock::new(hash(0), vec![hash(100)], vec![]),
-            MockBlock::new(hash(1), vec![hash(101)], vec![]),
-            MockBlock::new(hash(2), vec![hash(102)], vec![]),
+            MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(101)], vec![], vec![]),
+            MockBlock::new(hash(2), vec![hash(102)], vec![], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         {
             let mut blocks = controller.get_blocks_mut();
             for i in 3..7 {
-                blocks.push(MockBlock::new(hash(10 + i), vec![hash(100 + i)], vec![]));
+                blocks.push(MockBlock::new(
+                    hash(10 + i),
+                    vec![hash(100 + i)],
+                    vec![],
+                    vec![],
+                ));
             }
         }
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
@@ -990,8 +1014,8 @@ mod tests {
     async fn test_latest_block_number_smaller_than_history_size() {
         let (mut chain, controller) = new_chain();
         let blocks = vec![
-            MockBlock::new(hash(0), vec![hash(101), hash(102)], vec![]),
-            MockBlock::new(hash(1), vec![hash(103)], vec![]),
+            MockBlock::new(hash(0), vec![hash(101), hash(102)], vec![], vec![]),
+            MockBlock::new(hash(1), vec![hash(103)], vec![], vec![]),
         ];
         controller.set_blocks(blocks);
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
@@ -1084,6 +1108,24 @@ mod tests {
             ],
             data: AbiEncode::encode((
                 U256::zero(), // totalDeposits
+            ))
+            .into(),
+            ..Default::default()
+        }
+    }
+
+    fn fake_withdrawal_log(withdrawal_address: Address) -> Log {
+        Log {
+            address: ENTRY_POINT_ADDRESS,
+            topics: vec![
+                H256::from(utils::keccak256(
+                    WithdrawnFilter::abi_signature().as_bytes(),
+                )),
+                H256::from(withdrawal_address),
+            ],
+            data: AbiEncode::encode((
+                Address::zero(), // withdrawAddress
+                U256::zero(),    // amount
             ))
             .into(),
             ..Default::default()
