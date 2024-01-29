@@ -269,9 +269,14 @@ impl OpPool for OpPoolImpl {
 
     async fn debug_clear_state(
         &self,
-        _request: Request<DebugClearStateRequest>,
+        request: Request<DebugClearStateRequest>,
     ) -> Result<Response<DebugClearStateResponse>> {
-        let resp = match self.local_pool.debug_clear_state().await {
+        let req = request.into_inner();
+        let resp = match self
+            .local_pool
+            .debug_clear_state(req.clear_mempool, req.clear_reputation)
+            .await
+        {
             Ok(_) => DebugClearStateResponse {
                 result: Some(debug_clear_state_response::Result::Success(
                     DebugClearStateSuccess {},

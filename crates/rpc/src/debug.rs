@@ -32,6 +32,10 @@ pub trait DebugApi {
     #[method(name = "bundler_clearState")]
     async fn bundler_clear_state(&self) -> RpcResult<String>;
 
+    /// Clears the state of the mempool without affect reputations.
+    #[method(name = "bundler_clearMempool")]
+    async fn bundler_clear_mempool(&self) -> RpcResult<String>;
+
     /// Dumps the mempool.
     #[method(name = "bundler_dumpMempool")]
     async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>>;
@@ -90,7 +94,17 @@ where
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
             .pool
-            .debug_clear_state()
+            .debug_clear_state(true, true)
+            .await
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+        Ok("ok".to_string())
+    }
+
+    async fn bundler_clear_mempool(&self) -> RpcResult<String> {
+        let _ = self
+            .pool
+            .debug_clear_state(true, false)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 

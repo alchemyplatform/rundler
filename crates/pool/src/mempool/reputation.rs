@@ -108,6 +108,9 @@ pub(crate) trait ReputationManager: Send + Sync + 'static {
 
     /// Get the ops allowed for an unstaked entity
     fn get_ops_allowed(&self, address: Address) -> u64;
+
+    /// Clear all reputation values
+    fn clear(&self);
 }
 
 #[derive(Debug)]
@@ -186,6 +189,10 @@ impl ReputationManager for HourlyMovingAverageReputation {
 
     fn get_ops_allowed(&self, address: Address) -> u64 {
         self.reputation.read().get_ops_allowed(address)
+    }
+
+    fn clear(&self) {
+        self.reputation.write().clear()
     }
 }
 
@@ -334,6 +341,10 @@ impl AddressReputation {
         }
         self.counts
             .retain(|_, count| count.ops_seen > 0 || count.ops_included > 0);
+    }
+
+    fn clear(&mut self) {
+        self.counts.clear();
     }
 }
 

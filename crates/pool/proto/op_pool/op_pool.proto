@@ -290,7 +290,10 @@ message UpdateEntitiesResponse {
 }
 message UpdateEntitiesSuccess {}
 
-message DebugClearStateRequest {}
+message DebugClearStateRequest {
+  bool clear_mempool = 1;
+  bool clear_reputation = 2;
+}
 message DebugClearStateResponse {
   oneof result {
     DebugClearStateSuccess success = 1;

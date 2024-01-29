@@ -581,8 +581,13 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
-    fn clear(&self) {
-        self.state.write().pool.clear()
+    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool) {
+        if clear_mempool {
+            self.state.write().pool.clear()
+        }
+        if clear_reputation {
+            self.reputation.clear()
+        }
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -727,7 +732,7 @@ mod tests {
                 .unwrap();
         }
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
-        pool.clear();
+        pool.clear_state(true, true);
         assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
     }
 
@@ -1562,6 +1567,11 @@ mod tests {
 
             // return ops allowed, as defined by UREP-020
             self.same_unstaked_entity_mempool_count + inclusion_based_count
+        }
+
+        fn clear(&self) {
+            self.counts.write().seen.clear();
+            self.counts.write().included.clear();
         }
     }
 }

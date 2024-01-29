@@ -264,11 +264,18 @@ impl PoolServer for RemotePoolClient {
         }
     }
 
-    async fn debug_clear_state(&self) -> PoolResult<()> {
+    async fn debug_clear_state(
+        &self,
+        clear_mempool: bool,
+        clear_reputation: bool,
+    ) -> PoolResult<()> {
         let res = self
             .op_pool_client
             .clone()
-            .debug_clear_state(DebugClearStateRequest {})
+            .debug_clear_state(DebugClearStateRequest {
+                clear_mempool,
+                clear_reputation,
+            })
             .await?
             .into_inner()
             .result;

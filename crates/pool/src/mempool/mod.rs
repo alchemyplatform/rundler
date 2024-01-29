@@ -91,8 +91,8 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Debug methods
 
-    /// Clears the mempool
-    fn clear(&self);
+    /// Clears the mempool of UOs or reputation of all addresses
+    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool);
 
     /// Dumps the mempool's reputation tracking
     fn dump_reputation(&self) -> Vec<Reputation>;

@@ -184,8 +184,15 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
-    async fn debug_clear_state(&self) -> Result<(), PoolServerError> {
-        let req = ServerRequestKind::DebugClearState;
+    async fn debug_clear_state(
+        &self,
+        clear_mempool: bool,
+        clear_reputation: bool,
+    ) -> Result<(), PoolServerError> {
+        let req = ServerRequestKind::DebugClearState {
+            clear_mempool,
+            clear_reputation,
+        };
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugClearState => Ok(()),
@@ -362,9 +369,9 @@ where
         Ok(())
     }
 
-    fn debug_clear_state(&self) -> PoolResult<()> {
+    fn debug_clear_state(&self, clear_mempool: bool, clear_reputation: bool) -> PoolResult<()> {
         for mempool in self.mempools.values() {
-            mempool.clear();
+            mempool.clear_state(clear_mempool, clear_reputation);
         }
         Ok(())
     }
@@ -477,8 +484,8 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::DebugClearState => {
-                            match self.debug_clear_state() {
+                        ServerRequestKind::DebugClearState { clear_mempool, clear_reputation } => {
+                            match self.debug_clear_state(clear_mempool, clear_reputation) {
                                 Ok(_) => Ok(ServerResponse::DebugClearState),
                                 Err(e) => Err(e),
                             }
@@ -570,7 +577,10 @@ enum ServerRequestKind {
         entry_point: Address,
         entity_updates: Vec<EntityUpdate>,
     },
-    DebugClearState,
+    DebugClearState {
+        clear_mempool: bool,
+        clear_reputation: bool,
+    },
     DebugDumpMempool {
         entry_point: Address,
     },
