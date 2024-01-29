@@ -1498,6 +1498,7 @@ mod tests {
     struct Counts {
         seen: HashMap<Address, u64>,
         included: HashMap<Address, u64>,
+        tracking_enabled: bool,
     }
 
     impl MockReputationManager {
@@ -1587,6 +1588,10 @@ mod tests {
         fn clear(&self) {
             self.counts.write().seen.clear();
             self.counts.write().included.clear();
+        }
+
+        fn set_tracking(&self, tracking_enabled: bool) {
+            self.counts.write().tracking_enabled = tracking_enabled;
         }
     }
 }
