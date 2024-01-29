@@ -92,7 +92,7 @@ pub trait Mempool: Send + Sync + 'static {
     /// Debug methods
 
     /// Clears the mempool of UOs or reputation of all addresses
-    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool);
+    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool, clear_paymaster: bool);
 
     /// Dumps the mempool's reputation tracking
     fn dump_reputation(&self) -> Vec<Reputation>;
@@ -103,12 +103,6 @@ pub trait Mempool: Send + Sync + 'static {
     /// Overwrites the mempool's reputation for an address
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
 
-    /// Toggles the operation of the paymaster tracker for a given pool
-    fn toggle_paymaster_tracker(&self);
-
-    /// Toggles the operation of the reputation tracker for a given pool
-    fn toggle_reputation_tracker(&self);
-
     /// Clears the paymaster tracker state
     fn clear_paymaster_tracker_state(&self);
 
@@ -117,6 +111,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Reset paymater state
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()>;
+
+    /// Turns on and off tracking errors
+    fn set_tracking(&self, paymaster: bool, reputation: bool);
 }
 
 /// Config for the mempool

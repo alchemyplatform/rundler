@@ -30,28 +30,24 @@ use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Result, Status};
 
 use super::protos::{
-    add_op_response, admin_clear_paymaster_tracker_state_response,
-    admin_toggle_paymaster_tracker_response, admin_toggle_reputation_tracker_response,
-    debug_clear_state_response, debug_dump_mempool_response, debug_dump_reputation_response,
-    debug_set_reputation_response, get_op_by_hash_response, get_ops_response,
-    get_reputation_status_response, get_stake_status_response,
+    add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
+    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
+    get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
-    AdminClearPaymasterTrackerStateRequest, AdminClearPaymasterTrackerStateResponse,
-    AdminClearPaymasterTrackerStateSuccess, AdminTogglePaymasterTrackerRequest,
-    AdminTogglePaymasterTrackerResponse, AdminTogglePaymasterTrackerSuccess,
-    AdminToggleReputationTrackerRequest, AdminToggleReputationTrackerResponse,
-    AdminToggleReputationTrackerSuccess, DebugClearStateRequest, DebugClearStateResponse,
-    DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
-    DebugDumpMempoolSuccess, DebugDumpReputationRequest, DebugDumpReputationResponse,
-    DebugDumpReputationSuccess, DebugSetReputationRequest, DebugSetReputationResponse,
-    DebugSetReputationSuccess, GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess,
-    GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetReputationStatusRequest,
-    GetReputationStatusResponse, GetReputationStatusSuccess, GetStakeStatusRequest,
-    GetStakeStatusResponse, GetStakeStatusSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
-    RemoveOpsSuccess, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
-    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
+    AdminSetTrackingRequest, AdminSetTrackingResponse, AdminSetTrackingSuccess,
+    DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
+    DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
+    DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
+    DebugSetReputationRequest, DebugSetReputationResponse, DebugSetReputationSuccess,
+    GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess, GetOpsRequest, GetOpsResponse,
+    GetOpsSuccess, GetReputationStatusRequest, GetReputationStatusResponse,
+    GetReputationStatusSuccess, GetStakeStatusRequest, GetStakeStatusResponse,
+    GetStakeStatusSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, UpdateEntitiesRequest, UpdateEntitiesResponse,
+    UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
     mempool::Reputation,
@@ -244,81 +240,6 @@ impl OpPool for OpPoolImpl {
         Ok(Response::new(resp))
     }
 
-    async fn admin_toggle_paymaster_tracker(
-        &self,
-        request: Request<AdminTogglePaymasterTrackerRequest>,
-    ) -> Result<Response<AdminTogglePaymasterTrackerResponse>> {
-        let req = request.into_inner();
-        let ep = self.get_entry_point(&req.entry_point)?;
-
-        let resp = match self.local_pool.admin_toggle_paymaster_tracker(ep).await {
-            Ok(_) => AdminTogglePaymasterTrackerResponse {
-                result: Some(admin_toggle_paymaster_tracker_response::Result::Success(
-                    AdminTogglePaymasterTrackerSuccess {},
-                )),
-            },
-            Err(error) => AdminTogglePaymasterTrackerResponse {
-                result: Some(admin_toggle_paymaster_tracker_response::Result::Failure(
-                    error.into(),
-                )),
-            },
-        };
-
-        Ok(Response::new(resp))
-    }
-
-    async fn admin_toggle_reputation_tracker(
-        &self,
-        request: Request<AdminToggleReputationTrackerRequest>,
-    ) -> Result<Response<AdminToggleReputationTrackerResponse>> {
-        let req = request.into_inner();
-        let ep = self.get_entry_point(&req.entry_point)?;
-
-        let resp = match self.local_pool.admin_toggle_paymaster_tracker(ep).await {
-            Ok(_) => AdminToggleReputationTrackerResponse {
-                result: Some(admin_toggle_reputation_tracker_response::Result::Success(
-                    AdminToggleReputationTrackerSuccess {},
-                )),
-            },
-            Err(error) => AdminToggleReputationTrackerResponse {
-                result: Some(admin_toggle_reputation_tracker_response::Result::Failure(
-                    error.into(),
-                )),
-            },
-        };
-
-        Ok(Response::new(resp))
-    }
-
-    async fn admin_clear_paymaster_tracker_state(
-        &self,
-        request: Request<AdminClearPaymasterTrackerStateRequest>,
-    ) -> Result<Response<AdminClearPaymasterTrackerStateResponse>> {
-        let req = request.into_inner();
-        let ep = self.get_entry_point(&req.entry_point)?;
-
-        let resp = match self
-            .local_pool
-            .admin_clear_paymaster_tracker_state(ep)
-            .await
-        {
-            Ok(_) => AdminClearPaymasterTrackerStateResponse {
-                result: Some(
-                    admin_clear_paymaster_tracker_state_response::Result::Success(
-                        AdminClearPaymasterTrackerStateSuccess {},
-                    ),
-                ),
-            },
-            Err(error) => AdminClearPaymasterTrackerStateResponse {
-                result: Some(
-                    admin_clear_paymaster_tracker_state_response::Result::Failure(error.into()),
-                ),
-            },
-        };
-
-        Ok(Response::new(resp))
-    }
-
     async fn update_entities(
         &self,
         request: Request<UpdateEntitiesRequest>,
@@ -355,7 +276,7 @@ impl OpPool for OpPoolImpl {
         let req = request.into_inner();
         let resp = match self
             .local_pool
-            .debug_clear_state(req.clear_mempool, req.clear_reputation)
+            .debug_clear_state(req.clear_mempool, req.clear_reputation, req.clear_paymaster)
             .await
         {
             Ok(_) => DebugClearStateResponse {
@@ -365,6 +286,30 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => DebugClearStateResponse {
                 result: Some(debug_clear_state_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn admin_set_tracking(
+        &self,
+        request: Request<AdminSetTrackingRequest>,
+    ) -> Result<Response<AdminSetTrackingResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+        let resp = match self
+            .local_pool
+            .admin_set_tracking(ep, req.paymaster, req.reputation)
+            .await
+        {
+            Ok(_) => AdminSetTrackingResponse {
+                result: Some(admin_set_tracking_response::Result::Success(
+                    AdminSetTrackingSuccess {},
+                )),
+            },
+            Err(error) => AdminSetTrackingResponse {
+                result: Some(admin_set_tracking_response::Result::Failure(error.into())),
             },
         };
 

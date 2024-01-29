@@ -305,6 +305,11 @@ where
         self.config.entry_point
     }
 
+    fn set_tracking(&self, paymaster: bool, reputation: bool) {
+        self.state.write().pool.set_tracking(paymaster);
+        self.reputation.set_tracking(reputation);
+    }
+
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
         let paymaster_addresses = self.state.read().pool.paymaster_addresses();
 
@@ -582,25 +587,20 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
-    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool) {
+    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool, clear_paymaster: bool) {
         if clear_mempool {
             self.state.write().pool.clear()
         }
         if clear_reputation {
             self.reputation.clear()
         }
+        if clear_paymaster {
+            self.state.write().pool.clear_paymaster_tracker_state();
+        }
     }
 
     fn clear_paymaster_tracker_state(&self) {
         self.state.write().pool.clear_paymaster_tracker_state()
-    }
-
-    fn toggle_paymaster_tracker(&self) {
-        self.state.write().pool.toggle_paymaster_tracker()
-    }
-
-    fn toggle_reputation_tracker(&self) {
-        self.reputation.toggle_tracking()
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -745,7 +745,7 @@ mod tests {
                 .unwrap();
         }
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
-        pool.clear_state(true, true);
+        pool.clear_state(true, true, true);
         assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
     }
 
@@ -1528,10 +1528,6 @@ mod tests {
 
         fn add_seen(&self, address: Address) {
             *self.counts.write().seen.entry(address).or_default() += 1;
-        }
-
-        fn toggle_tracking(&self) {
-            // only counts are locked for some reason here
         }
 
         fn handle_srep_050_penalty(&self, address: Address) {

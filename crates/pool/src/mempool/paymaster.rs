@@ -45,8 +45,8 @@ impl PaymasterTracker {
         self.paymaster_balances.contains_key(&paymaster)
     }
 
-    pub(crate) fn toggle_tracker_enabled(&mut self) {
-        self.tracker_enabled = !self.tracker_enabled;
+    pub(crate) fn set_paymaster_tracker(&mut self, tracking_enabled: bool) {
+        self.tracker_enabled = tracking_enabled;
     }
 
     pub(crate) fn clear(&mut self) {

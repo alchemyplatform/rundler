@@ -33,15 +33,12 @@ use tonic_health::{
 };
 
 use super::protos::{
-    self, add_op_response, admin_clear_paymaster_tracker_state_response,
-    admin_toggle_paymaster_tracker_response, admin_toggle_reputation_tracker_response,
-    debug_clear_state_response, debug_dump_mempool_response, debug_dump_reputation_response,
-    debug_set_reputation_response, get_op_by_hash_response, get_ops_response,
-    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
-    remove_ops_response, update_entities_response, AddOpRequest,
-    AdminClearPaymasterTrackerStateRequest, AdminTogglePaymasterTrackerRequest,
-    AdminToggleReputationTrackerRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
-    DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
+    self, add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
+    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
+    get_stake_status_response, op_pool_client::OpPoolClient, remove_ops_response,
+    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
     GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
     SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
@@ -272,6 +269,7 @@ impl PoolServer for RemotePoolClient {
         &self,
         clear_mempool: bool,
         clear_reputation: bool,
+        clear_paymaster: bool,
     ) -> PoolResult<()> {
         let res = self
             .op_pool_client
@@ -279,6 +277,7 @@ impl PoolServer for RemotePoolClient {
             .debug_clear_state(DebugClearStateRequest {
                 clear_mempool,
                 clear_reputation,
+                clear_paymaster,
             })
             .await?
             .into_inner()
@@ -293,64 +292,27 @@ impl PoolServer for RemotePoolClient {
         }
     }
 
-    async fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()> {
+    async fn admin_set_tracking(
+        &self,
+        entry_point: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> PoolResult<()> {
         let res = self
             .op_pool_client
             .clone()
-            .admin_toggle_paymaster_tracker(AdminTogglePaymasterTrackerRequest {
+            .admin_set_tracking(AdminSetTrackingRequest {
                 entry_point: entry_point.as_bytes().to_vec(),
+                reputation,
+                paymaster,
             })
             .await?
             .into_inner()
             .result;
 
         match res {
-            Some(admin_toggle_paymaster_tracker_response::Result::Success(_)) => Ok(()),
-            Some(admin_toggle_paymaster_tracker_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
-        }
-    }
-
-    async fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()> {
-        let res = self
-            .op_pool_client
-            .clone()
-            .admin_toggle_reputation_tracker(AdminToggleReputationTrackerRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .result;
-
-        match res {
-            Some(admin_toggle_reputation_tracker_response::Result::Success(_)) => Ok(()),
-            Some(admin_toggle_reputation_tracker_response::Result::Failure(f)) => {
-                Err(f.try_into()?)
-            }
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
-                "should have received result from op pool"
-            )))?,
-        }
-    }
-
-    async fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()> {
-        let res = self
-            .op_pool_client
-            .clone()
-            .admin_clear_paymaster_tracker_state(AdminClearPaymasterTrackerStateRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-            })
-            .await?
-            .into_inner()
-            .result;
-
-        match res {
-            Some(admin_clear_paymaster_tracker_state_response::Result::Success(_)) => Ok(()),
-            Some(admin_clear_paymaster_tracker_state_response::Result::Failure(f)) => {
-                Err(f.try_into()?)
-            }
+            Some(admin_set_tracking_response::Result::Success(_)) => Ok(()),
+            Some(admin_set_tracking_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

@@ -393,8 +393,8 @@ impl PoolInner {
         self.paymaster_balances.clear();
     }
 
-    pub(crate) fn toggle_paymaster_tracker(&mut self) {
-        self.paymaster_balances.toggle_tracker_enabled()
+    pub(crate) fn set_tracking(&mut self, paymaster: bool) {
+        self.paymaster_balances.set_paymaster_tracker(paymaster);
     }
 
     fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {

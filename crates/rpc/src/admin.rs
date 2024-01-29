@@ -21,17 +21,23 @@ use crate::error::rpc_err;
 /// Admin API
 #[rpc(client, server, namespace = "admin")]
 pub trait AdminApi {
-    /// Toggles the operation of the paymaster tracker.
-    #[method(name = "togglePaymasterTracker")]
-    async fn admin_toggle_paymaster_tracker(&self, entrypoint: Address) -> RpcResult<String>;
-
-    /// Toggles the operation of the paymaster tracker.
-    #[method(name = "toggleReputationTracker")]
-    async fn admin_toggle_reputation_tracker(&self, entrypoint: Address) -> RpcResult<String>;
+    /// Clears the state of the mempool field if name is true
+    #[method(name = "clearState")]
+    async fn admin_clear_state(
+        &self,
+        mempool: bool,
+        paymaster: bool,
+        reputation: bool,
+    ) -> RpcResult<String>;
 
     /// Clears paymaster tracker state.
-    #[method(name = "clearPaymasterTrackerState")]
-    async fn admin_clear_paymaster_tracker_state(&self, entrypoint: Address) -> RpcResult<String>;
+    #[method(name = "setTracking")]
+    async fn admin_set_tracking(
+        &self,
+        entrypoint: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> RpcResult<String>;
 }
 
 pub(crate) struct AdminApi<P> {
@@ -49,30 +55,30 @@ impl<P> AdminApiServer for AdminApi<P>
 where
     P: PoolServer,
 {
-    async fn admin_toggle_paymaster_tracker(&self, entrypoint: Address) -> RpcResult<String> {
+    async fn admin_clear_state(
+        &self,
+        mempool: bool,
+        paymaster: bool,
+        reputation: bool,
+    ) -> RpcResult<String> {
         let _ = self
             .pool
-            .admin_toggle_paymaster_tracker(entrypoint)
+            .debug_clear_state(mempool, paymaster, reputation)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
         Ok("ok".to_string())
     }
 
-    async fn admin_toggle_reputation_tracker(&self, entrypoint: Address) -> RpcResult<String> {
+    async fn admin_set_tracking(
+        &self,
+        entrypoint: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> RpcResult<String> {
         let _ = self
             .pool
-            .admin_toggle_reputation_tracker(entrypoint)
-            .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
-
-        Ok("ok".to_string())
-    }
-
-    async fn admin_clear_paymaster_tracker_state(&self, entrypoint: Address) -> RpcResult<String> {
-        let _ = self
-            .pool
-            .admin_clear_paymaster_tracker_state(entrypoint)
+            .admin_set_tracking(entrypoint, paymaster, reputation)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 

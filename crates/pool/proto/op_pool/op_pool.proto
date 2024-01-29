@@ -160,14 +160,8 @@ service OpPool {
   // the chain. 
   rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
 
-  // Toggles the operation of the paymaster tracker for a given pool
-  rpc AdminTogglePaymasterTracker(AdminTogglePaymasterTrackerRequest) returns (AdminTogglePaymasterTrackerResponse);
-
-  // Toggles the operation of the reputation tracker for a given pool
-  rpc AdminToggleReputationTracker(AdminToggleReputationTrackerRequest) returns (AdminToggleReputationTrackerResponse);
-
-  // Clears the current state of the paymaster tracker
-  rpc AdminClearPaymasterTrackerState(AdminClearPaymasterTrackerStateRequest) returns (AdminClearPaymasterTrackerStateResponse);
+  // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
+  rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -284,45 +278,6 @@ message RemoveOpsResponse {
 }
 message RemoveOpsSuccess {}
 
-message AdminTogglePaymasterTrackerRequest {
-  // The serialized entry point address
-  bytes entry_point = 1;
-}
-message AdminTogglePaymasterTrackerResponse {
-  oneof result {
-    AdminTogglePaymasterTrackerSuccess success = 1;
-    MempoolError failure = 2;
-  }
-}
-
-message AdminTogglePaymasterTrackerSuccess {}
-
-message AdminClearPaymasterTrackerStateRequest {
-  // The serialized entry point address
-  bytes entry_point = 1;
-}
-message AdminClearPaymasterTrackerStateResponse {
-  oneof result {
-    AdminClearPaymasterTrackerStateSuccess success = 1;
-    MempoolError failure = 2;
-  }
-}
-
-message AdminClearPaymasterTrackerStateSuccess {}
-
-message AdminToggleReputationTrackerRequest {
-  // The serialized entry point address
-  bytes entry_point = 1;
-}
-message AdminToggleReputationTrackerResponse {
-  oneof result {
-    AdminToggleReputationTrackerSuccess success = 1;
-    MempoolError failure = 2;
-  }
-}
-
-message AdminToggleReputationTrackerSuccess {}
-
 message UpdateEntitiesRequest {
   // The serilaized entry point address
   bytes entry_point = 1;
@@ -341,6 +296,7 @@ message UpdateEntitiesSuccess {}
 message DebugClearStateRequest {
   bool clear_mempool = 1;
   bool clear_reputation = 2;
+  bool clear_paymaster = 3;
 }
 message DebugClearStateResponse {
   oneof result {
@@ -402,6 +358,20 @@ message NewHead {
   // The block number
   uint64 block_number = 2;
 }
+
+message AdminSetTrackingRequest {
+  // The serialized entry point address via which the UserOperation is being submitted
+  bytes entry_point = 1;
+  bool paymaster = 2;
+  bool reputation = 3;
+}
+message AdminSetTrackingResponse {
+  oneof result {
+    AdminSetTrackingSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message AdminSetTrackingSuccess {}
 
 message Reputation {
   // The (serialized) address to set the reputation for

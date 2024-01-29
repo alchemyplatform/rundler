@@ -94,8 +94,7 @@ where
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
             .pool
-            .debug_clear_state(true, true)
-<<<<<<< HEAD
+            .debug_clear_state(true, true, true)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
@@ -105,19 +104,7 @@ where
     async fn bundler_clear_mempool(&self) -> RpcResult<String> {
         let _ = self
             .pool
-            .debug_clear_state(true, false)
-=======
->>>>>>> e7c003e (refactor(pool): consolidate clear state method)
-            .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
-
-        Ok("ok".to_string())
-    }
-
-    async fn bundler_clear_mempool(&self) -> RpcResult<String> {
-        let _ = self
-            .pool
-            .debug_clear_state(true, false)
+            .debug_clear_state(true, false, true)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 

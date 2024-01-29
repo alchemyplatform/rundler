@@ -111,6 +111,9 @@ pub(crate) trait ReputationManager: Send + Sync + 'static {
 
     /// Clear all reputation values
     fn clear(&self);
+
+    /// Sets whether reputation tracking can block user operations
+    fn set_tracking(&self, tracking_enabled: bool);
 }
 
 #[derive(Debug)]
@@ -194,6 +197,10 @@ impl ReputationManager for HourlyMovingAverageReputation {
     fn clear(&self) {
         self.reputation.write().clear()
     }
+
+    fn set_tracking(&self, tracking_enabled: bool) {
+        self.reputation.write().set_tracking(tracking_enabled)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -229,10 +236,6 @@ impl ReputationParams {
             tracking_enabled,
             ..Default::default()
         }
-    }
-
-    fn toggle_tracking(&mut self) {
-        self.tracking_enabled = !self.tracking_enabled;
     }
 
     #[allow(dead_code)]
@@ -363,6 +366,10 @@ impl AddressReputation {
 
     fn clear(&mut self) {
         self.counts.clear();
+    }
+
+    fn set_tracking(&mut self, tracking_enabled: bool) {
+        self.params.tracking_enabled = tracking_enabled;
     }
 }
 

@@ -94,6 +94,7 @@ pub trait PoolServer: Send + Sync + 'static {
     async fn debug_clear_state(
         &self,
         clear_mempool: bool,
+        clear_paymaster: bool,
         clear_reputation: bool,
     ) -> PoolResult<()>;
 
@@ -124,12 +125,11 @@ pub trait PoolServer: Send + Sync + 'static {
     /// Dump reputations for entities, used for debug methods
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;
 
-    /// Toggles the operation of the paymaster tracker
-    async fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()>;
-
-    /// Toggles the operation of the reputation tracker
-    async fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()>;
-
-    /// Clears current state of the paymaster tracker
-    async fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()>;
+    /// Controls whether or not the certain tracking data structures are used to block user operations
+    async fn admin_set_tracking(
+        &self,
+        entry_point: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> PoolResult<()>;
 }

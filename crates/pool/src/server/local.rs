@@ -168,33 +168,6 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
-    async fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()> {
-        let req = ServerRequestKind::AdminTogglePaymasterTracker { entry_point };
-        let resp = self.send(req).await?;
-        match resp {
-            ServerResponse::AdminTogglePaymasterTracker => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
-        }
-    }
-
-    async fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()> {
-        let req = ServerRequestKind::AdminToggleReputationTracker { entry_point };
-        let resp = self.send(req).await?;
-        match resp {
-            ServerResponse::AdminToggleReputationTracker => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
-        }
-    }
-
-    async fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()> {
-        let req = ServerRequestKind::AdminClearPaymasterTrackerState { entry_point };
-        let resp = self.send(req).await?;
-        match resp {
-            ServerResponse::AdminToggleReputationTracker => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
-        }
-    }
-
     async fn update_entities(
         &self,
         entry_point: Address,
@@ -215,14 +188,34 @@ impl PoolServer for LocalPoolHandle {
         &self,
         clear_mempool: bool,
         clear_reputation: bool,
+        clear_paymaster: bool,
     ) -> Result<(), PoolServerError> {
         let req = ServerRequestKind::DebugClearState {
             clear_mempool,
             clear_reputation,
+            clear_paymaster,
         };
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugClearState => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    async fn admin_set_tracking(
+        &self,
+        entry_point: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> Result<(), PoolServerError> {
+        let req = ServerRequestKind::AdminSetTracking {
+            entry_point,
+            paymaster,
+            reputation,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::AdminSetTracking => Ok(()),
             _ => Err(PoolServerError::UnexpectedResponse),
         }
     }
@@ -396,10 +389,26 @@ where
         Ok(())
     }
 
-    fn debug_clear_state(&self, clear_mempool: bool, clear_reputation: bool) -> PoolResult<()> {
+    fn debug_clear_state(
+        &self,
+        clear_mempool: bool,
+        clear_reputation: bool,
+        clear_paymaster: bool,
+    ) -> PoolResult<()> {
         for mempool in self.mempools.values() {
-            mempool.clear_state(clear_mempool, clear_reputation);
+            mempool.clear_state(clear_mempool, clear_reputation, clear_paymaster);
         }
+        Ok(())
+    }
+
+    fn admin_set_tracking(
+        &self,
+        entry_point: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> PoolResult<()> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.set_tracking(paymaster, reputation);
         Ok(())
     }
 
@@ -427,24 +436,6 @@ where
     fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool.dump_reputation())
-    }
-
-    fn admin_toggle_paymaster_tracker(&self, entry_point: Address) -> PoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        mempool.toggle_paymaster_tracker();
-        Ok(())
-    }
-
-    fn admin_toggle_reputation_tracker(&self, entry_point: Address) -> PoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        mempool.toggle_reputation_tracker();
-        Ok(())
-    }
-
-    fn admin_clear_paymaster_tracker_state(&self, entry_point: Address) -> PoolResult<()> {
-        let mempool = self.get_pool(entry_point)?;
-        mempool.clear_paymaster_tracker_state();
-        Ok(())
     }
 
     fn get_reputation_status(
@@ -523,21 +514,9 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::AdminTogglePaymasterTracker { entry_point } => {
-                            match self.admin_toggle_paymaster_tracker(entry_point) {
-                                Ok(_) => Ok(ServerResponse::AdminTogglePaymasterTracker),
-                                Err(e) => Err(e),
-                            }
-                        },
-                        ServerRequestKind::AdminToggleReputationTracker { entry_point } => {
-                            match self.admin_toggle_reputation_tracker(entry_point) {
-                                Ok(_) => Ok(ServerResponse::AdminToggleReputationTracker),
-                                Err(e) => Err(e),
-                            }
-                        },
-                        ServerRequestKind::AdminClearPaymasterTrackerState { entry_point } => {
-                            match self.admin_clear_paymaster_tracker_state(entry_point) {
-                                Ok(_) => Ok(ServerResponse::AdminClearPaymasterTrackerState),
+                        ServerRequestKind::AdminSetTracking{ entry_point, paymaster, reputation } => {
+                            match self.admin_set_tracking(entry_point, paymaster, reputation) {
+                                Ok(_) => Ok(ServerResponse::AdminSetTracking),
                                 Err(e) => Err(e),
                             }
                         },
@@ -547,8 +526,8 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::DebugClearState { clear_mempool, clear_reputation } => {
-                            match self.debug_clear_state(clear_mempool, clear_reputation) {
+                        ServerRequestKind::DebugClearState { clear_mempool, clear_reputation, clear_paymaster } => {
+                            match self.debug_clear_state(clear_mempool, clear_reputation, clear_paymaster) {
                                 Ok(_) => Ok(ServerResponse::DebugClearState),
                                 Err(e) => Err(e),
                             }
@@ -643,6 +622,12 @@ enum ServerRequestKind {
     DebugClearState {
         clear_mempool: bool,
         clear_reputation: bool,
+        clear_paymaster: bool,
+    },
+    AdminSetTracking {
+        entry_point: Address,
+        paymaster: bool,
+        reputation: bool,
     },
     DebugDumpMempool {
         entry_point: Address,
@@ -662,15 +647,6 @@ enum ServerRequestKind {
         entry_point: Address,
         address: Address,
     },
-    AdminTogglePaymasterTracker {
-        entry_point: Address,
-    },
-    AdminToggleReputationTracker {
-        entry_point: Address,
-    },
-    AdminClearPaymasterTrackerState {
-        entry_point: Address,
-    },
     SubscribeNewHeads,
 }
 
@@ -689,11 +665,9 @@ enum ServerResponse {
         op: Option<PoolOperation>,
     },
     RemoveOps,
-    AdminTogglePaymasterTracker,
-    AdminToggleReputationTracker,
-    AdminClearPaymasterTrackerState,
     UpdateEntities,
     DebugClearState,
+    AdminSetTracking,
     DebugDumpMempool {
         ops: Vec<PoolOperation>,
     },
