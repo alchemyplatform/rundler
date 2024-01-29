@@ -599,10 +599,6 @@ where
         }
     }
 
-    fn clear_paymaster_tracker_state(&self) {
-        self.state.write().pool.clear_paymaster_tracker_state()
-    }
-
     fn dump_reputation(&self) -> Vec<Reputation> {
         self.reputation.dump_reputation()
     }

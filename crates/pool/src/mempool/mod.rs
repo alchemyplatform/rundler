@@ -103,9 +103,6 @@ pub trait Mempool: Send + Sync + 'static {
     /// Overwrites the mempool's reputation for an address
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64);
 
-    /// Clears the paymaster tracker state
-    fn clear_paymaster_tracker_state(&self);
-
     /// Get stake status for address
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus>;
 
