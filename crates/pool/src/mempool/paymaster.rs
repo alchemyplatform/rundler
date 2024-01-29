@@ -145,7 +145,8 @@ impl PaymasterTracker {
         let id = po.uo.id();
         let max_op_cost = po.uo.max_gas_cost();
 
-        if paymaster_metadata.pending_balance.lt(&max_op_cost) {
+        // Only return an error if tracking is enabled
+        if paymaster_metadata.pending_balance.lt(&max_op_cost) && self.tracker_enabled {
             return Err(MempoolError::PaymasterBalanceTooLow(
                 max_op_cost,
                 paymaster_metadata.pending_balance,
@@ -386,6 +387,51 @@ mod tests {
 
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn new_uo_not_enough_balance_tracking_disabled() {
+        let mut paymaster_tracker = PaymasterTracker::new(false);
+
+        let paymaster = Address::random();
+        let sender = Address::random();
+        let paymaster_balance = U256::from(5);
+        let confirmed_balance = U256::from(5);
+        let uo = UserOperation {
+            sender,
+            call_gas_limit: 10.into(),
+            pre_verification_gas: 10.into(),
+            verification_gas_limit: 10.into(),
+            max_fee_per_gas: 1.into(),
+            ..Default::default()
+        };
+
+        let paymaster_meta = PaymasterMetadata {
+            address: paymaster,
+            pending_balance: paymaster_balance,
+            confirmed_balance,
+        };
+
+        let po = demo_pool_op(uo);
+
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        assert!(res.is_ok());
+        assert_eq!(
+            paymaster_tracker
+                .paymaster_balances
+                .get(&paymaster)
+                .unwrap()
+                .confirmed,
+            5.into(),
+        );
+        assert_eq!(
+            paymaster_tracker
+                .paymaster_balances
+                .get(&paymaster)
+                .unwrap()
+                .pending,
+            30.into(),
+        );
     }
 
     #[test]
