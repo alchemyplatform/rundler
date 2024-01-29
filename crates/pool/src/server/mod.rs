@@ -91,10 +91,11 @@ pub trait PoolServer: Send + Sync + 'static {
     async fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
 
     /// Clear the pool state, used for debug methods
-    async fn debug_clear_state(&self) -> PoolResult<()>;
-
-    /// Clear the mempool state, used for debug methods
-    async fn debug_clear_mempool(&self) -> PoolResult<()>;
+    async fn debug_clear_state(
+        &self,
+        clear_mempool: bool,
+        clear_reputation: bool,
+    ) -> PoolResult<()>;
 
     /// Dump all operations in the pool, used for debug methods
     async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>>;
