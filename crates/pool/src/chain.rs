@@ -740,7 +740,7 @@ mod tests {
             );
             joined_logs.extend(
                 block
-                    .deposit_addresses
+                    .withdrawal_addresses
                     .iter()
                     .copied()
                     .map(fake_withdrawal_log),
@@ -857,7 +857,7 @@ mod tests {
         let (mut chain, controller) = new_chain();
         controller.set_blocks(vec![
             MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
-            MockBlock::new(hash(1), vec![hash(101)], vec![addr(1)], vec![]),
+            MockBlock::new(hash(1), vec![hash(101)], vec![addr(1)], vec![addr(9)]),
             MockBlock::new(hash(2), vec![hash(102)], vec![], vec![]),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
@@ -885,7 +885,7 @@ mod tests {
                 unmined_ops: vec![fake_mined_op(101), fake_mined_op(102)],
                 unmined_entity_deposits: vec![fake_mined_deposit(addr(1), 0.into())],
                 entity_withdrawals: vec![],
-                unmined_entity_withdrawals: vec![],
+                unmined_entity_withdrawals: vec![fake_mined_deposit(addr(9), 0.into())],
                 reorg_larger_than_history: false,
             }
         );
