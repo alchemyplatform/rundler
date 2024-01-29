@@ -819,7 +819,12 @@ mod tests {
         controller.set_blocks(vec![
             MockBlock::new(hash(0), vec![hash(100)], vec![], vec![]),
             MockBlock::new(hash(1), vec![hash(101)], vec![], vec![]),
-            MockBlock::new(hash(2), vec![hash(102)], vec![Address::zero()], vec![]),
+            MockBlock::new(
+                hash(2),
+                vec![hash(102)],
+                vec![Address::zero()],
+                vec![addr(1)],
+            ),
         ]);
         chain.sync_to_block(controller.get_head()).await.unwrap();
         {
@@ -829,7 +834,7 @@ mod tests {
             blocks.extend([
                 MockBlock::new(hash(12), vec![hash(112)], vec![], vec![]),
                 MockBlock::new(hash(13), vec![hash(113)], vec![], vec![]),
-                MockBlock::new(hash(14), vec![hash(114)], vec![], vec![]),
+                MockBlock::new(hash(14), vec![hash(114)], vec![], vec![addr(3)]),
             ]);
         }
         let update = chain.sync_to_block(controller.get_head()).await.unwrap();
@@ -845,8 +850,8 @@ mod tests {
                 unmined_ops: vec![fake_mined_op(102)],
                 entity_deposits: vec![],
                 unmined_entity_deposits: vec![fake_mined_deposit(Address::zero(), 0.into())],
-                entity_withdrawals: vec![],
-                unmined_entity_withdrawals: vec![],
+                entity_withdrawals: vec![fake_mined_deposit(addr(3), 0.into())],
+                unmined_entity_withdrawals: vec![fake_mined_deposit(addr(1), 0.into())],
                 reorg_larger_than_history: false,
             }
         );
