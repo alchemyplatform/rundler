@@ -281,13 +281,13 @@ impl AddressReputation {
     }
 
     fn status(&self, address: Address) -> ReputationStatus {
-        if !self.params.tracking_enabled {
-            return ReputationStatus::Ok;
-        }
-
         if self.blocklist.contains(&address) {
             return ReputationStatus::Banned;
         } else if self.allowlist.contains(&address) {
+            return ReputationStatus::Ok;
+        }
+
+        if !self.params.tracking_enabled {
             return ReputationStatus::Ok;
         }
 
