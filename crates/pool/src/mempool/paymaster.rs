@@ -97,45 +97,18 @@ impl PaymasterTracker {
         keys
     }
 
-    pub(crate) fn update_paymaster_balance_after_deposit_reorg(
+    pub(crate) fn update_paymaster_balance(
         &mut self,
         paymaster: Address,
-        deposit_amount: U256,
+        amount: U256,
+        is_deposit: bool,
     ) {
         if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
-            paymaster_balance.confirmed =
-                paymaster_balance.confirmed.saturating_sub(deposit_amount);
-        }
-    }
-
-    pub(crate) fn update_paymaster_balance_from_deposit(
-        &mut self,
-        paymaster: Address,
-        deposit_amount: U256,
-    ) {
-        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
-            paymaster_balance.confirmed =
-                paymaster_balance.confirmed.saturating_add(deposit_amount);
-        }
-    }
-
-    pub(crate) fn update_paymaster_balance_after_withdrawal_reorg(
-        &mut self,
-        paymaster: Address,
-        withdrawal: U256,
-    ) {
-        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
-            paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(withdrawal);
-        }
-    }
-
-    pub(crate) fn update_paymaster_balance_from_withdrawal(
-        &mut self,
-        paymaster: Address,
-        withdrawal: U256,
-    ) {
-        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
-            paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_sub(withdrawal);
+            if is_deposit {
+                paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_sub(amount);
+            } else {
+                paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(amount);
+            }
         }
     }
 

@@ -34,7 +34,7 @@ use super::{
     Mempool, OperationOrigin, PaymasterMetadata, PoolConfig, PoolOperation, StakeInfo, StakeStatus,
 };
 use crate::{
-    chain::{ChainUpdate, DepositInfo},
+    chain::{BalanceUpdate, ChainUpdate},
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
 };
 
@@ -156,29 +156,15 @@ where
                 .iter()
                 .filter(|op| op.entry_point == self.config.entry_point);
 
-            let deposits: Vec<DepositInfo> = update
-                .entity_deposits
+            let entity_balance_updates: Vec<BalanceUpdate> = update
+                .entity_balance_updates
                 .iter()
                 .filter(|d| d.entrypoint == self.config.entry_point)
                 .cloned()
                 .collect();
 
-            let unmined_entity_deposits: Vec<DepositInfo> = update
-                .unmined_entity_deposits
-                .iter()
-                .filter(|d| d.entrypoint == self.config.entry_point)
-                .cloned()
-                .collect();
-
-            let withdrawals: Vec<DepositInfo> = update
-                .entity_withdrawals
-                .iter()
-                .filter(|d| d.entrypoint == self.config.entry_point)
-                .cloned()
-                .collect();
-
-            let unmined_entity_withdrawals: Vec<DepositInfo> = update
-                .unmined_entity_withdrawals
+            let unmined_entity_balance_updates: Vec<BalanceUpdate> = update
+                .unmined_entity_balance_updates
                 .iter()
                 .filter(|d| d.entrypoint == self.config.entry_point)
                 .cloned()
@@ -197,10 +183,8 @@ where
 
             let mut state = self.state.write();
             state.pool.update_paymaster_balances_after_updates(
-                &deposits,
-                &unmined_entity_deposits,
-                &withdrawals,
-                &unmined_entity_withdrawals,
+                &entity_balance_updates,
+                &unmined_entity_balance_updates,
             );
 
             for op in mined_ops {
@@ -787,10 +771,8 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            entity_deposits: vec![],
-            unmined_entity_deposits: vec![],
-            entity_withdrawals: vec![],
-            unmined_entity_withdrawals: vec![],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -843,10 +825,8 @@ mod tests {
                 paymaster: Some(paymaster),
             }],
             unmined_ops: vec![],
-            entity_deposits: vec![],
-            unmined_entity_deposits: vec![],
-            entity_withdrawals: vec![],
-            unmined_entity_withdrawals: vec![],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -879,10 +859,8 @@ mod tests {
                 actual_gas_cost: 10.into(),
                 paymaster: None,
             }],
-            entity_deposits: vec![],
-            unmined_entity_deposits: vec![],
-            entity_withdrawals: vec![],
-            unmined_entity_withdrawals: vec![],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -923,10 +901,8 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            entity_deposits: vec![],
-            unmined_entity_deposits: vec![],
-            entity_withdrawals: vec![],
-            unmined_entity_withdrawals: vec![],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -967,10 +943,8 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            entity_deposits: vec![],
-            unmined_entity_deposits: vec![],
-            entity_withdrawals: vec![],
-            unmined_entity_withdrawals: vec![],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1040,11 +1014,9 @@ mod tests {
                 actual_gas_cost: U256::zero(),
                 paymaster: None,
             }],
-            entity_deposits: vec![],
+            entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![],
             unmined_ops: vec![],
-            unmined_entity_deposits: vec![],
-            entity_withdrawals: vec![],
-            unmined_entity_withdrawals: vec![],
             reorg_larger_than_history: false,
         })
         .await;

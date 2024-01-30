@@ -33,7 +33,7 @@ use super::{
     size::SizeTracker,
     PaymasterMetadata, PoolConfig, PoolOperation,
 };
-use crate::chain::{DepositInfo, MinedOp};
+use crate::chain::{BalanceUpdate, MinedOp};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -359,35 +359,23 @@ impl PoolInner {
 
     pub(crate) fn update_paymaster_balances_after_updates(
         &mut self,
-        deposits: &Vec<DepositInfo>,
-        unmined_entity_deposits: &Vec<DepositInfo>,
-        withdrawals: &Vec<DepositInfo>,
-        unmined_entity_withdrawals: &Vec<DepositInfo>,
+        balance_updates: &[BalanceUpdate],
+        unmined_balance_updates: &[BalanceUpdate],
     ) {
-        for deposit in deposits {
-            self.paymaster_balances
-                .update_paymaster_balance_from_deposit(deposit.address, deposit.amount)
+        for balance_update in balance_updates {
+            self.paymaster_balances.update_paymaster_balance(
+                balance_update.address,
+                balance_update.amount,
+                balance_update.is_deposit,
+            )
         }
 
-        for unmined_deposit in unmined_entity_deposits {
-            self.paymaster_balances
-                .update_paymaster_balance_after_deposit_reorg(
-                    unmined_deposit.address,
-                    unmined_deposit.amount,
-                )
-        }
-
-        for withdrawal in withdrawals {
-            self.paymaster_balances
-                .update_paymaster_balance_from_withdrawal(withdrawal.address, withdrawal.amount)
-        }
-
-        for unmined_withdrawal in unmined_entity_withdrawals {
-            self.paymaster_balances
-                .update_paymaster_balance_after_withdrawal_reorg(
-                    unmined_withdrawal.address,
-                    unmined_withdrawal.amount,
-                )
+        for unmined_balance_update in unmined_balance_updates {
+            self.paymaster_balances.update_paymaster_balance(
+                unmined_balance_update.address,
+                unmined_balance_update.amount,
+                !unmined_balance_update.is_deposit,
+            )
         }
     }
 
