@@ -215,7 +215,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         .context("failed to run initial guess")?;
         if gas_used.success {
             Err(anyhow!(
-                "simulateHandleOp succeeded, but should always revert"
+                "simulateHandleOp succeeded but should always revert, make sure the entry point contract is deployed and the address is correct"
             ))?;
         }
         if let Some(message) = self
