@@ -31,3 +31,8 @@ services:
 ```
 
 An example docker-compose configuration running Rundler in its distributed mode can be found [here](../test/spec-tests/remote/docker-compose.yml). 
+
+## Cross platform docker builds
+
+Cross platform builds should only be done when there is a new release automatically by a github action. This is done by first installing
+the `tonistiigi/binfmt` package which will install the relevevant cross compliation software needed (qemu, etc.) to compile each image.
