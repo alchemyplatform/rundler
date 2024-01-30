@@ -159,14 +159,12 @@ where
             let entity_balance_updates = update
                 .entity_balance_updates
                 .iter()
-                .filter(|u| u.entrypoint == self.config.entry_point)
-                .into_iter();
+                .filter(|u| u.entrypoint == self.config.entry_point);
 
             let unmined_entity_balance_updates = update
                 .unmined_entity_balance_updates
                 .iter()
-                .filter(|u| u.entrypoint == self.config.entry_point)
-                .into_iter();
+                .filter(|u| u.entrypoint == self.config.entry_point);
 
             let unmined_ops = deduped_ops
                 .unmined_ops
