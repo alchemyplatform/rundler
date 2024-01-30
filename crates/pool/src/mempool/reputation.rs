@@ -231,7 +231,7 @@ impl Default for ReputationParams {
 }
 
 impl ReputationParams {
-    pub(crate) fn new_with_config(tracking_enabled: bool) -> Self {
+    pub(crate) fn new(tracking_enabled: bool) -> Self {
         Self {
             tracking_enabled,
             ..Default::default()
@@ -459,7 +459,7 @@ mod tests {
     #[test]
     fn reputation_banned_tracking_disabled() {
         let addr = Address::random();
-        let params = ReputationParams::new_with_config(false);
+        let params = ReputationParams::new(false);
         let mut reputation = AddressReputation::new(params);
 
         let ops_seen = 1000;
