@@ -34,7 +34,7 @@ use super::{
     Mempool, OperationOrigin, PaymasterMetadata, PoolConfig, PoolOperation, StakeInfo, StakeStatus,
 };
 use crate::{
-    chain::{BalanceUpdate, ChainUpdate},
+    chain::ChainUpdate,
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
 };
 
@@ -156,19 +156,17 @@ where
                 .iter()
                 .filter(|op| op.entry_point == self.config.entry_point);
 
-            let entity_balance_updates: Vec<BalanceUpdate> = update
+            let entity_balance_updates = update
                 .entity_balance_updates
                 .iter()
-                .filter(|d| d.entrypoint == self.config.entry_point)
-                .cloned()
-                .collect();
+                .filter(|u| u.entrypoint == self.config.entry_point)
+                .into_iter();
 
-            let unmined_entity_balance_updates: Vec<BalanceUpdate> = update
+            let unmined_entity_balance_updates = update
                 .unmined_entity_balance_updates
                 .iter()
-                .filter(|d| d.entrypoint == self.config.entry_point)
-                .cloned()
-                .collect();
+                .filter(|u| u.entrypoint == self.config.entry_point)
+                .into_iter();
 
             let unmined_ops = deduped_ops
                 .unmined_ops
@@ -182,9 +180,9 @@ where
             }
 
             let mut state = self.state.write();
-            state.pool.update_paymaster_balances_after_updates(
-                &entity_balance_updates,
-                &unmined_entity_balance_updates,
+            state.pool.update_paymaster_balances_after_update(
+                entity_balance_updates,
+                unmined_entity_balance_updates,
             );
 
             for op in mined_ops {

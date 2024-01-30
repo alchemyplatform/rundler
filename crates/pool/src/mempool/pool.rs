@@ -357,12 +357,12 @@ impl PoolInner {
         self.paymaster_balances.paymaster_exists(paymaster)
     }
 
-    pub(crate) fn update_paymaster_balances_after_updates(
+    pub(crate) fn update_paymaster_balances_after_update<'a>(
         &mut self,
-        balance_updates: &[BalanceUpdate],
-        unmined_balance_updates: &[BalanceUpdate],
+        entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
+        unmined_entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
     ) {
-        for balance_update in balance_updates {
+        for balance_update in entity_balance_updates {
             self.paymaster_balances.update_paymaster_balance(
                 balance_update.address,
                 balance_update.amount,
@@ -370,7 +370,7 @@ impl PoolInner {
             )
         }
 
-        for unmined_balance_update in unmined_balance_updates {
+        for unmined_balance_update in unmined_entity_balance_updates {
             self.paymaster_balances.update_paymaster_balance(
                 unmined_balance_update.address,
                 unmined_balance_update.amount,
