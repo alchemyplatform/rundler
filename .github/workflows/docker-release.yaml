@@ -2,6 +2,10 @@ name: Docker release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
   push:
     tags:
       - v*.*.*
@@ -50,4 +54,9 @@ jobs:
       - name: Build and push image
         run: |
           cargo install cross --git https://github.com/cross-rs/cross 
-          sudo -E env "PATH=$PATH" make docker-build-latest
+
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            make GIT_TAG=${github.event.inputs.version} docker-build 
+          else
+            sudo -E env "PATH=$PATH" make docker-build-latest
+          fi
