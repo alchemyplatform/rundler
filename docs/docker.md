@@ -46,7 +46,7 @@ This phase compiles and imports required libraries for successful compilation. I
 
 ### Release Phase [Dockerfile.cross](../Dockerfile.cross)
 
-This phase imports the compiled binary from the previous stage into its environment and exposes relevant ports for the correct functioning of the program. The target plaform is specified by the `TARGETPLATFORM` argument.
+This phase imports the compiled binary from the previous stage into its environment and exposes relevant ports for the correct functioning of the program. The target platform is specified by the `TARGETPLATFORM` argument.
 
 ### Usage
 
