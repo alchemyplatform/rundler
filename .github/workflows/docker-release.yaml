@@ -56,7 +56,7 @@ jobs:
           cargo install cross --git https://github.com/cross-rs/cross 
 
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            make GIT_TAG=${github.event.inputs.version} docker-build 
+            make GIT_TAG="${{ github.event.inputs.version }}" docker-build 
           else
             sudo -E env "PATH=$PATH" make docker-build-latest
           fi
