@@ -50,7 +50,7 @@ This phase imports the compiled binary from the previous stage into its environm
 
 ### Usage
 
-GitHub Actions
+**GitHub Actions**
 
 ```
 jobs:
@@ -69,7 +69,7 @@ jobs:
           sudo -E env "PATH=$PATH" make docker-build-latest
 ```
 
-Local Builds
+**Local Builds**
 
 ```
 docker run --privileged --rm tonistiigi/binfmt --install arm64,amd64
