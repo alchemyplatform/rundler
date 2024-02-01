@@ -165,6 +165,25 @@ impl PoolInner {
         self.best.clone().into_iter().map(|v| v.po)
     }
 
+    // Check if it is worth adding an user operation to the pool given pool size constraints and the price of the UO.
+    pub(crate) fn check_pool_capacity(&self, uo: &UserOperation) -> MempoolResult<()> {
+        let max_op_size = OrderedPoolOperation::max_size(uo);
+        let mut free_space =
+            self.config.max_size_of_pool_bytes - (std::cmp::max(self.pool_size.0, 0) as usize);
+        let mut req_fee_per_gas = U256::zero();
+        let mut pool_iter = self.best.iter().rev();
+
+        while !(max_op_size <= free_space && uo.max_fee_per_gas > req_fee_per_gas) {
+            if let Some(op) = pool_iter.next() {
+                req_fee_per_gas = op.po.uo.max_fee_per_gas;
+                free_space += op.mem_size();
+            } else {
+                return Err(MempoolError::DiscardedOnInsert);
+            }
+        }
+        Ok(())
+    }
+
     /// Removes all operations using the given entity, returning the hashes of the removed operations.
     ///
     /// NOTE: This method is O(n) where n is the number of operations in the pool.
@@ -557,7 +576,11 @@ impl OrderedPoolOperation {
     }
 
     fn mem_size(&self) -> usize {
-        std::mem::size_of::<OrderedPoolOperation>() + self.po.mem_size()
+        std::mem::size_of::<Self>() + self.po.mem_size()
+    }
+
+    fn max_size(uo: &UserOperation) -> usize {
+        std::mem::size_of::<Self>() + PoolOperation::max_size(uo)
     }
 }
 
@@ -1027,6 +1050,31 @@ mod tests {
         assert_eq!(res.len(), 2);
         assert!(res.contains(&(po1.uo.op_hash(conf.entry_point, conf.chain_id), 5.into())));
         assert!(res.contains(&(po3.uo.op_hash(conf.entry_point, conf.chain_id), 9.into())));
+    }
+
+    #[test]
+    fn test_check_pool_capacity() {
+        let mut conf = conf();
+        conf.max_size_of_pool_bytes = 1204; // has room only for two ops
+        let mut pool = PoolInner::new(conf.clone());
+
+        // An orderedPoolOperation created by adding one of these pool operations has a memory size of 600 bytes
+        let po1 = create_op(Address::random(), 0, 10);
+        let po2 = create_op(Address::random(), 0, 10);
+
+        // The largest possible orderedPoolOperation created from this op is 604 bytes
+        let op = create_op(Address::random(), 0, 9).uo;
+
+        assert!(pool.check_pool_capacity(&op).is_ok());
+
+        let _ = pool.add_operation(po1.clone(), None).unwrap();
+        assert!(pool.check_pool_capacity(&op).is_ok());
+
+        let _ = pool.add_operation(po2.clone(), None).unwrap();
+        assert!(matches!(
+            pool.check_pool_capacity(&op).unwrap_err(),
+            MempoolError::DiscardedOnInsert
+        ));
     }
 
     fn conf() -> PoolInnerConfig {

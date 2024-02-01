@@ -362,6 +362,8 @@ where
             );
         }
 
+        // Check if there is space for the op in the pool
+        self.state.read().pool.check_pool_capacity(&op)?;
         // Check if op is already known or replacing another, and if so, ensure its fees are high enough
         // do this before simulation to save resources
         self.state.read().pool.check_replacement(&op)?;
@@ -678,7 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_single_op() {
-        let op = create_op(Address::random(), 0, 0, None);
+        let op = create_op(Address::random(), 0, 1, None);
         let ops = vec![op.clone()];
         let uos = vec![op.op.clone()];
         let pool = create_pool(ops);
@@ -1073,7 +1075,7 @@ mod tests {
         let op = create_op_with_errors(
             Address::random(),
             0,
-            0,
+            1,
             Some(PrecheckViolation::InitCodeTooShort(0)),
             None,
             false,
@@ -1093,7 +1095,7 @@ mod tests {
         let op = create_op_with_errors(
             Address::random(),
             0,
-            0,
+            1,
             None,
             Some(SimulationViolation::DidNotRevert),
             false,
@@ -1110,7 +1112,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_already_known() {
-        let op = create_op(Address::random(), 0, 0, None);
+        let op = create_op(Address::random(), 0, 1, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool
@@ -1212,7 +1214,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_expiry() {
-        let mut op = create_op(Address::random(), 0, 0, None);
+        let mut op = create_op(Address::random(), 0, 1, None);
         op.valid_time_range = ValidTimeRange {
             valid_after: 0.into(),
             valid_until: 10.into(),
@@ -1237,7 +1239,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash() {
-        let op = create_op(Address::random(), 0, 0, None);
+        let op = create_op(Address::random(), 0, 1, None);
         let pool = create_pool(vec![op.clone()]);
 
         let hash = pool
@@ -1251,7 +1253,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_not_found() {
-        let op = create_op(Address::random(), 0, 0, None);
+        let op = create_op(Address::random(), 0, 1, None);
         let pool = create_pool(vec![op.clone()]);
 
         let _ = pool

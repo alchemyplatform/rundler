@@ -273,6 +273,10 @@ impl PoolOperation {
             + self.uo.heap_size()
             + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
     }
+
+    pub(crate) fn max_size(uo: &UserOperation) -> usize {
+        std::mem::size_of::<Self>() + uo.heap_size() + 4 * std::mem::size_of::<EntityType>()
+    }
 }
 
 #[cfg(test)]
