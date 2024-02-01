@@ -364,7 +364,7 @@ where
 
         // Check if op is already known or replacing another, and if so, ensure its fees are high enough
         // do this before simulation to save resources
-        self.state.read().pool.check_replacement(&op)?;
+        let replacement = self.state.read().pool.check_replacement(&op)?;
         // Check if op violates the STO-040 spec rule
         self.state.read().pool.check_multiple_roles_violation(&op)?;
 
@@ -456,15 +456,16 @@ where
         };
 
         // Update reputation
-        pool_op.entities().unique().for_each(|e| {
-            self.reputation.add_seen(e.address);
-            if self.reputation.status(e.address) == ReputationStatus::Throttled {
-                self.throttle_entity(e);
-            } else if self.reputation.status(e.address) == ReputationStatus::Banned {
-                self.remove_entity(e);
-            }
-        });
-
+        if replacement.is_none() {
+            pool_op.entities().unique().for_each(|e| {
+                self.reputation.add_seen(e.address);
+                if self.reputation.status(e.address) == ReputationStatus::Throttled {
+                    self.throttle_entity(e);
+                } else if self.reputation.status(e.address) == ReputationStatus::Banned {
+                    self.remove_entity(e);
+                }
+            });
+        }
         let op_hash = pool_op
             .uo
             .op_hash(self.config.entry_point, self.config.chain_id);
@@ -1208,6 +1209,11 @@ mod tests {
             .paymaster_metadata(paymaster)
             .unwrap();
         assert_eq!(paymaster_balance.pending_balance, U256::from(900));
+        let rep = pool.dump_reputation();
+        assert_eq!(rep.len(), 1);
+        assert_eq!(rep[0].address, op.op.sender);
+        assert_eq!(rep[0].ops_seen, 1);
+        assert_eq!(rep[0].ops_included, 0);
     }
 
     #[tokio::test]
