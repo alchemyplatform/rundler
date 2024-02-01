@@ -6,16 +6,16 @@ The rundler project's releases are seamlessly managed by GitHub Actions and can 
 
 # Extract Version
 
-This initial step intelligently extracts the project version either from GitHub Actions inputs or the Git reference.
+This initial step conditionally extracts the project version either from GitHub Actions inputs or the Git reference.
 
 # Build
 
-The build process is meticulously orchestrated to cater to various architectures and platforms. Employing a dynamic matrix strategy, it defines distinct build configurations encompassing architecture, platform, and profile. Key actions include:
+The build process is orchestrated to cater to various architectures and platforms. Using a dynamic matrix strategy, it defines distinct build configurations encompassing architecture, platform, and profile. Key actions include:
 
 - Checking out the source code.
 - Updating the Rust toolchain.
 - Installing the target architecture.
-- Leveraging the Swatinem/rust-cache action to efficiently cache Rust dependencies.
+- Leveraging the `Swatinem/rust-cache` action to efficiently cache Rust dependencies.
 - Setting up essential environment variables for Apple Silicon SDK during Apple builds.
 - Compiling the project with the specified profile and architecture.
 - Organizing the compiled binary into a designated 'artifacts' directory.
