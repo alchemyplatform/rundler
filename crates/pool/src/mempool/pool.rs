@@ -33,7 +33,7 @@ use super::{
     size::SizeTracker,
     PaymasterMetadata, PoolConfig, PoolOperation,
 };
-use crate::chain::{DepositInfo, MinedOp};
+use crate::chain::{BalanceUpdate, MinedOp};
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -357,22 +357,25 @@ impl PoolInner {
         self.paymaster_balances.paymaster_exists(paymaster)
     }
 
-    pub(crate) fn update_paymaster_balances_after_updates(
+    pub(crate) fn update_paymaster_balances_after_update<'a>(
         &mut self,
-        deposits: &Vec<DepositInfo>,
-        unmined_entity_deposits: &Vec<DepositInfo>,
+        entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
+        unmined_entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
     ) {
-        for deposit in deposits {
-            self.paymaster_balances
-                .update_paymaster_balance_from_deposit(deposit.address, deposit.amount)
+        for balance_update in entity_balance_updates {
+            self.paymaster_balances.update_paymaster_balance_from_event(
+                balance_update.address,
+                balance_update.amount,
+                balance_update.is_addition,
+            )
         }
 
-        for unmined_deposit in unmined_entity_deposits {
-            self.paymaster_balances
-                .update_paymaster_balance_after_deposit_reorg(
-                    unmined_deposit.address,
-                    unmined_deposit.amount,
-                )
+        for unmined_balance_update in unmined_entity_balance_updates {
+            self.paymaster_balances.update_paymaster_balance_from_event(
+                unmined_balance_update.address,
+                unmined_balance_update.amount,
+                !unmined_balance_update.is_addition,
+            )
         }
     }
 
