@@ -94,7 +94,7 @@ pub struct BalanceUpdate {
     pub address: Address,
     pub entrypoint: Address,
     pub amount: U256,
-    pub is_deposit: bool,
+    pub is_addition: bool,
 }
 
 impl MinedOp {
@@ -450,7 +450,8 @@ impl<P: Provider> Chain<P> {
     }
 
     fn load_entity_balance_updates(&self, logs: &Vec<Log>) -> Vec<BalanceUpdate> {
-        let mut deposits = vec![];
+        let mut balance_updates = vec![];
+
         for log in logs {
             let entrypoint = log.address;
             if let Ok(event) = contract::parse_log::<DepositedFilter>(log.clone()) {
@@ -458,10 +459,10 @@ impl<P: Provider> Chain<P> {
                     entrypoint,
                     address: event.account,
                     amount: event.total_deposit,
-                    is_deposit: true,
+                    is_addition: true,
                 };
 
-                deposits.push(info);
+                balance_updates.push(info);
             }
 
             if let Ok(event) = contract::parse_log::<WithdrawnFilter>(log.clone()) {
@@ -469,14 +470,14 @@ impl<P: Provider> Chain<P> {
                     entrypoint,
                     address: event.account,
                     amount: event.amount,
-                    is_deposit: false,
+                    is_addition: false,
                 };
 
-                deposits.push(info);
+                balance_updates.push(info);
             }
         }
 
-        deposits
+        balance_updates
     }
 
     fn block_with_number(&self, number: u64) -> Option<&BlockSummary> {
@@ -1093,13 +1094,13 @@ mod tests {
     fn fake_mined_balance_update(
         address: Address,
         amount: U256,
-        is_deposit: bool,
+        is_addition: bool,
     ) -> BalanceUpdate {
         BalanceUpdate {
             address,
             entrypoint: ENTRY_POINT_ADDRESS,
             amount,
-            is_deposit,
+            is_addition,
         }
     }
 

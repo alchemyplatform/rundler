@@ -363,18 +363,18 @@ impl PoolInner {
         unmined_entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
     ) {
         for balance_update in entity_balance_updates {
-            self.paymaster_balances.update_paymaster_balance(
+            self.paymaster_balances.update_paymaster_balance_from_event(
                 balance_update.address,
                 balance_update.amount,
-                balance_update.is_deposit,
+                balance_update.is_addition,
             )
         }
 
         for unmined_balance_update in unmined_entity_balance_updates {
-            self.paymaster_balances.update_paymaster_balance(
+            self.paymaster_balances.update_paymaster_balance_from_event(
                 unmined_balance_update.address,
                 unmined_balance_update.amount,
-                !unmined_balance_update.is_deposit,
+                !unmined_balance_update.is_addition,
             )
         }
     }

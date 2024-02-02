@@ -97,17 +97,17 @@ impl PaymasterTracker {
         keys
     }
 
-    pub(crate) fn update_paymaster_balance(
+    pub(crate) fn update_paymaster_balance_from_event(
         &mut self,
         paymaster: Address,
         amount: U256,
-        is_deposit: bool,
+        should_add: bool,
     ) {
         if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
-            if is_deposit {
-                paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_sub(amount);
-            } else {
+            if should_add {
                 paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(amount);
+            } else {
+                paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_sub(amount);
             }
         }
     }
@@ -380,6 +380,43 @@ mod tests {
 
         let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn update_balance_after_deposit() {
+        let mut paymaster_tracker = PaymasterTracker::new(true);
+
+        let paymaster = Address::random();
+        let pending_op_cost = U256::from(100);
+        let confirmed_balance = U256::from(1000);
+
+        paymaster_tracker.paymaster_balances.insert(
+            paymaster,
+            PaymasterBalance {
+                pending: pending_op_cost,
+                confirmed: confirmed_balance,
+            },
+        );
+
+        // deposit
+        paymaster_tracker.update_paymaster_balance_from_event(paymaster, 100.into(), true);
+
+        let balance = paymaster_tracker
+            .paymaster_balances
+            .get(&paymaster)
+            .unwrap();
+
+        assert_eq!(balance.confirmed, 1100.into());
+
+        // withdrawal
+        paymaster_tracker.update_paymaster_balance_from_event(paymaster, 50.into(), false);
+
+        let balance = paymaster_tracker
+            .paymaster_balances
+            .get(&paymaster)
+            .unwrap();
+
+        assert_eq!(balance.confirmed, 1050.into());
     }
 
     #[test]
