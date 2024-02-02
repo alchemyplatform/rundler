@@ -677,7 +677,7 @@ mod tests {
     use rundler_types::{DepositInfo, EntityType, GasFees, ValidTimeRange};
 
     use super::*;
-    use crate::chain::MinedOp;
+    use crate::chain::{BalanceUpdate, MinedOp};
 
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -744,10 +744,11 @@ mod tests {
 
     #[tokio::test]
     async fn chain_update_mine() {
+        let paymaster = Address::random();
         let (pool, uos) = create_pool_insert_ops(vec![
             create_op(Address::random(), 0, 3, None),
             create_op(Address::random(), 0, 2, None),
-            create_op(Address::random(), 0, 1, None),
+            create_op(Address::random(), 0, 1, Some(paymaster)),
         ])
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -767,13 +768,27 @@ mod tests {
                 paymaster: None,
             }],
             unmined_ops: vec![],
-            entity_balance_updates: vec![],
-            unmined_entity_balance_updates: vec![],
+            entity_balance_updates: vec![BalanceUpdate {
+                address: paymaster,
+                amount: 100.into(),
+                entrypoint: pool.config.entry_point,
+                is_addition: true,
+            }],
+            unmined_entity_balance_updates: vec![BalanceUpdate {
+                address: paymaster,
+                amount: 10.into(),
+                entrypoint: pool.config.entry_point,
+                is_addition: false,
+            }],
             reorg_larger_than_history: false,
         })
         .await;
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos[1..].to_vec());
+
+        let paymaster_balance = pool.paymaster_balance(paymaster).await.unwrap();
+
+        assert_eq!(paymaster_balance.confirmed_balance, 1110.into());
     }
 
     #[tokio::test]
@@ -821,8 +836,18 @@ mod tests {
                 paymaster: Some(paymaster),
             }],
             unmined_ops: vec![],
-            entity_balance_updates: vec![],
-            unmined_entity_balance_updates: vec![],
+            entity_balance_updates: vec![BalanceUpdate {
+                address: paymaster,
+                amount: 100.into(),
+                entrypoint: pool.config.entry_point,
+                is_addition: true,
+            }],
+            unmined_entity_balance_updates: vec![BalanceUpdate {
+                address: paymaster,
+                amount: 10.into(),
+                entrypoint: pool.config.entry_point,
+                is_addition: false,
+            }],
             reorg_larger_than_history: false,
         })
         .await;
@@ -838,7 +863,8 @@ mod tests {
             .pool
             .paymaster_metadata(paymaster)
             .unwrap();
-        assert_eq!(metadata.pending_balance, 890.into());
+
+        assert_eq!(metadata.pending_balance, 1000.into());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -856,7 +882,12 @@ mod tests {
                 paymaster: None,
             }],
             entity_balance_updates: vec![],
-            unmined_entity_balance_updates: vec![],
+            unmined_entity_balance_updates: vec![BalanceUpdate {
+                address: paymaster,
+                amount: 100.into(),
+                entrypoint: pool.config.entry_point,
+                is_addition: true,
+            }],
             reorg_larger_than_history: false,
         })
         .await;
@@ -867,7 +898,7 @@ mod tests {
             .pool
             .paymaster_metadata(paymaster)
             .unwrap();
-        assert_eq!(metadata.pending_balance, 850.into());
+        assert_eq!(metadata.pending_balance, 860.into());
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
