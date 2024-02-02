@@ -19,10 +19,10 @@ use alloy_chains::NamedChain;
 pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
     NamedChain::Optimism as u64,
     NamedChain::OptimismGoerli as u64,
-    11155420, // OptimismSepolia
+    NamedChain::OptimismSepolia as u64,
     NamedChain::Base as u64,
     NamedChain::BaseGoerli as u64,
-    84532, // BaseSepolia
+    NamedChain::BaseSepolia as u64,
 ];
 
 // TODO use chain from ethers types once my PR is merged into ethers
@@ -31,7 +31,7 @@ pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
 pub const ARBITRUM_CHAIN_IDS: &[u64] = &[
     NamedChain::Arbitrum as u64,
     NamedChain::ArbitrumGoerli as u64,
-    421614, /* ArbitrumSepolia */
+    NamedChain::ArbitrumSepolia as u64,
     NamedChain::ArbitrumNova as u64,
 ];
 
@@ -39,15 +39,14 @@ pub const ARBITRUM_CHAIN_IDS: &[u64] = &[
 pub const BASE_CHAIN_IDS: &[u64] = &[
     NamedChain::Base as u64,
     NamedChain::BaseGoerli as u64,
-    84532, /* BaseSepolia */
+    NamedChain::BaseSepolia as u64,
 ];
 
 /// Known chain IDs for the Polygon ecosystem
 pub const POLYGON_CHAIN_IDS: &[u64] = &[
     NamedChain::Polygon as u64,
     NamedChain::PolygonMumbai as u64,
-    // Use named NamedChain::PolygonAmoy once merged
-    80002,
+    80002, // PolygonAmoy - Change to named chain once there is a new release on alloy-rs/chains
 ];
 
 /// Return true if the chain ID has a dynamic preVerificationGas field
