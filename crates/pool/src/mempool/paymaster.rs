@@ -383,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn update_balance_after_deposit() {
+    fn test_update_balance() {
         let mut paymaster_tracker = PaymasterTracker::new(true);
 
         let paymaster = Address::random();
