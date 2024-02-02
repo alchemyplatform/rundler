@@ -427,10 +427,11 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 
 #[cfg(test)]
 mod tests {
+    use alloy_chains::NamedChain;
     use ethers::{
         abi::{AbiEncode, Address},
         providers::JsonRpcError,
-        types::{Chain, U64},
+        types::U64,
         utils::hex,
     };
     use rundler_provider::{MockEntryPoint, MockProvider, ProviderError};
@@ -575,7 +576,7 @@ mod tests {
         // Chose arbitrum
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
-            Chain::Arbitrum as u64,
+            NamedChain::Arbitrum as u64,
             provider.clone(),
             entry,
             settings,
@@ -628,7 +629,7 @@ mod tests {
         // Chose OP
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
-            Chain::Optimism as u64,
+            NamedChain::Optimism as u64,
             provider.clone(),
             entry,
             settings,

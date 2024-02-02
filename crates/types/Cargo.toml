@@ -12,6 +12,7 @@ rundler-utils = { path = "../utils" }
 anyhow.workspace = true
 chrono = "0.4.24"
 ethers.workspace = true
+alloy-chains.workspace = true
 parse-display = "0.8.0"
 serde.workspace = true
 serde_json.workspace = true

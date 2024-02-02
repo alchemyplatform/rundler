@@ -13,15 +13,15 @@
 
 //! Grouped/Labeled chain IDs for various networks
 
-use ethers::types::Chain;
+use alloy_chains::NamedChain;
 
 /// Known chain IDs that use the Optimism Bedrock stack
 pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
-    Chain::Optimism as u64,
-    Chain::OptimismGoerli as u64,
+    NamedChain::Optimism as u64,
+    NamedChain::OptimismGoerli as u64,
     11155420, // OptimismSepolia
-    Chain::Base as u64,
-    Chain::BaseGoerli as u64,
+    NamedChain::Base as u64,
+    NamedChain::BaseGoerli as u64,
     84532, // BaseSepolia
 ];
 
@@ -29,21 +29,26 @@ pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
 // https://github.com/gakonst/ethers-rs/pull/2657
 /// Known chain IDs for the Base ecosystem
 pub const ARBITRUM_CHAIN_IDS: &[u64] = &[
-    Chain::Arbitrum as u64,
-    Chain::ArbitrumGoerli as u64,
+    NamedChain::Arbitrum as u64,
+    NamedChain::ArbitrumGoerli as u64,
     421614, /* ArbitrumSepolia */
-    Chain::ArbitrumNova as u64,
+    NamedChain::ArbitrumNova as u64,
 ];
 
 /// Known chain IDs for the Base ecosystem
 pub const BASE_CHAIN_IDS: &[u64] = &[
-    Chain::Base as u64,
-    Chain::BaseGoerli as u64,
+    NamedChain::Base as u64,
+    NamedChain::BaseGoerli as u64,
     84532, /* BaseSepolia */
 ];
 
 /// Known chain IDs for the Polygon ecosystem
-pub const POLYGON_CHAIN_IDS: &[u64] = &[Chain::Polygon as u64, Chain::PolygonMumbai as u64];
+pub const POLYGON_CHAIN_IDS: &[u64] = &[
+    NamedChain::Polygon as u64,
+    NamedChain::PolygonMumbai as u64,
+    // Use named NamedChain::PolygonAmoy once merged
+    80002,
+];
 
 /// Return true if the chain ID has a dynamic preVerificationGas field
 pub fn is_dynamic_pvg(chain_id: u64) -> bool {

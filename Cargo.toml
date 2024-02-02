@@ -18,6 +18,7 @@ anyhow = "1.0.70"
 async-trait = "0.1.73"
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 ethers = "2.0.10"
+alloy-chains = "0.1.10"
 futures = "0.3.28"
 futures-util = "0.3.28"
 jsonrpsee = "0.20.1"
