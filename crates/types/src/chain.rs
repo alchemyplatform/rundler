@@ -14,6 +14,7 @@
 //! Grouped/Labeled chain IDs for various networks
 
 use alloy_chains::NamedChain;
+use constcat::concat_slices;
 
 /// Known chain IDs that use the Optimism Bedrock stack
 pub const OP_BEDROCK_CHAIN_IDS: &[u64] = &[
@@ -43,11 +44,17 @@ pub const BASE_CHAIN_IDS: &[u64] = &[
 ];
 
 /// Known chain IDs for the Polygon ecosystem
-pub const POLYGON_CHAIN_IDS: &[u64] = &[
-    NamedChain::Polygon as u64,
+pub const POLYGON_CHAIN_IDS: &[u64] =
+    concat_slices!([u64]: POLYGON_TESTNET_CHAIN_IDS, POLYGON_MAINNET_CHAIN_IDS);
+
+/// Known chain IDs for the Polygon ecosystem
+pub const POLYGON_TESTNET_CHAIN_IDS: &[u64] = &[
     NamedChain::PolygonMumbai as u64,
     80002, // PolygonAmoy - Change to named chain once there is a new release on alloy-rs/chains
 ];
+
+/// Known chain IDs for the Polygon ecosystem
+pub const POLYGON_MAINNET_CHAIN_IDS: &[u64] = &[NamedChain::Polygon as u64];
 
 /// Return true if the chain ID has a dynamic preVerificationGas field
 pub fn is_dynamic_pvg(chain_id: u64) -> bool {

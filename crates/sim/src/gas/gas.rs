@@ -22,7 +22,9 @@ use ethers::{
 use alloy_chains::NamedChain;
 use rundler_provider::Provider;
 use rundler_types::{
-    chain::{ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS},
+    chain::{
+        ARBITRUM_CHAIN_IDS, OP_BEDROCK_CHAIN_IDS, POLYGON_CHAIN_IDS, POLYGON_TESTNET_CHAIN_IDS,
+    },
     GasFees, UserOperation,
 };
 use rundler_utils::math;
@@ -402,7 +404,8 @@ pub fn get_min_max_priority_fee_per_gas(chain_id: u64) -> U256 {
     match chain_id {
         x if x == NamedChain::Mainnet as u64 => ETHEREUM_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
         x if x == NamedChain::Polygon as u64 => POLYGON_MAINNET_MAX_PRIORITY_FEE_MIN.into(),
-        x if x == NamedChain::PolygonMumbai as u64 => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
+        x if POLYGON_TESTNET_CHAIN_IDS.contains(&x) => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
+        x if x == 80002 => POLYGON_MUMBAI_MAX_PRIORITY_FEE_MIN.into(),
         x if OP_BEDROCK_CHAIN_IDS.contains(&x) => OPTIMISM_BEDROCK_MAX_PRIORITY_FEE_MIN.into(),
         _ => U256::zero(),
     }
