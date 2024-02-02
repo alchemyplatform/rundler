@@ -33,13 +33,14 @@ use tonic_health::{
 };
 
 use super::protos::{
-    self, add_op_response, debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_ops_response, update_entities_response, AddOpRequest,
-    DebugClearStateRequest, DebugDumpMempoolRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    self, add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
+    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
+    get_stake_status_response, op_pool_client::OpPoolClient, remove_ops_response,
+    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
+    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
     mempool::{PoolOperation, Reputation, StakeStatus},
@@ -267,6 +268,7 @@ impl PoolServer for RemotePoolClient {
     async fn debug_clear_state(
         &self,
         clear_mempool: bool,
+        clear_paymaster: bool,
         clear_reputation: bool,
     ) -> PoolResult<()> {
         let res = self
@@ -274,6 +276,7 @@ impl PoolServer for RemotePoolClient {
             .clone()
             .debug_clear_state(DebugClearStateRequest {
                 clear_mempool,
+                clear_paymaster,
                 clear_reputation,
             })
             .await?
@@ -283,6 +286,33 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(debug_clear_state_response::Result::Success(_)) => Ok(()),
             Some(debug_clear_state_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn admin_set_tracking(
+        &self,
+        entry_point: Address,
+        paymaster: bool,
+        reputation: bool,
+    ) -> PoolResult<()> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .admin_set_tracking(AdminSetTrackingRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+                reputation,
+                paymaster,
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(admin_set_tracking_response::Result::Success(_)) => Ok(()),
+            Some(admin_set_tracking_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

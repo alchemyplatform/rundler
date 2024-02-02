@@ -37,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
+    admin::{AdminApi, AdminApiServer},
     debug::{DebugApi, DebugApiServer},
     eth::{EthApi, EthApiServer, EthApiSettings},
     health::{HealthChecker, SystemApiServer},
@@ -181,6 +182,7 @@ where
                 )?,
                 ApiNamespace::Debug => module
                     .merge(DebugApi::new(self.pool.clone(), self.builder.clone()).into_rpc())?,
+                ApiNamespace::Admin => module.merge(AdminApi::new(self.pool.clone()).into_rpc())?,
                 ApiNamespace::Rundler => module.merge(
                     RundlerApi::new(
                         provider.clone(),

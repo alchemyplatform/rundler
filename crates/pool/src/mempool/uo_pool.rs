@@ -184,7 +184,7 @@ where
             let mut state = self.state.write();
             state
                 .pool
-                .update_paymaster_balances_after_update(&deposits, &unmined_entity_deposits);
+                .update_paymaster_balances_after_updates(&deposits, &unmined_entity_deposits);
 
             for op in mined_ops {
                 if op.entry_point != self.config.entry_point {
@@ -305,6 +305,11 @@ where
         self.config.entry_point
     }
 
+    fn set_tracking(&self, paymaster: bool, reputation: bool) {
+        self.state.write().pool.set_tracking(paymaster);
+        self.reputation.set_tracking(reputation);
+    }
+
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
         let paymaster_addresses = self.state.read().pool.paymaster_addresses();
 
@@ -334,6 +339,7 @@ where
         // If banned, reject
         let mut entity_summary = EntitySummary::default();
         let mut throttled = false;
+
         for entity in op.entities() {
             let address = entity.address;
             let reputation = match self.reputation.status(address) {
@@ -582,10 +588,12 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
-    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool) {
-        if clear_mempool {
-            self.state.write().pool.clear()
-        }
+    fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool) {
+        self.state
+            .write()
+            .pool
+            .clear(clear_mempool, clear_paymaster);
+
         if clear_reputation {
             self.reputation.clear()
         }
@@ -733,7 +741,7 @@ mod tests {
                 .unwrap();
         }
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
-        pool.clear_state(true, true);
+        pool.clear_state(true, true, true);
         assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
     }
 
@@ -1384,6 +1392,8 @@ mod tests {
             same_sender_mempool_count: 4,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
+            paymaster_tracking_enabled: true,
+            reputation_tracking_enabled: true,
         };
         let (event_sender, _) = broadcast::channel(4);
 
@@ -1489,6 +1499,7 @@ mod tests {
     struct Counts {
         seen: HashMap<Address, u64>,
         included: HashMap<Address, u64>,
+        tracking_enabled: bool,
     }
 
     impl MockReputationManager {
@@ -1578,6 +1589,10 @@ mod tests {
         fn clear(&self) {
             self.counts.write().seen.clear();
             self.counts.write().included.clear();
+        }
+
+        fn set_tracking(&self, tracking_enabled: bool) {
+            self.counts.write().tracking_enabled = tracking_enabled;
         }
     }
 }

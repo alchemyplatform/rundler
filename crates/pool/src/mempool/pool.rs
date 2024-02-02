@@ -43,6 +43,7 @@ pub(crate) struct PoolInnerConfig {
     min_replacement_fee_increase_percentage: u64,
     throttled_entity_mempool_count: u64,
     throttled_entity_live_blocks: u64,
+    paymaster_tracking_enabled: bool,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -54,6 +55,7 @@ impl From<PoolConfig> for PoolInnerConfig {
             min_replacement_fee_increase_percentage: config.min_replacement_fee_increase_percentage,
             throttled_entity_mempool_count: config.throttled_entity_mempool_count,
             throttled_entity_live_blocks: config.throttled_entity_live_blocks,
+            paymaster_tracking_enabled: config.paymaster_tracking_enabled,
         }
     }
 }
@@ -91,11 +93,11 @@ pub(crate) struct PoolInner {
 impl PoolInner {
     pub(crate) fn new(config: PoolInnerConfig) -> Self {
         Self {
+            paymaster_balances: PaymasterTracker::new(config.paymaster_tracking_enabled),
             config,
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
-            paymaster_balances: PaymasterTracker::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
             count_by_address: HashMap::new(),
@@ -355,7 +357,7 @@ impl PoolInner {
         self.paymaster_balances.paymaster_exists(paymaster)
     }
 
-    pub(crate) fn update_paymaster_balances_after_update(
+    pub(crate) fn update_paymaster_balances_after_updates(
         &mut self,
         deposits: &Vec<DepositInfo>,
         unmined_entity_deposits: &Vec<DepositInfo>,
@@ -374,17 +376,26 @@ impl PoolInner {
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.by_hash.clear();
-        self.by_id.clear();
-        self.paymaster_balances.clear();
-        self.best.clear();
-        self.mined_at_block_number_by_hash.clear();
-        self.mined_hashes_with_block_numbers.clear();
-        self.count_by_address.clear();
-        self.pool_size = SizeTracker::default();
-        self.cache_size = SizeTracker::default();
-        self.update_metrics();
+    pub(crate) fn clear(&mut self, clear_mempool: bool, clear_paymaster: bool) {
+        if clear_mempool {
+            self.by_hash.clear();
+            self.by_id.clear();
+            self.best.clear();
+            self.mined_at_block_number_by_hash.clear();
+            self.mined_hashes_with_block_numbers.clear();
+            self.count_by_address.clear();
+            self.pool_size = SizeTracker::default();
+            self.cache_size = SizeTracker::default();
+            self.update_metrics();
+        }
+
+        if clear_paymaster {
+            self.paymaster_balances.clear();
+        }
+    }
+
+    pub(crate) fn set_tracking(&mut self, paymaster: bool) {
+        self.paymaster_balances.set_paymaster_tracker(paymaster);
     }
 
     fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
@@ -1037,6 +1048,7 @@ mod tests {
             max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
+            paymaster_tracking_enabled: true,
         }
     }
 

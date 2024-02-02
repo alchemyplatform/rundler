@@ -159,6 +159,9 @@ service OpPool {
   // Streaming API to subscribe to be updated upon a new block being added to (or reorged onto)
   // the chain. 
   rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream SubscribeNewHeadsResponse);
+
+  // Clears the bundler mempool and reputation data of paymasters/accounts/factories/aggregators
+  rpc AdminSetTracking(AdminSetTrackingRequest) returns (AdminSetTrackingResponse);
 }
 
 message GetSupportedEntryPointsRequest {}
@@ -293,6 +296,7 @@ message UpdateEntitiesSuccess {}
 message DebugClearStateRequest {
   bool clear_mempool = 1;
   bool clear_reputation = 2;
+  bool clear_paymaster = 3;
 }
 message DebugClearStateResponse {
   oneof result {
@@ -354,6 +358,20 @@ message NewHead {
   // The block number
   uint64 block_number = 2;
 }
+
+message AdminSetTrackingRequest {
+  // The serialized entry point address via which the UserOperation is being submitted
+  bytes entry_point = 1;
+  bool paymaster = 2;
+  bool reputation = 3;
+}
+message AdminSetTrackingResponse {
+  oneof result {
+    AdminSetTrackingSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message AdminSetTrackingSuccess {}
 
 message Reputation {
   // The (serialized) address to set the reputation for

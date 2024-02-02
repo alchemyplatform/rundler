@@ -30,11 +30,13 @@ use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Result, Status};
 
 use super::protos::{
-    add_op_response, debug_clear_state_response, debug_dump_mempool_response,
-    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_response, get_reputation_status_response, get_stake_status_response,
+    add_op_response, admin_set_tracking_response, debug_clear_state_response,
+    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
+    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
+    get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
+    AdminSetTrackingRequest, AdminSetTrackingResponse, AdminSetTrackingSuccess,
     DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
     DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
     DebugDumpReputationRequest, DebugDumpReputationResponse, DebugDumpReputationSuccess,
@@ -274,7 +276,7 @@ impl OpPool for OpPoolImpl {
         let req = request.into_inner();
         let resp = match self
             .local_pool
-            .debug_clear_state(req.clear_mempool, req.clear_reputation)
+            .debug_clear_state(req.clear_mempool, req.clear_paymaster, req.clear_reputation)
             .await
         {
             Ok(_) => DebugClearStateResponse {
@@ -284,6 +286,30 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => DebugClearStateResponse {
                 result: Some(debug_clear_state_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn admin_set_tracking(
+        &self,
+        request: Request<AdminSetTrackingRequest>,
+    ) -> Result<Response<AdminSetTrackingResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+        let resp = match self
+            .local_pool
+            .admin_set_tracking(ep, req.paymaster, req.reputation)
+            .await
+        {
+            Ok(_) => AdminSetTrackingResponse {
+                result: Some(admin_set_tracking_response::Result::Success(
+                    AdminSetTrackingSuccess {},
+                )),
+            },
+            Err(error) => AdminSetTrackingResponse {
+                result: Some(admin_set_tracking_response::Result::Failure(error.into())),
             },
         };
 

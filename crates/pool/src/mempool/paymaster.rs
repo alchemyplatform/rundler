@@ -29,17 +29,24 @@ pub(crate) struct PaymasterTracker {
     user_op_fees: HashMap<UserOperationId, UserOpFees>,
     /// map for paymaster balance status
     paymaster_balances: HashMap<Address, PaymasterBalance>,
+    /// boolean for operation of tracker
+    tracker_enabled: bool,
 }
 
 impl PaymasterTracker {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(tracker_enabled: bool) -> Self {
         Self {
+            tracker_enabled,
             ..Default::default()
         }
     }
 
     pub(crate) fn paymaster_exists(&self, paymaster: Address) -> bool {
         self.paymaster_balances.contains_key(&paymaster)
+    }
+
+    pub(crate) fn set_paymaster_tracker(&mut self, tracking_enabled: bool) {
+        self.tracker_enabled = tracking_enabled;
     }
 
     pub(crate) fn clear(&mut self) {
@@ -138,7 +145,8 @@ impl PaymasterTracker {
         let id = po.uo.id();
         let max_op_cost = po.uo.max_gas_cost();
 
-        if paymaster_metadata.pending_balance.lt(&max_op_cost) {
+        // Only return an error if tracking is enabled
+        if paymaster_metadata.pending_balance.lt(&max_op_cost) && self.tracker_enabled {
             return Err(MempoolError::PaymasterBalanceTooLow(
                 max_op_cost,
                 paymaster_metadata.pending_balance,
@@ -308,7 +316,7 @@ mod tests {
 
     #[test]
     fn new_uo_unused_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new();
+        let mut paymaster_tracker = PaymasterTracker::new(true);
 
         let paymaster = Address::random();
         let sender = Address::random();
@@ -354,7 +362,7 @@ mod tests {
 
     #[test]
     fn new_uo_not_enough_balance() {
-        let mut paymaster_tracker = PaymasterTracker::new();
+        let mut paymaster_tracker = PaymasterTracker::new(true);
 
         let paymaster = Address::random();
         let sender = Address::random();
@@ -382,8 +390,53 @@ mod tests {
     }
 
     #[test]
+    fn new_uo_not_enough_balance_tracking_disabled() {
+        let mut paymaster_tracker = PaymasterTracker::new(false);
+
+        let paymaster = Address::random();
+        let sender = Address::random();
+        let paymaster_balance = U256::from(5);
+        let confirmed_balance = U256::from(5);
+        let uo = UserOperation {
+            sender,
+            call_gas_limit: 10.into(),
+            pre_verification_gas: 10.into(),
+            verification_gas_limit: 10.into(),
+            max_fee_per_gas: 1.into(),
+            ..Default::default()
+        };
+
+        let paymaster_meta = PaymasterMetadata {
+            address: paymaster,
+            pending_balance: paymaster_balance,
+            confirmed_balance,
+        };
+
+        let po = demo_pool_op(uo);
+
+        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        assert!(res.is_ok());
+        assert_eq!(
+            paymaster_tracker
+                .paymaster_balances
+                .get(&paymaster)
+                .unwrap()
+                .confirmed,
+            5.into(),
+        );
+        assert_eq!(
+            paymaster_tracker
+                .paymaster_balances
+                .get(&paymaster)
+                .unwrap()
+                .pending,
+            30.into(),
+        );
+    }
+
+    #[test]
     fn new_uo_not_enough_balance_existing_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new();
+        let mut paymaster_tracker = PaymasterTracker::new(true);
 
         let paymaster = Address::random();
         let sender = Address::random();
@@ -421,7 +474,7 @@ mod tests {
 
     #[test]
     fn new_uo_existing_paymaster_valid_balance() {
-        let mut paymaster_tracker = PaymasterTracker::new();
+        let mut paymaster_tracker = PaymasterTracker::new(true);
         let paymaster = Address::random();
         let paymaster_balance = U256::from(100000000);
         let pending_paymaster_balance = U256::from(10);
@@ -484,7 +537,7 @@ mod tests {
 
     #[test]
     fn replacement_uo_new_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new();
+        let mut paymaster_tracker = PaymasterTracker::new(true);
         let paymaster_0 = Address::random();
         let paymaster_1 = Address::random();
 
@@ -563,7 +616,7 @@ mod tests {
 
     #[test]
     fn replacement_uo_same_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new();
+        let mut paymaster_tracker = PaymasterTracker::new(true);
         let sender = Address::random();
         let paymaster = Address::random();
         let paymaster_balance = U256::from(100000000);

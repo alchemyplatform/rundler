@@ -92,7 +92,7 @@ pub trait Mempool: Send + Sync + 'static {
     /// Debug methods
 
     /// Clears the mempool of UOs or reputation of all addresses
-    fn clear_state(&self, clear_mempool: bool, clear_reputation: bool);
+    fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool);
 
     /// Dumps the mempool's reputation tracking
     fn dump_reputation(&self) -> Vec<Reputation>;
@@ -108,6 +108,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Reset paymater state
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()>;
+
+    /// Turns on and off tracking errors
+    fn set_tracking(&self, paymaster: bool, reputation: bool);
 }
 
 /// Config for the mempool
@@ -143,6 +146,10 @@ pub struct PoolConfig {
     pub throttled_entity_mempool_count: u64,
     /// The maximum number of blocks a user operation with a throttled entity can stay in the mempool
     pub throttled_entity_live_blocks: u64,
+    /// Boolean field used to toggle the operation of the paymaster tracker
+    pub paymaster_tracking_enabled: bool,
+    /// Boolean field used to toggle the operation of the reputation tracker
+    pub reputation_tracking_enabled: bool,
 }
 
 /// Stake status structure

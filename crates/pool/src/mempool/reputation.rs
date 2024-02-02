@@ -111,6 +111,9 @@ pub(crate) trait ReputationManager: Send + Sync + 'static {
 
     /// Clear all reputation values
     fn clear(&self);
+
+    /// Sets whether reputation tracking can block user operations
+    fn set_tracking(&self, tracking_enabled: bool);
 }
 
 #[derive(Debug)]
@@ -194,6 +197,10 @@ impl ReputationManager for HourlyMovingAverageReputation {
     fn clear(&self) {
         self.reputation.write().clear()
     }
+
+    fn set_tracking(&self, tracking_enabled: bool) {
+        self.reputation.write().set_tracking(tracking_enabled)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,6 +212,7 @@ pub(crate) struct ReputationParams {
     inclusion_rate_factor: u64,
     throttling_slack: u64,
     ban_slack: u64,
+    tracking_enabled: bool,
 }
 
 impl Default for ReputationParams {
@@ -217,11 +225,20 @@ impl Default for ReputationParams {
             inclusion_rate_factor: 10,
             throttling_slack: 10,
             ban_slack: 50,
+            tracking_enabled: true,
         }
     }
 }
 
 impl ReputationParams {
+    pub(crate) fn new(tracking_enabled: bool) -> Self {
+        Self {
+            tracking_enabled,
+            ..Default::default()
+        }
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn bundler_default() -> Self {
         Self::default()
     }
@@ -267,6 +284,10 @@ impl AddressReputation {
         if self.blocklist.contains(&address) {
             return ReputationStatus::Banned;
         } else if self.allowlist.contains(&address) {
+            return ReputationStatus::Ok;
+        }
+
+        if !self.params.tracking_enabled {
             return ReputationStatus::Ok;
         }
 
@@ -345,6 +366,10 @@ impl AddressReputation {
 
     fn clear(&mut self) {
         self.counts.clear();
+    }
+
+    fn set_tracking(&mut self, tracking_enabled: bool) {
+        self.params.tracking_enabled = tracking_enabled;
     }
 }
 
@@ -429,6 +454,18 @@ mod tests {
         let ops_included = ops_seen / params.min_inclusion_rate_denominator - params.ban_slack - 1;
         reputation.set_reputation(addr, ops_seen, ops_included);
         assert_eq!(reputation.status(addr), ReputationStatus::Banned);
+    }
+
+    #[test]
+    fn reputation_banned_tracking_disabled() {
+        let addr = Address::random();
+        let params = ReputationParams::new(false);
+        let mut reputation = AddressReputation::new(params);
+
+        let ops_seen = 1000;
+        let ops_included = ops_seen / params.min_inclusion_rate_denominator - params.ban_slack - 1;
+        reputation.set_reputation(addr, ops_seen, ops_included);
+        assert_eq!(reputation.status(addr), ReputationStatus::Ok);
     }
 
     #[test]

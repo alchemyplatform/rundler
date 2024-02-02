@@ -131,6 +131,10 @@ List of command line options for configuring the Pool.
   - See [here](./architecture/pool.md#allowlistblocklist) for details.
 - `--pool.chain_history_size`: Size of the chain history
   - env: *POOL_CHAIN_HISTORY_SIZE*
+- `--pool.paymaster_tracking_enabled`: Boolean field that sets whether the pool server starts with paymaster tracking enabled (default: `true`)
+  - env: *POOL_PAYMASTER_TRACKING_ENABLED*
+- `--pool.reputation_tracking_enabled`: Boolean field that sets whether the pool server starts with reputation tracking enabled (default: `true`)
+  - env: *POOL_REPUTATION_TRACKING_ENABLED*
 
 ## Builder Options
 
