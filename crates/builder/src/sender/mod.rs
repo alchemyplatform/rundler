@@ -142,6 +142,7 @@ impl TransactionSenderType {
         client: Arc<Provider<C>>,
         signer: S,
         eth_poll_interval: Duration,
+        builders: &Vec<String>,
         bloxroute_header: &Option<String>,
     ) -> std::result::Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
         let sender = match self {
@@ -156,7 +157,9 @@ impl TransactionSenderType {
                         self.into_snake_case(),
                     ));
                 }
-                TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(client, signer)?)
+                TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(
+                    client, signer, builders,
+                )?)
             }
             Self::PolygonBloxroute => {
                 if let Some(header) = bloxroute_header {

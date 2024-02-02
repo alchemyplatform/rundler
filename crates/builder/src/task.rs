@@ -97,6 +97,8 @@ pub struct Args {
     pub max_fee_increases: u64,
     /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
+    /// A list of builders to pass into the Flashbots MEV-Share RPC
+    pub mev_share_builders: Vec<String>,
     /// Optional Bloxroute auth header
     ///
     /// This is only used for Polygon.
@@ -419,6 +421,7 @@ where
             submit_provider,
             signer,
             self.args.eth_poll_interval,
+            &self.args.mev_share_builders,
             &self.args.bloxroute_auth_header,
         )?;
 
