@@ -153,6 +153,15 @@ pub struct BuilderArgs {
     )]
     max_fee_increases: u64,
 
+    /// A list of builders to pass into the Flashbots MEV-Share RPC
+    #[arg(
+        long = "builder.mev_share_builders",
+        name = "builder.mev_share_builders",
+        env = "BUILDER_MEV_SHARE_BUILDERS",
+        value_delimiter = ','
+    )]
+    mev_share_builders: Vec<String>,
+
     /// If using Polygon Mainnet, the auth header to use
     /// for Bloxroute polygon_private_tx sender
     #[arg(
@@ -222,6 +231,7 @@ impl BuilderArgs {
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
             remote_address,
+            mev_share_builders: self.mev_share_builders.clone(),
             bloxroute_auth_header: self.bloxroute_auth_header.clone(),
             num_bundle_builders: common.num_builders,
             bundle_builder_index_offset: self.builder_index_offset,
