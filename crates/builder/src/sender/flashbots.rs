@@ -38,6 +38,7 @@ use jsonrpsee::{
     http_client::{transport::HttpBackend, HttpClient, HttpClientBuilder},
 };
 use pin_project::pin_project;
+use reqwest::Url;
 use serde::{de, Deserialize, Serialize};
 use serde_json::{value::RawValue, Value};
 use tonic::async_trait;
@@ -120,10 +121,14 @@ where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
 {
-    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S) -> Result<Self> {
+    pub(crate) fn new(
+        provider: Arc<Provider<C>>,
+        signer: S,
+        builders: &Vec<String>,
+    ) -> Result<Self> {
         Ok(Self {
             provider: SignerMiddleware::new(provider, signer),
-            client: FlashbotsClient::new()?,
+            client: FlashbotsClient::new(builders)?,
         })
     }
 }
@@ -176,8 +181,14 @@ struct FlashbotsClient {
 }
 
 impl FlashbotsClient {
-    fn new() -> anyhow::Result<Self> {
-        let client = HttpClientBuilder::default().build("https://rpc.flashbots.net")?;
+    fn new(builders: &Vec<String>) -> anyhow::Result<Self> {
+        let mut flashbots_url = Url::parse("https://rpc.flashbots.net")?;
+        for builder in builders {
+            flashbots_url
+                .query_pairs_mut()
+                .append_pair("builder", builder);
+        }
+        let client = HttpClientBuilder::default().build(flashbots_url.as_str())?;
         Ok(Self { client })
     }
 
