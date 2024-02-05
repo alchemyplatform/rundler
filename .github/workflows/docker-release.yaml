@@ -58,5 +58,5 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             make GIT_TAG="${{ github.event.inputs.version }}" docker-build 
           else
-            sudo -E env "PATH=$PATH" make docker-build-latest
+            make docker-build-latest
           fi
