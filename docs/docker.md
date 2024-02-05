@@ -71,6 +71,9 @@ jobs:
 
 **Local Builds**
 
+These command should only be used if you are trying to cross compile the application locally. If you just want to build cross compiled docker images, you should use the commands above.
+
+
 ```
 docker run --privileged --rm tonistiigi/binfmt --install arm64,amd64
 docker buildx create --use --name cross-builder
