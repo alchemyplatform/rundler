@@ -13,13 +13,12 @@
 
 use std::{cmp, fmt::Debug, sync::Arc};
 
+use alloy_chains::NamedChain;
 use anyhow::Context;
 use ethers::{
     abi::AbiEncode,
     types::{Address, U256},
 };
-
-use alloy_chains::NamedChain;
 use rundler_provider::Provider;
 use rundler_types::{
     chain::{
