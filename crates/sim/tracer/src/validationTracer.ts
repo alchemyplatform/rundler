@@ -367,7 +367,7 @@ type StringSet = Record<string, boolean | undefined>;
         const index = EXT_OPCODES[opcode] ? 0 : 1;
         const address = toAddress(log.stack.peek(index).toString(16));
         const addressHex = toHex(address);
-        if (!isPrecompiled(address)) {
+        if (!isPrecompiled(address) && !PRECOMPILE_WHITELIST[addressHex]) {
           if (
             !accessedContractAddresses[addressHex] ||
             currentPhase.undeployedContractAccesses[addressHex]
