@@ -71,6 +71,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-chains"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "206e825321d0ed5b6e3907e6ddf70c2139cfdc6274e83a1ca2f4784bd0abc0c9"
+dependencies = [
+ "num_enum",
+ "serde",
+ "strum",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -865,6 +876,12 @@ name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
+
+[[package]]
+name = "constcat"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5cd0c57ef83705837b1cb872c973eff82b070846d3e23668322b2c0f8246d0"
 
 [[package]]
 name = "convert_case"
@@ -3928,6 +3945,7 @@ dependencies = [
 name = "rundler"
 version = "0.1.0-beta"
 dependencies = [
+ "alloy-chains",
  "anyhow",
  "clap",
  "dotenv",
@@ -3964,6 +3982,7 @@ dependencies = [
 name = "rundler-builder"
 version = "0.1.0-beta"
 dependencies = [
+ "alloy-chains",
  "anyhow",
  "async-trait",
  "enum_dispatch",
@@ -4092,6 +4111,7 @@ dependencies = [
 name = "rundler-sim"
 version = "0.1.0-beta"
 dependencies = [
+ "alloy-chains",
  "anyhow",
  "arrayvec",
  "async-trait",
@@ -4156,8 +4176,10 @@ dependencies = [
 name = "rundler-types"
 version = "0.1.0-beta"
 dependencies = [
+ "alloy-chains",
  "anyhow",
  "chrono",
+ "constcat",
  "ethers",
  "parse-display",
  "rundler-utils",

@@ -9,8 +9,10 @@ repository.workspace = true
 [dependencies]
 rundler-utils = { path = "../utils" }
 
+alloy-chains.workspace = true
 anyhow.workspace = true
 chrono = "0.4.24"
+constcat = "0.4.1"
 ethers.workspace = true
 parse-display = "0.8.0"
 serde.workspace = true

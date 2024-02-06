@@ -446,7 +446,8 @@ pub enum PrecheckViolation {
 mod tests {
     use std::str::FromStr;
 
-    use ethers::types::{Bytes, Chain};
+    use alloy_chains::NamedChain;
+    use ethers::types::Bytes;
     use rundler_provider::{MockEntryPoint, MockProvider};
 
     use super::*;
@@ -572,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_fees() {
         let settings = Settings {
-            chain_id: Chain::Optimism as u64,
+            chain_id: NamedChain::Optimism as u64,
             base_fee_accept_percent: 80,
             priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
             ..Default::default()
@@ -584,7 +585,7 @@ mod tests {
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let mintip = get_min_max_priority_fee_per_gas(Chain::Optimism as u64);
+        let mintip = get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64);
         let op = UserOperation {
             max_fee_per_gas: U256::from(math::percent(5000, settings.base_fee_accept_percent))
                 + mintip,
@@ -638,7 +639,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_fees_min() {
         let settings = Settings {
-            chain_id: Chain::Optimism as u64,
+            chain_id: NamedChain::Optimism as u64,
             base_fee_accept_percent: 100,
             priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
             ..Default::default()
@@ -650,7 +651,7 @@ mod tests {
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let mintip = get_min_max_priority_fee_per_gas(Chain::Optimism as u64);
+        let mintip = get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64);
         let undertip = mintip - U256::from(1);
 
         let op = UserOperation {
@@ -664,8 +665,8 @@ mod tests {
         let res = prechecker.check_gas(&op, async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
-            get_min_max_priority_fee_per_gas(Chain::Optimism as u64) - U256::from(1),
-            get_min_max_priority_fee_per_gas(Chain::Optimism as u64),
+            get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64) - U256::from(1),
+            get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64),
         ));
 
         assert_eq!(res, expected);

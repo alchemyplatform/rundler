@@ -13,9 +13,10 @@
 
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
+use alloy_chains::NamedChain;
 use anyhow::Context;
 use clap::Args;
-use ethers::types::{Chain, H256};
+use ethers::types::H256;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfig;
 use rundler_task::spawn_tasks_with_shutdown;
@@ -212,9 +213,9 @@ const LARGE_HISTORY_SIZE: u64 = 128;
 // Mainnets that are known to not have large reorgs can use the small history
 // size. Use the large history size for all testnets because I don't trust them.
 const SMALL_HISTORY_CHAIN_IDS: &[u64] = &[
-    Chain::Mainnet as u64,
-    Chain::Arbitrum as u64,
-    Chain::Optimism as u64,
+    NamedChain::Mainnet as u64,
+    NamedChain::Arbitrum as u64,
+    NamedChain::Optimism as u64,
 ];
 
 fn default_chain_history_size(chain_id: u64) -> u64 {
