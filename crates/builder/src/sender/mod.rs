@@ -17,6 +17,7 @@ mod flashbots;
 mod raw;
 use std::{str::FromStr, sync::Arc, time::Duration};
 
+use alloy_chains::NamedChain;
 use anyhow::{bail, Context, Error};
 use async_trait::async_trait;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
@@ -26,8 +27,7 @@ use ethers::{
     prelude::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, Provider, ProviderError},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, Chain, TransactionReceipt, H256,
-        U256,
+        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, H256, U256,
     },
 };
 use ethers_signers::Signer;
@@ -150,7 +150,7 @@ impl TransactionSenderType {
                 ConditionalTransactionSender::new(client, signer),
             ),
             Self::Flashbots => {
-                if chain_id != Chain::Mainnet as u64 {
+                if chain_id != NamedChain::Mainnet as u64 {
                     return Err(SenderConstructorErrors::InvalidChainForSender(
                         chain_id,
                         self.into_snake_case(),
@@ -160,7 +160,7 @@ impl TransactionSenderType {
             }
             Self::PolygonBloxroute => {
                 if let Some(header) = bloxroute_header {
-                    if chain_id == Chain::Polygon as u64 {
+                    if chain_id == NamedChain::Polygon as u64 {
                         return Err(SenderConstructorErrors::InvalidChainForSender(
                             chain_id,
                             self.into_snake_case(),
