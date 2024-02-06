@@ -111,6 +111,7 @@ type StringSet = Record<string, boolean | undefined>;
     "0x0000000000000000000000000000000000000007", // ecMul
     "0x0000000000000000000000000000000000000008", // ecPairing
     "0x0000000000000000000000000000000000000009", // black2f
+    "0x0000000000000000000000000000000000000100", // RIP-7212
   ]);
 
   const phases: Phase[] = [];
@@ -344,7 +345,7 @@ type StringSet = Record<string, boolean | undefined>;
         const index = EXT_OPCODES[opcode] ? 0 : 1;
         const address = toAddress(log.stack.peek(index).toString(16));
         const addressHex = toHex(address);
-        if (!isPrecompiled(address)) {
+        if (!isPrecompiled(address) && !PRECOMPILE_WHITELIST[addressHex]) {
           if (
             !accessedContractAddresses[addressHex] ||
             currentPhase.undeployedContractAccesses[addressHex]
