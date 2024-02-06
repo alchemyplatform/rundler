@@ -20,6 +20,7 @@ rundler-types = { path = "../../crates/types" }
 rundler-utils = { path = "../../crates/utils" }
 
 # CLI dependencies
+alloy-chains.workspace = true
 anyhow.workspace = true
 clap = { version = "4.4.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
