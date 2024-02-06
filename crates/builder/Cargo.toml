@@ -14,11 +14,11 @@ rundler-task = { path = "../task" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
+alloy-chains.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 enum_dispatch = "0.3.11"
 ethers.workspace = true
-alloy-chains.workspace = true
 ethers-signers = {version = "2.0.8", features = ["aws"] }
 futures.workspace = true
 futures-timer = "3.0.2"
