@@ -322,9 +322,13 @@ where
     async fn send_bundle_with_increasing_gas_fees_inner(&self) -> anyhow::Result<SendBundleResult> {
         let (nonce, mut required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
         let mut initial_op_count: Option<usize> = None;
+        let mut is_replacement = false;
 
         for fee_increase_count in 0..=self.settings.max_fee_increases {
-            let Some(bundle_tx) = self.get_bundle_tx(nonce, required_fees).await? else {
+            let Some(bundle_tx) = self
+                .get_bundle_tx(nonce, required_fees, is_replacement)
+                .await?
+            else {
                 self.emit(BuilderEvent::formed_bundle(
                     self.builder_index,
                     None,
@@ -435,6 +439,7 @@ where
             required_fees = Some(
                 current_fees.increase_by_percent(self.settings.replacement_fee_percent_increase),
             );
+            is_replacement = true;
         }
         BuilderMetrics::increment_bundle_txns_abandoned(self.builder_index);
         Ok(SendBundleResult::StalledAtMaxFeeIncreases)
@@ -446,10 +451,11 @@ where
         &self,
         nonce: U256,
         required_fees: Option<GasFees>,
+        is_replacement: bool,
     ) -> anyhow::Result<Option<BundleTx>> {
         let bundle = self
             .proposer
-            .make_bundle(required_fees)
+            .make_bundle(required_fees, is_replacement)
             .await
             .context("proposer should create bundle for builder")?;
         let remove_ops_future = async {
