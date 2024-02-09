@@ -77,7 +77,11 @@ impl Bundle {
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub(crate) trait BundleProposer: Send + Sync + 'static {
-    async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle>;
+    async fn make_bundle(
+        &self,
+        required_fees: Option<GasFees>,
+        is_replacement: bool,
+    ) -> anyhow::Result<Bundle>;
 }
 
 #[derive(Debug)]
@@ -116,7 +120,11 @@ where
     P: Provider,
     C: PoolServer,
 {
-    async fn make_bundle(&self, required_fees: Option<GasFees>) -> anyhow::Result<Bundle> {
+    async fn make_bundle(
+        &self,
+        required_fees: Option<GasFees>,
+        is_replacement: bool,
+    ) -> anyhow::Result<Bundle> {
         let (ops, block_hash, (bundle_fees, base_fee)) = try_join!(
             self.get_ops_from_pool(),
             self.provider
@@ -142,7 +150,12 @@ where
         );
 
         // Determine fees required for ops to be included in a bundle
-        let required_op_fees = self.fee_estimator.required_op_fees(bundle_fees);
+        // if replacing, just require bundle fees increase chances of unsticking
+        let required_op_fees = if is_replacement {
+            bundle_fees
+        } else {
+            self.fee_estimator.required_op_fees(bundle_fees)
+        };
         let all_paymaster_addresses = ops
             .iter()
             .filter_map(|op| op.uo.paymaster())
@@ -1857,7 +1870,7 @@ mod tests {
             event_sender,
         );
         proposer
-            .make_bundle(None)
+            .make_bundle(None, false)
             .await
             .expect("should make a bundle")
     }
