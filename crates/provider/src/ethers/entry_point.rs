@@ -22,6 +22,7 @@ use ethers::{
         transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
         H256, U256,
     },
+    utils::hex,
 };
 use rundler_types::{
     contracts::{
@@ -33,6 +34,8 @@ use rundler_types::{
 use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::traits::{EntryPoint, HandleOpsOut};
+
+const REVERT_REASON_MAX_LEN: usize = 2048;
 
 #[async_trait::async_trait]
 impl<M> EntryPoint for IEntryPoint<M>
@@ -156,7 +159,7 @@ where
         } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
             Err(err.reason)
         } else {
-            Err(String::new())
+            Err(hex::encode(&revert_data[..REVERT_REASON_MAX_LEN]))
         }
     }
 }
