@@ -36,7 +36,10 @@ services:
       - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
       - NODE_HTTP=http://geth:8545
       - MIN_UNSTAKE_DELAY=2
+      - PRIORITY_FEE_MODE_KIND=base_fee_percent
+      - PRIORITY_FEE_MODE_VALUE=0
       - POOL_HOST=0.0.0.0
+      - POOL_THROTTLED_ENTITY_LIVE_BLOCKS=20
 
   rundler-builder:
     image: alchemy-platform/rundler:latest
@@ -47,7 +50,10 @@ services:
       - RUST_LOG=debug
       - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
       - NODE_HTTP=http://geth:8545
+      - RPC_API=eth,debug
       - MIN_UNSTAKE_DELAY=2
+      - PRIORITY_FEE_MODE_KIND=base_fee_percent
+      - PRIORITY_FEE_MODE_VALUE=0
       - BUILDER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
       - BUILDER_POOL_URL=https://rundler-pool:50051
       - BUILDER_HOST=0.0.0.0
@@ -65,6 +71,8 @@ services:
       - RUST_LOG=debug
       - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
       - NODE_HTTP=http://geth:8545
+      - PRIORITY_FEE_MODE_KIND=base_fee_percent
+      - PRIORITY_FEE_MODE_VALUE=0
       - RPC_API=eth,debug
       - RPC_POOL_URL=https://rundler-pool:50051
       - RPC_BUILDER_URL=https://rundler-builder:50051
