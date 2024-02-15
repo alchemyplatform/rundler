@@ -45,9 +45,9 @@ use super::protos::{
     GetOpsSuccess, GetReputationStatusRequest, GetReputationStatusResponse,
     GetReputationStatusSuccess, GetStakeStatusRequest, GetStakeStatusResponse,
     GetStakeStatusSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, UpdateEntitiesRequest, UpdateEntitiesResponse,
-    UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
+    MempoolOp, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
     mempool::Reputation,
@@ -393,7 +393,7 @@ impl OpPool for OpPoolImpl {
             Ok(status) => GetReputationStatusResponse {
                 result: Some(get_reputation_status_response::Result::Success(
                     GetReputationStatusSuccess {
-                        status: status as i32,
+                        status: ReputationStatus::from(status).into(),
                     },
                 )),
             },
