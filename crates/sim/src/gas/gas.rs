@@ -397,7 +397,10 @@ where
     }
 
     match chain_spec.priority_fee_oracle_type {
-        chain::PriorityFeeOracleType::Provider => Arc::new(Box::new(ProviderOracle::new(provider))),
+        chain::PriorityFeeOracleType::Provider => Arc::new(Box::new(ProviderOracle::new(
+            provider,
+            chain_spec.min_max_priority_fee_per_gas,
+        ))),
         chain::PriorityFeeOracleType::UsageBased => {
             let config = UsageBasedFeeOracleConfig {
                 minimum_fee: chain_spec.min_max_priority_fee_per_gas,
