@@ -47,6 +47,9 @@ use crate::{
     utils,
 };
 
+/// Required buffer for verification gas limit when targeting the 0.6 entrypoint contract
+pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: U256 = U256([2000, 0, 0, 0]);
+
 /// The result of a successful simulation
 #[derive(Clone, Debug, Default)]
 pub struct SimulationResult {
@@ -278,7 +281,9 @@ where
 
         let associated_addresses = tracer_out.associated_slots_by_address.addresses();
 
+        let initcode_length = op.init_code.len();
         Ok(ValidationContext {
+            op,
             block_id,
             entity_infos,
             tracer_out,
@@ -286,7 +291,7 @@ where
             associated_addresses,
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
-            initcode_length: op.init_code.len(),
+            initcode_length,
         })
     }
 
@@ -315,6 +320,7 @@ where
         context: &mut ValidationContext,
     ) -> anyhow::Result<Vec<SimulationViolation>> {
         let &mut ValidationContext {
+            ref op,
             ref entity_infos,
             ref tracer_out,
             ref entry_point_out,
@@ -331,8 +337,7 @@ where
         }
 
         let sender_address = entity_infos.sender_address();
-        let mut entity_types_needing_stake: HashMap<Entity, (Address, Option<EntityType>, U256)> =
-            HashMap::new();
+        let mut entity_types_needing_stake = HashMap::new();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let kind = entity_type_from_simulation_phase(index).unwrap();
@@ -420,7 +425,6 @@ where
                 violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
             }
 
-            // These violations are not allowlistable but we need to collect them here
             if phase.ran_out_of_gas {
                 violations.push(SimulationViolation::OutOfGas(entity));
             }
@@ -468,6 +472,23 @@ where
                     ));
                 }
             }
+        }
+
+        // This is a special case to cover a bug in the 0.6 entrypoint contract where a specially
+        // crafted UO can use extra verification gas that isn't caught during simulation, but when
+        // it runs on chain causes the transaction to revert.
+        let verification_gas_used = entry_point_out
+            .return_info
+            .pre_op_gas
+            .saturating_sub(op.pre_verification_gas);
+        let verification_buffer = op
+            .verification_gas_limit
+            .saturating_sub(verification_gas_used);
+        if verification_buffer < REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER {
+            violations.push(SimulationViolation::VerificationGasLimitBufferTooLow(
+                op.verification_gas_limit,
+                verification_gas_used + REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
+            ));
         }
 
         Ok(violations)
@@ -693,6 +714,9 @@ pub enum SimulationViolation {
     /// The user operation aggregator signature validation failed
     #[display("aggregator signature validation failed")]
     AggregatorValidationFailed,
+    /// Verification gas limit doesn't have the required buffer on the measured gas
+    #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
+    VerificationGasLimitBufferTooLow(U256, U256),
 }
 
 /// A wrapper around Opcode that implements extra traits
@@ -726,6 +750,7 @@ fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
 
 #[derive(Debug)]
 struct ValidationContext {
+    op: UserOperation,
     block_id: BlockId,
     entity_infos: EntityInfos,
     tracer_out: SimulationTracerOutput,
@@ -1271,6 +1296,11 @@ mod tests {
         );
 
         let mut validation_context = ValidationContext {
+            op: UserOperation {
+                verification_gas_limit: U256::from(2000),
+                pre_verification_gas: U256::from(1000),
+                ..Default::default()
+            },
             initcode_length: 10,
             associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
@@ -1297,7 +1327,7 @@ mod tests {
             tracer_out: tracer_output,
             entry_point_out: ValidationOutput {
                 return_info: ValidationReturnInfo::from((
-                    U256::default(),
+                    3000.into(),
                     U256::default(),
                     true,
                     0,
@@ -1362,6 +1392,7 @@ mod tests {
                         .unwrap()
                     }
                 ),
+                SimulationViolation::VerificationGasLimitBufferTooLow(2000.into(), 4000.into())
             ]
         );
     }

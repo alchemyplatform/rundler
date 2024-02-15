@@ -558,6 +558,7 @@ message SimulationViolationError {
     AggregatorValidationFailed aggregator_validation_failed = 16;
     UnstakedPaymasterContext unstaked_paymaster_context = 17;
     UnstakedAggregator unstaked_aggregator = 18;
+    VerificationGasLimitBufferTooLow verification_gas_limit_buffer_too_low = 19;
   }
 }
 
@@ -634,3 +635,7 @@ message CodeHashChanged {}
 
 message AggregatorValidationFailed {}
 
+message VerificationGasLimitBufferTooLow {
+  bytes limit = 1;
+  bytes needed = 2;
+}

@@ -39,7 +39,7 @@ use rundler_utils::{eth, math};
 use tokio::join;
 
 use super::types::{GasEstimate, Settings, UserOperationOptionalGas};
-use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, utils, FeeEstimator};
+use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, simulation, utils, FeeEstimator};
 
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary
@@ -150,13 +150,17 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
             return Err(GasEstimationError::RevertInValidation(err));
         }
 
+        // Add a buffer to the verification gas limit. Add 10% or 2000 gas, whichever is larger
+        // to ensure we get at least a 2000 gas buffer. Cap at the max verification gas.
+        let verification_gas_limit = cmp::max(
+            math::increase_by_percent(verification_gas_limit, VERIFICATION_GAS_BUFFER_PERCENT),
+            verification_gas_limit + simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
+        )
+        .min(settings.max_verification_gas.into());
+
         Ok(GasEstimate {
             pre_verification_gas,
-            verification_gas_limit: math::increase_by_percent(
-                verification_gas_limit,
-                VERIFICATION_GAS_BUFFER_PERCENT,
-            )
-            .min(settings.max_verification_gas.into()),
+            verification_gas_limit,
             call_gas_limit: call_gas_limit.clamp(MIN_CALL_GAS_LIMIT, settings.max_call_gas.into()),
         })
     }
@@ -1210,7 +1214,10 @@ mod tests {
         // gas used increased by 10%
         assert_eq!(
             estimation.verification_gas_limit,
-            math::increase_by_percent(gas_usage, 10)
+            cmp::max(
+                math::increase_by_percent(gas_usage, 10),
+                gas_usage + simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER
+            )
         );
 
         // input gas limit clamped with the set limit in settings and constant MIN

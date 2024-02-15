@@ -15,6 +15,7 @@
 mod simulation;
 #[cfg(feature = "test-utils")]
 pub use simulation::MockSimulator;
+pub(crate) use simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER;
 pub use simulation::{
     EntityInfo, EntityInfos, NeedsStakeInformation, Settings, SimulationError, SimulationResult,
     SimulationViolation, Simulator, SimulatorImpl, ViolationOpCode,

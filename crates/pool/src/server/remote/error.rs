@@ -32,7 +32,8 @@ use super::protos::{
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
     UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnstakedAggregator,
     UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    UsedForbiddenPrecompile, VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh,
+    WrongNumberOfPhases,
 };
 use crate::{mempool::MempoolError, server::error::PoolServerError};
 
@@ -599,6 +600,18 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     ),
                 ),
             },
+            SimulationViolation::VerificationGasLimitBufferTooLow(limit, needed) => {
+                ProtoSimulationViolationError {
+                    violation: Some(
+                        simulation_violation_error::Violation::VerificationGasLimitBufferTooLow(
+                            VerificationGasLimitBufferTooLow {
+                                limit: to_le_bytes(limit),
+                                needed: to_le_bytes(needed),
+                            },
+                        ),
+                    ),
+                }
+            }
         }
     }
 }
@@ -722,6 +735,12 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             }
             Some(simulation_violation_error::Violation::AggregatorValidationFailed(_)) => {
                 SimulationViolation::AggregatorValidationFailed
+            }
+            Some(simulation_violation_error::Violation::VerificationGasLimitBufferTooLow(e)) => {
+                SimulationViolation::VerificationGasLimitBufferTooLow(
+                    from_bytes(&e.limit)?,
+                    from_bytes(&e.needed)?,
+                )
             }
             None => {
                 bail!("unknown proto mempool simulation violation")
