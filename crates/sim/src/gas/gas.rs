@@ -431,6 +431,6 @@ where
         };
         Arc::new(Box::new(UsageBasedFeeOracle::new(provider, config)))
     } else {
-        Arc::new(Box::new(ProviderOracle::new(provider)))
+        Arc::new(Box::new(ProviderOracle::new(provider, minimum_fee)))
     }
 }

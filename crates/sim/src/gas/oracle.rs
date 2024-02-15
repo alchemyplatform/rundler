@@ -224,11 +224,15 @@ fn calculate_estimate_from_rewards(reward: &[Vec<U256>]) -> U256 {
 #[derive(Debug)]
 pub(crate) struct ProviderOracle<P> {
     provider: Arc<P>,
+    min_max_fee_per_gas: U256,
 }
 
 impl<P> ProviderOracle<P> {
-    pub(crate) fn new(provider: Arc<P>) -> Self {
-        Self { provider }
+    pub(crate) fn new(provider: Arc<P>, min_max_fee_per_gas: U256) -> Self {
+        Self {
+            provider,
+            min_max_fee_per_gas,
+        }
     }
 }
 
@@ -238,10 +242,12 @@ where
     P: Provider + Debug,
 {
     async fn estimate_priority_fee(&self) -> Result<U256> {
-        self.provider
+        Ok(self
+            .provider
             .get_max_priority_fee()
             .await
-            .map_err(|e| FeeOracleError::Other(e.into()))
+            .map_err(|e| FeeOracleError::Other(e.into()))?
+            .max(self.min_max_fee_per_gas))
     }
 }
 
@@ -419,6 +425,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_provider_oracle_min() {
+        let mut mock = MockProvider::default();
+        mock.expect_get_max_priority_fee()
+            .times(1)
+            .returning(|| Ok(U256::from(400)));
+        let oracle = ProviderOracle::new(Arc::new(mock), U256::from(401));
+        let fee = oracle.estimate_priority_fee().await.unwrap();
+        assert_eq!(fee, U256::from(401));
+    }
+
+    #[tokio::test]
     async fn test_max_oracle_choose_provider() {
         let mut mock = MockProvider::default();
         mock.expect_fee_history()
@@ -450,7 +467,7 @@ mod tests {
                 ..Default::default()
             },
         ));
-        oracle.add(ProviderOracle::new(provider));
+        oracle.add(ProviderOracle::new(provider, U256::from(0)));
 
         let fee = oracle.estimate_priority_fee().await.unwrap();
         assert_eq!(fee, U256::from(400));
@@ -488,7 +505,7 @@ mod tests {
                 ..Default::default()
             },
         ));
-        oracle.add(ProviderOracle::new(provider));
+        oracle.add(ProviderOracle::new(provider, U256::from(0)));
 
         let fee = oracle.estimate_priority_fee().await.unwrap();
         assert_eq!(fee, U256::from(200));
