@@ -41,6 +41,7 @@ use pin_project::pin_project;
 use serde::{de, Deserialize, Serialize};
 use serde_json::{value::RawValue, Value};
 use tonic::async_trait;
+use tracing::info;
 
 use super::{
     fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
@@ -93,7 +94,19 @@ where
     ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
-        let tx_hash = self.client.send_transaction(raw_tx).await?;
+        info!("------------raw transaction: {raw_tx:#?}, {nonce:#?}");
+
+        let asdf = self.client.send_transaction(raw_tx).await;
+        if asdf.is_err() {
+            let fdsa = asdf.unwrap_err();
+            info!("----------------ERROR: {fdsa:#?}");
+            return Err(TxSenderError::Other(anyhow!(
+                "Failed to send transaction to Flashbots: {:?}",
+                fdsa
+            )));
+        }
+
+        let tx_hash = asdf.unwrap();
 
         Ok(SentTxInfo { nonce, tx_hash })
     }
