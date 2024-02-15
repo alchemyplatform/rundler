@@ -69,6 +69,9 @@ pub enum EthRpcError {
     /// Sender address used as different entity in another UserOperation currently in the mempool.
     #[error("The sender address {0} is used as a different entity in another UserOperation currently in mempool")]
     SenderAddressUsedAsAlternateEntity(Address),
+    /// Simulation ran out of gas
+    #[error("Simulation ran out of gas for entity: {0}")]
+    OutOfGas(Entity),
     /// Opcode violation
     #[error("{0} uses banned opcode: {1:?}")]
     OpcodeViolation(EntityType, Opcode),
@@ -293,6 +296,7 @@ impl From<SimulationViolation> for EthRpcError {
                 )))
             }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
+            SimulationViolation::OutOfGas(entity) => Self::OutOfGas(entity),
             _ => Self::SimulationFailed(value),
         }
     }
@@ -305,7 +309,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
         match error {
             EthRpcError::Internal(_) => rpc_err(INTERNAL_ERROR_CODE, msg),
             EthRpcError::InvalidParams(_) => rpc_err(INVALID_PARAMS_CODE, msg),
-            EthRpcError::EntryPointValidationRejected(_) => {
+            EthRpcError::EntryPointValidationRejected(_) | EthRpcError::SimulationFailed(_) => {
                 rpc_err(ENTRYPOINT_VALIDATION_REJECTED_CODE, msg)
             }
             EthRpcError::PaymasterValidationRejected(data) => {
@@ -313,7 +317,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
             }
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::OpcodeViolationMap(_)
-            | EthRpcError::SimulationFailed(_)
+            | EthRpcError::OutOfGas(_)
             | EthRpcError::UnstakedAggregator
             | EthRpcError::MultipleRolesViolation(_)
             | EthRpcError::UnstakedPaymasterContext
