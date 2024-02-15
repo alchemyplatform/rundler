@@ -39,7 +39,6 @@ services:
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
       - PRIORITY_FEE_MODE_VALUE=0
       - POOL_HOST=0.0.0.0
-      - POOL_THROTTLED_ENTITY_LIVE_BLOCKS=20
 
   rundler-builder:
     image: alchemy-platform/rundler:latest
