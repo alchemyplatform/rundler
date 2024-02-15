@@ -109,7 +109,27 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::UnknownEntryPoint(e)) => {
                 MempoolError::UnknownEntryPoint(from_bytes(&e.entry_point)?)
             }
-            _ => bail!("unknown proto mempool error"),
+            Some(mempool_error::Error::InvalidSignature(_)) => {
+                MempoolError::SimulationViolation(SimulationViolation::InvalidSignature)
+            }
+            Some(mempool_error::Error::PaymasterBalanceTooLow(e)) => {
+                MempoolError::PaymasterBalanceTooLow(
+                    from_bytes(&e.current_balance)?,
+                    from_bytes(&e.required_balance)?,
+                )
+            }
+            Some(mempool_error::Error::AssociatedStorageIsAlternateSender(_)) => {
+                MempoolError::AssociatedStorageIsAlternateSender
+            }
+            Some(mempool_error::Error::SenderAddressUsedAsAlternateEntity(e)) => {
+                MempoolError::SenderAddressUsedAsAlternateEntity(from_bytes(&e.sender_address)?)
+            }
+            Some(mempool_error::Error::MultipleRolesViolation(e)) => {
+                MempoolError::MultipleRolesViolation(
+                    (&e.entity.context("should have entity in error")?).try_into()?,
+                )
+            }
+            None => bail!("unknown proto mempool error"),
         })
     }
 }
