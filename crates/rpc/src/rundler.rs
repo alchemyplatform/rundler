@@ -18,6 +18,7 @@ use ethers::types::U256;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_provider::Provider;
 use rundler_sim::{FeeEstimator, PrecheckSettings};
+use rundler_types::chain::ChainSpec;
 
 use crate::error::rpc_err;
 
@@ -36,11 +37,15 @@ impl<P> RundlerApi<P>
 where
     P: Provider,
 {
-    pub(crate) fn new(provider: Arc<P>, chain_id: u64, settings: PrecheckSettings) -> Self {
+    pub(crate) fn new(
+        chain_spec: &ChainSpec,
+        provider: Arc<P>,
+        settings: PrecheckSettings,
+    ) -> Self {
         Self {
             fee_estimator: FeeEstimator::new(
+                chain_spec,
                 provider,
-                chain_id,
                 settings.priority_fee_mode,
                 settings.bundle_priority_fee_overhead_percent,
             ),

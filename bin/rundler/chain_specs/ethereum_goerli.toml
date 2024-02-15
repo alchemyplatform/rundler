@@ -1,0 +1,4 @@
+base = "ethereum"
+
+name = "Ethereum Goerli"
+id = 5

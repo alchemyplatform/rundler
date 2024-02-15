@@ -1,0 +1,4 @@
+base = "ethereum"
+
+name = "Ethereum Sepolia"
+id = 11155111

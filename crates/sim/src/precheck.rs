@@ -19,13 +19,10 @@ use ethers::types::{Address, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{EntryPoint, Provider};
-use rundler_types::{GasFees, UserOperation};
+use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
 use rundler_utils::math;
 
-use crate::{
-    gas::{self, get_min_max_priority_fee_per_gas},
-    types::ViolationError,
-};
+use crate::{gas, types::ViolationError};
 
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
 pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
@@ -47,6 +44,7 @@ pub type PrecheckError = ViolationError<PrecheckViolation>;
 /// Prechecker implementation
 #[derive(Debug)]
 pub struct PrecheckerImpl<P: Provider, E: EntryPoint> {
+    chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
@@ -58,8 +56,6 @@ pub struct PrecheckerImpl<P: Provider, E: EntryPoint> {
 /// Precheck settings
 #[derive(Copy, Clone, Debug)]
 pub struct Settings {
-    /// Chain ID
-    pub chain_id: u64,
     /// Maximum verification gas allowed for a user operation
     pub max_verification_gas: U256,
     /// Maximum total execution gas allowed for a user operation
@@ -83,7 +79,6 @@ impl Default for Settings {
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(0),
             max_total_execution_gas: 10_000_000.into(),
-            chain_id: 1,
             base_fee_accept_percent: 50,
             pre_verification_gas_accept_percent: 100,
         }
@@ -140,17 +135,25 @@ impl<P: Provider, E: EntryPoint> Prechecker for PrecheckerImpl<P, E> {
 
 impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     /// Create a new prechecker
-    pub fn new(provider: Arc<P>, entry_point: E, settings: Settings) -> Self {
+    pub fn new(
+        chain_spec: ChainSpec,
+        provider: Arc<P>,
+        entry_point: E,
+        settings: Settings,
+    ) -> Self {
+        let fee_estimator = gas::FeeEstimator::new(
+            &chain_spec,
+            provider.clone(),
+            settings.priority_fee_mode,
+            settings.bundle_priority_fee_overhead_percent,
+        );
+
         Self {
-            provider: provider.clone(),
+            chain_spec,
+            provider,
             entry_point,
             settings,
-            fee_estimator: gas::FeeEstimator::new(
-                provider,
-                settings.chain_id,
-                settings.priority_fee_mode,
-                settings.bundle_priority_fee_overhead_percent,
-            ),
+            fee_estimator,
             cache: RwLock::new(AsyncDataCache { fees: None }),
         }
     }
@@ -194,7 +197,6 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         async_data: AsyncData,
     ) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
-            chain_id,
             max_verification_gas,
             max_total_execution_gas,
             ..
@@ -215,7 +217,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
 
         // compute the worst case total gas limit by assuming the UO is in its own bundle and has a postOp call.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = gas::user_operation_execution_gas_limit(op, chain_id, true, true);
+        let gas_limit = gas::user_operation_execution_gas_limit(&self.chain_spec, op, true, true);
         if gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
@@ -241,7 +243,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         let min_priority_fee = self.settings.priority_fee_mode.minimum_priority_fee(
             base_fee,
             self.settings.base_fee_accept_percent,
-            get_min_max_priority_fee_per_gas(self.settings.chain_id),
+            self.chain_spec.min_max_priority_fee_per_gas,
         );
         let min_max_fee = min_base_fee + min_priority_fee;
 
@@ -380,10 +382,9 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         base_fee: U256,
     ) -> anyhow::Result<U256> {
         gas::calc_required_pre_verification_gas(
-            &op,
-            self.entry_point.address(),
+            &self.chain_spec,
             self.provider.clone(),
-            self.settings.chain_id,
+            &op,
             base_fee,
         )
         .await
@@ -446,14 +447,17 @@ pub enum PrecheckViolation {
 mod tests {
     use std::str::FromStr;
 
-    use alloy_chains::NamedChain;
     use ethers::types::Bytes;
     use rundler_provider::{MockEntryPoint, MockProvider};
 
     use super::*;
 
-    fn create_base_config() -> (MockProvider, MockEntryPoint) {
-        (MockProvider::new(), MockEntryPoint::new())
+    fn create_base_config() -> (ChainSpec, MockProvider, MockEntryPoint) {
+        (
+            ChainSpec::default(),
+            MockProvider::new(),
+            MockEntryPoint::new(),
+        )
     }
 
     fn get_test_async_data() -> AsyncData {
@@ -469,8 +473,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_init_code() {
-        let (provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, Settings::default());
+        let (cs, provider, entry_point) = create_base_config();
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), entry_point, Settings::default());
         let op = UserOperation {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
@@ -499,9 +504,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_gas() {
-        let (provider, entry_point) = create_base_config();
+        let (cs, provider, entry_point) = create_base_config();
         let test_settings = Settings {
-            chain_id: 1,
             max_verification_gas: 5_000_000.into(),
             max_total_execution_gas: 10_000_000.into(),
             bundle_priority_fee_overhead_percent: 0,
@@ -509,7 +513,7 @@ mod tests {
             base_fee_accept_percent: 100,
             pre_verification_gas_accept_percent: 100,
         };
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, test_settings);
+        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, test_settings);
         let op = UserOperation {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
@@ -541,8 +545,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_payer_paymaster_deposit_too_low() {
-        let (provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, Settings::default());
+        let (cs, provider, entry_point) = create_base_config();
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), entry_point, Settings::default());
         let op = UserOperation {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
@@ -573,19 +578,19 @@ mod tests {
     #[tokio::test]
     async fn test_check_fees() {
         let settings = Settings {
-            chain_id: NamedChain::Optimism as u64,
             base_fee_accept_percent: 80,
             priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
             ..Default::default()
         };
-        let (provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, settings);
+        let (mut cs, provider, entry_point) = create_base_config();
+        cs.id = 10;
+        let mintip = cs.min_max_priority_fee_per_gas;
+        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let mintip = get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64);
         let op = UserOperation {
             max_fee_per_gas: U256::from(math::percent(5000, settings.base_fee_accept_percent))
                 + mintip,
@@ -606,13 +611,12 @@ mod tests {
     #[tokio::test]
     async fn test_check_fees_too_low() {
         let settings = Settings {
-            chain_id: 10000000,
             base_fee_accept_percent: 80,
             priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
             ..Default::default()
         };
-        let (provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, settings);
+        let (cs, provider, entry_point) = create_base_config();
+        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
@@ -639,19 +643,20 @@ mod tests {
     #[tokio::test]
     async fn test_check_fees_min() {
         let settings = Settings {
-            chain_id: NamedChain::Optimism as u64,
             base_fee_accept_percent: 100,
             priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
             ..Default::default()
         };
-        let (provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, settings);
+        let (mut cs, provider, entry_point) = create_base_config();
+        cs.id = 10;
+        cs.min_max_priority_fee_per_gas = 100_000.into();
+        let mintip = cs.min_max_priority_fee_per_gas;
+        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let mintip = get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64);
         let undertip = mintip - U256::from(1);
 
         let op = UserOperation {
@@ -665,8 +670,8 @@ mod tests {
         let res = prechecker.check_gas(&op, async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
-            get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64) - U256::from(1),
-            get_min_max_priority_fee_per_gas(NamedChain::Optimism as u64),
+            mintip - U256::from(1),
+            mintip,
         ));
 
         assert_eq!(res, expected);
@@ -675,13 +680,12 @@ mod tests {
     #[tokio::test]
     async fn test_pvg_too_low() {
         let settings = Settings {
-            chain_id: 10000000,
             base_fee_accept_percent: 80,
             priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
             ..Default::default()
         };
-        let (provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(Arc::new(provider), entry_point, settings);
+        let (cs, provider, entry_point) = create_base_config();
+        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();

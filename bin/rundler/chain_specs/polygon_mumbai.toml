@@ -1,0 +1,6 @@
+base = "polygon"
+
+name = "Polygon Mumbai"
+id = 80001
+
+min_max_priority_fee_per_gas = "0x59682F00" # 1_500_000_000

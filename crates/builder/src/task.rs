@@ -22,7 +22,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::{
     providers::{JsonRpcClient, Provider},
-    types::{Address, H256},
+    types::H256,
 };
 use ethers_signers::Signer;
 use futures::future;
@@ -32,7 +32,7 @@ use rundler_sim::{
     MempoolConfig, PriorityFeeMode, SimulateValidationTracerImpl, SimulationSettings, SimulatorImpl,
 };
 use rundler_task::Task;
-use rundler_types::contracts::i_entry_point::IEntryPoint;
+use rundler_types::{chain::ChainSpec, contracts::i_entry_point::IEntryPoint};
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use rusoto_core::Region;
 use tokio::{
@@ -56,10 +56,10 @@ use crate::{
 /// Builder task arguments
 #[derive(Debug)]
 pub struct Args {
+    /// Chain spec
+    pub chain_spec: ChainSpec,
     /// Full node RPC url
     pub rpc_url: String,
-    /// Address of the entry point contract this builder targets
-    pub entry_point_address: Address,
     /// Private key to use for signing transactions
     /// If not provided, AWS KMS will be used
     pub private_key: Option<String>,
@@ -72,8 +72,6 @@ pub struct Args {
     pub redis_uri: String,
     /// Redis lease TTL in milliseconds
     pub redis_lock_ttl_millis: u64,
-    /// Chain ID
-    pub chain_id: u64,
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit
@@ -156,7 +154,7 @@ where
         let builder_runnder_handle = self.builder_builder.run(
             manual_bundling_mode,
             send_bundle_txs,
-            vec![self.args.entry_point_address],
+            vec![self.args.chain_spec.entry_point_address],
             shutdown_token.clone(),
         );
 
@@ -164,7 +162,7 @@ where
             Some(addr) => {
                 spawn_remote_builder_server(
                     addr,
-                    self.args.chain_id,
+                    self.args.chain_spec.id,
                     builder_handle,
                     shutdown_token,
                 )
@@ -230,8 +228,12 @@ where
         let signer = if let Some(pk) = &self.args.private_key {
             info!("Using local signer");
             BundlerSigner::Local(
-                LocalSigner::connect(Arc::clone(&provider), self.args.chain_id, pk.to_owned())
-                    .await?,
+                LocalSigner::connect(
+                    Arc::clone(&provider),
+                    self.args.chain_spec.id,
+                    pk.to_owned(),
+                )
+                .await?,
             )
         } else {
             info!("Using AWS KMS signer");
@@ -243,7 +245,7 @@ where
                 Duration::from_millis(self.args.redis_lock_ttl_millis / 10),
                 KmsSigner::connect(
                     Arc::clone(&provider),
-                    self.args.chain_id,
+                    self.args.chain_spec.id,
                     self.args.aws_kms_region.clone(),
                     self.args.aws_kms_key_ids.clone(),
                     self.args.redis_uri.clone(),
@@ -259,7 +261,7 @@ where
         };
         let beneficiary = signer.address();
         let proposer_settings = bundle_proposer::Settings {
-            chain_id: self.args.chain_id,
+            chain_spec: self.args.chain_spec.clone(),
             max_bundle_size: self.args.max_bundle_size,
             max_bundle_gas: self.args.max_bundle_gas,
             beneficiary,
@@ -267,7 +269,10 @@ where
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
 
-        let entry_point = IEntryPoint::new(self.args.entry_point_address, Arc::clone(&provider));
+        let entry_point = IEntryPoint::new(
+            self.args.chain_spec.entry_point_address,
+            Arc::clone(&provider),
+        );
         let simulate_validation_tracer =
             SimulateValidationTracerImpl::new(Arc::clone(&provider), entry_point.clone());
         let simulator = SimulatorImpl::new(
@@ -282,9 +287,9 @@ where
             eth::new_provider(&self.args.submit_url, Some(self.args.eth_poll_interval))?;
 
         let transaction_sender = self.args.sender_type.into_sender(
+            &self.args.chain_spec,
             submit_provider,
             signer,
-            self.args.chain_id,
             self.args.eth_poll_interval,
             &self.args.bloxroute_auth_header,
         )?;
@@ -320,7 +325,7 @@ where
             index,
             manual_bundling_mode.clone(),
             send_bundle_rx,
-            self.args.chain_id,
+            self.args.chain_spec.id,
             beneficiary,
             proposer,
             entry_point,

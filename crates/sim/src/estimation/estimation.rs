@@ -25,6 +25,7 @@ use mockall::automock;
 use rand::Rng;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_types::{
+    chain::ChainSpec,
     contracts::{
         call_gas_estimation_proxy::{
             EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
@@ -93,7 +94,7 @@ pub trait GasEstimator: Send + Sync + 'static {
 /// Gas estimator implementation
 #[derive(Debug)]
 pub struct GasEstimatorImpl<P, E> {
-    chain_id: u64,
+    chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
@@ -169,14 +170,14 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
 impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
     /// Create a new gas estimator
     pub fn new(
-        chain_id: u64,
+        chain_spec: ChainSpec,
         provider: Arc<P>,
         entry_point: E,
         settings: Settings,
         fee_estimator: FeeEstimator<P>,
     ) -> Self {
         Self {
-            chain_id,
+            chain_spec,
             provider,
             entry_point,
             settings,
@@ -410,11 +411,10 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         gas_price: U256,
     ) -> Result<U256, GasEstimationError> {
         Ok(gas::estimate_pre_verification_gas(
+            &self.chain_spec,
+            self.provider.clone(),
             &op.max_fill(&self.settings),
             &op.random_fill(&self.settings),
-            self.entry_point.address(),
-            self.provider.clone(),
-            self.chain_id,
             gas_price,
         )
         .await?)
@@ -431,7 +431,6 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 
 #[cfg(test)]
 mod tests {
-    use alloy_chains::NamedChain;
     use ethers::{
         abi::{AbiEncode, Address},
         providers::JsonRpcError,
@@ -439,7 +438,10 @@ mod tests {
         utils::hex,
     };
     use rundler_provider::{MockEntryPoint, MockProvider, ProviderError};
-    use rundler_types::contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult};
+    use rundler_types::{
+        chain::L1GasOracleContractType,
+        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
+    };
 
     use super::*;
     use crate::PriorityFeeMode;
@@ -461,7 +463,12 @@ mod tests {
     }
 
     fn create_fee_estimator(provider: Arc<MockProvider>) -> FeeEstimator<MockProvider> {
-        FeeEstimator::new(provider, 0, PriorityFeeMode::BaseFeePercent(0), 0)
+        FeeEstimator::new(
+            &ChainSpec::default(),
+            provider,
+            PriorityFeeMode::BaseFeePercent(0),
+            0,
+        )
     }
 
     fn create_estimator(
@@ -476,7 +483,7 @@ mod tests {
         };
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
-            0,
+            ChainSpec::default(),
             provider.clone(),
             entry,
             settings,
@@ -578,9 +585,15 @@ mod tests {
         };
 
         // Chose arbitrum
+        let cs = ChainSpec {
+            id: 42161,
+            calldata_pre_verification_gas: true,
+            l1_gas_oracle_contract_type: L1GasOracleContractType::ArbitrumNitro,
+            ..Default::default()
+        };
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
-            NamedChain::Arbitrum as u64,
+            cs,
             provider.clone(),
             entry,
             settings,
@@ -631,9 +644,15 @@ mod tests {
         };
 
         // Chose OP
+        let cs = ChainSpec {
+            id: 10,
+            calldata_pre_verification_gas: true,
+            l1_gas_oracle_contract_type: L1GasOracleContractType::OptimismBedrock,
+            ..Default::default()
+        };
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
-            NamedChain::Optimism as u64,
+            cs,
             provider.clone(),
             entry,
             settings,
@@ -1296,7 +1315,7 @@ mod tests {
 
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
-            0,
+            ChainSpec::default(),
             provider.clone(),
             entry,
             settings,

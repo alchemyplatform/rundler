@@ -33,7 +33,9 @@ services:
     command: /usr/local/bin/rundler pool
     environment:
       - RUST_LOG=debug
-      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - CHAIN_BASE=ethereum
+      - CHAIN_NAME=dev
+      - CHAIN_ID=1337
       - NODE_HTTP=http://geth:8545
       - MIN_UNSTAKE_DELAY=2
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
@@ -47,7 +49,9 @@ services:
     command: /usr/local/bin/rundler builder
     environment:
       - RUST_LOG=debug
-      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - CHAIN_BASE=ethereum
+      - CHAIN_NAME=dev
+      - CHAIN_ID=1337
       - NODE_HTTP=http://geth:8545
       - RPC_API=eth,debug
       - MIN_UNSTAKE_DELAY=2
@@ -68,7 +72,9 @@ services:
     command: /usr/local/bin/rundler rpc
     environment:
       - RUST_LOG=debug
-      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - CHAIN_BASE=ethereum
+      - CHAIN_NAME=dev
+      - CHAIN_ID=1337
       - NODE_HTTP=http://geth:8545
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
       - PRIORITY_FEE_MODE_VALUE=0

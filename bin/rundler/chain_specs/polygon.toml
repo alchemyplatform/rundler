@@ -1,0 +1,6 @@
+name = "Polygon"
+id = 137
+
+priority_fee_oracle_type = "USAGE_BASED"
+min_max_priority_fee_per_gas = "0x06FC23AC00" # 30_000_000_000
+bloxroute_enabled = true

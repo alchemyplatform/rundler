@@ -26,6 +26,7 @@ use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
     spawn_tasks_with_shutdown,
 };
+use rundler_types::chain::ChainSpec;
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
@@ -175,6 +176,7 @@ impl BuilderArgs {
     /// common and builder specific arguments.
     pub async fn to_args(
         &self,
+        chain_spec: ChainSpec,
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
     ) -> anyhow::Result<BuilderTaskArgs> {
@@ -197,13 +199,8 @@ impl BuilderArgs {
         };
 
         Ok(BuilderTaskArgs {
+            chain_spec,
             rpc_url,
-            entry_point_address: common
-                .entry_points
-                .first()
-                .context("should have at least one entry point")?
-                .parse()
-                .context("should parse entry point address")?,
             private_key: self.private_key.clone(),
             aws_kms_key_ids: self.aws_kms_key_ids.clone(),
             aws_kms_region: common
@@ -212,7 +209,6 @@ impl BuilderArgs {
                 .context("should be a valid aws region")?,
             redis_uri: self.redis_uri.clone(),
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
-            chain_id: common.chain_id,
             max_bundle_size: self.max_bundle_size,
             max_bundle_gas: common.max_bundle_gas,
             submit_url,
@@ -249,7 +245,11 @@ pub struct BuilderCliArgs {
     pool_url: String,
 }
 
-pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
+pub async fn run(
+    chain_spec: ChainSpec,
+    builder_args: BuilderCliArgs,
+    common_args: CommonArgs,
+) -> anyhow::Result<()> {
     let BuilderCliArgs {
         builder: builder_args,
         pool_url,
@@ -260,6 +260,7 @@ pub async fn run(builder_args: BuilderCliArgs, common_args: CommonArgs) -> anyho
 
     let task_args = builder_args
         .to_args(
+            chain_spec,
             &common_args,
             Some(format_socket_addr(&builder_args.host, builder_args.port).parse()?),
         )

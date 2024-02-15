@@ -20,6 +20,7 @@ use rundler_pool::RemotePoolClient;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
+use rundler_types::chain::ChainSpec;
 
 use super::CommonArgs;
 
@@ -81,6 +82,7 @@ impl RpcArgs {
     #[allow(clippy::too_many_arguments)]
     pub fn to_args(
         &self,
+        chain_spec: ChainSpec,
         common: &CommonArgs,
         precheck_settings: PrecheckSettings,
         eth_api_settings: EthApiSettings,
@@ -93,19 +95,13 @@ impl RpcArgs {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(RpcTaskArgs {
+            chain_spec,
             port: self.port,
             host: self.host.clone(),
-            entry_points: common
-                .entry_points
-                .iter()
-                .map(|ep| ep.parse())
-                .collect::<Result<Vec<_>, _>>()
-                .context("Invalid entry_points argument")?,
             rpc_url: common
                 .node_http
                 .clone()
                 .context("rpc requires node_http arg")?,
-            chain_id: common.chain_id,
             api_namespaces: apis,
             precheck_settings,
             eth_api_settings,
@@ -141,7 +137,11 @@ pub struct RpcCliArgs {
     builder_url: String,
 }
 
-pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Result<()> {
+pub async fn run(
+    chain_spec: ChainSpec,
+    rpc_args: RpcCliArgs,
+    common_args: CommonArgs,
+) -> anyhow::Result<()> {
     let RpcCliArgs {
         rpc: rpc_args,
         pool_url,
@@ -149,6 +149,7 @@ pub async fn run(rpc_args: RpcCliArgs, common_args: CommonArgs) -> anyhow::Resul
     } = rpc_args;
 
     let task_args = rpc_args.to_args(
+        chain_spec,
         &common_args,
         (&common_args).try_into()?,
         (&common_args).into(),

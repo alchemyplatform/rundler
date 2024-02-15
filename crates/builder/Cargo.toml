@@ -14,7 +14,6 @@ rundler-task = { path = "../task" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
-alloy-chains.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 enum_dispatch = "0.3.11"
