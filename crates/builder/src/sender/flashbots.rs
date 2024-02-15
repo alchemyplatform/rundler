@@ -38,7 +38,6 @@ use jsonrpsee::{
     http_client::{transport::HttpBackend, HttpClient, HttpClientBuilder},
 };
 use pin_project::pin_project;
-use reqwest::Url;
 use serde::{de, Deserialize, Serialize};
 use serde_json::{value::RawValue, Value};
 use tonic::async_trait;
@@ -46,6 +45,30 @@ use tonic::async_trait;
 use super::{
     fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
 };
+
+#[derive(Serialize, Deserialize)]
+struct Preferences {
+    fast: bool,
+    privacy: Option<Privacy>,
+    validity: Option<Validity>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Privacy {
+    hints: Option<Vec<String>>,
+    builders: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Validity {
+    refund: Option<Vec<Refund>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Refund {
+    address: String,
+    percent: u8,
+}
 
 #[derive(Debug)]
 pub(crate) struct FlashbotsTransactionSender<C, S>
@@ -124,7 +147,7 @@ where
     pub(crate) fn new(
         provider: Arc<Provider<C>>,
         signer: S,
-        builders: &Vec<String>,
+        builders: Vec<String>,
     ) -> Result<Self> {
         Ok(Self {
             provider: SignerMiddleware::new(provider, signer),
@@ -178,18 +201,13 @@ struct FlashbotsAPIResponse {
 #[derive(Debug)]
 struct FlashbotsClient {
     client: HttpClient<HttpBackend>,
+    builders: Vec<String>,
 }
 
 impl FlashbotsClient {
-    fn new(builders: &Vec<String>) -> anyhow::Result<Self> {
-        let mut flashbots_url = Url::parse("https://rpc.flashbots.net")?;
-        for builder in builders {
-            flashbots_url
-                .query_pairs_mut()
-                .append_pair("builder", builder);
-        }
-        let client = HttpClientBuilder::default().build(flashbots_url.as_str())?;
-        Ok(Self { client })
+    fn new(builders: Vec<String>) -> anyhow::Result<Self> {
+        let client = HttpClientBuilder::default().build("https://relay.flashbots.net")?;
+        Ok(Self { client, builders })
     }
 
     async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
@@ -201,9 +219,17 @@ impl FlashbotsClient {
     }
 
     async fn send_transaction(&self, raw_tx: Bytes) -> Result<TxHash> {
+        let preferences = Preferences {
+            fast: false,
+            privacy: Some(Privacy {
+                hints: None,
+                builders: Some(self.builders.clone()),
+            }),
+            validity: None,
+        };
         let response: FlashbotsResponse = self
             .client
-            .request("eth_sendRawTransaction", (raw_tx,))
+            .request("eth_sendPrivateRawTransaction", (raw_tx, preferences))
             .await?;
         Ok(response.tx_hash)
     }

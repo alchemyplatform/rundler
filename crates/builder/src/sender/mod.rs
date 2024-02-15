@@ -142,7 +142,7 @@ impl TransactionSenderType {
         client: Arc<Provider<C>>,
         signer: S,
         eth_poll_interval: Duration,
-        builders: &Vec<String>,
+        builders: Vec<String>,
         bloxroute_header: &Option<String>,
     ) -> std::result::Result<TransactionSenderEnum<C, S>, SenderConstructorErrors> {
         let sender = match self {
