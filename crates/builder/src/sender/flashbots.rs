@@ -113,17 +113,28 @@ where
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
         let status = self.client.status(tx_hash).await?;
+        info!("----------------GETTING FLASHBOTS TX STATUS: {status:#?}");
         Ok(match status.status {
             FlashbotsAPITransactionStatus::Pending => TxStatus::Pending,
             FlashbotsAPITransactionStatus::Included => {
                 // Even if Flashbots says the transaction is included, we still
                 // need to wait for the provider to see it. Until it does, we're
                 // still pending.
-                let tx = self
+                let txres = self
                     .provider
                     .get_transaction(tx_hash)
                     .await
-                    .context("provider should look up transaction included by Flashbots")?;
+                    .context("provider should look up transaction included by Flashbots");
+
+                if txres.is_err() {
+                    let err = txres.unwrap_err();
+                    info!("----------------GETTING TRANSACTION FAILURE: {err:#?}");
+                    return Err(TxSenderError::Other(anyhow!(
+                        "Failed to get transaction from provider: {:?}",
+                        err
+                    )));
+                }
+                let tx = txres.unwrap();
                 if let Some(tx) = tx {
                     if let Some(block_number) = tx.block_number {
                         return Ok(TxStatus::Mined {
@@ -225,7 +236,15 @@ impl FlashbotsClient {
 
     async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
         let url = format!("https://protect.flashbots.net/tx/{:?}", tx_hash);
-        let resp = reqwest::get(&url).await?;
+        info!("----------------get status url: {url:#?}");
+        let resp = reqwest::get(&url).await;
+        if resp.is_err() {
+            let err = resp.unwrap_err();
+            info!("----------------STATUS RESPONSE FAILURE: {err:#?}");
+            return Err(anyhow!("Failed to get status: {:?}", err));
+        }
+        let resp = resp.unwrap();
+        info!("flashbots status raw response: {resp:#?}");
         resp.json::<FlashbotsAPIResponse>()
             .await
             .context("should deserialize FlashbotsAPIResponse")
@@ -240,11 +259,20 @@ impl FlashbotsClient {
             }),
             validity: None,
         };
-        let response: FlashbotsResponse = self
+        let response = self
             .client
             .request("eth_sendPrivateRawTransaction", (raw_tx, preferences))
-            .await?;
-        Ok(response.tx_hash)
+            .await;
+        if response.is_err() {
+            let err = response.unwrap_err();
+            info!("----------------SEND PRIVATE RAW TRANSACTION FAILURE: {err:#?}");
+            return Err(TxSenderError::Other(anyhow!(
+                "Failed to send transaction to Flashbots: {:?}",
+                err
+            )));
+        }
+        let res: FlashbotsResponse = response.unwrap();
+        Ok(res.tx_hash)
     }
 }
 
