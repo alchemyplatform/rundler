@@ -17,20 +17,25 @@ use rundler_types::chain::ChainSpec;
 
 /// Resolve the chain spec from the network flag and a chain spec file
 pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> ChainSpec {
+    // get sources
+    let file_source = file.as_ref().map(|f| File::with_name(f.as_str()));
+    let network_source = network.as_ref().map(|n| {
+        File::from_str(
+            get_hardcoded_chain_spec(n.to_lowercase().as_str()),
+            FileFormat::Toml,
+        )
+    });
+
     // get the base config from the hierarchy of
     // - ENV
     // - file
     // - network flag
-
     let mut base_getter = Config::builder();
-    if let Some(file) = &file {
-        base_getter = base_getter.add_source(File::with_name(file.as_str()));
+    if let Some(network_source) = &network_source {
+        base_getter = base_getter.add_source(network_source.clone());
     }
-    if let Some(network) = &network {
-        base_getter = base_getter.add_source(File::from_str(
-            get_hardcoded_chain_spec(network.to_lowercase().as_str()),
-            FileFormat::Toml,
-        ));
+    if let Some(file_source) = &file_source {
+        base_getter = base_getter.add_source(file_source.clone());
     }
     let base_config = base_getter
         .add_source(Environment::with_prefix("CHAIN"))
@@ -44,25 +49,20 @@ pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> Ch
     // - network flag
     // - base (if defined)
     // - defaults
-
     let default = serde_json::to_string(&ChainSpec::default()).expect("should serialize to string");
     let mut config_builder =
         Config::builder().add_source(File::from_str(default.as_str(), FileFormat::Json));
-
     if let Some(base) = base {
         config_builder = config_builder.add_source(File::from_str(
             get_hardcoded_chain_spec(base.as_str()),
             FileFormat::Toml,
         ));
     }
-    if let Some(file) = &file {
-        config_builder = config_builder.add_source(File::with_name(file.as_str()));
+    if let Some(network_source) = network_source {
+        config_builder = config_builder.add_source(network_source);
     }
-    if let Some(network) = &network {
-        config_builder = config_builder.add_source(File::from_str(
-            get_hardcoded_chain_spec(network.to_lowercase().as_str()),
-            FileFormat::Toml,
-        ));
+    if let Some(file_source) = file_source {
+        config_builder = config_builder.add_source(file_source);
     }
     let c = config_builder
         .add_source(Environment::with_prefix("CHAIN"))
@@ -103,6 +103,7 @@ macro_rules! define_hardcoded_chain_specs {
 }
 
 define_hardcoded_chain_specs!(
+    dev,
     ethereum,
     ethereum_goerli,
     ethereum_sepolia,
