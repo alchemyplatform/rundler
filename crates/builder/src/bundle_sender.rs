@@ -11,10 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -23,18 +20,19 @@ use futures_util::StreamExt;
 use rundler_pool::PoolServer;
 use rundler_provider::EntryPoint;
 use rundler_sim::ExpectedStorage;
-use rundler_types::{EntityUpdate, GasFees, UserOperation};
+use rundler_types::{chain::ChainSpec, EntityUpdate, GasFees, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
     sync::{broadcast, mpsc, oneshot},
 };
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     bundle_proposer::BundleProposer,
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
+    BundlingMode,
 };
 
 #[async_trait]
@@ -57,9 +55,8 @@ where
     C: PoolServer,
 {
     builder_index: u64,
-    manual_bundling_mode: Arc<AtomicBool>,
-    send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
-    chain_id: u64,
+    bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
+    chain_spec: ChainSpec,
     beneficiary: Address,
     proposer: P,
     entry_point: E,
@@ -74,6 +71,11 @@ struct BundleTx {
     tx: TypedTransaction,
     expected_storage: ExpectedStorage,
     op_hashes: Vec<H256>,
+}
+
+pub enum BundleSenderAction {
+    SendBundle(SendBundleRequest),
+    ChangeMode(BundlingMode),
 }
 
 pub struct SendBundleRequest {
@@ -134,40 +136,74 @@ where
             }
         });
 
+        let mut bundling_mode = BundlingMode::Auto;
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
             let mut last_block = None;
+            let mut timer = tokio::time::interval(Duration::from_millis(
+                self.chain_spec.bundle_max_send_interval_millis,
+            ));
 
-            if self.manual_bundling_mode.load(Ordering::Relaxed) {
-                if let Some(r) = self.send_bundle_receiver.recv().await {
-                    send_bundle_response = Some(r.responder);
-                } else {
-                    error!("Bundle stream closed in manual mode");
-                    bail!("Bundle stream closed in manual mode");
+            // 3 triggers for loop logic:
+            // 1 - new block
+            //      - If auto mode, send next bundle
+            // 2 - timer tick
+            //      - If auto mode, send next bundle
+            // 3 - action recv
+            //      - If change mode, change and restart loop
+            //      - If send bundle and manual mode, send next bundle
+            last_block = tokio::select! {
+                b = rx.recv() => {
+                    match bundling_mode {
+                        BundlingMode::Manual => continue,
+                        BundlingMode::Auto => b
+                    }
+                },
+                _ = timer.tick() => {
+                    match bundling_mode {
+                        BundlingMode::Manual => continue,
+                        BundlingMode::Auto => Some(last_block.unwrap_or_default())
+                    }
+                },
+                a = self.bundle_action_receiver.recv() => {
+                    match a {
+                        Some(BundleSenderAction::ChangeMode(mode)) => {
+                            debug!("chainging bundling mode to {mode:?}");
+                            bundling_mode = mode;
+                            continue;
+                        },
+                        Some(BundleSenderAction::SendBundle(r)) => {
+                            match bundling_mode {
+                                BundlingMode::Manual => {
+                                    send_bundle_response = Some(r.responder);
+                                    Some(last_block.unwrap_or_default())
+                                },
+                                BundlingMode::Auto => {
+                                    error!("Received bundle send action while in auto mode, ignoring");
+                                    continue;
+                                }
+                            }
+                        },
+                        None => {
+                            error!("Bundle action recv closed");
+                            bail!("Bundle action recv closed");
+                        }
+                    }
                 }
-            } else {
-                // Wait for new block. Block number doesn't matter as the pool will only notify of new blocks
-                // after the pool has updated its state. The bundle will be formed using the latest pool state
-                // and can land in the next block
-                last_block = rx.recv().await;
+            };
 
-                if last_block.is_none() {
-                    error!("Block stream closed");
-                    bail!("Block stream closed");
-                }
-                // Consume any other blocks that may have been buffered up
-                loop {
-                    match rx.try_recv() {
-                        Ok(b) => {
-                            last_block = Some(b);
-                        }
-                        Err(mpsc::error::TryRecvError::Empty) => {
-                            break;
-                        }
-                        Err(mpsc::error::TryRecvError::Disconnected) => {
-                            error!("Block stream closed");
-                            bail!("Block stream closed");
-                        }
+            // Consume any other blocks that may have been buffered up
+            loop {
+                match rx.try_recv() {
+                    Ok(b) => {
+                        last_block = Some(b);
+                    }
+                    Err(mpsc::error::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        error!("Block stream closed");
+                        bail!("Block stream closed");
                     }
                 }
             }
@@ -219,9 +255,8 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_index: u64,
-        manual_bundling_mode: Arc<AtomicBool>,
-        send_bundle_receiver: mpsc::Receiver<SendBundleRequest>,
-        chain_id: u64,
+        bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
+        chain_spec: ChainSpec,
         beneficiary: Address,
         proposer: P,
         entry_point: E,
@@ -232,9 +267,8 @@ where
     ) -> Self {
         Self {
             builder_index,
-            manual_bundling_mode,
-            send_bundle_receiver,
-            chain_id,
+            bundle_action_receiver,
+            chain_spec,
             beneficiary,
             proposer,
             entry_point,
@@ -507,7 +541,7 @@ where
             .remove_ops(
                 self.entry_point.address(),
                 ops.iter()
-                    .map(|op| op.op_hash(self.entry_point.address(), self.chain_id))
+                    .map(|op| op.op_hash(self.entry_point.address(), self.chain_spec.id))
                     .collect(),
             )
             .await
@@ -529,7 +563,7 @@ where
     }
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
-        op.op_hash(self.entry_point.address(), self.chain_id)
+        op.op_hash(self.entry_point.address(), self.chain_spec.id)
     }
 }
 

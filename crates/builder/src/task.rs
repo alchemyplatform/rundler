@@ -11,12 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -45,7 +40,7 @@ use tracing::info;
 
 use crate::{
     bundle_proposer::{self, BundleProposerImpl},
-    bundle_sender::{self, BundleSender, BundleSenderImpl, SendBundleRequest},
+    bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
     sender::TransactionSenderType,
     server::{spawn_remote_builder_server, LocalBuilderBuilder},
@@ -128,20 +123,18 @@ where
         info!("Mempool config: {:?}", self.args.mempool_configs);
 
         let provider = eth::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
-        let manual_bundling_mode = Arc::new(AtomicBool::new(false));
 
         let mut sender_handles = vec![];
-        let mut send_bundle_txs = vec![];
+        let mut bundle_sender_actions = vec![];
         for i in 0..self.args.num_bundle_builders {
-            let (spawn_guard, send_bundle_tx) = self
+            let (spawn_guard, bundle_sender_action) = self
                 .create_bundle_builder(
                     i + self.args.bundle_builder_index_offset,
-                    Arc::clone(&manual_bundling_mode),
                     Arc::clone(&provider),
                 )
                 .await?;
             sender_handles.push(spawn_guard);
-            send_bundle_txs.push(send_bundle_tx);
+            bundle_sender_actions.push(bundle_sender_action);
         }
         // flatten the senders handles to one handle, short-circuit on errors
         let sender_handle = tokio::spawn(
@@ -152,8 +145,7 @@ where
 
         let builder_handle = self.builder_builder.get_handle();
         let builder_runnder_handle = self.builder_builder.run(
-            manual_bundling_mode,
-            send_bundle_txs,
+            bundle_sender_actions,
             vec![self.args.chain_spec.entry_point_address],
             shutdown_token.clone(),
         );
@@ -217,11 +209,10 @@ where
     async fn create_bundle_builder<C: JsonRpcClient + 'static>(
         &self,
         index: u64,
-        manual_bundling_mode: Arc<AtomicBool>,
         provider: Arc<Provider<C>>,
     ) -> anyhow::Result<(
         JoinHandle<anyhow::Result<()>>,
-        mpsc::Sender<SendBundleRequest>,
+        mpsc::Sender<BundleSenderAction>,
     )> {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
@@ -323,9 +314,8 @@ where
         );
         let builder = BundleSenderImpl::new(
             index,
-            manual_bundling_mode.clone(),
             send_bundle_rx,
-            self.args.chain_spec.id,
+            self.args.chain_spec.clone(),
             beneficiary,
             proposer,
             entry_point,

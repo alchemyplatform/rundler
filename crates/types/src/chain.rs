@@ -60,6 +60,16 @@ pub struct ChainSpec {
     pub max_max_priority_fee_per_gas: U256,
 
     /*
+     * Bundle building
+     */
+    /// The maximum amount of time to wait before sending a bundle.
+    ///
+    /// The bundle builder will always try to send a bundle when a new block is received.
+    /// This parameter is used to trigger the builder to send a bundle after a specified
+    /// amount of time, before a new block is not received.
+    pub bundle_max_send_interval_millis: u64,
+
+    /*
      * Senders
      */
     /// True if the flashbots sender is enabled on this chain
@@ -112,6 +122,7 @@ impl Default for ChainSpec {
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: U256::zero(),
             max_max_priority_fee_per_gas: U256::MAX,
+            bundle_max_send_interval_millis: u64::MAX,
             flashbots_enabled: false,
             bloxroute_enabled: false,
             chain_history_size: 64,
