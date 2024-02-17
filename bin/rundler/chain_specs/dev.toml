@@ -1,0 +1,4 @@
+base = "ethereum"
+
+name = "Ethereum Devnet"
+id = 1337

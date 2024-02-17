@@ -15,12 +15,20 @@ The `pool` and `builder` commands will also start a gRPC endpoint to allow other
 
 These options are common to all subcommands and can be used globally:
 
-- `--entry_points`: Entry point addresses to target. Provide a comma-separated list. (**REQUIRED**)
-  - env: *ENTRY_POINTS*
-  - (multiple entry points is currently in beta, we only officially support `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789`)
-- `--chain_id`: Chain ID to target. (default: `1337` **IMPORTANT**).
-  - env: *CHAIN_ID*
-- `--node_http`: ETH Node HTTP URL to connect to. (**REQUIRED**)
+### Chain Specification
+
+See [chain spec](./architecture/chain_spec.md) for a detailed description of chain spec derivation from these options.
+
+- `--network`: Network to look up a hardcoded chain spec. (default: None)
+  - env: *NETWORK*
+- `--chain_spec`: Path to a chain spec TOML file.
+  - env: *CHAIN_SPEC*
+- (env only): Chain specification overrides.
+  - env: *CHAIN_**
+
+### Rundler Common
+
+- `--node_http`: EVM Node HTTP URL to use. (**REQUIRED**)
   - env: *NODE_HTTP*
 - `--max_verification_gas`: Maximum verification gas. (default: `5000000`).
   - env: *MAX_VERIFICATION_GAS*
@@ -30,7 +38,7 @@ These options are common to all subcommands and can be used globally:
   - env: *MIN_STAKE_VALUE*
 - `--min_unstake_delay`: Minimum unstake delay. (default: `84600`).
   - env: *MIN_UNSTAKE_DELAY*
-- `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`. (default: distance to genesis **IMPORTANT**)
+- `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`. (default: all blocks)
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
 - `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
   - env: *MAX_SIMULATE_HANDLE_OPS_GAS*
@@ -57,8 +65,6 @@ These options are common to all subcommands and can be used globally:
   - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
 - `--num_builders`: The number of bundle builders to run (default: `1`)
   - env: *NUM_BUILDERS*
-
-### Mempool Configuration
 
 ## Metrics Options
 
@@ -178,7 +184,6 @@ List of command line options for configuring the Builder.
 - `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
   - env: `BUILDER_POOL_URL`
   - *Only required when running in distributed mode*
-
 
 ### Key management
 
