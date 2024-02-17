@@ -97,6 +97,9 @@ pub trait Mempool: Send + Sync + 'static {
     /// Dumps the mempool's reputation tracking
     fn dump_reputation(&self) -> Vec<Reputation>;
 
+    /// Dumps the mempool's paymaster balance cache
+    fn dump_paymaster_balances(&self) -> Vec<PaymasterMetadata>;
+
     /// Dumps the mempool's reputation tracking
     fn get_reputation_status(&self, address: Address) -> ReputationStatus;
 
@@ -106,7 +109,7 @@ pub trait Mempool: Send + Sync + 'static {
     /// Get stake status for address
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus>;
 
-    /// Reset paymater state
+    /// Reset paymaster state
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()>;
 
     /// Turns on and off tracking errors
@@ -163,7 +166,7 @@ pub struct StakeStatus {
 
 #[derive(Debug, Clone, Copy)]
 pub struct StakeInfo {
-    /// Stake ammount
+    /// Stake amount
     pub stake: u128,
     /// Unstake delay in seconds
     pub unstake_delay_sec: u32,

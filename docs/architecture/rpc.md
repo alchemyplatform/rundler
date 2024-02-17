@@ -1,10 +1,11 @@
 # RPC Task
 
-The `RPC` task is the main interface into the Rundler. It consists of 3 namespaces:
+The `RPC` task is the main interface into the Rundler. It consists of 4 namespaces:
 
-- **eth**
-- **debug**
-- **rundler**
+- [**eth**](#eth_-namespace)
+- [**debug**](#debug_-namespace)
+- [**rundler**](#rundler_-namespace)
+- [**admin**](#admin_-namespace)
 
 Each of which can be enabled/disabled via configuration.
 
@@ -29,18 +30,80 @@ Methods defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account
 
 Method defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
 
-| Method | Supported |
-| ------ | :-----------: |
-| `debug_clearState` | ✅ |
-| `debug_dumpMempool` | ✅ |
-| `debug_sendBundleNow` | ✅ |
-| `debug_setBundlingMode` | ✅ |
-| `debug_setReputation` | ✅ |
-| `debug_dumpReputation` | ✅ |
+| Method | Supported | Non-Standard |
+| ------ | :-----------: | :--: |
+| `debug_bundler_clearState` | ✅ |
+| `debug_bundler_dumpMempool` | ✅ |
+| `debug_bundler_sendBundleNow` | ✅ |
+| `debug_bundler_setBundlingMode` | ✅ |
+| `debug_bundler_setReputation` | ✅ |
+| `debug_bundler_dumpReputation` | ✅ |
+| `debug_bundler_addUserOps` | 🚧 | |
+| [`debug_bundler_clearMempool`](#debug_bundler_clearMempool) | ✅ | ✅
+| [`debug_bundler_dumpPaymasterBalances`](#debug_bundler_dumpPaymasterBalances) | ✅ | ✅
+
+#### `debug_bundler_clearMempool`
+
+This method is used by the ERC-4337 `bundler-spec-tests` but is not (yet) part of the standard.
+
+This method triggers a the mempool to drop all pending user operations, but keeps the rest of its state. In contrast to `debug_bundler_clearState` which drops all state.
+
+##### Parameters 
+
+- Entry point address
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "debug_bundler_clearMempool",
+  "params": ["0x...."] // entry point address 
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "ok"
+}
+```
+
+#### `debug_bundler_dumpPaymasterBalances`
+
+Dump the paymaster balances from the paymaster tracker in the mempool for a given entry point.
+
+##### Parameters 
+
+- Entry point address
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "debug_bundler_clearMempool",
+  "params": ["0x...."] // entry point address 
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      address: address           // paymaster address
+      pendingBalance: uint256    // paymaster balance including pending UOs in pool
+      confirmedBalance: uint256  // paymaster confirmed balance onchain
+    },
+    { ... }, ...
+  ]
+}
+```
 
 ### `rundler_` Namespace
 
-Rundler specific methods that are not specified by the ERC-4337 spec.
+Rundler specific methods that are not specified by the ERC-4337 spec. This namespace may be opened publicly.
 
 | Method | Supported |
 | ------ | :-----------: |
@@ -51,6 +114,80 @@ Rundler specific methods that are not specified by the ERC-4337 spec.
 This method returns the minimum `maxPriorityFeePerGas` that the bundler will accept at the current block height. This is based on the fees of the network as well as the priority fee mode configuration of the bundle builder.
 
 Users of this method should typically increase their priority fee values by a buffer value in order to handle price fluctuations. 
+
+### `admin_` Namespace
+
+Administration methods specific to Rundler. This namespace should not be open to the public.
+
+| Method |
+| ------ |
+| [`admin_clearState`](#admin_clearState) |
+| [`admin_setTracking`](#admin_settracking) |
+
+#### `admin_clearState`
+
+Clears the state of various Rundler components associated with an entry point address.
+
+##### Parameters 
+
+- Entry point address
+- Admin clear state object
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "admin_clearState",
+  "params": [
+    "0x....", // entry point address 
+    {
+      clearMempool: bool,   // optional, clears the UOs from the pool
+      clearPaymaster: bool, // optional, clears the paymaster balances
+      clearReputation: bool // optional, clears the reputation manager
+    }
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "ok"
+}
+```
+
+#### `admin_setTracking`
+
+Turns various mempool features on/off.
+
+##### Parameters 
+
+- Entry point address
+- Admin set tracking object
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "admin_clearState",
+  "params": [
+    "0x....", // entry point address 
+    {
+      paymasterTracking: bool,  // required, enables paymaster balance tracking/enforcement
+      reputationTracking: bool, // required, enables reputation tracking/enforcement
+    }
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "ok"
+}
+```
 
 ### Health Check
 

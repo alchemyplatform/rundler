@@ -150,6 +150,9 @@ service OpPool {
   // debug_bundler_setReputation
   rpc DebugDumpReputation(DebugDumpReputationRequest) returns (DebugDumpReputationResponse);
 
+  // Dumps the paymaster balances
+  rpc DebugDumpPaymasterBalances(DebugDumpPaymasterBalancesRequest) returns (DebugDumpPaymasterBalancesResponse);
+
   // Get reputation status of address
   rpc GetReputationStatus(GetReputationStatusRequest) returns (GetReputationStatusResponse);
 
@@ -345,6 +348,24 @@ message DebugDumpReputationResponse {
 }
 message DebugDumpReputationSuccess {
   repeated Reputation reputations = 1;
+}
+
+message DebugDumpPaymasterBalancesRequest {
+  bytes entry_point = 1;
+}
+message DebugDumpPaymasterBalancesResponse {
+  oneof result {
+    DebugDumpPaymasterBalancesSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message DebugDumpPaymasterBalancesSuccess {
+  repeated PaymasterBalance balances = 1;
+}
+message PaymasterBalance {
+  bytes address = 1;
+  bytes pending_balance = 2;
+  bytes confirmed_balance = 3;
 }
 
 message SubscribeNewHeadsRequest {}

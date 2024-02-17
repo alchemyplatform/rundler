@@ -353,6 +353,10 @@ impl PoolInner {
         self.paymaster_balances.paymaster_metadata(paymaster)
     }
 
+    pub(crate) fn dump_paymaster_metadata(&self) -> Vec<PaymasterMetadata> {
+        self.paymaster_balances.dump_paymaster_metadata()
+    }
+
     pub(crate) fn paymaster_exists(&self, paymaster: Address) -> bool {
         self.paymaster_balances.paymaster_exists(paymaster)
     }

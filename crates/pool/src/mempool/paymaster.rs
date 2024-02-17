@@ -124,6 +124,17 @@ impl PaymasterTracker {
         None
     }
 
+    pub(crate) fn dump_paymaster_metadata(&self) -> Vec<PaymasterMetadata> {
+        self.paymaster_balances
+            .iter()
+            .map(|(address, balance)| PaymasterMetadata {
+                pending_balance: balance.pending_balance(),
+                confirmed_balance: balance.confirmed,
+                address: *address,
+            })
+            .collect()
+    }
+
     pub(crate) fn unmine_actual_cost(&mut self, paymaster: &Address, actual_cost: U256) {
         if let Some(paymaster_balance) = self.paymaster_balances.get_mut(paymaster) {
             paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(actual_cost);

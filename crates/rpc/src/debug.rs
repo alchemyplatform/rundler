@@ -21,7 +21,8 @@ use rundler_pool::PoolServer;
 use crate::{
     error::rpc_err,
     types::{
-        RpcReputationInput, RpcReputationOutput, RpcStakeInfo, RpcStakeStatus, RpcUserOperation,
+        RpcDebugPaymasterBalance, RpcReputationInput, RpcReputationOutput, RpcStakeInfo,
+        RpcStakeStatus, RpcUserOperation,
     },
 };
 
@@ -72,6 +73,13 @@ pub trait DebugApi {
         entry_point: Address,
         address: Address,
     ) -> RpcResult<RpcStakeStatus>;
+
+    /// Dumps the paymaster balance cache
+    #[method(name = "bundler_dumpPaymasterBalances")]
+    async fn bundler_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcDebugPaymasterBalance>>;
 }
 
 pub(crate) struct DebugApi<P, B> {
@@ -230,5 +238,29 @@ where
                 unstake_delay_sec: result.stake_info.unstake_delay_sec,
             },
         })
+    }
+
+    async fn bundler_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcDebugPaymasterBalance>> {
+        let result = self
+            .pool
+            .debug_dump_paymaster_balances(entry_point)
+            .await
+            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+
+        let mut results = Vec::new();
+        for b in result {
+            let balance = RpcDebugPaymasterBalance {
+                address: b.address,
+                pending_balance: b.pending_balance,
+                confirmed_balance: b.confirmed_balance,
+            };
+
+            results.push(balance);
+        }
+
+        Ok(results)
     }
 }
