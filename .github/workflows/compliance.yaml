@@ -18,7 +18,7 @@ jobs:
       - name: Clone Test Executor
         uses: actions/checkout@v4
         with:
-          path: ./bundler-test-executors
+          path: bundler-test-executors
           repository: alchemyplatform/bundler-test-executor
 
       - name: Install Foundry
