@@ -27,10 +27,6 @@ jobs:
       - name: Setup PDM
         uses: pdm-project/setup-pdm@v3
 
-      - run: pwd
-
-      - run: ls -la
-
       - run: pip install jq yq
 
       - run: sudo apt-get install -y libxml2-utils
@@ -42,4 +38,4 @@ jobs:
         run: ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
 
       - name: Parse spec results
-        run: ./rundler/.github/compliance-parser.sh ./bundler-test-executors/build/out/rundler.xml
+        run: ./rundler/.github/compliance-parser.sh /home/runner/work/rundler/rundler/bundler-test-executors/build/out/rundler.xml
