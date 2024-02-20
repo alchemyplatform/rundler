@@ -26,45 +26,47 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::{interval, JsonRpcClient, Middleware, Provider},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, TxHash, H256,
-        U256, U64,
+        transaction::eip2718::TypedTransaction, Address, TransactionReceipt, TxHash, H256, U256,
+        U64,
     },
+    utils,
 };
 use ethers_signers::Signer;
 use futures_timer::Delay;
 use futures_util::{Stream, StreamExt, TryFutureExt};
-use jsonrpsee::{
-    core::{client::ClientT, traits::ToRpcParams},
-    http_client::{transport::HttpBackend, HttpClient, HttpClientBuilder},
-};
+use jsonrpsee::core::traits::ToRpcParams;
 use pin_project::pin_project;
+use reqwest::{
+    header::{HeaderMap, CONTENT_TYPE},
+    Client,
+};
 use serde::{de, Deserialize, Serialize};
-use serde_json::{value::RawValue, Value};
+use serde_json::{json, value::RawValue, Value};
 use tonic::async_trait;
 
 use super::{
     fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
 };
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Preferences {
     fast: bool,
     privacy: Option<Privacy>,
     validity: Option<Validity>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Privacy {
     hints: Option<Vec<String>>,
     builders: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Validity {
     refund: Option<Vec<Refund>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 struct Refund {
     address: String,
     percent: u8,
@@ -77,7 +79,9 @@ where
     S: Signer + 'static,
 {
     provider: SignerMiddleware<Arc<Provider<C>>, S>,
-    client: FlashbotsClient,
+    flashbots_client: FlashbotsClient,
+    http_client: Client,
+    builders: Vec<String>,
 }
 
 #[async_trait]
@@ -93,13 +97,59 @@ where
     ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
-        let tx_hash = self.client.send_transaction(raw_tx).await?;
+        let preferences = Preferences {
+            fast: false,
+            privacy: Some(Privacy {
+                hints: None,
+                builders: Some(self.builders.clone()),
+            }),
+            validity: None,
+        };
 
-        Ok(SentTxInfo { nonce, tx_hash })
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_sendPrivateRawTransaction",
+            "params": [raw_tx, preferences],
+            "id": 1
+        });
+
+        let flashbots_header = format!(
+            "{}:{}",
+            self.provider.signer().address(),
+            self.provider
+                .signer()
+                .sign_message(utils::keccak256(body.to_string()))
+                .await
+                .unwrap()
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert("X-Flashbots-Signature", flashbots_header.parse().unwrap());
+
+        // Send the request
+        let response = self
+            .http_client
+            .post("https://relay.flashbots.net")
+            .headers(headers)
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| anyhow!("failed to send transaction to Flashbots: {:?}", e))?;
+
+        let parsed_response = response
+            .json::<FlashbotsResponse>()
+            .await
+            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
+
+        Ok(SentTxInfo {
+            nonce,
+            tx_hash: parsed_response.tx_hash,
+        })
     }
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
-        let status = self.client.status(tx_hash).await?;
+        let status = self.flashbots_client.status(tx_hash).await?;
         Ok(match status.status {
             FlashbotsAPITransactionStatus::Pending => TxStatus::Pending,
             FlashbotsAPITransactionStatus::Included => {
@@ -131,7 +181,14 @@ where
     }
 
     async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
-        Ok(PendingFlashbotsTransaction::new(tx_hash, self.provider.inner(), &self.client).await?)
+        Ok(
+            PendingFlashbotsTransaction::new(
+                tx_hash,
+                self.provider.inner(),
+                &self.flashbots_client,
+            )
+            .await?,
+        )
     }
 
     fn address(&self) -> Address {
@@ -151,7 +208,9 @@ where
     ) -> Result<Self> {
         Ok(Self {
             provider: SignerMiddleware::new(provider, signer),
-            client: FlashbotsClient::new(builders)?,
+            flashbots_client: FlashbotsClient::new(),
+            http_client: Client::new(),
+            builders,
         })
     }
 }
@@ -199,15 +258,11 @@ struct FlashbotsAPIResponse {
 }
 
 #[derive(Debug)]
-struct FlashbotsClient {
-    client: HttpClient<HttpBackend>,
-    builders: Vec<String>,
-}
+struct FlashbotsClient {}
 
 impl FlashbotsClient {
-    fn new(builders: Vec<String>) -> anyhow::Result<Self> {
-        let client = HttpClientBuilder::default().build("https://relay.flashbots.net")?;
-        Ok(Self { client, builders })
+    fn new() -> Self {
+        Self {}
     }
 
     async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
@@ -216,22 +271,6 @@ impl FlashbotsClient {
         resp.json::<FlashbotsAPIResponse>()
             .await
             .context("should deserialize FlashbotsAPIResponse")
-    }
-
-    async fn send_transaction(&self, raw_tx: Bytes) -> Result<TxHash> {
-        let preferences = Preferences {
-            fast: false,
-            privacy: Some(Privacy {
-                hints: None,
-                builders: Some(self.builders.clone()),
-            }),
-            validity: None,
-        };
-        let response: FlashbotsResponse = self
-            .client
-            .request("eth_sendPrivateRawTransaction", (raw_tx, preferences))
-            .await?;
-        Ok(response.tx_hash)
     }
 }
 
