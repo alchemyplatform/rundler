@@ -27,9 +27,11 @@ jobs:
       - name: Setup PDM
         uses: pdm-project/setup-pdm@v3
 
-      - run: pip install jq yq
+      - run: pwd
 
-      - run: which xq
+      - run: ls -la
+
+      - run: pip install jq yq
 
       - run: sudo apt-get install -y libxml2-utils
 
