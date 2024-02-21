@@ -29,11 +29,10 @@ use tracing::info;
 use super::{
     entity_tracker::EntityCounter,
     error::{MempoolError, MempoolResult},
-    paymaster::PaymasterTracker,
     size::SizeTracker,
-    PaymasterMetadata, PoolConfig, PoolOperation,
+    PoolConfig, PoolOperation,
 };
-use crate::chain::{BalanceUpdate, MinedOp};
+use crate::chain::MinedOp;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoolInnerConfig {
@@ -43,7 +42,6 @@ pub(crate) struct PoolInnerConfig {
     min_replacement_fee_increase_percentage: u64,
     throttled_entity_mempool_count: u64,
     throttled_entity_live_blocks: u64,
-    paymaster_tracking_enabled: bool,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -55,7 +53,6 @@ impl From<PoolConfig> for PoolInnerConfig {
             min_replacement_fee_increase_percentage: config.min_replacement_fee_increase_percentage,
             throttled_entity_mempool_count: config.throttled_entity_mempool_count,
             throttled_entity_live_blocks: config.throttled_entity_live_blocks,
-            paymaster_tracking_enabled: config.paymaster_tracking_enabled,
         }
     }
 }
@@ -82,8 +79,6 @@ pub(crate) struct PoolInner {
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
     submission_id: u64,
-    /// A field that keeps track of paymaster balances across the mempool
-    paymaster_balances: PaymasterTracker,
     /// keeps track of the size of the pool in bytes
     pool_size: SizeTracker,
     /// keeps track of the size of the removed cache in bytes
@@ -93,7 +88,6 @@ pub(crate) struct PoolInner {
 impl PoolInner {
     pub(crate) fn new(config: PoolInnerConfig) -> Self {
         Self {
-            paymaster_balances: PaymasterTracker::new(config.paymaster_tracking_enabled),
             config,
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
@@ -140,27 +134,10 @@ impl PoolInner {
         }
     }
 
-    pub(crate) fn add_operation(
-        &mut self,
-        op: PoolOperation,
-        paymaster_meta: Option<PaymasterMetadata>,
-    ) -> MempoolResult<H256> {
-        let ret = self.add_operation_internal(Arc::new(op), None, paymaster_meta);
+    pub(crate) fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
+        let ret = self.add_operation_internal(Arc::new(op), None);
         self.update_metrics();
         ret
-    }
-
-    pub(crate) fn paymaster_addresses(&self) -> Vec<Address> {
-        self.paymaster_balances.paymaster_addresses()
-    }
-
-    pub(crate) fn set_confirmed_paymaster_balances(
-        &mut self,
-        addresses: &[Address],
-        balances: &[U256],
-    ) {
-        self.paymaster_balances
-            .set_confimed_balances(addresses, balances);
     }
 
     pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
@@ -261,9 +238,6 @@ impl PoolInner {
             .uo()
             .op_hash(mined_op.entry_point, self.config.chain_id);
 
-        self.paymaster_balances
-            .update_paymaster_balance_from_mined_op(mined_op);
-
         let ret = self.remove_operation_internal(hash, Some(block_number));
 
         self.update_metrics();
@@ -276,7 +250,7 @@ impl PoolInner {
         self.mined_hashes_with_block_numbers
             .remove(&(block_number, hash));
 
-        if let Err(error) = self.put_back_unmined_operation(op.clone(), mined_op) {
+        if let Err(error) = self.put_back_unmined_operation(op.clone()) {
             info!("Could not put back unmined operation: {error}");
         };
         self.update_metrics();
@@ -349,60 +323,16 @@ impl PoolInner {
         self.update_metrics();
     }
 
-    pub(crate) fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
-        self.paymaster_balances.paymaster_metadata(paymaster)
-    }
-
-    pub(crate) fn dump_paymaster_metadata(&self) -> Vec<PaymasterMetadata> {
-        self.paymaster_balances.dump_paymaster_metadata()
-    }
-
-    pub(crate) fn paymaster_exists(&self, paymaster: Address) -> bool {
-        self.paymaster_balances.paymaster_exists(paymaster)
-    }
-
-    pub(crate) fn update_paymaster_balances_after_update<'a>(
-        &mut self,
-        entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
-        unmined_entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
-    ) {
-        for balance_update in entity_balance_updates {
-            self.paymaster_balances.update_paymaster_balance_from_event(
-                balance_update.address,
-                balance_update.amount,
-                balance_update.is_addition,
-            )
-        }
-
-        for unmined_balance_update in unmined_entity_balance_updates {
-            self.paymaster_balances.update_paymaster_balance_from_event(
-                unmined_balance_update.address,
-                unmined_balance_update.amount,
-                !unmined_balance_update.is_addition,
-            )
-        }
-    }
-
-    pub(crate) fn clear(&mut self, clear_mempool: bool, clear_paymaster: bool) {
-        if clear_mempool {
-            self.by_hash.clear();
-            self.by_id.clear();
-            self.best.clear();
-            self.mined_at_block_number_by_hash.clear();
-            self.mined_hashes_with_block_numbers.clear();
-            self.count_by_address.clear();
-            self.pool_size = SizeTracker::default();
-            self.cache_size = SizeTracker::default();
-            self.update_metrics();
-        }
-
-        if clear_paymaster {
-            self.paymaster_balances.clear();
-        }
-    }
-
-    pub(crate) fn set_tracking(&mut self, paymaster: bool) {
-        self.paymaster_balances.set_paymaster_tracker(paymaster);
+    pub(crate) fn clear(&mut self) {
+        self.by_hash.clear();
+        self.by_id.clear();
+        self.best.clear();
+        self.mined_at_block_number_by_hash.clear();
+        self.mined_hashes_with_block_numbers.clear();
+        self.count_by_address.clear();
+        self.pool_size = SizeTracker::default();
+        self.cache_size = SizeTracker::default();
+        self.update_metrics();
     }
 
     fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
@@ -425,38 +355,19 @@ impl PoolInner {
         Ok(removed)
     }
 
-    fn put_back_unmined_operation(
-        &mut self,
-        op: OrderedPoolOperation,
-        mined_op: &MinedOp,
-    ) -> MempoolResult<H256> {
-        let mut paymaster_meta = None;
-        if let Some(paymaster) = op.uo().paymaster() {
-            self.paymaster_balances
-                .unmine_actual_cost(&paymaster, mined_op.actual_gas_cost);
-
-            paymaster_meta = self.paymaster_metadata(paymaster);
-        }
-
-        self.add_operation_internal(op.po, Some(op.submission_id), paymaster_meta)
+    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<H256> {
+        self.add_operation_internal(op.po, Some(op.submission_id))
     }
 
     fn add_operation_internal(
         &mut self,
         op: Arc<PoolOperation>,
         submission_id: Option<u64>,
-        paymaster_meta: Option<PaymasterMetadata>,
     ) -> MempoolResult<H256> {
         // Check if operation already known or replacing an existing operation
         // if replacing, remove the existing operation
         if let Some(hash) = self.check_replacement(&op.uo)? {
             self.remove_operation_by_hash(hash);
-        }
-
-        // check or update paymaster balance
-        if let Some(paymaster_meta) = paymaster_meta {
-            self.paymaster_balances
-                .add_or_update_balance(&op, &paymaster_meta)?;
         }
 
         let pool_op = OrderedPoolOperation {
@@ -502,7 +413,6 @@ impl PoolInner {
         let id = &op.po.uo.id();
         self.by_id.remove(id);
         self.best.remove(&op);
-        self.paymaster_balances.remove_operation(id);
 
         if let Some(block_number) = block_number {
             self.cache_size += op.mem_size();
@@ -627,7 +537,7 @@ mod tests {
     fn add_single_op() {
         let mut pool = PoolInner::new(conf());
         let op = create_op(Address::random(), 0, 1);
-        let hash = pool.add_operation(op.clone(), None).unwrap();
+        let hash = pool.add_operation(op.clone()).unwrap();
 
         check_map_entry(pool.by_hash.get(&hash), Some(&op));
         check_map_entry(pool.by_id.get(&op.uo.id()), Some(&op));
@@ -645,7 +555,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone(), None).unwrap());
+            hashes.push(pool.add_operation(op.clone()).unwrap());
         }
 
         for (hash, op) in hashes.iter().zip(&ops) {
@@ -671,7 +581,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone(), None).unwrap());
+            hashes.push(pool.add_operation(op.clone()).unwrap());
         }
 
         // best should be sorted by gas, then by submission id
@@ -692,7 +602,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone(), None).unwrap());
+            hashes.push(pool.add_operation(op.clone()).unwrap());
         }
 
         assert!(pool.remove_operation_by_hash(hashes[0]).is_some());
@@ -723,7 +633,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(account);
-            pool.add_operation(op.clone(), None).unwrap();
+            pool.add_operation(op.clone()).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -743,7 +653,7 @@ mod tests {
 
         let hash = op.uo.op_hash(pool.config.entry_point, pool.config.chain_id);
 
-        pool.add_operation(op, None).unwrap();
+        pool.add_operation(op).unwrap();
 
         let mined_op = MinedOp {
             paymaster: None,
@@ -774,8 +684,8 @@ mod tests {
             .uo
             .op_hash(pool.config.entry_point, pool.config.chain_id);
 
-        pool.add_operation(op, None).unwrap();
-        pool.add_operation(op_2, None).unwrap();
+        pool.add_operation(op).unwrap();
+        pool.add_operation(op_2).unwrap();
 
         let mined_op = MinedOp {
             paymaster: None,
@@ -808,7 +718,7 @@ mod tests {
                 address: agg,
                 is_staked: false,
             });
-            pool.add_operation(op.clone(), None).unwrap();
+            pool.add_operation(op.clone()).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -833,7 +743,7 @@ mod tests {
                 address: op.uo.paymaster().unwrap(),
                 is_staked: false,
             });
-            pool.add_operation(op.clone(), None).unwrap();
+            pool.add_operation(op.clone()).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -873,7 +783,7 @@ mod tests {
         for i in 0..count {
             let mut op = op.clone();
             op.uo.nonce = i.into();
-            hashes.push(pool.add_operation(op, None).unwrap());
+            hashes.push(pool.add_operation(op).unwrap());
         }
 
         assert_eq!(pool.address_count(&sender), 5);
@@ -897,12 +807,12 @@ mod tests {
         let mut pool = PoolInner::new(args.clone());
         for i in 0..20 {
             let op = create_op(Address::random(), i, i + 1);
-            pool.add_operation(op, None).unwrap();
+            pool.add_operation(op).unwrap();
         }
 
         // on greater gas, new op should win
         let op = create_op(Address::random(), args.max_size_of_pool_bytes, 2);
-        let result = pool.add_operation(op, None);
+        let result = pool.add_operation(op);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -912,15 +822,15 @@ mod tests {
         let mut pool = PoolInner::new(args.clone());
         for i in 0..20 {
             let op = create_op(Address::random(), i, i + 1);
-            pool.add_operation(op, None).unwrap();
+            pool.add_operation(op).unwrap();
         }
 
         let op = create_op(Address::random(), 4, 1);
-        assert!(pool.add_operation(op, None).is_err());
+        assert!(pool.add_operation(op).is_err());
 
         // on equal gas, worst should remain because it came first
         let op = create_op(Address::random(), 4, 2);
-        let result = pool.add_operation(op, None);
+        let result = pool.add_operation(op);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -930,11 +840,11 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 100);
         po1.uo.max_priority_fee_per_gas = 100.into();
-        let _ = pool.add_operation(po1.clone(), None).unwrap();
+        let _ = pool.add_operation(po1.clone()).unwrap();
 
         let mut po2 = create_op(sender, 0, 101);
         po2.uo.max_priority_fee_per_gas = 101.into();
-        let res = pool.add_operation(po2, None);
+        let res = pool.add_operation(po2);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::ReplacementUnderpriced(a, b) => {
@@ -967,7 +877,7 @@ mod tests {
             address: po1.uo.paymaster().unwrap(),
             is_staked: false,
         });
-        let _ = pool.add_operation(po1, None).unwrap();
+        let _ = pool.add_operation(po1).unwrap();
         assert_eq!(pool.address_count(&paymaster1), 1);
 
         let paymaster2 = Address::random();
@@ -978,7 +888,7 @@ mod tests {
             address: po2.uo.paymaster().unwrap(),
             is_staked: false,
         });
-        let _ = pool.add_operation(po2.clone(), None).unwrap();
+        let _ = pool.add_operation(po2.clone()).unwrap();
 
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(pool.address_count(&paymaster1), 0);
@@ -999,9 +909,9 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         po1.uo.max_priority_fee_per_gas = 10.into();
-        let _ = pool.add_operation(po1.clone(), None).unwrap();
+        let _ = pool.add_operation(po1.clone()).unwrap();
 
-        let res = pool.add_operation(po1, None);
+        let res = pool.add_operation(po1);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::OperationAlreadyKnown => (),
@@ -1016,7 +926,7 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         po1.valid_time_range.valid_until = Timestamp::from(1);
-        let _ = pool.add_operation(po1.clone(), None).unwrap();
+        let _ = pool.add_operation(po1.clone()).unwrap();
 
         let res = pool.remove_expired(Timestamp::from(2));
         assert_eq!(res.len(), 1);
@@ -1031,15 +941,14 @@ mod tests {
 
         let mut po1 = create_op(Address::random(), 0, 10);
         po1.valid_time_range.valid_until = 5.into();
-        let _ = pool.add_operation(po1.clone(), None).unwrap();
+        let _ = pool.add_operation(po1.clone()).unwrap();
 
         let mut po2 = create_op(Address::random(), 0, 10);
         po2.valid_time_range.valid_until = 10.into();
-        let _ = pool.add_operation(po2.clone(), None).unwrap();
-
+        let _ = pool.add_operation(po2.clone()).unwrap();
         let mut po3 = create_op(Address::random(), 0, 10);
         po3.valid_time_range.valid_until = 9.into();
-        let _ = pool.add_operation(po3.clone(), None).unwrap();
+        let _ = pool.add_operation(po3.clone()).unwrap();
 
         let res = pool.remove_expired(10.into());
         assert_eq!(res.len(), 2);
@@ -1055,7 +964,6 @@ mod tests {
             max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
-            paymaster_tracking_enabled: true,
         }
     }
 
