@@ -141,6 +141,8 @@ List of command line options for configuring the Pool.
   - env: *POOL_PAYMASTER_TRACKING_ENABLED*
 - `--pool.reputation_tracking_enabled`: Boolean field that sets whether the pool server starts with reputation tracking enabled (default: `true`)
   - env: *POOL_REPUTATION_TRACKING_ENABLED*
+- `--pool.drop_min_num_blocks`: The minimum number of blocks that a UO must stay in the mempool before it can be requested to be dropped by the user (default: `10`)
+  - env: *POOL_DROP_MIN_NUM_BLOCKS*
 
 ## Builder Options
 

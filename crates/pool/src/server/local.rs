@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
-use rundler_types::{EntityUpdate, UserOperation};
+use rundler_types::{EntityUpdate, UserOperation, UserOperationId};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -166,6 +166,19 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::RemoveOps => Ok(()),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
+    async fn remove_op_by_id(
+        &self,
+        entry_point: Address,
+        id: UserOperationId,
+    ) -> PoolResult<Option<H256>> {
+        let req = ServerRequestKind::RemoveOpById { entry_point, id };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::RemoveOpById { hash } => Ok(hash),
             _ => Err(PoolServerError::UnexpectedResponse),
         }
     }
@@ -391,6 +404,15 @@ where
         Ok(())
     }
 
+    fn remove_op_by_id(
+        &self,
+        entry_point: Address,
+        id: &UserOperationId,
+    ) -> PoolResult<Option<H256>> {
+        let mempool = self.get_pool(entry_point)?;
+        mempool.remove_op_by_id(id).map_err(|e| e.into())
+    }
+
     fn update_entities<'a>(
         &self,
         entry_point: Address,
@@ -572,6 +594,12 @@ where
                                 Err(e) => Err(e),
                             }
                         },
+                        ServerRequestKind::RemoveOpById { entry_point, id } => {
+                            match self.remove_op_by_id(entry_point, &id) {
+                                Ok(hash) => Ok(ServerResponse::RemoveOpById{ hash }),
+                                Err(e) => Err(e),
+                            }
+                        },
                         ServerRequestKind::AdminSetTracking{ entry_point, paymaster, reputation } => {
                             match self.admin_set_tracking(entry_point, paymaster, reputation) {
                                 Ok(_) => Ok(ServerResponse::AdminSetTracking),
@@ -661,6 +689,10 @@ enum ServerRequestKind {
         entry_point: Address,
         ops: Vec<H256>,
     },
+    RemoveOpById {
+        entry_point: Address,
+        id: UserOperationId,
+    },
     UpdateEntities {
         entry_point: Address,
         entity_updates: Vec<EntityUpdate>,
@@ -714,6 +746,9 @@ enum ServerResponse {
         op: Option<PoolOperation>,
     },
     RemoveOps,
+    RemoveOpById {
+        hash: Option<H256>,
+    },
     UpdateEntities,
     DebugClearState,
     AdminSetTracking,

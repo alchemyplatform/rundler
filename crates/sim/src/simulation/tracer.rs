@@ -140,7 +140,7 @@ where
     ) -> anyhow::Result<SimulationTracerOutput> {
         let tx = self
             .entry_point
-            .simulate_validation(op, max_validation_gas)
+            .get_simulate_validation_call(op, max_validation_gas)
             .await?;
 
         SimulationTracerOutput::try_from(

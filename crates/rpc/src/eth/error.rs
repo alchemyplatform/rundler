@@ -246,6 +246,9 @@ impl From<MempoolError> for EthRpcError {
             MempoolError::UnknownEntryPoint(a) => {
                 EthRpcError::EntryPointValidationRejected(format!("unknown entry point: {}", a))
             }
+            MempoolError::OperationDropTooSoon(_, _, _) => {
+                EthRpcError::InvalidParams(value.to_string())
+            }
         }
     }
 }

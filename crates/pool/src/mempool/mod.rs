@@ -36,7 +36,9 @@ use ethers::types::{Address, H256, U256};
 #[cfg(test)]
 use mockall::automock;
 use rundler_sim::{EntityInfos, MempoolConfig, PrecheckSettings, SimulationSettings};
-use rundler_types::{Entity, EntityType, EntityUpdate, UserOperation, ValidTimeRange};
+use rundler_types::{
+    Entity, EntityType, EntityUpdate, UserOperation, UserOperationId, ValidTimeRange,
+};
 use tonic::async_trait;
 pub(crate) use uo_pool::UoPool;
 
@@ -62,6 +64,9 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Removes a set of operations from the pool.
     fn remove_operations(&self, hashes: &[H256]);
+
+    /// Removes an operation from the pool by its ID.
+    fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<H256>>;
 
     /// Updates the reputation of an entity.
     fn update_entity(&self, entity_update: EntityUpdate);
@@ -150,6 +155,8 @@ pub struct PoolConfig {
     pub paymaster_tracking_enabled: bool,
     /// Boolean field used to toggle the operation of the reputation tracker
     pub reputation_tracking_enabled: bool,
+    /// The minimum number of blocks a user operation must be in the mempool before it can be dropped
+    pub drop_min_num_blocks: u64,
 }
 
 /// Stake status structure

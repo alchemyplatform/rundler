@@ -44,3 +44,6 @@ pub use user_operation::UserOperationId;
 
 mod storage;
 pub use storage::StorageSlot;
+
+mod validation_results;
+pub use validation_results::{AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo};

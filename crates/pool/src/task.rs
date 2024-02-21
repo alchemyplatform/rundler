@@ -171,14 +171,14 @@ impl PoolTask {
         let paymaster_helper =
             PaymasterHelperContract::new(pool_config.entry_point, Arc::clone(&provider));
 
-        let simulate_validation_tracer =
-            SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
         let prechecker = PrecheckerImpl::new(
             chain_spec,
             Arc::clone(&provider),
             i_entry_point.clone(),
             pool_config.precheck_settings,
         );
+        let simulate_validation_tracer =
+            SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
             i_entry_point.address(),

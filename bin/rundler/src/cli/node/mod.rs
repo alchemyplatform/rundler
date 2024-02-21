@@ -67,6 +67,7 @@ pub async fn run(
         (&common_args).try_into()?,
         (&common_args).into(),
         (&common_args).try_into()?,
+        (&common_args).try_into()?,
     )?;
 
     let (event_sender, event_rx) =

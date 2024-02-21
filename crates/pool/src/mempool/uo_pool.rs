@@ -21,7 +21,7 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use rundler_provider::{EntryPoint, PaymasterHelper};
 use rundler_sim::{Prechecker, Simulator};
-use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation};
+use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation, UserOperationId};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 use tonic::async_trait;
@@ -503,6 +503,45 @@ where
             })
         }
         UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
+    }
+
+    fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<H256>> {
+        // Check for the operation in the pool and its age
+        let po = {
+            let state = self.state.read();
+            match state.pool.get_operation_by_id(id) {
+                Some(po) => {
+                    if po.sim_block_number + self.config.drop_min_num_blocks > state.block_number {
+                        return Err(MempoolError::OperationDropTooSoon(
+                            po.sim_block_number,
+                            state.block_number,
+                            self.config.drop_min_num_blocks,
+                        ));
+                    }
+                    po
+                }
+                None => return Ok(None),
+            }
+        };
+
+        let hash = po.uo.op_hash(self.config.entry_point, self.config.chain_id);
+
+        // This can return none if the operation was removed by another thread
+        if self
+            .state
+            .write()
+            .pool
+            .remove_operation_by_hash(hash)
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        self.emit(OpPoolEvent::RemovedOp {
+            op_hash: hash,
+            reason: OpRemovalReason::Requested,
+        });
+        Ok(Some(hash))
     }
 
     fn update_entity(&self, update: EntityUpdate) {
@@ -1228,6 +1267,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_remove_by_id_too_soon() {
+        let op = create_op(Address::random(), 0, 0, None);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            pool.remove_op_by_id(&op.op.id()),
+            Err(MempoolError::OperationDropTooSoon(_, _, _))
+        ));
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+    }
+
+    #[tokio::test]
+    async fn test_remove_by_id_not_found() {
+        let op = create_op(Address::random(), 0, 0, None);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            pool.remove_op_by_id(&UserOperationId {
+                sender: Address::random(),
+                nonce: 0.into()
+            }),
+            Ok(None)
+        ));
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+    }
+
+    #[tokio::test]
+    async fn test_remove_by_id() {
+        let op = create_op(Address::random(), 0, 0, None);
+        let pool = create_pool(vec![op.clone()]);
+
+        let _ = pool
+            .add_operation(OperationOrigin::Local, op.op.clone())
+            .await
+            .unwrap();
+        let hash = op.op.op_hash(pool.config.entry_point, 1);
+
+        pool.on_chain_update(&ChainUpdate {
+            latest_block_number: 11,
+            ..Default::default()
+        })
+        .await;
+
+        assert_eq!(pool.remove_op_by_id(&op.op.id()).unwrap().unwrap(), hash);
+        check_ops(pool.best_operations(1, 0).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
     async fn test_get_user_op_by_hash_not_found() {
         let op = create_op(Address::random(), 0, 0, None);
         let pool = create_pool(vec![op.clone()]);
@@ -1289,6 +1386,7 @@ mod tests {
             throttled_entity_live_blocks: 10,
             paymaster_tracking_enabled: true,
             reputation_tracking_enabled: true,
+            drop_min_num_blocks: 10,
         };
 
         let mut simulator = MockSimulator::new();

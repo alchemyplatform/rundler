@@ -29,8 +29,8 @@ use indexmap::IndexSet;
 use mockall::automock;
 use rundler_provider::{AggregatorOut, AggregatorSimOut, Provider};
 use rundler_types::{
-    contracts::i_entry_point::FailedOp, Entity, EntityType, StorageSlot, UserOperation,
-    ValidTimeRange,
+    contracts::i_entry_point::FailedOp, Entity, EntityType, StakeInfo, StorageSlot, UserOperation,
+    ValidTimeRange, ValidationOutput, ValidationReturnInfo,
 };
 use strum::IntoEnumIterator;
 
@@ -40,7 +40,6 @@ use super::{
         parse_combined_tracer_str, AccessInfo, AssociatedSlotsByAddress, SimulateValidationTracer,
         SimulationTracerOutput,
     },
-    validation_results::{StakeInfo, ValidationOutput, ValidationReturnInfo},
 };
 use crate::{
     types::{ExpectedStorage, ViolationError},

@@ -16,10 +16,10 @@ use std::{pin::Pin, str::FromStr};
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::{
-    grpc::protos::{from_bytes, ConversionError},
+    grpc::protos::{from_bytes, to_le_bytes, ConversionError},
     server::{HealthCheck, ServerStatus},
 };
-use rundler_types::{EntityUpdate, UserOperation};
+use rundler_types::{EntityUpdate, UserOperation, UserOperationId};
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -37,11 +37,11 @@ use super::protos::{
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_ops_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_ops_response, update_entities_response, AddOpRequest,
-    AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
-    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
-    GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest,
-    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    op_pool_client::OpPoolClient, remove_op_by_id_response, remove_ops_response,
+    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
+    DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
+    RemoveOpsRequest, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
     mempool::{PaymasterMetadata, PoolOperation, Reputation, StakeStatus},
@@ -232,6 +232,38 @@ impl PoolServer for RemotePoolClient {
         match res {
             Some(remove_ops_response::Result::Success(_)) => Ok(()),
             Some(remove_ops_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn remove_op_by_id(
+        &self,
+        entry_point: Address,
+        id: UserOperationId,
+    ) -> PoolResult<Option<H256>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .remove_op_by_id(protos::RemoveOpByIdRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+                sender: id.sender.as_bytes().to_vec(),
+                nonce: to_le_bytes(id.nonce),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(remove_op_by_id_response::Result::Success(s)) => {
+                if s.hash.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(H256::from_slice(&s.hash)))
+                }
+            }
+            Some(remove_op_by_id_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

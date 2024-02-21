@@ -16,6 +16,7 @@ pub(crate) use api::EthApi;
 pub use api::Settings as EthApiSettings;
 
 mod error;
+pub(crate) use error::EthRpcError;
 mod server;
 
 use ethers::types::{spoof, Address, H256, U64};

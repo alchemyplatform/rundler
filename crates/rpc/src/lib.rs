@@ -34,7 +34,7 @@ mod health;
 mod metrics;
 
 mod rundler;
-pub use rundler::RundlerApiClient;
+pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
 
 mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};
