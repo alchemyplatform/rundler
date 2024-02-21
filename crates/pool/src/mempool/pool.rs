@@ -522,12 +522,16 @@ struct PoolMetrics {}
 
 impl PoolMetrics {
     fn set_pool_metrics(num_ops: usize, size_bytes: isize, entry_point: Address) {
-        metrics::gauge!("op_pool_num_ops_in_pool", num_ops as f64, "entrypoint_addr" => entry_point.to_string());
-        metrics::gauge!("op_pool_size_bytes", size_bytes as f64, "entrypoint_addr" => entry_point.to_string());
+        metrics::gauge!("op_pool_num_ops_in_pool", "entrypoint_addr" => entry_point.to_string())
+            .set(num_ops as f64);
+        metrics::gauge!("op_pool_size_bytes", "entrypoint_addr" => entry_point.to_string())
+            .set(size_bytes as f64);
     }
     fn set_cache_metrics(num_ops: usize, size_bytes: isize, entry_point: Address) {
-        metrics::gauge!("op_pool_num_ops_in_cache", num_ops as f64, "entrypoint_addr" => entry_point.to_string());
-        metrics::gauge!("op_pool_cache_size_bytes", size_bytes as f64, "entrypoint_addr" => entry_point.to_string());
+        metrics::gauge!("op_pool_num_ops_in_cache", "entrypoint_addr" => entry_point.to_string())
+            .set(num_ops as f64);
+        metrics::gauge!("op_pool_cache_size_bytes", "entrypoint_addr" => entry_point.to_string())
+            .set(size_bytes as f64);
     }
 }
 

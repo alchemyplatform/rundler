@@ -132,26 +132,26 @@ struct GrpcMetricsRecorder;
 impl GrpcMetricsRecorder {
     // Increment the number of requests for a given method and service.
     fn increment_num_requests(method_name: &str, scope: &str) {
-        metrics::increment_counter!("grpc_num_requests", "method_name" => method_name.to_string(), "service" => scope.to_string())
+        metrics::counter!("grpc_num_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1)
     }
 
     // Increment the number of open requests for a given method and service.
     fn increment_open_requests(method_name: &str, scope: &str) {
-        metrics::increment_gauge!("grpc_open_requests", 1_f64, "method_name" => method_name.to_string(), "service" => scope.to_string())
+        metrics::gauge!("grpc_open_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1_f64)
     }
 
     // Decrement the number of open requests for a given method and service.
     fn decrement_open_requests(method_name: &str, scope: &str) {
-        metrics::decrement_gauge!("grpc_open_requests", 1_f64, "method_name" => method_name.to_string(), "service" => scope.to_string())
+        metrics::gauge!("grpc_open_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).decrement(1_f64)
     }
 
     // Increment the number of gRPC errors for a given method and service.
     fn increment_rpc_error_count(method_name: &str, scope: &str) {
-        metrics::increment_counter!("grpc_error_count", "method_name" => method_name.to_string(), "service" => scope.to_string())
+        metrics::counter!("grpc_error_count", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1)
     }
 
     // Record the latency of a request for a given method and service.
     fn record_request_latency(method_name: &str, scope: &str, latency: Duration) {
-        metrics::histogram!("grpc_request_latency", latency, "method_name" => method_name.to_string(), "service" => scope.to_string())
+        metrics::histogram!("grpc_request_latency", "method_name" => method_name.to_string(), "service" => scope.to_string()).record(latency)
     }
 }

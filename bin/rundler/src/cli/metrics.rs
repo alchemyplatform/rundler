@@ -68,160 +68,71 @@ fn collect_tokio(
     runtime_metrics: &tokio::runtime::RuntimeMetrics,
     worker_metrics: tokio_metrics::RuntimeMetrics,
 ) {
-    gauge!(
-        format!("{}num_workers", TOKIO_PREFIX),
-        runtime_metrics.num_workers() as f64
-    );
-    gauge!(
-        format!("{}num_blocking_threads", TOKIO_PREFIX),
-        runtime_metrics.num_blocking_threads() as f64
-    );
-    gauge!(
-        format!("{}active_tasks_count", TOKIO_PREFIX),
-        runtime_metrics.active_tasks_count() as f64
-    );
-    gauge!(
-        format!("{}num_idle_blocking_threads", TOKIO_PREFIX),
-        runtime_metrics.num_idle_blocking_threads() as f64
-    );
-    gauge!(
-        format!("{}blocking_queue_depth", TOKIO_PREFIX),
-        runtime_metrics.blocking_queue_depth() as f64
-    );
-    gauge!(
-        format!("{}total_park_count", TOKIO_PREFIX),
-        worker_metrics.total_park_count as f64
-    );
-    gauge!(
-        format!("{}max_park_count", TOKIO_PREFIX),
-        worker_metrics.max_park_count as f64
-    );
-    gauge!(
-        format!("{}min_park_count", TOKIO_PREFIX),
-        worker_metrics.min_park_count as f64
-    );
-    gauge!(
-        format!("{}mean_poll_duration", TOKIO_PREFIX),
-        worker_metrics.mean_poll_duration.as_secs_f64()
-    );
-    gauge!(
-        format!("{}mean_poll_duration_worker_min", TOKIO_PREFIX),
-        worker_metrics.mean_poll_duration_worker_min.as_secs_f64()
-    );
-    gauge!(
-        format!("{}mean_poll_duration_worker_max", TOKIO_PREFIX),
-        worker_metrics.mean_poll_duration_worker_max.as_secs_f64()
-    );
-    gauge!(
-        format!("{}total_noop_count", TOKIO_PREFIX),
-        worker_metrics.total_noop_count as f64,
-    );
-    gauge!(
-        format!("{}max_noop_count", TOKIO_PREFIX),
-        worker_metrics.max_noop_count as f64,
-    );
-    gauge!(
-        format!("{}min_noop_count", TOKIO_PREFIX),
-        worker_metrics.min_noop_count as f64,
-    );
-    gauge!(
-        format!("{}total_steal_count", TOKIO_PREFIX),
-        worker_metrics.total_steal_count as f64,
-    );
-    gauge!(
-        format!("{}max_steal_count", TOKIO_PREFIX),
-        worker_metrics.max_steal_count as f64,
-    );
-    gauge!(
-        format!("{}min_steal_count", TOKIO_PREFIX),
-        worker_metrics.min_steal_count as f64,
-    );
-    gauge!(
-        format!("{}total_steal_operations", TOKIO_PREFIX),
-        worker_metrics.total_steal_operations as f64,
-    );
-    gauge!(
-        format!("{}max_steal_operations", TOKIO_PREFIX),
-        worker_metrics.max_steal_operations as f64,
-    );
-    gauge!(
-        format!("{}min_steal_operations", TOKIO_PREFIX),
-        worker_metrics.min_steal_operations as f64,
-    );
-    gauge!(
-        format!("{}num_remote_schedules", TOKIO_PREFIX),
-        worker_metrics.num_remote_schedules as f64,
-    );
-    gauge!(
-        format!("{}total_local_schedule_count", TOKIO_PREFIX),
-        worker_metrics.total_local_schedule_count as f64,
-    );
-    gauge!(
-        format!("{}max_local_schedule_count", TOKIO_PREFIX),
-        worker_metrics.max_local_schedule_count as f64,
-    );
-    gauge!(
-        format!("{}min_local_schedule_count", TOKIO_PREFIX),
-        worker_metrics.min_local_schedule_count as f64,
-    );
-    gauge!(
-        format!("{}total_overflow_count", TOKIO_PREFIX),
-        worker_metrics.total_overflow_count as f64,
-    );
-    gauge!(
-        format!("{}max_overflow_count", TOKIO_PREFIX),
-        worker_metrics.max_overflow_count as f64,
-    );
-    gauge!(
-        format!("{}min_overflow_count", TOKIO_PREFIX),
-        worker_metrics.min_overflow_count as f64,
-    );
-    gauge!(
-        format!("{}total_polls_count", TOKIO_PREFIX),
-        worker_metrics.total_polls_count as f64,
-    );
-    gauge!(
-        format!("{}max_polls_count", TOKIO_PREFIX),
-        worker_metrics.max_polls_count as f64,
-    );
-    gauge!(
-        format!("{}min_polls_count", TOKIO_PREFIX),
-        worker_metrics.min_polls_count as f64,
-    );
-    gauge!(
-        format!("{}total_busy_duration", TOKIO_PREFIX),
-        worker_metrics.total_busy_duration.as_secs_f64(),
-    );
-    gauge!(
-        format!("{}max_busy_duration", TOKIO_PREFIX),
-        worker_metrics.max_busy_duration.as_secs_f64(),
-    );
-    gauge!(
-        format!("{}min_busy_duration", TOKIO_PREFIX),
-        worker_metrics.min_busy_duration.as_secs_f64(),
-    );
-    gauge!(
-        format!("{}injection_queue_depth", TOKIO_PREFIX),
-        worker_metrics.injection_queue_depth as f64,
-    );
-    gauge!(
-        format!("{}total_local_queue_depth", TOKIO_PREFIX),
-        worker_metrics.total_local_queue_depth as f64,
-    );
-    gauge!(
-        format!("{}max_local_queue_depth", TOKIO_PREFIX),
-        worker_metrics.max_local_queue_depth as f64,
-    );
-    gauge!(
-        format!("{}min_local_queue_depth", TOKIO_PREFIX),
-        worker_metrics.min_local_queue_depth as f64,
-    );
-    gauge!(
-        format!("{}budget_forced_yield_count", TOKIO_PREFIX),
-        worker_metrics.budget_forced_yield_count as f64,
-    );
-    gauge!(
-        format!("{}io_driver_ready_count", TOKIO_PREFIX),
-        worker_metrics.io_driver_ready_count as f64,
-    );
+    gauge!(format!("{}num_workers", TOKIO_PREFIX)).set(runtime_metrics.num_workers() as f64);
+    gauge!(format!("{}num_blocking_threads", TOKIO_PREFIX))
+        .set(runtime_metrics.num_blocking_threads() as f64);
+    gauge!(format!("{}active_tasks_count", TOKIO_PREFIX))
+        .set(runtime_metrics.active_tasks_count() as f64);
+    gauge!(format!("{}num_idle_blocking_threads", TOKIO_PREFIX))
+        .set(runtime_metrics.num_idle_blocking_threads() as f64);
+    gauge!(format!("{}blocking_queue_depth", TOKIO_PREFIX))
+        .set(runtime_metrics.blocking_queue_depth() as f64);
+    gauge!(format!("{}total_park_count", TOKIO_PREFIX)).set(worker_metrics.total_park_count as f64);
+    gauge!(format!("{}max_park_count", TOKIO_PREFIX)).set(worker_metrics.max_park_count as f64);
+    gauge!(format!("{}min_park_count", TOKIO_PREFIX)).set(worker_metrics.min_park_count as f64);
+    gauge!(format!("{}mean_poll_duration", TOKIO_PREFIX))
+        .set(worker_metrics.mean_poll_duration.as_secs_f64());
+    gauge!(format!("{}mean_poll_duration_worker_min", TOKIO_PREFIX))
+        .set(worker_metrics.mean_poll_duration_worker_min.as_secs_f64());
+    gauge!(format!("{}mean_poll_duration_worker_max", TOKIO_PREFIX))
+        .set(worker_metrics.mean_poll_duration_worker_max.as_secs_f64());
+    gauge!(format!("{}total_noop_count", TOKIO_PREFIX)).set(worker_metrics.total_noop_count as f64);
+    gauge!(format!("{}max_noop_count", TOKIO_PREFIX)).set(worker_metrics.max_noop_count as f64);
+    gauge!(format!("{}min_noop_count", TOKIO_PREFIX)).set(worker_metrics.min_noop_count as f64);
+    gauge!(format!("{}total_steal_count", TOKIO_PREFIX))
+        .set(worker_metrics.total_steal_count as f64);
+    gauge!(format!("{}max_steal_count", TOKIO_PREFIX),).set(worker_metrics.max_steal_count as f64);
+    gauge!(format!("{}min_steal_count", TOKIO_PREFIX),).set(worker_metrics.min_steal_count as f64);
+    gauge!(format!("{}total_steal_operations", TOKIO_PREFIX))
+        .set(worker_metrics.total_steal_operations as f64);
+    gauge!(format!("{}max_steal_operations", TOKIO_PREFIX))
+        .set(worker_metrics.max_steal_operations as f64);
+    gauge!(format!("{}min_steal_operations", TOKIO_PREFIX))
+        .set(worker_metrics.min_steal_operations as f64);
+    gauge!(format!("{}num_remote_schedules", TOKIO_PREFIX))
+        .set(worker_metrics.num_remote_schedules as f64);
+    gauge!(format!("{}total_local_schedule_count", TOKIO_PREFIX))
+        .set(worker_metrics.total_local_schedule_count as f64);
+    gauge!(format!("{}max_local_schedule_count", TOKIO_PREFIX),)
+        .set(worker_metrics.max_local_schedule_count as f64);
+    gauge!(format!("{}min_local_schedule_count", TOKIO_PREFIX),)
+        .set(worker_metrics.min_local_schedule_count as f64);
+    gauge!(format!("{}total_overflow_count", TOKIO_PREFIX))
+        .set(worker_metrics.total_overflow_count as f64);
+    gauge!(format!("{}max_overflow_count", TOKIO_PREFIX))
+        .set(worker_metrics.max_overflow_count as f64);
+    gauge!(format!("{}min_overflow_count", TOKIO_PREFIX),)
+        .set(worker_metrics.min_overflow_count as f64);
+    gauge!(format!("{}total_polls_count", TOKIO_PREFIX))
+        .set(worker_metrics.total_polls_count as f64);
+    gauge!(format!("{}max_polls_count", TOKIO_PREFIX)).set(worker_metrics.max_polls_count as f64);
+    gauge!(format!("{}min_polls_count", TOKIO_PREFIX)).set(worker_metrics.min_polls_count as f64);
+    gauge!(format!("{}total_busy_duration", TOKIO_PREFIX))
+        .set(worker_metrics.total_busy_duration.as_secs_f64());
+    gauge!(format!("{}max_busy_duration", TOKIO_PREFIX))
+        .set(worker_metrics.max_busy_duration.as_secs_f64());
+    gauge!(format!("{}min_busy_duration", TOKIO_PREFIX))
+        .set(worker_metrics.min_busy_duration.as_secs_f64());
+    gauge!(format!("{}injection_queue_depth", TOKIO_PREFIX))
+        .set(worker_metrics.injection_queue_depth as f64);
+    gauge!(format!("{}total_local_queue_depth", TOKIO_PREFIX))
+        .set(worker_metrics.total_local_queue_depth as f64);
+    gauge!(format!("{}max_local_queue_depth", TOKIO_PREFIX))
+        .set(worker_metrics.max_local_queue_depth as f64);
+    gauge!(format!("{}min_local_queue_depth", TOKIO_PREFIX))
+        .set(worker_metrics.min_local_queue_depth as f64);
+    gauge!(format!("{}budget_forced_yield_count", TOKIO_PREFIX))
+        .set(worker_metrics.budget_forced_yield_count as f64);
+    gauge!(format!("{}io_driver_ready_count", TOKIO_PREFIX))
+        .set(worker_metrics.io_driver_ready_count as f64);
 }

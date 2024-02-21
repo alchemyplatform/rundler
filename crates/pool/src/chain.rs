@@ -586,15 +586,15 @@ struct ChainMetrics {}
 
 impl ChainMetrics {
     fn set_block_height(block_height: u64) {
-        metrics::gauge!("op_pool_chain_block_height", block_height as f64);
+        metrics::gauge!("op_pool_chain_block_height").set(block_height as f64);
     }
 
     fn increment_reorgs_detected() {
-        metrics::increment_counter!("op_pool_chain_reorgs_detected");
+        metrics::counter!("op_pool_chain_reorgs_detected").increment(1);
     }
 
     fn increment_total_reorg_depth(depth: u64) {
-        metrics::counter!("op_pool_chain_total_reorg_depth", depth);
+        metrics::counter!("op_pool_chain_total_reorg_depth").increment(depth);
     }
 }
 
