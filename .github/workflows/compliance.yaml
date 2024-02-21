@@ -37,5 +37,11 @@ jobs:
       - name: Run test executor
         run: ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
 
+      - run: cat ./bundler-test-executors/build/out/rundler.log
+
+      - run: cat ./bundler-test-executors/build/out/index.txt
+
+      - run: cat ./bundler-test-executors/build/out/rundler.txt
+
       - name: Parse spec results
         run: ./rundler/.github/compliance-parser.sh ./bundler-test-executors/build/out/rundler.xml
