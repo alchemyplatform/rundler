@@ -134,6 +134,14 @@ pub struct PoolArgs {
         default_value = "true"
     )]
     pub reputation_tracking_enabled: bool,
+
+    #[arg(
+        long = "pool.drop_min_num_blocks",
+        name = "pool.drop_min_num_blocks",
+        env = "POOL_DROP_MIN_NUM_BLOCKS",
+        default_value = "10"
+    )]
+    pub drop_min_num_blocks: u64,
 }
 
 impl PoolArgs {
@@ -182,6 +190,7 @@ impl PoolArgs {
             throttled_entity_live_blocks: self.throttled_entity_live_blocks,
             paymaster_tracking_enabled: self.paymaster_tracking_enabled,
             reputation_tracking_enabled: self.reputation_tracking_enabled,
+            drop_min_num_blocks: self.drop_min_num_blocks,
         };
 
         Ok(PoolTaskArgs {

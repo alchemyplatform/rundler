@@ -16,7 +16,8 @@ use ethers::{
     abi::{AbiDecode, AbiError},
     types::{Address, Bytes, U256},
 };
-use rundler_types::{
+
+use crate::{
     contracts::entry_point::{ValidationResult, ValidationResultWithAggregation},
     Timestamp,
 };
@@ -25,12 +26,17 @@ use rundler_types::{
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs
 /// instead of tuples and with a helper for deserializing.
 #[derive(Debug)]
-pub(crate) struct ValidationOutput {
-    pub(crate) return_info: ValidationReturnInfo,
-    pub(crate) sender_info: StakeInfo,
-    pub(crate) factory_info: StakeInfo,
-    pub(crate) paymaster_info: StakeInfo,
-    pub(crate) aggregator_info: Option<AggregatorInfo>,
+pub struct ValidationOutput {
+    /// The return info from the validation function
+    pub return_info: ValidationReturnInfo,
+    /// The stake info for the sender
+    pub sender_info: StakeInfo,
+    /// The stake info for the factory
+    pub factory_info: StakeInfo,
+    /// The stake info for the paymaster
+    pub paymaster_info: StakeInfo,
+    /// Optional aggregator_info
+    pub aggregator_info: Option<AggregatorInfo>,
 }
 
 impl AbiDecode for ValidationOutput {
@@ -82,13 +88,19 @@ impl From<ValidationResultWithAggregation> for ValidationOutput {
     }
 }
 
+/// ValidationReturnInfo from EntryPoint contract
 #[derive(Debug)]
-pub(crate) struct ValidationReturnInfo {
-    pub(crate) pre_op_gas: U256,
-    pub(crate) sig_failed: bool,
-    pub(crate) valid_after: Timestamp,
-    pub(crate) valid_until: Timestamp,
-    pub(crate) paymaster_context: Bytes,
+pub struct ValidationReturnInfo {
+    /// The amount of gas used before the op was executed (pre verification gas and validation gas)
+    pub pre_op_gas: U256,
+    /// Whether the signature verification failed
+    pub sig_failed: bool,
+    /// The time after which the op is valid
+    pub valid_after: Timestamp,
+    /// The time until which the op is valid
+    pub valid_until: Timestamp,
+    /// The paymaster context
+    pub paymaster_context: Bytes,
 }
 
 impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
@@ -111,10 +123,13 @@ impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
     }
 }
 
+/// StakeInfo from EntryPoint contract
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct StakeInfo {
-    pub(crate) stake: U256,
-    pub(crate) unstake_delay_sec: U256,
+pub struct StakeInfo {
+    /// The amount of stake
+    pub stake: U256,
+    /// The delay for unstaking
+    pub unstake_delay_sec: U256,
 }
 
 impl From<(U256, U256)> for StakeInfo {
@@ -126,10 +141,13 @@ impl From<(U256, U256)> for StakeInfo {
     }
 }
 
+/// AggregatorInfo from EntryPoint contract
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct AggregatorInfo {
-    pub(crate) address: Address,
-    pub(crate) stake_info: StakeInfo,
+pub struct AggregatorInfo {
+    /// The address of the aggregator
+    pub address: Address,
+    /// The stake info for the aggregator
+    pub stake_info: StakeInfo,
 }
 
 impl From<(Address, (U256, U256))> for AggregatorInfo {

@@ -16,6 +16,7 @@ ethers.workspace = true
 serde.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 mockall = {workspace = true, optional = true }
 

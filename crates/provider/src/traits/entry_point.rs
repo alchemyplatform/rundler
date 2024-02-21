@@ -18,7 +18,7 @@ use ethers::types::{
 use mockall::automock;
 use rundler_types::{
     contracts::{i_entry_point::ExecutionResult, shared_types::UserOpsPerAggregator},
-    GasFees, UserOperation,
+    GasFees, UserOperation, ValidationOutput,
 };
 
 /// Result of an entry point handle ops call
@@ -56,12 +56,19 @@ pub trait EntryPoint: Send + Sync + 'static {
     async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
         -> anyhow::Result<U256>;
 
-    /// Call the entry point contract's `simulateValidation` function
-    async fn simulate_validation(
+    /// Construct a call for the entry point contract's `simulateValidation` function
+    async fn get_simulate_validation_call(
         &self,
         user_op: UserOperation,
         max_validation_gas: u64,
     ) -> anyhow::Result<TypedTransaction>;
+
+    /// Call the entry point contract's `simulateValidation` function.
+    async fn call_simulate_validation(
+        &self,
+        user_op: UserOperation,
+        max_validation_gas: u64,
+    ) -> anyhow::Result<ValidationOutput>;
 
     /// Call the entry point contract's `simulateHandleOps` function
     /// with a spoofed state

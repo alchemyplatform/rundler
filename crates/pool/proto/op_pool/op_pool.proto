@@ -133,6 +133,9 @@ service OpPool {
   // Removes UserOperations from the mempool
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
 
+  // Remove a UserOperation by its id
+  rpc RemoveOpById(RemoveOpByIdRequest) returns (RemoveOpByIdResponse);
+
   // Handles a list of updates to be performed on entities
   rpc UpdateEntities(UpdateEntitiesRequest) returns (UpdateEntitiesResponse);
 
@@ -281,6 +284,21 @@ message RemoveOpsResponse {
 }
 message RemoveOpsSuccess {}
 
+message RemoveOpByIdRequest {
+  bytes entry_point = 1;
+  bytes sender = 2;
+  bytes nonce = 3;
+}
+message RemoveOpByIdResponse {
+  oneof result {
+    RemoveOpByIdSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message RemoveOpByIdSuccess {
+  bytes hash = 1;
+}
+
 message UpdateEntitiesRequest {
   // The serilaized entry point address
   bytes entry_point = 1;
@@ -428,6 +446,7 @@ message MempoolError {
     SenderAddressUsedAsAlternateEntity sender_address_used_as_alternate_entity = 13;
     AssociatedStorageIsAlternateSender associated_storage_is_alternate_sender = 14;
     PaymasterBalanceTooLow paymaster_balance_too_low = 15;
+    OperationDropTooSoon operation_drop_too_soon = 16;
   }
 }
 
@@ -473,6 +492,12 @@ message UnsupportedAggregatorError {
 }
 
 message InvalidSignatureError {}
+
+message OperationDropTooSoon {
+  uint64 added_at = 1;
+  uint64 attempted_at = 2;
+  uint64 must_wait = 3;
+}
 
 // PRECHECK VIOLATIONS
 message PrecheckViolationError {

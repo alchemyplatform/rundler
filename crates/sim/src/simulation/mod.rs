@@ -26,5 +26,3 @@ pub use mempool::MempoolConfig;
 
 mod tracer;
 pub use tracer::{SimulateValidationTracer, SimulateValidationTracerImpl};
-
-mod validation_results;

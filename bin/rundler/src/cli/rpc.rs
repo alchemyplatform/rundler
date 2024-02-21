@@ -17,7 +17,7 @@ use anyhow::Context;
 use clap::Args;
 use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
-use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs};
+use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
 use rundler_types::chain::ChainSpec;
@@ -86,6 +86,7 @@ impl RpcArgs {
         common: &CommonArgs,
         precheck_settings: PrecheckSettings,
         eth_api_settings: EthApiSettings,
+        rundler_api_settings: RundlerApiSettings,
         estimation_settings: EstimationSettings,
     ) -> anyhow::Result<RpcTaskArgs> {
         let apis = self
@@ -105,6 +106,7 @@ impl RpcArgs {
             api_namespaces: apis,
             precheck_settings,
             eth_api_settings,
+            rundler_api_settings,
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
@@ -153,6 +155,7 @@ pub async fn run(
         &common_args,
         (&common_args).try_into()?,
         (&common_args).into(),
+        (&common_args).try_into()?,
         (&common_args).try_into()?,
     )?;
 

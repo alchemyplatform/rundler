@@ -27,7 +27,7 @@ use builder::BuilderCliArgs;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
-use rundler_rpc::EthApiSettings;
+use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
@@ -298,7 +298,7 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
 impl TryFrom<&CommonArgs> for PrecheckSettings {
     type Error = anyhow::Error;
 
-    fn try_from(value: &CommonArgs) -> anyhow::Result<Self> {
+    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
         Ok(Self {
             max_verification_gas: value.max_verification_gas.into(),
             max_total_execution_gas: value.max_bundle_gas.into(),
@@ -327,6 +327,21 @@ impl From<&CommonArgs> for SimulationSettings {
 impl From<&CommonArgs> for EthApiSettings {
     fn from(value: &CommonArgs) -> Self {
         Self::new(value.user_operation_event_block_distance)
+    }
+}
+
+impl TryFrom<&CommonArgs> for RundlerApiSettings {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+        Ok(Self {
+            priority_fee_mode: PriorityFeeMode::try_from(
+                value.priority_fee_mode_kind.as_str(),
+                value.priority_fee_mode_value,
+            )?,
+            bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
+            max_verification_gas: value.max_verification_gas,
+        })
     }
 }
 

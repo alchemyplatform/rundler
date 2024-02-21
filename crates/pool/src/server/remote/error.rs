@@ -25,7 +25,7 @@ use super::protos::{
     FactoryCalledCreate2Twice, FactoryIsNotContract, InitCodeTooShort, InvalidSignature,
     InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
     MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
-    NotStaked, OperationAlreadyKnownError, OutOfGas, PaymasterBalanceTooLow,
+    NotStaked, OperationAlreadyKnownError, OperationDropTooSoon, OutOfGas, PaymasterBalanceTooLow,
     PaymasterDepositTooLow, PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
     SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
@@ -130,6 +130,9 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
                     (&e.entity.context("should have entity in error")?).try_into()?,
                 )
             }
+            Some(mempool_error::Error::OperationDropTooSoon(e)) => {
+                MempoolError::OperationDropTooSoon(e.added_at, e.attempted_at, e.must_wait)
+            }
             None => bail!("unknown proto mempool error"),
         })
     }
@@ -223,6 +226,17 @@ impl From<MempoolError> for ProtoMempoolError {
                     },
                 )),
             },
+            MempoolError::OperationDropTooSoon(added_at, attempted_at, must_wait) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::OperationDropTooSoon(
+                        OperationDropTooSoon {
+                            added_at,
+                            attempted_at,
+                            must_wait,
+                        },
+                    )),
+                }
+            }
         }
     }
 }

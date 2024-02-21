@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use rundler_task::grpc::{metrics::GrpcMetricsLayer, protos::from_bytes};
-use rundler_types::EntityUpdate;
+use rundler_types::{EntityUpdate, UserOperationId};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -35,21 +35,21 @@ use super::protos::{
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
     get_ops_response, get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
-    remove_ops_response, update_entities_response, AddOpRequest, AddOpResponse, AddOpSuccess,
-    AdminSetTrackingRequest, AdminSetTrackingResponse, AdminSetTrackingSuccess,
-    DebugClearStateRequest, DebugClearStateResponse, DebugClearStateSuccess,
-    DebugDumpMempoolRequest, DebugDumpMempoolResponse, DebugDumpMempoolSuccess,
-    DebugDumpPaymasterBalancesRequest, DebugDumpPaymasterBalancesResponse,
+    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
+    AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
+    AdminSetTrackingSuccess, DebugClearStateRequest, DebugClearStateResponse,
+    DebugClearStateSuccess, DebugDumpMempoolRequest, DebugDumpMempoolResponse,
+    DebugDumpMempoolSuccess, DebugDumpPaymasterBalancesRequest, DebugDumpPaymasterBalancesResponse,
     DebugDumpPaymasterBalancesSuccess, DebugDumpReputationRequest, DebugDumpReputationResponse,
     DebugDumpReputationSuccess, DebugSetReputationRequest, DebugSetReputationResponse,
     DebugSetReputationSuccess, GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess,
     GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetReputationStatusRequest,
     GetReputationStatusResponse, GetReputationStatusSuccess, GetStakeStatusRequest,
     GetStakeStatusResponse, GetStakeStatusSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpsRequest, RemoveOpsResponse,
-    RemoveOpsSuccess, ReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
-    UpdateEntitiesRequest, UpdateEntitiesResponse, UpdateEntitiesSuccess,
-    OP_POOL_FILE_DESCRIPTOR_SET,
+    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpByIdRequest, RemoveOpByIdResponse,
+    RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::{
     mempool::Reputation,
@@ -236,6 +236,41 @@ impl OpPool for OpPoolImpl {
             },
             Err(error) => RemoveOpsResponse {
                 result: Some(remove_ops_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn remove_op_by_id(
+        &self,
+        request: Request<RemoveOpByIdRequest>,
+    ) -> Result<Response<RemoveOpByIdResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+
+        let resp = match self
+            .local_pool
+            .remove_op_by_id(
+                ep,
+                UserOperationId {
+                    sender: from_bytes(&req.sender)
+                        .map_err(|e| Status::invalid_argument(format!("Invalid sender: {e}")))?,
+                    nonce: from_bytes(&req.nonce)
+                        .map_err(|e| Status::invalid_argument(format!("Invalid nonce: {e}")))?,
+                },
+            )
+            .await
+        {
+            Ok(hash) => RemoveOpByIdResponse {
+                result: Some(remove_op_by_id_response::Result::Success(
+                    RemoveOpByIdSuccess {
+                        hash: hash.map_or(vec![], |h| h.as_bytes().to_vec()),
+                    },
+                )),
+            },
+            Err(error) => RemoveOpByIdResponse {
+                result: Some(remove_op_by_id_response::Result::Failure(error.into())),
             },
         };
 

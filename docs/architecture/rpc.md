@@ -108,12 +108,78 @@ Rundler specific methods that are not specified by the ERC-4337 spec. This names
 | Method | Supported |
 | ------ | :-----------: |
 | [`rundler_maxPriorityFeePerGas`](#rundler_maxpriorityfeepergas) | ✅ |
+| [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation) | ✅ | 
 
 #### `rundler_maxPriorityFeePerGas`
 
 This method returns the minimum `maxPriorityFeePerGas` that the bundler will accept at the current block height. This is based on the fees of the network as well as the priority fee mode configuration of the bundle builder.
 
 Users of this method should typically increase their priority fee values by a buffer value in order to handle price fluctuations. 
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_maxPriorityFeePerGas",
+  "params": []
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": ["0x..."] // uint256
+}
+```
+
+#### `rundler_dropLocalUserOperation`
+
+Drops a user operation from the local mempool for the given sender/nonce. The user must send a signed UO that passes validation and matches the requirements below.
+
+**NOTE:** there is no guarantee that this method effectively cancels a user operation. If the user operation has been bundled prior to the drop attempt it may still be mined. If the user operation has been sent to the P2P network it may be mined by another bundler after being dropped locally.
+
+**Requirements:**
+
+- `sender` and `nonce` match the UO that is being dropped.
+- `preVerificationGas`, `callGasLimit`, `maxFeePerGas` must all be 0.
+  - This is to ensure this UO is not viable onchain.
+- `callData` must be `0x`.
+  - This is to ensure this UO is not viable onchain.
+- If an `initCode` was used on the UO to be dropped, the request must also supply that same `initCode`, else `0x`,
+  - This is required for signature verification.
+- `verificationGasLimit` must be high enough to run the account verification step.
+- `signature` must be valid on a UO with the above requirements.
+- User operation must be in the pool for at least N blocks before it is dropped. N is configurable via a CLI setting.
+  - This is to ensure that the bundler has had sufficient time to attempt to bundle the UO and get compensated for its initial simulation. This prevents DOS attacks.
+
+**Notes:**
+
+- `paymasterAndData` is not required to be `0x`, but there is little use for it here, its recommended to set to `0x`.
+- `verificationGasLimit` doesn't require estimation, just set to a high number that is lower than the bundler's max verification gas, i.e. 1M.
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_dropLocalUserOperation",
+  "params": [
+    {
+      ...   // UO with the requirements above
+    },
+    "0x..." // entry point address
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": ["0x..."] // hash of UO if dropped, or empty if a UO is not found for the sender/ID
+}
+```
+
 
 ### `admin_` Namespace
 

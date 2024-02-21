@@ -39,7 +39,7 @@ use crate::{
     eth::{EthApi, EthApiServer, EthApiSettings},
     health::{HealthChecker, SystemApiServer},
     metrics::RpcMetricsLogger,
-    rundler::{RundlerApi, RundlerApiServer},
+    rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
 
@@ -60,6 +60,8 @@ pub struct Args {
     pub precheck_settings: PrecheckSettings,
     /// eth_ API settings.
     pub eth_api_settings: EthApiSettings,
+    /// rundler_ API settings.
+    pub rundler_api_settings: RundlerApiSettings,
     /// Estimation settings.
     pub estimation_settings: EstimationSettings,
     /// RPC timeout.
@@ -175,7 +177,9 @@ where
                     RundlerApi::new(
                         &self.args.chain_spec,
                         provider.clone(),
-                        self.args.precheck_settings,
+                        entry_point.clone(),
+                        self.pool.clone(),
+                        self.args.rundler_api_settings,
                     )
                     .into_rpc(),
                 )?,

@@ -175,6 +175,10 @@ impl PoolInner {
         self.by_hash.get(&hash).map(|o| o.po.clone())
     }
 
+    pub(crate) fn get_operation_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>> {
+        self.by_id.get(id).map(|o| o.po.clone())
+    }
+
     pub(crate) fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
         let ret = self.remove_operation_internal(hash, None);
         self.update_metrics();
@@ -542,6 +546,36 @@ mod tests {
         check_map_entry(pool.by_hash.get(&hash), Some(&op));
         check_map_entry(pool.by_id.get(&op.uo.id()), Some(&op));
         check_map_entry(pool.best.iter().next(), Some(&op));
+    }
+
+    #[test]
+    fn test_get_by_hash() {
+        let mut pool = PoolInner::new(conf());
+        let op = create_op(Address::random(), 0, 1);
+        let hash = pool.add_operation(op.clone()).unwrap();
+
+        let get_op = pool.get_operation_by_hash(hash).unwrap();
+        assert_eq!(op, *get_op);
+
+        assert_eq!(pool.get_operation_by_hash(H256::random()), None);
+    }
+
+    #[test]
+    fn test_get_by_id() {
+        let mut pool = PoolInner::new(conf());
+        let op = create_op(Address::random(), 0, 1);
+        pool.add_operation(op.clone()).unwrap();
+        let id = op.uo.id();
+
+        let get_op = pool.get_operation_by_id(&id).unwrap();
+        assert_eq!(op, *get_op);
+
+        let bad_id = UserOperationId {
+            sender: Address::random(),
+            nonce: 0.into(),
+        };
+
+        assert_eq!(pool.get_operation_by_id(&bad_id), None);
     }
 
     #[test]

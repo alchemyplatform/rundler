@@ -29,7 +29,7 @@ use rundler_types::{
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
         shared_types::UserOpsPerAggregator,
     },
-    GasFees, UserOperation,
+    GasFees, UserOperation, ValidationOutput,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
@@ -46,19 +46,36 @@ where
         self.deref().address()
     }
 
-    async fn simulate_validation(
+    async fn get_simulate_validation_call(
         &self,
         user_op: UserOperation,
         max_validation_gas: u64,
     ) -> anyhow::Result<TypedTransaction> {
         let pvg = user_op.pre_verification_gas;
-
         let tx = self
             .simulate_validation(user_op)
             .gas(U256::from(max_validation_gas) + pvg)
             .tx;
-
         Ok(tx)
+    }
+
+    async fn call_simulate_validation(
+        &self,
+        user_op: UserOperation,
+        max_validation_gas: u64,
+    ) -> anyhow::Result<ValidationOutput> {
+        let pvg = user_op.pre_verification_gas;
+        match self
+            .simulate_validation(user_op)
+            .gas(U256::from(max_validation_gas) + pvg)
+            .call()
+            .await
+        {
+            Ok(()) => anyhow::bail!("simulateValidation should always revert"),
+            Err(ContractError::Revert(revert_data)) => ValidationOutput::decode(revert_data)
+                .context("entry point should return validation output"),
+            Err(error) => Err(error).context("call simulation RPC failed")?,
+        }
     }
 
     async fn call_handle_ops(
