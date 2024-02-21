@@ -111,7 +111,6 @@ define_hardcoded_chain_specs!(
     optimism_goerli,
     optimism_sepolia,
     base,
-    base_goerli,
     base_sepolia,
     arbitrum,
     arbitrum_goerli,
