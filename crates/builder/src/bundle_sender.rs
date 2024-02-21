@@ -137,12 +137,12 @@ where
         });
 
         let mut bundling_mode = BundlingMode::Auto;
+        let mut timer = tokio::time::interval(Duration::from_millis(
+            self.chain_spec.bundle_max_send_interval_millis,
+        ));
         loop {
             let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
             let mut last_block = None;
-            let mut timer = tokio::time::interval(Duration::from_millis(
-                self.chain_spec.bundle_max_send_interval_millis,
-            ));
 
             // 3 triggers for loop logic:
             // 1 - new block
@@ -241,6 +241,8 @@ where
                     error!("Failed to send bundle result to manual caller");
                 }
             }
+
+            timer.reset();
         }
     }
 }
