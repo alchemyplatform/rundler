@@ -29,6 +29,8 @@ jobs:
 
       - run: pip install jq yq
 
+      - run: which xq
+
       - run: sudo apt-get install -y libxml2-utils
 
       - name: Build local docker image
