@@ -34,16 +34,17 @@ use tonic_health::{
 
 use super::protos::{
     self, add_op_response, admin_set_tracking_response, debug_clear_state_response,
-    debug_dump_mempool_response, debug_dump_reputation_response, debug_set_reputation_response,
-    get_op_by_hash_response, get_ops_response, get_reputation_status_response,
-    get_stake_status_response, op_pool_client::OpPoolClient, remove_ops_response,
-    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
-    DebugDumpMempoolRequest, DebugDumpReputationRequest, DebugSetReputationRequest, GetOpsRequest,
-    GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    debug_dump_mempool_response, debug_dump_paymaster_balances_response,
+    debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
+    get_ops_response, get_reputation_status_response, get_stake_status_response,
+    op_pool_client::OpPoolClient, remove_ops_response, update_entities_response, AddOpRequest,
+    AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
+    GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 use crate::{
-    mempool::{PoolOperation, Reputation, StakeStatus},
+    mempool::{PaymasterMetadata, PoolOperation, Reputation, StakeStatus},
     server::{error::PoolServerError, NewHead, PoolResult, PoolServer},
     ReputationStatus,
 };
@@ -391,6 +392,34 @@ impl PoolServer for RemotePoolClient {
                 .map(|res| res.map_err(PoolServerError::from))
                 .collect(),
             Some(debug_dump_reputation_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolServerError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn debug_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PaymasterMetadata>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .debug_dump_paymaster_balances(DebugDumpPaymasterBalancesRequest {
+                entry_point: entry_point.as_bytes().to_vec(),
+            })
+            .await?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(debug_dump_paymaster_balances_response::Result::Success(s)) => s
+                .balances
+                .into_iter()
+                .map(PaymasterMetadata::try_from)
+                .map(|res| res.map_err(PoolServerError::from))
+                .collect(),
+            Some(debug_dump_paymaster_balances_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolServerError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

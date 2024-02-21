@@ -29,7 +29,7 @@ pub use remote::RemotePoolClient;
 use rundler_types::{EntityUpdate, UserOperation};
 
 use crate::{
-    mempool::{PoolOperation, Reputation, StakeStatus},
+    mempool::{PaymasterMetadata, PoolOperation, Reputation, StakeStatus},
     ReputationStatus,
 };
 
@@ -90,6 +90,20 @@ pub trait PoolServer: Send + Sync + 'static {
     /// has processed all operations up to that head.
     async fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
 
+    /// Get reputation status given entrypoint and address
+    async fn get_reputation_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<ReputationStatus>;
+
+    /// Get stake status given entrypoint and address
+    async fn get_stake_status(
+        &self,
+        entry_point: Address,
+        address: Address,
+    ) -> PoolResult<StakeStatus>;
+
     /// Clear the pool state, used for debug methods
     async fn debug_clear_state(
         &self,
@@ -108,22 +122,14 @@ pub trait PoolServer: Send + Sync + 'static {
         reputations: Vec<Reputation>,
     ) -> PoolResult<()>;
 
-    /// Get reputation status given entrypoint and address
-    async fn get_reputation_status(
-        &self,
-        entry_point: Address,
-        address: Address,
-    ) -> PoolResult<ReputationStatus>;
-
-    /// Get stake status given entrypoint and address
-    async fn get_stake_status(
-        &self,
-        entry_point: Address,
-        address: Address,
-    ) -> PoolResult<StakeStatus>;
-
     /// Dump reputations for entities, used for debug methods
     async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;
+
+    /// Dump paymaster balances, used for debug methods
+    async fn debug_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PaymasterMetadata>>;
 
     /// Controls whether or not the certain tracking data structures are used to block user operations
     async fn admin_set_tracking(

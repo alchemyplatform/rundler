@@ -26,13 +26,13 @@ use crate::{
 pub trait AdminApi {
     /// Clears the state of the mempool field if name is true
     #[method(name = "clearState")]
-    async fn admin_clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String>;
+    async fn clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String>;
 
-    /// Clears paymaster tracker state.
+    /// Sets the tracking state for the paymaster and reputation pool modules
     #[method(name = "setTracking")]
-    async fn admin_set_tracking(
+    async fn set_tracking(
         &self,
-        entrypoint: Address,
+        entry_point: Address,
         tracking_info: RpcAdminSetTracking,
     ) -> RpcResult<String>;
 }
@@ -52,13 +52,13 @@ impl<P> AdminApiServer for AdminApi<P>
 where
     P: PoolServer,
 {
-    async fn admin_clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String> {
+    async fn clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String> {
         let _ = self
             .pool
             .debug_clear_state(
-                clear_params.clear_mempool,
-                clear_params.clear_paymaster,
-                clear_params.clear_reputation,
+                clear_params.clear_mempool.unwrap_or(false),
+                clear_params.clear_paymaster.unwrap_or(false),
+                clear_params.clear_reputation.unwrap_or(false),
             )
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
@@ -66,15 +66,15 @@ where
         Ok("ok".to_string())
     }
 
-    async fn admin_set_tracking(
+    async fn set_tracking(
         &self,
-        entrypoint: Address,
+        entry_point: Address,
         tracking_params: RpcAdminSetTracking,
     ) -> RpcResult<String> {
         let _ = self
             .pool
             .admin_set_tracking(
-                entrypoint,
+                entry_point,
                 tracking_params.paymaster_tracking,
                 tracking_params.reputation_tracking,
             )

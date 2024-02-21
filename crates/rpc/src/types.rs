@@ -241,9 +241,21 @@ pub struct RpcAdminSetTracking {
 #[serde(rename_all = "camelCase")]
 pub struct RpcAdminClearState {
     /// Field to set whether to clear entire mempool
-    pub clear_mempool: bool,
+    pub clear_mempool: Option<bool>,
     /// Field to set whether to clear paymaster state
-    pub clear_paymaster: bool,
+    pub clear_paymaster: Option<bool>,
     /// Field to set whether to clear reputation state
-    pub clear_reputation: bool,
+    pub clear_reputation: Option<bool>,
+}
+
+/// Paymaster balance
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcDebugPaymasterBalance {
+    /// Paymaster address
+    pub address: Address,
+    /// Paymaster balance including pending UOs in pool
+    pub pending_balance: U256,
+    /// Paymaster confirmed balance onchain
+    pub confirmed_balance: U256,
 }

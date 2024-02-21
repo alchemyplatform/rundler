@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, pin::Pin, sync::Arc};
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -29,7 +29,9 @@ use tracing::error;
 use super::{PoolResult, PoolServerError};
 use crate::{
     chain::ChainUpdate,
-    mempool::{Mempool, MempoolError, OperationOrigin, PoolOperation, StakeStatus},
+    mempool::{
+        Mempool, MempoolError, OperationOrigin, PaymasterMetadata, PoolOperation, StakeStatus,
+    },
     server::{NewHead, PoolServer, Reputation},
     ReputationStatus,
 };
@@ -254,6 +256,18 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
+    async fn debug_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PaymasterMetadata>> {
+        let req = ServerRequestKind::DebugDumpPaymasterBalances { entry_point };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::DebugDumpPaymasterBalances { balances } => Ok(balances),
+            _ => Err(PoolServerError::UnexpectedResponse),
+        }
+    }
+
     async fn get_stake_status(
         &self,
         entry_point: Address,
@@ -438,6 +452,14 @@ where
         Ok(mempool.dump_reputation())
     }
 
+    fn debug_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PaymasterMetadata>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool.dump_paymaster_balances())
+    }
+
     fn get_reputation_status(
         &self,
         entry_point: Address,
@@ -445,6 +467,28 @@ where
     ) -> PoolResult<ReputationStatus> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool.get_reputation_status(address))
+    }
+
+    fn get_pool_and_spawn<F, Fut>(
+        &self,
+        entry_point: Address,
+        response: oneshot::Sender<Result<ServerResponse, PoolServerError>>,
+        f: F,
+    ) where
+        F: FnOnce(Arc<M>, oneshot::Sender<Result<ServerResponse, PoolServerError>>) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        match self.get_pool(entry_point) {
+            Ok(mempool) => {
+                let mempool = Arc::clone(mempool);
+                tokio::spawn(f(mempool, response));
+            }
+            Err(e) => {
+                if let Err(e) = response.send(Err(e)) {
+                    tracing::error!("Failed to send response: {:?}", e);
+                }
+            }
+        }
     }
 
     async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
@@ -473,28 +517,42 @@ where
                 }
                 Some(req) = self.req_receiver.recv() => {
                     let resp = match req.request {
+                        // Async methods
+                        // Responses are sent in the spawned task
+                        ServerRequestKind::AddOp { entry_point, op, origin } => {
+                            let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolServerError>>| async move {
+                                let resp = match mempool.add_operation(origin, op).await {
+                                    Ok(hash) => Ok(ServerResponse::AddOp { hash }),
+                                    Err(e) => Err(e.into()),
+                                };
+                                if let Err(e) = response.send(resp) {
+                                    tracing::error!("Failed to send response: {:?}", e);
+                                }
+                            };
+
+                            self.get_pool_and_spawn(entry_point, req.response, fut);
+                            continue;
+                        },
+                        ServerRequestKind::GetStakeStatus { entry_point, address }=> {
+                            let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolServerError>>| async move {
+                                let resp = match mempool.get_stake_status(address).await {
+                                    Ok(status) => Ok(ServerResponse::GetStakeStatus { status }),
+                                    Err(e) => Err(e.into()),
+                                };
+                                if let Err(e) = response.send(resp) {
+                                    tracing::error!("Failed to send response: {:?}", e);
+                                }
+                            };
+                            self.get_pool_and_spawn(entry_point, req.response, fut);
+                            continue;
+                        },
+
+                        // Sync methods
+                        // Responses are sent in the main loop below
                         ServerRequestKind::GetSupportedEntryPoints => {
                             Ok(ServerResponse::GetSupportedEntryPoints {
                                 entry_points: self.mempools.keys().copied().collect()
                             })
-                        },
-                        ServerRequestKind::AddOp { entry_point, op, origin } => {
-                            match self.get_pool(entry_point) {
-                                Ok(mempool) => {
-                                    let mempool = Arc::clone(mempool);
-                                    tokio::spawn(async move {
-                                        let resp = match mempool.add_operation(origin, op).await {
-                                            Ok(hash) => Ok(ServerResponse::AddOp { hash }),
-                                            Err(e) => Err(e.into()),
-                                        };
-                                        if let Err(e) = req.response.send(resp) {
-                                            tracing::error!("Failed to send response: {:?}", e);
-                                        }
-                                    });
-                                    continue;
-                                },
-                                Err(e) => Err(e),
-                            }
                         },
                         ServerRequestKind::GetOps { entry_point, max_ops, shard_index } => {
                             match self.get_ops(entry_point, max_ops, shard_index) {
@@ -550,27 +608,15 @@ where
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::GetReputationStatus{ entry_point, address } => {
-                            match self.get_reputation_status(entry_point, address) {
-                                Ok(status) => Ok(ServerResponse::GetReputationStatus {  status }),
+                        ServerRequestKind::DebugDumpPaymasterBalances { entry_point } => {
+                            match self.debug_dump_paymaster_balances(entry_point) {
+                                Ok(balances) => Ok(ServerResponse::DebugDumpPaymasterBalances { balances }),
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::GetStakeStatus { entry_point, address }=> {
-                            match self.get_pool(entry_point) {
-                                Ok(mempool) => {
-                                    let mempool = Arc::clone(mempool);
-                                    tokio::spawn(async move {
-                                        let resp = match mempool.get_stake_status(address).await {
-                                            Ok(status) => Ok(ServerResponse::GetStakeStatus { status }),
-                                            Err(e) => Err(e.into()),
-                                        };
-                                        if let Err(e) = req.response.send(resp) {
-                                            tracing::error!("Failed to send response: {:?}", e);
-                                        }
-                                    });
-                                    continue;
-                                },
+                        ServerRequestKind::GetReputationStatus{ entry_point, address } => {
+                            match self.get_reputation_status(entry_point, address) {
+                                Ok(status) => Ok(ServerResponse::GetReputationStatus { status }),
                                 Err(e) => Err(e),
                             }
                         },
@@ -639,6 +685,9 @@ enum ServerRequestKind {
     DebugDumpReputation {
         entry_point: Address,
     },
+    DebugDumpPaymasterBalances {
+        entry_point: Address,
+    },
     GetReputationStatus {
         entry_point: Address,
         address: Address,
@@ -674,6 +723,9 @@ enum ServerResponse {
     DebugSetReputations,
     DebugDumpReputation {
         reputations: Vec<Reputation>,
+    },
+    DebugDumpPaymasterBalances {
+        balances: Vec<PaymasterMetadata>,
     },
     GetReputationStatus {
         status: ReputationStatus,

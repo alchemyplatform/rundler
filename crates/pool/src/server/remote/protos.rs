@@ -22,8 +22,9 @@ use rundler_types::{
 
 use crate::{
     mempool::{
-        PoolOperation, Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
-        StakeInfo as RundlerStakeInfo, StakeStatus as RundlerStakeStatus,
+        PaymasterMetadata as PoolPaymasterMetadata, PoolOperation, Reputation as PoolReputation,
+        ReputationStatus as PoolReputationStatus, StakeInfo as RundlerStakeInfo,
+        StakeStatus as RundlerStakeStatus,
     },
     server::NewHead as PoolNewHead,
 };
@@ -325,6 +326,28 @@ impl From<PoolNewHead> for NewHead {
         Self {
             block_hash: head.block_hash.as_bytes().to_vec(),
             block_number: head.block_number,
+        }
+    }
+}
+
+impl TryFrom<PaymasterBalance> for PoolPaymasterMetadata {
+    type Error = ConversionError;
+
+    fn try_from(paymaster_balance: PaymasterBalance) -> Result<Self, Self::Error> {
+        Ok(Self {
+            address: from_bytes(&paymaster_balance.address)?,
+            confirmed_balance: from_bytes(&paymaster_balance.confirmed_balance)?,
+            pending_balance: from_bytes(&paymaster_balance.pending_balance)?,
+        })
+    }
+}
+
+impl From<PoolPaymasterMetadata> for PaymasterBalance {
+    fn from(paymaster_metadata: PoolPaymasterMetadata) -> Self {
+        Self {
+            address: paymaster_metadata.address.as_bytes().to_vec(),
+            confirmed_balance: to_le_bytes(paymaster_metadata.confirmed_balance),
+            pending_balance: to_le_bytes(paymaster_metadata.pending_balance),
         }
     }
 }

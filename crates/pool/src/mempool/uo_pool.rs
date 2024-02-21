@@ -600,6 +600,10 @@ where
         self.reputation.dump_reputation()
     }
 
+    fn dump_paymaster_balances(&self) -> Vec<PaymasterMetadata> {
+        self.state.read().pool.dump_paymaster_metadata()
+    }
+
     fn get_reputation_status(&self, address: Address) -> ReputationStatus {
         self.reputation.status(address)
     }
