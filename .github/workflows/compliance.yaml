@@ -35,7 +35,7 @@ jobs:
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
 
       - name: Run test executor
-        run: cd bundler-test-executors && runall.sh local ./bundlers/rundler/rundler.yml
+        run: cd bundler-test-executors && ./runall.sh local ./bundlers/rundler/rundler.yml
 
       - name: Parse spec results
         run: ./rundler/.github/compliance-parser.sh ./bundler-test-executors/build/out/rundler.xml
