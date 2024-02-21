@@ -22,13 +22,13 @@ use jsonrpsee::{
 };
 use rundler_builder::BuilderServer;
 use rundler_pool::PoolServer;
-use rundler_provider::EntryPoint;
+use rundler_provider::{EntryPoint, EthersEntryPoint};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
 };
-use rundler_types::{chain::ChainSpec, contracts::i_entry_point::IEntryPoint};
+use rundler_types::chain::ChainSpec;
 use rundler_utils::eth;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -89,11 +89,10 @@ where
         tracing::info!("Starting rpc server on {}", addr);
 
         let provider = eth::new_provider(&self.args.rpc_url, None)?;
-        let entry_point =
-            IEntryPoint::new(self.args.chain_spec.entry_point_address, provider.clone());
+        let ep = EthersEntryPoint::new(self.args.chain_spec.entry_point_address, provider.clone());
 
         let mut module = RpcModule::new(());
-        self.attach_namespaces(provider, entry_point, &mut module)?;
+        self.attach_namespaces(provider, ep, &mut module)?;
 
         let servers: Vec<Box<dyn HealthCheck>> =
             vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];

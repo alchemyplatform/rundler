@@ -23,11 +23,12 @@ use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
 use rundler_pool::PoolServer;
+use rundler_provider::{EntryPoint, EthersEntryPoint};
 use rundler_sim::{
     MempoolConfig, PriorityFeeMode, SimulateValidationTracerImpl, SimulationSettings, SimulatorImpl,
 };
 use rundler_task::Task;
-use rundler_types::{chain::ChainSpec, contracts::i_entry_point::IEntryPoint};
+use rundler_types::chain::ChainSpec;
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use rusoto_core::Region;
 use tokio::{
@@ -260,15 +261,15 @@ where
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
 
-        let entry_point = IEntryPoint::new(
+        let ep = EthersEntryPoint::new(
             self.args.chain_spec.entry_point_address,
             Arc::clone(&provider),
         );
         let simulate_validation_tracer =
-            SimulateValidationTracerImpl::new(Arc::clone(&provider), entry_point.clone());
+            SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
-            entry_point.address(),
+            ep.address(),
             simulate_validation_tracer,
             self.args.sim_settings,
             self.args.mempool_configs.clone(),
@@ -307,7 +308,7 @@ where
             index,
             self.pool.clone(),
             simulator,
-            entry_point.clone(),
+            ep.clone(),
             Arc::clone(&provider),
             proposer_settings,
             self.event_sender.clone(),
@@ -318,7 +319,7 @@ where
             self.args.chain_spec.clone(),
             beneficiary,
             proposer,
-            entry_point,
+            ep,
             transaction_tracker,
             self.pool.clone(),
             builder_settings,

@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use anyhow::Context;
 use ethers::{abi::Address, types::U256};
 use parking_lot::RwLock;
-use rundler_provider::{EntryPoint, PaymasterHelper};
+use rundler_provider::EntryPoint;
 use rundler_types::{UserOperation, UserOperationId};
 
 use super::{error::MempoolResult, PaymasterMetadata, StakeInfo};
@@ -29,8 +29,7 @@ use crate::{
 
 /// Keeps track of current and pending paymaster balances
 #[derive(Debug)]
-pub(crate) struct PaymasterTracker<PH, E> {
-    paymaster_helper: PH,
+pub(crate) struct PaymasterTracker<E> {
     entry_point: E,
     state: RwLock<PaymasterTrackerInner>,
     config: PaymasterConfig,
@@ -57,14 +56,12 @@ impl PaymasterConfig {
     }
 }
 
-impl<PH, E> PaymasterTracker<PH, E>
+impl<E> PaymasterTracker<E>
 where
-    PH: PaymasterHelper,
     E: EntryPoint,
 {
-    pub(crate) fn new(paymaster_helper: PH, entry_point: E, config: PaymasterConfig) -> Self {
+    pub(crate) fn new(entry_point: E, config: PaymasterConfig) -> Self {
         Self {
-            paymaster_helper,
             entry_point,
             state: RwLock::new(PaymasterTrackerInner::new(config.tracker_enabled)),
             config,
@@ -72,7 +69,7 @@ where
     }
 
     pub(crate) async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
-        let deposit_info = self.paymaster_helper.get_deposit_info(address).await?;
+        let deposit_info = self.entry_point.get_deposit_info(address).await?;
 
         let is_staked = deposit_info.stake.ge(&self.config.min_stake_value)
             && deposit_info
@@ -171,7 +168,7 @@ where
         let paymaster_addresses = self.paymaster_addresses();
 
         let balances = self
-            .paymaster_helper
+            .entry_point
             .get_balances(paymaster_addresses.clone())
             .await?;
 
@@ -526,7 +523,7 @@ impl PaymasterBalance {
 #[cfg(test)]
 mod tests {
     use ethers::types::{Address, H256, U256};
-    use rundler_provider::{MockEntryPoint, MockPaymasterHelper};
+    use rundler_provider::MockEntryPoint;
     use rundler_sim::EntityInfos;
     use rundler_types::{DepositInfo, UserOperation, UserOperationId, ValidTimeRange};
 
@@ -948,11 +945,10 @@ mod tests {
         assert!(status.is_staked);
     }
 
-    fn new_paymaster_tracker() -> PaymasterTracker<MockPaymasterHelper, MockEntryPoint> {
-        let mut helper = MockPaymasterHelper::new();
+    fn new_paymaster_tracker() -> PaymasterTracker<MockEntryPoint> {
         let mut entrypoint = MockEntryPoint::new();
 
-        helper.expect_get_deposit_info().returning(|_| {
+        entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
                 deposit: 1000,
                 staked: true,
@@ -962,7 +958,7 @@ mod tests {
             })
         });
 
-        helper
+        entrypoint
             .expect_get_balances()
             .returning(|_| Ok(vec![50.into()]));
 
@@ -972,10 +968,10 @@ mod tests {
 
         let config = PaymasterConfig::new(1001, 99, true);
 
-        PaymasterTracker::new(helper, entrypoint, config)
+        PaymasterTracker::new(entrypoint, config)
     }
 
-    impl PaymasterTracker<MockPaymasterHelper, MockEntryPoint> {
+    impl PaymasterTracker<MockEntryPoint> {
         fn add_new_user_op(
             &self,
             id: &UserOperationId,

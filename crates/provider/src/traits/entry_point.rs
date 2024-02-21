@@ -18,7 +18,7 @@ use ethers::types::{
 use mockall::automock;
 use rundler_types::{
     contracts::{i_entry_point::ExecutionResult, shared_types::UserOpsPerAggregator},
-    GasFees, UserOperation, ValidationOutput,
+    DepositInfo, GasFees, UserOperation, ValidationOutput,
 };
 
 /// Result of an entry point handle ops call
@@ -96,4 +96,10 @@ pub trait EntryPoint: Send + Sync + 'static {
         &self,
         revert_data: Bytes,
     ) -> Result<ExecutionResult, String>;
+
+    /// Get the deposit info for an address
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
+
+    /// Get the balances of a list of addresses in order
+    async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
 }

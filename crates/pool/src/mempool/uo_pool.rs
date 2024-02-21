@@ -19,7 +19,7 @@ use ethers::{
 };
 use itertools::Itertools;
 use parking_lot::RwLock;
-use rundler_provider::{EntryPoint, PaymasterHelper};
+use rundler_provider::EntryPoint;
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation, UserOperationId};
 use rundler_utils::emit::WithEntryPoint;
@@ -45,10 +45,10 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<P: Prechecker, S: Simulator, E: EntryPoint, PH: PaymasterHelper> {
+pub(crate) struct UoPool<P: Prechecker, S: Simulator, E: EntryPoint> {
     config: PoolConfig,
     state: RwLock<UoPoolState>,
-    paymaster: PaymasterTracker<PH, E>,
+    paymaster: PaymasterTracker<E>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
@@ -61,19 +61,18 @@ struct UoPoolState {
     block_number: u64,
 }
 
-impl<P, S, E, PH> UoPool<P, S, E, PH>
+impl<P, S, E> UoPool<P, S, E>
 where
     P: Prechecker,
     S: Simulator,
     E: EntryPoint,
-    PH: PaymasterHelper,
 {
     pub(crate) fn new(
         config: PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
-        paymaster: PaymasterTracker<PH, E>,
+        paymaster: PaymasterTracker<E>,
         reputation: Arc<AddressReputation>,
     ) -> Self {
         Self {
@@ -132,12 +131,11 @@ where
 }
 
 #[async_trait]
-impl<P, S, E, PH> Mempool for UoPool<P, S, E, PH>
+impl<P, S, E> Mempool for UoPool<P, S, E>
 where
     P: Prechecker,
     S: Simulator,
     E: EntryPoint,
-    PH: PaymasterHelper,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
         {
@@ -667,7 +665,7 @@ mod tests {
     use std::collections::HashMap;
 
     use ethers::types::{Bytes, H160};
-    use rundler_provider::{MockEntryPoint, MockPaymasterHelper};
+    use rundler_provider::MockEntryPoint;
     use rundler_sim::{
         EntityInfo, EntityInfos, MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings,
         PrecheckViolation, SimulationError, SimulationResult, SimulationSettings,
@@ -1369,7 +1367,7 @@ mod tests {
 
     fn create_pool(
         ops: Vec<OpWithErrors>,
-    ) -> UoPool<impl Prechecker, impl Simulator, impl EntryPoint, impl PaymasterHelper> {
+    ) -> UoPool<impl Prechecker, impl Simulator, impl EntryPoint> {
         let args = PoolConfig {
             entry_point: Address::random(),
             chain_id: 1,
@@ -1392,8 +1390,7 @@ mod tests {
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
         let mut entrypoint = MockEntryPoint::new();
-        let mut paymaster_helper = MockPaymasterHelper::new();
-        paymaster_helper.expect_get_deposit_info().returning(|_| {
+        entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
                 deposit: 1000,
                 staked: true,
@@ -1407,7 +1404,6 @@ mod tests {
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
         let paymaster = PaymasterTracker::new(
-            paymaster_helper,
             entrypoint,
             PaymasterConfig::new(
                 args.sim_settings.min_stake_value,
@@ -1481,7 +1477,7 @@ mod tests {
     async fn create_pool_insert_ops(
         ops: Vec<OpWithErrors>,
     ) -> (
-        UoPool<impl Prechecker, impl Simulator, impl EntryPoint, impl PaymasterHelper>,
+        UoPool<impl Prechecker, impl Simulator, impl EntryPoint>,
         Vec<UserOperation>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
