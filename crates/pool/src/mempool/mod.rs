@@ -153,6 +153,8 @@ pub struct PoolConfig {
     pub throttled_entity_live_blocks: u64,
     /// Boolean field used to toggle the operation of the paymaster tracker
     pub paymaster_tracking_enabled: bool,
+    /// Number of paymaster balances to cache
+    pub paymaster_cache_length: u32,
     /// Boolean field used to toggle the operation of the reputation tracker
     pub reputation_tracking_enabled: bool,
     /// The minimum number of blocks a user operation must be in the mempool before it can be dropped

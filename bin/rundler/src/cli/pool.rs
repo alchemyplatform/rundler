@@ -128,6 +128,14 @@ pub struct PoolArgs {
     pub paymaster_tracking_enabled: bool,
 
     #[arg(
+        long = "pool.paymaster_cache_length",
+        name = "pool.paymaster_cache_length",
+        env = "POOL_PAYMASTER_CACHE_LENGTH",
+        default_value = "10000"
+    )]
+    pub paymaster_cache_length: u32,
+
+    #[arg(
         long = "pool.reputation_tracking_enabled",
         name = "pool.reputation_tracking_enabled",
         env = "POOL_REPUTATION_TRACKING_ENABLED",
@@ -189,6 +197,7 @@ impl PoolArgs {
             throttled_entity_mempool_count: self.throttled_entity_mempool_count,
             throttled_entity_live_blocks: self.throttled_entity_live_blocks,
             paymaster_tracking_enabled: self.paymaster_tracking_enabled,
+            paymaster_cache_length: self.paymaster_cache_length,
             reputation_tracking_enabled: self.reputation_tracking_enabled,
             drop_min_num_blocks: self.drop_min_num_blocks,
         };

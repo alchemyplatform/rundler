@@ -20,6 +20,7 @@
 
 //! Rundler utilities
 
+pub mod cache;
 pub mod emit;
 pub mod eth;
 pub mod handle;

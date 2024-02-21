@@ -139,6 +139,8 @@ List of command line options for configuring the Pool.
   - env: *POOL_CHAIN_HISTORY_SIZE*
 - `--pool.paymaster_tracking_enabled`: Boolean field that sets whether the pool server starts with paymaster tracking enabled (default: `true`)
   - env: *POOL_PAYMASTER_TRACKING_ENABLED*
+- `--pool.paymaster_cache_length`: Length of the paymaster cache (default: `10_000`)
+  - env: *POOL_PAYMASTER_CACHE_LENGTH*
 - `--pool.reputation_tracking_enabled`: Boolean field that sets whether the pool server starts with reputation tracking enabled (default: `true`)
   - env: *POOL_REPUTATION_TRACKING_ENABLED*
 - `--pool.drop_min_num_blocks`: The minimum number of blocks that a UO must stay in the mempool before it can be requested to be dropped by the user (default: `10`)

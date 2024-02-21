@@ -20,6 +20,7 @@ use ethers::{abi::Address, types::U256};
 use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
 use rundler_types::{UserOperation, UserOperationId};
+use rundler_utils::cache::LruMap;
 
 use super::{error::MempoolResult, PaymasterMetadata, StakeInfo};
 use crate::{
@@ -40,6 +41,7 @@ pub(crate) struct PaymasterConfig {
     min_stake_value: u128,
     min_unstake_delay: u32,
     tracker_enabled: bool,
+    cache_length: u32,
 }
 
 impl PaymasterConfig {
@@ -47,11 +49,13 @@ impl PaymasterConfig {
         min_stake_value: u128,
         min_unstake_delay: u32,
         tracker_enabled: bool,
+        cache_length: u32,
     ) -> Self {
         Self {
             min_stake_value,
             min_unstake_delay,
             tracker_enabled,
+            cache_length,
         }
     }
 }
@@ -63,7 +67,10 @@ where
     pub(crate) fn new(entry_point: E, config: PaymasterConfig) -> Self {
         Self {
             entry_point,
-            state: RwLock::new(PaymasterTrackerInner::new(config.tracker_enabled)),
+            state: RwLock::new(PaymasterTrackerInner::new(
+                config.tracker_enabled,
+                config.cache_length,
+            )),
             config,
         }
     }
@@ -212,26 +219,27 @@ where
 }
 
 /// Keeps track of current and pending paymaster balances
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug)]
 struct PaymasterTrackerInner {
     /// map for userop based on id
     user_op_fees: HashMap<UserOperationId, UserOpFees>,
     /// map for paymaster balance status
-    paymaster_balances: HashMap<Address, PaymasterBalance>,
+    paymaster_balances: LruMap<Address, PaymasterBalance>,
     /// boolean for operation of tracker
     tracker_enabled: bool,
 }
 
 impl PaymasterTrackerInner {
-    fn new(tracker_enabled: bool) -> Self {
+    fn new(tracker_enabled: bool, cache_size: u32) -> Self {
         Self {
+            user_op_fees: HashMap::new(),
             tracker_enabled,
-            ..Default::default()
+            paymaster_balances: LruMap::new(cache_size),
         }
     }
 
     fn paymaster_exists(&self, paymaster: Address) -> bool {
-        self.paymaster_balances.contains_key(&paymaster)
+        self.paymaster_balances.peek(&paymaster).is_some()
     }
 
     fn set_tracking(&mut self, tracking_enabled: bool) {
@@ -273,18 +281,17 @@ impl PaymasterTrackerInner {
 
     fn set_confimed_balances(&mut self, addresses: &[Address], balances: &[U256]) {
         for (i, address) in addresses.iter().enumerate() {
-            if let Some(paymaster_balance) = self.paymaster_balances.get_mut(address) {
+            if let Some(paymaster_balance) = self.paymaster_balances.get(address) {
                 paymaster_balance.confirmed = balances[i];
             }
         }
     }
 
-    //TODO track if paymaster has become stale and can be removed from the pool
     fn update_paymaster_balance_from_mined_op(&mut self, mined_op: &MinedOp) {
         let id = mined_op.id();
 
         if let Some(op_fee) = self.user_op_fees.get(&id) {
-            if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&op_fee.paymaster) {
+            if let Some(paymaster_balance) = self.paymaster_balances.get(&op_fee.paymaster) {
                 paymaster_balance.confirmed = paymaster_balance
                     .confirmed
                     .saturating_sub(mined_op.actual_gas_cost);
@@ -299,7 +306,7 @@ impl PaymasterTrackerInner {
 
     fn remove_operation(&mut self, id: &UserOperationId) {
         if let Some(op_fee) = self.user_op_fees.get(id) {
-            if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&op_fee.paymaster) {
+            if let Some(paymaster_balance) = self.paymaster_balances.get(&op_fee.paymaster) {
                 paymaster_balance.pending =
                     paymaster_balance.pending.saturating_sub(op_fee.max_op_cost);
             }
@@ -309,7 +316,7 @@ impl PaymasterTrackerInner {
     }
 
     fn paymaster_addresses(&self) -> Vec<Address> {
-        let keys: Vec<Address> = self.paymaster_balances.keys().cloned().collect();
+        let keys: Vec<Address> = self.paymaster_balances.iter().map(|(k, _)| *k).collect();
 
         keys
     }
@@ -320,7 +327,7 @@ impl PaymasterTrackerInner {
         amount: U256,
         should_add: bool,
     ) {
-        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&paymaster) {
+        if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
             if should_add {
                 paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(amount);
             } else {
@@ -330,7 +337,7 @@ impl PaymasterTrackerInner {
     }
 
     fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
-        if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
+        if let Some(paymaster_balance) = self.paymaster_balances.peek(&paymaster) {
             return Some(PaymasterMetadata {
                 pending_balance: paymaster_balance.pending_balance(),
                 confirmed_balance: paymaster_balance.confirmed,
@@ -353,7 +360,7 @@ impl PaymasterTrackerInner {
     }
 
     fn unmine_actual_cost(&mut self, paymaster: &Address, actual_cost: U256) {
-        if let Some(paymaster_balance) = self.paymaster_balances.get_mut(paymaster) {
+        if let Some(paymaster_balance) = self.paymaster_balances.get(paymaster) {
             paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(actual_cost);
         }
     }
@@ -391,17 +398,10 @@ impl PaymasterTrackerInner {
         &mut self,
         paymaster: &Address,
         previous_max_op_cost: U256,
-    ) -> MempoolResult<()> {
-        let prev_paymaster_balance = self
-            .paymaster_balances
-            .get_mut(paymaster)
-            .context("Previous paymaster must be valid to update")?;
-
-        prev_paymaster_balance.pending = prev_paymaster_balance
-            .pending
-            .saturating_sub(previous_max_op_cost);
-
-        Ok(())
+    ) {
+        if let Some(pb) = self.paymaster_balances.get(paymaster) {
+            pb.pending = pb.pending.saturating_sub(previous_max_op_cost);
+        };
     }
 
     fn replace_existing_user_op(
@@ -420,15 +420,14 @@ impl PaymasterTrackerInner {
 
         *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
 
-        if let Some(paymaster_balance) =
-            self.paymaster_balances.get_mut(&paymaster_metadata.address)
-        {
+        // TODO handle this
+        if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster_metadata.address) {
             // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {
                 paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
 
                 //remove previous limit from data
-                self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost)?;
+                self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost);
             } else {
                 paymaster_balance.pending = paymaster_balance
                     .pending
@@ -439,7 +438,7 @@ impl PaymasterTrackerInner {
             // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {
                 //remove previous limit from data
-                self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost)?;
+                self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost);
             }
 
             self.add_new_paymaster(
@@ -463,9 +462,7 @@ impl PaymasterTrackerInner {
             UserOpFees::new(paymaster_metadata.address, max_op_cost),
         );
 
-        if let Some(paymaster_balance) =
-            self.paymaster_balances.get_mut(&paymaster_metadata.address)
-        {
+        if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster_metadata.address) {
             paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
         } else {
             self.add_new_paymaster(
@@ -527,7 +524,7 @@ mod tests {
     use rundler_sim::EntityInfos;
     use rundler_types::{DepositInfo, UserOperation, UserOperationId, ValidTimeRange};
 
-    use super::PaymasterConfig;
+    use super::*;
     use crate::{
         chain::BalanceUpdate,
         mempool::{paymaster::PaymasterTracker, PaymasterMetadata},
@@ -945,6 +942,27 @@ mod tests {
         assert!(status.is_staked);
     }
 
+    #[test]
+    fn test_inner_cache_full() {
+        let mut inner = PaymasterTrackerInner::new(true, 2);
+
+        let paymaster_0 = Address::random();
+        let paymaster_1 = Address::random();
+        let paymaster_2 = Address::random();
+
+        let confirmed_balance = U256::from(1000);
+        let pending_balance = U256::from(100);
+
+        inner.add_new_paymaster(paymaster_0, confirmed_balance, pending_balance);
+        inner.add_new_paymaster(paymaster_1, confirmed_balance, pending_balance);
+        inner.add_new_paymaster(paymaster_2, confirmed_balance, pending_balance);
+
+        assert_eq!(inner.paymaster_balances.len(), 2);
+        assert!(!inner.paymaster_exists(paymaster_0));
+        assert!(inner.paymaster_exists(paymaster_1));
+        assert!(inner.paymaster_exists(paymaster_2));
+    }
+
     fn new_paymaster_tracker() -> PaymasterTracker<MockEntryPoint> {
         let mut entrypoint = MockEntryPoint::new();
 
@@ -966,7 +984,7 @@ mod tests {
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
 
-        let config = PaymasterConfig::new(1001, 99, true);
+        let config = PaymasterConfig::new(1001, 99, true, u32::MAX);
 
         PaymasterTracker::new(entrypoint, config)
     }
