@@ -17,14 +17,206 @@ use std::collections::HashMap;
 
 use anyhow::Context;
 use ethers::{abi::Address, types::U256};
-use rundler_types::UserOperationId;
+use parking_lot::RwLock;
+use rundler_provider::{EntryPoint, PaymasterHelper};
+use rundler_types::{UserOperation, UserOperationId};
 
-use super::{error::MempoolResult, PaymasterMetadata};
-use crate::{chain::MinedOp, MempoolError, PoolOperation};
+use super::{error::MempoolResult, PaymasterMetadata, StakeInfo};
+use crate::{
+    chain::{BalanceUpdate, MinedOp},
+    MempoolError, PoolOperation, StakeStatus,
+};
+
+/// Keeps track of current and pending paymaster balances
+#[derive(Debug)]
+pub(crate) struct PaymasterTracker<PH, E> {
+    paymaster_helper: PH,
+    entry_point: E,
+    state: RwLock<PaymasterTrackerInner>,
+    config: PaymasterConfig,
+}
+
+#[derive(Debug)]
+pub(crate) struct PaymasterConfig {
+    min_stake_value: u128,
+    min_unstake_delay: u32,
+    tracker_enabled: bool,
+}
+
+impl PaymasterConfig {
+    pub(crate) fn new(
+        min_stake_value: u128,
+        min_unstake_delay: u32,
+        tracker_enabled: bool,
+    ) -> Self {
+        Self {
+            min_stake_value,
+            min_unstake_delay,
+            tracker_enabled,
+        }
+    }
+}
+
+impl<PH, E> PaymasterTracker<PH, E>
+where
+    PH: PaymasterHelper,
+    E: EntryPoint,
+{
+    pub(crate) fn new(paymaster_helper: PH, entry_point: E, config: PaymasterConfig) -> Self {
+        Self {
+            paymaster_helper,
+            entry_point,
+            state: RwLock::new(PaymasterTrackerInner::new(config.tracker_enabled)),
+            config,
+        }
+    }
+
+    pub(crate) async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
+        let deposit_info = self.paymaster_helper.get_deposit_info(address).await?;
+
+        let is_staked = deposit_info.stake.ge(&self.config.min_stake_value)
+            && deposit_info
+                .unstake_delay_sec
+                .ge(&self.config.min_unstake_delay);
+
+        let stake_status = StakeStatus {
+            stake_info: StakeInfo {
+                stake: deposit_info.stake,
+                unstake_delay_sec: deposit_info.unstake_delay_sec,
+            },
+            is_staked,
+        };
+
+        Ok(stake_status)
+    }
+
+    pub(crate) fn update_paymaster_balances_after_update<'a>(
+        &self,
+        entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
+        unmined_entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
+    ) {
+        for balance_update in entity_balance_updates {
+            self.state.write().update_paymaster_balance_from_event(
+                balance_update.address,
+                balance_update.amount,
+                balance_update.is_addition,
+            )
+        }
+
+        for unmined_balance_update in unmined_entity_balance_updates {
+            self.state.write().update_paymaster_balance_from_event(
+                unmined_balance_update.address,
+                unmined_balance_update.amount,
+                !unmined_balance_update.is_addition,
+            )
+        }
+    }
+
+    pub(crate) async fn paymaster_balance(
+        &self,
+        paymaster: Address,
+    ) -> MempoolResult<PaymasterMetadata> {
+        if self.state.read().paymaster_exists(paymaster) {
+            let meta = self
+                .state
+                .read()
+                .paymaster_metadata(paymaster)
+                .context("Paymaster balance should not be empty if address exists in pool")?;
+
+            return Ok(meta);
+        }
+
+        let balance = self
+            .entry_point
+            .balance_of(paymaster, None)
+            .await
+            .context("Paymaster balance should not be empty if address exists in pool")?;
+
+        let paymaster_meta = PaymasterMetadata {
+            address: paymaster,
+            pending_balance: balance,
+            confirmed_balance: balance,
+        };
+
+        // Save paymaster balance after first lookup
+        self.state
+            .write()
+            .add_new_paymaster(paymaster, balance, 0.into());
+
+        Ok(paymaster_meta)
+    }
+
+    pub(crate) async fn check_operation_cost(&self, op: &UserOperation) -> MempoolResult<()> {
+        if let Some(paymaster) = op.paymaster() {
+            let balance = self.paymaster_balance(paymaster).await?;
+            self.state.read().check_operation_cost(op, &balance)?
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn clear(&self) {
+        self.state.write().clear();
+    }
+
+    pub(crate) fn dump_paymaster_metadata(&self) -> Vec<PaymasterMetadata> {
+        self.state.read().dump_paymaster_metadata()
+    }
+
+    pub(crate) fn set_tracking(&self, tracking_enabled: bool) {
+        self.state.write().set_tracking(tracking_enabled);
+    }
+
+    pub(crate) async fn reset_confimed_balances(&self) -> MempoolResult<()> {
+        let paymaster_addresses = self.paymaster_addresses();
+
+        let balances = self
+            .paymaster_helper
+            .get_balances(paymaster_addresses.clone())
+            .await?;
+
+        self.state
+            .write()
+            .set_confimed_balances(&paymaster_addresses, &balances);
+
+        Ok(())
+    }
+
+    pub(crate) fn update_paymaster_balance_from_mined_op(&self, mined_op: &MinedOp) {
+        self.state
+            .write()
+            .update_paymaster_balance_from_mined_op(mined_op);
+    }
+    pub(crate) fn remove_operation(&self, id: &UserOperationId) {
+        self.state.write().remove_operation(id);
+    }
+
+    pub(crate) fn paymaster_addresses(&self) -> Vec<Address> {
+        self.state.read().paymaster_addresses()
+    }
+
+    pub(crate) fn unmine_actual_cost(&self, paymaster: &Address, actual_cost: U256) {
+        self.state
+            .write()
+            .unmine_actual_cost(paymaster, actual_cost);
+    }
+
+    pub(crate) async fn add_or_update_balance(&self, po: &PoolOperation) -> MempoolResult<()> {
+        if let Some(paymaster) = po.uo.paymaster() {
+            let paymaster_metadata = self.paymaster_balance(paymaster).await?;
+            return self
+                .state
+                .write()
+                .add_or_update_balance(po, &paymaster_metadata);
+        }
+
+        Ok(())
+    }
+}
 
 /// Keeps track of current and pending paymaster balances
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct PaymasterTracker {
+struct PaymasterTrackerInner {
     /// map for userop based on id
     user_op_fees: HashMap<UserOperationId, UserOpFees>,
     /// map for paymaster balance status
@@ -33,28 +225,56 @@ pub(crate) struct PaymasterTracker {
     tracker_enabled: bool,
 }
 
-impl PaymasterTracker {
-    pub(crate) fn new(tracker_enabled: bool) -> Self {
+impl PaymasterTrackerInner {
+    fn new(tracker_enabled: bool) -> Self {
         Self {
             tracker_enabled,
             ..Default::default()
         }
     }
 
-    pub(crate) fn paymaster_exists(&self, paymaster: Address) -> bool {
+    fn paymaster_exists(&self, paymaster: Address) -> bool {
         self.paymaster_balances.contains_key(&paymaster)
     }
 
-    pub(crate) fn set_paymaster_tracker(&mut self, tracking_enabled: bool) {
+    fn set_tracking(&mut self, tracking_enabled: bool) {
         self.tracker_enabled = tracking_enabled;
     }
 
-    pub(crate) fn clear(&mut self) {
+    fn check_operation_cost(
+        &self,
+        op: &UserOperation,
+        paymaster_metadata: &PaymasterMetadata,
+    ) -> MempoolResult<()> {
+        let max_op_cost = op.max_gas_cost();
+
+        if let Some(prev) = self.user_op_fees.get(&op.id()) {
+            let reset_balance = paymaster_metadata
+                .pending_balance
+                .saturating_add(prev.max_op_cost);
+
+            if reset_balance.lt(&max_op_cost) {
+                return Err(MempoolError::PaymasterBalanceTooLow(
+                    max_op_cost,
+                    reset_balance,
+                ));
+            }
+        } else if paymaster_metadata.pending_balance.lt(&max_op_cost) {
+            return Err(MempoolError::PaymasterBalanceTooLow(
+                max_op_cost,
+                paymaster_metadata.pending_balance,
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn clear(&mut self) {
         self.user_op_fees.clear();
         self.paymaster_balances.clear();
     }
 
-    pub(crate) fn set_confimed_balances(&mut self, addresses: &[Address], balances: &[U256]) {
+    fn set_confimed_balances(&mut self, addresses: &[Address], balances: &[U256]) {
         for (i, address) in addresses.iter().enumerate() {
             if let Some(paymaster_balance) = self.paymaster_balances.get_mut(address) {
                 paymaster_balance.confirmed = balances[i];
@@ -63,7 +283,7 @@ impl PaymasterTracker {
     }
 
     //TODO track if paymaster has become stale and can be removed from the pool
-    pub(crate) fn update_paymaster_balance_from_mined_op(&mut self, mined_op: &MinedOp) {
+    fn update_paymaster_balance_from_mined_op(&mut self, mined_op: &MinedOp) {
         let id = mined_op.id();
 
         if let Some(op_fee) = self.user_op_fees.get(&id) {
@@ -80,7 +300,7 @@ impl PaymasterTracker {
         }
     }
 
-    pub(crate) fn remove_operation(&mut self, id: &UserOperationId) {
+    fn remove_operation(&mut self, id: &UserOperationId) {
         if let Some(op_fee) = self.user_op_fees.get(id) {
             if let Some(paymaster_balance) = self.paymaster_balances.get_mut(&op_fee.paymaster) {
                 paymaster_balance.pending =
@@ -91,13 +311,13 @@ impl PaymasterTracker {
         }
     }
 
-    pub(crate) fn paymaster_addresses(&self) -> Vec<Address> {
+    fn paymaster_addresses(&self) -> Vec<Address> {
         let keys: Vec<Address> = self.paymaster_balances.keys().cloned().collect();
 
         keys
     }
 
-    pub(crate) fn update_paymaster_balance_from_event(
+    fn update_paymaster_balance_from_event(
         &mut self,
         paymaster: Address,
         amount: U256,
@@ -112,7 +332,7 @@ impl PaymasterTracker {
         }
     }
 
-    pub(crate) fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
+    fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
         if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
             return Some(PaymasterMetadata {
                 pending_balance: paymaster_balance.pending_balance(),
@@ -124,7 +344,7 @@ impl PaymasterTracker {
         None
     }
 
-    pub(crate) fn dump_paymaster_metadata(&self) -> Vec<PaymasterMetadata> {
+    fn dump_paymaster_metadata(&self) -> Vec<PaymasterMetadata> {
         self.paymaster_balances
             .iter()
             .map(|(address, balance)| PaymasterMetadata {
@@ -135,13 +355,13 @@ impl PaymasterTracker {
             .collect()
     }
 
-    pub(crate) fn unmine_actual_cost(&mut self, paymaster: &Address, actual_cost: U256) {
+    fn unmine_actual_cost(&mut self, paymaster: &Address, actual_cost: U256) {
         if let Some(paymaster_balance) = self.paymaster_balances.get_mut(paymaster) {
             paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(actual_cost);
         }
     }
 
-    pub(crate) fn add_or_update_balance(
+    fn add_or_update_balance(
         &mut self,
         po: &PoolOperation,
         paymaster_metadata: &PaymasterMetadata,
@@ -225,9 +445,10 @@ impl PaymasterTracker {
                 self.decrement_previous_paymaster_balance(&prev_paymaster, prev_max_op_cost)?;
             }
 
-            self.paymaster_balances.insert(
+            self.add_new_paymaster(
                 paymaster_metadata.address,
-                PaymasterBalance::new(paymaster_metadata.confirmed_balance, max_op_cost),
+                paymaster_metadata.confirmed_balance,
+                max_op_cost,
             );
         }
 
@@ -250,11 +471,24 @@ impl PaymasterTracker {
         {
             paymaster_balance.pending = paymaster_balance.pending.saturating_add(max_op_cost);
         } else {
-            self.paymaster_balances.insert(
+            self.add_new_paymaster(
                 paymaster_metadata.address,
-                PaymasterBalance::new(paymaster_metadata.confirmed_balance, max_op_cost),
+                paymaster_metadata.confirmed_balance,
+                max_op_cost,
             );
         }
+    }
+
+    fn add_new_paymaster(
+        &mut self,
+        address: Address,
+        confirmed_balance: U256,
+        inital_pending_balance: U256,
+    ) {
+        self.paymaster_balances.insert(
+            address,
+            PaymasterBalance::new(confirmed_balance, inital_pending_balance),
+        );
     }
 }
 
@@ -292,14 +526,14 @@ impl PaymasterBalance {
 #[cfg(test)]
 mod tests {
     use ethers::types::{Address, H256, U256};
+    use rundler_provider::{MockEntryPoint, MockPaymasterHelper};
     use rundler_sim::EntityInfos;
-    use rundler_types::{UserOperation, UserOperationId, ValidTimeRange};
+    use rundler_types::{DepositInfo, UserOperation, UserOperationId, ValidTimeRange};
 
+    use super::PaymasterConfig;
     use crate::{
-        mempool::{
-            paymaster::{PaymasterBalance, PaymasterTracker, UserOpFees},
-            PaymasterMetadata,
-        },
+        chain::BalanceUpdate,
+        mempool::{paymaster::PaymasterTracker, PaymasterMetadata},
         PoolOperation,
     };
 
@@ -318,125 +552,126 @@ mod tests {
         }
     }
 
-    #[test]
-    fn new_uo_unused_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn new_uo_unused_paymaster() {
+        let paymaster_tracker = new_paymaster_tracker();
 
         let paymaster = Address::random();
         let sender = Address::random();
-        let paymaster_balance = U256::from(100000000);
-        let confirmed_balance = U256::from(100000000);
         let uo = UserOperation {
             sender,
             call_gas_limit: 10.into(),
             pre_verification_gas: 10.into(),
+            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
             verification_gas_limit: 10.into(),
             max_fee_per_gas: 1.into(),
             ..Default::default()
         };
 
         let uo_max_cost = uo.clone().max_gas_cost();
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: paymaster_balance,
-            confirmed_balance,
-        };
 
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po).await;
         assert!(res.is_ok());
+        let balance = paymaster_tracker
+            .paymaster_balance(paymaster)
+            .await
+            .unwrap();
+
+        assert_eq!(balance.confirmed_balance, 1000.into(),);
+
         assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .confirmed,
-            paymaster_balance,
-        );
-        assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .pending,
-            uo_max_cost,
+            balance.pending_balance,
+            balance.confirmed_balance.saturating_sub(uo_max_cost),
         );
     }
 
-    #[test]
-    fn new_uo_not_enough_balance() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn new_uo_not_enough_balance() {
+        let paymaster_tracker = new_paymaster_tracker();
 
         let paymaster = Address::random();
         let sender = Address::random();
         let paymaster_balance = U256::from(5);
         let confirmed_balance = U256::from(5);
+
+        paymaster_tracker.add_new_paymaster(paymaster, confirmed_balance, paymaster_balance);
+
         let uo = UserOperation {
             sender,
             call_gas_limit: 10.into(),
+            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
             pre_verification_gas: 10.into(),
             verification_gas_limit: 10.into(),
             max_fee_per_gas: 1.into(),
             ..Default::default()
         };
 
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: paymaster_balance,
-            confirmed_balance,
-        };
-
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po).await;
+
         assert!(res.is_err());
     }
 
-    #[test]
-    fn test_update_balance() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn test_update_balance() {
+        let paymaster_tracker = new_paymaster_tracker();
 
         let paymaster = Address::random();
         let pending_op_cost = U256::from(100);
         let confirmed_balance = U256::from(1000);
 
-        paymaster_tracker.paymaster_balances.insert(
-            paymaster,
-            PaymasterBalance {
-                pending: pending_op_cost,
-                confirmed: confirmed_balance,
-            },
-        );
+        paymaster_tracker.add_new_paymaster(paymaster, confirmed_balance, pending_op_cost);
+
+        let deposit = BalanceUpdate {
+            address: paymaster,
+            entrypoint: Address::random(),
+            amount: 100.into(),
+            is_addition: true,
+        };
 
         // deposit
-        paymaster_tracker.update_paymaster_balance_from_event(paymaster, 100.into(), true);
+        paymaster_tracker
+            .update_paymaster_balances_after_update(vec![&deposit].into_iter(), vec![].into_iter());
 
         let balance = paymaster_tracker
-            .paymaster_balances
-            .get(&paymaster)
+            .paymaster_balance(paymaster)
+            .await
             .unwrap();
 
-        assert_eq!(balance.confirmed, 1100.into());
+        assert_eq!(balance.confirmed_balance, 1100.into());
+
+        let withdrawal = BalanceUpdate {
+            address: paymaster,
+            entrypoint: Address::random(),
+            amount: 50.into(),
+            is_addition: false,
+        };
 
         // withdrawal
-        paymaster_tracker.update_paymaster_balance_from_event(paymaster, 50.into(), false);
+        paymaster_tracker.update_paymaster_balances_after_update(
+            vec![&withdrawal].into_iter(),
+            vec![].into_iter(),
+        );
 
         let balance = paymaster_tracker
-            .paymaster_balances
-            .get(&paymaster)
+            .paymaster_balance(paymaster)
+            .await
             .unwrap();
 
-        assert_eq!(balance.confirmed, 1050.into());
+        assert_eq!(balance.confirmed_balance, 1050.into());
     }
 
-    #[test]
-    fn new_uo_not_enough_balance_tracking_disabled() {
-        let mut paymaster_tracker = PaymasterTracker::new(false);
+    #[tokio::test]
+    async fn new_uo_not_enough_balance_tracking_disabled() {
+        let paymaster_tracker = new_paymaster_tracker();
+        paymaster_tracker.set_tracking(false);
 
         let paymaster = Address::random();
         let sender = Address::random();
-        let paymaster_balance = U256::from(5);
+        let pending_op_cost = U256::from(5);
         let confirmed_balance = U256::from(5);
         let uo = UserOperation {
             sender,
@@ -447,85 +682,82 @@ mod tests {
             ..Default::default()
         };
 
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: paymaster_balance,
-            confirmed_balance,
-        };
-
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        paymaster_tracker.add_new_paymaster(paymaster, confirmed_balance, pending_op_cost);
+
+        let res = paymaster_tracker.add_or_update_balance(&po).await;
         assert!(res.is_ok());
-        assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .confirmed,
-            5.into(),
-        );
-        assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .pending,
-            30.into(),
-        );
     }
 
-    #[test]
-    fn new_uo_not_enough_balance_existing_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn new_uo_not_enough_balance_existing_paymaster() {
+        let paymaster_tracker = new_paymaster_tracker();
 
         let paymaster = Address::random();
         let sender = Address::random();
         let paymaster_balance = U256::from(100);
         let pending_paymaster_balance = U256::from(10);
 
-        paymaster_tracker.paymaster_balances.insert(
+        paymaster_tracker.add_new_paymaster(
             paymaster,
-            PaymasterBalance {
-                pending: pending_paymaster_balance,
-                confirmed: paymaster_balance,
-            },
+            paymaster_balance,
+            pending_paymaster_balance,
         );
 
         let uo = UserOperation {
             sender,
             call_gas_limit: 100.into(),
+            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
             pre_verification_gas: 100.into(),
             verification_gas_limit: 100.into(),
             max_fee_per_gas: 1.into(),
             ..Default::default()
         };
 
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: paymaster_balance,
-            confirmed_balance: paymaster_balance,
-        };
-
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po).await;
         assert!(res.is_err());
     }
 
-    #[test]
-    fn new_uo_existing_paymaster_valid_balance() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn test_reset_balances() {
+        let paymaster_tracker = new_paymaster_tracker();
+
+        let paymaster_0 = Address::random();
+        let paymaster_0_confimed = 1000.into();
+
+        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_0_confimed, 0.into());
+
+        let balance_0 = paymaster_tracker
+            .paymaster_balance(paymaster_0)
+            .await
+            .unwrap();
+
+        assert_eq!(balance_0.confirmed_balance, 1000.into());
+
+        let _ = paymaster_tracker.reset_confimed_balances().await;
+
+        let balance_0 = paymaster_tracker
+            .paymaster_balance(paymaster_0)
+            .await
+            .unwrap();
+
+        assert_eq!(balance_0.confirmed_balance, 50.into());
+    }
+
+    #[tokio::test]
+    async fn new_uo_existing_paymaster_valid_balance() {
+        let paymaster_tracker = new_paymaster_tracker();
         let paymaster = Address::random();
         let paymaster_balance = U256::from(100000000);
         let pending_paymaster_balance = U256::from(10);
 
-        paymaster_tracker.paymaster_balances.insert(
+        paymaster_tracker.add_new_paymaster(
             paymaster,
-            PaymasterBalance {
-                pending: pending_paymaster_balance,
-                confirmed: paymaster_balance,
-            },
+            paymaster_balance,
+            pending_paymaster_balance,
         );
 
         let sender = Address::random();
@@ -534,51 +766,35 @@ mod tests {
             call_gas_limit: 10.into(),
             pre_verification_gas: 10.into(),
             verification_gas_limit: 10.into(),
+            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
             max_fee_per_gas: 1.into(),
             ..Default::default()
         };
 
         let uo_max_cost = uo.clone().max_gas_cost();
 
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: paymaster_balance,
-            confirmed_balance: paymaster_balance,
-        };
-
         let po = demo_pool_op(uo);
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po).await;
 
         assert!(res.is_ok());
+
+        let remaining = paymaster_tracker
+            .paymaster_balance(paymaster)
+            .await
+            .unwrap();
+
+        assert_eq!(remaining.confirmed_balance, paymaster_balance);
         assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .confirmed,
-            paymaster_balance,
-        );
-        assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .pending,
-            pending_paymaster_balance.saturating_add(uo_max_cost),
-        );
-        assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .pending_balance(),
-            paymaster_balance.saturating_sub(uo_max_cost.saturating_add(pending_paymaster_balance)),
+            remaining.pending_balance,
+            paymaster_balance
+                .saturating_sub(pending_paymaster_balance)
+                .saturating_sub(uo_max_cost),
         );
     }
 
-    #[test]
-    fn replacement_uo_new_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn replacement_uo_new_paymaster() {
+        let paymaster_tracker = new_paymaster_tracker();
         let paymaster_0 = Address::random();
         let paymaster_1 = Address::random();
 
@@ -590,6 +806,7 @@ mod tests {
             sender,
             call_gas_limit: 10.into(),
             pre_verification_gas: 10.into(),
+            paymaster_and_data: paymaster_0.as_bytes().to_vec().into(),
             verification_gas_limit: 10.into(),
             max_fee_per_gas: 1.into(),
             ..Default::default()
@@ -597,30 +814,27 @@ mod tests {
 
         let mut uo_1 = uo.clone();
         uo_1.max_fee_per_gas = 2.into();
+        uo_1.paymaster_and_data = paymaster_1.as_bytes().to_vec().into();
 
         let max_op_cost_0 = uo.max_gas_cost();
         let max_op_cost_1 = uo_1.max_gas_cost();
 
-        let paymaster_meta_0 = PaymasterMetadata {
-            address: paymaster_0,
-            pending_balance: paymaster_balance_0,
-            confirmed_balance: paymaster_balance_0,
-        };
-
-        let paymaster_meta_1 = PaymasterMetadata {
-            address: paymaster_1,
-            pending_balance: paymaster_balance_1,
-            confirmed_balance: paymaster_balance_1,
-        };
+        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_balance_0, 0.into());
+        paymaster_tracker.add_new_paymaster(paymaster_1, paymaster_balance_1, 0.into());
 
         let po_0 = demo_pool_op(uo);
+
         // Update first paymaster balance with first uo
         paymaster_tracker
-            .add_or_update_balance(&po_0, &paymaster_meta_0)
+            .add_or_update_balance(&po_0)
+            .await
             .unwrap();
 
         assert_eq!(
-            paymaster_tracker.paymaster_metadata(paymaster_0).unwrap(),
+            paymaster_tracker
+                .paymaster_balance(paymaster_0)
+                .await
+                .unwrap(),
             PaymasterMetadata {
                 address: paymaster_0,
                 confirmed_balance: paymaster_balance_0,
@@ -631,12 +845,16 @@ mod tests {
         let po_1 = demo_pool_op(uo_1);
         // send same uo with updated fees and new paymaster
         paymaster_tracker
-            .add_or_update_balance(&po_1, &paymaster_meta_1)
+            .add_or_update_balance(&po_1)
+            .await
             .unwrap();
 
         // check previous paymaster goes back to normal balance
         assert_eq!(
-            paymaster_tracker.paymaster_metadata(paymaster_0).unwrap(),
+            paymaster_tracker
+                .paymaster_balance(paymaster_0)
+                .await
+                .unwrap(),
             PaymasterMetadata {
                 address: paymaster_0,
                 confirmed_balance: paymaster_balance_0,
@@ -646,7 +864,10 @@ mod tests {
 
         // check that new paymaster has been updated correctly
         assert_eq!(
-            paymaster_tracker.paymaster_metadata(paymaster_1).unwrap(),
+            paymaster_tracker
+                .paymaster_balance(paymaster_1)
+                .await
+                .unwrap(),
             PaymasterMetadata {
                 address: paymaster_1,
                 confirmed_balance: paymaster_balance_1,
@@ -655,9 +876,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn replacement_uo_same_paymaster() {
-        let mut paymaster_tracker = PaymasterTracker::new(true);
+    #[tokio::test]
+    async fn replacement_uo_same_paymaster() {
+        let paymaster_tracker = new_paymaster_tracker();
         let sender = Address::random();
         let paymaster = Address::random();
         let paymaster_balance = U256::from(100000000);
@@ -666,22 +887,19 @@ mod tests {
 
         let existing_id = UserOperationId { sender, nonce };
 
-        paymaster_tracker.paymaster_balances.insert(
+        // add paymaster
+        paymaster_tracker.add_new_paymaster(
             paymaster,
-            PaymasterBalance {
-                pending: pending_paymaster_balance,
-                confirmed: paymaster_balance,
-            },
+            paymaster_balance,
+            pending_paymaster_balance,
         );
 
-        // existing fee
-        paymaster_tracker.user_op_fees.insert(
-            existing_id,
-            UserOpFees {
-                paymaster,
-                max_op_cost: 30.into(),
-            },
-        );
+        let meta = paymaster_tracker
+            .paymaster_balance(paymaster)
+            .await
+            .unwrap();
+
+        paymaster_tracker.add_new_user_op(&existing_id, &meta, 30.into());
 
         // replacement_uo
         let uo = UserOperation {
@@ -690,45 +908,96 @@ mod tests {
             call_gas_limit: 100.into(),
             pre_verification_gas: 100.into(),
             verification_gas_limit: 100.into(),
+            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
             max_fee_per_gas: 1.into(),
             ..Default::default()
-        };
-
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: paymaster_balance,
-            confirmed_balance: paymaster_balance,
         };
 
         let max_op_cost = uo.clone().max_gas_cost();
 
         let po = demo_pool_op(uo);
 
-        let res = paymaster_tracker.add_or_update_balance(&po, &paymaster_meta);
+        let res = paymaster_tracker.add_or_update_balance(&po).await;
         assert!(res.is_ok());
         assert_eq!(
             paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
+                .paymaster_balance(paymaster)
+                .await
                 .unwrap()
-                .confirmed,
+                .confirmed_balance,
             paymaster_balance,
         );
         assert_eq!(
             paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
+                .paymaster_balance(paymaster)
+                .await
                 .unwrap()
-                .pending,
-            max_op_cost,
+                .pending_balance,
+            paymaster_balance
+                .saturating_sub(pending_paymaster_balance)
+                .saturating_sub(max_op_cost),
         );
-        assert_eq!(
-            paymaster_tracker
-                .paymaster_balances
-                .get(&paymaster)
-                .unwrap()
-                .pending_balance(),
-            paymaster_balance.saturating_sub(max_op_cost),
-        );
+    }
+
+    #[tokio::test]
+    async fn test_stake_status_staked() {
+        let tracker = new_paymaster_tracker();
+
+        let status = tracker.get_stake_status(Address::random()).await.unwrap();
+
+        assert!(status.is_staked);
+    }
+
+    fn new_paymaster_tracker() -> PaymasterTracker<MockPaymasterHelper, MockEntryPoint> {
+        let mut helper = MockPaymasterHelper::new();
+        let mut entrypoint = MockEntryPoint::new();
+
+        helper.expect_get_deposit_info().returning(|_| {
+            Ok(DepositInfo {
+                deposit: 1000,
+                staked: true,
+                stake: 10000,
+                unstake_delay_sec: 100,
+                withdraw_time: 10,
+            })
+        });
+
+        helper
+            .expect_get_balances()
+            .returning(|_| Ok(vec![50.into()]));
+
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+
+        let config = PaymasterConfig::new(1001, 99, true);
+
+        PaymasterTracker::new(helper, entrypoint, config)
+    }
+
+    impl PaymasterTracker<MockPaymasterHelper, MockEntryPoint> {
+        fn add_new_user_op(
+            &self,
+            id: &UserOperationId,
+            paymaster_metadata: &PaymasterMetadata,
+            max_op_cost: U256,
+        ) {
+            self.state
+                .write()
+                .add_new_user_op(id, paymaster_metadata, max_op_cost)
+        }
+
+        fn add_new_paymaster(
+            &self,
+            address: Address,
+            confirmed_balance: U256,
+            inital_pending_balance: U256,
+        ) {
+            self.state.write().add_new_paymaster(
+                address,
+                confirmed_balance,
+                inital_pending_balance,
+            );
+        }
     }
 }

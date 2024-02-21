@@ -31,11 +31,11 @@ use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
 
-use super::mempool::{HourlyMovingAverageReputation, PoolConfig, ReputationParams};
+use super::mempool::PoolConfig;
 use crate::{
     chain::{self, Chain},
     emit::OpPoolEvent,
-    mempool::UoPool,
+    mempool::{AddressReputation, PaymasterConfig, PaymasterTracker, ReputationParams, UoPool},
     server::{spawn_remote_mempool_server, LocalPoolBuilder},
 };
 
@@ -165,24 +165,8 @@ impl PoolTask {
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
     ) -> anyhow::Result<
-        UoPool<
-            HourlyMovingAverageReputation,
-            impl Prechecker,
-            impl Simulator,
-            impl EntryPoint,
-            impl PaymasterHelper,
-        >,
+        UoPool<impl Prechecker, impl Simulator, impl EntryPoint, impl PaymasterHelper>,
     > {
-        // Reputation manager
-        let reputation = Arc::new(HourlyMovingAverageReputation::new(
-            ReputationParams::new(pool_config.reputation_tracking_enabled),
-            pool_config.blocklist.clone(),
-            pool_config.allowlist.clone(),
-        ));
-        // Start reputation manager
-        let reputation_runner = Arc::clone(&reputation);
-        tokio::spawn(async move { reputation_runner.run().await });
-
         let i_entry_point = IEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
         let paymaster_helper =
             PaymasterHelperContract::new(pool_config.entry_point, Arc::clone(&provider));
@@ -203,14 +187,35 @@ impl PoolTask {
             pool_config.mempool_channel_configs.clone(),
         );
 
-        Ok(UoPool::new(
+        let reputation = Arc::new(AddressReputation::new(
+            ReputationParams::new(pool_config.reputation_tracking_enabled),
+            pool_config.blocklist.clone().unwrap_or_default(),
+            pool_config.allowlist.clone().unwrap_or_default(),
+        ));
+
+        // Start reputation manager
+        let reputation_runner = Arc::clone(&reputation);
+        tokio::spawn(async move { reputation_runner.run().await });
+
+        let paymaster = PaymasterTracker::new(
+            paymaster_helper,
+            i_entry_point,
+            PaymasterConfig::new(
+                pool_config.sim_settings.min_stake_value,
+                pool_config.sim_settings.min_unstake_delay,
+                pool_config.paymaster_tracking_enabled,
+            ),
+        );
+
+        let uo_pool = UoPool::new(
             pool_config.clone(),
-            Arc::clone(&reputation),
             event_sender,
             prechecker,
             simulator,
-            i_entry_point,
-            paymaster_helper,
-        ))
+            paymaster,
+            reputation,
+        );
+
+        Ok(uo_pool)
     }
 }

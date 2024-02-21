@@ -19,7 +19,7 @@ use ethers::{
 };
 use itertools::Itertools;
 use parking_lot::RwLock;
-use rundler_provider::{EntryPoint, PaymasterHelper, ProviderResult};
+use rundler_provider::{EntryPoint, PaymasterHelper};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
@@ -29,13 +29,15 @@ use tracing::info;
 
 use super::{
     error::{MempoolError, MempoolResult},
+    paymaster::PaymasterTracker,
     pool::PoolInner,
-    reputation::{Reputation, ReputationManager, ReputationStatus},
-    Mempool, OperationOrigin, PaymasterMetadata, PoolConfig, PoolOperation, StakeInfo, StakeStatus,
+    reputation::{AddressReputation, Reputation, ReputationStatus},
+    Mempool, OperationOrigin, PaymasterMetadata, PoolConfig, PoolOperation,
 };
 use crate::{
     chain::ChainUpdate,
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
+    StakeStatus,
 };
 
 /// User Operation Mempool
@@ -43,21 +45,14 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<
-    R: ReputationManager,
-    P: Prechecker,
-    S: Simulator,
-    E: EntryPoint,
-    PH: PaymasterHelper,
-> {
+pub(crate) struct UoPool<P: Prechecker, S: Simulator, E: EntryPoint, PH: PaymasterHelper> {
     config: PoolConfig,
-    reputation: Arc<R>,
     state: RwLock<UoPoolState>,
+    paymaster: PaymasterTracker<PH, E>,
+    reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
     simulator: S,
-    entry_point: E,
-    paymaster_helper: PH,
 }
 
 struct UoPoolState {
@@ -66,9 +61,8 @@ struct UoPoolState {
     block_number: u64,
 }
 
-impl<R, P, S, E, PH> UoPool<R, P, S, E, PH>
+impl<P, S, E, PH> UoPool<P, S, E, PH>
 where
-    R: ReputationManager,
     P: Prechecker,
     S: Simulator,
     E: EntryPoint,
@@ -76,26 +70,24 @@ where
 {
     pub(crate) fn new(
         config: PoolConfig,
-        reputation: Arc<R>,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
-        entry_point: E,
-        paymaster_helper: PH,
+        paymaster: PaymasterTracker<PH, E>,
+        reputation: Arc<AddressReputation>,
     ) -> Self {
         Self {
-            config: config.clone(),
-            reputation,
             state: RwLock::new(UoPoolState {
-                pool: PoolInner::new(config.into()),
+                pool: PoolInner::new(config.clone().into()),
                 throttled_ops: HashSet::new(),
                 block_number: 0,
             }),
+            reputation,
+            paymaster,
             event_sender,
             prechecker,
             simulator,
-            entry_point,
-            paymaster_helper,
+            config,
         }
     }
 
@@ -140,9 +132,8 @@ where
 }
 
 #[async_trait]
-impl<R, P, S, E, PH> Mempool for UoPool<R, P, S, E, PH>
+impl<P, S, E, PH> Mempool for UoPool<P, S, E, PH>
 where
-    R: ReputationManager,
     P: Prechecker,
     S: Simulator,
     E: EntryPoint,
@@ -177,8 +168,7 @@ where
                 let _ = self.reset_confirmed_paymaster_balances().await;
             }
 
-            let mut state = self.state.write();
-            state.pool.update_paymaster_balances_after_update(
+            self.paymaster.update_paymaster_balances_after_update(
                 entity_balance_updates,
                 unmined_entity_balance_updates,
             );
@@ -187,13 +177,19 @@ where
                 if op.entry_point != self.config.entry_point {
                     continue;
                 }
+                self.paymaster.update_paymaster_balance_from_mined_op(op);
 
                 // Remove throttled ops that were included in the block
-                state.throttled_ops.remove(&op.hash);
+                self.state.write().throttled_ops.remove(&op.hash);
 
-                if let Some(op) = state.pool.mine_operation(op, update.latest_block_number) {
+                if let Some(pool_op) = self
+                    .state
+                    .write()
+                    .pool
+                    .mine_operation(op, update.latest_block_number)
+                {
                     // Only account for an entity once
-                    for entity_addr in op.entities().map(|e| e.address).unique() {
+                    for entity_addr in pool_op.entities().map(|e| e.address).unique() {
                         self.reputation.add_included(entity_addr);
                     }
                     mined_op_count += 1;
@@ -204,12 +200,20 @@ where
                     continue;
                 }
 
-                if let Some(op) = state.pool.unmine_operation(op) {
-                    // Only account for an entity once
-                    for entity_addr in op.entities().map(|e| e.address).unique() {
+                if let Some(paymaster) = op.paymaster {
+                    self.paymaster
+                        .unmine_actual_cost(&paymaster, op.actual_gas_cost);
+                }
+
+                let pool_op = self.state.write().pool.unmine_operation(op);
+
+                if let Some(po) = pool_op {
+                    for entity_addr in po.entities().map(|e| e.address).unique() {
                         self.reputation.remove_included(entity_addr);
                     }
+
                     unmined_op_count += 1;
+                    let _ = self.paymaster.add_or_update_balance(&po).await;
                 }
             }
             if mined_op_count > 0 {
@@ -234,9 +238,11 @@ where
             );
             UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.config.entry_point);
 
+            let mut state = self.state.write();
             state
                 .pool
                 .forget_mined_operations_before_block(update.earliest_remembered_block_number);
+
             // Remove throttled ops that are too old
             let mut to_remove = HashSet::new();
             for hash in state.throttled_ops.iter() {
@@ -251,6 +257,7 @@ where
                     }
                 }
             }
+
             for (hash, added_at_block) in to_remove {
                 state.pool.remove_operation_by_hash(hash);
                 state.throttled_ops.remove(&hash);
@@ -303,24 +310,16 @@ where
     }
 
     fn set_tracking(&self, paymaster: bool, reputation: bool) {
-        self.state.write().pool.set_tracking(paymaster);
+        self.paymaster.set_tracking(paymaster);
         self.reputation.set_tracking(reputation);
     }
 
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
-        let paymaster_addresses = self.state.read().pool.paymaster_addresses();
+        self.paymaster.reset_confimed_balances().await
+    }
 
-        let balances = self
-            .paymaster_helper
-            .get_balances(paymaster_addresses.clone())
-            .await?;
-
-        self.state
-            .write()
-            .pool
-            .set_confirmed_paymaster_balances(&paymaster_addresses, &balances);
-
-        Ok(())
+    async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
+        self.paymaster.get_stake_status(address).await
     }
 
     async fn add_operation(
@@ -372,17 +371,10 @@ where
         self.state.read().pool.check_multiple_roles_violation(&op)?;
 
         // check if paymaster is present and exists in pool
-        // Note: this is super gross but due the fact that we do not want to make
-        // http calls when we hold the readwrite lock its a work around
-        let mut paymaster_metadata = None;
-        if let Some(address) = op.paymaster() {
-            let meta = self
-                .paymaster_balance(address)
-                .await
-                .map_err(|e| MempoolError::Other(e.into()))?;
-
-            paymaster_metadata = Some(meta);
-        }
+        // this is optimistic and could potentially lead to
+        // multiple user operations call this before they are
+        // added to the pool and can lead to an overdraft
+        self.paymaster.check_operation_cost(&op).await?;
 
         // Prechecks
         self.prechecker.check(&op).await?;
@@ -449,14 +441,17 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
-            let hash = state
-                .pool
-                .add_operation(pool_op.clone(), paymaster_metadata)?;
+            let hash = state.pool.add_operation(pool_op.clone())?;
+
             if throttled {
                 state.throttled_ops.insert(hash);
             }
             hash
         };
+
+        // Add op cost to pending paymaster balance
+        // once the operation has been added to the pool
+        self.paymaster.add_or_update_balance(&pool_op).await?;
 
         // Update reputation
         if replacement.is_none() {
@@ -493,7 +488,8 @@ where
         {
             let mut state = self.state.write();
             for hash in hashes {
-                if state.pool.remove_operation_by_hash(*hash).is_some() {
+                if let Some(op) = state.pool.remove_operation_by_hash(*hash) {
+                    self.paymaster.remove_operation(&op.uo.id());
                     count += 1;
                     removed_hashes.push(*hash);
                 }
@@ -523,28 +519,6 @@ where
         if self.reputation.status(entity.address) == ReputationStatus::Banned {
             self.remove_entity(entity);
         }
-    }
-
-    async fn paymaster_balance(&self, paymaster: Address) -> ProviderResult<PaymasterMetadata> {
-        if self.state.read().pool.paymaster_exists(paymaster) {
-            let meta = self
-                .state
-                .read()
-                .pool
-                .paymaster_metadata(paymaster)
-                .expect("Paymaster balance should not be empty if address exists in pool");
-            return Ok(meta);
-        }
-
-        let balance = self.entry_point.balance_of(paymaster, None).await?;
-
-        let paymaster_meta = PaymasterMetadata {
-            address: paymaster,
-            pending_balance: balance,
-            confirmed_balance: balance,
-        };
-
-        Ok(paymaster_meta)
     }
 
     fn best_operations(
@@ -586,10 +560,13 @@ where
     }
 
     fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool) {
-        self.state
-            .write()
-            .pool
-            .clear(clear_mempool, clear_paymaster);
+        if clear_mempool {
+            self.state.write().pool.clear();
+        }
+
+        if clear_paymaster {
+            self.paymaster.clear();
+        }
 
         if clear_reputation {
             self.reputation.clear()
@@ -601,32 +578,11 @@ where
     }
 
     fn dump_paymaster_balances(&self) -> Vec<PaymasterMetadata> {
-        self.state.read().pool.dump_paymaster_metadata()
+        self.paymaster.dump_paymaster_metadata()
     }
 
     fn get_reputation_status(&self, address: Address) -> ReputationStatus {
         self.reputation.status(address)
-    }
-
-    async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
-        let deposit_info = self.paymaster_helper.get_deposit_info(address).await?;
-
-        let is_staked = deposit_info
-            .stake
-            .ge(&self.config.sim_settings.min_stake_value)
-            && deposit_info
-                .unstake_delay_sec
-                .ge(&self.config.sim_settings.min_unstake_delay);
-
-        let stake_status = StakeStatus {
-            stake_info: StakeInfo {
-                stake: deposit_info.stake,
-                unstake_delay_sec: deposit_info.unstake_delay_sec,
-            },
-            is_staked,
-        };
-
-        Ok(stake_status)
     }
 
     fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64) {
@@ -681,7 +637,10 @@ mod tests {
     use rundler_types::{DepositInfo, EntityType, GasFees, ValidTimeRange};
 
     use super::*;
-    use crate::chain::{BalanceUpdate, MinedOp};
+    use crate::{
+        chain::{BalanceUpdate, MinedOp},
+        mempool::{PaymasterConfig, ReputationParams},
+    };
 
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
@@ -790,8 +749,7 @@ mod tests {
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos[1..].to_vec());
 
-        let paymaster_balance = pool.paymaster_balance(paymaster).await.unwrap();
-
+        let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.confirmed_balance, 1110.into());
     }
 
@@ -814,12 +772,7 @@ mod tests {
         }
 
         let (pool, uos) = create_pool_insert_ops(ops).await;
-        let metadata = pool
-            .state
-            .read()
-            .pool
-            .paymaster_metadata(paymaster)
-            .unwrap();
+        let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
 
         assert_eq!(metadata.pending_balance, 850.into());
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
@@ -861,13 +814,7 @@ mod tests {
             uos.clone()[1..].to_vec(),
         );
 
-        let metadata = pool
-            .state
-            .read()
-            .pool
-            .paymaster_metadata(paymaster)
-            .unwrap();
-
+        let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(metadata.pending_balance, 1000.into());
 
         pool.on_chain_update(&ChainUpdate {
@@ -896,13 +843,8 @@ mod tests {
         })
         .await;
 
-        let metadata = pool
-            .state
-            .read()
-            .pool
-            .paymaster_metadata(paymaster)
-            .unwrap();
-        assert_eq!(metadata.pending_balance, 860.into());
+        let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
+        assert_eq!(metadata.pending_balance, 850.into());
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
@@ -996,8 +938,12 @@ mod tests {
         }
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
+
+        let ops_seen = 100;
+        let ops_included = ops_seen / 10 - THROTTLE_SLACK - 1;
+
         // Past throttle slack
-        pool.set_reputation(address, 1 + THROTTLE_SLACK, 0);
+        pool.set_reputation(address, ops_seen, ops_included);
 
         // Ops 0 through 3 should be included
         for uo in uos.iter().take(4) {
@@ -1075,7 +1021,10 @@ mod tests {
         let uo = op.op.clone();
         let pool = create_pool(vec![op]);
         // Past ban slack
-        pool.set_reputation(address, 1 + BAN_SLACK, 0);
+
+        let ops_seen = 1000;
+        let ops_included = ops_seen / 10 - BAN_SLACK - 1;
+        pool.set_reputation(address, ops_seen, ops_included);
 
         // First op should be banned
         let ret = pool.add_operation(OperationOrigin::Local, uo.clone()).await;
@@ -1192,18 +1141,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stake_status_staked() {
-        let mut pool = create_pool(vec![]);
-
-        pool.config.sim_settings.min_stake_value = 9999;
-        pool.config.sim_settings.min_unstake_delay = 99;
-
-        let status = pool.get_stake_status(Address::random()).await.unwrap();
-
-        assert!(status.is_staked);
-    }
-
-    #[tokio::test]
     async fn test_stake_status_not_staked() {
         let mut pool = create_pool(vec![]);
 
@@ -1242,12 +1179,7 @@ mod tests {
 
         check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
 
-        let paymaster_balance = pool
-            .state
-            .read()
-            .pool
-            .paymaster_metadata(paymaster)
-            .unwrap();
+        let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.pending_balance, U256::from(900));
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -1340,28 +1272,29 @@ mod tests {
 
     fn create_pool(
         ops: Vec<OpWithErrors>,
-    ) -> UoPool<
-        impl ReputationManager,
-        impl Prechecker,
-        impl Simulator,
-        impl EntryPoint,
-        impl PaymasterHelper,
-    > {
-        let reputation = Arc::new(MockReputationManager::new(THROTTLE_SLACK, BAN_SLACK));
+    ) -> UoPool<impl Prechecker, impl Simulator, impl EntryPoint, impl PaymasterHelper> {
+        let args = PoolConfig {
+            entry_point: Address::random(),
+            chain_id: 1,
+            min_replacement_fee_increase_percentage: 10,
+            max_size_of_pool_bytes: 10000,
+            blocklist: None,
+            allowlist: None,
+            precheck_settings: PrecheckSettings::default(),
+            sim_settings: SimulationSettings::default(),
+            mempool_channel_configs: HashMap::new(),
+            num_shards: 1,
+            same_sender_mempool_count: 4,
+            throttled_entity_mempool_count: 4,
+            throttled_entity_live_blocks: 10,
+            paymaster_tracking_enabled: true,
+            reputation_tracking_enabled: true,
+        };
+
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
         let mut entrypoint = MockEntryPoint::new();
         let mut paymaster_helper = MockPaymasterHelper::new();
-        prechecker.expect_update_fees().returning(|| {
-            Ok((
-                GasFees {
-                    max_fee_per_gas: 0.into(),
-                    max_priority_fee_per_gas: 0.into(),
-                },
-                0.into(),
-            ))
-        });
-
         paymaster_helper.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
                 deposit: 1000,
@@ -1375,6 +1308,31 @@ mod tests {
         entrypoint
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
+        let paymaster = PaymasterTracker::new(
+            paymaster_helper,
+            entrypoint,
+            PaymasterConfig::new(
+                args.sim_settings.min_stake_value,
+                args.sim_settings.min_unstake_delay,
+                args.paymaster_tracking_enabled,
+            ),
+        );
+
+        let reputation = Arc::new(AddressReputation::new(
+            ReputationParams::test_parameters(BAN_SLACK, THROTTLE_SLACK),
+            args.blocklist.clone().unwrap_or_default(),
+            args.allowlist.clone().unwrap_or_default(),
+        ));
+
+        prechecker.expect_update_fees().returning(|| {
+            Ok((
+                GasFees {
+                    max_fee_per_gas: 0.into(),
+                    max_priority_fee_per_gas: 0.into(),
+                },
+                0.into(),
+            ))
+        });
 
         for op in ops {
             prechecker.expect_check().returning(move |_| {
@@ -1410,46 +1368,22 @@ mod tests {
                 });
         }
 
-        let args = PoolConfig {
-            entry_point: Address::random(),
-            chain_id: 1,
-            min_replacement_fee_increase_percentage: 10,
-            max_size_of_pool_bytes: 10000,
-            blocklist: None,
-            allowlist: None,
-            precheck_settings: PrecheckSettings::default(),
-            sim_settings: SimulationSettings::default(),
-            mempool_channel_configs: HashMap::new(),
-            num_shards: 1,
-            same_sender_mempool_count: 4,
-            throttled_entity_mempool_count: 4,
-            throttled_entity_live_blocks: 10,
-            paymaster_tracking_enabled: true,
-            reputation_tracking_enabled: true,
-        };
         let (event_sender, _) = broadcast::channel(4);
 
         UoPool::new(
             args,
-            reputation,
             event_sender,
             prechecker,
             simulator,
-            entrypoint,
-            paymaster_helper,
+            paymaster,
+            reputation,
         )
     }
 
     async fn create_pool_insert_ops(
         ops: Vec<OpWithErrors>,
     ) -> (
-        UoPool<
-            impl ReputationManager,
-            impl Prechecker,
-            impl Simulator,
-            impl EntryPoint,
-            impl PaymasterHelper,
-        >,
+        UoPool<impl Prechecker, impl Simulator, impl EntryPoint, impl PaymasterHelper>,
         Vec<UserOperation>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
@@ -1513,118 +1447,6 @@ mod tests {
         assert_eq!(ops.len(), expected.len());
         for (actual, expected) in ops.into_iter().zip(expected) {
             assert_eq!(actual.uo, expected);
-        }
-    }
-
-    #[derive(Default, Clone)]
-    struct MockReputationManager {
-        bundle_invalidation_ops_seen_staked_penalty: u64,
-        bundle_invalidation_ops_seen_unstaked_penalty: u64,
-        same_unstaked_entity_mempool_count: u64,
-        inclusion_rate_factor: u64,
-        throttling_slack: u64,
-        ban_slack: u64,
-        counts: Arc<RwLock<Counts>>,
-    }
-
-    #[derive(Default)]
-    struct Counts {
-        seen: HashMap<Address, u64>,
-        included: HashMap<Address, u64>,
-        tracking_enabled: bool,
-    }
-
-    impl MockReputationManager {
-        fn new(throttling_slack: u64, ban_slack: u64) -> Self {
-            Self {
-                throttling_slack,
-                ban_slack,
-                ..Self::default()
-            }
-        }
-    }
-
-    impl ReputationManager for MockReputationManager {
-        fn status(&self, address: Address) -> ReputationStatus {
-            let counts = self.counts.read();
-
-            let seen = *counts.seen.get(&address).unwrap_or(&0);
-            let included = *counts.included.get(&address).unwrap_or(&0);
-            let diff = seen.saturating_sub(included);
-            if diff > self.ban_slack {
-                ReputationStatus::Banned
-            } else if diff > self.throttling_slack {
-                ReputationStatus::Throttled
-            } else {
-                ReputationStatus::Ok
-            }
-        }
-
-        fn add_seen(&self, address: Address) {
-            *self.counts.write().seen.entry(address).or_default() += 1;
-        }
-
-        fn handle_srep_050_penalty(&self, address: Address) {
-            *self.counts.write().seen.entry(address).or_default() =
-                self.bundle_invalidation_ops_seen_staked_penalty;
-        }
-
-        fn handle_urep_030_penalty(&self, address: Address) {
-            *self.counts.write().seen.entry(address).or_default() +=
-                self.bundle_invalidation_ops_seen_unstaked_penalty;
-        }
-
-        fn add_included(&self, address: Address) {
-            *self.counts.write().included.entry(address).or_default() += 1;
-        }
-
-        fn remove_included(&self, address: Address) {
-            let mut counts = self.counts.write();
-            let included = counts.included.entry(address).or_default();
-            *included = included.saturating_sub(1);
-        }
-
-        fn dump_reputation(&self) -> Vec<Reputation> {
-            self.counts
-                .read()
-                .seen
-                .iter()
-                .map(|(address, ops_seen)| Reputation {
-                    address: *address,
-                    ops_seen: *ops_seen,
-                    ops_included: *self.counts.read().included.get(address).unwrap_or(&0),
-                })
-                .collect()
-        }
-
-        fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64) {
-            let mut counts = self.counts.write();
-            counts.seen.insert(address, ops_seen);
-            counts.included.insert(address, ops_included);
-        }
-
-        fn get_ops_allowed(&self, address: Address) -> u64 {
-            let counts = self.counts.read();
-            let seen = *counts.seen.get(&address).unwrap_or(&0);
-            let included = *counts.included.get(&address).unwrap_or(&0);
-            let inclusion_based_count = if seen == 0 {
-                // make sure we aren't dividing by 0
-                0
-            } else {
-                included * self.inclusion_rate_factor / seen + std::cmp::min(included, 10_000)
-            };
-
-            // return ops allowed, as defined by UREP-020
-            self.same_unstaked_entity_mempool_count + inclusion_based_count
-        }
-
-        fn clear(&self) {
-            self.counts.write().seen.clear();
-            self.counts.write().included.clear();
-        }
-
-        fn set_tracking(&self, tracking_enabled: bool) {
-            self.counts.write().tracking_enabled = tracking_enabled;
         }
     }
 }

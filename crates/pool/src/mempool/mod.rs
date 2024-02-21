@@ -18,13 +18,13 @@ mod entity_tracker;
 mod pool;
 
 mod reputation;
-pub(crate) use reputation::{HourlyMovingAverageReputation, ReputationParams};
+pub(crate) use reputation::{AddressReputation, ReputationParams};
 pub use reputation::{Reputation, ReputationStatus};
-use rundler_provider::ProviderResult;
 
 mod size;
 
 mod paymaster;
+pub(crate) use paymaster::{PaymasterConfig, PaymasterTracker};
 
 mod uo_pool;
 use std::{
@@ -65,9 +65,6 @@ pub trait Mempool: Send + Sync + 'static {
 
     /// Updates the reputation of an entity.
     fn update_entity(&self, entity_update: EntityUpdate);
-
-    /// Returns current paymaster balance
-    async fn paymaster_balance(&self, paymaster: Address) -> ProviderResult<PaymasterMetadata>;
 
     /// Returns the best operations from the pool.
     ///
