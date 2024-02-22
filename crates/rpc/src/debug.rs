@@ -70,8 +70,8 @@ pub trait DebugApi {
     #[method(name = "bundler_getStakeStatus")]
     async fn bundler_get_stake_status(
         &self,
-        entry_point: Address,
         address: Address,
+        entry_point: Address,
     ) -> RpcResult<RpcStakeStatus>;
 
     /// Dumps the paymaster balance cache
