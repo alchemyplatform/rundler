@@ -20,6 +20,7 @@ cargo-husky = { version = "1", default-features = false, features = ["user-hooks
 ethers = "2.0.10"
 futures = "0.3.28"
 futures-util = "0.3.28"
+itertools = "0.12.1"
 jsonrpsee = "0.20.1"
 metrics = "0.21.0"
 mockall = "0.11.4"

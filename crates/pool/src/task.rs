@@ -195,6 +195,7 @@ impl PoolTask {
                 pool_config.sim_settings.min_stake_value,
                 pool_config.sim_settings.min_unstake_delay,
                 pool_config.paymaster_tracking_enabled,
+                pool_config.paymaster_cache_length,
             ),
         );
 

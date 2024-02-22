@@ -1383,6 +1383,7 @@ mod tests {
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
             paymaster_tracking_enabled: true,
+            paymaster_cache_length: 100,
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
         };
@@ -1409,6 +1410,7 @@ mod tests {
                 args.sim_settings.min_stake_value,
                 args.sim_settings.min_unstake_delay,
                 args.paymaster_tracking_enabled,
+                args.paymaster_cache_length,
             ),
         );
 
