@@ -20,6 +20,7 @@ jobs:
         with:
           path: bundler-test-executors
           repository: alchemyplatform/bundler-test-executor
+          ref: releases/v0.6
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
