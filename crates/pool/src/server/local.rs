@@ -16,6 +16,7 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 use async_stream::stream;
 use async_trait::async_trait;
 use ethers::types::{Address, H256};
+use futures::future;
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
 use rundler_types::{EntityUpdate, UserOperation, UserOperationId};
@@ -527,13 +528,18 @@ where
                         // For example, a bundle builder listening for a new block to kick off
                         // its bundle building process will want to be able to query the mempool
                         // and only receive operations that have not yet been mined.
-                        for mempool in self.mempools.values() {
-                            mempool.on_chain_update(&chain_update).await;
-                        }
-
-                        let _ = self.block_sender.send(NewHead {
-                            block_hash: chain_update.latest_block_hash,
-                            block_number: chain_update.latest_block_number,
+                        let block_sender = self.block_sender.clone();
+                        let update_futures : Vec<_> = self.mempools.values().map(|m| {
+                            let m = Arc::clone(m);
+                            let cu = Arc::clone(&chain_update);
+                            async move { m.on_chain_update(&cu).await }
+                        }).collect();
+                        tokio::spawn(async move {
+                            future::join_all(update_futures).await;
+                            let _ = block_sender.send(NewHead {
+                                block_hash: chain_update.latest_block_hash,
+                                block_number: chain_update.latest_block_number,
+                            });
                         });
                     }
                 }
