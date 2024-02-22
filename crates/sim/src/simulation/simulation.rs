@@ -1048,11 +1048,11 @@ mod tests {
 
     use ethers::{
         abi::AbiEncode,
-        providers::JsonRpcError,
         types::{Address, BlockNumber, Bytes, U64},
         utils::hex,
     };
-    use rundler_provider::{AggregatorOut, MockProvider, ProviderError};
+    use rundler_provider::{AggregatorOut, MockProvider};
+    use rundler_types::contracts::get_code_hashes::CodeHashesResult;
 
     use super::*;
     use crate::simulation::tracer::{MockSimulateValidationTracer, Phase};
@@ -1172,18 +1172,18 @@ mod tests {
             .expect_trace_simulate_validation()
             .returning(move |_, _, _| Ok(get_test_tracer_output()));
 
-        // The underlying eth_call when getting the code hash in check_contracts
-        provider.expect_call().returning(|_, _, _| {
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(
-                    "0x091cd005abf68e7b82c951a8619f065986132f67a0945153533cfcdd93b6895f33dbc0c7"
-                        .to_string(),
-                )),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
+        // The underlying call constructor when getting the code hash in check_contracts
+        provider
+            .expect_call_constructor()
+            .returning(|_, _: Vec<Address>, _, _| {
+                Ok(CodeHashesResult {
+                    hash: H256::from_str(
+                        "0x091cd005abf68e7b82c951a8619f065986132f67a0945153533cfcdd93b6895f",
+                    )
+                    .unwrap()
+                    .into(),
+                })
+            });
 
         provider
             .expect_validate_user_op_signature()

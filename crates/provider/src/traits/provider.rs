@@ -15,10 +15,13 @@
 
 use std::{fmt::Debug, sync::Arc};
 
-use ethers::types::{
-    spoof, transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
-    FeeHistory, Filter, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log,
-    Transaction, TransactionReceipt, TxHash, H256, U256, U64,
+use ethers::{
+    abi::{AbiDecode, AbiEncode},
+    types::{
+        spoof, transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
+        FeeHistory, Filter, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log,
+        Transaction, TransactionReceipt, TxHash, H256, U256, U64,
+    },
 };
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -75,6 +78,19 @@ pub trait Provider: Send + Sync + Debug + 'static {
         block: Option<BlockId>,
         state_overrides: &spoof::State,
     ) -> ProviderResult<Bytes>;
+
+    /// Call a contract's constructor
+    /// The constructor is assumed to revert with the result data
+    async fn call_constructor<A, R>(
+        &self,
+        bytecode: &Bytes,
+        args: A,
+        block_id: Option<BlockId>,
+        state_overrides: &spoof::State,
+    ) -> anyhow::Result<R>
+    where
+        A: AbiEncode + Send + Sync + 'static,
+        R: AbiDecode + Send + Sync + 'static;
 
     /// Get the current block number
     async fn get_block_number(&self) -> ProviderResult<u64>;

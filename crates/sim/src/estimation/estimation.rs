@@ -433,11 +433,10 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 mod tests {
     use ethers::{
         abi::{AbiEncode, Address},
-        providers::JsonRpcError,
         types::U64,
         utils::hex,
     };
-    use rundler_provider::{MockEntryPoint, MockProvider, ProviderError};
+    use rundler_provider::{MockEntryPoint, MockProvider};
     use rundler_types::{
         chain::L1GasOracleContractType,
         contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
@@ -724,22 +723,15 @@ mod tests {
                 }))
             });
 
-        provider.expect_call().returning(move |_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: gas_usage * 2,
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
-
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: gas_usage * 2,
+                    success: false,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -786,22 +778,15 @@ mod tests {
 
         // this gas used number is larger than a u64 max number so we need to
         // check for this overflow
-        provider.expect_call().returning(|_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(18446744073709551616_u128),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
-
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: U256::from(18446744073709551616_u128),
+                    success: false,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -850,22 +835,15 @@ mod tests {
 
         // the success field should not be true as the
         // call should always revert
-        provider.expect_call().returning(|_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: true,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
-
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: true,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -900,22 +878,15 @@ mod tests {
                 }))
             });
 
-        provider.expect_call().returning(|_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
-
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: false,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -949,22 +920,15 @@ mod tests {
             .expect_call_spoofed_simulate_op()
             .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error")));
 
-        provider.expect_call().returning(|_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(20000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
-
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: U256::from(20000),
+                    success: false,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -1009,9 +973,13 @@ mod tests {
                 }))
             });
 
-        provider
-            .expect_call()
-            .returning(|_a, _b, _c| Ok(Bytes::new()));
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                let ret: Result<GasUsedResult, anyhow::Error> =
+                    Err(anyhow::anyhow!("This should always revert"));
+                ret
+            },
+        );
 
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
@@ -1195,22 +1163,16 @@ mod tests {
         provider
             .expect_get_latest_block_hash_and_number()
             .returning(|| Ok((H256::zero(), U64::zero())));
-        provider.expect_call().returning(move |_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: gas_usage,
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: gas_usage,
+                    success: false,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
         provider
             .expect_get_base_fee()
             .returning(|| Ok(U256::from(1000)));
@@ -1281,22 +1243,16 @@ mod tests {
         provider
             .expect_get_latest_block_hash_and_number()
             .returning(|| Ok((H256::zero(), U64::zero())));
-        provider.expect_call().returning(|_a, _b, _c| {
-            let result_data: Bytes = GasUsedResult {
-                gas_used: U256::from(100000),
-                success: false,
-                result: Bytes::new(),
-            }
-            .encode()
-            .into();
+        provider.expect_call_constructor().returning(
+            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+                Ok(GasUsedResult {
+                    gas_used: U256::from(100000),
+                    success: false,
+                    result: Bytes::new(),
+                })
+            },
+        );
 
-            let json_rpc_error = JsonRpcError {
-                code: -32000,
-                message: "execution reverted".to_string(),
-                data: Some(serde_json::Value::String(result_data.to_string())),
-            };
-            Err(ProviderError::JsonRpcError(json_rpc_error))
-        });
         provider
             .expect_get_base_fee()
             .returning(|| Ok(U256::from(1000)));

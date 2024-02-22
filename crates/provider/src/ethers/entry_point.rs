@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Context;
 use ethers::{
@@ -26,24 +26,60 @@ use ethers::{
 };
 use rundler_types::{
     contracts::{
+        get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
         shared_types::UserOpsPerAggregator,
     },
-    GasFees, UserOperation, ValidationOutput,
+    DepositInfo, GasFees, UserOperation, ValidationOutput,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
-use crate::traits::{EntryPoint, HandleOpsOut};
+use crate::{
+    traits::{EntryPoint, HandleOpsOut},
+    Provider,
+};
 
 const REVERT_REASON_MAX_LEN: usize = 2048;
 
-#[async_trait::async_trait]
-impl<M> EntryPoint for IEntryPoint<M>
+/// Implementation of the `EntryPoint` trait for the v0.6 version of the entry point contract using ethers
+#[derive(Debug)]
+pub struct EntryPointImpl<P: Provider + Middleware> {
+    i_entry_point: IEntryPoint<P>,
+    provider: Arc<P>,
+}
+
+impl<P> Clone for EntryPointImpl<P>
 where
-    M: Middleware + 'static,
+    P: Provider + Middleware,
+{
+    fn clone(&self) -> Self {
+        Self {
+            i_entry_point: self.i_entry_point.clone(),
+            provider: self.provider.clone(),
+        }
+    }
+}
+
+impl<P> EntryPointImpl<P>
+where
+    P: Provider + Middleware,
+{
+    /// Create a new `EntryPointImpl` instance
+    pub fn new(entry_point_address: Address, provider: Arc<P>) -> Self {
+        Self {
+            i_entry_point: IEntryPoint::new(entry_point_address, Arc::clone(&provider)),
+            provider,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<P> EntryPoint for EntryPointImpl<P>
+where
+    P: Provider + Middleware + Send + Sync + 'static,
 {
     fn address(&self) -> Address {
-        self.deref().address()
+        self.i_entry_point.address()
     }
 
     async fn get_simulate_validation_call(
@@ -53,6 +89,7 @@ where
     ) -> anyhow::Result<TypedTransaction> {
         let pvg = user_op.pre_verification_gas;
         let tx = self
+            .i_entry_point
             .simulate_validation(user_op)
             .gas(U256::from(max_validation_gas) + pvg)
             .tx;
@@ -66,6 +103,7 @@ where
     ) -> anyhow::Result<ValidationOutput> {
         let pvg = user_op.pre_verification_gas;
         match self
+            .i_entry_point
             .simulate_validation(user_op)
             .gas(U256::from(max_validation_gas) + pvg)
             .call()
@@ -84,7 +122,7 @@ where
         beneficiary: Address,
         gas: U256,
     ) -> anyhow::Result<HandleOpsOut> {
-        let result = get_handle_ops_call(self, ops_per_aggregator, beneficiary, gas)
+        let result = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas)
             .call()
             .await;
         let error = match result {
@@ -118,8 +156,8 @@ where
         block_id: Option<BlockId>,
     ) -> anyhow::Result<U256> {
         block_id
-            .map_or(self.balance_of(address), |bid| {
-                self.balance_of(address).block(bid)
+            .map_or(self.i_entry_point.balance_of(address), |bid| {
+                self.i_entry_point.balance_of(address).block(bid)
             })
             .call()
             .await
@@ -136,6 +174,7 @@ where
         spoofed_state: &spoof::State,
     ) -> anyhow::Result<Result<ExecutionResult, String>> {
         let contract_error = self
+            .i_entry_point
             .simulate_handle_op(op, target, target_call_data)
             .block(block_hash)
             .gas(gas)
@@ -157,7 +196,7 @@ where
         gas_fees: GasFees,
     ) -> TypedTransaction {
         let tx: Eip1559TransactionRequest =
-            get_handle_ops_call(self, ops_per_aggregator, beneficiary, gas)
+            get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas)
                 .tx
                 .into();
         tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
@@ -178,6 +217,28 @@ where
         } else {
             Err(hex::encode(&revert_data[..REVERT_REASON_MAX_LEN]))
         }
+    }
+
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo> {
+        Ok(self
+            .i_entry_point
+            .get_deposit_info(address)
+            .await
+            .context("should get deposit info")?)
+    }
+
+    async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>> {
+        let out: GetBalancesResult = self
+            .provider
+            .call_constructor(
+                &GETBALANCES_BYTECODE,
+                (self.address(), addresses),
+                None,
+                &spoof::state(),
+            )
+            .await
+            .context("should compute balances")?;
+        Ok(out.balances)
     }
 }
 

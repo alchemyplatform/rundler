@@ -15,6 +15,7 @@ use std::{fmt::Debug, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
+    abi::{AbiDecode, AbiEncode},
     contract::ContractError,
     prelude::ContractError as EthersContractError,
     providers::{
@@ -72,6 +73,30 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
             call = call.block(block);
         }
         Ok(call.await?)
+    }
+
+    async fn call_constructor<A, R>(
+        &self,
+        bytecode: &Bytes,
+        args: A,
+        block_id: Option<BlockId>,
+        state_overrides: &spoof::State,
+    ) -> anyhow::Result<R>
+    where
+        A: AbiEncode + Send + Sync + 'static,
+        R: AbiDecode + Send + Sync + 'static,
+    {
+        let mut data = bytecode.to_vec();
+        data.extend(AbiEncode::encode(args));
+        let tx = Eip1559TransactionRequest {
+            data: Some(data.into()),
+            ..Default::default()
+        };
+        let error = Provider::call(self, &tx.into(), block_id, state_overrides)
+            .await
+            .err()
+            .context("called constructor should revert")?;
+        get_revert_data(error).context("should decode revert data from called constructor")
     }
 
     async fn fee_history<T: Into<U256> + Send + Sync + Serialize + 'static>(
@@ -280,5 +305,19 @@ impl From<EthersProviderError> for ProviderError {
 impl<M: Middleware> From<EthersContractError<M>> for ProviderError {
     fn from(e: EthersContractError<M>) -> Self {
         ProviderError::ContractError(e.to_string())
+    }
+}
+
+// Gets and decodes the revert data from a provider error, if it is a revert error.
+fn get_revert_data<D: AbiDecode>(error: ProviderError) -> Result<D, ProviderError> {
+    let ProviderError::JsonRpcError(jsonrpc_error) = &error else {
+        return Err(error);
+    };
+    if !jsonrpc_error.is_revert() {
+        return Err(error);
+    }
+    match jsonrpc_error.decode_revert_data() {
+        Some(ret) => Ok(ret),
+        None => Err(error),
     }
 }

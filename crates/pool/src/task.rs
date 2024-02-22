@@ -16,17 +16,12 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::providers::Middleware;
-use rundler_provider::{EntryPoint, PaymasterHelper, Provider};
+use rundler_provider::{EntryPoint, EthersEntryPoint, Provider};
 use rundler_sim::{
     Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
 };
 use rundler_task::Task;
-use rundler_types::{
-    chain::ChainSpec,
-    contracts::{
-        i_entry_point::IEntryPoint, paymaster_helper::PaymasterHelper as PaymasterHelperContract,
-    },
-};
+use rundler_types::chain::ChainSpec;
 use rundler_utils::{emit::WithEntryPoint, eth, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -164,24 +159,21 @@ impl PoolTask {
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
-    ) -> anyhow::Result<
-        UoPool<impl Prechecker, impl Simulator, impl EntryPoint, impl PaymasterHelper>,
-    > {
-        let i_entry_point = IEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
-        let paymaster_helper =
-            PaymasterHelperContract::new(pool_config.entry_point, Arc::clone(&provider));
+    ) -> anyhow::Result<UoPool<impl Prechecker, impl Simulator, impl EntryPoint>> {
+        let ep = EthersEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
 
         let prechecker = PrecheckerImpl::new(
             chain_spec,
             Arc::clone(&provider),
-            i_entry_point.clone(),
+            ep.clone(),
             pool_config.precheck_settings,
         );
+
         let simulate_validation_tracer =
-            SimulateValidationTracerImpl::new(Arc::clone(&provider), i_entry_point.clone());
+            SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
         let simulator = SimulatorImpl::new(
             Arc::clone(&provider),
-            i_entry_point.address(),
+            ep.address(),
             simulate_validation_tracer,
             pool_config.sim_settings,
             pool_config.mempool_channel_configs.clone(),
@@ -198,8 +190,7 @@ impl PoolTask {
         tokio::spawn(async move { reputation_runner.run().await });
 
         let paymaster = PaymasterTracker::new(
-            paymaster_helper,
-            i_entry_point,
+            ep.clone(),
             PaymasterConfig::new(
                 pool_config.sim_settings.min_stake_value,
                 pool_config.sim_settings.min_unstake_delay,

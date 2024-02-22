@@ -14,6 +14,6 @@
 //! Provider implementations using [ethers-rs](https://github.com/gakonst/ethers-rs)
 
 mod entry_point;
-mod paymaster_helper;
+pub use entry_point::EntryPointImpl as EthersEntryPoint;
+
 mod provider;
-mod stake_manager;
