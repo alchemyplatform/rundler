@@ -19,11 +19,11 @@ use ethers::providers::{HttpClientError, JsonRpcClient};
 use metrics::{counter, histogram};
 use parse_display::Display;
 use reqwest::StatusCode;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::time::Instant;
 
-#[derive(Display, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Display)]
+#[display(style = "snake_case")]
 enum RpcCode {
     ServerError,
     InternalError,
@@ -35,8 +35,8 @@ enum RpcCode {
     Other,
 }
 
-#[derive(Display, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Display)]
+#[display(style = "snake_case")]
 enum HttpCode {
     TwoHundreds,
     FourHundreds,
