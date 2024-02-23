@@ -13,10 +13,13 @@ rundler-utils = { path = "../utils" }
 anyhow.workspace = true
 async-trait.workspace = true
 ethers.workspace = true
+metrics.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+parse-display.workspace = true
 
 mockall = {workspace = true, optional = true }
 

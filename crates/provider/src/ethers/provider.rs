@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use ethers::{
@@ -19,8 +19,8 @@ use ethers::{
     contract::ContractError,
     prelude::ContractError as EthersContractError,
     providers::{
-        JsonRpcClient, Middleware, Provider as EthersProvider,
-        ProviderError as EthersProviderError, RawCall,
+        Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, Provider as EthersProvider,
+        ProviderError as EthersProviderError, RawCall, RetryClient, RetryClientBuilder,
     },
     types::{
         spoof, transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
@@ -29,6 +29,7 @@ use ethers::{
         H256, U256, U64,
     },
 };
+use reqwest::Url;
 use rundler_types::{
     contracts::{
         gas_price_oracle::GasPriceOracle, i_aggregator::IAggregator, i_entry_point::IEntryPoint,
@@ -38,6 +39,7 @@ use rundler_types::{
 };
 use serde::{de::DeserializeOwned, Serialize};
 
+use super::metrics_middleware::MetricsMiddleware;
 use crate::{AggregatorOut, AggregatorSimOut, Provider, ProviderError, ProviderResult};
 
 const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
@@ -320,4 +322,36 @@ fn get_revert_data<D: AbiDecode>(error: ProviderError) -> Result<D, ProviderErro
         Some(ret) => Ok(ret),
         None => Err(error),
     }
+}
+
+/// Construct a new Ethers provider from a URL and a poll interval.
+///
+/// Creates a provider with a retry client that retries 10 times, with an initial backoff of 500ms.
+pub fn new_provider(
+    url: &str,
+    poll_interval: Option<Duration>,
+) -> anyhow::Result<Arc<EthersProvider<RetryClient<MetricsMiddleware<Http>>>>> {
+    let parsed_url = Url::parse(url).context("provider url should be valid")?;
+
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .build()
+        .context("failed to build reqwest client")?;
+    let http = MetricsMiddleware::new(Http::new_with_client(parsed_url, http_client));
+
+    let client = RetryClientBuilder::default()
+        // these retries are if the server returns a 429
+        .rate_limit_retries(10)
+        // these retries are if the connection is dubious
+        .timeout_retries(3)
+        .initial_backoff(Duration::from_millis(500))
+        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
+
+    let mut provider = EthersProvider::new(client);
+
+    if let Some(poll_interval) = poll_interval {
+        provider = provider.interval(poll_interval);
+    }
+
+    Ok(Arc::new(provider))
 }

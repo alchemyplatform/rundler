@@ -29,7 +29,7 @@ use rundler_sim::{
 };
 use rundler_task::Task;
 use rundler_types::chain::ChainSpec;
-use rundler_utils::{emit::WithEntryPoint, eth, handle};
+use rundler_utils::{emit::WithEntryPoint, handle};
 use rusoto_core::Region;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -123,7 +123,8 @@ where
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         info!("Mempool config: {:?}", self.args.mempool_configs);
 
-        let provider = eth::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
+        let provider =
+            rundler_provider::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
 
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
@@ -275,8 +276,10 @@ where
             self.args.mempool_configs.clone(),
         );
 
-        let submit_provider =
-            eth::new_provider(&self.args.submit_url, Some(self.args.eth_poll_interval))?;
+        let submit_provider = rundler_provider::new_provider(
+            &self.args.submit_url,
+            Some(self.args.eth_poll_interval),
+        )?;
 
         let transaction_sender = self.args.sender_type.into_sender(
             &self.args.chain_spec,

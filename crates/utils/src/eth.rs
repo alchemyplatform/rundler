@@ -13,18 +13,12 @@
 
 //! Utilities for working with an Ethereum-like chain via Ethers.
 
-use std::{sync::Arc, time::Duration};
-
-use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, RawLog},
     contract::ContractError,
-    providers::{
-        Http, HttpRateLimitRetryPolicy, Middleware, Provider, RetryClient, RetryClientBuilder,
-    },
+    providers::Middleware,
     types::{Address, Bytes, Log},
 };
-use url::Url;
 
 /// Gets the revert data from a contract error if it is a revert error,
 /// otherwise returns the original error.
@@ -49,37 +43,6 @@ pub fn parse_revert_message(revert_data: &[u8]) -> Option<String> {
     ContractRevertError::decode(revert_data)
         .ok()
         .map(|err| err.reason)
-}
-
-/// Construct a new Ethers provider from a URL and a poll interval.
-///
-/// Creates a provider with a retry client that retries 10 times, with an initial backoff of 500ms.
-pub fn new_provider(
-    url: &str,
-    poll_interval: Option<Duration>,
-) -> anyhow::Result<Arc<Provider<RetryClient<Http>>>> {
-    let parsed_url = Url::parse(url).context("provider url should be valid")?;
-
-    let http_client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(1))
-        .build()
-        .context("failed to build reqwest client")?;
-    let http = Http::new_with_client(parsed_url, http_client);
-
-    let client = RetryClientBuilder::default()
-        // these retries are if the server returns a 429
-        .rate_limit_retries(10)
-        // these retries are if the connection is dubious
-        .timeout_retries(3)
-        .initial_backoff(Duration::from_millis(500))
-        .build(http, Box::<HttpRateLimitRetryPolicy>::default());
-
-    let mut provider = Provider::new(client);
-    if let Some(poll_interval) = poll_interval {
-        provider = provider.interval(poll_interval);
-    }
-
-    Ok(Arc::new(provider))
 }
 
 /// Converts an ethers `Log` into an ethabi `RawLog`.

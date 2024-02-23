@@ -15,7 +15,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::bail;
 use async_trait::async_trait;
-use ethers::providers::{Http, Provider, RetryClient};
+use ethers::providers::{JsonRpcClient, Provider};
 use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
@@ -29,7 +29,6 @@ use rundler_task::{
     Task,
 };
 use rundler_types::chain::ChainSpec;
-use rundler_utils::eth;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -88,7 +87,7 @@ where
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
 
-        let provider = eth::new_provider(&self.args.rpc_url, None)?;
+        let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
         let ep = EthersEntryPoint::new(self.args.chain_spec.entry_point_address, provider.clone());
 
         let mut module = RpcModule::new(());
@@ -148,9 +147,9 @@ where
         Box::new(self)
     }
 
-    fn attach_namespaces<E: EntryPoint + Clone>(
+    fn attach_namespaces<E: EntryPoint + Clone, C: JsonRpcClient + 'static>(
         &self,
-        provider: Arc<Provider<RetryClient<Http>>>,
+        provider: Arc<Provider<C>>,
         entry_point: E,
         module: &mut RpcModule<()>,
     ) -> anyhow::Result<()> {

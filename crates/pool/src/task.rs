@@ -22,7 +22,7 @@ use rundler_sim::{
 };
 use rundler_task::Task;
 use rundler_types::chain::ChainSpec;
-use rundler_utils::{emit::WithEntryPoint, eth, handle};
+use rundler_utils::{emit::WithEntryPoint, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
 
@@ -78,7 +78,10 @@ impl Task for PoolTask {
                 .map(|config| config.entry_point)
                 .collect(),
         };
-        let provider = eth::new_provider(&self.args.http_url, Some(self.args.http_poll_interval))?;
+        let provider = rundler_provider::new_provider(
+            &self.args.http_url,
+            Some(self.args.http_poll_interval),
+        )?;
         let chain = Chain::new(provider.clone(), chain_settings);
         let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
         let chain_handle = chain.spawn_watcher(update_sender.clone(), shutdown_token.clone());
