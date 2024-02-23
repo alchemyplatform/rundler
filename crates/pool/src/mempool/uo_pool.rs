@@ -632,31 +632,35 @@ struct UoPoolMetrics {}
 
 impl UoPoolMetrics {
     fn update_ops_seen(num_ops: isize, entry_point: Address) {
-        metrics::increment_gauge!("op_pool_ops_seen", num_ops as f64, "entrypoint" => entry_point.to_string());
+        metrics::gauge!("op_pool_ops_seen", "entrypoint" => entry_point.to_string())
+            .increment(num_ops as f64);
     }
 
     fn increment_unmined_operations(num_ops: usize, entry_point: Address) {
-        metrics::counter!("op_pool_unmined_operations", num_ops as u64, "entrypoint" => entry_point.to_string());
+        metrics::counter!("op_pool_unmined_operations", "entrypoint" => entry_point.to_string())
+            .increment(num_ops as u64);
     }
 
     fn increment_removed_operations(num_ops: usize, entry_point: Address) {
-        metrics::counter!("op_pool_removed_operations", num_ops as u64, "entrypoint" => entry_point.to_string());
+        metrics::counter!("op_pool_removed_operations", "entrypoint" => entry_point.to_string())
+            .increment(num_ops as u64);
     }
 
     fn increment_removed_entities(entry_point: Address) {
-        metrics::increment_counter!("op_pool_removed_entities", "entrypoint" => entry_point.to_string());
+        metrics::counter!("op_pool_removed_entities", "entrypoint" => entry_point.to_string())
+            .increment(1);
     }
 
     fn current_max_fee_gwei(fee: f64) {
-        metrics::gauge!("op_pool_current_max_fee_gwei", fee);
+        metrics::gauge!("op_pool_current_max_fee_gwei").set(fee);
     }
 
     fn current_max_priority_fee_gwei(fee: f64) {
-        metrics::gauge!("op_pool_current_max_priority_fee_gwei", fee);
+        metrics::gauge!("op_pool_current_max_priority_fee_gwei").set(fee);
     }
 
     fn current_base_fee(fee: f64) {
-        metrics::gauge!("op_pool_current_base_fee", fee);
+        metrics::gauge!("op_pool_current_base_fee").set(fee);
     }
 }
 

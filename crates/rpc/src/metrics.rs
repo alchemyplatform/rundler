@@ -82,22 +82,22 @@ pub(crate) struct RpcMetrics {}
 
 impl RpcMetrics {
     fn increment_num_requests(method_name: String) {
-        metrics::increment_counter!("rpc_num_requests", "method_name" => method_name)
+        metrics::counter!("rpc_num_requests", "method_name" => method_name).increment(1);
     }
 
     fn increment_open_requests(method_name: String) {
-        metrics::increment_gauge!("rpc_open_requests", 1_f64, "method_name" => method_name)
+        metrics::gauge!("rpc_open_requests", "method_name" => method_name).increment(1_f64);
     }
 
     fn decrement_open_requests(method_name: String) {
-        metrics::decrement_gauge!("rpc_open_requests", 1_f64, "method_name" => method_name)
+        metrics::gauge!("rpc_open_requests", "method_name" => method_name).decrement(1_f64);
     }
 
     fn increment_rpc_error_count(method_name: String) {
-        metrics::increment_counter!("rpc_error_count", "method_name" => method_name)
+        metrics::counter!("rpc_error_count", "method_name" => method_name).increment(1);
     }
 
     fn record_request_latency(method_name: String, latency: Duration) {
-        metrics::histogram!("rpc_request_latency", latency, "method_name" => method_name)
+        metrics::histogram!("rpc_request_latency", "method_name" => method_name).record(latency);
     }
 }

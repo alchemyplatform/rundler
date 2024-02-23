@@ -63,7 +63,8 @@ pub(crate) async fn monitor_account_balance<M: Middleware>(addr: Address, provid
                 // converting to u64. This keeps six decimal places.
                 let eth_balance = (balance / 10_u64.pow(12)).as_u64() as f64 / 1e6;
                 tracing::info!("account {addr:?} balance: {}", eth_balance);
-                metrics::gauge!("bundle_builder_account_balance", eth_balance, "addr" => format!("{addr:?}"));
+                metrics::gauge!("bundle_builder_account_balance", "addr" => format!("{addr:?}"))
+                    .set(eth_balance);
             }
             Err(err) => {
                 tracing::error!("Get account {addr:?} balance error {err:?}");
