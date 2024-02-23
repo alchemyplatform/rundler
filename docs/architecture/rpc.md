@@ -39,8 +39,46 @@ Method defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account-
 | `debug_bundler_setReputation` | ✅ |
 | `debug_bundler_dumpReputation` | ✅ |
 | `debug_bundler_addUserOps` | 🚧 | |
+| [`debug_bundler_getStakeStatus`](#debug_bundler_getstakestatus) | ✅ | ✅ |
 | [`debug_bundler_clearMempool`](#debug_bundler_clearMempool) | ✅ | ✅
 | [`debug_bundler_dumpPaymasterBalances`](#debug_bundler_dumpPaymasterBalances) | ✅ | ✅
+
+#### `debug_bundler_getStakeStatus`
+
+This method is used by the ERC-4337 `bundler-spec-tests` but is not (yet) part of the standard.
+
+This method gets the stake status of a certain address with a particular entry point contract.
+
+##### Parameters 
+
+- Address to get stake status for
+- Entry point address
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "debug_bundler_clearMempool",
+  "params": ["0x...", "0x..."] // address, entry point address 
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      isStaked: bool,
+      stakeInfo: {
+        addr: address,
+        stake: uint128,
+        unstakeDelaySec: uint32
+      }
+    }
+  ]
+}
+```
 
 #### `debug_bundler_clearMempool`
 
