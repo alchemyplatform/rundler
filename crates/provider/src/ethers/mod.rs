@@ -15,5 +15,5 @@
 
 mod entry_point;
 pub use entry_point::EntryPointImpl as EthersEntryPoint;
-
-mod provider;
+mod metrics_middleware;
+pub(crate) mod provider;
