@@ -11,3 +11,5 @@
 [Docker](./docker.md): Instructions for building and running Docker images.
 
 [Proto](./proto.md): Protobuf usage and best practices.
+
+[Releases](./release.md): The release pipeline for the rundler binary

@@ -1,0 +1,15 @@
+# This image is meant to enable cross-architecture builds.
+# It assumes the rundler binary has already been compiled for `$TARGETPLATFORM` and is
+# locatable in `./dist/bin/$TARGETARCH`
+FROM --platform=$TARGETPLATFORM ubuntu:22.04
+
+LABEL org.opencontainers.image.source=https://github.com/alchemyplatform/rundler
+LABEL org.opencontainers.image.licenses="GNU Lesser General Public License v3.0"
+
+# Filled by docker buildx
+ARG TARGETARCH
+
+COPY ./dist/bin/$TARGETARCH/rundler /usr/local/bin/rundler
+
+EXPOSE 3000 8080
+ENTRYPOINT ["/usr/local/bin/rundler"]

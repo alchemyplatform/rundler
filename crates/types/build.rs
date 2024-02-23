@@ -19,7 +19,6 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/lib");
     println!("cargo:rerun-if-changed=contracts/src");
     println!("cargo:rerun-if-changed=contracts/foundry.toml");
-    update_submodules()?;
     generate_contract_bindings()?;
     Ok(())
 }
@@ -61,14 +60,6 @@ fn generate_abis() -> Result<(), Box<dyn error::Error>> {
             .arg("./contracts"),
         "https://getfoundry.sh/",
         "generate ABIs",
-    )
-}
-
-fn update_submodules() -> Result<(), Box<dyn error::Error>> {
-    run_command(
-        Command::new("git").arg("submodule").arg("update"),
-        "https://github.com/git-guides/install-git",
-        "update submodules",
     )
 }
 

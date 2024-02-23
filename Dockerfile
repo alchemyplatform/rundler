@@ -1,7 +1,7 @@
 # Adapted from https://github.com/paradigmxyz/reth/blob/main/Dockerfile
 # syntax=docker/dockerfile:1.4
 
-FROM rust:1.75.0 AS chef-builder
+FROM --platform=$TARGETPLATFORM rust:1.75.0 AS chef-builder
 
 # Install system dependencies
 RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
@@ -50,8 +50,8 @@ WORKDIR /app
 # install curl for healthcheck
 RUN apt-get -y update; apt-get -y install curl
 
-# Copy reth over from the build stage
+# Copy rundler over from the build stage
 COPY --from=builder /app/target/release/rundler /usr/local/bin
 
 EXPOSE 3000 8080
-CMD ["/usr/local/bin/rundler", "node"]
+ENTRYPOINT ["/usr/local/bin/rundler"]
