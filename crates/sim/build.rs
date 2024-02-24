@@ -21,15 +21,17 @@ fn main() -> Result<(), Box<dyn error::Error>> {
 }
 
 fn compile_tracer() -> Result<(), Box<dyn error::Error>> {
-    let install_url = "https://classic.yarnpkg.com/en/docs/install";
+    let install_url = "https://bun.sh/docs/installation";
     let action = "compile tracer";
     run_command(
-        Command::new("yarn").current_dir("tracer"),
+        Command::new("bun").arg("install").current_dir("tracer"),
         install_url,
         action,
     )?;
     run_command(
-        Command::new("yarn").arg("build").current_dir("tracer"),
+        Command::new("bun")
+            .args(["run", "bundle"])
+            .current_dir("tracer"),
         install_url,
         action,
     )
