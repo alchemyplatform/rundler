@@ -39,7 +39,7 @@ submodule-update: ## Update git submodules
 	git submodule update
 
 build-%:
-	cross build --bin rundler --target $* --profile "$(PROFILE)"
+	cross build --target $* --profile "$(PROFILE)"
 	
 .PHONY: fmt
 fmt: ## format code with nightly rust
@@ -71,6 +71,6 @@ define build_docker_image
 		--platform linux/arm64,linux/amd64 \
 		--tag $(DOCKER_IMAGE_NAME):$(1) \
 		$(if $(2),--tag $(DOCKER_IMAGE_NAME):$(2)) \
-		--provenance=false 
+		--provenance=false --push
 endef
 

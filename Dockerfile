@@ -1,19 +1,18 @@
 # Adapted from https://github.com/paradigmxyz/reth/blob/main/Dockerfile
 # syntax=docker/dockerfile:1.4
 
+FROM ghcr.io/foundry-rs/foundry:latest as foundry
+
 FROM --platform=$TARGETPLATFORM rust:1.75.0 AS chef-builder
 
 # Install system dependencies
+COPY --from=foundry /usr/local/bin/forge /usr/local/bin/forge
+SHELL ["/bin/bash", "-c"]
 RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
 RUN mkdir -p /etc/apt/keyrings
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
 RUN echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
-RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config protobuf-compiler nodejs yarn rsync
-
-SHELL ["/bin/bash", "-c"]
-RUN curl -L https://foundry.paradigm.xyz | bash
-ENV PATH="/root/.foundry/bin:${PATH}"
-RUN foundryup
+RUN apt-get update && apt-get -y upgrade && apt-get install -y protobuf-compiler nodejs yarn rsync
 
 RUN cargo install cargo-chef --locked
 

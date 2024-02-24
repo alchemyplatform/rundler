@@ -44,3 +44,5 @@ tracing.workspace = true
 tracing-appender = "0.2.2"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt", "json"] }
+openssl = { version = "0.10", features = ["vendored"] }
+
