@@ -11,7 +11,5 @@
     "@types/bun": "^1.0.7",
     "prettier": "^2.8.4",
     "typescript": "^4.9.5"
-  },
-  "module": "src/validationTracer.ts",
-  "type": "module"
+  }
 }
