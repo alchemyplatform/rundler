@@ -26,6 +26,10 @@ jobs:
       - name: Install protobuf
         run: sudo apt-get install -y protobuf-compiler
 
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+    
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
