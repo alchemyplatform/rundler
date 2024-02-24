@@ -1,6 +1,6 @@
 ARG CROSS_BASE_IMAGE
 
-FROM ghcr.io/foundry-rs/foundry:latest as foundry
+FROM ghcr.io/foundry-rs/foundry:nightly-ac802618e15039b31e464ae6d1fe3ee39f87cefd as foundry
 
 FROM $CROSS_BASE_IMAGE
 COPY --from=foundry /usr/local/bin/forge /usr/local/bin/forge
