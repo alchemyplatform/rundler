@@ -107,6 +107,7 @@ define_hardcoded_chain_specs!(
     ethereum,
     ethereum_goerli,
     ethereum_sepolia,
+    zora,
     optimism,
     optimism_goerli,
     optimism_sepolia,
