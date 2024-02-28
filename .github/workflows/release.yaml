@@ -86,7 +86,7 @@ jobs:
 
       - name: Build rundler for ${{ matrix.target }}
         run: |
-          env PROFILE=${{ matrix.profile }} make build-${{ matrix.target }}
+          sudo -E env "PATH=$PATH" make build-${{ matrix.target }}
 
       - name: Move cross-compiled binary
         run: |
