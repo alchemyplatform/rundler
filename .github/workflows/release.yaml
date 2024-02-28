@@ -75,7 +75,7 @@ jobs:
       # ==============================
 
       - name: Apple Silicon setup
-        if: ${{ matrix.job.target == 'aarch64-apple-darwin' }}
+        if: matrix.target == 'aarch64-apple-darwin'
         run: |
           echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
           echo "MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx --show-sdk-platform-version)" >> $GITHUB_ENV
@@ -90,10 +90,10 @@ jobs:
           env PROFILE=${{ matrix.profile }} make build-${{ matrix.arch }}
 
       - name: Move cross-compiled binary
-        if: matrix.arch != 'x86_64-pc-windows-gnu'
         run: |
           mkdir artifacts
-          mv target/${{ matrix.arch }}/${{ matrix.profile }}/rundler ./artifacts
+          [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
+          mv "target/${{ matrix.target }}/${{ matrix.profile }}/rundler${ext}" ./artifacts
 
       - name: Move cross-compiled binary (Windows)
         if: matrix.arch == 'x86_64-pc-windows-gnu'
