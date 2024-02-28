@@ -68,7 +68,7 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Install protobuf
         if: contains( ${{ matrix.target }}, 'apple')
-        run: sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
 
       # ==============================
       # Apple Silicon SDK setup
