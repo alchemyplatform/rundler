@@ -92,7 +92,7 @@ jobs:
         run: |
           mkdir artifacts
           [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
-          mv "target/${{ matrix.target }}/${{ matrix.profile }}/rundler${ext}" ./artifacts
+          sudo mv "target/${{ matrix.target }}/${{ matrix.profile }}/rundler${ext}" ./artifacts
 
       # ==============================
       #       Signing
