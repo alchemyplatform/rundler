@@ -213,7 +213,7 @@ jobs:
             )
             assets=()
             for asset in ./rundler-*.tar.gz*; do
-                assets+=("-a" "$asset/$asset")
+                assets+=("$asset/$asset")
             done
             tag_name="${{ env.VERSION }}"
-            echo "$body" | gh release create --draft "${assets[@]}" -F "-" "$tag_name"
+            echo "$body" | gh release create --draft -t "Rundler $tag_name" -F "-" "$tag_name" "${assets[@]}"
