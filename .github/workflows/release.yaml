@@ -77,7 +77,6 @@ jobs:
 
       - name: Build rundler for ${{ matrix.target }}
         run: |
-          cargo install cross
           env PROFILE=${{ matrix.profile }} make build-${{ matrix.target }}
 
       - name: Move cross-compiled binary
