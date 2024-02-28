@@ -30,42 +30,33 @@ jobs:
 
   build:
     name: build release
+    runs-on: ${{ matrix.os }}
+    needs: extract-version
     strategy:
       matrix:
-        arch:
-          [
-            aarch64-unknown-linux-gnu,
-            x86_64-unknown-linux-gnu,
-            x86_64-apple-darwin,
-            aarch64-apple-darwin,
-            x86_64-pc-windows-gnu,
-          ]
         include:
-          - arch: aarch64-unknown-linux-gnu
-            platform: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-20.04
             profile: release
-          - arch: x86_64-unknown-linux-gnu
-            platform: ubuntu-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-20.04
             profile: release
-          - arch: x86_64-apple-darwin
-            platform: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
             profile: release
-          - arch: aarch64-apple-darwin
-            platform: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
             profile: release
-          - arch: x86_64-pc-windows-gnu
-            platform: ubuntu-latest
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-20.04
             profile: release
 
-    runs-on: ${{ matrix.platform }}
-    needs: extract-version
     steps:
-      - name: Checkout sources
-        uses: actions/checkout@v3
-      - name: Get latest version of stable Rust
-        run: rustup update stable
-      - name: Install target
-        run: rustup target add ${{ matrix.arch }}
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: ${{ matrix.target }}
+      - uses: taiki-e/install-action@cross
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
@@ -84,22 +75,16 @@ jobs:
       #       Builds
       # ==============================
 
-      - name: Build rundler for ${{ matrix.arch }}
+      - name: Build rundler for ${{ matrix.target }}
         run: |
           cargo install cross
-          env PROFILE=${{ matrix.profile }} make build-${{ matrix.arch }}
+          env PROFILE=${{ matrix.profile }} make build-${{ matrix.target }}
 
       - name: Move cross-compiled binary
         run: |
           mkdir artifacts
           [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
           mv "target/${{ matrix.target }}/${{ matrix.profile }}/rundler${ext}" ./artifacts
-
-      - name: Move cross-compiled binary (Windows)
-        if: matrix.arch == 'x86_64-pc-windows-gnu'
-        run: |
-          mkdir artifacts
-          mv target/${{ matrix.arch }}/${{ matrix.profile }}/rundler.exe ./artifacts
 
       # ==============================
       #       Signing
@@ -113,8 +98,8 @@ jobs:
           export GPG_TTY=$(tty)
           echo -n "$GPG_SIGNING_KEY" | gpg --batch --import
           cd artifacts
-          tar -czf rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz rundler*
-          echo "$GPG_PASSPHRASE" | gpg --passphrase-fd 0 --pinentry-mode loopback --batch -ab rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
+          tar -czf rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz rundler*
+          echo "$GPG_PASSPHRASE" | gpg --passphrase-fd 0 --pinentry-mode loopback --batch -ab rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz
           mv *tar.gz* ..
         shell: bash
 
@@ -125,14 +110,14 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
-          name: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
-          path: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz
+          name: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz
+          path: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz
 
       - name: Upload signature
         uses: actions/upload-artifact@v3
         with:
-          name: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
-          path: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.arch }}.tar.gz.asc
+          name: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz.asc
+          path: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz.asc
 
   draft-release:
       name: draft release
