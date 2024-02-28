@@ -64,6 +64,8 @@ jobs:
           cache-on-failure: true
       - name: Foundry install
         uses: foundry-rs/foundry-toolchain@v1
+      - name: Install protobuf
+        run: sudo apt-get install -y protobuf-compiler
 
       # ==============================
       # Apple Silicon SDK setup
