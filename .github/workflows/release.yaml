@@ -64,10 +64,10 @@ jobs:
           cache-on-failure: true
 
       - name: Foundry install
-        if: contains(matrix.target, "apple")
+        if: contains( ${{ matrix.target }}, 'apple')
         uses: foundry-rs/foundry-toolchain@v1
       - name: Install protobuf
-        if: contains(matrix.target, "apple")
+        if: contains( ${{ matrix.target }}, 'apple')
         run: sudo apt-get install -y protobuf-compiler
 
       # ==============================
