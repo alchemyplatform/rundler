@@ -62,6 +62,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+      - name: Foundry install
+        uses: foundry-rs/foundry-toolchain@v1
 
       # ==============================
       # Apple Silicon SDK setup
