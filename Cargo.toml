@@ -7,7 +7,7 @@ default-members = ["bin/rundler"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0-beta"
+version = "0.1.0-rc0"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
