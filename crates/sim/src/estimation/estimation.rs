@@ -11,7 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, ops::Deref, sync::Arc};
+use std::{
+    cmp,
+    ops::{Add, Deref},
+    sync::Arc,
+};
 
 use anyhow::{anyhow, Context};
 use ethers::{
@@ -51,7 +55,11 @@ const GAS_ROUNDING: u64 = 4096;
 /// `GAS_ESTIMATION_ERROR_MARGIN` of each other.
 const GAS_ESTIMATION_ERROR_MARGIN: f64 = 0.1;
 
+/// Percentage by which to increase the verification gas limit after binary search
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
+/// Absolute value by which to increase the call gas limit after binary search
+/// TODO(danc): remove this in 0.7 entry point else users will get overcharged
+const CALL_GAS_BUFFER_VALUE: U256 = U256([3000, 0, 0, 0]);
 
 /// This accounts for the gas used during a transfer to the entrypoint contract
 /// As well as the cost to initialize a previously 0 storage slot for an account
@@ -167,7 +175,9 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
                 VERIFICATION_GAS_BUFFER_PERCENT,
             )
             .min(settings.max_verification_gas.into()),
-            call_gas_limit: call_gas_limit.clamp(MIN_CALL_GAS_LIMIT, settings.max_call_gas.into()),
+            call_gas_limit: call_gas_limit
+                .add(CALL_GAS_BUFFER_VALUE)
+                .clamp(MIN_CALL_GAS_LIMIT, settings.max_call_gas.into()),
         })
     }
 }
@@ -1177,7 +1187,10 @@ mod tests {
         assert_eq!(estimation.verification_gas_limit, U256::from(33000));
 
         // input gas limit clamped with the set limit in settings and constant MIN
-        assert_eq!(estimation.call_gas_limit, U256::from(10000));
+        assert_eq!(
+            estimation.call_gas_limit,
+            U256::from(10000) + CALL_GAS_BUFFER_VALUE
+        );
     }
 
     #[tokio::test]
