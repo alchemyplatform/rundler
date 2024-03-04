@@ -30,7 +30,7 @@ services:
     image: alchemy-platform/rundler:latest
     depends_on:
       - geth
-    command: /usr/local/bin/rundler pool
+    command: pool
     environment:
       - RUST_LOG=debug
       - NETWORK=dev
@@ -44,7 +44,7 @@ services:
     image: alchemy-platform/rundler:latest
     depends_on:
       - rundler-pool
-    command: /usr/local/bin/rundler builder
+    command: builder
     environment:
       - RUST_LOG=debug
       - NETWORK=dev
@@ -65,7 +65,7 @@ services:
     ports:
       - "8080:8080"
       - "3000:3000"
-    command: /usr/local/bin/rundler rpc
+    command: rpc
     environment:
       - RUST_LOG=debug
       - NETWORK=dev
