@@ -24,7 +24,6 @@ pub mod chain;
 
 #[rustfmt::skip]
 pub mod contracts;
-pub use contracts::v0_6::shared_types::DepositInfo as DepositInfoV0_6;
 
 mod entity;
 pub use entity::{Entity, EntityType, EntityUpdate, EntityUpdateType};
