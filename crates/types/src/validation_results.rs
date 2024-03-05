@@ -18,7 +18,7 @@ use ethers::{
 };
 
 use crate::{
-    contracts::entry_point::{ValidationResult, ValidationResultWithAggregation},
+    contracts::v0_6::entry_point::{ValidationResult, ValidationResultWithAggregation},
     Timestamp,
 };
 
