@@ -523,11 +523,10 @@ impl PaymasterBalance {
 #[cfg(test)]
 mod tests {
     use ethers::types::{Address, H256, U256};
-    use rundler_provider::MockEntryPointV0_6;
+    use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_sim::EntityInfos;
     use rundler_types::{
-        contracts::v0_6::verifying_paymaster::DepositInfo, v0_6::UserOperation,
-        UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
+        v0_6::UserOperation, UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
     };
 
     use super::*;
@@ -974,7 +973,7 @@ mod tests {
 
         entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
-                deposit: 1000,
+                deposit: 1000.into(),
                 staked: true,
                 stake: 10000,
                 unstake_delay_sec: 100,
