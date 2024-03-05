@@ -30,7 +30,7 @@ use rand::Rng;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_types::{
     chain::ChainSpec,
-    contracts::{
+    contracts::v0_6::{
         call_gas_estimation_proxy::{
             EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
             EstimateCallGasResult, EstimateCallGasRevertAtMax,
@@ -479,7 +479,7 @@ mod tests {
     use rundler_provider::{MockEntryPoint, MockProvider};
     use rundler_types::{
         chain::L1GasOracleContractType,
-        contracts::{get_gas_used::GasUsedResult, i_entry_point::ExecutionResult},
+        contracts::{utils::get_gas_used::GasUsedResult, v0_6::i_entry_point::ExecutionResult},
     };
 
     use super::*;

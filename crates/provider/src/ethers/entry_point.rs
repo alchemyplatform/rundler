@@ -25,7 +25,7 @@ use ethers::{
     utils::hex,
 };
 use rundler_types::{
-    contracts::{
+    contracts::v0_6::{
         get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
         i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
         shared_types::UserOpsPerAggregator,

@@ -11,27 +11,14 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use dotenv::dotenv;
-use rundler_dev::{self, DevClients};
+//! Generated contract interfaces
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenv()?;
-    let clients = DevClients::new_from_env()?;
-    let DevClients {
-        wallet,
-        entry_point,
-        bundler_client,
-        ..
-    } = &clients;
+#![allow(non_snake_case)]
+#![allow(clippy::all)]
+#![allow(missing_docs)]
 
-    // simply call the nonce method multiple times
-    for i in 0..10 {
-        println!("Sending op {i}");
-        let op = clients.new_wallet_op(wallet.get_nonce(), 0.into()).await?;
-        let call = entry_point.handle_ops(vec![op], bundler_client.address());
-        rundler_dev::await_mined_tx(call.send(), "send user operation").await?;
-    }
-
-    Ok(())
-}
+pub mod arbitrum;
+pub mod optimism;
+pub mod utils;
+pub mod v0_6;
+pub mod v0_7;
