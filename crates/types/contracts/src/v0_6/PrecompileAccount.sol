@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.13;
 
-import "account-abstraction/interfaces/IAccount.sol";
+import "account-abstraction/v0_6/interfaces/IAccount.sol";
 
 contract PrecompileAccount is IAccount {
     address public precompile;
