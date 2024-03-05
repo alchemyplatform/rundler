@@ -1,15 +1,23 @@
-[submodule "crates/types/contracts/lib/account-abstraction"]
-	path = crates/types/contracts/lib/account-abstraction
+[submodule "crates/types/contracts/lib/account-abstraction-versions/v0_7"]
+	path = crates/types/contracts/lib/account-abstraction-versions/v0_7
 	url = https://github.com/eth-infinitism/account-abstraction
-	branch = v0.5
+	branch = releases/v0.7
+[submodule "crates/types/contracts/lib/account-abstraction-versions/v0_6"]
+	path = crates/types/contracts/lib/account-abstraction-versions/v0_6
+	url = https://github.com/eth-infinitism/account-abstraction
+	branch = releases/v0.6
 [submodule "crates/types/contracts/lib/forge-std"]
 	path = crates/types/contracts/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
 	branch = chore/v1.5.0
-[submodule "crates/types/contracts/lib/openzeppelin-contracts"]
-	path = crates/types/contracts/lib/openzeppelin-contracts
+[submodule "crates/types/contracts/lib/openzeppelin-contracts-versions/v5_0"]
+	path = crates/types/contracts/lib/openzeppelin-contracts-versions/v5_0
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
-	branch = release-v4.8
+	branch = release-v5.0
+[submodule "crates/types/contracts/lib/openzeppelin-contracts-versions/v4_9"]
+	path = crates/types/contracts/lib/openzeppelin-contracts-versions/v4_9
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+	branch = release-v4.9
 [submodule "test/spec-tests/bundler-spec-tests"]
 	path = test/spec-tests/bundler-spec-tests
 	url = https://github.com/alchemyplatform/bundler-spec-tests.git
