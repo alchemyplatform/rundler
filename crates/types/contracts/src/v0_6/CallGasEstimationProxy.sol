@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import "account-abstraction/interfaces/IEntryPoint.sol";
+import "account-abstraction/v0_6/interfaces/IEntryPoint.sol";
 import "@openzeppelin/contracts/proxy/Proxy.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 

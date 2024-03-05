@@ -17,7 +17,7 @@ use ethers::{
     types::{spoof, Address, BlockId, Bytes, Selector, H256, U256},
 };
 use rundler_provider::Provider;
-use rundler_types::contracts::{
+use rundler_types::contracts::utils::{
     get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
     get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
 };
