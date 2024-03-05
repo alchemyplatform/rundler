@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.12;
 
-import "account-abstraction/interfaces/IStakeManager.sol";
+import "account-abstraction/v0_6/interfaces/IStakeManager.sol";
 
 contract GetBalances {
     error GetBalancesResult(uint256[] balances);
