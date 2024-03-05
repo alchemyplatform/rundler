@@ -31,18 +31,21 @@ use rundler_types::{
         v0_6::{
             get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
             i_aggregator::IAggregator,
-            i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
+            i_entry_point::{
+                DepositInfo as DepositInfoV0_6, ExecutionResult as ExecutionResultV0_6, FailedOp,
+                IEntryPoint, SignatureValidationFailed,
+            },
             shared_types::UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
         },
     },
     v0_6::UserOperation,
-    DepositInfoV0_6, GasFees, UserOpsPerAggregator, ValidationOutput,
+    GasFees, UserOpsPerAggregator, ValidationOutput,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::{
-    traits::HandleOpsOut, AggregatorOut, AggregatorSimOut, BundleHandler, L1GasProvider, Provider,
-    SignatureAggregator, SimulationProvider,
+    traits::HandleOpsOut, AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo,
+    ExecutionResult, L1GasProvider, Provider, SignatureAggregator, SimulationProvider,
 };
 
 const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
@@ -119,12 +122,13 @@ where
             .context("entry point should return balance")
     }
 
-    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfoV0_6> {
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo> {
         Ok(self
             .i_entry_point
             .get_deposit_info(address)
             .await
-            .context("should get deposit info")?)
+            .context("should get deposit info")?
+            .into())
     }
 
     async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>> {
@@ -348,8 +352,8 @@ where
         &self,
         revert_data: Bytes,
     ) -> Result<ExecutionResult, String> {
-        if let Ok(result) = ExecutionResult::decode(&revert_data) {
-            Ok(result)
+        if let Ok(result) = ExecutionResultV0_6::decode(&revert_data) {
+            Ok(result.into())
         } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
             Err(failed_op.reason)
         } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
@@ -405,4 +409,29 @@ fn get_handle_ops_call<M: Middleware>(
             entry_point.handle_aggregated_ops(ops_per_aggregator, beneficiary)
         };
     call.gas(gas)
+}
+
+impl From<ExecutionResultV0_6> for ExecutionResult {
+    fn from(result: ExecutionResultV0_6) -> Self {
+        ExecutionResult {
+            pre_op_gas: result.pre_op_gas,
+            paid: result.paid,
+            valid_after: result.valid_after.into(),
+            valid_until: result.valid_until.into(),
+            target_success: result.target_success,
+            target_result: result.target_result,
+        }
+    }
+}
+
+impl From<DepositInfoV0_6> for DepositInfo {
+    fn from(info: DepositInfoV0_6) -> Self {
+        DepositInfo {
+            deposit: info.deposit.into(),
+            staked: info.staked,
+            stake: info.stake,
+            unstake_delay_sec: info.unstake_delay_sec,
+            withdraw_time: info.withdraw_time,
+        }
+    }
 }
