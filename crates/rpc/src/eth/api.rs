@@ -587,6 +587,10 @@ mod tests {
         contracts::v0_6::i_entry_point::HandleOpsCall, v0_6::UserOperation,
         UserOperation as UserOperationTrait, ValidTimeRange,
     };
+    use rundler_pool::{MockPoolServer, PoolOperation};
+    use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_sim::PriorityFeeMode;
+    use rundler_types::contracts::v0_6::i_entry_point::HandleOpsCall;
 
     use super::*;
 
