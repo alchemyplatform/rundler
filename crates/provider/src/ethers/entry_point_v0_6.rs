@@ -20,35 +20,57 @@ use ethers::{
     providers::{spoof, Middleware, RawCall},
     types::{
         transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
-        H256, U256,
+        H160, H256, U256, U64,
     },
     utils::hex,
 };
 use rundler_types::{
-    contracts::v0_6::{
-        get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
-        i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
-        shared_types::UserOpsPerAggregator,
+    contracts::{
+        arbitrum::node_interface::NodeInterface,
+        optimism::gas_price_oracle::GasPriceOracle,
+        v0_6::{
+            get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
+            i_aggregator::IAggregator,
+            i_entry_point::{ExecutionResult, FailedOp, IEntryPoint, SignatureValidationFailed},
+            shared_types::UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
+        },
     },
-    DepositInfo, GasFees, UserOperation, ValidationOutput,
+    DepositInfoV0_6, GasFees, UserOperation, UserOpsPerAggregator, ValidationOutput,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::{
     traits::{EntryPoint, HandleOpsOut},
-    Provider,
+    AggregatorOut, AggregatorSimOut, Provider,
 };
+
+const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc8,
+]);
+
+const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
+    0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0F,
+]);
 
 const REVERT_REASON_MAX_LEN: usize = 2048;
 
+// TODO(danc):
+// - Modify this interface to take only `UserOperationV0_6` and remove the `into_v0_6` calls
+// - Places that are already in a V0_6 context can use this directly
+// - Implement a wrapper that takes `UserOperation` and dispatches to the correct entry point version
+//   based on a constructor from ChainSpec.
+// - Use either version depending on the abstraction of the caller.
+
 /// Implementation of the `EntryPoint` trait for the v0.6 version of the entry point contract using ethers
 #[derive(Debug)]
-pub struct EntryPointImpl<P: Provider + Middleware> {
+pub struct EntryPointV0_6<P: Provider + Middleware> {
     i_entry_point: IEntryPoint<P>,
     provider: Arc<P>,
+    arb_node: NodeInterface<P>,
+    opt_gas_oracle: GasPriceOracle<P>,
 }
 
-impl<P> Clone for EntryPointImpl<P>
+impl<P> Clone for EntryPointV0_6<P>
 where
     P: Provider + Middleware,
 {
@@ -56,25 +78,32 @@ where
         Self {
             i_entry_point: self.i_entry_point.clone(),
             provider: self.provider.clone(),
+            arb_node: self.arb_node.clone(),
+            opt_gas_oracle: self.opt_gas_oracle.clone(),
         }
     }
 }
 
-impl<P> EntryPointImpl<P>
+impl<P> EntryPointV0_6<P>
 where
     P: Provider + Middleware,
 {
-    /// Create a new `EntryPointImpl` instance
+    /// Create a new `EntryPointV0_6` instance
     pub fn new(entry_point_address: Address, provider: Arc<P>) -> Self {
         Self {
             i_entry_point: IEntryPoint::new(entry_point_address, Arc::clone(&provider)),
-            provider,
+            provider: Arc::clone(&provider),
+            arb_node: NodeInterface::new(
+                ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS,
+                Arc::clone(&provider),
+            ),
+            opt_gas_oracle: GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, provider),
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<P> EntryPoint for EntryPointImpl<P>
+impl<P> EntryPoint for EntryPointV0_6<P>
 where
     P: Provider + Middleware + Send + Sync + 'static,
 {
@@ -87,6 +116,10 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
     ) -> anyhow::Result<TypedTransaction> {
+        let user_op = user_op
+            .into_v0_6()
+            .expect("V0_6 EP called with non-V0_6 op");
+
         let pvg = user_op.pre_verification_gas;
         let tx = self
             .i_entry_point
@@ -101,6 +134,10 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
     ) -> anyhow::Result<ValidationOutput> {
+        let user_op = user_op
+            .into_v0_6()
+            .expect("V0_6 EP called with non-V0_6 op");
+
         let pvg = user_op.pre_verification_gas;
         match self
             .i_entry_point
@@ -166,16 +203,20 @@ where
 
     async fn call_spoofed_simulate_op(
         &self,
-        op: UserOperation,
+        user_op: UserOperation,
         target: Address,
         target_call_data: Bytes,
         block_hash: H256,
         gas: U256,
         spoofed_state: &spoof::State,
     ) -> anyhow::Result<Result<ExecutionResult, String>> {
+        let user_op = user_op
+            .into_v0_6()
+            .expect("V0_6 EP called with non-V0_6 op");
+
         let contract_error = self
             .i_entry_point
-            .simulate_handle_op(op, target, target_call_data)
+            .simulate_handle_op(user_op, target, target_call_data)
             .block(block_hash)
             .gas(gas)
             .call_raw()
@@ -219,7 +260,7 @@ where
         }
     }
 
-    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo> {
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfoV0_6> {
         Ok(self
             .i_entry_point
             .get_deposit_info(address)
@@ -240,14 +281,119 @@ where
             .context("should compute balances")?;
         Ok(out.balances)
     }
+
+    async fn aggregate_signatures(
+        self: Arc<Self>,
+        aggregator_address: Address,
+        ops: Vec<UserOperation>,
+    ) -> anyhow::Result<Option<Bytes>> {
+        let ops = ops
+            .into_iter()
+            .map(|op| op.into_v0_6().expect("V0_6 EP called with non-V0_6 op"))
+            .collect();
+
+        let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
+        // TODO: Cap the gas here.
+        let result = aggregator.aggregate_signatures(ops).call().await;
+        match result {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(ContractError::Revert(_)) => Ok(None),
+            Err(error) => Err(error).context("aggregator contract should aggregate signatures")?,
+        }
+    }
+
+    async fn validate_user_op_signature(
+        self: Arc<Self>,
+        aggregator_address: Address,
+        user_op: UserOperation,
+        gas_cap: u64,
+    ) -> anyhow::Result<AggregatorOut> {
+        let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
+        let user_op = user_op
+            .into_v0_6()
+            .expect("V0_6 EP called with non-V0_6 op");
+
+        let result = aggregator
+            .validate_user_op_signature(user_op)
+            .gas(gas_cap)
+            .call()
+            .await;
+
+        match result {
+            Ok(sig) => Ok(AggregatorOut::SuccessWithInfo(AggregatorSimOut {
+                address: aggregator_address,
+                signature: sig,
+            })),
+            Err(ContractError::Revert(_)) => Ok(AggregatorOut::ValidationReverted),
+            Err(error) => Err(error).context("should call aggregator to validate signature")?,
+        }
+    }
+
+    async fn calc_arbitrum_l1_gas(
+        self: Arc<Self>,
+        entry_point_address: Address,
+        user_op: UserOperation,
+    ) -> anyhow::Result<U256> {
+        let user_op = user_op
+            .into_v0_6()
+            .expect("V0_6 EP called with non-V0_6 op");
+
+        let data = self
+            .i_entry_point
+            .handle_ops(vec![user_op], Address::random())
+            .calldata()
+            .context("should get calldata for entry point handle ops")?;
+
+        let gas = self
+            .arb_node
+            .gas_estimate_l1_component(entry_point_address, false, data)
+            .call()
+            .await?;
+        Ok(U256::from(gas.0))
+    }
+
+    async fn calc_optimism_l1_gas(
+        self: Arc<Self>,
+        entry_point_address: Address,
+        user_op: UserOperation,
+        gas_price: U256,
+    ) -> anyhow::Result<U256> {
+        let user_op = user_op
+            .into_v0_6()
+            .expect("V0_6 EP called with non-V0_6 op");
+
+        let data = self
+            .i_entry_point
+            .handle_ops(vec![user_op], Address::random())
+            .calldata()
+            .context("should get calldata for entry point handle ops")?;
+
+        // construct an unsigned transaction with default values just for L1 gas estimation
+        let tx = Eip1559TransactionRequest::new()
+            .from(Address::random())
+            .to(entry_point_address)
+            .gas(U256::from(1_000_000))
+            .max_priority_fee_per_gas(U256::from(100_000_000))
+            .max_fee_per_gas(U256::from(100_000_000))
+            .value(U256::from(0))
+            .data(data)
+            .nonce(U256::from(100_000))
+            .chain_id(U64::from(100_000))
+            .rlp();
+
+        let l1_fee = self.opt_gas_oracle.get_l1_fee(tx).call().await?;
+        Ok(l1_fee.checked_div(gas_price).unwrap_or(U256::MAX))
+    }
 }
 
 fn get_handle_ops_call<M: Middleware>(
     entry_point: &IEntryPoint<M>,
-    mut ops_per_aggregator: Vec<UserOpsPerAggregator>,
+    ops_per_aggregator: Vec<UserOpsPerAggregator>,
     beneficiary: Address,
     gas: U256,
 ) -> FunctionCall<Arc<M>, M, ()> {
+    let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> =
+        ops_per_aggregator.into_iter().map(|x| x.into()).collect();
     let call =
         if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::zero() {
             entry_point.handle_ops(ops_per_aggregator.swap_remove(0).user_ops, beneficiary)

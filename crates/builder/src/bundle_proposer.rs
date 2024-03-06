@@ -32,13 +32,12 @@ use mockall::automock;
 use rundler_pool::{PoolOperation, PoolServer};
 use rundler_provider::{EntryPoint, HandleOpsOut, Provider};
 use rundler_sim::{
-    gas::{self, GasOverheads},
-    EntityInfo, EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
+    gas, EntityInfo, EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
     SimulationResult, SimulationViolation, Simulator, ViolationError,
 };
 use rundler_types::{
-    chain::ChainSpec, Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, Timestamp,
-    UserOperation, UserOpsPerAggregator,
+    chain::ChainSpec, Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, GasOverheads,
+    Timestamp, UserOperation, UserOpsPerAggregator,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -99,7 +98,7 @@ where
     builder_index: u64,
     pool: C,
     simulator: S,
-    entry_point: E,
+    entry_point: Arc<E>,
     provider: Arc<P>,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
@@ -230,7 +229,7 @@ where
         builder_index: u64,
         pool: C,
         simulator: S,
-        entry_point: E,
+        entry_point: Arc<E>,
         provider: Arc<P>,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -266,8 +265,8 @@ where
         required_op_fees: GasFees,
     ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
         // filter by fees
-        if op.uo.max_fee_per_gas < required_op_fees.max_fee_per_gas
-            || op.uo.max_priority_fee_per_gas < required_op_fees.max_priority_fee_per_gas
+        if op.uo.max_fee_per_gas() < required_op_fees.max_fee_per_gas
+            || op.uo.max_priority_fee_per_gas() < required_op_fees.max_priority_fee_per_gas
         {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_index,
@@ -275,8 +274,8 @@ where
                 SkipReason::InsufficientFees {
                     required_fees: required_op_fees,
                     actual_fees: GasFees {
-                        max_fee_per_gas: op.uo.max_fee_per_gas,
-                        max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas,
+                        max_fee_per_gas: op.uo.max_fee_per_gas(),
+                        max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
                     },
                 },
             ));
@@ -286,7 +285,7 @@ where
         // Check if the pvg is enough
         let required_pvg = gas::calc_required_pre_verification_gas(
             &self.settings.chain_spec,
-            self.provider.clone(),
+            self.entry_point.clone(),
             &op.uo,
             base_fee,
         )
@@ -305,18 +304,18 @@ where
         })
         .ok()?;
 
-        if op.uo.pre_verification_gas < required_pvg {
+        if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_index,
                 self.op_hash(&op.uo),
                 SkipReason::InsufficientPreVerificationGas {
                     base_fee,
                     op_fees: GasFees {
-                        max_fee_per_gas: op.uo.max_fee_per_gas,
-                        max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas,
+                        max_fee_per_gas: op.uo.max_fee_per_gas(),
+                        max_priority_fee_per_gas: op.uo.max_priority_fee_per_gas(),
                     },
                     required_pvg,
-                    actual_pvg: op.uo.pre_verification_gas,
+                    actual_pvg: op.uo.pre_verification_gas(),
                 },
             ));
             return None;
@@ -325,7 +324,11 @@ where
         // Simulate
         let result = self
             .simulator
-            .simulate_validation(op.uo.clone(), Some(block_hash), Some(op.expected_code_hash))
+            .simulate_validation(
+                op.uo.clone().into(),
+                Some(block_hash),
+                Some(op.expected_code_hash),
+            )
             .await;
         let result = match result {
             Ok(success) => (op, Ok(success)),
@@ -360,7 +363,7 @@ where
     ) -> ProposalContext {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
-            .map(|(op, _)| op.uo.sender)
+            .map(|(op, _)| op.uo.sender())
             .collect();
         let mut context = ProposalContext::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
@@ -410,13 +413,7 @@ where
             }
 
             // Skip this op if the bundle does not have enough remaining gas to execute it.
-            let required_gas = get_gas_required_for_op(
-                &self.settings.chain_spec,
-                gas_spent,
-                ov,
-                &op,
-                simulation.requires_post_op,
-            );
+            let required_gas = get_gas_required_for_op(&self.settings.chain_spec, gas_spent, &op);
             if required_gas > self.settings.max_bundle_gas.into() {
                 continue;
             }
@@ -424,11 +421,11 @@ where
             if let Some(&other_sender) = simulation
                 .accessed_addresses
                 .iter()
-                .find(|&address| *address != op.sender && all_sender_addresses.contains(address))
+                .find(|&address| *address != op.sender() && all_sender_addresses.contains(address))
             {
                 // Exclude ops that access the sender of another op in the
                 // batch, but don't reject them (remove them from pool).
-                info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender);
+                info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender());
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
                     self.op_hash(&op),
@@ -610,7 +607,7 @@ where
             .iter()
             .map(|op_with_simulation| op_with_simulation.op.clone())
             .collect();
-        let result = Arc::clone(&self.provider)
+        let result = Arc::clone(&self.entry_point)
             .aggregate_signatures(aggregator, ops)
             .await
             .map_err(anyhow::Error::from);
@@ -842,7 +839,7 @@ where
     }
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
-        op.op_hash(self.entry_point.address(), self.settings.chain_spec.id)
+        op.hash(self.entry_point.address(), self.settings.chain_spec.id)
     }
 }
 
@@ -855,8 +852,9 @@ struct OpWithSimulation {
 impl OpWithSimulation {
     fn op_with_replaced_sig(&self) -> UserOperation {
         let mut op = self.op.clone();
-        if let Some(aggregator) = &self.simulation.aggregator {
-            op.signature = aggregator.signature.clone();
+        if self.simulation.aggregator.is_some() {
+            // if using an aggregator, clear out the user op signature
+            op.clear_signature();
         }
         op
     }
@@ -1039,13 +1037,7 @@ impl ProposalContext {
         let mut max_gas = U256::zero();
         for op_with_sim in self.iter_ops_with_simulations() {
             let op = &op_with_sim.op;
-            let required_gas = get_gas_required_for_op(
-                chain_spec,
-                gas_spent,
-                ov,
-                op,
-                op_with_sim.simulation.requires_post_op,
-            );
+            let required_gas = get_gas_required_for_op(chain_spec, gas_spent, op);
             max_gas = cmp::max(max_gas, required_gas);
             gas_spent += gas::user_operation_gas_limit(
                 chain_spec,
@@ -1226,24 +1218,12 @@ impl ProposalContext {
     }
 }
 
-fn get_gas_required_for_op(
-    chain_spec: &ChainSpec,
-    gas_spent: U256,
-    ov: GasOverheads,
-    op: &UserOperation,
-    requires_post_op: bool,
-) -> U256 {
-    let post_exec_req_gas = if requires_post_op {
-        cmp::max(op.verification_gas_limit, ov.bundle_transaction_gas_buffer)
-    } else {
-        ov.bundle_transaction_gas_buffer
-    };
-
+fn get_gas_required_for_op(chain_spec: &ChainSpec, gas_spent: U256, op: &UserOperation) -> U256 {
     gas_spent
         + gas::user_operation_pre_verification_gas_limit(chain_spec, op, false)
-        + op.verification_gas_limit * 2
-        + op.call_gas_limit
-        + post_exec_req_gas
+        + op.total_verification_gas_limit()
+        + op.required_pre_execution_buffer()
+        + op.call_gas_limit()
 }
 
 #[cfg(test)]

@@ -13,40 +13,10 @@
 
 use ethers::types::{Address, Bytes, U256};
 use rand::RngCore;
-use rundler_types::UserOperation;
+use rundler_types::{UserOperation, UserOperationV0_6};
 use serde::{Deserialize, Serialize};
 
-use crate::precheck::MIN_CALL_GAS_LIMIT;
-
-/// Settings for gas estimation
-#[derive(Clone, Copy, Debug)]
-pub struct Settings {
-    /// The maximum amount of gas that can be used for the verification step of a user operation
-    pub max_verification_gas: u64,
-    /// The maximum amount of gas that can be used for the call step of a user operation
-    pub max_call_gas: u64,
-    /// The maximum amount of gas that can be used in a call to `simulateHandleOps`
-    pub max_simulate_handle_ops_gas: u64,
-    /// The gas fee to use during validation gas estimation, required to be held by the fee-payer
-    /// during estimation. If using a paymaster, the fee-payer must have 3x this value.
-    /// As the gas limit is varied during estimation, the fee is held constant by varied the
-    /// gas price.
-    /// Clients can use state overrides to set the balance of the fee-payer to at least this value.
-    pub validation_estimation_gas_fee: u64,
-}
-
-impl Settings {
-    /// Check if the settings are valid
-    pub fn validate(&self) -> Option<String> {
-        if U256::from(self.max_call_gas)
-            .cmp(&MIN_CALL_GAS_LIMIT)
-            .is_lt()
-        {
-            return Some("max_call_gas field cannot be lower than MIN_CALL_GAS_LIMIT".to_string());
-        }
-        None
-    }
-}
+use super::super::{GasEstimate, Settings};
 
 /// User operation with optional gas fields for gas estimation
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -102,8 +72,8 @@ impl UserOperationOptionalGas {
     /// cover the modified user op, calculate the gas needed for the worst
     /// case scenario where the gas fields of the user operation are entirely
     /// nonzero bytes. Likewise for the signature field.
-    pub fn max_fill(&self, settings: &Settings) -> UserOperation {
-        UserOperation {
+    pub fn max_fill(&self, settings: &Settings) -> UserOperationV0_6 {
+        UserOperationV0_6 {
             call_gas_limit: U256::MAX,
             verification_gas_limit: U256::MAX,
             pre_verification_gas: U256::MAX,
@@ -124,8 +94,8 @@ impl UserOperationOptionalGas {
     //
     /// Note that this will slightly overestimate the calldata gas needed as it uses
     /// the worst case scenario for the unknown gas values and paymaster_and_data.
-    pub fn random_fill(&self, settings: &Settings) -> UserOperation {
-        UserOperation {
+    pub fn random_fill(&self, settings: &Settings) -> UserOperationV0_6 {
+        UserOperationV0_6 {
             call_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
             verification_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
             pre_verification_gas: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
@@ -139,8 +109,8 @@ impl UserOperationOptionalGas {
 
     /// Convert into a full user operation.
     /// Fill in the optional fields of the user operation with default values if unset
-    pub fn into_user_operation(self, settings: &Settings) -> UserOperation {
-        UserOperation {
+    pub fn into_user_operation(self, settings: &Settings) -> UserOperationV0_6 {
+        UserOperationV0_6 {
             sender: self.sender,
             nonce: self.nonce,
             init_code: self.init_code,
@@ -167,8 +137,8 @@ impl UserOperationOptionalGas {
     /// Convert into a full user operation with the provided gas estimates.
     ///
     /// Fee fields are left unchanged or are defaulted.
-    pub fn into_user_operation_with_estimates(self, estimates: GasEstimate) -> UserOperation {
-        UserOperation {
+    pub fn into_user_operation_with_estimates(self, estimates: GasEstimate) -> UserOperationV0_6 {
+        UserOperationV0_6 {
             sender: self.sender,
             nonce: self.nonce,
             init_code: self.init_code,
@@ -184,16 +154,16 @@ impl UserOperationOptionalGas {
     }
 
     /// Convert from a full user operation, keeping the gas fields set
-    pub fn from_user_operation_keeping_gas(op: UserOperation) -> Self {
+    pub fn from_user_operation_keeping_gas(op: UserOperationV0_6) -> Self {
         Self::from_user_operation(op, true)
     }
 
     /// Convert from a full user operation, ignoring the gas fields
-    pub fn from_user_operation_without_gas(op: UserOperation) -> Self {
+    pub fn from_user_operation_without_gas(op: UserOperationV0_6) -> Self {
         Self::from_user_operation(op, false)
     }
 
-    fn from_user_operation(op: UserOperation, keep_gas: bool) -> Self {
+    fn from_user_operation(op: UserOperationV0_6, keep_gas: bool) -> Self {
         let if_keep_gas = |x: U256| Some(x).filter(|_| keep_gas);
         Self {
             sender: op.sender,
@@ -215,16 +185,4 @@ impl UserOperationOptionalGas {
         rand::thread_rng().fill_bytes(&mut bytes);
         bytes.into()
     }
-}
-
-/// Gas estimate for a user operation
-#[derive(Debug, Copy, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GasEstimate {
-    /// Pre verification gas estimate
-    pub pre_verification_gas: U256,
-    /// Verification gas limit estimate
-    pub verification_gas_limit: U256,
-    /// Call gas limit estimate
-    pub call_gas_limit: U256,
 }

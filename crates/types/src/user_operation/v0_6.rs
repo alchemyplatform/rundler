@@ -12,35 +12,19 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use ethers::{
-    abi::{encode, Token},
+    abi::{encode, AbiEncode, Token},
     types::{Address, Bytes, H256, U256},
     utils::keccak256,
 };
 use strum::IntoEnumIterator;
 
-use crate::{
-    entity::{Entity, EntityType},
-    UserOperation,
-};
-
-/// Number of bytes in the fixed size portion of an ABI encoded user operation
-const PACKED_USER_OPERATION_FIXED_LEN: usize = 480;
-
-/// Unique identifier for a user operation from a given sender
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct UserOperationId {
-    /// sender of user operation
-    pub sender: Address,
-    /// nonce of user operation
-    pub nonce: U256,
-}
+use super::{GasOverheads, UserOperationId};
+pub use crate::contracts::v0_6::shared_types::{UserOperation, UserOpsPerAggregator};
+use crate::entity::{Entity, EntityType};
 
 impl UserOperation {
-    /// Hash a user operation with the given entry point and chain ID.
-    ///
-    /// The hash is used to uniquely identify a user operation in the entry point.
-    /// It does not include the signature field.
-    pub fn op_hash(&self, entry_point: Address, chain_id: u64) -> H256 {
+    /// asdf
+    pub fn hash(&self, entry_point: Address, chain_id: u64) -> H256 {
         keccak256(encode(&[
             Token::FixedBytes(keccak256(self.pack_for_hash()).to_vec()),
             Token::Address(entry_point),
@@ -49,7 +33,7 @@ impl UserOperation {
         .into()
     }
 
-    /// Get the unique identifier for this user operation from its sender
+    /// asdf
     pub fn id(&self) -> UserOperationId {
         UserOperationId {
             sender: self.sender,
@@ -57,44 +41,24 @@ impl UserOperation {
         }
     }
 
-    /// Get the address of the factory entity associated with this user operation, if any
+    /// asdf
     pub fn factory(&self) -> Option<Address> {
         Self::get_address_from_field(&self.init_code)
     }
 
-    /// Returns the maximum cost, in wei, of this user operation
+    /// asdf
+    pub fn paymaster(&self) -> Option<Address> {
+        Self::get_address_from_field(&self.paymaster_and_data)
+    }
+
+    /// asdf
     pub fn max_gas_cost(&self) -> U256 {
         let mul = if self.paymaster().is_some() { 3 } else { 1 };
         self.max_fee_per_gas
             * (self.pre_verification_gas + self.call_gas_limit + self.verification_gas_limit * mul)
     }
 
-    /// Get the address of the paymaster entity associated with this user operation, if any
-    pub fn paymaster(&self) -> Option<Address> {
-        Self::get_address_from_field(&self.paymaster_and_data)
-    }
-
-    /// Extracts an address from the beginning of a data field
-    /// Useful to extract the paymaster address from paymaster_and_data
-    /// and the factory address from init_code
-    pub fn get_address_from_field(data: &Bytes) -> Option<Address> {
-        if data.len() < 20 {
-            None
-        } else {
-            Some(Address::from_slice(&data[..20]))
-        }
-    }
-
-    /// Efficient calculation of the size of a packed user operation
-    pub fn abi_encoded_size(&self) -> usize {
-        PACKED_USER_OPERATION_FIXED_LEN
-            + pad_len(&self.init_code)
-            + pad_len(&self.call_data)
-            + pad_len(&self.paymaster_and_data)
-            + pad_len(&self.signature)
-    }
-
-    /// Compute the amount of heap memory the UserOperation takes up.
+    /// asdf
     pub fn heap_size(&self) -> usize {
         self.init_code.len()
             + self.call_data.len()
@@ -102,8 +66,58 @@ impl UserOperation {
             + self.signature.len()
     }
 
-    /// Gets the byte array representation of the user operation to be used in the signature
-    pub fn pack_for_hash(&self) -> Bytes {
+    /// asdf
+    pub fn entities(&'_ self) -> Vec<Entity> {
+        EntityType::iter()
+            .filter_map(|entity| {
+                self.entity_address(entity)
+                    .map(|address| Entity::new(entity, address))
+            })
+            .collect()
+    }
+
+    /// asdf
+    pub fn total_verification_gas_limit(&self) -> U256 {
+        let mul = if self.paymaster().is_some() { 2 } else { 1 };
+        self.verification_gas_limit * mul
+    }
+
+    /// asdf
+    pub fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256 {
+        let ov = GasOverheads::default();
+        let encoded_op = self.clone().encode();
+        let length_in_words = encoded_op.len() / 32; // size of packed user op is always a multiple of 32 bytes
+        let call_data_cost: U256 = encoded_op
+            .iter()
+            .map(|&x| {
+                if x == 0 {
+                    ov.zero_byte
+                } else {
+                    ov.non_zero_byte
+                }
+            })
+            .reduce(|a, b| a + b)
+            .unwrap_or_default();
+
+        call_data_cost
+            + ov.per_user_op
+            + ov.per_user_op_word * length_in_words
+            + (if include_fixed_gas_overhead {
+                ov.transaction_gas_overhead
+            } else {
+                0.into()
+            })
+    }
+
+    fn get_address_from_field(data: &Bytes) -> Option<Address> {
+        if data.len() < 20 {
+            None
+        } else {
+            Some(Address::from_slice(&data[..20]))
+        }
+    }
+
+    fn pack_for_hash(&self) -> Bytes {
         let hash_init_code = keccak256(self.init_code.clone());
         let hash_call_data = keccak256(self.call_data.clone());
         let hash_paymaster_and_data = keccak256(self.paymaster_and_data.clone());
@@ -123,15 +137,6 @@ impl UserOperation {
         .into()
     }
 
-    /// Gets an iterator on all entities associated with this user operation
-    pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        EntityType::iter().filter_map(|entity| {
-            self.entity_address(entity)
-                .map(|address| Entity::new(entity, address))
-        })
-    }
-
-    /// Gets the address of the entity of the given type associated with this user operation, if any
     fn entity_address(&self, entity: EntityType) -> Option<Address> {
         match entity {
             EntityType::Account => Some(self.sender),
@@ -142,19 +147,16 @@ impl UserOperation {
     }
 }
 
-/// Calculates the size a byte array padded to the next largest multiple of 32
-fn pad_len(b: &Bytes) -> usize {
-    (b.len() + 31) & !31
+impl From<UserOperation> for super::UserOperation {
+    fn from(op: UserOperation) -> Self {
+        super::UserOperation::V0_6(op)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
 
-    use ethers::{
-        abi::AbiEncode,
-        types::{Bytes, U256},
-    };
+    use ethers::types::{Bytes, U256};
 
     use super::*;
 
@@ -198,7 +200,7 @@ mod tests {
             .parse()
             .unwrap();
         let chain_id = 1337;
-        let hash = operation.op_hash(entry_point, chain_id);
+        let hash = operation.hash(entry_point, chain_id);
         assert_eq!(
             hash,
             "0xdca97c3b49558ab360659f6ead939773be8bf26631e61bb17045bb70dc983b2d"
@@ -258,7 +260,7 @@ mod tests {
             .parse()
             .unwrap();
         let chain_id = 1337;
-        let hash = operation.op_hash(entry_point, chain_id);
+        let hash = operation.hash(entry_point, chain_id);
         assert_eq!(
             hash,
             "0x484add9e4d8c3172d11b5feb6a3cc712280e176d278027cfa02ee396eb28afa1"
@@ -279,30 +281,6 @@ mod tests {
             "0x0123456789abcdef0123456789abcdef01234567"
                 .parse()
                 .unwrap()
-        );
-    }
-
-    #[test]
-    fn test_abi_encoded_size() {
-        let user_operation = UserOperation {
-            sender: "0xe29a7223a7e040d70b5cd460ef2f4ac6a6ab304d"
-                .parse()
-                .unwrap(),
-            nonce: U256::from_dec_str("3937668929043450082210854285941660524781292117276598730779").unwrap(),
-            init_code: Bytes::default(),
-            call_data: Bytes::from_str("0x5194544700000000000000000000000058440a3e78b190e5bd07905a08a60e30bb78cb5b000000000000000000000000000000000000000000000000000009184e72a000000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000").unwrap(),
-            call_gas_limit: 40_960.into(),
-            verification_gas_limit: 75_099.into(),
-            pre_verification_gas: 46_330.into(),
-            max_fee_per_gas: 105_000_000.into(),
-            max_priority_fee_per_gas: 105_000_000.into(),
-            paymaster_and_data: Bytes::from_str("0xc03aac639bb21233e0139381970328db8bceeb6700006508996f000065089a9b0000000000000000000000000000000000000000ca7517be4e51ca2cde69bc44c4c3ce00ff7f501ce4ee1b3c6b2a742f579247292e4f9a672522b15abee8eaaf1e1487b8e3121d61d42ba07a47f5ccc927aa7eb61b").unwrap(),
-            signature: Bytes::from_str("0x00000000f8a0655423f2dfbb104e0ff906b7b4c64cfc12db0ac5ef0fb1944076650ce92a1a736518e5b6cd46c6ff6ece7041f2dae199fb4c8e7531704fbd629490b712dc1b").unwrap(),
-        };
-
-        assert_eq!(
-            user_operation.clone().encode().len(),
-            user_operation.abi_encoded_size()
         );
     }
 }

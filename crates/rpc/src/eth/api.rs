@@ -31,14 +31,14 @@ use rundler_pool::PoolServer;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_sim::{
     EstimationSettings, FeeEstimator, GasEstimate, GasEstimationError, GasEstimator,
-    GasEstimatorImpl, PrecheckSettings, UserOperationOptionalGas,
+    GasEstimatorV0_6, PrecheckSettings, UserOperationOptionalGasV0_6,
 };
 use rundler_types::{
     chain::ChainSpec,
     contracts::v0_6::i_entry_point::{
         IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
-    UserOperation,
+    UserOperation, UserOperationV0_6,
 };
 use rundler_utils::{eth::log_to_raw_log, log::LogOnError};
 use tracing::Level;
@@ -64,7 +64,7 @@ impl Settings {
 
 #[derive(Debug)]
 struct EntryPointContext<P, E> {
-    gas_estimator: GasEstimatorImpl<P, E>,
+    gas_estimator: GasEstimatorV0_6<P, E>,
 }
 
 impl<P, E> EntryPointContext<P, E>
@@ -75,11 +75,11 @@ where
     fn new(
         chain_spec: ChainSpec,
         provider: Arc<P>,
-        entry_point: E,
+        entry_point: Arc<E>,
         estimation_settings: EstimationSettings,
         fee_estimator: FeeEstimator<P>,
     ) -> Self {
-        let gas_estimator = GasEstimatorImpl::new(
+        let gas_estimator = GasEstimatorV0_6::new(
             chain_spec,
             provider,
             entry_point,
@@ -108,7 +108,7 @@ where
     pub(crate) fn new(
         chain_spec: ChainSpec,
         provider: Arc<P>,
-        entry_points: Vec<E>,
+        entry_points: Vec<Arc<E>>,
         pool: PS,
         settings: Settings,
         estimation_settings: EstimationSettings,
@@ -157,6 +157,8 @@ where
                 "supplied entry point addr is not a known entry point".to_string(),
             ));
         }
+        let op: UserOperationV0_6 = op.into();
+
         self.pool
             .add_op(entry_point, op.into())
             .await
@@ -166,7 +168,7 @@ where
 
     pub(crate) async fn estimate_user_operation_gas(
         &self,
-        op: UserOperationOptionalGas,
+        op: UserOperationOptionalGasV0_6,
         entry_point: Address,
         state_override: Option<spoof::State>,
     ) -> EthResult<GasEstimate> {
@@ -346,7 +348,7 @@ where
         let user_operation = if self.contexts_by_entry_point.contains_key(&to) {
             self.get_user_operations_from_tx_data(tx.input)
                 .into_iter()
-                .find(|op| op.op_hash(to, self.chain_spec.id) == hash)
+                .find(|op| op.hash(to, self.chain_spec.id) == hash)
                 .context("matching user operation should be found in tx data")?
         } else {
             self.trace_find_user_operation(transaction_hash, hash)
@@ -378,7 +380,7 @@ where
             .await
             .map_err(EthRpcError::from)?;
         Ok(res.map(|op| RichUserOperation {
-            user_operation: op.uo.into(),
+            user_operation: UserOperationV0_6::from(op.uo).into(),
             entry_point: op.entry_point.into(),
             block_number: None,
             block_hash: None,
@@ -410,7 +412,7 @@ where
         Ok(logs.into_iter().next())
     }
 
-    fn get_user_operations_from_tx_data(&self, tx_data: Bytes) -> Vec<UserOperation> {
+    fn get_user_operations_from_tx_data(&self, tx_data: Bytes) -> Vec<UserOperationV0_6> {
         let entry_point_calls = match IEntryPointCalls::decode(tx_data) {
             Ok(entry_point_calls) => entry_point_calls,
             Err(_) => return vec![],
@@ -510,7 +512,7 @@ where
         &self,
         tx_hash: H256,
         user_op_hash: H256,
-    ) -> EthResult<Option<UserOperation>> {
+    ) -> EthResult<Option<UserOperationV0_6>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
             tracer: Some(GethDebugTracerType::BuiltInTracer(
@@ -543,7 +545,7 @@ where
                 if let Some(uo) = self
                     .get_user_operations_from_tx_data(call_frame.input)
                     .into_iter()
-                    .find(|op| op.op_hash(*to, self.chain_spec.id) == user_op_hash)
+                    .find(|op| op.hash(*to, self.chain_spec.id) == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }

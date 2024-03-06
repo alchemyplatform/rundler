@@ -380,7 +380,7 @@ where
         // Only let ops with successful simulations through
         let sim_result = self
             .simulator
-            .simulate_validation(op.clone(), None, None)
+            .simulate_validation(op.clone().into(), None, None)
             .await?;
 
         // No aggregators supported for now
@@ -412,12 +412,12 @@ where
         {
             let state = self.state.read();
             if !pool_op.account_is_staked
-                && state.pool.address_count(&pool_op.uo.sender)
+                && state.pool.address_count(&pool_op.uo.sender())
                     >= self.config.same_sender_mempool_count
             {
                 return Err(MempoolError::MaxOperationsReached(
                     self.config.same_sender_mempool_count,
-                    pool_op.uo.sender,
+                    pool_op.uo.sender(),
                 ));
             }
 
@@ -464,7 +464,7 @@ where
         }
         let op_hash = pool_op
             .uo
-            .op_hash(self.config.entry_point, self.config.chain_id);
+            .hash(self.config.entry_point, self.config.chain_id);
         let valid_after = pool_op.valid_time_range.valid_after;
         let valid_until = pool_op.valid_time_range.valid_until;
         self.emit(OpPoolEvent::ReceivedOp {
@@ -522,7 +522,7 @@ where
             }
         };
 
-        let hash = po.uo.op_hash(self.config.entry_point, self.config.chain_id);
+        let hash = po.uo.hash(self.config.entry_point, self.config.chain_id);
 
         // This can return none if the operation was removed by another thread
         if self
@@ -577,12 +577,12 @@ where
             .filter(|op| {
                 // short-circuit the mod if there is only 1 shard
                 ((self.config.num_shards == 1) ||
-                (U256::from_little_endian(op.uo.sender.as_bytes())
+                (U256::from_little_endian(op.uo.sender().as_bytes())
                         .div_mod(self.config.num_shards.into())
                         .1
                         == shard_index.into())) &&
                 // filter out ops from senders we've already seen
-                senders.insert(op.uo.sender)
+                senders.insert(op.uo.sender())
             })
             .take(max)
             .collect())

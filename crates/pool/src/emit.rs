@@ -157,8 +157,8 @@ impl Display for OpPoolEvent {
                     format_entity_status("Factory", entities.factory.as_ref()),
                     format_entity_status("Paymaster", entities.paymaster.as_ref()),
                     format_entity_status("Aggregator", entities.aggregator.as_ref()),
-                    op.max_fee_per_gas,
-                    op.max_priority_fee_per_gas,
+                    op.max_fee_per_gas(),
+                    op.max_priority_fee_per_gas(),
                 )
             }
             OpPoolEvent::RemovedOp { op_hash, reason } => {

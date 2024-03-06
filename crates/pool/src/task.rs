@@ -16,9 +16,9 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::providers::Middleware;
-use rundler_provider::{EntryPoint, EthersEntryPoint, Provider};
+use rundler_provider::{EntryPoint, EthersEntryPointV0_6, Provider};
 use rundler_sim::{
-    Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
+    Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorV0_6,
 };
 use rundler_task::Task;
 use rundler_types::chain::ChainSpec;
@@ -163,20 +163,20 @@ impl PoolTask {
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
     ) -> anyhow::Result<UoPool<impl Prechecker, impl Simulator, impl EntryPoint>> {
-        let ep = EthersEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
+        let ep = EthersEntryPointV0_6::new(pool_config.entry_point, Arc::clone(&provider));
 
         let prechecker = PrecheckerImpl::new(
             chain_spec,
             Arc::clone(&provider),
-            ep.clone(),
+            Arc::new(ep.clone()),
             pool_config.precheck_settings,
         );
 
         let simulate_validation_tracer =
             SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
-        let simulator = SimulatorImpl::new(
+        let simulator = SimulatorV0_6::new(
             Arc::clone(&provider),
-            ep.address(),
+            Arc::new(ep.clone()),
             simulate_validation_tracer,
             pool_config.sim_settings,
             pool_config.mempool_channel_configs.clone(),

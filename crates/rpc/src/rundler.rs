@@ -23,7 +23,7 @@ use jsonrpsee::{
 use rundler_pool::PoolServer;
 use rundler_provider::{EntryPoint, Provider};
 use rundler_sim::{gas, FeeEstimator};
-use rundler_types::{chain::ChainSpec, UserOperation, UserOperationId};
+use rundler_types::{chain::ChainSpec, UserOperation, UserOperationId, UserOperationV0_6};
 
 use crate::{error::rpc_err, eth::EthRpcError, RpcUserOperation};
 
@@ -126,7 +126,7 @@ where
             ));
         }
 
-        let uo: UserOperation = user_op.into();
+        let uo: UserOperationV0_6 = user_op.into();
         let id = UserOperationId {
             sender: uo.sender,
             nonce: uo.nonce,
@@ -145,7 +145,7 @@ where
 
         let output = self
             .entry_point
-            .call_simulate_validation(uo, self.settings.max_verification_gas)
+            .call_simulate_validation(uo.into(), self.settings.max_verification_gas)
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 

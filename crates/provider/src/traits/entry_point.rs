@@ -11,15 +11,37 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use ethers::types::{
     spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
 };
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_types::{
-    contracts::v0_6::{i_entry_point::ExecutionResult, shared_types::UserOpsPerAggregator},
-    DepositInfo, GasFees, UserOperation, ValidationOutput,
+    contracts::v0_6::i_entry_point::ExecutionResult, DepositInfoV0_6, GasFees, UserOperation,
+    UserOpsPerAggregator, ValidationOutput,
 };
+
+/// Output of a successful signature aggregator simulation call
+#[derive(Clone, Debug, Default)]
+pub struct AggregatorSimOut {
+    /// Address of the aggregator contract
+    pub address: Address,
+    /// Aggregated signature
+    pub signature: Bytes,
+}
+
+/// Result of a signature aggregator call
+#[derive(Debug)]
+pub enum AggregatorOut {
+    /// No aggregator used
+    NotNeeded,
+    /// Successful call
+    SuccessWithInfo(AggregatorSimOut),
+    /// Aggregator validation function reverted
+    ValidationReverted,
+}
 
 /// Result of an entry point handle ops call
 #[derive(Clone, Debug)]
@@ -98,8 +120,38 @@ pub trait EntryPoint: Send + Sync + 'static {
     ) -> Result<ExecutionResult, String>;
 
     /// Get the deposit info for an address
-    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfoV0_6>;
 
     /// Get the balances of a list of addresses in order
     async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
+
+    /// Call an aggregator to aggregate signatures for a set of operations
+    async fn aggregate_signatures(
+        self: Arc<Self>,
+        aggregator_address: Address,
+        ops: Vec<UserOperation>,
+    ) -> anyhow::Result<Option<Bytes>>;
+
+    /// Validate a user operation signature using an aggregator
+    async fn validate_user_op_signature(
+        self: Arc<Self>,
+        aggregator_address: Address,
+        user_op: UserOperation,
+        gas_cap: u64,
+    ) -> anyhow::Result<AggregatorOut>;
+
+    /// Calculate the L1 portion of the gas for a user operation on Arbitrum
+    async fn calc_arbitrum_l1_gas(
+        self: Arc<Self>,
+        entry_point_address: Address,
+        op: UserOperation,
+    ) -> anyhow::Result<U256>;
+
+    /// Calculate the L1 portion of the gas for a user operation on optimism
+    async fn calc_optimism_l1_gas(
+        self: Arc<Self>,
+        entry_point_address: Address,
+        op: UserOperation,
+        gas_price: U256,
+    ) -> anyhow::Result<U256>;
 }

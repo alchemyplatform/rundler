@@ -46,7 +46,7 @@ use rundler_types::{
         entry_point::EntryPoint, simple_account::SimpleAccount,
         simple_account_factory::SimpleAccountFactory, verifying_paymaster::VerifyingPaymaster,
     },
-    UserOperation,
+    UserOperationV0_6 as UserOperation,
 };
 
 /// Chain ID used by Geth in --dev mode.
@@ -320,7 +320,7 @@ pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<
         init_code,
         ..base_user_op()
     };
-    let op_hash = op.op_hash(entry_point.address(), DEV_CHAIN_ID);
+    let op_hash = op.hash(entry_point.address(), DEV_CHAIN_ID);
     let signature = wallet_owner_eoa
         .sign_message(op_hash)
         .await
@@ -426,7 +426,7 @@ impl DevClients {
             paymaster_and_data.extend(paymaster_signature.to_vec());
             op.paymaster_and_data = paymaster_and_data.into()
         }
-        let op_hash = op.op_hash(self.entry_point.address(), DEV_CHAIN_ID);
+        let op_hash = op.hash(self.entry_point.address(), DEV_CHAIN_ID);
         let signature = self
             .wallet_owner_signer
             .sign_message(op_hash)

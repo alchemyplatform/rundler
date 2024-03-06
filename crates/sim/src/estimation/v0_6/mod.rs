@@ -11,9 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Provider implementations using [ethers-rs](https://github.com/gakonst/ethers-rs)
-
-mod entry_point_v0_6;
-pub use entry_point_v0_6::EntryPointV0_6 as EthersEntryPointV0_6;
-mod metrics_middleware;
-pub(crate) mod provider;
+mod estimator_v0_6;
+pub use estimator_v0_6::GasEstimatorV0_6;
+mod types;
+pub use types::UserOperationOptionalGas as UserOperationOptionalGasV0_6;

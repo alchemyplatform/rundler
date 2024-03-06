@@ -543,7 +543,7 @@ where
             .remove_ops(
                 self.entry_point.address(),
                 ops.iter()
-                    .map(|op| op.op_hash(self.entry_point.address(), self.chain_spec.id))
+                    .map(|op| op.hash(self.entry_point.address(), self.chain_spec.id))
                     .collect(),
             )
             .await
@@ -565,7 +565,7 @@ where
     }
 
     fn op_hash(&self, op: &UserOperation) -> H256 {
-        op.op_hash(self.entry_point.address(), self.chain_spec.id)
+        op.hash(self.entry_point.address(), self.chain_spec.id)
     }
 }
 
