@@ -46,7 +46,7 @@ pub type PrecheckError = ViolationError<PrecheckViolation>;
 pub struct PrecheckerImpl<P: Provider, E: EntryPoint> {
     chain_spec: ChainSpec,
     provider: Arc<P>,
-    entry_point: E,
+    entry_point: Arc<E>,
     settings: Settings,
     fee_estimator: gas::FeeEstimator<P>,
 
@@ -138,7 +138,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     pub fn new(
         chain_spec: ChainSpec,
         provider: Arc<P>,
-        entry_point: E,
+        entry_point: Arc<E>,
         settings: Settings,
     ) -> Self {
         let fee_estimator = gas::FeeEstimator::new(
@@ -169,23 +169,20 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             ..
         } = async_data;
         let mut violations = ArrayVec::new();
-        let len = op.init_code.len();
-        if len == 0 {
+        if op.factory().is_none() {
             if !sender_exists {
                 violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
-                    op.sender,
+                    op.sender(),
                 ));
             }
         } else {
-            if len < 20 {
-                violations.push(PrecheckViolation::InitCodeTooShort(len));
-            } else if !factory_exists {
+            if !factory_exists {
                 violations.push(PrecheckViolation::FactoryIsNotContract(
                     op.factory().unwrap(),
                 ))
             }
             if sender_exists {
-                violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender));
+                violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender()));
             }
         }
         violations
@@ -208,9 +205,9 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         } = async_data;
 
         let mut violations = ArrayVec::new();
-        if op.verification_gas_limit > max_verification_gas {
+        if op.verification_gas_limit() > max_verification_gas {
             violations.push(PrecheckViolation::VerificationGasLimitTooHigh(
-                op.verification_gas_limit,
+                op.verification_gas_limit(),
                 max_verification_gas,
             ));
         }
@@ -231,9 +228,9 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             min_pre_verification_gas,
             self.settings.pre_verification_gas_accept_percent,
         );
-        if op.pre_verification_gas < min_pre_verification_gas {
+        if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
-                op.pre_verification_gas,
+                op.pre_verification_gas(),
                 min_pre_verification_gas,
             ));
         }
@@ -248,22 +245,22 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         let min_max_fee = min_base_fee + min_priority_fee;
 
         // check priority fee first, since once ruled out we can check max fee
-        if op.max_priority_fee_per_gas < min_priority_fee {
+        if op.max_priority_fee_per_gas() < min_priority_fee {
             violations.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
-                op.max_priority_fee_per_gas,
+                op.max_priority_fee_per_gas(),
                 min_priority_fee,
             ));
         }
-        if op.max_fee_per_gas < min_max_fee {
+        if op.max_fee_per_gas() < min_max_fee {
             violations.push(PrecheckViolation::MaxFeePerGasTooLow(
-                op.max_fee_per_gas,
+                op.max_fee_per_gas(),
                 min_max_fee,
             ));
         }
 
-        if op.call_gas_limit < MIN_CALL_GAS_LIMIT {
+        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
             violations.push(PrecheckViolation::CallGasLimitTooLow(
-                op.call_gas_limit,
+                op.call_gas_limit(),
                 MIN_CALL_GAS_LIMIT,
             ));
         }
@@ -276,19 +273,14 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             payer_funds,
             ..
         } = async_data;
-        if !op.paymaster_and_data.is_empty() {
-            let Some(paymaster) = op.paymaster() else {
-                return Some(PrecheckViolation::PaymasterTooShort(
-                    op.paymaster_and_data.len(),
-                ));
-            };
+        if let Some(paymaster) = op.paymaster() {
             if !paymaster_exists {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
             }
         }
         let max_gas_cost = op.max_gas_cost();
         if payer_funds < max_gas_cost {
-            if op.paymaster_and_data.is_empty() {
+            if op.paymaster().is_none() {
                 return Some(PrecheckViolation::SenderFundsTooLow(
                     payer_funds,
                     max_gas_cost,
@@ -314,7 +306,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             min_pre_verification_gas,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
-            self.is_contract(Some(op.sender)),
+            self.is_contract(Some(op.sender())),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
             self.get_required_pre_verification_gas(op.clone(), base_fee)
@@ -350,7 +342,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     async fn get_payer_deposit(&self, op: &UserOperation) -> anyhow::Result<U256> {
         let payer = match op.paymaster() {
             Some(paymaster) => paymaster,
-            None => op.sender,
+            None => op.sender(),
         };
         self.entry_point
             .balance_of(payer, None)
@@ -359,12 +351,12 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     }
 
     async fn get_payer_balance(&self, op: &UserOperation) -> anyhow::Result<U256> {
-        if !op.paymaster_and_data.is_empty() {
+        if op.paymaster().is_some() {
             // Paymasters must deposit eth, and cannot pay with their own.
             return Ok(0.into());
         }
         self.provider
-            .get_balance(op.sender, None)
+            .get_balance(op.sender(), None)
             .await
             .context("precheck should get sender balance")
     }
@@ -383,7 +375,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
     ) -> anyhow::Result<U256> {
         gas::calc_required_pre_verification_gas(
             &self.chain_spec,
-            self.provider.clone(),
+            self.entry_point.clone(),
             &op,
             base_fee,
         )
@@ -397,9 +389,6 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
 /// All possible errors that can be returned from a precheck.
 #[derive(Clone, Debug, parse_display::Display, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PrecheckViolation {
-    /// The init code is too short to contain a factory address.
-    #[display("initCode must start with a 20-byte factory address, but was only {0} bytes")]
-    InitCodeTooShort(usize),
     /// The sender is not deployed, and no init code is provided.
     #[display("sender {0:?} is not a contract and initCode is empty")]
     SenderIsNotContractAndNoInitCode(Address),
@@ -419,9 +408,6 @@ pub enum PrecheckViolation {
     /// The pre-verification gas of the user operation is too low.
     #[display("preVerificationGas is {0} but must be at least {1}")]
     PreVerificationGasTooLow(U256, U256),
-    /// The paymaster and data is too short to contain a paymaster address.
-    #[display("paymasterAndData must start a 20-byte paymaster address, but was only {0} bytes")]
-    PaymasterTooShort(usize),
     /// A paymaster is provided, but the address is not deployed.
     #[display("paymasterAndData indicates paymaster with no code: {0:?}")]
     PaymasterIsNotContract(Address),
@@ -449,6 +435,7 @@ mod tests {
 
     use ethers::types::Bytes;
     use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_types::UserOperationV0_6;
 
     use super::*;
 
@@ -474,9 +461,13 @@ mod tests {
     #[tokio::test]
     async fn test_check_init_code() {
         let (cs, provider, entry_point) = create_base_config();
-        let prechecker =
-            PrecheckerImpl::new(cs, Arc::new(provider), entry_point, Settings::default());
-        let op = UserOperation {
+        let prechecker = PrecheckerImpl::new(
+            cs,
+            Arc::new(provider),
+            Arc::new(entry_point),
+            Settings::default(),
+        );
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
             init_code: Bytes::from_str("0x1000").unwrap(),
@@ -488,18 +479,14 @@ mod tests {
             max_priority_fee_per_gas: 2_000.into(),
             paymaster_and_data: Bytes::default(),
             signature: Bytes::default(),
-        };
+        });
 
         let res = prechecker.check_init_code(&op, get_test_async_data());
-        assert_eq!(
-            res,
-            ArrayVec::<PrecheckViolation, 2>::from([
-                PrecheckViolation::InitCodeTooShort(2),
-                PrecheckViolation::ExistingSenderWithInitCode(
-                    Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap()
-                )
-            ])
-        );
+        let mut expected = ArrayVec::new();
+        expected.push(PrecheckViolation::ExistingSenderWithInitCode(
+            Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
+        ));
+        assert_eq!(res, expected);
     }
 
     #[tokio::test]
@@ -513,8 +500,9 @@ mod tests {
             base_fee_accept_percent: 100,
             pre_verification_gas_accept_percent: 100,
         };
-        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, test_settings);
-        let op = UserOperation {
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), Arc::new(entry_point), test_settings);
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
             init_code: Bytes::from_str("0x1000000000000000000000000000000000000000").unwrap(),
@@ -526,7 +514,7 @@ mod tests {
             max_priority_fee_per_gas: 2_000.into(),
             paymaster_and_data: Bytes::default(),
             signature: Bytes::default(),
-        };
+        });
 
         let res = prechecker.check_gas(&op, get_test_async_data());
 
@@ -546,9 +534,13 @@ mod tests {
     #[tokio::test]
     async fn test_check_payer_paymaster_deposit_too_low() {
         let (cs, provider, entry_point) = create_base_config();
-        let prechecker =
-            PrecheckerImpl::new(cs, Arc::new(provider), entry_point, Settings::default());
-        let op = UserOperation {
+        let prechecker = PrecheckerImpl::new(
+            cs,
+            Arc::new(provider),
+            Arc::new(entry_point),
+            Settings::default(),
+        );
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
             init_code: Bytes::default(),
@@ -563,7 +555,7 @@ mod tests {
             )
             .unwrap(),
             signature: Bytes::default(),
-        };
+        });
 
         let res = prechecker.check_payer(&op, get_test_async_data());
         assert_eq!(
@@ -585,13 +577,14 @@ mod tests {
         let (mut cs, provider, entry_point) = create_base_config();
         cs.id = 10;
         let mintip = cs.min_max_priority_fee_per_gas;
-        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), Arc::new(entry_point), settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let op = UserOperation {
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             max_fee_per_gas: U256::from(math::percent(5000, settings.base_fee_accept_percent))
                 + mintip,
             max_priority_fee_per_gas: mintip,
@@ -602,7 +595,7 @@ mod tests {
             .into(),
             call_gas_limit: MIN_CALL_GAS_LIMIT,
             ..Default::default()
-        };
+        });
 
         let res = prechecker.check_gas(&op, async_data);
         assert!(res.is_empty());
@@ -616,19 +609,20 @@ mod tests {
             ..Default::default()
         };
         let (cs, provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), Arc::new(entry_point), settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let op = UserOperation {
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             max_fee_per_gas: math::percent(5000, settings.base_fee_accept_percent - 10).into(),
             max_priority_fee_per_gas: 0.into(),
             pre_verification_gas: 1_000.into(),
             call_gas_limit: MIN_CALL_GAS_LIMIT,
             ..Default::default()
-        };
+        });
 
         let res = prechecker.check_gas(&op, async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
@@ -651,7 +645,8 @@ mod tests {
         cs.id = 10;
         cs.min_max_priority_fee_per_gas = 100_000.into();
         let mintip = cs.min_max_priority_fee_per_gas;
-        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), Arc::new(entry_point), settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
@@ -659,13 +654,13 @@ mod tests {
 
         let undertip = mintip - U256::from(1);
 
-        let op = UserOperation {
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             max_fee_per_gas: U256::from(5_000) + mintip,
             max_priority_fee_per_gas: undertip,
             pre_verification_gas: 1_000.into(),
             call_gas_limit: MIN_CALL_GAS_LIMIT,
             ..Default::default()
-        };
+        });
 
         let res = prechecker.check_gas(&op, async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
@@ -685,13 +680,14 @@ mod tests {
             ..Default::default()
         };
         let (cs, provider, entry_point) = create_base_config();
-        let prechecker = PrecheckerImpl::new(cs, Arc::new(provider), entry_point, settings);
+        let prechecker =
+            PrecheckerImpl::new(cs, Arc::new(provider), Arc::new(entry_point), settings);
 
         let mut async_data = get_test_async_data();
         async_data.base_fee = 5_000.into();
         async_data.min_pre_verification_gas = 1_000.into();
 
-        let op = UserOperation {
+        let op = UserOperation::V0_6(UserOperationV0_6 {
             max_fee_per_gas: 5000.into(),
             max_priority_fee_per_gas: 0.into(),
             pre_verification_gas: math::percent(
@@ -701,7 +697,7 @@ mod tests {
             .into(),
             call_gas_limit: MIN_CALL_GAS_LIMIT,
             ..Default::default()
-        };
+        });
 
         let res = prechecker.check_gas(&op, async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();

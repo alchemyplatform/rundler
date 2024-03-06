@@ -22,7 +22,7 @@ use jsonrpsee::{
 };
 use rundler_builder::BuilderServer;
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, EthersEntryPoint};
+use rundler_provider::{EntryPoint, EthersEntryPointV0_6};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
@@ -88,7 +88,8 @@ where
         tracing::info!("Starting rpc server on {}", addr);
 
         let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
-        let ep = EthersEntryPoint::new(self.args.chain_spec.entry_point_address, provider.clone());
+        let ep =
+            EthersEntryPointV0_6::new(self.args.chain_spec.entry_point_address, provider.clone());
 
         let mut module = RpcModule::new(());
         self.attach_namespaces(provider, ep, &mut module)?;
@@ -160,7 +161,7 @@ where
                         self.args.chain_spec.clone(),
                         provider.clone(),
                         // TODO: support multiple entry points
-                        vec![entry_point.clone()],
+                        vec![Arc::new(entry_point.clone())],
                         self.pool.clone(),
                         self.args.eth_api_settings,
                         self.args.estimation_settings,

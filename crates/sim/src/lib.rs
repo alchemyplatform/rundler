@@ -32,8 +32,8 @@
 
 mod estimation;
 pub use estimation::{
-    GasEstimate, GasEstimationError, GasEstimator, GasEstimatorImpl,
-    Settings as EstimationSettings, UserOperationOptionalGas,
+    GasEstimate, GasEstimationError, GasEstimator, GasEstimatorV0_6,
+    Settings as EstimationSettings, UserOperationOptionalGasV0_6,
 };
 
 pub mod gas;
@@ -53,7 +53,7 @@ pub use simulation::MockSimulator;
 pub use simulation::{
     EntityInfo, EntityInfos, MempoolConfig, NeedsStakeInformation, Settings as SimulationSettings,
     SimulateValidationTracer, SimulateValidationTracerImpl, SimulationError, SimulationResult,
-    SimulationViolation, Simulator, SimulatorImpl, ViolationOpCode,
+    SimulationViolation, Simulator, SimulatorV0_6, ViolationOpCode,
 };
 
 mod types;

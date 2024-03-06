@@ -22,11 +22,11 @@ use super::protos::{
     AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
     DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, ExistingSenderWithInitCode,
-    FactoryCalledCreate2Twice, FactoryIsNotContract, InitCodeTooShort, InvalidSignature,
-    InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
-    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
-    NotStaked, OperationAlreadyKnownError, OperationDropTooSoon, OutOfGas, PaymasterBalanceTooLow,
-    PaymasterDepositTooLow, PaymasterIsNotContract, PaymasterTooShort, PreVerificationGasTooLow,
+    FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidSignature, InvalidStorageAccess,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
+    OperationAlreadyKnownError, OperationDropTooSoon, OutOfGas, PaymasterBalanceTooLow,
+    PaymasterDepositTooLow, PaymasterIsNotContract, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
     SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
@@ -244,13 +244,6 @@ impl From<MempoolError> for ProtoMempoolError {
 impl From<PrecheckViolation> for ProtoPrecheckViolationError {
     fn from(value: PrecheckViolation) -> Self {
         match value {
-            PrecheckViolation::InitCodeTooShort(length) => ProtoPrecheckViolationError {
-                violation: Some(precheck_violation_error::Violation::InitCodeTooShort(
-                    InitCodeTooShort {
-                        length: length as u64,
-                    },
-                )),
-            },
             PrecheckViolation::SenderIsNotContractAndNoInitCode(addr) => {
                 ProtoPrecheckViolationError {
                     violation: Some(
@@ -310,13 +303,6 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     ),
                 }
             }
-            PrecheckViolation::PaymasterTooShort(length) => ProtoPrecheckViolationError {
-                violation: Some(precheck_violation_error::Violation::PaymasterTooShort(
-                    PaymasterTooShort {
-                        length: length as u64,
-                    },
-                )),
-            },
             PrecheckViolation::PaymasterIsNotContract(addr) => ProtoPrecheckViolationError {
                 violation: Some(precheck_violation_error::Violation::PaymasterIsNotContract(
                     PaymasterIsNotContract {
@@ -377,9 +363,6 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
 
     fn try_from(value: ProtoPrecheckViolationError) -> Result<Self, Self::Error> {
         Ok(match value.violation {
-            Some(precheck_violation_error::Violation::InitCodeTooShort(e)) => {
-                PrecheckViolation::InitCodeTooShort(e.length as usize)
-            }
             Some(precheck_violation_error::Violation::SenderIsNotContractAndNoInitCode(e)) => {
                 PrecheckViolation::SenderIsNotContractAndNoInitCode(from_bytes(&e.sender_address)?)
             }
@@ -406,9 +389,6 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
                     from_bytes(&e.actual_gas)?,
                     from_bytes(&e.min_gas)?,
                 )
-            }
-            Some(precheck_violation_error::Violation::PaymasterTooShort(e)) => {
-                PrecheckViolation::PaymasterTooShort(e.length as usize)
             }
             Some(precheck_violation_error::Violation::PaymasterIsNotContract(e)) => {
                 PrecheckViolation::PaymasterIsNotContract(from_bytes(&e.paymaster_address)?)
@@ -780,12 +760,16 @@ mod tests {
 
     #[test]
     fn test_precheck_error() {
-        let error = MempoolError::PrecheckViolation(PrecheckViolation::InitCodeTooShort(0));
+        let error = MempoolError::PrecheckViolation(PrecheckViolation::SenderFundsTooLow(
+            0.into(),
+            0.into(),
+        ));
         let proto_error: ProtoMempoolError = error.into();
         let error2 = proto_error.try_into().unwrap();
         match error2 {
-            MempoolError::PrecheckViolation(PrecheckViolation::InitCodeTooShort(v)) => {
-                assert_eq!(v, 0)
+            MempoolError::PrecheckViolation(PrecheckViolation::SenderFundsTooLow(x, y)) => {
+                assert_eq!(x, 0);
+                assert_eq!(y, 0);
             }
             _ => panic!("wrong error type"),
         }

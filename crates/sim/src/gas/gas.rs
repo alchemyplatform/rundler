@@ -14,8 +14,8 @@
 use std::{cmp, fmt::Debug, sync::Arc};
 
 use anyhow::Context;
-use ethers::{abi::AbiEncode, types::U256};
-use rundler_provider::Provider;
+use ethers::types::U256;
+use rundler_provider::{EntryPoint, Provider};
 use rundler_types::{
     chain::{self, ChainSpec, L1GasOracleContractType},
     GasFees, UserOperation,
@@ -26,32 +26,6 @@ use tokio::try_join;
 use super::oracle::{
     ConstantOracle, FeeOracle, ProviderOracle, UsageBasedFeeOracle, UsageBasedFeeOracleConfig,
 };
-
-/// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
-#[derive(Clone, Copy, Debug)]
-pub struct GasOverheads {
-    /// The Entrypoint requires a gas buffer for the bundle to account for the gas spent outside of the major steps in the processing of UOs
-    pub bundle_transaction_gas_buffer: U256,
-    /// The fixed gas overhead for any EVM transaction
-    pub transaction_gas_overhead: U256,
-    per_user_op: U256,
-    per_user_op_word: U256,
-    zero_byte: U256,
-    non_zero_byte: U256,
-}
-
-impl Default for GasOverheads {
-    fn default() -> Self {
-        Self {
-            bundle_transaction_gas_buffer: 5_000.into(),
-            transaction_gas_overhead: 21_000.into(),
-            per_user_op: 18_300.into(),
-            per_user_op_word: 4.into(),
-            zero_byte: 4.into(),
-            non_zero_byte: 16.into(),
-        }
-    }
-}
 
 /// Returns the required pre_verification_gas for the given user operation
 ///
@@ -66,14 +40,14 @@ impl Default for GasOverheads {
 ///
 /// Networks that require dynamic pre_verification_gas are typically those that charge extra calldata fees
 /// that can scale based on dynamic gas prices.
-pub async fn estimate_pre_verification_gas<P: Provider>(
+pub async fn estimate_pre_verification_gas<E: EntryPoint>(
     chain_spec: &ChainSpec,
-    provider: Arc<P>,
+    enty_point: Arc<E>,
     full_op: &UserOperation,
     random_op: &UserOperation,
     gas_price: U256,
 ) -> anyhow::Result<U256> {
-    let static_gas = calc_static_pre_verification_gas(full_op, true);
+    let static_gas = full_op.calc_static_pre_verification_gas(true);
     if !chain_spec.calldata_pre_verification_gas {
         return Ok(static_gas);
     }
@@ -81,13 +55,13 @@ pub async fn estimate_pre_verification_gas<P: Provider>(
     let dynamic_gas = match chain_spec.l1_gas_oracle_contract_type {
         L1GasOracleContractType::None => panic!("Chain spec requires calldata pre_verification_gas but no l1_gas_oracle_contract_type is set"),
         L1GasOracleContractType::ArbitrumNitro => {
-            provider
+            enty_point
                 .clone()
                 .calc_arbitrum_l1_gas(chain_spec.entry_point_address, random_op.clone())
                 .await?
         },
         L1GasOracleContractType::OptimismBedrock => {
-            provider
+            enty_point
                 .clone()
                 .calc_optimism_l1_gas(chain_spec.entry_point_address, random_op.clone(), gas_price)
                 .await?
@@ -100,13 +74,13 @@ pub async fn estimate_pre_verification_gas<P: Provider>(
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
 ///
 /// The effective gas price is calculated as min(base_fee + max_priority_fee_per_gas, max_fee_per_gas)
-pub async fn calc_required_pre_verification_gas<P: Provider>(
+pub async fn calc_required_pre_verification_gas<E: EntryPoint>(
     chain_spec: &ChainSpec,
-    provider: Arc<P>,
+    entry_point: Arc<E>,
     op: &UserOperation,
     base_fee: U256,
 ) -> anyhow::Result<U256> {
-    let static_gas = calc_static_pre_verification_gas(op, true);
+    let static_gas = op.calc_static_pre_verification_gas(true);
     if !chain_spec.calldata_pre_verification_gas {
         return Ok(static_gas);
     }
@@ -114,15 +88,15 @@ pub async fn calc_required_pre_verification_gas<P: Provider>(
     let dynamic_gas = match chain_spec.l1_gas_oracle_contract_type {
         L1GasOracleContractType::None => panic!("Chain spec requires calldata pre_verification_gas but no l1_gas_oracle_contract_type is set"),
         L1GasOracleContractType::ArbitrumNitro => {
-            provider
+            entry_point
                 .clone()
                 .calc_arbitrum_l1_gas(chain_spec.entry_point_address, op.clone())
                 .await?
         },
         L1GasOracleContractType::OptimismBedrock => {
-            let gas_price = cmp::min(base_fee + op.max_priority_fee_per_gas, op.max_fee_per_gas);
+            let gas_price = cmp::min(base_fee + op.max_priority_fee_per_gas(), op.max_fee_per_gas());
 
-            provider
+            entry_point
                 .clone()
                 .calc_optimism_l1_gas(chain_spec.entry_point_address, op.clone(), gas_price)
                 .await?
@@ -156,9 +130,9 @@ pub fn user_operation_gas_limit(
     paymaster_post_op: bool,
 ) -> U256 {
     user_operation_pre_verification_gas_limit(chain_spec, uo, assume_single_op_bundle)
-        + uo.call_gas_limit
-        + uo.verification_gas_limit
-            * verification_gas_limit_multiplier(assume_single_op_bundle, paymaster_post_op)
+        + uo.total_verification_gas_limit()
+        + uo.required_pre_execution_buffer()
+        + uo.call_gas_limit()
 }
 
 /// Returns the gas limit for the user operation that applies to bundle transaction's execution limit
@@ -169,9 +143,9 @@ pub fn user_operation_execution_gas_limit(
     paymaster_post_op: bool,
 ) -> U256 {
     user_operation_pre_verification_execution_gas_limit(chain_spec, uo, assume_single_op_bundle)
-        + uo.call_gas_limit
-        + uo.verification_gas_limit
-            * verification_gas_limit_multiplier(assume_single_op_bundle, paymaster_post_op)
+        + uo.call_gas_limit()
+        + uo.required_pre_execution_buffer()
+        + uo.total_verification_gas_limit()
 }
 
 /// Returns the static pre-verification gas cost of a user operation
@@ -184,9 +158,9 @@ pub fn user_operation_pre_verification_execution_gas_limit(
     // but this not part of the EXECUTION gas limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
     if chain_spec.calldata_pre_verification_gas {
-        calc_static_pre_verification_gas(uo, include_fixed_gas_overhead)
+        uo.calc_static_pre_verification_gas(include_fixed_gas_overhead)
     } else {
-        uo.pre_verification_gas
+        uo.pre_verification_gas()
     }
 }
 
@@ -200,51 +174,9 @@ pub fn user_operation_pre_verification_gas_limit(
     // but this not part of the execution TOTAL limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
     if chain_spec.calldata_pre_verification_gas && !chain_spec.include_l1_gas_in_gas_limit {
-        calc_static_pre_verification_gas(uo, include_fixed_gas_overhead)
+        uo.calc_static_pre_verification_gas(include_fixed_gas_overhead)
     } else {
-        uo.pre_verification_gas
-    }
-}
-
-fn calc_static_pre_verification_gas(op: &UserOperation, include_fixed_gas_overhead: bool) -> U256 {
-    let ov = GasOverheads::default();
-    let encoded_op = op.clone().encode();
-    let length_in_words = encoded_op.len() / 32; // size of packed user op is always a multiple of 32 bytes
-    let call_data_cost: U256 = encoded_op
-        .iter()
-        .map(|&x| {
-            if x == 0 {
-                ov.zero_byte
-            } else {
-                ov.non_zero_byte
-            }
-        })
-        .reduce(|a, b| a + b)
-        .unwrap_or_default();
-
-    call_data_cost
-        + ov.per_user_op
-        + ov.per_user_op_word * length_in_words
-        + (if include_fixed_gas_overhead {
-            ov.transaction_gas_overhead
-        } else {
-            0.into()
-        })
-}
-
-fn verification_gas_limit_multiplier(
-    assume_single_op_bundle: bool,
-    paymaster_post_op: bool,
-) -> u64 {
-    // If using a paymaster that has a postOp, we need to account for potentially 2 postOp calls which can each use up to verification_gas_limit gas.
-    // otherwise the entrypoint expects the gas for 1 postOp call that uses verification_gas_limit plus the actual verification call
-    // we only add the additional verification_gas_limit only if we know for sure that this is a single op bundle, which what we do to get a worst-case upper bound
-    if paymaster_post_op {
-        3
-    } else if assume_single_op_bundle {
-        2
-    } else {
-        1
+        uo.pre_verification_gas()
     }
 }
 

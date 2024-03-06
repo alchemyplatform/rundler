@@ -106,7 +106,7 @@ impl PoolInner {
         // Check if operation already known
         if self
             .by_hash
-            .contains_key(&op.op_hash(self.config.entry_point, self.config.chain_id))
+            .contains_key(&op.hash(self.config.entry_point, self.config.chain_id))
         {
             return Err(MempoolError::OperationAlreadyKnown);
         }
@@ -115,19 +115,19 @@ impl PoolInner {
             let (replacement_priority_fee, replacement_fee) =
                 self.get_min_replacement_fees(pool_op.uo());
 
-            if op.max_priority_fee_per_gas < replacement_priority_fee
-                || op.max_fee_per_gas < replacement_fee
+            if op.max_priority_fee_per_gas() < replacement_priority_fee
+                || op.max_fee_per_gas() < replacement_fee
             {
                 return Err(MempoolError::ReplacementUnderpriced(
-                    pool_op.uo().max_priority_fee_per_gas,
-                    pool_op.uo().max_fee_per_gas,
+                    pool_op.uo().max_priority_fee_per_gas(),
+                    pool_op.uo().max_fee_per_gas(),
                 ));
             }
 
             Ok(Some(
                 pool_op
                     .uo()
-                    .op_hash(self.config.entry_point, self.config.chain_id),
+                    .hash(self.config.entry_point, self.config.chain_id),
             ))
         } else {
             Ok(None)
@@ -187,9 +187,11 @@ impl PoolInner {
 
     // STO-040
     pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
-        if let Some(ec) = self.count_by_address.get(&uo.sender) {
+        if let Some(ec) = self.count_by_address.get(&uo.sender()) {
             if ec.includes_non_sender() {
-                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
+                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(
+                    uo.sender(),
+                ));
             }
         }
 
@@ -217,7 +219,7 @@ impl PoolInner {
     ) -> MempoolResult<()> {
         for storage_address in accessed_storage {
             if let Some(ec) = self.count_by_address.get(storage_address) {
-                if ec.sender().gt(&0) && storage_address.ne(&uo.sender) {
+                if ec.sender().gt(&0) && storage_address.ne(&uo.sender()) {
                     // Reject UO if the sender is also an entity in another UO in the mempool
                     for entity in uo.entities() {
                         if storage_address.eq(&entity.address) {
@@ -240,7 +242,7 @@ impl PoolInner {
 
         let hash = tx_in_pool
             .uo()
-            .op_hash(mined_op.entry_point, self.config.chain_id);
+            .hash(mined_op.entry_point, self.config.chain_id);
 
         let ret = self.remove_operation_internal(hash, Some(block_number));
 
@@ -285,10 +287,7 @@ impl PoolInner {
                 }
                 false
             })
-            .map(|o| {
-                o.po.uo
-                    .op_hash(self.config.entry_point, self.config.chain_id)
-            })
+            .map(|o| o.po.uo.hash(self.config.entry_point, self.config.chain_id))
             .collect::<Vec<_>>();
         for &hash in &to_remove {
             self.remove_operation_internal(hash, None);
@@ -346,7 +345,7 @@ impl PoolInner {
             if let Some(worst) = self.best.pop_last() {
                 let hash = worst
                     .uo()
-                    .op_hash(self.config.entry_point, self.config.chain_id);
+                    .hash(self.config.entry_point, self.config.chain_id);
 
                 let _ = self
                     .remove_operation_internal(hash, None)
@@ -390,7 +389,7 @@ impl PoolInner {
         // create and insert ordered operation
         let hash = pool_op
             .uo()
-            .op_hash(self.config.entry_point, self.config.chain_id);
+            .hash(self.config.entry_point, self.config.chain_id);
         self.pool_size += pool_op.mem_size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
@@ -451,11 +450,11 @@ impl PoolInner {
 
     fn get_min_replacement_fees(&self, op: &UserOperation) -> (U256, U256) {
         let replacement_priority_fee = math::increase_by_percent(
-            op.max_priority_fee_per_gas,
+            op.max_priority_fee_per_gas(),
             self.config.min_replacement_fee_increase_percentage,
         );
         let replacement_fee = math::increase_by_percent(
-            op.max_fee_per_gas,
+            op.max_fee_per_gas(),
             self.config.min_replacement_fee_increase_percentage,
         );
         (replacement_priority_fee, replacement_fee)
@@ -500,8 +499,8 @@ impl Ord for OrderedPoolOperation {
         // Sort by gas price descending then by id ascending
         other
             .uo()
-            .max_fee_per_gas
-            .cmp(&self.uo().max_fee_per_gas)
+            .max_fee_per_gas()
+            .cmp(&self.uo().max_fee_per_gas())
             .then_with(|| self.submission_id.cmp(&other.submission_id))
     }
 }

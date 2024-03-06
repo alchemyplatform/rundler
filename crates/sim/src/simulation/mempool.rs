@@ -204,7 +204,7 @@ mod tests {
     use rundler_types::StorageSlot;
 
     use super::*;
-    use crate::simulation::{simulation::NeedsStakeInformation, ViolationOpCode};
+    use crate::simulation::{NeedsStakeInformation, ViolationOpCode};
 
     #[test]
     fn test_allow_entity_any() {

@@ -17,7 +17,7 @@ use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::{
     Entity as RundlerEntity, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
     EntityUpdateType as RundlerEntityUpdateType, UserOperation as RundlerUserOperation,
-    ValidTimeRange,
+    UserOperationV0_6 as RundlerUserOperationV0_6, ValidTimeRange,
 };
 
 use crate::{
@@ -36,7 +36,18 @@ pub const OP_POOL_FILE_DESCRIPTOR_SET: &[u8] =
 
 impl From<&RundlerUserOperation> for UserOperation {
     fn from(op: &RundlerUserOperation) -> Self {
-        UserOperation {
+        match op {
+            RundlerUserOperation::V0_6(op) => op.into(),
+            RundlerUserOperation::V0_7(_) => {
+                unimplemented!("V0_7 user operation is not supported")
+            }
+        }
+    }
+}
+
+impl From<&RundlerUserOperationV0_6> for UserOperation {
+    fn from(op: &RundlerUserOperationV0_6) -> Self {
+        let op = UserOperationV06 {
             sender: op.sender.0.to_vec(),
             nonce: to_le_bytes(op.nonce),
             init_code: op.init_code.to_vec(),
@@ -48,15 +59,18 @@ impl From<&RundlerUserOperation> for UserOperation {
             max_priority_fee_per_gas: to_le_bytes(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data.to_vec(),
             signature: op.signature.to_vec(),
+        };
+        UserOperation {
+            uo: Some(user_operation::Uo::V06(op)),
         }
     }
 }
 
-impl TryFrom<UserOperation> for RundlerUserOperation {
+impl TryFrom<UserOperationV06> for RundlerUserOperationV0_6 {
     type Error = ConversionError;
 
-    fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
-        Ok(RundlerUserOperation {
+    fn try_from(op: UserOperationV06) -> Result<Self, Self::Error> {
+        Ok(RundlerUserOperationV0_6 {
             sender: from_bytes(&op.sender)?,
             nonce: from_bytes(&op.nonce)?,
             init_code: op.init_code.into(),
@@ -69,6 +83,20 @@ impl TryFrom<UserOperation> for RundlerUserOperation {
             paymaster_and_data: op.paymaster_and_data.into(),
             signature: op.signature.into(),
         })
+    }
+}
+
+impl TryFrom<UserOperation> for RundlerUserOperation {
+    type Error = ConversionError;
+
+    fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
+        let op = op
+            .uo
+            .expect("User operation should contain user operation oneof");
+
+        match op {
+            user_operation::Uo::V06(op) => Ok(RundlerUserOperation::V0_6(op.try_into()?)),
+        }
     }
 }
 

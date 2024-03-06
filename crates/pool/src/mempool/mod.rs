@@ -192,7 +192,7 @@ pub enum OperationOrigin {
 }
 
 /// A user operation with additional metadata from validation.
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PoolOperation {
     /// The user operation stored in the pool
     pub uo: UserOperation,

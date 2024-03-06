@@ -16,7 +16,7 @@ use ethers::{
     utils::to_checksum,
 };
 use rundler_pool::{Reputation, ReputationStatus};
-use rundler_types::UserOperation;
+use rundler_types::UserOperationV0_6;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// API namespace
@@ -96,8 +96,8 @@ pub struct RpcUserOperation {
     signature: Bytes,
 }
 
-impl From<UserOperation> for RpcUserOperation {
-    fn from(op: UserOperation) -> Self {
+impl From<UserOperationV0_6> for RpcUserOperation {
+    fn from(op: UserOperationV0_6) -> Self {
         RpcUserOperation {
             sender: op.sender.into(),
             nonce: op.nonce,
@@ -114,9 +114,9 @@ impl From<UserOperation> for RpcUserOperation {
     }
 }
 
-impl From<RpcUserOperation> for UserOperation {
+impl From<RpcUserOperation> for UserOperationV0_6 {
     fn from(def: RpcUserOperation) -> Self {
-        UserOperation {
+        UserOperationV0_6 {
             sender: def.sender.into(),
             nonce: def.nonce,
             init_code: def.init_code,

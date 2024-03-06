@@ -16,7 +16,7 @@ use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_pool::PoolServer;
 use rundler_provider::{EntryPoint, Provider};
-use rundler_sim::{GasEstimate, UserOperationOptionalGas};
+use rundler_sim::{GasEstimate, UserOperationOptionalGasV0_6};
 
 use super::{api::EthApi, EthApiServer};
 use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
@@ -38,7 +38,7 @@ where
 
     async fn estimate_user_operation_gas(
         &self,
-        op: UserOperationOptionalGas,
+        op: UserOperationOptionalGasV0_6,
         entry_point: Address,
         state_override: Option<spoof::State>,
     ) -> RpcResult<GasEstimate> {
