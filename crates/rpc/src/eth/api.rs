@@ -35,7 +35,7 @@ use rundler_sim::{
 };
 use rundler_types::{
     chain::ChainSpec,
-    contracts::i_entry_point::{
+    contracts::v0_6::i_entry_point::{
         IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
     UserOperation,
@@ -567,7 +567,7 @@ mod tests {
     use rundler_pool::{MockPoolServer, PoolOperation};
     use rundler_provider::{MockEntryPoint, MockProvider};
     use rundler_sim::PriorityFeeMode;
-    use rundler_types::contracts::i_entry_point::HandleOpsCall;
+    use rundler_types::contracts::v0_6::i_entry_point::HandleOpsCall;
 
     use super::*;
 

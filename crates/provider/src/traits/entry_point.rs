@@ -17,7 +17,7 @@ use ethers::types::{
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_types::{
-    contracts::{i_entry_point::ExecutionResult, shared_types::UserOpsPerAggregator},
+    contracts::v0_6::{i_entry_point::ExecutionResult, shared_types::UserOpsPerAggregator},
     DepositInfo, GasFees, UserOperation, ValidationOutput,
 };
 

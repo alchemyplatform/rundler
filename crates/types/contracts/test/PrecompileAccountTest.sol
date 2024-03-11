@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.14;
 
-import "../src/PrecompileAccount.sol";
-import "account-abstraction/interfaces/UserOperation.sol";
+import "../src/v0_6/PrecompileAccount.sol";
+import "account-abstraction/v0_6/interfaces/UserOperation.sol";
 import "forge-std/Test.sol";
 
 contract PrecompileAccountTest is Test {

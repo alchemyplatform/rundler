@@ -22,13 +22,9 @@
 
 pub mod chain;
 
-/// Generated contracts module
-#[allow(non_snake_case)]
 #[rustfmt::skip]
-#[allow(clippy::all)]
-#[allow(missing_docs)]
 pub mod contracts;
-pub use contracts::shared_types::{DepositInfo, UserOperation, UserOpsPerAggregator};
+pub use contracts::v0_6::shared_types::{DepositInfo, UserOperation, UserOpsPerAggregator};
 
 mod entity;
 pub use entity::{Entity, EntityType, EntityUpdate, EntityUpdateType};

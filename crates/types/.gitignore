@@ -1,2 +1,6 @@
 # Generated code
-/src/contracts
+/src/contracts/v0_6
+/src/contracts/v0_7
+/src/contracts/arbitrum
+/src/contracts/optimism
+/src/contracts/utils

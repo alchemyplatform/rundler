@@ -27,7 +27,7 @@ use futures::future;
 use rundler_provider::Provider;
 use rundler_task::block_watcher;
 use rundler_types::{
-    contracts::{
+    contracts::v0_6::{
         entry_point::{DepositedFilter, WithdrawnFilter},
         i_entry_point::UserOperationEventFilter,
     },

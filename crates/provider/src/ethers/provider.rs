@@ -32,8 +32,9 @@ use ethers::{
 use reqwest::Url;
 use rundler_types::{
     contracts::{
-        gas_price_oracle::GasPriceOracle, i_aggregator::IAggregator, i_entry_point::IEntryPoint,
-        node_interface::NodeInterface,
+        arbitrum::node_interface::NodeInterface,
+        optimism::gas_price_oracle::GasPriceOracle,
+        v0_6::{i_aggregator::IAggregator, i_entry_point::IEntryPoint},
     },
     UserOperation,
 };

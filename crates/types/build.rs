@@ -19,48 +19,146 @@ fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/lib");
     println!("cargo:rerun-if-changed=contracts/src");
     println!("cargo:rerun-if-changed=contracts/foundry.toml");
-    generate_contract_bindings()?;
+    generate_v0_6_bindings()?;
+    generate_v0_7_bindings()?;
+    generate_utils_bindings()?;
+    generate_arbitrum_bindings()?;
+    generate_optimism_bindings()?;
     Ok(())
 }
 
-fn generate_contract_bindings() -> Result<(), Box<dyn error::Error>> {
-    generate_abis()?;
-    MultiAbigen::from_abigens([
-        abigen_of("IEntryPoint")?,
-        abigen_of("EntryPoint")?,
-        abigen_of("IAggregator")?,
-        abigen_of("IStakeManager")?,
-        abigen_of("GetCodeHashes")?,
-        abigen_of("GetBalances")?,
-        abigen_of("GetGasUsed")?,
-        abigen_of("CallGasEstimationProxy")?,
-        abigen_of("SimpleAccount")?,
-        abigen_of("SimpleAccountFactory")?,
-        abigen_of("VerifyingPaymaster")?,
-        abigen_of("NodeInterface")?,
-        abigen_of("GasPriceOracle")?,
-    ])
-    .build()?
-    .write_to_module("src/contracts", false)?;
-    Ok(())
-}
-
-fn abigen_of(contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
-    Ok(Abigen::new(
-        contract,
-        format!("contracts/out/{contract}.sol/{contract}.json"),
-    )?)
-}
-
-fn generate_abis() -> Result<(), Box<dyn error::Error>> {
+fn generate_v0_6_bindings() -> Result<(), Box<dyn error::Error>> {
     run_command(
         Command::new("forge")
             .arg("build")
             .arg("--root")
-            .arg("./contracts"),
+            .arg("./contracts")
+            .arg("--contracts")
+            .arg("src/v0_6")
+            .arg("--out")
+            .arg("out/v0_6")
+            .arg("--remappings")
+            .arg("@openzeppelin/=lib/openzeppelin-contracts-versions/v4_9"),
         "https://getfoundry.sh/",
         "generate ABIs",
-    )
+    )?;
+
+    MultiAbigen::from_abigens([
+        abigen_of("v0_6", "IEntryPoint")?,
+        abigen_of("v0_6", "EntryPoint")?,
+        abigen_of("v0_6", "IAggregator")?,
+        abigen_of("v0_6", "IStakeManager")?,
+        abigen_of("v0_6", "GetBalances")?,
+        abigen_of("v0_6", "CallGasEstimationProxy")?,
+        abigen_of("v0_6", "SimpleAccount")?,
+        abigen_of("v0_6", "SimpleAccountFactory")?,
+        abigen_of("v0_6", "VerifyingPaymaster")?,
+    ])
+    .build()?
+    .write_to_module("src/contracts/v0_6", false)?;
+
+    Ok(())
+}
+
+fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        Command::new("forge")
+            .arg("build")
+            .arg("--root")
+            .arg("./contracts")
+            .arg("--contracts")
+            .arg("src/v0_7")
+            .arg("--out")
+            .arg("out/v0_7")
+            .arg("--remappings")
+            .arg("@openzeppelin/=lib/openzeppelin-contracts-versions/v5_0"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )?;
+
+    MultiAbigen::from_abigens([
+        abigen_of("v0_7", "IEntryPoint")?,
+        abigen_of("v0_7", "EntryPoint")?,
+        abigen_of("v0_7", "IAggregator")?,
+        abigen_of("v0_7", "IStakeManager")?,
+    ])
+    .build()?
+    .write_to_module("src/contracts/v0_7", false)?;
+
+    Ok(())
+}
+
+fn generate_utils_bindings() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        Command::new("forge")
+            .arg("build")
+            .arg("--root")
+            .arg("./contracts")
+            .arg("--contracts")
+            .arg("src/utils")
+            .arg("--out")
+            .arg("out/utils"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )?;
+
+    MultiAbigen::from_abigens([
+        abigen_of("utils", "GetCodeHashes")?,
+        abigen_of("utils", "GetGasUsed")?,
+    ])
+    .build()?
+    .write_to_module("src/contracts/utils", false)?;
+
+    Ok(())
+}
+
+fn generate_arbitrum_bindings() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        Command::new("forge")
+            .arg("build")
+            .arg("--root")
+            .arg("./contracts")
+            .arg("--contracts")
+            .arg("src/arbitrum")
+            .arg("--out")
+            .arg("out/arbitrum"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )?;
+
+    MultiAbigen::from_abigens([abigen_of("arbitrum", "NodeInterface")?])
+        .build()?
+        .write_to_module("src/contracts/arbitrum", false)?;
+
+    Ok(())
+}
+
+fn generate_optimism_bindings() -> Result<(), Box<dyn error::Error>> {
+    run_command(
+        Command::new("forge")
+            .arg("build")
+            .arg("--root")
+            .arg("./contracts")
+            .arg("--contracts")
+            .arg("src/optimism")
+            .arg("--out")
+            .arg("out/optimism"),
+        "https://getfoundry.sh/",
+        "generate ABIs",
+    )?;
+
+    MultiAbigen::from_abigens([abigen_of("optimism", "GasPriceOracle")?])
+        .build()?
+        .write_to_module("src/contracts/optimism", false)?;
+
+    Ok(())
+}
+
+fn abigen_of(extra_path: &str, contract: &str) -> Result<Abigen, Box<dyn error::Error>> {
+    Ok(Abigen::new(
+        contract,
+        format!("contracts/out/{extra_path}/{contract}.sol/{contract}.json"),
+    )?)
 }
 
 fn run_command(

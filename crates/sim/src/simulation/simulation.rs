@@ -29,8 +29,8 @@ use indexmap::IndexSet;
 use mockall::automock;
 use rundler_provider::{AggregatorOut, AggregatorSimOut, Provider};
 use rundler_types::{
-    contracts::i_entry_point::FailedOp, Entity, EntityType, StakeInfo, StorageSlot, UserOperation,
-    ValidTimeRange, ValidationOutput, ValidationReturnInfo,
+    contracts::v0_6::i_entry_point::FailedOp, Entity, EntityType, StakeInfo, StorageSlot,
+    UserOperation, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
 };
 use strum::IntoEnumIterator;
 
@@ -1052,7 +1052,7 @@ mod tests {
         utils::hex,
     };
     use rundler_provider::{AggregatorOut, MockProvider};
-    use rundler_types::contracts::get_code_hashes::CodeHashesResult;
+    use rundler_types::contracts::utils::get_code_hashes::CodeHashesResult;
 
     use super::*;
     use crate::simulation::tracer::{MockSimulateValidationTracer, Phase};

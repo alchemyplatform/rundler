@@ -42,7 +42,7 @@ use ethers::{
     utils::{self, hex, keccak256},
 };
 use rundler_types::{
-    contracts::{
+    contracts::v0_6::{
         entry_point::EntryPoint, simple_account::SimpleAccount,
         simple_account_factory::SimpleAccountFactory, verifying_paymaster::VerifyingPaymaster,
     },
@@ -470,7 +470,7 @@ impl DevClients {
             .context("call executed by wallet should have to address")?;
         let nonce = self
             .wallet
-            .nonce()
+            .get_nonce()
             .await
             .context("should read nonce from wallet")?;
         let call_data = Bytes::clone(
