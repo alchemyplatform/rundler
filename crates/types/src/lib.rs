@@ -24,7 +24,7 @@ pub mod chain;
 
 #[rustfmt::skip]
 pub mod contracts;
-pub use contracts::v0_6::shared_types::{DepositInfo, UserOperation, UserOpsPerAggregator};
+pub use contracts::v0_6::shared_types::DepositInfo as DepositInfoV0_6;
 
 mod entity;
 pub use entity::{Entity, EntityType, EntityUpdate, EntityUpdateType};
@@ -36,7 +36,7 @@ mod timestamp;
 pub use timestamp::{Timestamp, ValidTimeRange};
 
 mod user_operation;
-pub use user_operation::UserOperationId;
+pub use user_operation::*;
 
 mod storage;
 pub use storage::StorageSlot;

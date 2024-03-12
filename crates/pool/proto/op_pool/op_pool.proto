@@ -17,9 +17,15 @@ syntax = "proto3";
 
 package op_pool;
 
+message UserOperation {
+  oneof uo {
+    UserOperationV06 v06 = 1;
+  }
+}
+
 // Protocol Buffer representation of an ERC-4337 UserOperation. See the official
 // specification at https://eips.ethereum.org/EIPS/eip-4337#definitions
-message UserOperation {
+message UserOperationV06 {
   // The account making the operation
   bytes sender = 1;
   // Anti-replay parameter (see “Semi-abstracted Nonce Support” )
@@ -502,20 +508,18 @@ message OperationDropTooSoon {
 // PRECHECK VIOLATIONS
 message PrecheckViolationError {
   oneof violation {
-    InitCodeTooShort init_code_too_short = 1;
-    SenderIsNotContractAndNoInitCode sender_is_not_contract_and_no_init_code = 2;
-    ExistingSenderWithInitCode existing_sender_with_init_code = 3;
-    FactoryIsNotContract factory_is_not_contract = 4;
-    TotalGasLimitTooHigh total_gas_limit_too_high = 5;
-    VerificationGasLimitTooHigh verification_gas_limit_too_high = 6;
-    PreVerificationGasTooLow pre_verification_gas_too_low = 7;
-    PaymasterTooShort paymaster_too_short = 8;
-    PaymasterIsNotContract paymaster_is_not_contract = 9;
-    PaymasterDepositTooLow paymaster_deposit_too_low = 10;
-    SenderFundsTooLow sender_funds_too_low = 11;
-    MaxFeePerGasTooLow max_fee_per_gas_too_low = 12;
-    MaxPriorityFeePerGasTooLow max_priority_fee_per_gas_too_low = 13;
-    CallGasLimitTooLow call_gas_limit_too_low = 14;
+    SenderIsNotContractAndNoInitCode sender_is_not_contract_and_no_init_code = 1;
+    ExistingSenderWithInitCode existing_sender_with_init_code = 2;
+    FactoryIsNotContract factory_is_not_contract = 3;
+    TotalGasLimitTooHigh total_gas_limit_too_high = 4;
+    VerificationGasLimitTooHigh verification_gas_limit_too_high = 5;
+    PreVerificationGasTooLow pre_verification_gas_too_low = 6;
+    PaymasterIsNotContract paymaster_is_not_contract = 7;
+    PaymasterDepositTooLow paymaster_deposit_too_low = 8;
+    SenderFundsTooLow sender_funds_too_low = 9;
+    MaxFeePerGasTooLow max_fee_per_gas_too_low = 10;
+    MaxPriorityFeePerGasTooLow max_priority_fee_per_gas_too_low = 11;
+    CallGasLimitTooLow call_gas_limit_too_low = 12;
   }
 }
 
