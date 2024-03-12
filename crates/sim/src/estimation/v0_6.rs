@@ -24,10 +24,8 @@ use ethers::{
     providers::spoof,
     types::{Address, Bytes, H256, U256},
 };
-#[cfg(feature = "test-utils")]
-use mockall::automock;
 use rand::Rng;
-use rundler_provider::{EntryPoint, Provider};
+use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
     contracts::v0_6::{
@@ -38,13 +36,18 @@ use rundler_types::{
         },
         i_entry_point,
     },
-    UserOperation,
+    v0_6::{UserOperation, UserOperationOptionalGas},
+    GasEstimate, UserOperation as UserOperationTrait,
 };
 use rundler_utils::{eth, math};
 use tokio::join;
 
-use super::types::{GasEstimate, Settings, UserOperationOptionalGas};
-use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, simulation, utils, FeeEstimator};
+use crate::{
+    estimation::{GasEstimationError, Settings},
+    gas,
+    precheck::MIN_CALL_GAS_LIMIT,
+    simulation, utils, FeeEstimator,
+};
 
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary
@@ -69,39 +72,9 @@ const CALL_GAS_BUFFER_VALUE: U256 = U256([3000, 0, 0, 0]);
 /// failure will tell you the new value.
 const PROXY_TARGET_OFFSET: usize = 137;
 
-/// Error type for gas estimation
-#[derive(Debug, thiserror::Error)]
-pub enum GasEstimationError {
-    /// Validation reverted
-    #[error("{0}")]
-    RevertInValidation(String),
-    /// Call reverted with a string message
-    #[error("user operation's call reverted: {0}")]
-    RevertInCallWithMessage(String),
-    /// Call reverted with bytes
-    #[error("user operation's call reverted: {0:#x}")]
-    RevertInCallWithBytes(Bytes),
-    /// Other error
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
-/// Gas estimator trait
-#[cfg_attr(feature = "test-utils", automock)]
-#[async_trait::async_trait]
-pub trait GasEstimator: Send + Sync + 'static {
-    /// Returns a gas estimate or a revert message, or an anyhow error on any
-    /// other error.
-    async fn estimate_op_gas(
-        &self,
-        op: UserOperationOptionalGas,
-        state_override: spoof::State,
-    ) -> Result<GasEstimate, GasEstimationError>;
-}
-
 /// Gas estimator implementation
 #[derive(Debug)]
-pub struct GasEstimatorImpl<P, E> {
+pub struct GasEstimator<P, E> {
     chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
@@ -110,7 +83,13 @@ pub struct GasEstimatorImpl<P, E> {
 }
 
 #[async_trait::async_trait]
-impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
+impl<P, E> crate::estimation::GasEstimator for GasEstimator<P, E>
+where
+    P: Provider,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+{
+    type UserOperationOptionalGas = UserOperationOptionalGas;
+
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,
@@ -143,7 +122,10 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
 
         let op = UserOperation {
             pre_verification_gas,
-            ..op.into_user_operation(settings)
+            ..op.into_user_operation(
+                settings.max_call_gas.into(),
+                settings.max_verification_gas.into(),
+            )
         };
 
         let verification_future =
@@ -167,7 +149,7 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
         // to ensure we get at least a 2000 gas buffer. Cap at the max verification gas.
         let verification_gas_limit = cmp::max(
             math::increase_by_percent(verification_gas_limit, VERIFICATION_GAS_BUFFER_PERCENT),
-            verification_gas_limit + simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
+            verification_gas_limit + simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
         )
         .min(settings.max_verification_gas.into());
 
@@ -180,11 +162,17 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
             pre_verification_gas,
             verification_gas_limit,
             call_gas_limit,
+            paymaster_verification_gas_limit: None,
+            paymaster_post_op_gas_limit: None,
         })
     }
 }
 
-impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
+impl<P, E> GasEstimator<P, E>
+where
+    P: Provider,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+{
     /// Create a new gas estimator
     pub fn new(
         chain_spec: ChainSpec,
@@ -456,9 +444,15 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
     ) -> Result<U256, GasEstimationError> {
         Ok(gas::estimate_pre_verification_gas(
             &self.chain_spec,
-            self.provider.clone(),
-            &op.max_fill(&self.settings),
-            &op.random_fill(&self.settings),
+            &self.entry_point,
+            &op.max_fill(
+                self.settings.max_call_gas.into(),
+                self.settings.max_verification_gas.into(),
+            ),
+            &op.random_fill(
+                self.settings.max_call_gas.into(),
+                self.settings.max_verification_gas.into(),
+            ),
             gas_price,
         )
         .await?)
@@ -480,14 +474,19 @@ mod tests {
         types::U64,
         utils::hex,
     };
-    use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_provider::{MockEntryPointV0_6, MockProvider};
     use rundler_types::{
         chain::L1GasOracleContractType,
         contracts::{utils::get_gas_used::GasUsedResult, v0_6::i_entry_point::ExecutionResult},
+        v0_6::{UserOperation, UserOperationOptionalGas},
+        UserOperation as UserOperationTrait,
     };
 
     use super::*;
-    use crate::PriorityFeeMode;
+    use crate::{
+        estimation::GasEstimator as GasEstimatorTrait,
+        simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER, PriorityFeeMode,
+    };
 
     // Gas overhead defaults
     const FIXED: u32 = 21000;
@@ -498,8 +497,8 @@ mod tests {
     /// Must match the constant in `CallGasEstimationProxy.sol`.
     const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
 
-    fn create_base_config() -> (MockEntryPoint, MockProvider) {
-        let entry = MockEntryPoint::new();
+    fn create_base_config() -> (MockEntryPointV0_6, MockProvider) {
+        let entry = MockEntryPointV0_6::new();
         let provider = MockProvider::new();
 
         (entry, provider)
@@ -515,9 +514,9 @@ mod tests {
     }
 
     fn create_estimator(
-        entry: MockEntryPoint,
+        entry: MockEntryPointV0_6,
         provider: MockProvider,
-    ) -> (GasEstimatorImpl<MockProvider, MockEntryPoint>, Settings) {
+    ) -> (GasEstimator<MockProvider, MockEntryPointV0_6>, Settings) {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
@@ -525,7 +524,7 @@ mod tests {
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
         let provider = Arc::new(provider);
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
             ChainSpec::default(),
             provider.clone(),
             entry,
@@ -592,7 +591,10 @@ mod tests {
             .await
             .unwrap();
 
-        let u_o = user_op.max_fill(&settings);
+        let u_o = user_op.max_fill(
+            settings.max_call_gas.into(),
+            settings.max_verification_gas.into(),
+        );
 
         let u_o_encoded = u_o.encode();
         let length_in_words = (u_o_encoded.len() + 31) / 32;
@@ -614,9 +616,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_calc_pre_verification_input_arbitrum() {
-        let (mut entry, mut provider) = create_base_config();
+        let (mut entry, provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
-        provider
+        entry
             .expect_calc_arbitrum_l1_gas()
             .returning(|_a, _b| Ok(U256::from(1000)));
 
@@ -635,7 +637,7 @@ mod tests {
             ..Default::default()
         };
         let provider = Arc::new(provider);
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
             cs,
             provider.clone(),
             entry,
@@ -649,7 +651,10 @@ mod tests {
             .await
             .unwrap();
 
-        let u_o = user_op.max_fill(&settings);
+        let u_o = user_op.max_fill(
+            settings.max_call_gas.into(),
+            settings.max_verification_gas.into(),
+        );
 
         let u_o_encoded = u_o.encode();
         let length_in_words = (u_o_encoded.len() + 31) / 32;
@@ -672,10 +677,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_calc_pre_verification_input_op() {
-        let (mut entry, mut provider) = create_base_config();
+        let (mut entry, provider) = create_base_config();
 
         entry.expect_address().return_const(Address::zero());
-        provider
+        entry
             .expect_calc_optimism_l1_gas()
             .returning(|_a, _b, _c| Ok(U256::from(1000)));
 
@@ -694,7 +699,7 @@ mod tests {
             ..Default::default()
         };
         let provider = Arc::new(provider);
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
             cs,
             provider.clone(),
             entry,
@@ -708,7 +713,10 @@ mod tests {
             .await
             .unwrap();
 
-        let u_o = user_op.max_fill(&settings);
+        let u_o = user_op.max_fill(
+            settings.max_call_gas.into(),
+            settings.max_verification_gas.into(),
+        );
 
         let u_o_encoded: Bytes = u_o.encode().into();
         let length_in_words = (u_o_encoded.len() + 31) / 32;
@@ -751,7 +759,7 @@ mod tests {
         entry
             .expect_call_spoofed_simulate_op()
             .returning(move |op, _b, _c, _d, _e, _f| {
-                if op.verification_gas_limit < gas_usage {
+                if op.total_verification_gas_limit() < gas_usage {
                     return Ok(Err("AA23".to_string()));
                 }
 
@@ -1174,7 +1182,7 @@ mod tests {
         entry
             .expect_call_spoofed_simulate_op()
             .returning(move |op, _b, _c, _d, _e, _f| {
-                if op.verification_gas_limit < gas_usage {
+                if op.total_verification_gas_limit() < gas_usage {
                     return Ok(Err("AA23".to_string()));
                 }
 
@@ -1243,7 +1251,7 @@ mod tests {
             estimation.verification_gas_limit,
             cmp::max(
                 math::increase_by_percent(expected, 10),
-                expected + simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER
+                expected + REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER
             )
         );
 
@@ -1319,7 +1327,8 @@ mod tests {
         };
 
         let provider = Arc::new(provider);
-        let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
+        let entry = entry;
+        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
             ChainSpec::default(),
             provider.clone(),
             entry,

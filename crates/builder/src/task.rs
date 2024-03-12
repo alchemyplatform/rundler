@@ -23,9 +23,13 @@ use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, EthersEntryPoint};
+use rundler_provider::EthersEntryPointV0_6;
 use rundler_sim::{
-    MempoolConfig, PriorityFeeMode, SimulateValidationTracerImpl, SimulationSettings, SimulatorImpl,
+    simulation::v0_6::{
+        SimulateValidationTracerImpl as SimulateValidationTracerImplV0_6,
+        Simulator as SimulatorV0_6,
+    },
+    MempoolConfig, PriorityFeeMode, SimulationSettings,
 };
 use rundler_task::Task;
 use rundler_types::chain::ChainSpec;
@@ -262,15 +266,15 @@ where
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
 
-        let ep = EthersEntryPoint::new(
+        let ep = EthersEntryPointV0_6::new(
             self.args.chain_spec.entry_point_address,
             Arc::clone(&provider),
         );
         let simulate_validation_tracer =
-            SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
-        let simulator = SimulatorImpl::new(
+            SimulateValidationTracerImplV0_6::new(Arc::clone(&provider), ep.clone());
+        let simulator = SimulatorV0_6::new(
             Arc::clone(&provider),
-            ep.address(),
+            ep.clone(),
             simulate_validation_tracer,
             self.args.sim_settings,
             self.args.mempool_configs.clone(),

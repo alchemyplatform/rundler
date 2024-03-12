@@ -15,9 +15,9 @@ use anyhow::{anyhow, Context};
 use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::{
-    Entity as RundlerEntity, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
-    EntityUpdateType as RundlerEntityUpdateType, UserOperation as RundlerUserOperation,
-    ValidTimeRange,
+    v0_6, Entity as RundlerEntity, EntityType as RundlerEntityType,
+    EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
+    UserOperationVariant, ValidTimeRange,
 };
 
 use crate::{
@@ -34,9 +34,20 @@ tonic::include_proto!("op_pool");
 pub const OP_POOL_FILE_DESCRIPTOR_SET: &[u8] =
     tonic::include_file_descriptor_set!("op_pool_descriptor");
 
-impl From<&RundlerUserOperation> for UserOperation {
-    fn from(op: &RundlerUserOperation) -> Self {
-        UserOperation {
+impl From<&UserOperationVariant> for UserOperation {
+    fn from(op: &UserOperationVariant) -> Self {
+        match op {
+            UserOperationVariant::V0_6(op) => op.into(),
+            UserOperationVariant::V0_7(_) => {
+                unimplemented!("V0_7 user operation is not supported")
+            }
+        }
+    }
+}
+
+impl From<&v0_6::UserOperation> for UserOperation {
+    fn from(op: &v0_6::UserOperation) -> Self {
+        let op = UserOperationV06 {
             sender: op.sender.0.to_vec(),
             nonce: to_le_bytes(op.nonce),
             init_code: op.init_code.to_vec(),
@@ -48,15 +59,18 @@ impl From<&RundlerUserOperation> for UserOperation {
             max_priority_fee_per_gas: to_le_bytes(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data.to_vec(),
             signature: op.signature.to_vec(),
+        };
+        UserOperation {
+            uo: Some(user_operation::Uo::V06(op)),
         }
     }
 }
 
-impl TryFrom<UserOperation> for RundlerUserOperation {
+impl TryFrom<UserOperationV06> for v0_6::UserOperation {
     type Error = ConversionError;
 
-    fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
-        Ok(RundlerUserOperation {
+    fn try_from(op: UserOperationV06) -> Result<Self, Self::Error> {
+        Ok(v0_6::UserOperation {
             sender: from_bytes(&op.sender)?,
             nonce: from_bytes(&op.nonce)?,
             init_code: op.init_code.into(),
@@ -69,6 +83,20 @@ impl TryFrom<UserOperation> for RundlerUserOperation {
             paymaster_and_data: op.paymaster_and_data.into(),
             signature: op.signature.into(),
         })
+    }
+}
+
+impl TryFrom<UserOperation> for UserOperationVariant {
+    type Error = ConversionError;
+
+    fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
+        let op = op
+            .uo
+            .expect("User operation should contain user operation oneof");
+
+        match op {
+            user_operation::Uo::V06(op) => Ok(UserOperationVariant::V0_6(op.try_into()?)),
+        }
     }
 }
 
@@ -246,8 +274,8 @@ impl From<RundlerStakeStatus> for StakeStatus {
     }
 }
 
-impl From<&PoolOperation> for MempoolOp {
-    fn from(op: &PoolOperation) -> Self {
+impl From<&PoolOperation<UserOperationVariant>> for MempoolOp {
+    fn from(op: &PoolOperation<UserOperationVariant>) -> Self {
         MempoolOp {
             uo: Some(UserOperation::from(&op.uo)),
             entry_point: op.entry_point.as_bytes().to_vec(),
@@ -267,7 +295,7 @@ impl From<&PoolOperation> for MempoolOp {
 }
 
 pub const MISSING_USER_OP_ERR_STR: &str = "Mempool op should contain user operation";
-impl TryFrom<MempoolOp> for PoolOperation {
+impl TryFrom<MempoolOp> for PoolOperation<UserOperationVariant> {
     type Error = anyhow::Error;
 
     fn try_from(op: MempoolOp) -> Result<Self, Self::Error> {

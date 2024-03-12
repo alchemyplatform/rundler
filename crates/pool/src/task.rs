@@ -16,12 +16,10 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::providers::Middleware;
-use rundler_provider::{EntryPoint, EthersEntryPoint, Provider};
-use rundler_sim::{
-    Prechecker, PrecheckerImpl, SimulateValidationTracerImpl, Simulator, SimulatorImpl,
-};
+use rundler_provider::{EntryPoint, EthersEntryPointV0_6, Provider};
+use rundler_sim::{simulation::v0_6 as sim_v0_6, Prechecker, PrecheckerImpl, Simulator};
 use rundler_task::Task;
-use rundler_types::chain::ChainSpec;
+use rundler_types::{chain::ChainSpec, v0_6};
 use rundler_utils::{emit::WithEntryPoint, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -89,7 +87,7 @@ impl Task for PoolTask {
         // create mempools
         let mut mempools = HashMap::new();
         for pool_config in &self.args.pool_configs {
-            let pool = PoolTask::create_mempool(
+            let pool = PoolTask::create_mempool_v0_6(
                 self.args.chain_spec.clone(),
                 pool_config,
                 self.event_sender.clone(),
@@ -157,13 +155,20 @@ impl PoolTask {
         Box::new(self)
     }
 
-    async fn create_mempool<P: Provider + Middleware>(
+    async fn create_mempool_v0_6<P: Provider + Middleware>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
-    ) -> anyhow::Result<UoPool<impl Prechecker, impl Simulator, impl EntryPoint>> {
-        let ep = EthersEntryPoint::new(pool_config.entry_point, Arc::clone(&provider));
+    ) -> anyhow::Result<
+        UoPool<
+            v0_6::UserOperation,
+            impl Prechecker<UO = v0_6::UserOperation>,
+            impl Simulator<UO = v0_6::UserOperation>,
+            impl EntryPoint,
+        >,
+    > {
+        let ep = EthersEntryPointV0_6::new(pool_config.entry_point, Arc::clone(&provider));
 
         let prechecker = PrecheckerImpl::new(
             chain_spec,
@@ -173,10 +178,10 @@ impl PoolTask {
         );
 
         let simulate_validation_tracer =
-            SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
-        let simulator = SimulatorImpl::new(
+            sim_v0_6::SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
+        let simulator = sim_v0_6::Simulator::new(
             Arc::clone(&provider),
-            ep.address(),
+            ep.clone(),
             simulate_validation_tracer,
             pool_config.sim_settings,
             pool_config.mempool_channel_configs.clone(),

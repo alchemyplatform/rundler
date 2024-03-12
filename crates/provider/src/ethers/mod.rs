@@ -14,6 +14,6 @@
 //! Provider implementations using [ethers-rs](https://github.com/gakonst/ethers-rs)
 
 mod entry_point;
-pub use entry_point::EntryPointImpl as EthersEntryPoint;
+pub use entry_point::v0_6::EntryPoint as EntryPointV0_6;
 mod metrics_middleware;
 pub(crate) mod provider;
