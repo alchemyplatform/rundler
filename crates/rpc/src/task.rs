@@ -22,13 +22,13 @@ use jsonrpsee::{
 };
 use rundler_builder::BuilderServer;
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, EthersEntryPoint};
+use rundler_provider::{EntryPoint, EthersEntryPointV0_6, L1GasProvider, SimulationProvider};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
 };
-use rundler_types::chain::ChainSpec;
+use rundler_types::{chain::ChainSpec, v0_6::UserOperation};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -88,7 +88,8 @@ where
         tracing::info!("Starting rpc server on {}", addr);
 
         let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
-        let ep = EthersEntryPoint::new(self.args.chain_spec.entry_point_address, provider.clone());
+        let ep =
+            EthersEntryPointV0_6::new(self.args.chain_spec.entry_point_address, provider.clone());
 
         let mut module = RpcModule::new(());
         self.attach_namespaces(provider, ep, &mut module)?;
@@ -147,12 +148,19 @@ where
         Box::new(self)
     }
 
-    fn attach_namespaces<E: EntryPoint + Clone, C: JsonRpcClient + 'static>(
+    fn attach_namespaces<E, C>(
         &self,
         provider: Arc<Provider<C>>,
         entry_point: E,
         module: &mut RpcModule<()>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<()>
+    where
+        E: EntryPoint
+            + SimulationProvider<UO = UserOperation>
+            + L1GasProvider<UO = UserOperation>
+            + Clone,
+        C: JsonRpcClient + 'static,
+    {
         for api in &self.args.api_namespaces {
             match api {
                 ApiNamespace::Eth => module.merge(

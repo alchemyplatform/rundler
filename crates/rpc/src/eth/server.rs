@@ -15,17 +15,19 @@ use async_trait::async_trait;
 use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, Provider};
-use rundler_sim::{GasEstimate, UserOperationOptionalGas};
+use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
+use rundler_types::v0_6;
 
 use super::{api::EthApi, EthApiServer};
-use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
+use crate::types::{RichUserOperation, RpcGasEstimate, RpcUserOperation, UserOperationReceipt};
 
 #[async_trait]
 impl<P, E, PS> EthApiServer for EthApi<P, E, PS>
 where
     P: Provider,
-    E: EntryPoint,
+    E: EntryPoint
+        + L1GasProvider<UO = v0_6::UserOperation>
+        + SimulationProvider<UO = v0_6::UserOperation>,
     PS: PoolServer,
 {
     async fn send_user_operation(
@@ -38,10 +40,10 @@ where
 
     async fn estimate_user_operation_gas(
         &self,
-        op: UserOperationOptionalGas,
+        op: v0_6::UserOperationOptionalGas,
         entry_point: Address,
         state_override: Option<spoof::State>,
-    ) -> RpcResult<GasEstimate> {
+    ) -> RpcResult<RpcGasEstimate> {
         Ok(EthApi::estimate_user_operation_gas(self, op, entry_point, state_override).await?)
     }
 
