@@ -16,8 +16,10 @@ use ethers::{
     utils::to_checksum,
 };
 use rundler_pool::{Reputation, ReputationStatus};
-use rundler_types::UserOperation;
+use rundler_types::{v0_6, GasEstimate};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::eth::EthRpcError;
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
@@ -96,8 +98,8 @@ pub struct RpcUserOperation {
     signature: Bytes,
 }
 
-impl From<UserOperation> for RpcUserOperation {
-    fn from(op: UserOperation) -> Self {
+impl From<v0_6::UserOperation> for RpcUserOperation {
+    fn from(op: v0_6::UserOperation) -> Self {
         RpcUserOperation {
             sender: op.sender.into(),
             nonce: op.nonce,
@@ -114,9 +116,21 @@ impl From<UserOperation> for RpcUserOperation {
     }
 }
 
-impl From<RpcUserOperation> for UserOperation {
-    fn from(def: RpcUserOperation) -> Self {
-        UserOperation {
+impl TryFrom<RpcUserOperation> for v0_6::UserOperation {
+    type Error = EthRpcError;
+
+    fn try_from(def: RpcUserOperation) -> Result<Self, Self::Error> {
+        if def.init_code.len() > 0 && def.init_code.len() < 20 {
+            return Err(EthRpcError::InvalidParams(
+                "init_code must be empty or at least 20 bytes".to_string(),
+            ));
+        } else if def.paymaster_and_data.len() > 0 && def.paymaster_and_data.len() < 20 {
+            return Err(EthRpcError::InvalidParams(
+                "paymaster_and_data must be empty or at least 20 bytes".to_string(),
+            ));
+        }
+
+        Ok(v0_6::UserOperation {
             sender: def.sender.into(),
             nonce: def.nonce,
             init_code: def.init_code,
@@ -128,7 +142,7 @@ impl From<RpcUserOperation> for UserOperation {
             max_priority_fee_per_gas: def.max_priority_fee_per_gas,
             paymaster_and_data: def.paymaster_and_data,
             signature: def.signature,
-        }
+        })
     }
 }
 
@@ -258,4 +272,35 @@ pub struct RpcDebugPaymasterBalance {
     pub pending_balance: U256,
     /// Paymaster confirmed balance onchain
     pub confirmed_balance: U256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcGasEstimate {
+    /// The pre-verification gas estimate
+    pub pre_verification_gas: U256,
+    /// The call gas limit estimate
+    pub call_gas_limit: U256,
+    /// The verification gas limit estimate
+    pub verification_gas_limit: U256,
+    /// The paymaster verification gas limit estimate
+    /// 0.6: unused
+    /// 0.7: populated if a paymaster is used
+    pub paymaster_verification_gas_limit: Option<U256>,
+    /// The paymaster post op gas limit
+    /// 0.6: unused
+    /// 0.7: populated if a paymaster is used
+    pub paymaster_post_op_gas_limit: Option<U256>,
+}
+
+impl From<GasEstimate> for RpcGasEstimate {
+    fn from(estimate: GasEstimate) -> Self {
+        RpcGasEstimate {
+            pre_verification_gas: estimate.pre_verification_gas,
+            call_gas_limit: estimate.call_gas_limit,
+            verification_gas_limit: estimate.verification_gas_limit,
+            paymaster_verification_gas_limit: estimate.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: estimate.paymaster_post_op_gas_limit,
+        }
+    }
 }
