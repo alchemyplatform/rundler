@@ -581,16 +581,12 @@ mod tests {
     };
     use mockall::predicate::eq;
     use rundler_pool::{IntoPoolOperationVariant, MockPoolServer, PoolOperation};
-    use rundler_provider::{MockEntryPointV0_6, MockProvider};
+    use rundler_provider::{MockEntryPoint, MockEntryPointV0_6, MockProvider};
     use rundler_sim::{EntityInfos, PriorityFeeMode};
     use rundler_types::{
         contracts::v0_6::i_entry_point::HandleOpsCall, v0_6::UserOperation,
         UserOperation as UserOperationTrait, ValidTimeRange,
     };
-    use rundler_pool::{MockPoolServer, PoolOperation};
-    use rundler_provider::{MockEntryPoint, MockProvider};
-    use rundler_sim::PriorityFeeMode;
-    use rundler_types::contracts::v0_6::i_entry_point::HandleOpsCall;
 
     use super::*;
 
