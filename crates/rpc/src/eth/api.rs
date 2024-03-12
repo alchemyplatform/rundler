@@ -28,23 +28,23 @@ use ethers::{
     utils::to_checksum,
 };
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, Provider};
+use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_sim::{
-    EstimationSettings, FeeEstimator, GasEstimate, GasEstimationError, GasEstimator,
-    GasEstimatorImpl, PrecheckSettings, UserOperationOptionalGas,
+    estimation::v0_6::GasEstimator as GasEstimatorV0_6, EstimationSettings, FeeEstimator,
+    GasEstimationError, GasEstimator, PrecheckSettings,
 };
 use rundler_types::{
     chain::ChainSpec,
     contracts::v0_6::i_entry_point::{
         IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
-    UserOperation,
+    v0_6, UserOperation,
 };
 use rundler_utils::{eth::log_to_raw_log, log::LogOnError};
 use tracing::Level;
 
 use super::error::{EthResult, EthRpcError, ExecutionRevertedWithBytesData};
-use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
+use crate::types::{RichUserOperation, RpcGasEstimate, RpcUserOperation, UserOperationReceipt};
 
 /// Settings for the `eth_` API
 #[derive(Copy, Clone, Debug)]
@@ -64,13 +64,15 @@ impl Settings {
 
 #[derive(Debug)]
 struct EntryPointContext<P, E> {
-    gas_estimator: GasEstimatorImpl<P, E>,
+    gas_estimator: GasEstimatorV0_6<P, E>,
 }
 
 impl<P, E> EntryPointContext<P, E>
 where
     P: Provider,
-    E: EntryPoint,
+    E: EntryPoint
+        + L1GasProvider<UO = v0_6::UserOperation>
+        + SimulationProvider<UO = v0_6::UserOperation>,
 {
     fn new(
         chain_spec: ChainSpec,
@@ -79,7 +81,7 @@ where
         estimation_settings: EstimationSettings,
         fee_estimator: FeeEstimator<P>,
     ) -> Self {
-        let gas_estimator = GasEstimatorImpl::new(
+        let gas_estimator = GasEstimatorV0_6::new(
             chain_spec,
             provider,
             entry_point,
@@ -102,7 +104,9 @@ pub(crate) struct EthApi<P, E, PS> {
 impl<P, E, PS> EthApi<P, E, PS>
 where
     P: Provider,
-    E: EntryPoint,
+    E: EntryPoint
+        + L1GasProvider<UO = v0_6::UserOperation>
+        + SimulationProvider<UO = v0_6::UserOperation>,
     PS: PoolServer,
 {
     pub(crate) fn new(
@@ -157,6 +161,8 @@ where
                 "supplied entry point addr is not a known entry point".to_string(),
             ));
         }
+        let op: v0_6::UserOperation = op.try_into()?;
+
         self.pool
             .add_op(entry_point, op.into())
             .await
@@ -166,10 +172,10 @@ where
 
     pub(crate) async fn estimate_user_operation_gas(
         &self,
-        op: UserOperationOptionalGas,
+        op: v0_6::UserOperationOptionalGas,
         entry_point: Address,
         state_override: Option<spoof::State>,
-    ) -> EthResult<GasEstimate> {
+    ) -> EthResult<RpcGasEstimate> {
         let context = self
             .contexts_by_entry_point
             .get(&entry_point)
@@ -179,12 +185,22 @@ where
                 )
             })?;
 
+        if op.init_code.len() > 0 && op.init_code.len() < 20 {
+            return Err(EthRpcError::InvalidParams(
+                "init_code must be empty or at least 20 bytes".to_string(),
+            ));
+        } else if op.paymaster_and_data.len() > 0 && op.paymaster_and_data.len() < 20 {
+            return Err(EthRpcError::InvalidParams(
+                "paymaster_and_data must be empty or at least 20 bytes".to_string(),
+            ));
+        }
+
         let result = context
             .gas_estimator
             .estimate_op_gas(op, state_override.unwrap_or_default())
             .await;
         match result {
-            Ok(estimate) => Ok(estimate),
+            Ok(estimate) => Ok(estimate.into()),
             Err(GasEstimationError::RevertInValidation(message)) => {
                 Err(EthRpcError::EntryPointValidationRejected(message))?
             }
@@ -346,7 +362,7 @@ where
         let user_operation = if self.contexts_by_entry_point.contains_key(&to) {
             self.get_user_operations_from_tx_data(tx.input)
                 .into_iter()
-                .find(|op| op.op_hash(to, self.chain_spec.id) == hash)
+                .find(|op| op.hash(to, self.chain_spec.id) == hash)
                 .context("matching user operation should be found in tx data")?
         } else {
             self.trace_find_user_operation(transaction_hash, hash)
@@ -378,7 +394,7 @@ where
             .await
             .map_err(EthRpcError::from)?;
         Ok(res.map(|op| RichUserOperation {
-            user_operation: op.uo.into(),
+            user_operation: v0_6::UserOperation::from(op.uo).into(),
             entry_point: op.entry_point.into(),
             block_number: None,
             block_hash: None,
@@ -410,7 +426,7 @@ where
         Ok(logs.into_iter().next())
     }
 
-    fn get_user_operations_from_tx_data(&self, tx_data: Bytes) -> Vec<UserOperation> {
+    fn get_user_operations_from_tx_data(&self, tx_data: Bytes) -> Vec<v0_6::UserOperation> {
         let entry_point_calls = match IEntryPointCalls::decode(tx_data) {
             Ok(entry_point_calls) => entry_point_calls,
             Err(_) => return vec![],
@@ -510,7 +526,7 @@ where
         &self,
         tx_hash: H256,
         user_op_hash: H256,
-    ) -> EthResult<Option<UserOperation>> {
+    ) -> EthResult<Option<v0_6::UserOperation>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
             tracer: Some(GethDebugTracerType::BuiltInTracer(
@@ -543,7 +559,7 @@ where
                 if let Some(uo) = self
                     .get_user_operations_from_tx_data(call_frame.input)
                     .into_iter()
-                    .find(|op| op.op_hash(*to, self.chain_spec.id) == user_op_hash)
+                    .find(|op| op.hash(*to, self.chain_spec.id) == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }
@@ -564,10 +580,13 @@ mod tests {
         utils::keccak256,
     };
     use mockall::predicate::eq;
-    use rundler_pool::{MockPoolServer, PoolOperation};
-    use rundler_provider::{MockEntryPoint, MockProvider};
-    use rundler_sim::PriorityFeeMode;
-    use rundler_types::contracts::v0_6::i_entry_point::HandleOpsCall;
+    use rundler_pool::{IntoPoolOperationVariant, MockPoolServer, PoolOperation};
+    use rundler_provider::{MockEntryPointV0_6, MockProvider};
+    use rundler_sim::{EntityInfos, PriorityFeeMode};
+    use rundler_types::{
+        contracts::v0_6::i_entry_point::HandleOpsCall, v0_6::UserOperation,
+        UserOperation as UserOperationTrait, ValidTimeRange,
+    };
 
     use super::*;
 
@@ -584,7 +603,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPointV0_6, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -607,7 +626,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPointV0_6, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -630,7 +649,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPointV0_6, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -657,7 +676,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPointV0_6, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -683,7 +702,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPointV0_6, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -705,7 +724,7 @@ mod tests {
         ]);
 
         let result =
-            EthApi::<MockProvider, MockEntryPoint, MockPoolServer>::filter_receipt_logs_matching_user_op(
+            EthApi::<MockProvider, MockEntryPointV0_6, MockPoolServer>::filter_receipt_logs_matching_user_op(
                 &reference_log,
                 &receipt,
             );
@@ -717,25 +736,32 @@ mod tests {
     async fn test_get_user_op_by_hash_pending() {
         let ep = Address::random();
         let uo = UserOperation::default();
-        let hash = uo.op_hash(ep, 1);
+        let hash = uo.hash(ep, 1);
 
         let po = PoolOperation {
             uo: uo.clone(),
             entry_point: ep,
-            ..Default::default()
+            aggregator: None,
+            valid_time_range: ValidTimeRange::default(),
+            expected_code_hash: H256::random(),
+            sim_block_hash: H256::random(),
+            sim_block_number: 1000,
+            entities_needing_stake: vec![],
+            account_is_staked: false,
+            entity_infos: EntityInfos::default(),
         };
 
         let mut pool = MockPoolServer::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok(Some(po.clone())));
+            .returning(move |_| Ok(Some(po.clone().into_variant())));
 
         let mut provider = MockProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
         provider.expect_get_block_number().returning(|| Ok(1000));
 
-        let mut entry_point = MockEntryPoint::default();
+        let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().returning(move || ep);
 
         let api = create_api(provider, entry_point, pool);
@@ -754,7 +780,7 @@ mod tests {
     async fn test_get_user_op_by_hash_mined() {
         let ep = Address::random();
         let uo = UserOperation::default();
-        let hash = uo.op_hash(ep, 1);
+        let hash = uo.hash(ep, 1);
         let block_number = 1000;
         let block_hash = H256::random();
 
@@ -794,7 +820,7 @@ mod tests {
             .with(eq(tx_hash))
             .returning(move |_| Ok(Some(tx.clone())));
 
-        let mut entry_point = MockEntryPoint::default();
+        let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().returning(move || ep);
 
         let api = create_api(provider, entry_point, pool);
@@ -813,7 +839,7 @@ mod tests {
     async fn test_get_user_op_by_hash_not_found() {
         let ep = Address::random();
         let uo = UserOperation::default();
-        let hash = uo.op_hash(ep, 1);
+        let hash = uo.hash(ep, 1);
 
         let mut pool = MockPoolServer::default();
         pool.expect_get_op_by_hash()
@@ -825,7 +851,7 @@ mod tests {
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
         provider.expect_get_block_number().returning(|| Ok(1000));
 
-        let mut entry_point = MockEntryPoint::default();
+        let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().returning(move || ep);
 
         let api = create_api(provider, entry_point, pool);
@@ -852,9 +878,9 @@ mod tests {
 
     fn create_api(
         provider: MockProvider,
-        ep: MockEntryPoint,
+        ep: MockEntryPointV0_6,
         pool: MockPoolServer,
-    ) -> EthApi<MockProvider, MockEntryPoint, MockPoolServer> {
+    ) -> EthApi<MockProvider, MockEntryPointV0_6, MockPoolServer> {
         let mut contexts_by_entry_point = HashMap::new();
         let provider = Arc::new(provider);
         let chain_spec = ChainSpec {

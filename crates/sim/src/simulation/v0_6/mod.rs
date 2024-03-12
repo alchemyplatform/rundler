@@ -11,20 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Traits for the provider module.
+use ethers::types::U256;
 
-mod error;
-pub use error::ProviderError;
+mod simulator;
+pub use simulator::Simulator;
 
-mod entry_point;
-pub use entry_point::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, EntryPoint, HandleOpsOut, L1GasProvider,
-    SignatureAggregator, SimulationProvider,
-};
+mod tracer;
+pub use tracer::{SimulateValidationTracer, SimulateValidationTracerImpl};
 
-mod provider;
-#[cfg(feature = "test-utils")]
-pub use provider::MockProvider;
-pub use provider::{Provider, ProviderResult};
-#[cfg(feature = "test-utils")]
-pub(crate) mod test_utils;
+/// Required buffer for verification gas limit when targeting the 0.6 entrypoint contract
+pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: U256 = U256([2000, 0, 0, 0]);

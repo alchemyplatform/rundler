@@ -16,7 +16,6 @@ use std::{fmt::Debug, sync::Arc, time::Duration};
 use anyhow::Context;
 use ethers::{
     abi::{AbiDecode, AbiEncode},
-    contract::ContractError,
     prelude::ContractError as EthersContractError,
     providers::{
         Http, HttpRateLimitRetryPolicy, JsonRpcClient, Middleware, Provider as EthersProvider,
@@ -25,31 +24,15 @@ use ethers::{
     types::{
         spoof, transaction::eip2718::TypedTransaction, Address, Block, BlockId, BlockNumber, Bytes,
         Eip1559TransactionRequest, FeeHistory, Filter, GethDebugTracingCallOptions,
-        GethDebugTracingOptions, GethTrace, Log, Transaction, TransactionReceipt, TxHash, H160,
-        H256, U256, U64,
+        GethDebugTracingOptions, GethTrace, Log, Transaction, TransactionReceipt, TxHash, H256,
+        U256, U64,
     },
 };
 use reqwest::Url;
-use rundler_types::{
-    contracts::{
-        arbitrum::node_interface::NodeInterface,
-        optimism::gas_price_oracle::GasPriceOracle,
-        v0_6::{i_aggregator::IAggregator, i_entry_point::IEntryPoint},
-    },
-    UserOperation,
-};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::metrics_middleware::MetricsMiddleware;
-use crate::{AggregatorOut, AggregatorSimOut, Provider, ProviderError, ProviderResult};
-
-const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc8,
-]);
-
-const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
-    0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0F,
-]);
+use crate::{Provider, ProviderError, ProviderResult};
 
 #[async_trait::async_trait]
 impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
@@ -192,101 +175,12 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
         Ok(Middleware::get_logs(self, filter).await?)
     }
 
-    async fn aggregate_signatures(
-        self: Arc<Self>,
-        aggregator_address: Address,
-        ops: Vec<UserOperation>,
-    ) -> ProviderResult<Option<Bytes>> {
-        let aggregator = IAggregator::new(aggregator_address, self);
-        // TODO: Cap the gas here.
-        let result = aggregator.aggregate_signatures(ops).call().await;
-        match result {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(ContractError::Revert(_)) => Ok(None),
-            Err(error) => Err(error).context("aggregator contract should aggregate signatures")?,
-        }
-    }
-
-    async fn validate_user_op_signature(
-        self: Arc<Self>,
-        aggregator_address: Address,
-        user_op: UserOperation,
-        gas_cap: u64,
-    ) -> ProviderResult<AggregatorOut> {
-        let aggregator = IAggregator::new(aggregator_address, self);
-        let result = aggregator
-            .validate_user_op_signature(user_op)
-            .gas(gas_cap)
-            .call()
-            .await;
-
-        match result {
-            Ok(sig) => Ok(AggregatorOut::SuccessWithInfo(AggregatorSimOut {
-                address: aggregator_address,
-                signature: sig,
-            })),
-            Err(ContractError::Revert(_)) => Ok(AggregatorOut::ValidationReverted),
-            Err(error) => Err(error).context("should call aggregator to validate signature")?,
-        }
-    }
-
     async fn get_code(&self, address: Address, block_hash: Option<H256>) -> ProviderResult<Bytes> {
         Ok(Middleware::get_code(self, address, block_hash.map(|b| b.into())).await?)
     }
 
     async fn get_transaction_count(&self, address: Address) -> ProviderResult<U256> {
         Ok(Middleware::get_transaction_count(self, address, None).await?)
-    }
-
-    async fn calc_arbitrum_l1_gas(
-        self: Arc<Self>,
-        entry_point_address: Address,
-        op: UserOperation,
-    ) -> ProviderResult<U256> {
-        let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&self));
-        let data = entry_point
-            .handle_ops(vec![op], Address::random())
-            .calldata()
-            .context("should get calldata for entry point handle ops")?;
-
-        let arb_node = NodeInterface::new(ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS, self);
-        let gas = arb_node
-            .gas_estimate_l1_component(entry_point_address, false, data)
-            .call()
-            .await?;
-        Ok(U256::from(gas.0))
-    }
-
-    async fn calc_optimism_l1_gas(
-        self: Arc<Self>,
-        entry_point_address: Address,
-        op: UserOperation,
-        gas_price: U256,
-    ) -> ProviderResult<U256> {
-        let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&self));
-        let data = entry_point
-            .handle_ops(vec![op], Address::random())
-            .calldata()
-            .context("should get calldata for entry point handle ops")?;
-
-        // construct an unsigned transaction with default values just for L1 gas estimation
-        let tx = Eip1559TransactionRequest::new()
-            .from(Address::random())
-            .to(entry_point_address)
-            .gas(U256::from(1_000_000))
-            .max_priority_fee_per_gas(U256::from(100_000_000))
-            .max_fee_per_gas(U256::from(100_000_000))
-            .value(U256::from(0))
-            .data(data)
-            .nonce(U256::from(100_000))
-            .chain_id(U64::from(100_000))
-            .rlp();
-
-        let gas_oracle =
-            GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, Arc::clone(&self));
-
-        let l1_fee = gas_oracle.get_l1_fee(tx).call().await?;
-        Ok(l1_fee.checked_div(gas_price).unwrap_or(U256::MAX))
     }
 }
 
