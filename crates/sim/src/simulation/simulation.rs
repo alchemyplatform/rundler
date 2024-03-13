@@ -349,6 +349,14 @@ where
             };
             for opcode in &phase.forbidden_opcodes_used {
                 let (contract, opcode) = parse_combined_tracer_str(opcode)?;
+
+                // OP-080: staked entities are allowed to use BALANCE and SELFBALANCE
+                if entity_info.is_staked
+                    && (opcode == Opcode::BALANCE || opcode == Opcode::SELFBALANCE)
+                {
+                    continue;
+                }
+
                 violations.push(SimulationViolation::UsedForbiddenOpcode(
                     entity,
                     contract,
@@ -1394,5 +1402,105 @@ mod tests {
                 SimulationViolation::VerificationGasLimitBufferTooLow(2000.into(), 4000.into())
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_op_080() {
+        let (provider, tracer) = create_base_config();
+
+        let mut tracer_output = get_test_tracer_output();
+
+        // add forbidden opcodes and precompiles
+        tracer_output.phases[2].forbidden_opcodes_used = vec![
+            String::from("0x8abb13360b87be5eeb1b98647a016add927a136c:SELFBALANCE"),
+            String::from("0x8abb13360b87be5eeb1b98647a016add927a136c:BALANCE"),
+        ];
+
+        let mut validation_context = ValidationContext {
+            op: UserOperation {
+                verification_gas_limit: U256::from(100000),
+                pre_verification_gas: U256::from(1000),
+                ..Default::default()
+            },
+            initcode_length: 10,
+            associated_addresses: HashSet::new(),
+            block_id: BlockId::Number(BlockNumber::Latest),
+            entity_infos: EntityInfos::new(
+                Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
+                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
+                &ValidationOutput {
+                    return_info: ValidationReturnInfo::from((
+                        U256::default(),
+                        U256::default(),
+                        false,
+                        0,
+                        0,
+                        Bytes::default(),
+                    )),
+                    sender_info: StakeInfo::from((U256::default(), U256::default())),
+                    factory_info: StakeInfo::from((U256::default(), U256::default())),
+                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                    aggregator_info: None,
+                },
+                Settings::default(),
+            ),
+            tracer_out: tracer_output,
+            entry_point_out: ValidationOutput {
+                return_info: ValidationReturnInfo::from((
+                    3000.into(),
+                    U256::default(),
+                    true,
+                    0,
+                    0,
+                    Bytes::default(),
+                )),
+                sender_info: StakeInfo::from((U256::default(), U256::default())),
+                factory_info: StakeInfo::from((U256::default(), U256::default())),
+                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                aggregator_info: None,
+            },
+            entities_needing_stake: vec![],
+            accessed_addresses: HashSet::new(),
+        };
+
+        let simulator = create_simulator(provider, tracer);
+        let res = simulator.gather_context_violations(&mut validation_context);
+
+        // unstaked causes errors
+        assert_eq!(
+            res.unwrap(),
+            vec![
+                SimulationViolation::InvalidSignature,
+                SimulationViolation::UsedForbiddenOpcode(
+                    Entity {
+                        kind: EntityType::Paymaster,
+                        address: Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c")
+                            .unwrap()
+                    },
+                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    ViolationOpCode(Opcode::SELFBALANCE)
+                ),
+                SimulationViolation::UsedForbiddenOpcode(
+                    Entity {
+                        kind: EntityType::Paymaster,
+                        address: Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c")
+                            .unwrap()
+                    },
+                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    ViolationOpCode(Opcode::BALANCE)
+                )
+            ]
+        );
+
+        // staked causes no errors
+        validation_context
+            .entity_infos
+            .paymaster
+            .as_mut()
+            .unwrap()
+            .is_staked = true;
+        let res = simulator.gather_context_violations(&mut validation_context);
+        assert_eq!(res.unwrap(), vec![SimulationViolation::InvalidSignature]);
     }
 }
