@@ -11,32 +11,26 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-#![warn(missing_docs, unreachable_pub)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
-//! JSON-RPC server for the Rundler.
+use ethers::types::spoof;
+use rundler_types::{v0_7::UserOperationOptionalGas, GasEstimate};
 
-mod debug;
-pub use debug::DebugApiClient;
+use super::GasEstimationError;
 
-mod admin;
-pub use admin::AdminApiClient;
+/// Gas estimator for entry point v0.7
+#[derive(Debug)]
+pub struct GasEstimator {}
 
-mod error;
+#[async_trait::async_trait]
+impl super::GasEstimator for GasEstimator {
+    type UserOperationOptionalGas = UserOperationOptionalGas;
 
-mod eth;
-pub use eth::{EthApiClient, EthApiSettings};
-
-mod health;
-mod metrics;
-
-mod rundler;
-pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
-
-mod task;
-pub use task::{Args as RpcTaskArgs, RpcTask};
-
-mod types;
+    /// Returns a gas estimate or a revert message, or an anyhow error on any
+    /// other error.
+    async fn estimate_op_gas(
+        &self,
+        _op: UserOperationOptionalGas,
+        _state_override: spoof::State,
+    ) -> Result<GasEstimate, GasEstimationError> {
+        unimplemented!()
+    }
+}
