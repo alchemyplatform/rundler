@@ -42,12 +42,8 @@ use rundler_types::{
 use rundler_utils::{eth, math};
 use tokio::join;
 
-use crate::{
-    estimation::{GasEstimationError, Settings},
-    gas,
-    precheck::MIN_CALL_GAS_LIMIT,
-    simulation, utils, FeeEstimator,
-};
+use super::{GasEstimationError, Settings};
+use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, simulation, utils, FeeEstimator};
 
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary

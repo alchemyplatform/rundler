@@ -31,8 +31,11 @@
 //! - `test-utils`: Export mocks and utilities for testing.
 
 /// Gas estimation
-pub mod estimation;
-pub use estimation::{GasEstimationError, GasEstimator, Settings as EstimationSettings};
+mod estimation;
+pub use estimation::{
+    GasEstimationError, GasEstimator, GasEstimatorV0_6, GasEstimatorV0_7,
+    Settings as EstimationSettings,
+};
 
 pub mod gas;
 pub use gas::{FeeEstimator, PriorityFeeMode};
