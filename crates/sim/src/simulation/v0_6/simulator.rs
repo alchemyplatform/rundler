@@ -28,8 +28,11 @@ use rundler_provider::{
     AggregatorOut, AggregatorSimOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
 use rundler_types::{
-    contracts::v0_6::i_entry_point::FailedOp, v0_6::UserOperation, Entity, EntityType, StorageSlot,
-    UserOperation as UserOperationTrait, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
+    contracts::v0_6::i_entry_point::FailedOp,
+    pool::{NeedsStakeInformation, SimulationViolation},
+    v0_6::UserOperation,
+    Entity, EntityInfos, EntityType, StorageSlot, UserOperation as UserOperationTrait,
+    ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
 };
 
 use super::{
@@ -43,8 +46,7 @@ use crate::{
         ParseStorageAccess, Settings, StorageRestriction,
     },
     types::ViolationError,
-    utils, EntityInfos, NeedsStakeInformation, SimulationError, SimulationResult,
-    SimulationViolation, ViolationOpCode,
+    utils, SimulationError, SimulationResult,
 };
 
 /// Simulator implementation.
@@ -187,7 +189,7 @@ where
                 entity_infos: None,
             })?
         };
-        let entity_infos = EntityInfos::new(
+        let entity_infos = simulation::infos_from_validation_output(
             factory_address,
             sender_address,
             paymaster_address,
@@ -578,9 +580,10 @@ where
         } = return_info;
 
         // Conduct any stake overrides before assigning entity_infos
-        context
-            .entity_infos
-            .override_is_staked(&self.allow_unstaked_addresses);
+        simulation::override_infos_staked(
+            &mut context.entity_infos,
+            &self.allow_unstaked_addresses,
+        );
 
         Ok(SimulationResult {
             mempools,
@@ -893,7 +896,7 @@ mod tests {
             has_factory: true,
             associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: EntityInfos::new(
+            entity_infos: simulation::infos_from_validation_output(
                 Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
                 Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
                 Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),

@@ -17,10 +17,11 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use futures_util::StreamExt;
-use rundler_pool::PoolServer;
 use rundler_provider::{BundleHandler, EntryPoint};
 use rundler_sim::ExpectedStorage;
-use rundler_types::{chain::ChainSpec, EntityUpdate, GasFees, UserOperation};
+use rundler_types::{
+    builder::BundlingMode, chain::ChainSpec, pool::Pool, EntityUpdate, GasFees, UserOperation,
+};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
@@ -32,7 +33,6 @@ use crate::{
     bundle_proposer::BundleProposer,
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
-    BundlingMode,
 };
 
 #[async_trait]
@@ -100,7 +100,7 @@ where
     P: BundleProposer<UO = UO>,
     E: EntryPoint + BundleHandler<UO = UO>,
     T: TransactionTracker,
-    C: PoolServer,
+    C: Pool,
 {
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
@@ -249,7 +249,7 @@ where
     P: BundleProposer<UO = UO>,
     E: EntryPoint + BundleHandler<UO = UO>,
     T: TransactionTracker,
-    C: PoolServer,
+    C: Pool,
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(

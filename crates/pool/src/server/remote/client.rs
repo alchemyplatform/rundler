@@ -19,7 +19,13 @@ use rundler_task::{
     grpc::protos::{from_bytes, to_le_bytes, ConversionError},
     server::{HealthCheck, ServerStatus},
 };
-use rundler_types::{EntityUpdate, UserOperationId, UserOperationVariant};
+use rundler_types::{
+    pool::{
+        NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult, Reputation,
+        ReputationStatus, StakeStatus,
+    },
+    EntityUpdate, UserOperationId, UserOperationVariant,
+};
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -41,12 +47,8 @@ use super::protos::{
     update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
     DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
     DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
-};
-use crate::{
-    mempool::{PaymasterMetadata, PoolOperation, Reputation, StakeStatus},
-    server::{error::PoolServerError, NewHead, PoolResult, PoolServer},
-    ReputationStatus,
+    RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
+    SubscribeNewHeadsResponse, UpdateEntitiesRequest,
 };
 
 /// Remote pool client
@@ -123,18 +125,20 @@ impl RemotePoolClient {
 }
 
 #[async_trait]
-impl PoolServer for RemotePoolClient {
+impl Pool for RemotePoolClient {
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>> {
         Ok(self
             .op_pool_client
             .clone()
             .get_supported_entry_points(protos::GetSupportedEntryPointsRequest {})
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .entry_points
             .into_iter()
             .map(|ep| from_bytes(ep.as_slice()))
-            .collect::<Result<_, ConversionError>>()?)
+            .collect::<Result<_, ConversionError>>()
+            .map_err(anyhow::Error::from)?)
     }
 
     async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<H256> {
@@ -145,14 +149,15 @@ impl PoolServer for RemotePoolClient {
                 entry_point: entry_point.as_bytes().to_vec(),
                 op: Some(protos::UserOperation::from(&op)),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(add_op_response::Result::Success(s)) => Ok(H256::from_slice(&s.hash)),
             Some(add_op_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -172,7 +177,8 @@ impl PoolServer for RemotePoolClient {
                 max_ops,
                 shard_index,
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -181,10 +187,10 @@ impl PoolServer for RemotePoolClient {
                 .ops
                 .into_iter()
                 .map(PoolOperation::try_from)
-                .map(|res| res.map_err(PoolServerError::from))
+                .map(|res| res.map_err(PoolError::from))
                 .collect(),
             Some(get_ops_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -200,7 +206,8 @@ impl PoolServer for RemotePoolClient {
             .get_op_by_hash(protos::GetOpByHashRequest {
                 hash: hash.as_bytes().to_vec(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -210,11 +217,11 @@ impl PoolServer for RemotePoolClient {
             }
             Some(get_op_by_hash_response::Result::Failure(e)) => match e.error {
                 Some(_) => Err(e.try_into()?),
-                None => Err(PoolServerError::Other(anyhow::anyhow!(
+                None => Err(PoolError::Other(anyhow::anyhow!(
                     "should have received error from op pool"
                 )))?,
             },
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -228,14 +235,15 @@ impl PoolServer for RemotePoolClient {
                 entry_point: entry_point.as_bytes().to_vec(),
                 hashes: ops.into_iter().map(|h| h.as_bytes().to_vec()).collect(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(remove_ops_response::Result::Success(_)) => Ok(()),
             Some(remove_ops_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -254,7 +262,8 @@ impl PoolServer for RemotePoolClient {
                 sender: id.sender.as_bytes().to_vec(),
                 nonce: to_le_bytes(id.nonce),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -267,7 +276,7 @@ impl PoolServer for RemotePoolClient {
                 }
             }
             Some(remove_op_by_id_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -288,14 +297,15 @@ impl PoolServer for RemotePoolClient {
                     .map(protos::EntityUpdate::from)
                     .collect(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(update_entities_response::Result::Success(_)) => Ok(()),
             Some(update_entities_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -315,14 +325,15 @@ impl PoolServer for RemotePoolClient {
                 clear_paymaster,
                 clear_reputation,
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(debug_clear_state_response::Result::Success(_)) => Ok(()),
             Some(debug_clear_state_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -342,14 +353,15 @@ impl PoolServer for RemotePoolClient {
                 reputation,
                 paymaster,
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(admin_set_tracking_response::Result::Success(_)) => Ok(()),
             Some(admin_set_tracking_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -365,7 +377,8 @@ impl PoolServer for RemotePoolClient {
             .debug_dump_mempool(DebugDumpMempoolRequest {
                 entry_point: entry_point.as_bytes().to_vec(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -374,10 +387,10 @@ impl PoolServer for RemotePoolClient {
                 .ops
                 .into_iter()
                 .map(PoolOperation::try_from)
-                .map(|res| res.map_err(PoolServerError::from))
+                .map(|res| res.map_err(PoolError::from))
                 .collect(),
             Some(debug_dump_mempool_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -398,14 +411,15 @@ impl PoolServer for RemotePoolClient {
                     .map(protos::Reputation::from)
                     .collect(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(debug_set_reputation_response::Result::Success(_)) => Ok(()),
             Some(debug_set_reputation_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -418,7 +432,8 @@ impl PoolServer for RemotePoolClient {
             .debug_dump_reputation(DebugDumpReputationRequest {
                 entry_point: entry_point.as_bytes().to_vec(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -427,10 +442,10 @@ impl PoolServer for RemotePoolClient {
                 .reputations
                 .into_iter()
                 .map(Reputation::try_from)
-                .map(|res| res.map_err(PoolServerError::from))
+                .map(|res| res.map_err(anyhow::Error::from).map_err(PoolError::from))
                 .collect(),
             Some(debug_dump_reputation_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -446,7 +461,8 @@ impl PoolServer for RemotePoolClient {
             .debug_dump_paymaster_balances(DebugDumpPaymasterBalancesRequest {
                 entry_point: entry_point.as_bytes().to_vec(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -455,10 +471,10 @@ impl PoolServer for RemotePoolClient {
                 .balances
                 .into_iter()
                 .map(PaymasterMetadata::try_from)
-                .map(|res| res.map_err(PoolServerError::from))
+                .map(|res| res.map_err(anyhow::Error::from).map_err(PoolError::from))
                 .collect(),
             Some(debug_dump_paymaster_balances_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -476,16 +492,20 @@ impl PoolServer for RemotePoolClient {
                 entry_point: entry_point.as_bytes().to_vec(),
                 address: address.as_bytes().to_vec(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(get_reputation_status_response::Result::Success(s)) => {
-                Ok(ReputationStatus::try_from(s.status)?)
+                Ok(ProtoReputationStatus::try_from(s.status)
+                    .map_err(anyhow::Error::from)?
+                    .try_into()
+                    .map_err(anyhow::Error::from)?)
             }
             Some(get_reputation_status_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
@@ -503,7 +523,8 @@ impl PoolServer for RemotePoolClient {
                 entry_point: entry_point.as_bytes().to_vec(),
                 address: address.as_bytes().to_vec(),
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -512,7 +533,7 @@ impl PoolServer for RemotePoolClient {
                 Ok(s.status.unwrap_or_default().try_into()?)
             }
             Some(get_stake_status_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(PoolServerError::Other(anyhow::anyhow!(
+            None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,
         }
