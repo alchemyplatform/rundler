@@ -201,10 +201,9 @@ pub(crate) fn match_mempools(
 #[cfg(test)]
 mod tests {
     use ethers::types::U256;
-    use rundler_types::StorageSlot;
+    use rundler_types::{pool::NeedsStakeInformation, StorageSlot, ViolationOpCode};
 
     use super::*;
-    use crate::simulation::{NeedsStakeInformation, ViolationOpCode};
 
     #[test]
     fn test_allow_entity_any() {

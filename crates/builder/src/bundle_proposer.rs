@@ -28,17 +28,18 @@ use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
-use rundler_pool::{FromPoolOperationVariant, PoolOperation, PoolServer};
 use rundler_provider::{
     BundleHandler, EntryPoint, HandleOpsOut, L1GasProvider, Provider, SignatureAggregator,
 };
 use rundler_sim::{
-    gas, EntityInfo, EntityInfos, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
-    SimulationResult, SimulationViolation, Simulator, ViolationError,
+    gas, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult,
+    Simulator, ViolationError,
 };
 use rundler_types::{
-    chain::ChainSpec, Entity, EntityType, EntityUpdate, EntityUpdateType, GasFees, GasOverheads,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator,
+    chain::ChainSpec,
+    pool::{FromPoolOperationVariant, Pool, PoolOperation, SimulationViolation},
+    Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
+    GasOverheads, Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -146,7 +147,7 @@ where
     S: Simulator<UO = UO>,
     E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
     P: Provider,
-    C: PoolServer,
+    C: Pool,
 {
     type UO = UO;
 
@@ -251,7 +252,7 @@ where
     S: Simulator<UO = UO>,
     E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
     P: Provider,
-    C: PoolServer,
+    C: Pool,
 {
     pub(crate) fn new(
         builder_index: u64,
@@ -1276,10 +1277,13 @@ mod tests {
         types::{H160, U64},
         utils::parse_units,
     };
-    use rundler_pool::{IntoPoolOperationVariant, MockPoolServer};
     use rundler_provider::{AggregatorSimOut, MockEntryPointV0_6, MockProvider};
-    use rundler_sim::{MockSimulator, SimulationViolation, ViolationError};
-    use rundler_types::{v0_6::UserOperation, UserOperation as UserOperationTrait, ValidTimeRange};
+    use rundler_sim::MockSimulator;
+    use rundler_types::{
+        pool::{IntoPoolOperationVariant, MockPool, SimulationViolation},
+        v0_6::UserOperation,
+        UserOperation as UserOperationTrait, ValidTimeRange,
+    };
 
     use super::*;
 
@@ -2064,7 +2068,7 @@ mod tests {
             })
             .collect();
 
-        let mut pool_client = MockPoolServer::new();
+        let mut pool_client = MockPool::new();
         pool_client.expect_get_ops().returning(move |_, _, _| {
             Ok(ops
                 .iter()
