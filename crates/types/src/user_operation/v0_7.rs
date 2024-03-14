@@ -18,7 +18,9 @@ use ethers::{
 };
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
-use crate::{contracts::v0_7::shared_types::PackedUserOperation, Entity, GasOverheads};
+use crate::{
+    contracts::v0_7::shared_types::PackedUserOperation, Entity, EntryPointVersion, GasOverheads,
+};
 
 const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([10_000, 0, 0, 0]);
 
@@ -79,6 +81,10 @@ pub struct UserOperation {
 impl UserOperationTrait for UserOperation {
     type OptionalGas = UserOperationOptionalGas;
 
+    fn entry_point_version() -> EntryPointVersion {
+        EntryPointVersion::V0_7
+    }
+
     fn hash(&self, _entry_point: Address, _chain_id: u64) -> H256 {
         self.hash
     }
@@ -100,6 +106,10 @@ impl UserOperationTrait for UserOperation {
 
     fn factory(&self) -> Option<Address> {
         self.factory
+    }
+
+    fn call_data(&self) -> &Bytes {
+        &self.call_data
     }
 
     fn max_gas_cost(&self) -> U256 {

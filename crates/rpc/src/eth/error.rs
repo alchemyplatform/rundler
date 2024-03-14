@@ -18,7 +18,7 @@ use jsonrpsee::types::{
 };
 use rundler_pool::{MempoolError, PoolServerError};
 use rundler_provider::ProviderError;
-use rundler_sim::{PrecheckViolation, SimulationViolation};
+use rundler_sim::{GasEstimationError, PrecheckViolation, SimulationViolation};
 use rundler_types::{Entity, EntityType, Timestamp};
 use serde::Serialize;
 
@@ -367,5 +367,24 @@ impl From<tonic::Status> for EthRpcError {
 impl From<ProviderError> for EthRpcError {
     fn from(e: ProviderError) -> Self {
         EthRpcError::Internal(anyhow::anyhow!("provider error: {e:?}"))
+    }
+}
+
+impl From<GasEstimationError> for EthRpcError {
+    fn from(e: GasEstimationError) -> Self {
+        match e {
+            GasEstimationError::RevertInValidation(message) => {
+                EthRpcError::EntryPointValidationRejected(message)
+            }
+            GasEstimationError::RevertInCallWithMessage(message) => {
+                EthRpcError::ExecutionReverted(message)
+            }
+            GasEstimationError::RevertInCallWithBytes(b) => {
+                EthRpcError::ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData {
+                    revert_data: b,
+                })
+            }
+            GasEstimationError::Other(error) => EthRpcError::Internal(error),
+        }
     }
 }
