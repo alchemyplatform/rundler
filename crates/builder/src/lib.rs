@@ -29,10 +29,7 @@ mod sender;
 pub use sender::TransactionSenderType;
 
 mod server;
-pub use server::{
-    BuilderResult, BuilderServer, BuilderServerError, BundlingMode, LocalBuilderBuilder,
-    LocalBuilderHandle, RemoteBuilderClient,
-};
+pub use server::{LocalBuilderBuilder, LocalBuilderHandle, RemoteBuilderClient};
 
 mod signer;
 
