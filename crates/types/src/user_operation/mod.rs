@@ -28,6 +28,8 @@ use crate::Entity;
 /// ERC-4337 Entry point version
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum EntryPointVersion {
+    /// Unspecified version
+    Unspecified,
     /// Version 0.6
     V0_6,
     /// Version 0.7
@@ -50,14 +52,12 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Associated type for the version of a user operation that has optional gas and fee fields
     type OptionalGas;
 
-    /// Hash a user operation with the given entry point and chain ID.
-    ///
-    /// The hash is used to uniquely identify a user operation in the entry point.
-    /// It does not include the signature field.
-    fn hash(&self, entry_point: Address, chain_id: u64) -> H256;
+    /// Get the entry point version for this UO
+    fn entry_point_version() -> EntryPointVersion;
 
-    /// Get the user operation id
-    fn id(&self) -> UserOperationId;
+    /*
+     * Getters
+     */
 
     /// Get the user operation sender address
     fn sender(&self) -> Address;
@@ -68,20 +68,42 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Get the user operation factory address, if any
     fn factory(&self) -> Option<Address>;
 
-    /// Returns the maximum cost, in wei, of this user operation
-    fn max_gas_cost(&self) -> U256;
-
-    /// Gets an iterator on all entities associated with this user operation
-    fn entities(&'_ self) -> Vec<Entity>;
-
-    /// Returns the heap size of the user operation
-    fn heap_size(&self) -> usize;
+    /// Get the user operation calldata
+    fn call_data(&self) -> &Bytes;
 
     /// Returns the call gas limit
     fn call_gas_limit(&self) -> U256;
 
     /// Returns the verification gas limit
     fn verification_gas_limit(&self) -> U256;
+
+    /// Returns the max fee per gas
+    fn max_fee_per_gas(&self) -> U256;
+
+    /// Returns the max priority fee per gas
+    fn max_priority_fee_per_gas(&self) -> U256;
+
+    /// Returns the maximum cost, in wei, of this user operation
+    fn max_gas_cost(&self) -> U256;
+
+    /*
+     * Enhanced functions
+     */
+
+    /// Hash a user operation with the given entry point and chain ID.
+    ///
+    /// The hash is used to uniquely identify a user operation in the entry point.
+    /// It does not include the signature field.
+    fn hash(&self, entry_point: Address, chain_id: u64) -> H256;
+
+    /// Get the user operation id
+    fn id(&self) -> UserOperationId;
+
+    /// Gets an iterator on all entities associated with this user operation
+    fn entities(&'_ self) -> Vec<Entity>;
+
+    /// Returns the heap size of the user operation
+    fn heap_size(&self) -> usize;
 
     /// Returns the total verification gas limit
     fn total_verification_gas_limit(&self) -> U256;
@@ -98,12 +120,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
 
     /// Calculate the static portion of the pre-verification gas for this user operation
     fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256;
-
-    /// Returns the max fee per gas
-    fn max_fee_per_gas(&self) -> U256;
-
-    /// Returns the max priority fee per gas
-    fn max_priority_fee_per_gas(&self) -> U256;
 
     /// Clear the signature field of the user op
     ///
@@ -131,6 +147,10 @@ pub enum UserOperationVariant {
 
 impl UserOperation for UserOperationVariant {
     type OptionalGas = UserOperationOptionalGas;
+
+    fn entry_point_version() -> EntryPointVersion {
+        EntryPointVersion::Unspecified
+    }
 
     fn hash(&self, entry_point: Address, chain_id: u64) -> H256 {
         match self {
@@ -164,6 +184,13 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.factory(),
             UserOperationVariant::V0_7(op) => op.factory(),
+        }
+    }
+
+    fn call_data(&self) -> &Bytes {
+        match self {
+            UserOperationVariant::V0_6(op) => op.call_data(),
+            UserOperationVariant::V0_7(op) => op.call_data(),
         }
     }
 

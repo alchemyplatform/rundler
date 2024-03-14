@@ -24,10 +24,17 @@ use super::{
     GasOverheads, UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant,
 };
 pub use crate::contracts::v0_6::shared_types::{UserOperation, UserOpsPerAggregator};
-use crate::entity::{Entity, EntityType};
+use crate::{
+    entity::{Entity, EntityType},
+    EntryPointVersion,
+};
 
 impl UserOperationTrait for UserOperation {
     type OptionalGas = UserOperationOptionalGas;
+
+    fn entry_point_version() -> EntryPointVersion {
+        EntryPointVersion::V0_6
+    }
 
     fn hash(&self, entry_point: Address, chain_id: u64) -> H256 {
         keccak256(encode(&[
@@ -55,6 +62,10 @@ impl UserOperationTrait for UserOperation {
 
     fn paymaster(&self) -> Option<Address> {
         Self::get_address_from_field(&self.paymaster_and_data)
+    }
+
+    fn call_data(&self) -> &Bytes {
+        &self.call_data
     }
 
     fn max_gas_cost(&self) -> U256 {
