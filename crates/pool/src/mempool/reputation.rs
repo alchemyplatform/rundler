@@ -18,58 +18,8 @@ use std::{
 
 use ethers::types::Address;
 use parking_lot::RwLock;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use rundler_types::pool::{Reputation, ReputationStatus};
 use tokio::time::interval;
-
-/// Reputation status for an entity
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ReputationStatus {
-    /// Entity is not throttled or banned
-    Ok,
-    /// Entity is throttled
-    Throttled,
-    /// Entity is banned
-    Banned,
-}
-
-impl Serialize for ReputationStatus {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            ReputationStatus::Ok => serializer.serialize_str("ok"),
-            ReputationStatus::Throttled => serializer.serialize_str("throttled"),
-            ReputationStatus::Banned => serializer.serialize_str("banned"),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for ReputationStatus {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        match s.as_str() {
-            "ok" => Ok(ReputationStatus::Ok),
-            "throttled" => Ok(ReputationStatus::Throttled),
-            "banned" => Ok(ReputationStatus::Banned),
-            _ => Err(de::Error::custom(format!("Invalid reputation status {s}"))),
-        }
-    }
-}
-
-/// The reputation of an entity
-#[derive(Debug, Clone)]
-pub struct Reputation {
-    /// The entity's address
-    pub address: Address,
-    /// Number of ops seen in the current interval
-    pub ops_seen: u64,
-    /// Number of ops included in the current interval
-    pub ops_included: u64,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ReputationParams {

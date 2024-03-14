@@ -11,27 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use crate::mempool::MempoolError;
+//! Rundler builder types
 
-/// Pool server error type
-#[derive(Debug, thiserror::Error)]
-pub enum PoolServerError {
-    /// Mempool error occurred
-    #[error(transparent)]
-    MempoolError(MempoolError),
-    /// Unexpected response from PoolServer
-    #[error("Unexpected response from PoolServer")]
-    UnexpectedResponse,
-    /// Internal error
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
+mod error;
+pub use error::*;
 
-impl From<MempoolError> for PoolServerError {
-    fn from(error: MempoolError) -> Self {
-        match error {
-            MempoolError::Other(e) => Self::Other(e),
-            _ => Self::MempoolError(error),
-        }
-    }
-}
+mod traits;
+pub use traits::*;
+
+mod types;
+pub use types::*;

@@ -14,15 +14,16 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Error;
-use ethers::types::{Address, Opcode, H256, U256};
+use ethers::types::{Address, H256, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::AggregatorSimOut;
 use rundler_types::{
-    Entity, EntityType, StakeInfo, StorageSlot, UserOperation, ValidTimeRange, ValidationOutput,
+    pool::{MempoolError, SimulationViolation},
+    Entity, EntityInfo, EntityInfos, EntityType, StakeInfo, UserOperation, ValidTimeRange,
+    ValidationOutput,
 };
 use serde::{Deserialize, Serialize};
-use strum::IntoEnumIterator;
 
 /// Simulation module for Entry Point v0.6
 pub mod v0_6;
@@ -95,6 +96,27 @@ impl From<Error> for SimulationError {
     }
 }
 
+impl From<SimulationError> for MempoolError {
+    fn from(mut error: SimulationError) -> Self {
+        let SimulationError {
+            violation_error, ..
+        } = &mut error;
+        let ViolationError::Violations(violations) = violation_error else {
+            return Self::Other((*violation_error).clone().into());
+        };
+
+        let Some(violation) = violations.iter_mut().min() else {
+            return Self::Other((*violation_error).clone().into());
+        };
+
+        // extract violation and replace with dummy
+        Self::SimulationViolation(std::mem::replace(
+            violation,
+            SimulationViolation::DidNotRevert,
+        ))
+    }
+}
+
 /// Simulator trait for running user operation simulations
 #[cfg_attr(feature = "test-utils", automock(type UO = rundler_types::v0_6::UserOperation;))]
 #[async_trait::async_trait]
@@ -112,93 +134,6 @@ pub trait Simulator: Send + Sync + 'static {
     ) -> Result<SimulationResult, SimulationError>;
 }
 
-/// All possible simulation violations
-#[derive(Clone, Debug, parse_display::Display, Ord, Eq, PartialOrd, PartialEq)]
-pub enum SimulationViolation {
-    // Make sure to maintain the order here based on the importance
-    // of the violation for converting to an JSON RPC error
-    /// The user operation signature is invalid
-    #[display("invalid signature")]
-    InvalidSignature,
-    /// The user operation used an opcode that is not allowed
-    #[display("{0.kind} uses banned opcode: {2} in contract {1:?}")]
-    UsedForbiddenOpcode(Entity, Address, ViolationOpCode),
-    /// The user operation used a precompile that is not allowed
-    #[display("{0.kind} uses banned precompile: {2:?} in contract {1:?}")]
-    UsedForbiddenPrecompile(Entity, Address, Address),
-    /// The user operation accessed a contract that has not been deployed
-    #[display(
-        "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
-    )]
-    AccessedUndeployedContract(Entity, Address),
-    /// The user operation factory entity called CREATE2 more than once during initialization
-    #[display("factory may only call CREATE2 once during initialization")]
-    FactoryCalledCreate2Twice(Address),
-    /// The user operation accessed a storage slot that is not allowed
-    #[display("{0.kind} accessed forbidden storage at address {1:?} during validation")]
-    InvalidStorageAccess(Entity, StorageSlot),
-    /// The user operation called an entry point method that is not allowed
-    #[display("{0.kind} called entry point method other than depositTo")]
-    CalledBannedEntryPointMethod(Entity),
-    /// The user operation made a call that contained value to a contract other than the entrypoint
-    /// during validation
-    #[display("{0.kind} must not send ETH during validation (except from account to entry point)")]
-    CallHadValue(Entity),
-    /// The code hash of accessed contracts changed on the second simulation
-    #[display("code accessed by validation has changed since the last time validation was run")]
-    CodeHashChanged,
-    /// The user operation contained an entity that accessed storage without being staked
-    #[display("{0.needs_stake} needs to be staked: {0.accessing_entity} accessed storage at {0.accessed_address} slot {0.slot} (associated with {0.accessed_entity:?})")]
-    NotStaked(Box<NeedsStakeInformation>),
-    /// The user operation uses a paymaster that returns a context while being unstaked
-    #[display("Unstaked paymaster must not return context")]
-    UnstakedPaymasterContext,
-    /// The user operation uses an aggregator entity and it is not staked
-    #[display("An aggregator must be staked, regardless of storager usage")]
-    UnstakedAggregator,
-    /// Simulation reverted with an unintended reason, containing a message
-    #[display("reverted while simulating {0} validation: {1}")]
-    UnintendedRevertWithMessage(EntityType, String, Option<Address>),
-    /// Simulation reverted with an unintended reason
-    #[display("reverted while simulating {0} validation")]
-    UnintendedRevert(EntityType, Option<Address>),
-    /// Simulation did not revert, a revert is always expected
-    #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
-    DidNotRevert,
-    /// Simulation had the wrong number of phases
-    #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
-    WrongNumberOfPhases(u32),
-    /// The user operation ran out of gas during validation
-    #[display("ran out of gas during {0.kind} validation")]
-    OutOfGas(Entity),
-    /// The user operation aggregator signature validation failed
-    #[display("aggregator signature validation failed")]
-    AggregatorValidationFailed,
-    /// Verification gas limit doesn't have the required buffer on the measured gas
-    #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
-    VerificationGasLimitBufferTooLow(U256, U256),
-}
-
-/// A wrapper around Opcode that implements extra traits
-#[derive(Debug, PartialEq, Clone, parse_display::Display, Eq)]
-#[display("{0:?}")]
-pub struct ViolationOpCode(pub Opcode);
-
-impl PartialOrd for ViolationOpCode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ViolationOpCode {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let left = self.0 as i32;
-        let right = other.0 as i32;
-
-        left.cmp(&right)
-    }
-}
-
 fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
     match i {
         0 => Some(EntityType::Factory),
@@ -208,131 +143,11 @@ fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-/// additional context about an entity
-pub struct EntityInfo {
-    /// The address of an entity
-    pub address: Address,
-    /// Whether the entity is staked or not
-    pub is_staked: bool,
-}
-
-impl EntityInfo {
-    fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
-        self.is_staked = allow_unstaked_addresses.contains(&self.address) || self.is_staked;
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-/// additional context for all the entities used in an op
-pub struct EntityInfos {
-    /// The entity info for the factory
-    pub factory: Option<EntityInfo>,
-    /// The entity info for the op sender
-    pub sender: EntityInfo,
-    /// The entity info for the paymaster
-    pub paymaster: Option<EntityInfo>,
-    /// The entity info for the aggregator
-    pub aggregator: Option<EntityInfo>,
-}
-
-impl EntityInfos {
-    fn new(
-        factory_address: Option<Address>,
-        sender_address: Address,
-        paymaster_address: Option<Address>,
-        entry_point_out: &ValidationOutput,
-        sim_settings: Settings,
-    ) -> Self {
-        let factory = factory_address.map(|address| EntityInfo {
-            address,
-            is_staked: is_staked(entry_point_out.factory_info, sim_settings),
-        });
-        let sender = EntityInfo {
-            address: sender_address,
-            is_staked: is_staked(entry_point_out.sender_info, sim_settings),
-        };
-        let paymaster = paymaster_address.map(|address| EntityInfo {
-            address,
-            is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
-        });
-        let aggregator = entry_point_out
-            .aggregator_info
-            .map(|aggregator_info| EntityInfo {
-                address: aggregator_info.address,
-                is_staked: is_staked(aggregator_info.stake_info, sim_settings),
-            });
-
-        Self {
-            factory,
-            sender,
-            paymaster,
-            aggregator,
-        }
-    }
-
-    /// Get iterator over the entities
-    pub fn entities(&'_ self) -> impl Iterator<Item = (EntityType, EntityInfo)> + '_ {
-        EntityType::iter().filter_map(|t| self.get(t).map(|info| (t, info)))
-    }
-
-    fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
-        if let Some(mut factory) = self.factory {
-            factory.override_is_staked(allow_unstaked_addresses)
-        }
-        self.sender.override_is_staked(allow_unstaked_addresses);
-        if let Some(mut paymaster) = self.paymaster {
-            paymaster.override_is_staked(allow_unstaked_addresses)
-        }
-        if let Some(mut aggregator) = self.aggregator {
-            aggregator.override_is_staked(allow_unstaked_addresses)
-        }
-    }
-
-    /// Get the EntityInfo of a specific entity
-    pub fn get(self, entity: EntityType) -> Option<EntityInfo> {
-        match entity {
-            EntityType::Factory => self.factory,
-            EntityType::Account => Some(self.sender),
-            EntityType::Paymaster => self.paymaster,
-            EntityType::Aggregator => self.aggregator,
-        }
-    }
-
-    fn sender_address(self) -> Address {
-        self.sender.address
-    }
-}
-
-fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
-    info.stake >= sim_settings.min_stake_value.into()
-        && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum StorageRestriction {
     /// (Entity needing stake, accessing entity type, accessed entity type, accessed address, accessed slot)
     NeedsStake(EntityType, EntityType, Option<EntityType>, Address, U256),
     Banned(U256),
-}
-
-/// Information about a storage violation based on stake status
-#[derive(Debug, PartialEq, Clone, PartialOrd, Eq, Ord)]
-pub struct NeedsStakeInformation {
-    /// Entity needing stake info
-    pub needs_stake: Entity,
-    /// The entity that accessed the storage requiring stake
-    pub accessing_entity: EntityType,
-    /// Type of accessed entity, if it is a known entity
-    pub accessed_entity: Option<EntityType>,
-    /// Address that was accessed while unstaked
-    pub accessed_address: Address,
-    /// The accessed slot number
-    pub slot: U256,
-    /// Minumum stake
-    pub min_stake: U256,
-    /// Minumum delay after an unstake event
-    pub min_unstake_delay: U256,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -510,4 +325,61 @@ impl Default for Settings {
             max_verification_gas: 5_000_000,
         }
     }
+}
+
+fn override_is_staked(ei: &mut EntityInfo, allow_unstaked_addresses: &HashSet<Address>) {
+    ei.is_staked = allow_unstaked_addresses.contains(&ei.address) || ei.is_staked;
+}
+
+fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashSet<Address>) {
+    override_is_staked(&mut eis.sender, allow_unstaked_addresses);
+
+    if let Some(mut factory) = eis.factory {
+        override_is_staked(&mut factory, allow_unstaked_addresses);
+    }
+    if let Some(mut paymaster) = eis.paymaster {
+        override_is_staked(&mut paymaster, allow_unstaked_addresses);
+    }
+    if let Some(mut aggregator) = eis.aggregator {
+        override_is_staked(&mut aggregator, allow_unstaked_addresses);
+    }
+}
+
+fn infos_from_validation_output(
+    factory_address: Option<Address>,
+    sender_address: Address,
+    paymaster_address: Option<Address>,
+    entry_point_out: &ValidationOutput,
+    sim_settings: Settings,
+) -> EntityInfos {
+    let factory = factory_address.map(|address| EntityInfo {
+        address,
+        is_staked: is_staked(entry_point_out.factory_info, sim_settings),
+    });
+    let sender = EntityInfo {
+        address: sender_address,
+        is_staked: is_staked(entry_point_out.sender_info, sim_settings),
+    };
+    let paymaster = paymaster_address.map(|address| EntityInfo {
+        address,
+        is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
+    });
+    let aggregator = entry_point_out
+        .aggregator_info
+        .map(|aggregator_info| EntityInfo {
+            address: aggregator_info.address,
+            is_staked: is_staked(aggregator_info.stake_info, sim_settings),
+        });
+
+    EntityInfos {
+        factory,
+        sender,
+        paymaster,
+        aggregator,
+    }
+}
+
+pub(crate) fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
+    info.stake >= sim_settings.min_stake_value.into()
+        && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
 }
