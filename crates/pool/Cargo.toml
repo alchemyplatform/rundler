@@ -44,6 +44,3 @@ rundler-provider = { path = "../provider", features = ["test-utils"] }
 
 [build-dependencies]
 tonic-build.workspace = true
-
-[features]
-test-utils = [ "mockall" ]

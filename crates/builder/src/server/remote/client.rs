@@ -18,6 +18,7 @@ use rundler_task::{
     grpc::protos::{from_bytes, ConversionError},
     server::{HealthCheck, ServerStatus},
 };
+use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
 use tonic::{
     async_trait,
     transport::{Channel, Uri},
@@ -32,7 +33,6 @@ use super::protos::{
     debug_set_bundling_mode_response, BundlingMode as ProtoBundlingMode, DebugSendBundleNowRequest,
     DebugSetBundlingModeRequest, GetSupportedEntryPointsRequest,
 };
-use crate::server::{BuilderResult, BuilderServer, BuilderServerError, BundlingMode};
 
 /// Remote builder client, used for communicating with a remote builder server
 #[derive(Debug, Clone)]
@@ -55,18 +55,20 @@ impl RemoteBuilderClient {
 }
 
 #[async_trait]
-impl BuilderServer for RemoteBuilderClient {
+impl Builder for RemoteBuilderClient {
     async fn get_supported_entry_points(&self) -> BuilderResult<Vec<Address>> {
         Ok(self
             .grpc_client
             .clone()
             .get_supported_entry_points(GetSupportedEntryPointsRequest {})
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .entry_points
             .into_iter()
             .map(|ep| from_bytes(ep.as_slice()))
-            .collect::<Result<_, ConversionError>>()?)
+            .collect::<Result<_, ConversionError>>()
+            .map_err(anyhow::Error::from)?)
     }
 
     async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)> {
@@ -74,7 +76,8 @@ impl BuilderServer for RemoteBuilderClient {
             .grpc_client
             .clone()
             .debug_send_bundle_now(DebugSendBundleNowRequest {})
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
@@ -83,7 +86,7 @@ impl BuilderServer for RemoteBuilderClient {
                 Ok((H256::from_slice(&s.transaction_hash), s.block_number))
             }
             Some(debug_send_bundle_now_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(BuilderServerError::Other(anyhow::anyhow!(
+            None => Err(BuilderError::Other(anyhow::anyhow!(
                 "should have received result from builder"
             )))?,
         }
@@ -96,14 +99,15 @@ impl BuilderServer for RemoteBuilderClient {
             .debug_set_bundling_mode(DebugSetBundlingModeRequest {
                 mode: ProtoBundlingMode::from(mode) as i32,
             })
-            .await?
+            .await
+            .map_err(anyhow::Error::from)?
             .into_inner()
             .result;
 
         match res {
             Some(debug_set_bundling_mode_response::Result::Success(_)) => Ok(()),
             Some(debug_set_bundling_mode_response::Result::Failure(f)) => Err(f.try_into()?),
-            None => Err(BuilderServerError::Other(anyhow::anyhow!(
+            None => Err(BuilderError::Other(anyhow::anyhow!(
                 "should have received result from builder"
             )))?,
         }

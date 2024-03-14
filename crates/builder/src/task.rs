@@ -22,7 +22,6 @@ use ethers::{
 use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
-use rundler_pool::PoolServer;
 use rundler_provider::EthersEntryPointV0_6;
 use rundler_sim::{
     simulation::v0_6::{
@@ -32,7 +31,7 @@ use rundler_sim::{
     MempoolConfig, PriorityFeeMode, SimulationSettings,
 };
 use rundler_task::Task;
-use rundler_types::chain::ChainSpec;
+use rundler_types::{chain::ChainSpec, pool::Pool};
 use rundler_utils::{emit::WithEntryPoint, handle};
 use rusoto_core::Region;
 use tokio::{
@@ -122,7 +121,7 @@ pub struct BuilderTask<P> {
 #[async_trait]
 impl<P> Task for BuilderTask<P>
 where
-    P: PoolServer + Clone,
+    P: Pool + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         info!("Mempool config: {:?}", self.args.mempool_configs);
@@ -190,7 +189,7 @@ where
 
 impl<P> BuilderTask<P>
 where
-    P: PoolServer + Clone,
+    P: Pool + Clone,
 {
     /// Create a new builder task
     pub fn new(

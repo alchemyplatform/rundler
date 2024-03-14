@@ -13,20 +13,19 @@
 
 use std::net::SocketAddr;
 
+use rundler_types::builder::Builder;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Server, Request, Response, Status};
 
 use super::protos::{
     builder_server::{Builder as GrpcBuilder, BuilderServer as GrpcBuilderServer},
-    debug_send_bundle_now_response, debug_set_bundling_mode_response, DebugSendBundleNowRequest,
-    DebugSendBundleNowResponse, DebugSetBundlingModeRequest, DebugSetBundlingModeResponse,
-    DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
-    BUILDER_FILE_DESCRIPTOR_SET,
+    debug_send_bundle_now_response, debug_set_bundling_mode_response, BundlingMode,
+    DebugSendBundleNowRequest, DebugSendBundleNowResponse, DebugSetBundlingModeRequest,
+    DebugSetBundlingModeResponse, DebugSetBundlingModeSuccess, GetSupportedEntryPointsRequest,
+    GetSupportedEntryPointsResponse, BUILDER_FILE_DESCRIPTOR_SET,
 };
-use crate::server::{
-    local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess, BuilderServer,
-};
+use crate::server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess};
 
 /// Spawn a remote builder server
 pub(crate) async fn spawn_remote_builder_server(
@@ -122,13 +121,14 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         &self,
         request: Request<DebugSetBundlingModeRequest>,
     ) -> tonic::Result<Response<DebugSetBundlingModeResponse>> {
-        let resp = match self
-            .local_builder
-            .debug_set_bundling_mode(request.into_inner().mode.try_into().map_err(|e| {
-                Status::internal(format!("Failed to convert from proto reputation {e}"))
-            })?)
-            .await
-        {
+        let mode = BundlingMode::try_from(request.into_inner().mode).map_err(|e| {
+            Status::internal(format!("Failed to convert from proto reputation {e}"))
+        })?;
+        let mode = mode.try_into().map_err(|e| {
+            Status::internal(format!("Failed to convert from proto reputation {e}"))
+        })?;
+
+        let resp = match self.local_builder.debug_set_bundling_mode(mode).await {
             Ok(()) => DebugSetBundlingModeResponse {
                 result: Some(debug_set_bundling_mode_response::Result::Success(
                     DebugSetBundlingModeSuccess {},

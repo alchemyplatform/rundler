@@ -16,10 +16,12 @@ use jsonrpsee::types::{
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
     ErrorObjectOwned,
 };
-use rundler_pool::{MempoolError, PoolServerError};
 use rundler_provider::ProviderError;
-use rundler_sim::{GasEstimationError, PrecheckViolation, SimulationViolation};
-use rundler_types::{Entity, EntityType, Timestamp};
+use rundler_sim::GasEstimationError;
+use rundler_types::{
+    pool::{MempoolError, PoolError, PrecheckViolation, SimulationViolation},
+    Entity, EntityType, Timestamp,
+};
 use serde::Serialize;
 
 use crate::error::{rpc_err, rpc_err_with_data};
@@ -196,14 +198,14 @@ pub struct ExecutionRevertedWithBytesData {
     pub revert_data: Bytes,
 }
 
-impl From<PoolServerError> for EthRpcError {
-    fn from(value: PoolServerError) -> Self {
+impl From<PoolError> for EthRpcError {
+    fn from(value: PoolError) -> Self {
         match value {
-            PoolServerError::MempoolError(e) => e.into(),
-            PoolServerError::UnexpectedResponse => {
+            PoolError::MempoolError(e) => e.into(),
+            PoolError::UnexpectedResponse => {
                 EthRpcError::Internal(anyhow::anyhow!("unexpected response from pool server"))
             }
-            PoolServerError::Other(e) => EthRpcError::Internal(e),
+            PoolError::Other(e) => EthRpcError::Internal(e),
         }
     }
 }

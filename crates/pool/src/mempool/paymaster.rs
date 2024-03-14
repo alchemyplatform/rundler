@@ -19,14 +19,14 @@ use anyhow::Context;
 use ethers::{abi::Address, types::U256};
 use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
-use rundler_types::{UserOperation, UserOperationId};
+use rundler_types::{
+    pool::{MempoolError, PaymasterMetadata, PoolOperation, StakeStatus},
+    StakeInfo, UserOperation, UserOperationId,
+};
 use rundler_utils::cache::LruMap;
 
-use super::{error::MempoolResult, PaymasterMetadata, StakeInfo};
-use crate::{
-    chain::{BalanceUpdate, MinedOp},
-    MempoolError, PoolOperation, StakeStatus,
-};
+use super::MempoolResult;
+use crate::chain::{BalanceUpdate, MinedOp};
 
 /// Keeps track of current and pending paymaster balances
 #[derive(Debug)]
@@ -86,8 +86,8 @@ where
 
         let stake_status = StakeStatus {
             stake_info: StakeInfo {
-                stake: deposit_info.stake,
-                unstake_delay_sec: deposit_info.unstake_delay_sec,
+                stake: deposit_info.stake.into(),
+                unstake_delay_sec: deposit_info.unstake_delay_sec.into(),
             },
             is_staked,
         };
@@ -524,18 +524,15 @@ impl PaymasterBalance {
 mod tests {
     use ethers::types::{Address, H256, U256};
     use rundler_provider::MockEntryPointV0_6;
-    use rundler_sim::EntityInfos;
     use rundler_types::{
-        contracts::v0_6::verifying_paymaster::DepositInfo, v0_6::UserOperation,
-        UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
+        contracts::v0_6::verifying_paymaster::DepositInfo,
+        pool::{PaymasterMetadata, PoolOperation},
+        v0_6::UserOperation,
+        EntityInfos, UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
     };
 
     use super::*;
-    use crate::{
-        chain::BalanceUpdate,
-        mempool::{paymaster::PaymasterTracker, PaymasterMetadata},
-        PoolOperation,
-    };
+    use crate::{chain::BalanceUpdate, mempool::paymaster::PaymasterTracker};
 
     fn demo_pool_op(uo: UserOperation) -> PoolOperation<UserOperation> {
         PoolOperation {

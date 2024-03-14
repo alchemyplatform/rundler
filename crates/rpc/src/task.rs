@@ -20,15 +20,13 @@ use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use rundler_builder::BuilderServer;
-use rundler_pool::PoolServer;
 use rundler_provider::EthersEntryPointV0_6;
 use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PrecheckSettings};
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
 };
-use rundler_types::chain::ChainSpec;
+use rundler_types::{builder::Builder, chain::ChainSpec, pool::Pool};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -83,8 +81,8 @@ pub struct RpcTask<P, B> {
 #[async_trait]
 impl<P, B> Task for RpcTask<P, B>
 where
-    P: PoolServer + HealthCheck + Clone,
-    B: BuilderServer + HealthCheck + Clone,
+    P: Pool + HealthCheck + Clone,
+    B: Builder + HealthCheck + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
@@ -163,8 +161,8 @@ where
 
 impl<P, B> RpcTask<P, B>
 where
-    P: PoolServer + HealthCheck + Clone,
-    B: BuilderServer + HealthCheck + Clone,
+    P: Pool + HealthCheck + Clone,
+    B: Builder + HealthCheck + Clone,
 {
     /// Creates a new RPC server task.
     pub fn new(args: Args, pool: P, builder: B) -> Self {

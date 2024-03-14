@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use ethers::types::Address;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
-use rundler_pool::PoolServer;
+use rundler_types::pool::Pool;
 
 use crate::{
     error::rpc_err,
@@ -50,7 +50,7 @@ impl<P> AdminApi<P> {
 #[async_trait]
 impl<P> AdminApiServer for AdminApi<P>
 where
-    P: PoolServer,
+    P: Pool,
 {
     async fn clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String> {
         let _ = self

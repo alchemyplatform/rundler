@@ -44,8 +44,7 @@ mod precheck;
 #[cfg(feature = "test-utils")]
 pub use precheck::MockPrechecker;
 pub use precheck::{
-    PrecheckError, PrecheckViolation, Prechecker, PrecheckerImpl, Settings as PrecheckSettings,
-    MIN_CALL_GAS_LIMIT,
+    PrecheckError, Prechecker, PrecheckerImpl, Settings as PrecheckSettings, MIN_CALL_GAS_LIMIT,
 };
 
 /// Simulation and violation checking
@@ -53,8 +52,7 @@ pub mod simulation;
 #[cfg(feature = "test-utils")]
 pub use simulation::MockSimulator;
 pub use simulation::{
-    EntityInfo, EntityInfos, MempoolConfig, NeedsStakeInformation, Settings as SimulationSettings,
-    SimulationError, SimulationResult, SimulationViolation, Simulator, ViolationOpCode,
+    MempoolConfig, Settings as SimulationSettings, SimulationError, SimulationResult, Simulator,
 };
 
 mod types;

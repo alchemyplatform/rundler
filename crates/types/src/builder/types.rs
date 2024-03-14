@@ -11,9 +11,20 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-mod local;
-pub use local::{LocalPoolBuilder, LocalPoolHandle};
+use parse_display::Display;
+use serde::{Deserialize, Serialize};
 
-mod remote;
-pub(crate) use remote::spawn_remote_mempool_server;
-pub use remote::RemotePoolClient;
+/// Builder bundling mode
+#[derive(Display, Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[display(style = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum BundlingMode {
+    /// Manual bundling mode for debugging.
+    ///
+    /// Bundles will only be sent when `debug_send_bundle_now` is called.
+    Manual,
+    /// Auto bundling mode for normal operation.
+    ///
+    /// Bundles will be sent automatically.
+    Auto,
+}

@@ -11,9 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-mod local;
-pub use local::{LocalPoolBuilder, LocalPoolHandle};
-
-mod remote;
-pub(crate) use remote::spawn_remote_mempool_server;
-pub use remote::RemotePoolClient;
+/// Builder server errors
+#[derive(Debug, thiserror::Error)]
+pub enum BuilderError {
+    /// Builder returned an unexpected response type for the given request
+    #[error("Unexpected response from Builder")]
+    UnexpectedResponse,
+    /// Internal errors
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}

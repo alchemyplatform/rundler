@@ -18,8 +18,7 @@ use ethers::{
     utils::to_checksum,
 };
 use futures_util::future;
-use rundler_pool::PoolServer;
-use rundler_types::{chain::ChainSpec, UserOperationOptionalGas, UserOperationVariant};
+use rundler_types::{chain::ChainSpec, pool::Pool, UserOperationOptionalGas, UserOperationVariant};
 use rundler_utils::log::LogOnError;
 use tracing::Level;
 
@@ -45,20 +44,17 @@ impl Settings {
     }
 }
 
-pub(crate) struct EthApi<PS>
-where
-    PS: PoolServer,
-{
+pub(crate) struct EthApi<P> {
     chain_spec: ChainSpec,
-    pool: PS,
+    pool: P,
     router: EntryPointRouter,
 }
 
-impl<PS> EthApi<PS>
+impl<P> EthApi<P>
 where
-    PS: PoolServer,
+    P: Pool,
 {
-    pub(crate) fn new(chain_spec: ChainSpec, router: EntryPointRouter, pool: PS) -> Self {
+    pub(crate) fn new(chain_spec: ChainSpec, router: EntryPointRouter, pool: P) -> Self {
         Self {
             router,
             pool,
@@ -176,15 +172,13 @@ mod tests {
         types::{Bytes, Log, Transaction},
     };
     use mockall::predicate::eq;
-    use rundler_pool::{IntoPoolOperationVariant, MockPoolServer, PoolOperation};
     use rundler_provider::{EntryPoint, MockEntryPointV0_6, MockProvider};
-    use rundler_sim::{
-        EntityInfos, EstimationSettings, FeeEstimator, GasEstimatorV0_6, PriorityFeeMode,
-    };
+    use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PriorityFeeMode};
     use rundler_types::{
         contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
+        pool::{IntoPoolOperationVariant, MockPool, PoolOperation},
         v0_6::UserOperation,
-        UserOperation as UserOperationTrait, ValidTimeRange,
+        EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
     use super::*;
@@ -211,7 +205,7 @@ mod tests {
             entity_infos: EntityInfos::default(),
         };
 
-        let mut pool = MockPoolServer::default();
+        let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
@@ -244,7 +238,7 @@ mod tests {
         let block_number = 1000;
         let block_hash = H256::random();
 
-        let mut pool = MockPoolServer::default();
+        let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .returning(move |_| Ok(None));
@@ -301,7 +295,7 @@ mod tests {
         let uo = UserOperation::default();
         let hash = uo.hash(ep, 1);
 
-        let mut pool = MockPoolServer::default();
+        let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
@@ -322,8 +316,8 @@ mod tests {
     fn create_api(
         provider: MockProvider,
         ep: MockEntryPointV0_6,
-        pool: MockPoolServer,
-    ) -> EthApi<MockPoolServer> {
+        pool: MockPool,
+    ) -> EthApi<MockPool> {
         let provider = Arc::new(provider);
         let chain_spec = ChainSpec {
             id: 1,

@@ -19,7 +19,13 @@ use ethers::types::{Address, H256};
 use futures::future;
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
-use rundler_types::{v0_6, EntityUpdate, UserOperationId, UserOperationVariant};
+use rundler_types::{
+    pool::{
+        IntoPoolOperationVariant, MempoolError, NewHead, PaymasterMetadata, Pool, PoolError,
+        PoolOperation, PoolResult, Reputation, ReputationStatus, StakeStatus,
+    },
+    v0_6, EntityUpdate, UserOperationId, UserOperationVariant,
+};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -27,15 +33,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 
-use super::{PoolResult, PoolServerError};
 use crate::{
     chain::ChainUpdate,
-    mempool::{
-        IntoPoolOperationVariant, Mempool, MempoolError, OperationOrigin, PaymasterMetadata,
-        PoolOperation, StakeStatus,
-    },
-    server::{NewHead, PoolServer, Reputation},
-    ReputationStatus,
+    mempool::{Mempool, OperationOrigin},
 };
 
 /// Local pool server builder
@@ -116,13 +116,13 @@ impl LocalPoolHandle {
 }
 
 #[async_trait]
-impl PoolServer for LocalPoolHandle {
+impl Pool for LocalPoolHandle {
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>> {
         let req = ServerRequestKind::GetSupportedEntryPoints;
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetSupportedEntryPoints { entry_points } => Ok(entry_points),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -135,7 +135,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::AddOp { hash } => Ok(hash),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -153,7 +153,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetOps { ops } => Ok(ops),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -165,7 +165,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetOpByHash { op } => Ok(op),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -174,7 +174,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::RemoveOps => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -187,7 +187,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::RemoveOpById { hash } => Ok(hash),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -203,7 +203,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::UpdateEntities => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -212,7 +212,7 @@ impl PoolServer for LocalPoolHandle {
         clear_mempool: bool,
         clear_paymaster: bool,
         clear_reputation: bool,
-    ) -> Result<(), PoolServerError> {
+    ) -> Result<(), PoolError> {
         let req = ServerRequestKind::DebugClearState {
             clear_mempool,
             clear_reputation,
@@ -221,7 +221,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugClearState => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -230,7 +230,7 @@ impl PoolServer for LocalPoolHandle {
         entry_point: Address,
         paymaster: bool,
         reputation: bool,
-    ) -> Result<(), PoolServerError> {
+    ) -> Result<(), PoolError> {
         let req = ServerRequestKind::AdminSetTracking {
             entry_point,
             paymaster,
@@ -239,7 +239,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::AdminSetTracking => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -251,7 +251,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugDumpMempool { ops } => Ok(ops),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -267,7 +267,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugSetReputations => Ok(()),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -276,7 +276,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugDumpReputation { reputations } => Ok(reputations),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -288,7 +288,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugDumpPaymasterBalances { balances } => Ok(balances),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -304,7 +304,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetStakeStatus { status } => Ok(status),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -320,7 +320,7 @@ impl PoolServer for LocalPoolHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetReputationStatus { status } => Ok(status),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 
@@ -342,7 +342,7 @@ impl PoolServer for LocalPoolHandle {
                     }
                 }
             })),
-            _ => Err(PoolServerError::UnexpectedResponse),
+            _ => Err(PoolError::UnexpectedResponse),
         }
     }
 }
@@ -381,9 +381,9 @@ where
     }
 
     fn get_pool(&self, entry_point: Address) -> PoolResult<&Arc<M>> {
-        self.mempools.get(&entry_point).ok_or_else(|| {
-            PoolServerError::MempoolError(MempoolError::UnknownEntryPoint(entry_point))
-        })
+        self.mempools
+            .get(&entry_point)
+            .ok_or_else(|| PoolError::MempoolError(MempoolError::UnknownEntryPoint(entry_point)))
     }
 
     fn get_ops(
@@ -511,10 +511,10 @@ where
     fn get_pool_and_spawn<F, Fut>(
         &self,
         entry_point: Address,
-        response: oneshot::Sender<Result<ServerResponse, PoolServerError>>,
+        response: oneshot::Sender<Result<ServerResponse, PoolError>>,
         f: F,
     ) where
-        F: FnOnce(Arc<M>, oneshot::Sender<Result<ServerResponse, PoolServerError>>) -> Fut,
+        F: FnOnce(Arc<M>, oneshot::Sender<Result<ServerResponse, PoolError>>) -> Fut,
         Fut: Future<Output = ()> + Send + 'static,
     {
         match self.get_pool(entry_point) {
@@ -564,7 +564,7 @@ where
                         // Async methods
                         // Responses are sent in the spawned task
                         ServerRequestKind::AddOp { entry_point, op, origin } => {
-                            let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolServerError>>| async move {
+                            let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
                                 let resp = match mempool.add_operation(origin, op.into()).await {
                                     Ok(hash) => Ok(ServerResponse::AddOp { hash }),
                                     Err(e) => Err(e.into()),
@@ -578,7 +578,7 @@ where
                             continue;
                         },
                         ServerRequestKind::GetStakeStatus { entry_point, address }=> {
-                            let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolServerError>>| async move {
+                            let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
                                 let resp = match mempool.get_stake_status(address).await {
                                     Ok(status) => Ok(ServerResponse::GetStakeStatus { status }),
                                     Err(e) => Err(e.into()),

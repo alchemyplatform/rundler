@@ -22,16 +22,14 @@ use ethers::{
     abi::Address,
     types::{H256, U256},
 };
-use rundler_types::{Entity, EntityType, Timestamp, UserOperation, UserOperationId};
+use rundler_types::{
+    pool::{MempoolError, PoolOperation},
+    Entity, EntityType, Timestamp, UserOperation, UserOperationId,
+};
 use rundler_utils::math;
 use tracing::info;
 
-use super::{
-    entity_tracker::EntityCounter,
-    error::{MempoolError, MempoolResult},
-    size::SizeTracker,
-    PoolConfig, PoolOperation,
-};
+use super::{entity_tracker::EntityCounter, size::SizeTracker, MempoolResult, PoolConfig};
 use crate::chain::MinedOp;
 
 #[derive(Debug, Clone)]
@@ -545,8 +543,10 @@ impl PoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use rundler_sim::{EntityInfo, EntityInfos};
-    use rundler_types::{v0_6::UserOperation, UserOperation as UserOperationTrait, ValidTimeRange};
+    use rundler_types::{
+        v0_6::UserOperation, EntityInfo, EntityInfos, UserOperation as UserOperationTrait,
+        ValidTimeRange,
+    };
 
     use super::*;
 

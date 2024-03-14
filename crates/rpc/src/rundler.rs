@@ -20,10 +20,9 @@ use jsonrpsee::{
     proc_macros::rpc,
     types::error::{INTERNAL_ERROR_CODE, INVALID_REQUEST_CODE},
 };
-use rundler_pool::PoolServer;
 use rundler_provider::Provider;
 use rundler_sim::{gas, FeeEstimator};
-use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
+use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
 
 use crate::{
     error::rpc_err,
@@ -65,23 +64,23 @@ pub trait RundlerApi {
     ) -> RpcResult<Option<H256>>;
 }
 
-pub(crate) struct RundlerApi<P: Provider, PS: PoolServer> {
+pub(crate) struct RundlerApi<P, PL> {
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
-    pool_server: PS,
+    pool_server: PL,
     entry_point_router: EntryPointRouter,
 }
 
-impl<P, PS> RundlerApi<P, PS>
+impl<P, PL> RundlerApi<P, PL>
 where
     P: Provider,
-    PS: PoolServer,
+    PL: Pool,
 {
     pub(crate) fn new(
         chain_spec: &ChainSpec,
         provider: Arc<P>,
         entry_point_router: EntryPointRouter,
-        pool_server: PS,
+        pool_server: PL,
         settings: Settings,
     ) -> Self {
         Self {
@@ -99,10 +98,10 @@ where
 }
 
 #[async_trait]
-impl<P, PS> RundlerApiServer for RundlerApi<P, PS>
+impl<P, PL> RundlerApiServer for RundlerApi<P, PL>
 where
     P: Provider,
-    PS: PoolServer,
+    PL: Pool,
 {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
         let (bundle_fees, _) = self

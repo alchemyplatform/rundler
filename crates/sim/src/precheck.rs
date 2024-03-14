@@ -19,7 +19,11 @@ use ethers::types::{Address, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider};
-use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
+use rundler_types::{
+    chain::ChainSpec,
+    pool::{MempoolError, PrecheckViolation},
+    GasFees, UserOperation,
+};
 use rundler_utils::math;
 
 use crate::{gas, types::ViolationError};
@@ -43,6 +47,24 @@ pub trait Prechecker: Send + Sync + 'static {
 
 /// Precheck error
 pub type PrecheckError = ViolationError<PrecheckViolation>;
+
+impl From<PrecheckError> for MempoolError {
+    fn from(mut error: PrecheckError) -> Self {
+        let PrecheckError::Violations(violations) = &mut error else {
+            return Self::Other(error.into());
+        };
+
+        let Some(violation) = violations.iter_mut().min() else {
+            return Self::Other(error.into());
+        };
+
+        // extract violation and replace with dummy
+        Self::PrecheckViolation(std::mem::replace(
+            violation,
+            PrecheckViolation::SenderIsNotContractAndNoInitCode(Address::zero()),
+        ))
+    }
+}
 
 /// Prechecker implementation
 #[derive(Debug)]
@@ -385,51 +407,6 @@ where
             .await
             .context("should calculate pre-verification gas")
     }
-}
-
-/// Precheck violation enumeration
-///
-/// All possible errors that can be returned from a precheck.
-#[derive(Clone, Debug, parse_display::Display, Eq, PartialEq, Ord, PartialOrd)]
-pub enum PrecheckViolation {
-    /// The sender is not deployed, and no init code is provided.
-    #[display("sender {0:?} is not a contract and initCode is empty")]
-    SenderIsNotContractAndNoInitCode(Address),
-    /// The sender is already deployed, and an init code is provided.
-    #[display("sender {0:?} is an existing contract, but initCode is nonempty")]
-    ExistingSenderWithInitCode(Address),
-    /// An init code contains a factory address that is not deployed.
-    #[display("initCode indicates factory with no code: {0:?}")]
-    FactoryIsNotContract(Address),
-    /// The total gas limit of the user operation is too high.
-    /// See `gas::user_operation_execution_gas_limit` for calculation.
-    #[display("total gas limit is {0} but must be at most {1}")]
-    TotalGasLimitTooHigh(U256, U256),
-    /// The verification gas limit of the user operation is too high.
-    #[display("verificationGasLimit is {0} but must be at most {1}")]
-    VerificationGasLimitTooHigh(U256, U256),
-    /// The pre-verification gas of the user operation is too low.
-    #[display("preVerificationGas is {0} but must be at least {1}")]
-    PreVerificationGasTooLow(U256, U256),
-    /// A paymaster is provided, but the address is not deployed.
-    #[display("paymasterAndData indicates paymaster with no code: {0:?}")]
-    PaymasterIsNotContract(Address),
-    /// The paymaster deposit is too low to pay for the user operation's maximum cost.
-    #[display("paymaster deposit is {0} but must be at least {1} to pay for this operation")]
-    PaymasterDepositTooLow(U256, U256),
-    /// The sender balance is too low to pay for the user operation's maximum cost.
-    /// (when not using a paymaster)
-    #[display("sender balance and deposit together is {0} but must be at least {1} to pay for this operation")]
-    SenderFundsTooLow(U256, U256),
-    /// The provided max priority fee per gas is too low based on the current network rate.
-    #[display("maxPriorityFeePerGas is {0} but must be at least {1}")]
-    MaxPriorityFeePerGasTooLow(U256, U256),
-    /// The provided max fee per gas is too low based on the current network rate.
-    #[display("maxFeePerGas is {0} but must be at least {1}")]
-    MaxFeePerGasTooLow(U256, U256),
-    /// The call gas limit is too low to account for any possible call.
-    #[display("callGasLimit is {0} but must be at least {1}")]
-    CallGasLimitTooLow(U256, U256),
 }
 
 #[cfg(test)]

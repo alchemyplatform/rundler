@@ -13,7 +13,7 @@
 
 use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::core::RpcResult;
-use rundler_pool::PoolServer;
+use rundler_types::pool::Pool;
 
 use super::{api::EthApi, EthApiServer};
 use crate::types::{
@@ -22,9 +22,9 @@ use crate::types::{
 };
 
 #[async_trait::async_trait]
-impl<PS> EthApiServer for EthApi<PS>
+impl<P> EthApiServer for EthApi<P>
 where
-    PS: PoolServer,
+    P: Pool,
 {
     async fn send_user_operation(
         &self,
