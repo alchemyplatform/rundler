@@ -17,7 +17,7 @@ use anyhow::bail;
 use ethers::{types::Address, utils::to_checksum};
 use parse_display::Display;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
-use strum::EnumIter;
+use strum::{EnumIter, IntoEnumIterator};
 
 /// The type of an entity
 #[derive(
@@ -155,4 +155,75 @@ pub struct EntityUpdate {
     pub entity: Entity,
     /// The kind of update to perform for the entity
     pub update_type: EntityUpdateType,
+}
+
+/// additional context about an entity
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EntityInfo {
+    /// The address of an entity
+    pub address: Address,
+    /// Whether the entity is staked or not
+    pub is_staked: bool,
+}
+
+/// additional context for all the entities used in an op
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EntityInfos {
+    /// The entity info for the factory
+    pub factory: Option<EntityInfo>,
+    /// The entity info for the op sender
+    pub sender: EntityInfo,
+    /// The entity info for the paymaster
+    pub paymaster: Option<EntityInfo>,
+    /// The entity info for the aggregator
+    pub aggregator: Option<EntityInfo>,
+}
+
+impl EntityInfos {
+    /// Get iterator over the entities
+    pub fn entities(&'_ self) -> impl Iterator<Item = (EntityType, EntityInfo)> + '_ {
+        EntityType::iter().filter_map(|t| self.get(t).map(|info| (t, info)))
+    }
+
+    /// Get the EntityInfo of a specific entity
+    pub fn get(self, entity: EntityType) -> Option<EntityInfo> {
+        match entity {
+            EntityType::Factory => self.factory,
+            EntityType::Account => Some(self.sender),
+            EntityType::Paymaster => self.paymaster,
+            EntityType::Aggregator => self.aggregator,
+        }
+    }
+
+    /// Get the type of an entity from its address, if any
+    pub fn type_from_address(self, address: Address) -> Option<EntityType> {
+        if address.eq(&self.sender.address) {
+            return Some(EntityType::Account);
+        }
+
+        if let Some(factory) = self.factory {
+            if address.eq(&factory.address) {
+                return Some(EntityType::Factory);
+            }
+        }
+
+        if let Some(paymaster) = self.paymaster {
+            if address.eq(&paymaster.address) {
+                return Some(EntityType::Paymaster);
+            }
+        }
+
+        if let Some(aggregator) = self.aggregator {
+            if address.eq(&aggregator.address) {
+                return Some(EntityType::Aggregator);
+            }
+        }
+
+        None
+    }
+
+    /// Get the sender address
+    pub fn sender_address(self) -> Address {
+        self.sender.address
+    }
 }

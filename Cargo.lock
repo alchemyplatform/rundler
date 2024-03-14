@@ -4122,7 +4122,6 @@ dependencies = [
  "prost",
  "reqwest",
  "rslock",
- "rundler-pool",
  "rundler-provider",
  "rundler-sim",
  "rundler-task",
@@ -4217,8 +4216,6 @@ dependencies = [
  "jsonrpsee",
  "metrics 0.22.1",
  "mockall",
- "rundler-builder",
- "rundler-pool",
  "rundler-provider",
  "rundler-sim",
  "rundler-task",
@@ -4304,15 +4301,20 @@ name = "rundler-types"
 version = "0.1.0-rc0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "constcat",
  "ethers",
+ "futures-util",
+ "mockall",
  "parse-display",
  "rand",
+ "rundler-types",
  "rundler-utils",
  "serde",
  "serde_json",
  "strum 0.26.1",
+ "thiserror",
 ]
 
 [[package]]

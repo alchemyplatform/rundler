@@ -22,6 +22,9 @@ use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{
+    pool::{
+        MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
+    },
     Entity, EntityUpdate, EntityUpdateType, UserOperation, UserOperationId, UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
@@ -30,16 +33,12 @@ use tonic::async_trait;
 use tracing::info;
 
 use super::{
-    error::{MempoolError, MempoolResult},
-    paymaster::PaymasterTracker,
-    pool::PoolInner,
-    reputation::{AddressReputation, Reputation, ReputationStatus},
-    Mempool, OperationOrigin, PaymasterMetadata, PoolConfig, PoolOperation,
+    paymaster::PaymasterTracker, pool::PoolInner, reputation::AddressReputation, Mempool,
+    MempoolResult, OperationOrigin, PoolConfig,
 };
 use crate::{
     chain::ChainUpdate,
     emit::{EntityReputation, EntityStatus, EntitySummary, OpPoolEvent, OpRemovalReason},
-    StakeStatus,
 };
 
 /// User Operation Mempool
@@ -673,13 +672,15 @@ mod tests {
     use ethers::types::{Bytes, H160};
     use rundler_provider::MockEntryPointV0_6;
     use rundler_sim::{
-        EntityInfo, EntityInfos, MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings,
-        PrecheckViolation, SimulationError, SimulationResult, SimulationSettings,
-        SimulationViolation, ViolationError,
+        MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, SimulationError,
+        SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
-        contracts::v0_6::verifying_paymaster::DepositInfo, v0_6::UserOperation, EntityType,
-        GasFees, UserOperation as UserOperationTrait, ValidTimeRange,
+        contracts::v0_6::verifying_paymaster::DepositInfo,
+        pool::{PrecheckViolation, SimulationViolation},
+        v0_6::UserOperation,
+        EntityInfo, EntityInfos, EntityType, GasFees, UserOperation as UserOperationTrait,
+        ValidTimeRange,
     };
 
     use super::*;

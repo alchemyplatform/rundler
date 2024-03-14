@@ -15,8 +15,10 @@ use ethers::{
     types::{Address, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
-use rundler_pool::{Reputation, ReputationStatus};
-use rundler_types::{GasEstimate, UserOperationOptionalGas, UserOperationVariant};
+use rundler_types::{
+    pool::{Reputation, ReputationStatus},
+    GasEstimate, UserOperationOptionalGas, UserOperationVariant,
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod v0_6;
