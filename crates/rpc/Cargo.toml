@@ -7,8 +7,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-rundler-builder = { path = "../builder" }
-rundler-pool = { path = "../pool" }
 rundler-provider = { path = "../provider" }
 rundler-sim = { path = "../sim" }
 rundler-task = { path = "../task" }
@@ -34,4 +32,4 @@ futures-util.workspace = true
 [dev-dependencies]
 mockall.workspace = true
 rundler-provider = { path = "../provider", features = ["test-utils"]}
-rundler-pool = { path = "../pool", features = ["test-utils"] }
+rundler-types= { path = "../types", features = ["test-utils"]}
