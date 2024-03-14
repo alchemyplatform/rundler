@@ -19,7 +19,10 @@ use rundler_types::GasEstimate;
 use crate::precheck::MIN_CALL_GAS_LIMIT;
 
 /// Gas estimation module for Entry Point v0.6
-pub mod v0_6;
+mod v0_6;
+pub use v0_6::GasEstimator as GasEstimatorV0_6;
+mod v0_7;
+pub use v0_7::GasEstimator as GasEstimatorV0_7;
 
 /// Error type for gas estimation
 #[derive(Debug, thiserror::Error)]
