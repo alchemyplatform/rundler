@@ -30,11 +30,9 @@
 //!
 //! - `test-utils`: Export mocks and utilities for testing.
 
-mod estimation;
-pub use estimation::{
-    GasEstimate, GasEstimationError, GasEstimator, GasEstimatorImpl,
-    Settings as EstimationSettings, UserOperationOptionalGas,
-};
+/// Gas estimation
+pub mod estimation;
+pub use estimation::{GasEstimationError, GasEstimator, Settings as EstimationSettings};
 
 pub mod gas;
 pub use gas::{FeeEstimator, PriorityFeeMode};
@@ -47,13 +45,13 @@ pub use precheck::{
     MIN_CALL_GAS_LIMIT,
 };
 
-mod simulation;
+/// Simulation and violation checking
+pub mod simulation;
 #[cfg(feature = "test-utils")]
 pub use simulation::MockSimulator;
 pub use simulation::{
     EntityInfo, EntityInfos, MempoolConfig, NeedsStakeInformation, Settings as SimulationSettings,
-    SimulateValidationTracer, SimulateValidationTracerImpl, SimulationError, SimulationResult,
-    SimulationViolation, Simulator, SimulatorImpl, ViolationOpCode,
+    SimulationError, SimulationResult, SimulationViolation, Simulator, ViolationOpCode,
 };
 
 mod types;

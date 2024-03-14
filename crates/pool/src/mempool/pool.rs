@@ -59,19 +59,19 @@ impl From<PoolConfig> for PoolInnerConfig {
 
 /// Pool of user operations
 #[derive(Debug)]
-pub(crate) struct PoolInner {
+pub(crate) struct PoolInner<UO: UserOperation> {
     /// Pool settings
     config: PoolInnerConfig,
     /// Operations by hash
-    by_hash: HashMap<H256, OrderedPoolOperation>,
+    by_hash: HashMap<H256, OrderedPoolOperation<UO>>,
     /// Operations by operation ID
-    by_id: HashMap<UserOperationId, OrderedPoolOperation>,
+    by_id: HashMap<UserOperationId, OrderedPoolOperation<UO>>,
     /// Best operations, sorted by gas price
-    best: BTreeSet<OrderedPoolOperation>,
+    best: BTreeSet<OrderedPoolOperation<UO>>,
     /// Removed operations, temporarily kept around in case their blocks are
     /// reorged away. Stored along with the block number at which it was
     /// removed.
-    mined_at_block_number_by_hash: HashMap<H256, (OrderedPoolOperation, u64)>,
+    mined_at_block_number_by_hash: HashMap<H256, (OrderedPoolOperation<UO>, u64)>,
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
     mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
@@ -85,7 +85,7 @@ pub(crate) struct PoolInner {
     cache_size: SizeTracker,
 }
 
-impl PoolInner {
+impl<UO: UserOperation> PoolInner<UO> {
     pub(crate) fn new(config: PoolInnerConfig) -> Self {
         Self {
             config,
@@ -102,11 +102,11 @@ impl PoolInner {
     }
 
     /// Returns hash of operation to replace if operation is a replacement
-    pub(crate) fn check_replacement(&self, op: &UserOperation) -> MempoolResult<Option<H256>> {
+    pub(crate) fn check_replacement(&self, op: &UO) -> MempoolResult<Option<H256>> {
         // Check if operation already known
         if self
             .by_hash
-            .contains_key(&op.op_hash(self.config.entry_point, self.config.chain_id))
+            .contains_key(&op.hash(self.config.entry_point, self.config.chain_id))
         {
             return Err(MempoolError::OperationAlreadyKnown);
         }
@@ -115,32 +115,32 @@ impl PoolInner {
             let (replacement_priority_fee, replacement_fee) =
                 self.get_min_replacement_fees(pool_op.uo());
 
-            if op.max_priority_fee_per_gas < replacement_priority_fee
-                || op.max_fee_per_gas < replacement_fee
+            if op.max_priority_fee_per_gas() < replacement_priority_fee
+                || op.max_fee_per_gas() < replacement_fee
             {
                 return Err(MempoolError::ReplacementUnderpriced(
-                    pool_op.uo().max_priority_fee_per_gas,
-                    pool_op.uo().max_fee_per_gas,
+                    pool_op.uo().max_priority_fee_per_gas(),
+                    pool_op.uo().max_fee_per_gas(),
                 ));
             }
 
             Ok(Some(
                 pool_op
                     .uo()
-                    .op_hash(self.config.entry_point, self.config.chain_id),
+                    .hash(self.config.entry_point, self.config.chain_id),
             ))
         } else {
             Ok(None)
         }
     }
 
-    pub(crate) fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
+    pub(crate) fn add_operation(&mut self, op: PoolOperation<UO>) -> MempoolResult<H256> {
         let ret = self.add_operation_internal(Arc::new(op), None);
         self.update_metrics();
         ret
     }
 
-    pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> {
+    pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation<UO>>> {
         self.best.clone().into_iter().map(|v| v.po)
     }
 
@@ -171,25 +171,33 @@ impl PoolInner {
         0
     }
 
-    pub(crate) fn get_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn get_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation<UO>>> {
         self.by_hash.get(&hash).map(|o| o.po.clone())
     }
 
-    pub(crate) fn get_operation_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn get_operation_by_id(
+        &self,
+        id: &UserOperationId,
+    ) -> Option<Arc<PoolOperation<UO>>> {
         self.by_id.get(id).map(|o| o.po.clone())
     }
 
-    pub(crate) fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn remove_operation_by_hash(
+        &mut self,
+        hash: H256,
+    ) -> Option<Arc<PoolOperation<UO>>> {
         let ret = self.remove_operation_internal(hash, None);
         self.update_metrics();
         ret
     }
 
     // STO-040
-    pub(crate) fn check_multiple_roles_violation(&self, uo: &UserOperation) -> MempoolResult<()> {
-        if let Some(ec) = self.count_by_address.get(&uo.sender) {
+    pub(crate) fn check_multiple_roles_violation(&self, uo: &UO) -> MempoolResult<()> {
+        if let Some(ec) = self.count_by_address.get(&uo.sender()) {
             if ec.includes_non_sender() {
-                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(uo.sender));
+                return Err(MempoolError::SenderAddressUsedAsAlternateEntity(
+                    uo.sender(),
+                ));
             }
         }
 
@@ -213,11 +221,11 @@ impl PoolInner {
     pub(crate) fn check_associated_storage(
         &self,
         accessed_storage: &HashSet<Address>,
-        uo: &UserOperation,
+        uo: &UO,
     ) -> MempoolResult<()> {
         for storage_address in accessed_storage {
             if let Some(ec) = self.count_by_address.get(storage_address) {
-                if ec.sender().gt(&0) && storage_address.ne(&uo.sender) {
+                if ec.sender().gt(&0) && storage_address.ne(&uo.sender()) {
                     // Reject UO if the sender is also an entity in another UO in the mempool
                     for entity in uo.entities() {
                         if storage_address.eq(&entity.address) {
@@ -235,12 +243,12 @@ impl PoolInner {
         &mut self,
         mined_op: &MinedOp,
         block_number: u64,
-    ) -> Option<Arc<PoolOperation>> {
+    ) -> Option<Arc<PoolOperation<UO>>> {
         let tx_in_pool = self.by_id.get(&mined_op.id())?;
 
         let hash = tx_in_pool
             .uo()
-            .op_hash(mined_op.entry_point, self.config.chain_id);
+            .hash(mined_op.entry_point, self.config.chain_id);
 
         let ret = self.remove_operation_internal(hash, Some(block_number));
 
@@ -248,7 +256,10 @@ impl PoolInner {
         ret
     }
 
-    pub(crate) fn unmine_operation(&mut self, mined_op: &MinedOp) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn unmine_operation(
+        &mut self,
+        mined_op: &MinedOp,
+    ) -> Option<Arc<PoolOperation<UO>>> {
         let hash = mined_op.hash;
         let (op, block_number) = self.mined_at_block_number_by_hash.remove(&hash)?;
         self.mined_hashes_with_block_numbers
@@ -285,10 +296,7 @@ impl PoolInner {
                 }
                 false
             })
-            .map(|o| {
-                o.po.uo
-                    .op_hash(self.config.entry_point, self.config.chain_id)
-            })
+            .map(|o| o.po.uo.hash(self.config.entry_point, self.config.chain_id))
             .collect::<Vec<_>>();
         for &hash in &to_remove {
             self.remove_operation_internal(hash, None);
@@ -346,7 +354,7 @@ impl PoolInner {
             if let Some(worst) = self.best.pop_last() {
                 let hash = worst
                     .uo()
-                    .op_hash(self.config.entry_point, self.config.chain_id);
+                    .hash(self.config.entry_point, self.config.chain_id);
 
                 let _ = self
                     .remove_operation_internal(hash, None)
@@ -359,13 +367,13 @@ impl PoolInner {
         Ok(removed)
     }
 
-    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<H256> {
+    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation<UO>) -> MempoolResult<H256> {
         self.add_operation_internal(op.po, Some(op.submission_id))
     }
 
     fn add_operation_internal(
         &mut self,
-        op: Arc<PoolOperation>,
+        op: Arc<PoolOperation<UO>>,
         submission_id: Option<u64>,
     ) -> MempoolResult<H256> {
         // Check if operation already known or replacing an existing operation
@@ -390,7 +398,7 @@ impl PoolInner {
         // create and insert ordered operation
         let hash = pool_op
             .uo()
-            .op_hash(self.config.entry_point, self.config.chain_id);
+            .hash(self.config.entry_point, self.config.chain_id);
         self.pool_size += pool_op.mem_size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
@@ -412,7 +420,7 @@ impl PoolInner {
         &mut self,
         hash: H256,
         block_number: Option<u64>,
-    ) -> Option<Arc<PoolOperation>> {
+    ) -> Option<Arc<PoolOperation<UO>>> {
         let op = self.by_hash.remove(&hash)?;
         let id = &op.po.uo.id();
         self.by_id.remove(id);
@@ -449,13 +457,13 @@ impl PoolInner {
         id
     }
 
-    fn get_min_replacement_fees(&self, op: &UserOperation) -> (U256, U256) {
+    fn get_min_replacement_fees(&self, op: &UO) -> (U256, U256) {
         let replacement_priority_fee = math::increase_by_percent(
-            op.max_priority_fee_per_gas,
+            op.max_priority_fee_per_gas(),
             self.config.min_replacement_fee_increase_percentage,
         );
         let replacement_fee = math::increase_by_percent(
-            op.max_fee_per_gas,
+            op.max_fee_per_gas(),
             self.config.min_replacement_fee_increase_percentage,
         );
         (replacement_priority_fee, replacement_fee)
@@ -478,41 +486,41 @@ impl PoolInner {
 /// Wrapper around PoolOperation that adds a submission ID to implement
 /// a custom ordering for the best operations
 #[derive(Debug, Clone)]
-struct OrderedPoolOperation {
-    po: Arc<PoolOperation>,
+struct OrderedPoolOperation<UO: UserOperation> {
+    po: Arc<PoolOperation<UO>>,
     submission_id: u64,
 }
 
-impl OrderedPoolOperation {
-    fn uo(&self) -> &UserOperation {
+impl<UO: UserOperation> OrderedPoolOperation<UO> {
+    fn uo(&self) -> &UO {
         &self.po.uo
     }
 
     fn mem_size(&self) -> usize {
-        std::mem::size_of::<OrderedPoolOperation>() + self.po.mem_size()
+        std::mem::size_of::<Self>() + self.po.mem_size()
     }
 }
 
-impl Eq for OrderedPoolOperation {}
+impl<UO: UserOperation> Eq for OrderedPoolOperation<UO> {}
 
-impl Ord for OrderedPoolOperation {
+impl<UO: UserOperation> Ord for OrderedPoolOperation<UO> {
     fn cmp(&self, other: &Self) -> Ordering {
         // Sort by gas price descending then by id ascending
         other
             .uo()
-            .max_fee_per_gas
-            .cmp(&self.uo().max_fee_per_gas)
+            .max_fee_per_gas()
+            .cmp(&self.uo().max_fee_per_gas())
             .then_with(|| self.submission_id.cmp(&other.submission_id))
     }
 }
 
-impl PartialOrd for OrderedPoolOperation {
+impl<UO: UserOperation> PartialOrd for OrderedPoolOperation<UO> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl PartialEq for OrderedPoolOperation {
+impl<UO: UserOperation> PartialEq for OrderedPoolOperation<UO> {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
     }
@@ -538,6 +546,7 @@ impl PoolMetrics {
 #[cfg(test)]
 mod tests {
     use rundler_sim::{EntityInfo, EntityInfos};
+    use rundler_types::{v0_6::UserOperation, UserOperation as UserOperationTrait, ValidTimeRange};
 
     use super::*;
 
@@ -689,7 +698,7 @@ mod tests {
 
         let op = create_op(sender, nonce, 1);
 
-        let hash = op.uo.op_hash(pool.config.entry_point, pool.config.chain_id);
+        let hash = op.uo.hash(pool.config.entry_point, pool.config.chain_id);
 
         pool.add_operation(op).unwrap();
 
@@ -718,9 +727,7 @@ mod tests {
         let op = create_op(sender, nonce, 1);
         let op_2 = create_op(sender, nonce, 2);
 
-        let hash = op_2
-            .uo
-            .op_hash(pool.config.entry_point, pool.config.chain_id);
+        let hash = op_2.uo.hash(pool.config.entry_point, pool.config.chain_id);
 
         pool.add_operation(op).unwrap();
         pool.add_operation(op_2).unwrap();
@@ -968,7 +975,7 @@ mod tests {
 
         let res = pool.remove_expired(Timestamp::from(2));
         assert_eq!(res.len(), 1);
-        assert_eq!(res[0].0, po1.uo.op_hash(conf.entry_point, conf.chain_id));
+        assert_eq!(res[0].0, po1.uo.hash(conf.entry_point, conf.chain_id));
         assert_eq!(res[0].1, Timestamp::from(1));
     }
 
@@ -990,8 +997,8 @@ mod tests {
 
         let res = pool.remove_expired(10.into());
         assert_eq!(res.len(), 2);
-        assert!(res.contains(&(po1.uo.op_hash(conf.entry_point, conf.chain_id), 5.into())));
-        assert!(res.contains(&(po3.uo.op_hash(conf.entry_point, conf.chain_id), 9.into())));
+        assert!(res.contains(&(po1.uo.hash(conf.entry_point, conf.chain_id), 5.into())));
+        assert!(res.contains(&(po3.uo.hash(conf.entry_point, conf.chain_id), 9.into())));
     }
 
     fn conf() -> PoolInnerConfig {
@@ -1013,7 +1020,11 @@ mod tests {
         .mem_size()
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
+    fn create_op(
+        sender: Address,
+        nonce: usize,
+        max_fee_per_gas: usize,
+    ) -> PoolOperation<UserOperation> {
         PoolOperation {
             uo: UserOperation {
                 sender,
@@ -1031,11 +1042,21 @@ mod tests {
                 paymaster: None,
                 aggregator: None,
             },
-            ..PoolOperation::default()
+            entry_point: Address::random(),
+            valid_time_range: ValidTimeRange::default(),
+            aggregator: None,
+            expected_code_hash: H256::random(),
+            sim_block_hash: H256::random(),
+            sim_block_number: 0,
+            entities_needing_stake: vec![],
+            account_is_staked: false,
         }
     }
 
-    fn check_map_entry(actual: Option<&OrderedPoolOperation>, expected: Option<&PoolOperation>) {
+    fn check_map_entry(
+        actual: Option<&OrderedPoolOperation<UserOperation>>,
+        expected: Option<&PoolOperation<UserOperation>>,
+    ) {
         match (actual, expected) {
             (Some(actual), Some(expected)) => assert_eq!(*actual.po, *expected),
             (None, None) => (),

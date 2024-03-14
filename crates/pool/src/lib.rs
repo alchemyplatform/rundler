@@ -26,7 +26,8 @@ pub use emit::OpPoolEvent as PoolEvent;
 
 mod mempool;
 pub use mempool::{
-    MempoolError, PoolConfig, PoolOperation, Reputation, ReputationStatus, StakeStatus,
+    FromPoolOperationVariant, IntoPoolOperationVariant, MempoolError, PoolConfig, PoolOperation,
+    Reputation, ReputationStatus, StakeStatus,
 };
 
 mod server;

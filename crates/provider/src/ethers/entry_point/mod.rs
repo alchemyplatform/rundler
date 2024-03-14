@@ -11,20 +11,4 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Traits for the provider module.
-
-mod error;
-pub use error::ProviderError;
-
-mod entry_point;
-pub use entry_point::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, EntryPoint, HandleOpsOut, L1GasProvider,
-    SignatureAggregator, SimulationProvider,
-};
-
-mod provider;
-#[cfg(feature = "test-utils")]
-pub use provider::MockProvider;
-pub use provider::{Provider, ProviderResult};
-#[cfg(feature = "test-utils")]
-pub(crate) mod test_utils;
+pub(crate) mod v0_6;

@@ -21,9 +21,13 @@ use jsonrpsee::{
     types::error::{INTERNAL_ERROR_CODE, INVALID_REQUEST_CODE},
 };
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, Provider};
+use rundler_provider::{EntryPoint, Provider, SimulationProvider};
 use rundler_sim::{gas, FeeEstimator};
-use rundler_types::{chain::ChainSpec, UserOperation, UserOperationId};
+use rundler_types::{
+    chain::ChainSpec,
+    v0_6::{self, UserOperation},
+    UserOperationId,
+};
 
 use crate::{error::rpc_err, eth::EthRpcError, RpcUserOperation};
 
@@ -99,7 +103,7 @@ where
 impl<P, E, PS> RundlerApiServer for RundlerApi<P, E, PS>
 where
     P: Provider,
-    E: EntryPoint,
+    E: EntryPoint + SimulationProvider<UO = UserOperation>,
     PS: PoolServer,
 {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
@@ -126,7 +130,7 @@ where
             ));
         }
 
-        let uo: UserOperation = user_op.into();
+        let uo: v0_6::UserOperation = user_op.try_into()?;
         let id = UserOperationId {
             sender: uo.sender,
             nonce: uo.nonce,

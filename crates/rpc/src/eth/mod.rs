@@ -21,9 +21,9 @@ mod server;
 
 use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_sim::{GasEstimate, UserOperationOptionalGas};
+use rundler_types::v0_6;
 
-use crate::types::{RichUserOperation, RpcUserOperation, UserOperationReceipt};
+use crate::types::{RichUserOperation, RpcGasEstimate, RpcUserOperation, UserOperationReceipt};
 
 /// Eth API
 #[rpc(client, server, namespace = "eth")]
@@ -41,10 +41,10 @@ pub trait EthApi {
     #[method(name = "estimateUserOperationGas")]
     async fn estimate_user_operation_gas(
         &self,
-        op: UserOperationOptionalGas,
+        op: v0_6::UserOperationOptionalGas,
         entry_point: Address,
         state_override: Option<spoof::State>,
-    ) -> RpcResult<GasEstimate>;
+    ) -> RpcResult<RpcGasEstimate>;
 
     /// Returns the user operation with the given hash.
     #[method(name = "getUserOperationByHash")]

@@ -21,7 +21,9 @@ use itertools::Itertools;
 use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
 use rundler_sim::{Prechecker, Simulator};
-use rundler_types::{Entity, EntityUpdate, EntityUpdateType, UserOperation, UserOperationId};
+use rundler_types::{
+    Entity, EntityUpdate, EntityUpdateType, UserOperation, UserOperationId, UserOperationVariant,
+};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 use tonic::async_trait;
@@ -45,26 +47,27 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<P: Prechecker, S: Simulator, E: EntryPoint> {
+pub(crate) struct UoPool<UO: UserOperation, P: Prechecker, S: Simulator, E: EntryPoint> {
     config: PoolConfig,
-    state: RwLock<UoPoolState>,
-    paymaster: PaymasterTracker<E>,
+    state: RwLock<UoPoolState<UO>>,
+    paymaster: PaymasterTracker<UO, E>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
     simulator: S,
 }
 
-struct UoPoolState {
-    pool: PoolInner,
+struct UoPoolState<UO: UserOperation> {
+    pool: PoolInner<UO>,
     throttled_ops: HashSet<H256>,
     block_number: u64,
 }
 
-impl<P, S, E> UoPool<P, S, E>
+impl<UO, P, S, E> UoPool<UO, P, S, E>
 where
-    P: Prechecker,
-    S: Simulator,
+    UO: UserOperation,
+    P: Prechecker<UO = UO>,
+    S: Simulator<UO = UO>,
     E: EntryPoint,
 {
     pub(crate) fn new(
@@ -72,7 +75,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
-        paymaster: PaymasterTracker<E>,
+        paymaster: PaymasterTracker<UO, E>,
         reputation: Arc<AddressReputation>,
     ) -> Self {
         Self {
@@ -131,12 +134,15 @@ where
 }
 
 #[async_trait]
-impl<P, S, E> Mempool for UoPool<P, S, E>
+impl<UO, P, S, E> Mempool for UoPool<UO, P, S, E>
 where
-    P: Prechecker,
-    S: Simulator,
+    UO: UserOperation + Into<UserOperationVariant>,
+    P: Prechecker<UO = UO>,
+    S: Simulator<UO = UO>,
     E: EntryPoint,
 {
+    type UO = UO;
+
     async fn on_chain_update(&self, update: &ChainUpdate) {
         {
             let deduped_ops = update.deduped_ops();
@@ -320,11 +326,7 @@ where
         self.paymaster.get_stake_status(address).await
     }
 
-    async fn add_operation(
-        &self,
-        origin: OperationOrigin,
-        op: UserOperation,
-    ) -> MempoolResult<H256> {
+    async fn add_operation(&self, origin: OperationOrigin, op: UO) -> MempoolResult<H256> {
         // TODO(danc) aggregator reputation is not implemented
         // TODO(danc) catch ops with aggregators prior to simulation and reject
 
@@ -412,12 +414,12 @@ where
         {
             let state = self.state.read();
             if !pool_op.account_is_staked
-                && state.pool.address_count(&pool_op.uo.sender)
+                && state.pool.address_count(&pool_op.uo.sender())
                     >= self.config.same_sender_mempool_count
             {
                 return Err(MempoolError::MaxOperationsReached(
                     self.config.same_sender_mempool_count,
-                    pool_op.uo.sender,
+                    pool_op.uo.sender(),
                 ));
             }
 
@@ -464,12 +466,12 @@ where
         }
         let op_hash = pool_op
             .uo
-            .op_hash(self.config.entry_point, self.config.chain_id);
+            .hash(self.config.entry_point, self.config.chain_id);
         let valid_after = pool_op.valid_time_range.valid_after;
         let valid_until = pool_op.valid_time_range.valid_until;
         self.emit(OpPoolEvent::ReceivedOp {
             op_hash,
-            op: pool_op.uo,
+            op: pool_op.uo.into(),
             block_number: pool_op.sim_block_number,
             origin,
             valid_after,
@@ -522,7 +524,7 @@ where
             }
         };
 
-        let hash = po.uo.op_hash(self.config.entry_point, self.config.chain_id);
+        let hash = po.uo.hash(self.config.entry_point, self.config.chain_id);
 
         // This can return none if the operation was removed by another thread
         if self
@@ -562,7 +564,7 @@ where
         &self,
         max: usize,
         shard_index: u64,
-    ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
+    ) -> MempoolResult<Vec<Arc<PoolOperation<UO>>>> {
         if shard_index >= self.config.num_shards {
             Err(anyhow::anyhow!("Invalid shard ID"))?;
         }
@@ -577,22 +579,22 @@ where
             .filter(|op| {
                 // short-circuit the mod if there is only 1 shard
                 ((self.config.num_shards == 1) ||
-                (U256::from_little_endian(op.uo.sender.as_bytes())
+                (U256::from_little_endian(op.uo.sender().as_bytes())
                         .div_mod(self.config.num_shards.into())
                         .1
                         == shard_index.into())) &&
                 // filter out ops from senders we've already seen
-                senders.insert(op.uo.sender)
+                senders.insert(op.uo.sender())
             })
             .take(max)
             .collect())
     }
 
-    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
+    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation<UO>>> {
         self.state.read().pool.best_operations().take(max).collect()
     }
 
-    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
+    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation<UO>>> {
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
@@ -669,13 +671,16 @@ mod tests {
     use std::collections::HashMap;
 
     use ethers::types::{Bytes, H160};
-    use rundler_provider::MockEntryPoint;
+    use rundler_provider::MockEntryPointV0_6;
     use rundler_sim::{
         EntityInfo, EntityInfos, MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings,
         PrecheckViolation, SimulationError, SimulationResult, SimulationSettings,
         SimulationViolation, ViolationError,
     };
-    use rundler_types::{DepositInfo, EntityType, GasFees, ValidTimeRange};
+    use rundler_types::{
+        contracts::v0_6::verifying_paymaster::DepositInfo, v0_6::UserOperation, EntityType,
+        GasFees, UserOperation as UserOperationTrait, ValidTimeRange,
+    };
 
     use super::*;
     use crate::{
@@ -765,7 +770,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].op_hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
                 actual_gas_cost: U256::zero(),
@@ -827,7 +832,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].op_hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
                 actual_gas_cost: 10.into(),
@@ -867,7 +872,7 @@ mod tests {
             mined_ops: vec![],
             unmined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].op_hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
                 actual_gas_cost: 10.into(),
@@ -908,7 +913,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: Address::random(),
-                hash: uos[0].op_hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
                 actual_gas_cost: U256::zero(),
@@ -950,7 +955,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].op_hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
                 actual_gas_cost: U256::zero(),
@@ -1026,7 +1031,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].op_hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender,
                 nonce: uos[0].nonce,
                 actual_gas_cost: U256::zero(),
@@ -1101,11 +1106,12 @@ mod tests {
 
     #[tokio::test]
     async fn precheck_error() {
+        let sender = Address::random();
         let op = create_op_with_errors(
-            Address::random(),
+            sender,
             0,
             0,
-            Some(PrecheckViolation::InitCodeTooShort(0)),
+            Some(PrecheckViolation::SenderIsNotContractAndNoInitCode(sender)),
             None,
             false,
         );
@@ -1113,7 +1119,9 @@ mod tests {
         let pool = create_pool(ops);
 
         match pool.add_operation(OperationOrigin::Local, op.op).await {
-            Err(MempoolError::PrecheckViolation(PrecheckViolation::InitCodeTooShort(_))) => {}
+            Err(MempoolError::PrecheckViolation(
+                PrecheckViolation::SenderIsNotContractAndNoInitCode(_),
+            )) => {}
             _ => panic!("Expected InitCodeTooShort error"),
         }
         assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
@@ -1314,7 +1322,7 @@ mod tests {
             .add_operation(OperationOrigin::Local, op.op.clone())
             .await
             .unwrap();
-        let hash = op.op.op_hash(pool.config.entry_point, 1);
+        let hash = op.op.hash(pool.config.entry_point, 1);
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 11,
@@ -1371,7 +1379,12 @@ mod tests {
 
     fn create_pool(
         ops: Vec<OpWithErrors>,
-    ) -> UoPool<impl Prechecker, impl Simulator, impl EntryPoint> {
+    ) -> UoPool<
+        UserOperation,
+        impl Prechecker<UO = UserOperation>,
+        impl Simulator<UO = UserOperation>,
+        impl EntryPoint,
+    > {
         let args = PoolConfig {
             entry_point: Address::random(),
             chain_id: 1,
@@ -1394,7 +1407,7 @@ mod tests {
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        let mut entrypoint = MockEntryPoint::new();
+        let mut entrypoint = MockEntryPointV0_6::new();
         entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
                 deposit: 1000,
@@ -1483,7 +1496,12 @@ mod tests {
     async fn create_pool_insert_ops(
         ops: Vec<OpWithErrors>,
     ) -> (
-        UoPool<impl Prechecker, impl Simulator, impl EntryPoint>,
+        UoPool<
+            UserOperation,
+            impl Prechecker<UO = UserOperation>,
+            impl Simulator<UO = UserOperation>,
+            impl EntryPoint,
+        >,
         Vec<UserOperation>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
@@ -1543,7 +1561,7 @@ mod tests {
         }
     }
 
-    fn check_ops(ops: Vec<Arc<PoolOperation>>, expected: Vec<UserOperation>) {
+    fn check_ops(ops: Vec<Arc<PoolOperation<UserOperation>>>, expected: Vec<UserOperation>) {
         assert_eq!(ops.len(), expected.len());
         for (actual, expected) in ops.into_iter().zip(expected) {
             assert_eq!(actual.uo, expected);

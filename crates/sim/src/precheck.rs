@@ -18,7 +18,7 @@ use arrayvec::ArrayVec;
 use ethers::types::{Address, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{EntryPoint, Provider};
+use rundler_provider::{EntryPoint, L1GasProvider, Provider};
 use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
 use rundler_utils::math;
 
@@ -29,11 +29,14 @@ pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
 
 /// Trait for checking if a user operation is valid before simulation
 /// according to the spec rules.
-#[cfg_attr(feature = "test-utils", automock)]
+#[cfg_attr(feature = "test-utils", automock(type UO = rundler_types::v0_6::UserOperation;))]
 #[async_trait::async_trait]
 pub trait Prechecker: Send + Sync + 'static {
+    /// The user operation type
+    type UO: UserOperation;
+
     /// Run the precheck on the given operation and return an error if it fails.
-    async fn check(&self, op: &UserOperation) -> Result<(), PrecheckError>;
+    async fn check(&self, op: &Self::UO) -> Result<(), PrecheckError>;
     /// Update and return the bundle fees.
     async fn update_fees(&self) -> anyhow::Result<(GasFees, U256)>;
 }
@@ -43,14 +46,14 @@ pub type PrecheckError = ViolationError<PrecheckViolation>;
 
 /// Prechecker implementation
 #[derive(Debug)]
-pub struct PrecheckerImpl<P: Provider, E: EntryPoint> {
+pub struct PrecheckerImpl<UO, P, E> {
     chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
     fee_estimator: gas::FeeEstimator<P>,
-
     cache: RwLock<AsyncDataCache>,
+    _uo_type: std::marker::PhantomData<UO>,
 }
 
 /// Precheck settings
@@ -107,8 +110,15 @@ struct FeeCache {
 }
 
 #[async_trait::async_trait]
-impl<P: Provider, E: EntryPoint> Prechecker for PrecheckerImpl<P, E> {
-    async fn check(&self, op: &UserOperation) -> Result<(), PrecheckError> {
+impl<UO, P, E> Prechecker for PrecheckerImpl<UO, P, E>
+where
+    P: Provider,
+    E: EntryPoint + L1GasProvider<UO = UO>,
+    UO: UserOperation,
+{
+    type UO = UO;
+
+    async fn check(&self, op: &Self::UO) -> Result<(), PrecheckError> {
         let async_data = self.load_async_data(op).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
         violations.extend(self.check_init_code(op, async_data));
@@ -133,7 +143,12 @@ impl<P: Provider, E: EntryPoint> Prechecker for PrecheckerImpl<P, E> {
     }
 }
 
-impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
+impl<UO, P, E> PrecheckerImpl<UO, P, E>
+where
+    P: Provider,
+    E: EntryPoint + L1GasProvider<UO = UO>,
+    UO: UserOperation,
+{
     /// Create a new prechecker
     pub fn new(
         chain_spec: ChainSpec,
@@ -155,47 +170,37 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             settings,
             fee_estimator,
             cache: RwLock::new(AsyncDataCache { fees: None }),
+            _uo_type: std::marker::PhantomData,
         }
     }
 
-    fn check_init_code(
-        &self,
-        op: &UserOperation,
-        async_data: AsyncData,
-    ) -> ArrayVec<PrecheckViolation, 2> {
+    fn check_init_code(&self, op: &UO, async_data: AsyncData) -> ArrayVec<PrecheckViolation, 2> {
         let AsyncData {
             factory_exists,
             sender_exists,
             ..
         } = async_data;
         let mut violations = ArrayVec::new();
-        let len = op.init_code.len();
-        if len == 0 {
+        if op.factory().is_none() {
             if !sender_exists {
                 violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
-                    op.sender,
+                    op.sender(),
                 ));
             }
         } else {
-            if len < 20 {
-                violations.push(PrecheckViolation::InitCodeTooShort(len));
-            } else if !factory_exists {
+            if !factory_exists {
                 violations.push(PrecheckViolation::FactoryIsNotContract(
                     op.factory().unwrap(),
                 ))
             }
             if sender_exists {
-                violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender));
+                violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender()));
             }
         }
         violations
     }
 
-    fn check_gas(
-        &self,
-        op: &UserOperation,
-        async_data: AsyncData,
-    ) -> ArrayVec<PrecheckViolation, 6> {
+    fn check_gas(&self, op: &UO, async_data: AsyncData) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
             max_verification_gas,
             max_total_execution_gas,
@@ -208,16 +213,16 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         } = async_data;
 
         let mut violations = ArrayVec::new();
-        if op.verification_gas_limit > max_verification_gas {
+        if op.verification_gas_limit() > max_verification_gas {
             violations.push(PrecheckViolation::VerificationGasLimitTooHigh(
-                op.verification_gas_limit,
+                op.verification_gas_limit(),
                 max_verification_gas,
             ));
         }
 
         // compute the worst case total gas limit by assuming the UO is in its own bundle and has a postOp call.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = gas::user_operation_execution_gas_limit(&self.chain_spec, op, true, true);
+        let gas_limit = gas::user_operation_execution_gas_limit(&self.chain_spec, op, true);
         if gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
@@ -231,9 +236,9 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             min_pre_verification_gas,
             self.settings.pre_verification_gas_accept_percent,
         );
-        if op.pre_verification_gas < min_pre_verification_gas {
+        if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
-                op.pre_verification_gas,
+                op.pre_verification_gas(),
                 min_pre_verification_gas,
             ));
         }
@@ -248,47 +253,42 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         let min_max_fee = min_base_fee + min_priority_fee;
 
         // check priority fee first, since once ruled out we can check max fee
-        if op.max_priority_fee_per_gas < min_priority_fee {
+        if op.max_priority_fee_per_gas() < min_priority_fee {
             violations.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
-                op.max_priority_fee_per_gas,
+                op.max_priority_fee_per_gas(),
                 min_priority_fee,
             ));
         }
-        if op.max_fee_per_gas < min_max_fee {
+        if op.max_fee_per_gas() < min_max_fee {
             violations.push(PrecheckViolation::MaxFeePerGasTooLow(
-                op.max_fee_per_gas,
+                op.max_fee_per_gas(),
                 min_max_fee,
             ));
         }
 
-        if op.call_gas_limit < MIN_CALL_GAS_LIMIT {
+        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
             violations.push(PrecheckViolation::CallGasLimitTooLow(
-                op.call_gas_limit,
+                op.call_gas_limit(),
                 MIN_CALL_GAS_LIMIT,
             ));
         }
         violations
     }
 
-    fn check_payer(&self, op: &UserOperation, async_data: AsyncData) -> Option<PrecheckViolation> {
+    fn check_payer(&self, op: &UO, async_data: AsyncData) -> Option<PrecheckViolation> {
         let AsyncData {
             paymaster_exists,
             payer_funds,
             ..
         } = async_data;
-        if !op.paymaster_and_data.is_empty() {
-            let Some(paymaster) = op.paymaster() else {
-                return Some(PrecheckViolation::PaymasterTooShort(
-                    op.paymaster_and_data.len(),
-                ));
-            };
+        if let Some(paymaster) = op.paymaster() {
             if !paymaster_exists {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
             }
         }
         let max_gas_cost = op.max_gas_cost();
         if payer_funds < max_gas_cost {
-            if op.paymaster_and_data.is_empty() {
+            if op.paymaster().is_none() {
                 return Some(PrecheckViolation::SenderFundsTooLow(
                     payer_funds,
                     max_gas_cost,
@@ -303,7 +303,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         None
     }
 
-    async fn load_async_data(&self, op: &UserOperation) -> anyhow::Result<AsyncData> {
+    async fn load_async_data(&self, op: &UO) -> anyhow::Result<AsyncData> {
         let (_, base_fee) = self.get_fees().await?;
 
         let (
@@ -314,7 +314,7 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             min_pre_verification_gas,
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
-            self.is_contract(Some(op.sender)),
+            self.is_contract(Some(op.sender())),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
             self.get_required_pre_verification_gas(op.clone(), base_fee)
@@ -341,16 +341,16 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
         Ok(!bytecode.is_empty())
     }
 
-    async fn get_payer_funds(&self, op: &UserOperation) -> anyhow::Result<U256> {
+    async fn get_payer_funds(&self, op: &UO) -> anyhow::Result<U256> {
         let (deposit, balance) =
             tokio::try_join!(self.get_payer_deposit(op), self.get_payer_balance(op),)?;
         Ok(deposit + balance)
     }
 
-    async fn get_payer_deposit(&self, op: &UserOperation) -> anyhow::Result<U256> {
+    async fn get_payer_deposit(&self, op: &UO) -> anyhow::Result<U256> {
         let payer = match op.paymaster() {
             Some(paymaster) => paymaster,
-            None => op.sender,
+            None => op.sender(),
         };
         self.entry_point
             .balance_of(payer, None)
@@ -358,13 +358,13 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
             .context("precheck should get payer balance")
     }
 
-    async fn get_payer_balance(&self, op: &UserOperation) -> anyhow::Result<U256> {
-        if !op.paymaster_and_data.is_empty() {
+    async fn get_payer_balance(&self, op: &UO) -> anyhow::Result<U256> {
+        if op.paymaster().is_some() {
             // Paymasters must deposit eth, and cannot pay with their own.
             return Ok(0.into());
         }
         self.provider
-            .get_balance(op.sender, None)
+            .get_balance(op.sender(), None)
             .await
             .context("precheck should get sender balance")
     }
@@ -378,17 +378,12 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
 
     async fn get_required_pre_verification_gas(
         &self,
-        op: UserOperation,
+        op: UO,
         base_fee: U256,
     ) -> anyhow::Result<U256> {
-        gas::calc_required_pre_verification_gas(
-            &self.chain_spec,
-            self.provider.clone(),
-            &op,
-            base_fee,
-        )
-        .await
-        .context("should calculate pre-verification gas")
+        gas::calc_required_pre_verification_gas(&self.chain_spec, &self.entry_point, &op, base_fee)
+            .await
+            .context("should calculate pre-verification gas")
     }
 }
 
@@ -397,9 +392,6 @@ impl<P: Provider, E: EntryPoint> PrecheckerImpl<P, E> {
 /// All possible errors that can be returned from a precheck.
 #[derive(Clone, Debug, parse_display::Display, Eq, PartialEq, Ord, PartialOrd)]
 pub enum PrecheckViolation {
-    /// The init code is too short to contain a factory address.
-    #[display("initCode must start with a 20-byte factory address, but was only {0} bytes")]
-    InitCodeTooShort(usize),
     /// The sender is not deployed, and no init code is provided.
     #[display("sender {0:?} is not a contract and initCode is empty")]
     SenderIsNotContractAndNoInitCode(Address),
@@ -419,9 +411,6 @@ pub enum PrecheckViolation {
     /// The pre-verification gas of the user operation is too low.
     #[display("preVerificationGas is {0} but must be at least {1}")]
     PreVerificationGasTooLow(U256, U256),
-    /// The paymaster and data is too short to contain a paymaster address.
-    #[display("paymasterAndData must start a 20-byte paymaster address, but was only {0} bytes")]
-    PaymasterTooShort(usize),
     /// A paymaster is provided, but the address is not deployed.
     #[display("paymasterAndData indicates paymaster with no code: {0:?}")]
     PaymasterIsNotContract(Address),
@@ -448,15 +437,18 @@ mod tests {
     use std::str::FromStr;
 
     use ethers::types::Bytes;
-    use rundler_provider::{MockEntryPoint, MockProvider};
+    use rundler_provider::{MockEntryPointV0_6, MockProvider};
+    // TODO: these tests should be made generic on any UserOperation type, can use a mock
+    // First, need to fix the EntryPoint interface for DepositInfo
+    use rundler_types::v0_6::UserOperation;
 
     use super::*;
 
-    fn create_base_config() -> (ChainSpec, MockProvider, MockEntryPoint) {
+    fn create_base_config() -> (ChainSpec, MockProvider, MockEntryPointV0_6) {
         (
             ChainSpec::default(),
             MockProvider::new(),
-            MockEntryPoint::new(),
+            MockEntryPointV0_6::new(),
         )
     }
 
@@ -479,7 +471,7 @@ mod tests {
         let op = UserOperation {
             sender: Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             nonce: 100.into(),
-            init_code: Bytes::from_str("0x1000").unwrap(),
+            init_code: Bytes::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
             call_data: Bytes::default(),
             call_gas_limit: 9_000.into(), // large call gas limit high to trigger TotalGasLimitTooHigh
             verification_gas_limit: 10_000_000.into(),
@@ -491,15 +483,11 @@ mod tests {
         };
 
         let res = prechecker.check_init_code(&op, get_test_async_data());
-        assert_eq!(
-            res,
-            ArrayVec::<PrecheckViolation, 2>::from([
-                PrecheckViolation::InitCodeTooShort(2),
-                PrecheckViolation::ExistingSenderWithInitCode(
-                    Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap()
-                )
-            ])
-        );
+        let mut expected = ArrayVec::new();
+        expected.push(PrecheckViolation::ExistingSenderWithInitCode(
+            Address::from_str("0x3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d").unwrap(),
+        ));
+        assert_eq!(res, expected);
     }
 
     #[tokio::test]
@@ -534,7 +522,7 @@ mod tests {
             res,
             ArrayVec::<PrecheckViolation, 6>::from([
                 PrecheckViolation::VerificationGasLimitTooHigh(10_000_000.into(), 5_000_000.into(),),
-                PrecheckViolation::TotalGasLimitTooHigh(30_009_000.into(), 10_000_000.into(),),
+                PrecheckViolation::TotalGasLimitTooHigh(20_014_000.into(), 10_000_000.into(),),
                 PrecheckViolation::PreVerificationGasTooLow(0.into(), 1_000.into(),),
                 PrecheckViolation::MaxPriorityFeePerGasTooLow(2_000.into(), 4_000.into(),),
                 PrecheckViolation::MaxFeePerGasTooLow(5_000.into(), 8_000.into(),),

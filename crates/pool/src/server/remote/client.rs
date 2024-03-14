@@ -19,7 +19,7 @@ use rundler_task::{
     grpc::protos::{from_bytes, to_le_bytes, ConversionError},
     server::{HealthCheck, ServerStatus},
 };
-use rundler_types::{EntityUpdate, UserOperation, UserOperationId};
+use rundler_types::{EntityUpdate, UserOperationId, UserOperationVariant};
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -137,7 +137,7 @@ impl PoolServer for RemotePoolClient {
             .collect::<Result<_, ConversionError>>()?)
     }
 
-    async fn add_op(&self, entry_point: Address, op: UserOperation) -> PoolResult<H256> {
+    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<H256> {
         let res = self
             .op_pool_client
             .clone()
@@ -163,7 +163,7 @@ impl PoolServer for RemotePoolClient {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
-    ) -> PoolResult<Vec<PoolOperation>> {
+    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
         let res = self
             .op_pool_client
             .clone()
@@ -190,7 +190,10 @@ impl PoolServer for RemotePoolClient {
         }
     }
 
-    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+    async fn get_op_by_hash(
+        &self,
+        hash: H256,
+    ) -> PoolResult<Option<PoolOperation<UserOperationVariant>>> {
         let res = self
             .op_pool_client
             .clone()
@@ -352,7 +355,10 @@ impl PoolServer for RemotePoolClient {
         }
     }
 
-    async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
+    async fn debug_dump_mempool(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
         let res = self
             .op_pool_client
             .clone()

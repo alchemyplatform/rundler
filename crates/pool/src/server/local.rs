@@ -19,7 +19,7 @@ use ethers::types::{Address, H256};
 use futures::future;
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
-use rundler_types::{EntityUpdate, UserOperation, UserOperationId};
+use rundler_types::{v0_6, EntityUpdate, UserOperationId, UserOperationVariant};
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
@@ -31,7 +31,8 @@ use super::{PoolResult, PoolServerError};
 use crate::{
     chain::ChainUpdate,
     mempool::{
-        Mempool, MempoolError, OperationOrigin, PaymasterMetadata, PoolOperation, StakeStatus,
+        IntoPoolOperationVariant, Mempool, MempoolError, OperationOrigin, PaymasterMetadata,
+        PoolOperation, StakeStatus,
     },
     server::{NewHead, PoolServer, Reputation},
     ReputationStatus,
@@ -65,12 +66,15 @@ impl LocalPoolBuilder {
     }
 
     /// Run the local pool server, consumes the builder
-    pub fn run<M: Mempool>(
+    pub fn run<M>(
         self,
         mempools: HashMap<Address, Arc<M>>,
         chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
         shutdown_token: CancellationToken,
-    ) -> JoinHandle<anyhow::Result<()>> {
+    ) -> JoinHandle<anyhow::Result<()>>
+    where
+        M: Mempool<UO = v0_6::UserOperation>,
+    {
         let mut runner = LocalPoolServerRunner::new(
             self.req_receiver,
             self.block_sender,
@@ -122,7 +126,7 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
-    async fn add_op(&self, entry_point: Address, op: UserOperation) -> PoolResult<H256> {
+    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<H256> {
         let req = ServerRequestKind::AddOp {
             entry_point,
             op,
@@ -140,7 +144,7 @@ impl PoolServer for LocalPoolHandle {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
-    ) -> PoolResult<Vec<PoolOperation>> {
+    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
         let req = ServerRequestKind::GetOps {
             entry_point,
             max_ops,
@@ -153,7 +157,10 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
-    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+    async fn get_op_by_hash(
+        &self,
+        hash: H256,
+    ) -> PoolResult<Option<PoolOperation<UserOperationVariant>>> {
         let req = ServerRequestKind::GetOpByHash { hash };
         let resp = self.send(req).await?;
         match resp {
@@ -236,7 +243,10 @@ impl PoolServer for LocalPoolHandle {
         }
     }
 
-    async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
+    async fn debug_dump_mempool(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
         let req = ServerRequestKind::DebugDumpMempool { entry_point };
         let resp = self.send(req).await?;
         match resp {
@@ -354,7 +364,7 @@ impl HealthCheck for LocalPoolHandle {
 
 impl<M> LocalPoolServerRunner<M>
 where
-    M: Mempool,
+    M: Mempool<UO = v0_6::UserOperation>,
 {
     fn new(
         req_receiver: mpsc::Receiver<ServerRequest>,
@@ -381,19 +391,22 @@ where
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
-    ) -> PoolResult<Vec<PoolOperation>> {
+    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool
             .best_operations(max_ops as usize, shard_index)?
             .iter()
-            .map(|op| (**op).clone())
+            .map(|op| (**op).clone().into_variant())
             .collect())
     }
 
-    fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+    fn get_op_by_hash(
+        &self,
+        hash: H256,
+    ) -> PoolResult<Option<PoolOperation<UserOperationVariant>>> {
         for mempool in self.mempools.values() {
             if let Some(op) = mempool.get_user_operation_by_hash(hash) {
-                return Ok(Some((*op).clone()));
+                return Ok(Some((*op).clone().into_variant()));
             }
         }
         Ok(None)
@@ -449,12 +462,15 @@ where
         Ok(())
     }
 
-    fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
+    fn debug_dump_mempool(
+        &self,
+        entry_point: Address,
+    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool
             .all_operations(usize::MAX)
             .iter()
-            .map(|op| (**op).clone())
+            .map(|op| (**op).clone().into_variant())
             .collect())
     }
 
@@ -549,7 +565,7 @@ where
                         // Responses are sent in the spawned task
                         ServerRequestKind::AddOp { entry_point, op, origin } => {
                             let fut = |mempool: Arc<M>, response: oneshot::Sender<Result<ServerResponse, PoolServerError>>| async move {
-                                let resp = match mempool.add_operation(origin, op).await {
+                                let resp = match mempool.add_operation(origin, op.into()).await {
                                     Ok(hash) => Ok(ServerResponse::AddOp { hash }),
                                     Err(e) => Err(e.into()),
                                 };
@@ -680,7 +696,7 @@ enum ServerRequestKind {
     GetSupportedEntryPoints,
     AddOp {
         entry_point: Address,
-        op: UserOperation,
+        op: UserOperationVariant,
         origin: OperationOrigin,
     },
     GetOps {
@@ -746,10 +762,10 @@ enum ServerResponse {
         hash: H256,
     },
     GetOps {
-        ops: Vec<PoolOperation>,
+        ops: Vec<PoolOperation<UserOperationVariant>>,
     },
     GetOpByHash {
-        op: Option<PoolOperation>,
+        op: Option<PoolOperation<UserOperationVariant>>,
     },
     RemoveOps,
     RemoveOpById {
@@ -759,7 +775,7 @@ enum ServerResponse {
     DebugClearState,
     AdminSetTracking,
     DebugDumpMempool {
-        ops: Vec<PoolOperation>,
+        ops: Vec<PoolOperation<UserOperationVariant>>,
     },
     DebugSetReputations,
     DebugDumpReputation {
@@ -784,6 +800,7 @@ mod tests {
     use std::{iter::zip, sync::Arc};
 
     use futures_util::StreamExt;
+    use rundler_types::v0_6::UserOperation;
 
     use super::*;
     use crate::{chain::ChainUpdate, mempool::MockMempool};
@@ -799,11 +816,7 @@ mod tests {
         let ep = Address::random();
         let state = setup(HashMap::from([(ep, Arc::new(mock_pool))]));
 
-        let hash1 = state
-            .handle
-            .add_op(ep, UserOperation::default())
-            .await
-            .unwrap();
+        let hash1 = state.handle.add_op(ep, mock_op()).await.unwrap();
         assert_eq!(hash0, hash1);
     }
 
@@ -875,14 +888,7 @@ mod tests {
         );
 
         for (ep, hash) in zip(eps.iter(), hashes.iter()) {
-            assert_eq!(
-                *hash,
-                state
-                    .handle
-                    .add_op(*ep, UserOperation::default())
-                    .await
-                    .unwrap()
-            );
+            assert_eq!(*hash, state.handle.add_op(*ep, mock_op()).await.unwrap());
         }
     }
 
@@ -902,5 +908,9 @@ mod tests {
             chain_update_tx: tx,
             _run_handle: run_handle,
         }
+    }
+
+    fn mock_op() -> UserOperationVariant {
+        UserOperationVariant::V0_6(UserOperation::default())
     }
 }

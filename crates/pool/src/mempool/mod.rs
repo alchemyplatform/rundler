@@ -37,7 +37,8 @@ use ethers::types::{Address, H256, U256};
 use mockall::automock;
 use rundler_sim::{EntityInfos, MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
-    Entity, EntityType, EntityUpdate, UserOperation, UserOperationId, ValidTimeRange,
+    Entity, EntityType, EntityUpdate, UserOperation, UserOperationId, UserOperationVariant,
+    ValidTimeRange,
 };
 use tonic::async_trait;
 pub(crate) use uo_pool::UoPool;
@@ -45,10 +46,13 @@ pub(crate) use uo_pool::UoPool;
 use self::error::MempoolResult;
 use super::chain::ChainUpdate;
 
-#[cfg_attr(test, automock)]
+#[cfg_attr(test, automock(type UO = rundler_types::v0_6::UserOperation;))]
 #[async_trait]
 /// In-memory operation pool
 pub trait Mempool: Send + Sync + 'static {
+    /// The type of user operation this pool stores
+    type UO: UserOperation;
+
     /// Call to update the mempool with a new chain update
     async fn on_chain_update(&self, update: &ChainUpdate);
 
@@ -56,11 +60,7 @@ pub trait Mempool: Send + Sync + 'static {
     fn entry_point(&self) -> Address;
 
     /// Adds a user operation to the pool
-    async fn add_operation(
-        &self,
-        origin: OperationOrigin,
-        op: UserOperation,
-    ) -> MempoolResult<H256>;
+    async fn add_operation(&self, origin: OperationOrigin, op: Self::UO) -> MempoolResult<H256>;
 
     /// Removes a set of operations from the pool.
     fn remove_operations(&self, hashes: &[H256]);
@@ -83,13 +83,13 @@ pub trait Mempool: Send + Sync + 'static {
         &self,
         max: usize,
         shard_index: u64,
-    ) -> MempoolResult<Vec<Arc<PoolOperation>>>;
+    ) -> MempoolResult<Vec<Arc<PoolOperation<Self::UO>>>>;
 
     /// Returns the all operations from the pool up to a max size
-    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
+    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation<Self::UO>>>;
 
     /// Looks up a user operation by hash, returns None if not found
-    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>>;
+    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation<Self::UO>>>;
 
     /// Debug methods
 
@@ -192,10 +192,10 @@ pub enum OperationOrigin {
 }
 
 /// A user operation with additional metadata from validation.
-#[derive(Debug, Default, Clone, Eq, PartialEq)]
-pub struct PoolOperation {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PoolOperation<UO: UserOperation> {
     /// The user operation stored in the pool
-    pub uo: UserOperation,
+    pub uo: UO,
     /// The entry point address for this operation
     pub entry_point: Address,
     /// The aggregator address for this operation, if any.
@@ -227,7 +227,7 @@ pub struct PaymasterMetadata {
     pub pending_balance: U256,
 }
 
-impl PoolOperation {
+impl<UO: UserOperation> PoolOperation<UO> {
     /// Returns true if the operation contains the given entity.
     pub fn contains_entity(&self, entity: &Entity) -> bool {
         if let Some(e) = self.entity_infos.get(entity.kind) {
@@ -291,9 +291,62 @@ impl PoolOperation {
     }
 }
 
+/// Trait to convert a [PoolOperation] holding a [UserOperationVariant] to a [PoolOperation] with a different user operation type.
+pub trait FromPoolOperationVariant {
+    /// Conversion
+    fn from_variant(op: PoolOperation<UserOperationVariant>) -> Self;
+}
+
+/// Trait to convert a [PoolOperation] holding a user operation to a [PoolOperation] with a [UserOperationVariant].
+pub trait IntoPoolOperationVariant {
+    /// Conversion
+    fn into_variant(self) -> PoolOperation<UserOperationVariant>;
+}
+
+impl<UO> FromPoolOperationVariant for PoolOperation<UO>
+where
+    UO: UserOperation + From<UserOperationVariant>,
+{
+    fn from_variant(op: PoolOperation<UserOperationVariant>) -> Self {
+        PoolOperation {
+            uo: op.uo.into(),
+            entry_point: op.entry_point,
+            aggregator: op.aggregator,
+            valid_time_range: op.valid_time_range,
+            expected_code_hash: op.expected_code_hash,
+            sim_block_hash: op.sim_block_hash,
+            sim_block_number: op.sim_block_number,
+            entities_needing_stake: op.entities_needing_stake,
+            account_is_staked: op.account_is_staked,
+            entity_infos: op.entity_infos,
+        }
+    }
+}
+
+impl<UO> IntoPoolOperationVariant for PoolOperation<UO>
+where
+    UO: UserOperation + Into<UserOperationVariant>,
+{
+    fn into_variant(self) -> PoolOperation<UserOperationVariant> {
+        PoolOperation {
+            uo: self.uo.into(),
+            entry_point: self.entry_point,
+            aggregator: self.aggregator,
+            valid_time_range: self.valid_time_range,
+            expected_code_hash: self.expected_code_hash,
+            sim_block_hash: self.sim_block_hash,
+            sim_block_number: self.sim_block_number,
+            entities_needing_stake: self.entities_needing_stake,
+            account_is_staked: self.account_is_staked,
+            entity_infos: self.entity_infos,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rundler_sim::EntityInfo;
+    use rundler_types::v0_6::UserOperation;
 
     use super::*;
 

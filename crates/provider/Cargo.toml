@@ -12,6 +12,7 @@ rundler-utils = { path = "../utils" }
 
 anyhow.workspace = true
 async-trait.workspace = true
+auto_impl = "1.2.0"
 ethers.workspace = true
 metrics.workspace = true
 reqwest.workspace = true
@@ -25,3 +26,6 @@ mockall = {workspace = true, optional = true }
 
 [features]
 test-utils = [ "mockall" ]
+
+[dev-dependencies]
+rundler-provider = { path = ".", features = ["test-utils"] }

@@ -18,113 +18,34 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Error;
 use async_trait::async_trait;
 use ethers::{
     abi::AbiDecode,
-    types::{Address, BlockId, Opcode, H256, U256},
+    types::{Address, BlockId, H256},
 };
 use indexmap::IndexSet;
-#[cfg(feature = "test-utils")]
-use mockall::automock;
-use rundler_provider::{AggregatorOut, AggregatorSimOut, Provider};
-use rundler_types::{
-    contracts::v0_6::i_entry_point::FailedOp, Entity, EntityType, StakeInfo, StorageSlot,
-    UserOperation, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
+use rundler_provider::{
+    AggregatorOut, AggregatorSimOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
-use strum::IntoEnumIterator;
+use rundler_types::{
+    contracts::v0_6::i_entry_point::FailedOp, v0_6::UserOperation, Entity, EntityType, StorageSlot,
+    UserOperation as UserOperationTrait, ValidTimeRange, ValidationOutput, ValidationReturnInfo,
+};
 
 use super::{
-    mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
-    tracer::{
-        parse_combined_tracer_str, AccessInfo, AssociatedSlotsByAddress, SimulateValidationTracer,
-        SimulationTracerOutput,
-    },
+    tracer::{parse_combined_tracer_str, SimulateValidationTracer, SimulationTracerOutput},
+    REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
 };
 use crate::{
-    types::{ExpectedStorage, ViolationError},
-    utils,
+    simulation::{
+        self,
+        mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
+        ParseStorageAccess, Settings, StorageRestriction,
+    },
+    types::ViolationError,
+    utils, EntityInfos, NeedsStakeInformation, SimulationError, SimulationResult,
+    SimulationViolation, ViolationOpCode,
 };
-
-/// Required buffer for verification gas limit when targeting the 0.6 entrypoint contract
-pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: U256 = U256([2000, 0, 0, 0]);
-
-/// The result of a successful simulation
-#[derive(Clone, Debug, Default)]
-pub struct SimulationResult {
-    /// The mempool IDs that support this operation
-    pub mempools: Vec<H256>,
-    /// Block hash this operation was simulated against
-    pub block_hash: H256,
-    /// Block number this operation was simulated against
-    pub block_number: Option<u64>,
-    /// Gas used in the pre-op phase of simulation measured
-    /// by the entry point
-    pub pre_op_gas: U256,
-    /// The time range for which this operation is valid
-    pub valid_time_range: ValidTimeRange,
-    /// If using an aggregator, the result of the aggregation
-    /// simulation
-    pub aggregator: Option<AggregatorSimOut>,
-    /// Code hash of all accessed contracts
-    pub code_hash: H256,
-    /// List of used entities that need to be staked for this operation
-    /// to be valid
-    pub entities_needing_stake: Vec<EntityType>,
-    /// Whether the sender account is staked
-    pub account_is_staked: bool,
-    /// List of all addresses accessed during validation
-    pub accessed_addresses: HashSet<Address>,
-    /// List of addresses that have associated storage slots
-    /// accessed within the simulation
-    pub associated_addresses: HashSet<Address>,
-    /// Expected storage values for all accessed slots during validation
-    pub expected_storage: ExpectedStorage,
-    /// Whether the operation requires a post-op
-    pub requires_post_op: bool,
-    /// All the entities used in this operation and their staking state
-    pub entity_infos: EntityInfos,
-}
-
-impl SimulationResult {
-    /// Get the aggregator address if one was used
-    pub fn aggregator_address(&self) -> Option<Address> {
-        self.aggregator.as_ref().map(|agg| agg.address)
-    }
-}
-
-/// The result of a failed simulation. We return a list of the violations that ocurred during the failed simulation
-/// and also information about all the entities used in the op to handle entity penalties
-#[derive(Clone, Debug)]
-pub struct SimulationError {
-    /// A list of violations that occurred during simulation, or some other error that occurred not directly related to simulation rules
-    pub violation_error: ViolationError<SimulationViolation>,
-    /// The addresses and staking states of all the entities involved in an op. This value is None when simulation fails at a point where we are no
-    pub entity_infos: Option<EntityInfos>,
-}
-
-impl From<Error> for SimulationError {
-    fn from(error: Error) -> Self {
-        SimulationError {
-            violation_error: ViolationError::Other(error),
-            entity_infos: None,
-        }
-    }
-}
-
-/// Simulator trait for running user operation simulations
-#[cfg_attr(feature = "test-utils", automock)]
-#[async_trait::async_trait]
-pub trait Simulator: Send + Sync + 'static {
-    /// Simulate a user operation, returning simulation information
-    /// upon success, or simulation violations.
-    async fn simulate_validation(
-        &self,
-        op: UserOperation,
-        block_hash: Option<H256>,
-        expected_code_hash: Option<H256>,
-    ) -> Result<SimulationResult, SimulationError>;
-}
 
 /// Simulator implementation.
 ///
@@ -138,18 +59,22 @@ pub trait Simulator: Send + Sync + 'static {
 /// If no mempools are found, the simulator will return an error containing
 /// the violations.
 #[derive(Debug)]
-pub struct SimulatorImpl<P: Provider, T: SimulateValidationTracer> {
+pub struct Simulator<P, E, T> {
     provider: Arc<P>,
-    entry_point_address: Address,
+    entry_point: E,
     simulate_validation_tracer: T,
     sim_settings: Settings,
     mempool_configs: HashMap<H256, MempoolConfig>,
     allow_unstaked_addresses: HashSet<Address>,
 }
 
-impl<P, T> SimulatorImpl<P, T>
+impl<P, E, T> Simulator<P, E, T>
 where
     P: Provider,
+    E: EntryPoint
+        + SimulationProvider<UO = UserOperation>
+        + SignatureAggregator<UO = UserOperation>
+        + Clone,
     T: SimulateValidationTracer,
 {
     /// Create a new simulator
@@ -159,7 +84,7 @@ where
     /// the violations found during simulation.
     pub fn new(
         provider: Arc<P>,
-        entry_point_address: Address,
+        entry_point: E,
         simulate_validation_tracer: T,
         sim_settings: Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
@@ -178,7 +103,7 @@ where
 
         Self {
             provider,
-            entry_point_address,
+            entry_point,
             simulate_validation_tracer,
             sim_settings,
             mempool_configs,
@@ -279,8 +204,7 @@ where
         };
 
         let associated_addresses = tracer_out.associated_slots_by_address.addresses();
-
-        let initcode_length = op.init_code.len();
+        let has_factory = op.factory().is_some();
         Ok(ValidationContext {
             op,
             block_id,
@@ -290,7 +214,7 @@ where
             associated_addresses,
             entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
-            initcode_length,
+            has_factory,
         })
     }
 
@@ -304,11 +228,10 @@ where
             return Ok(AggregatorOut::NotNeeded);
         };
 
-        Ok(self
-            .provider
+        self.entry_point
             .clone()
             .validate_user_op_signature(aggregator_address, op, gas_cap)
-            .await?)
+            .await
     }
 
     // Parse the output from tracing and return a list of violations.
@@ -325,7 +248,7 @@ where
             ref entry_point_out,
             ref mut entities_needing_stake,
             ref mut accessed_addresses,
-            initcode_length,
+            has_factory,
             ..
         } = context;
 
@@ -357,7 +280,7 @@ where
             }
 
             for (addr, opcode) in &phase.ext_code_access_info {
-                if *addr == self.entry_point_address {
+                if *addr == self.entry_point.address() {
                     violations.push(SimulationViolation::UsedForbiddenOpcode(
                         entity,
                         *addr,
@@ -386,13 +309,13 @@ where
                 let address = *addr;
                 accessed_addresses.insert(address);
 
-                let violation = parse_storage_accesses(ParseStorageAccess {
+                let violation = simulation::parse_storage_accesses(ParseStorageAccess {
                     access_info,
                     slots_by_address: &tracer_out.associated_slots_by_address,
                     address,
                     sender: sender_address,
-                    entrypoint: self.entry_point_address,
-                    initcode_length,
+                    entrypoint: self.entry_point.address(),
+                    has_factory,
                     entity: &entity,
                     entity_infos,
                 })?;
@@ -435,7 +358,7 @@ where
         }
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
-            if !is_staked(aggregator_info.stake_info, self.sim_settings) {
+            if !simulation::is_staked(aggregator_info.stake_info, self.sim_settings) {
                 violations.push(SimulationViolation::UnstakedAggregator)
             }
         }
@@ -467,7 +390,7 @@ where
                     // weird case where CREATE2 is called > 1, but there isn't a factory
                     // defined. This should never happen, blame the violation on the entry point.
                     violations.push(SimulationViolation::FactoryCalledCreate2Twice(
-                        self.entry_point_address,
+                        self.entry_point.address(),
                     ));
                 }
             }
@@ -481,11 +404,11 @@ where
             .pre_op_gas
             .saturating_sub(op.pre_verification_gas);
         let verification_buffer = op
-            .verification_gas_limit
+            .total_verification_gas_limit()
             .saturating_sub(verification_gas_used);
         if verification_buffer < REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER {
             violations.push(SimulationViolation::VerificationGasLimitBufferTooLow(
-                op.verification_gas_limit,
+                op.total_verification_gas_limit(),
                 verification_gas_used + REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
             ));
         }
@@ -553,11 +476,17 @@ where
 }
 
 #[async_trait]
-impl<P, T> Simulator for SimulatorImpl<P, T>
+impl<P, E, T> simulation::Simulator for Simulator<P, E, T>
 where
     P: Provider,
+    E: EntryPoint
+        + SimulationProvider<UO = UserOperation>
+        + SignatureAggregator<UO = UserOperation>
+        + Clone,
     T: SimulateValidationTracer,
 {
+    type UO = UserOperation;
+
     async fn simulate_validation(
         &self,
         op: UserOperation,
@@ -618,7 +547,7 @@ where
             sender_info,
             ..
         } = entry_point_out;
-        let account_is_staked = is_staked(sender_info, self.sim_settings);
+        let account_is_staked = simulation::is_staked(sender_info, self.sim_settings);
         let ValidationReturnInfo {
             pre_op_gas,
             valid_after,
@@ -651,93 +580,6 @@ where
     }
 }
 
-/// All possible simulation violations
-#[derive(Clone, Debug, parse_display::Display, Ord, Eq, PartialOrd, PartialEq)]
-pub enum SimulationViolation {
-    // Make sure to maintain the order here based on the importance
-    // of the violation for converting to an JSON RPC error
-    /// The user operation signature is invalid
-    #[display("invalid signature")]
-    InvalidSignature,
-    /// The user operation used an opcode that is not allowed
-    #[display("{0.kind} uses banned opcode: {2} in contract {1:?}")]
-    UsedForbiddenOpcode(Entity, Address, ViolationOpCode),
-    /// The user operation used a precompile that is not allowed
-    #[display("{0.kind} uses banned precompile: {2:?} in contract {1:?}")]
-    UsedForbiddenPrecompile(Entity, Address, Address),
-    /// The user operation accessed a contract that has not been deployed
-    #[display(
-        "{0.kind} tried to access code at {1} during validation, but that address is not a contract"
-    )]
-    AccessedUndeployedContract(Entity, Address),
-    /// The user operation factory entity called CREATE2 more than once during initialization
-    #[display("factory may only call CREATE2 once during initialization")]
-    FactoryCalledCreate2Twice(Address),
-    /// The user operation accessed a storage slot that is not allowed
-    #[display("{0.kind} accessed forbidden storage at address {1:?} during validation")]
-    InvalidStorageAccess(Entity, StorageSlot),
-    /// The user operation called an entry point method that is not allowed
-    #[display("{0.kind} called entry point method other than depositTo")]
-    CalledBannedEntryPointMethod(Entity),
-    /// The user operation made a call that contained value to a contract other than the entrypoint
-    /// during validation
-    #[display("{0.kind} must not send ETH during validation (except from account to entry point)")]
-    CallHadValue(Entity),
-    /// The code hash of accessed contracts changed on the second simulation
-    #[display("code accessed by validation has changed since the last time validation was run")]
-    CodeHashChanged,
-    /// The user operation contained an entity that accessed storage without being staked
-    #[display("Unstaked {0.entity} accessed {0.accessed_address} ({0.accessed_entity:?}) at slot {0.slot}")]
-    NotStaked(Box<NeedsStakeInformation>),
-    /// The user operation uses a paymaster that returns a context while being unstaked
-    #[display("Unstaked paymaster must not return context")]
-    UnstakedPaymasterContext,
-    /// The user operation uses an aggregator entity and it is not staked
-    #[display("An aggregator must be staked, regardless of storager usage")]
-    UnstakedAggregator,
-    /// Simulation reverted with an unintended reason, containing a message
-    #[display("reverted while simulating {0} validation: {1}")]
-    UnintendedRevertWithMessage(EntityType, String, Option<Address>),
-    /// Simulation reverted with an unintended reason
-    #[display("reverted while simulating {0} validation")]
-    UnintendedRevert(EntityType, Option<Address>),
-    /// Simulation did not revert, a revert is always expected
-    #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
-    DidNotRevert,
-    /// Simulation had the wrong number of phases
-    #[display("simulateValidation should have 3 parts but had {0} instead. Make sure your EntryPoint is valid")]
-    WrongNumberOfPhases(u32),
-    /// The user operation ran out of gas during validation
-    #[display("ran out of gas during {0.kind} validation")]
-    OutOfGas(Entity),
-    /// The user operation aggregator signature validation failed
-    #[display("aggregator signature validation failed")]
-    AggregatorValidationFailed,
-    /// Verification gas limit doesn't have the required buffer on the measured gas
-    #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
-    VerificationGasLimitBufferTooLow(U256, U256),
-}
-
-/// A wrapper around Opcode that implements extra traits
-#[derive(Debug, PartialEq, Clone, parse_display::Display, Eq)]
-#[display("{0:?}")]
-pub struct ViolationOpCode(pub Opcode);
-
-impl PartialOrd for ViolationOpCode {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for ViolationOpCode {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let left = self.0 as i32;
-        let right = other.0 as i32;
-
-        left.cmp(&right)
-    }
-}
-
 fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
     match i {
         0 => Some(EntityType::Factory),
@@ -756,290 +598,8 @@ struct ValidationContext {
     entry_point_out: ValidationOutput,
     entities_needing_stake: Vec<EntityType>,
     accessed_addresses: HashSet<Address>,
-    initcode_length: usize,
+    has_factory: bool,
     associated_addresses: HashSet<Address>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-/// additional context about an entity
-pub struct EntityInfo {
-    /// The address of an entity
-    pub address: Address,
-    /// Whether the entity is staked or not
-    pub is_staked: bool,
-}
-
-impl EntityInfo {
-    fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
-        self.is_staked = allow_unstaked_addresses.contains(&self.address) || self.is_staked;
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-/// additional context for all the entities used in an op
-pub struct EntityInfos {
-    /// The entity info for the factory
-    pub factory: Option<EntityInfo>,
-    /// The entity info for the op sender
-    pub sender: EntityInfo,
-    /// The entity info for the paymaster
-    pub paymaster: Option<EntityInfo>,
-    /// The entity info for the aggregator
-    pub aggregator: Option<EntityInfo>,
-}
-
-impl EntityInfos {
-    fn new(
-        factory_address: Option<Address>,
-        sender_address: Address,
-        paymaster_address: Option<Address>,
-        entry_point_out: &ValidationOutput,
-        sim_settings: Settings,
-    ) -> Self {
-        let factory = factory_address.map(|address| EntityInfo {
-            address,
-            is_staked: is_staked(entry_point_out.factory_info, sim_settings),
-        });
-        let sender = EntityInfo {
-            address: sender_address,
-            is_staked: is_staked(entry_point_out.sender_info, sim_settings),
-        };
-        let paymaster = paymaster_address.map(|address| EntityInfo {
-            address,
-            is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
-        });
-        let aggregator = entry_point_out
-            .aggregator_info
-            .map(|aggregator_info| EntityInfo {
-                address: aggregator_info.address,
-                is_staked: is_staked(aggregator_info.stake_info, sim_settings),
-            });
-
-        Self {
-            factory,
-            sender,
-            paymaster,
-            aggregator,
-        }
-    }
-
-    /// Get iterator over the entities
-    pub fn entities(&'_ self) -> impl Iterator<Item = (EntityType, EntityInfo)> + '_ {
-        EntityType::iter().filter_map(|t| self.get(t).map(|info| (t, info)))
-    }
-
-    fn override_is_staked(&mut self, allow_unstaked_addresses: &HashSet<Address>) {
-        if let Some(mut factory) = self.factory {
-            factory.override_is_staked(allow_unstaked_addresses)
-        }
-        self.sender.override_is_staked(allow_unstaked_addresses);
-        if let Some(mut paymaster) = self.paymaster {
-            paymaster.override_is_staked(allow_unstaked_addresses)
-        }
-        if let Some(mut aggregator) = self.aggregator {
-            aggregator.override_is_staked(allow_unstaked_addresses)
-        }
-    }
-
-    /// Get the EntityInfo of a specific entity
-    pub fn get(self, entity: EntityType) -> Option<EntityInfo> {
-        match entity {
-            EntityType::Factory => self.factory,
-            EntityType::Account => Some(self.sender),
-            EntityType::Paymaster => self.paymaster,
-            EntityType::Aggregator => self.aggregator,
-        }
-    }
-
-    fn type_from_address(self, address: Address) -> Option<EntityType> {
-        if address.eq(&self.sender.address) {
-            return Some(EntityType::Account);
-        }
-
-        if let Some(factory) = self.factory {
-            if address.eq(&factory.address) {
-                return Some(EntityType::Factory);
-            }
-        }
-
-        if let Some(paymaster) = self.paymaster {
-            if address.eq(&paymaster.address) {
-                return Some(EntityType::Paymaster);
-            }
-        }
-
-        if let Some(aggregator) = self.aggregator {
-            if address.eq(&aggregator.address) {
-                return Some(EntityType::Aggregator);
-            }
-        }
-
-        None
-    }
-
-    fn sender_address(self) -> Address {
-        self.sender.address
-    }
-}
-
-fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
-    info.stake >= sim_settings.min_stake_value.into()
-        && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum StorageRestriction {
-    Allowed,
-    NeedsStake(Address, Option<EntityType>, U256),
-    Banned(U256),
-}
-
-/// Information about a storage violation based on stake status
-#[derive(Debug, PartialEq, Clone, PartialOrd, Eq, Ord)]
-pub struct NeedsStakeInformation {
-    /// Entity of stake information
-    pub entity: Entity,
-    /// Address that was accessed while unstaked
-    pub accessed_address: Address,
-    /// Type of accessed entity if it is a known entity
-    pub accessed_entity: Option<EntityType>,
-    /// The accessed slot number
-    pub slot: U256,
-    /// Minumum stake
-    pub min_stake: U256,
-    /// Minumum delay after an unstake event
-    pub min_unstake_delay: U256,
-}
-
-#[derive(Clone, Debug)]
-struct ParseStorageAccess<'a> {
-    access_info: &'a AccessInfo,
-    slots_by_address: &'a AssociatedSlotsByAddress,
-    address: Address,
-    sender: Address,
-    entrypoint: Address,
-    initcode_length: usize,
-    entity: &'a Entity,
-    entity_infos: &'a EntityInfos,
-}
-
-fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestriction, Error> {
-    let ParseStorageAccess {
-        access_info,
-        address,
-        sender,
-        entrypoint,
-        entity_infos,
-        entity,
-        slots_by_address,
-        initcode_length,
-        ..
-    } = args;
-
-    if address.eq(&sender) || address.eq(&entrypoint) {
-        return Ok(StorageRestriction::Allowed);
-    }
-
-    let mut required_stake_slot = None;
-
-    let slots: Vec<&U256> = access_info
-        .reads
-        .keys()
-        .chain(access_info.writes.keys())
-        .collect();
-
-    for slot in slots {
-        let is_sender_associated = slots_by_address.is_associated_slot(sender, *slot);
-        // [STO-032]
-        let is_entity_associated = slots_by_address.is_associated_slot(entity.address, *slot);
-        // [STO-031]
-        let is_same_address = address.eq(&entity.address);
-        // [STO-033]
-        let is_read_permission = !access_info.writes.contains_key(slot);
-
-        if is_sender_associated {
-            if initcode_length > 2
-                // special case: account.validateUserOp is allowed to use assoc storage if factory is staked.
-                // [STO-022], [STO-021]
-                && !(entity.address.eq(&sender)
-                    && entity_infos
-                        .factory
-                        .expect("Factory needs to be present and staked")
-                        .is_staked)
-            {
-                required_stake_slot = Some(slot);
-            }
-        } else if is_entity_associated || is_same_address || is_read_permission {
-            required_stake_slot = Some(slot);
-        } else {
-            return Ok(StorageRestriction::Banned(*slot));
-        }
-    }
-
-    if let Some(required_stake_slot) = required_stake_slot {
-        if let Some(entity_type) = entity_infos.type_from_address(address) {
-            return Ok(StorageRestriction::NeedsStake(
-                address,
-                Some(entity_type),
-                *required_stake_slot,
-            ));
-        }
-
-        return Ok(StorageRestriction::NeedsStake(
-            address,
-            None,
-            *required_stake_slot,
-        ));
-    }
-
-    Ok(StorageRestriction::Allowed)
-}
-
-/// Simulation Settings
-#[derive(Debug, Copy, Clone)]
-pub struct Settings {
-    /// The minimum amount of time that a staked entity must have configured as
-    /// their unstake delay on the entry point contract in order to be considered staked.
-    pub min_unstake_delay: u32,
-    /// The minimum amount of stake that a staked entity must have on the entry point
-    /// contract in order to be considered staked.
-    pub min_stake_value: u128,
-    /// The maximum amount of gas that can be used during the simulation call
-    pub max_simulate_handle_ops_gas: u64,
-    /// The maximum amount of verification gas that can be used during the simulation call
-    pub max_verification_gas: u64,
-}
-
-impl Settings {
-    /// Create new settings
-    pub fn new(
-        min_unstake_delay: u32,
-        min_stake_value: u128,
-        max_simulate_handle_ops_gas: u64,
-        max_verification_gas: u64,
-    ) -> Self {
-        Self {
-            min_unstake_delay,
-            min_stake_value,
-            max_simulate_handle_ops_gas,
-            max_verification_gas,
-        }
-    }
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            // one day in seconds: defined in the ERC-4337 spec
-            min_unstake_delay: 84600,
-            // 10^18 wei = 1 eth
-            min_stake_value: 1_000_000_000_000_000_000,
-            // 550 million gas: currently the defaults for Alchemy eth_call
-            max_simulate_handle_ops_gas: 550_000_000,
-            max_verification_gas: 5_000_000,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1048,17 +608,28 @@ mod tests {
 
     use ethers::{
         abi::AbiEncode,
-        types::{Address, BlockNumber, Bytes, U64},
+        types::{Address, BlockNumber, Bytes, Opcode, U256, U64},
         utils::hex,
     };
-    use rundler_provider::{AggregatorOut, MockProvider};
-    use rundler_types::contracts::utils::get_code_hashes::CodeHashesResult;
+    use rundler_provider::{AggregatorOut, MockEntryPointV0_6, MockProvider};
+    use rundler_types::{contracts::utils::get_code_hashes::CodeHashesResult, StakeInfo};
 
     use super::*;
-    use crate::simulation::tracer::{MockSimulateValidationTracer, Phase};
+    use crate::simulation::{
+        v0_6::tracer::{MockSimulateValidationTracer, Phase},
+        AccessInfo, Simulator as SimulatorTrait,
+    };
 
-    fn create_base_config() -> (MockProvider, MockSimulateValidationTracer) {
-        (MockProvider::new(), MockSimulateValidationTracer::new())
+    fn create_base_config() -> (
+        MockProvider,
+        MockEntryPointV0_6,
+        MockSimulateValidationTracer,
+    ) {
+        (
+            MockProvider::new(),
+            MockEntryPointV0_6::new(),
+            MockSimulateValidationTracer::new(),
+        )
     }
 
     fn get_test_tracer_output() -> SimulationTracerOutput {
@@ -1131,8 +702,9 @@ mod tests {
 
     fn create_simulator(
         provider: MockProvider,
+        entry_point: MockEntryPointV0_6,
         simulate_validation_tracer: MockSimulateValidationTracer,
-    ) -> SimulatorImpl<MockProvider, MockSimulateValidationTracer> {
+    ) -> Simulator<MockProvider, Arc<MockEntryPointV0_6>, MockSimulateValidationTracer> {
         let settings = Settings::default();
 
         let mut mempool_configs = HashMap::new();
@@ -1140,21 +712,24 @@ mod tests {
 
         let provider = Arc::new(provider);
 
-        let simulator: SimulatorImpl<MockProvider, MockSimulateValidationTracer> =
-            SimulatorImpl::new(
-                Arc::clone(&provider),
-                Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                simulate_validation_tracer,
-                settings,
-                mempool_configs,
-            );
+        let simulator: Simulator<
+            MockProvider,
+            Arc<MockEntryPointV0_6>,
+            MockSimulateValidationTracer,
+        > = Simulator::new(
+            Arc::clone(&provider),
+            Arc::new(entry_point),
+            simulate_validation_tracer,
+            settings,
+            mempool_configs,
+        );
 
         simulator
     }
 
     #[tokio::test]
     async fn test_simulate_validation() {
-        let (mut provider, mut tracer) = create_base_config();
+        let (mut provider, mut entry_point, mut tracer) = create_base_config();
 
         provider
             .expect_get_latest_block_hash_and_number()
@@ -1185,7 +760,7 @@ mod tests {
                 })
             });
 
-        provider
+        entry_point
             .expect_validate_user_op_signature()
             .returning(|_, _, _| Ok(AggregatorOut::NotNeeded));
 
@@ -1203,7 +778,7 @@ mod tests {
             signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
         };
 
-        let simulator = create_simulator(provider, tracer);
+        let simulator = create_simulator(provider, entry_point, tracer);
         let res = simulator
             .simulate_validation(user_operation, None, None)
             .await;
@@ -1212,7 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_context_two_phases_unintended_revert() {
-        let (provider, mut tracer) = create_base_config();
+        let (provider, entry_point, mut tracer) = create_base_config();
 
         tracer
             .expect_trace_simulate_validation()
@@ -1242,7 +817,7 @@ mod tests {
             signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
         };
 
-        let simulator = create_simulator(provider, tracer);
+        let simulator = create_simulator(provider, entry_point, tracer);
         let res = simulator
             .create_context(user_operation, BlockId::Number(BlockNumber::Latest))
             .await;
@@ -1262,7 +837,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_gather_context_violations() {
-        let (provider, tracer) = create_base_config();
+        let (provider, mut entry_point, tracer) = create_base_config();
+        entry_point
+            .expect_address()
+            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
 
         let mut tracer_output = get_test_tracer_output();
 
@@ -1300,7 +878,7 @@ mod tests {
                 pre_verification_gas: U256::from(1000),
                 ..Default::default()
             },
-            initcode_length: 10,
+            has_factory: true,
             associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
             entity_infos: EntityInfos::new(
@@ -1342,7 +920,7 @@ mod tests {
             accessed_addresses: HashSet::new(),
         };
 
-        let simulator = create_simulator(provider, tracer);
+        let simulator = create_simulator(provider, entry_point, tracer);
         let res = simulator.gather_context_violations(&mut validation_context);
 
         assert_eq!(

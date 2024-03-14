@@ -13,7 +13,7 @@
 
 //! Trait for interacting with chain data and contracts.
 
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use ethers::{
     abi::{AbiDecode, AbiEncode},
@@ -25,30 +25,9 @@ use ethers::{
 };
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_types::UserOperation;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::error::ProviderError;
-
-/// Output of a successful signature aggregator simulation call
-#[derive(Clone, Debug, Default)]
-pub struct AggregatorSimOut {
-    /// Address of the aggregator contract
-    pub address: Address,
-    /// Aggregated signature
-    pub signature: Bytes,
-}
-
-/// Result of a signature aggregator call
-#[derive(Debug)]
-pub enum AggregatorOut {
-    /// No aggregator used
-    NotNeeded,
-    /// Successful call
-    SuccessWithInfo(AggregatorSimOut),
-    /// Aggregator validation function reverted
-    ValidationReverted,
-}
 
 /// Result of a provider method call
 pub type ProviderResult<T> = Result<T, ProviderError>;
@@ -148,34 +127,4 @@ pub trait Provider: Send + Sync + Debug + 'static {
 
     /// Get the logs matching a filter
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>>;
-
-    /// Call an aggregator to aggregate signatures for a set of operations
-    async fn aggregate_signatures(
-        self: Arc<Self>,
-        aggregator_address: Address,
-        ops: Vec<UserOperation>,
-    ) -> ProviderResult<Option<Bytes>>;
-
-    /// Validate a user operation signature using an aggregator
-    async fn validate_user_op_signature(
-        self: Arc<Self>,
-        aggregator_address: Address,
-        user_op: UserOperation,
-        gas_cap: u64,
-    ) -> ProviderResult<AggregatorOut>;
-
-    /// Calculate the L1 portion of the gas for a user operation on Arbitrum
-    async fn calc_arbitrum_l1_gas(
-        self: Arc<Self>,
-        entry_point_address: Address,
-        op: UserOperation,
-    ) -> ProviderResult<U256>;
-
-    /// Calculate the L1 portion of the gas for a user operation on optimism
-    async fn calc_optimism_l1_gas(
-        self: Arc<Self>,
-        entry_point_address: Address,
-        op: UserOperation,
-        gas_price: U256,
-    ) -> ProviderResult<U256>;
 }

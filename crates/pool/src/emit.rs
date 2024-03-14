@@ -14,7 +14,7 @@
 use std::fmt::Display;
 
 use ethers::types::{Address, H256};
-use rundler_types::{Entity, EntityType, Timestamp, UserOperation};
+use rundler_types::{Entity, EntityType, Timestamp, UserOperation, UserOperationVariant};
 use rundler_utils::strs;
 
 use crate::mempool::OperationOrigin;
@@ -27,7 +27,7 @@ pub enum OpPoolEvent {
         /// Operation hash
         op_hash: H256,
         /// The full operation
-        op: UserOperation,
+        op: UserOperationVariant,
         /// Block number the operation was added to the pool
         block_number: u64,
         /// Operation origin
@@ -157,8 +157,8 @@ impl Display for OpPoolEvent {
                     format_entity_status("Factory", entities.factory.as_ref()),
                     format_entity_status("Paymaster", entities.paymaster.as_ref()),
                     format_entity_status("Aggregator", entities.aggregator.as_ref()),
-                    op.max_fee_per_gas,
-                    op.max_priority_fee_per_gas,
+                    op.max_fee_per_gas(),
+                    op.max_priority_fee_per_gas(),
                 )
             }
             OpPoolEvent::RemovedOp { op_hash, reason } => {

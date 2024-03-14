@@ -10,26 +10,24 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    convert::TryFrom,
-    fmt::Debug,
-    sync::Arc,
-};
+use std::{collections::HashMap, convert::TryFrom, fmt::Debug, sync::Arc};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::types::{
     Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
-    GethTrace, Opcode, U256,
+    GethTrace, Opcode,
 };
 #[cfg(test)]
 use mockall::automock;
-use rundler_provider::{EntryPoint, Provider};
-use rundler_types::UserOperation;
+use rundler_provider::{Provider, SimulationProvider};
+use rundler_types::v0_6::UserOperation;
 use serde::{Deserialize, Serialize};
 
-use crate::ExpectedStorage;
+use crate::{
+    simulation::{AccessInfo, AssociatedSlotsByAddress},
+    ExpectedStorage,
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,37 +66,6 @@ pub(crate) struct Phase {
     pub(crate) ext_code_access_info: HashMap<Address, Opcode>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct AccessInfo {
-    // slot value, just prior this current operation
-    pub(crate) reads: HashMap<U256, String>,
-    // count of writes.
-    pub(crate) writes: HashMap<U256, u32>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct AssociatedSlotsByAddress(HashMap<Address, BTreeSet<U256>>);
-
-impl AssociatedSlotsByAddress {
-    pub(crate) fn is_associated_slot(&self, address: Address, slot: U256) -> bool {
-        if slot == address.as_bytes().into() {
-            return true;
-        }
-        let Some(associated_slots) = self.0.get(&address) else {
-            return false;
-        };
-        let Some(&next_smallest_slot) = associated_slots.range(..(slot + 1)).next_back() else {
-            return false;
-        };
-        slot - next_smallest_slot < 128.into()
-    }
-
-    pub(crate) fn addresses(&self) -> HashSet<Address> {
-        self.0.clone().into_keys().collect()
-    }
-}
-
 /// Trait for tracing the simulation of a user operation.
 #[cfg_attr(test, automock)]
 #[async_trait]
@@ -114,11 +81,7 @@ pub trait SimulateValidationTracer: Send + Sync + 'static {
 
 /// Tracer implementation for the bundler's custom tracer.
 #[derive(Debug)]
-pub struct SimulateValidationTracerImpl<P, E>
-where
-    P: Provider,
-    E: EntryPoint,
-{
+pub struct SimulateValidationTracerImpl<P, E> {
     provider: Arc<P>,
     entry_point: E,
 }
@@ -130,7 +93,7 @@ where
 impl<P, E> SimulateValidationTracer for SimulateValidationTracerImpl<P, E>
 where
     P: Provider,
-    E: EntryPoint,
+    E: SimulationProvider<UO = UserOperation>,
 {
     async fn trace_simulate_validation(
         &self,
@@ -163,11 +126,7 @@ where
     }
 }
 
-impl<P, E> SimulateValidationTracerImpl<P, E>
-where
-    P: Provider,
-    E: EntryPoint,
-{
+impl<P, E> SimulateValidationTracerImpl<P, E> {
     /// Creates a new instance of the bundler's custom tracer.
     pub fn new(provider: Arc<P>, entry_point: E) -> Self {
         Self {
@@ -178,7 +137,7 @@ where
 }
 
 fn validation_tracer_js() -> &'static str {
-    include_str!("../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
+    include_str!("../../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
 }
 
 pub(crate) fn parse_combined_tracer_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>

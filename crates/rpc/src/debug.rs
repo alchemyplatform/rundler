@@ -17,6 +17,7 @@ use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
 use rundler_builder::{BuilderServer, BundlingMode};
 use rundler_pool::PoolServer;
+use rundler_types::v0_6;
 
 use crate::{
     error::rpc_err,
@@ -126,7 +127,7 @@ where
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?
             .into_iter()
-            .map(|pop| pop.uo.into())
+            .map(|pop| v0_6::UserOperation::from(pop.uo).into())
             .collect::<Vec<RpcUserOperation>>())
     }
 

@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use futures_util::StreamExt;
 use rundler_pool::PoolServer;
-use rundler_provider::EntryPoint;
+use rundler_provider::{BundleHandler, EntryPoint};
 use rundler_sim::ExpectedStorage;
 use rundler_types::{chain::ChainSpec, EntityUpdate, GasFees, UserOperation};
 use rundler_utils::emit::WithEntryPoint;
@@ -47,13 +47,7 @@ pub(crate) struct Settings {
 }
 
 #[derive(Debug)]
-pub(crate) struct BundleSenderImpl<P, E, T, C>
-where
-    P: BundleProposer,
-    E: EntryPoint,
-    T: TransactionTracker,
-    C: PoolServer,
-{
+pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     builder_index: u64,
     bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
     chain_spec: ChainSpec,
@@ -64,6 +58,7 @@ where
     pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    _uo_type: std::marker::PhantomData<UO>,
 }
 
 #[derive(Debug)]
@@ -99,10 +94,11 @@ pub enum SendBundleResult {
 }
 
 #[async_trait]
-impl<P, E, T, C> BundleSender for BundleSenderImpl<P, E, T, C>
+impl<UO, P, E, T, C> BundleSender for BundleSenderImpl<UO, P, E, T, C>
 where
-    P: BundleProposer,
-    E: EntryPoint,
+    UO: UserOperation,
+    P: BundleProposer<UO = UO>,
+    E: EntryPoint + BundleHandler<UO = UO>,
     T: TransactionTracker,
     C: PoolServer,
 {
@@ -247,10 +243,11 @@ where
     }
 }
 
-impl<P, E, T, C> BundleSenderImpl<P, E, T, C>
+impl<UO, P, E, T, C> BundleSenderImpl<UO, P, E, T, C>
 where
-    P: BundleProposer,
-    E: EntryPoint,
+    UO: UserOperation,
+    P: BundleProposer<UO = UO>,
+    E: EntryPoint + BundleHandler<UO = UO>,
     T: TransactionTracker,
     C: PoolServer,
 {
@@ -278,6 +275,7 @@ where
             pool,
             settings,
             event_sender,
+            _uo_type: std::marker::PhantomData,
         }
     }
 
@@ -538,12 +536,12 @@ where
         }))
     }
 
-    async fn remove_ops_from_pool(&self, ops: &[UserOperation]) -> anyhow::Result<()> {
+    async fn remove_ops_from_pool(&self, ops: &[UO]) -> anyhow::Result<()> {
         self.pool
             .remove_ops(
                 self.entry_point.address(),
                 ops.iter()
-                    .map(|op| op.op_hash(self.entry_point.address(), self.chain_spec.id))
+                    .map(|op| op.hash(self.entry_point.address(), self.chain_spec.id))
                     .collect(),
             )
             .await
@@ -564,8 +562,8 @@ where
         });
     }
 
-    fn op_hash(&self, op: &UserOperation) -> H256 {
-        op.op_hash(self.entry_point.address(), self.chain_spec.id)
+    fn op_hash(&self, op: &UO) -> H256 {
+        op.hash(self.entry_point.address(), self.chain_spec.id)
     }
 }
 
