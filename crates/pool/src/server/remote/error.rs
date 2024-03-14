@@ -13,9 +13,13 @@
 
 use anyhow::{bail, Context};
 use ethers::types::Opcode;
-use rundler_sim::{NeedsStakeInformation, PrecheckViolation, SimulationViolation, ViolationOpCode};
-use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
-use rundler_types::StorageSlot;
+use rundler_task::grpc::protos::{from_bytes, to_le_bytes};
+use rundler_types::{
+    pool::{
+        MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation, SimulationViolation,
+    },
+    StorageSlot, ViolationOpCode,
+};
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error,
@@ -35,38 +39,25 @@ use super::protos::{
     UsedForbiddenPrecompile, VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh,
     WrongNumberOfPhases,
 };
-use crate::{mempool::MempoolError, server::error::PoolServerError};
 
-impl From<tonic::Status> for PoolServerError {
-    fn from(value: tonic::Status) -> Self {
-        PoolServerError::Other(anyhow::anyhow!(value.to_string()))
-    }
-}
-
-impl From<ConversionError> for PoolServerError {
-    fn from(value: ConversionError) -> Self {
-        PoolServerError::Other(anyhow::anyhow!(value.to_string()))
-    }
-}
-
-impl TryFrom<ProtoMempoolError> for PoolServerError {
+impl TryFrom<ProtoMempoolError> for PoolError {
     type Error = anyhow::Error;
 
     fn try_from(value: ProtoMempoolError) -> Result<Self, Self::Error> {
-        Ok(PoolServerError::MempoolError(value.try_into()?))
+        Ok(PoolError::MempoolError(value.try_into()?))
     }
 }
 
-impl From<PoolServerError> for ProtoMempoolError {
-    fn from(value: PoolServerError) -> Self {
+impl From<PoolError> for ProtoMempoolError {
+    fn from(value: PoolError) -> Self {
         match value {
-            PoolServerError::MempoolError(e) => e.into(),
-            PoolServerError::UnexpectedResponse => ProtoMempoolError {
+            PoolError::MempoolError(e) => e.into(),
+            PoolError::UnexpectedResponse => ProtoMempoolError {
                 error: Some(mempool_error::Error::Internal(
                     "unexpected response from pool server".to_string(),
                 )),
             },
-            PoolServerError::Other(e) => ProtoMempoolError {
+            PoolError::Other(e) => ProtoMempoolError {
                 error: Some(mempool_error::Error::Internal(e.to_string())),
             },
         }

@@ -23,7 +23,10 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use rundler_task::grpc::{metrics::GrpcMetricsLayer, protos::from_bytes};
-use rundler_types::{EntityUpdate, UserOperationId};
+use rundler_types::{
+    pool::{Pool, Reputation},
+    EntityUpdate, UserOperationId,
+};
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
@@ -51,10 +54,7 @@ use super::protos::{
     SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
-use crate::{
-    mempool::Reputation,
-    server::{local::LocalPoolHandle, PoolServer},
-};
+use crate::server::local::LocalPoolHandle;
 
 const MAX_REMOTE_BLOCK_SUBSCRIPTIONS: usize = 32;
 

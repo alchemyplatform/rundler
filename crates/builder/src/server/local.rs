@@ -14,16 +14,14 @@
 use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use rundler_task::server::{HealthCheck, ServerStatus};
+use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResult},
-    server::{BuilderResult, BuilderServer, BuilderServerError, BundlingMode},
-};
+use crate::bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResult};
 
 /// Local builder server builder
 #[derive(Debug)]
@@ -92,13 +90,13 @@ impl LocalBuilderHandle {
 }
 
 #[async_trait]
-impl BuilderServer for LocalBuilderHandle {
+impl Builder for LocalBuilderHandle {
     async fn get_supported_entry_points(&self) -> BuilderResult<Vec<Address>> {
         let req = ServerRequestKind::GetSupportedEntryPoints;
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetSupportedEntryPoints { entry_points } => Ok(entry_points),
-            _ => Err(BuilderServerError::UnexpectedResponse),
+            _ => Err(BuilderError::UnexpectedResponse),
         }
     }
 
@@ -107,7 +105,7 @@ impl BuilderServer for LocalBuilderHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugSendBundleNow { hash, block_number } => Ok((hash, block_number)),
-            _ => Err(BuilderServerError::UnexpectedResponse),
+            _ => Err(BuilderError::UnexpectedResponse),
         }
     }
 
@@ -116,7 +114,7 @@ impl BuilderServer for LocalBuilderHandle {
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::DebugSetBundlingMode => Ok(()),
-            _ => Err(BuilderServerError::UnexpectedResponse),
+            _ => Err(BuilderError::UnexpectedResponse),
         }
     }
 }

@@ -20,6 +20,8 @@
 
 //! Rundler common types
 
+pub mod builder;
+
 pub mod chain;
 
 #[rustfmt::skip]
@@ -27,10 +29,15 @@ pub mod contracts;
 pub use contracts::v0_6::shared_types::DepositInfo as DepositInfoV0_6;
 
 mod entity;
-pub use entity::{Entity, EntityType, EntityUpdate, EntityUpdateType};
+pub use entity::{Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType};
+
+mod opcode;
+pub use opcode::ViolationOpCode;
 
 mod gas;
 pub use gas::GasFees;
+
+pub mod pool;
 
 mod timestamp;
 pub use timestamp::{Timestamp, ValidTimeRange};

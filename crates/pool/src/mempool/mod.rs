@@ -11,15 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-mod error;
-pub use error::MempoolError;
-
 mod entity_tracker;
 mod pool;
 
 mod reputation;
 pub(crate) use reputation::{AddressReputation, ReputationParams};
-pub use reputation::{Reputation, ReputationStatus};
 
 mod size;
 
@@ -32,19 +28,22 @@ use std::{
     sync::Arc,
 };
 
-use ethers::types::{Address, H256, U256};
+use ethers::types::{Address, H256};
 #[cfg(test)]
 use mockall::automock;
-use rundler_sim::{EntityInfos, MempoolConfig, PrecheckSettings, SimulationSettings};
+use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
-    Entity, EntityType, EntityUpdate, UserOperation, UserOperationId, UserOperationVariant,
-    ValidTimeRange,
+    pool::{
+        MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
+    },
+    EntityUpdate, UserOperation, UserOperationId,
 };
 use tonic::async_trait;
 pub(crate) use uo_pool::UoPool;
 
-use self::error::MempoolResult;
 use super::chain::ChainUpdate;
+
+pub(crate) type MempoolResult<T> = std::result::Result<T, MempoolError>;
 
 #[cfg_attr(test, automock(type UO = rundler_types::v0_6::UserOperation;))]
 #[async_trait]
@@ -161,23 +160,6 @@ pub struct PoolConfig {
     pub drop_min_num_blocks: u64,
 }
 
-/// Stake status structure
-#[derive(Debug, Clone, Copy)]
-pub struct StakeStatus {
-    /// Address is staked
-    pub is_staked: bool,
-    /// Stake information about address
-    pub stake_info: StakeInfo,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct StakeInfo {
-    /// Stake amount
-    pub stake: u128,
-    /// Unstake delay in seconds
-    pub unstake_delay_sec: u32,
-}
-
 /// Origin of an operation.
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // TODO(danc): remove once implemented
@@ -191,162 +173,9 @@ pub enum OperationOrigin {
     ReturnedAfterReorg,
 }
 
-/// A user operation with additional metadata from validation.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PoolOperation<UO: UserOperation> {
-    /// The user operation stored in the pool
-    pub uo: UO,
-    /// The entry point address for this operation
-    pub entry_point: Address,
-    /// The aggregator address for this operation, if any.
-    pub aggregator: Option<Address>,
-    /// The valid time range for this operation.
-    pub valid_time_range: ValidTimeRange,
-    /// The expected code hash for all contracts accessed during validation for this operation.
-    pub expected_code_hash: H256,
-    /// The block hash simulation was completed at
-    pub sim_block_hash: H256,
-    /// The block number simulation was completed at
-    pub sim_block_number: u64,
-    /// List of entities that need to stake for this operation.
-    pub entities_needing_stake: Vec<EntityType>,
-    /// Whether the account is staked.
-    pub account_is_staked: bool,
-    /// Staking information about all the entities.
-    pub entity_infos: EntityInfos,
-}
-
-#[derive(Debug, Default, Clone, Eq, PartialEq, Copy)]
-pub struct PaymasterMetadata {
-    /// Paymaster address
-    pub address: Address,
-    /// The on-chain balance of the paymaster
-    pub confirmed_balance: U256,
-    /// The pending balance is the confirm balance subtracted by
-    /// the max cost of all the pending user operations that use the paymaster  
-    pub pending_balance: U256,
-}
-
-impl<UO: UserOperation> PoolOperation<UO> {
-    /// Returns true if the operation contains the given entity.
-    pub fn contains_entity(&self, entity: &Entity) -> bool {
-        if let Some(e) = self.entity_infos.get(entity.kind) {
-            e.address == entity.address
-        } else {
-            false
-        }
-    }
-
-    /// Returns true if the operation requires the given entity to stake.
-    ///
-    /// For non-accounts, its possible that the entity is staked, but doesn't
-    /// _need_ to stake for this operation. For example, if the operation does not
-    /// access any storage slots that require staking. In that case this function
-    /// will return false.
-    ///
-    /// For staked accounts, this function will always return true. Staked accounts
-    /// are able to circumvent the mempool operation limits always need their reputation
-    /// checked to prevent them from filling the pool.
-    pub fn requires_stake(&self, entity: EntityType) -> bool {
-        match entity {
-            EntityType::Account => self.account_is_staked,
-            _ => self.entities_needing_stake.contains(&entity),
-        }
-    }
-
-    /// Returns an iterator over all entities that are included in this operation.
-    pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        self.entity_infos
-            .entities()
-            .map(|(t, entity)| Entity::new(t, entity.address))
-    }
-
-    /// Returns an iterator over all entities that need stake in this operation. This can be a subset of entities that are staked in the operation.
-    pub fn entities_requiring_stake(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        self.entity_infos.entities().filter_map(|(t, entity)| {
-            if self.requires_stake(t) {
-                Entity::new(t, entity.address).into()
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Return all the unstaked entities that are used in this operation.
-    pub fn unstaked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        self.entity_infos.entities().filter_map(|(t, entity)| {
-            if entity.is_staked {
-                None
-            } else {
-                Entity::new(t, entity.address).into()
-            }
-        })
-    }
-
-    /// Compute the amount of heap memory the PoolOperation takes up.
-    pub fn mem_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.uo.heap_size()
-            + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
-    }
-}
-
-/// Trait to convert a [PoolOperation] holding a [UserOperationVariant] to a [PoolOperation] with a different user operation type.
-pub trait FromPoolOperationVariant {
-    /// Conversion
-    fn from_variant(op: PoolOperation<UserOperationVariant>) -> Self;
-}
-
-/// Trait to convert a [PoolOperation] holding a user operation to a [PoolOperation] with a [UserOperationVariant].
-pub trait IntoPoolOperationVariant {
-    /// Conversion
-    fn into_variant(self) -> PoolOperation<UserOperationVariant>;
-}
-
-impl<UO> FromPoolOperationVariant for PoolOperation<UO>
-where
-    UO: UserOperation + From<UserOperationVariant>,
-{
-    fn from_variant(op: PoolOperation<UserOperationVariant>) -> Self {
-        PoolOperation {
-            uo: op.uo.into(),
-            entry_point: op.entry_point,
-            aggregator: op.aggregator,
-            valid_time_range: op.valid_time_range,
-            expected_code_hash: op.expected_code_hash,
-            sim_block_hash: op.sim_block_hash,
-            sim_block_number: op.sim_block_number,
-            entities_needing_stake: op.entities_needing_stake,
-            account_is_staked: op.account_is_staked,
-            entity_infos: op.entity_infos,
-        }
-    }
-}
-
-impl<UO> IntoPoolOperationVariant for PoolOperation<UO>
-where
-    UO: UserOperation + Into<UserOperationVariant>,
-{
-    fn into_variant(self) -> PoolOperation<UserOperationVariant> {
-        PoolOperation {
-            uo: self.uo.into(),
-            entry_point: self.entry_point,
-            aggregator: self.aggregator,
-            valid_time_range: self.valid_time_range,
-            expected_code_hash: self.expected_code_hash,
-            sim_block_hash: self.sim_block_hash,
-            sim_block_number: self.sim_block_number,
-            entities_needing_stake: self.entities_needing_stake,
-            account_is_staked: self.account_is_staked,
-            entity_infos: self.entity_infos,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use rundler_sim::EntityInfo;
-    use rundler_types::v0_6::UserOperation;
+    use rundler_types::{v0_6::UserOperation, EntityInfo, EntityInfos, EntityType, ValidTimeRange};
 
     use super::*;
 
