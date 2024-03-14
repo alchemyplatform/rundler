@@ -15,18 +15,14 @@ use anyhow::{anyhow, Context};
 use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
 use rundler_types::{
-    v0_6, Entity as RundlerEntity, EntityType as RundlerEntityType,
-    EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
-    UserOperationVariant, ValidTimeRange,
-};
-
-use crate::{
-    mempool::{
-        PaymasterMetadata as PoolPaymasterMetadata, PoolOperation, Reputation as PoolReputation,
-        ReputationStatus as PoolReputationStatus, StakeInfo as RundlerStakeInfo,
+    pool::{
+        NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
+        Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
     },
-    server::NewHead as PoolNewHead,
+    v0_6, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
+    EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
+    StakeInfo as RundlerStakeInfo, UserOperationVariant, ValidTimeRange,
 };
 
 tonic::include_proto!("op_pool");
@@ -209,25 +205,25 @@ impl From<PoolReputationStatus> for ReputationStatus {
     }
 }
 
+impl TryFrom<ReputationStatus> for PoolReputationStatus {
+    type Error = ConversionError;
+
+    fn try_from(status: ReputationStatus) -> Result<Self, Self::Error> {
+        match status {
+            ReputationStatus::Ok => Ok(PoolReputationStatus::Ok),
+            ReputationStatus::Throttled => Ok(PoolReputationStatus::Throttled),
+            ReputationStatus::Banned => Ok(PoolReputationStatus::Banned),
+            ReputationStatus::Unspecified => Err(ConversionError::InvalidEnumValue(status as i32)),
+        }
+    }
+}
+
 impl From<PoolReputation> for Reputation {
     fn from(rep: PoolReputation) -> Self {
         Reputation {
             address: rep.address.as_bytes().to_vec(),
             ops_seen: rep.ops_seen,
             ops_included: rep.ops_included,
-        }
-    }
-}
-
-impl TryFrom<i32> for PoolReputationStatus {
-    type Error = ConversionError;
-
-    fn try_from(status: i32) -> Result<Self, Self::Error> {
-        match status {
-            x if x == ReputationStatus::Ok as i32 => Ok(Self::Ok),
-            x if x == ReputationStatus::Throttled as i32 => Ok(Self::Throttled),
-            x if x == ReputationStatus::Banned as i32 => Ok(Self::Banned),
-            _ => Err(ConversionError::InvalidEnumValue(status)),
         }
     }
 }
@@ -253,7 +249,7 @@ impl TryFrom<StakeStatus> for RundlerStakeStatus {
                 is_staked: stake_status.is_staked,
                 stake_info: RundlerStakeInfo {
                     stake: stake_info.stake.into(),
-                    unstake_delay_sec: stake_info.unstake_delay_sec,
+                    unstake_delay_sec: stake_info.unstake_delay_sec.into(),
                 },
             });
         }
@@ -267,8 +263,8 @@ impl From<RundlerStakeStatus> for StakeStatus {
         StakeStatus {
             is_staked: stake_status.is_staked,
             stake_info: Some(StakeInfo {
-                stake: stake_status.stake_info.stake as u64,
-                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec,
+                stake: stake_status.stake_info.stake.as_u64(),
+                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec.as_u32(),
             }),
         }
     }
@@ -333,7 +329,7 @@ impl TryFrom<MempoolOp> for PoolOperation<UserOperationVariant> {
             sim_block_hash,
             sim_block_number: 0,
             account_is_staked: op.account_is_staked,
-            entity_infos: rundler_sim::EntityInfos::default(),
+            entity_infos: EntityInfos::default(),
         })
     }
 }

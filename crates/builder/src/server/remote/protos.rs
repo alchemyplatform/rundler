@@ -12,8 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use rundler_task::grpc::protos::ConversionError;
-
-use crate::server::BundlingMode as RpcBundlingMode;
+use rundler_types::builder::BundlingMode as RpcBundlingMode;
 
 tonic::include_proto!("builder");
 
@@ -37,18 +36,6 @@ impl TryFrom<BundlingMode> for RpcBundlingMode {
             BundlingMode::Auto => Ok(Self::Auto),
             BundlingMode::Manual => Ok(Self::Manual),
             _ => Err(ConversionError::InvalidEnumValue(value as i32)),
-        }
-    }
-}
-
-impl TryFrom<i32> for RpcBundlingMode {
-    type Error = ConversionError;
-
-    fn try_from(status: i32) -> Result<Self, Self::Error> {
-        match status {
-            x if x == BundlingMode::Auto as i32 => Ok(Self::Auto),
-            x if x == BundlingMode::Manual as i32 => Ok(Self::Manual),
-            _ => Err(ConversionError::InvalidEnumValue(status)),
         }
     }
 }

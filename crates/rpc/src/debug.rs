@@ -15,8 +15,10 @@ use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
-use rundler_builder::{BuilderServer, BundlingMode};
-use rundler_pool::PoolServer;
+use rundler_types::{
+    builder::{Builder, BundlingMode},
+    pool::Pool,
+};
 
 use crate::{
     error::rpc_err,
@@ -96,8 +98,8 @@ impl<P, B> DebugApi<P, B> {
 #[async_trait]
 impl<P, B> DebugApiServer for DebugApi<P, B>
 where
-    P: PoolServer,
-    B: BuilderServer,
+    P: Pool,
+    B: Builder,
 {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         let _ = self
@@ -234,8 +236,8 @@ where
             is_staked: result.is_staked,
             stake_info: RpcStakeInfo {
                 addr: address,
-                stake: result.stake_info.stake,
-                unstake_delay_sec: result.stake_info.unstake_delay_sec,
+                stake: result.stake_info.stake.as_u128(),
+                unstake_delay_sec: result.stake_info.unstake_delay_sec.as_u32(),
             },
         })
     }
