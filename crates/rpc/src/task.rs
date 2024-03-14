@@ -22,20 +22,23 @@ use jsonrpsee::{
 };
 use rundler_builder::BuilderServer;
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, EthersEntryPointV0_6, L1GasProvider, SimulationProvider};
-use rundler_sim::{EstimationSettings, PrecheckSettings};
+use rundler_provider::EthersEntryPointV0_6;
+use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PrecheckSettings};
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
 };
-use rundler_types::{chain::ChainSpec, v0_6::UserOperation};
+use rundler_types::chain::ChainSpec;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
     admin::{AdminApi, AdminApiServer},
     debug::{DebugApi, DebugApiServer},
-    eth::{EthApi, EthApiServer, EthApiSettings},
+    eth::{
+        EntryPointRouteImpl, EntryPointRouter, EntryPointRouterBuilder, EthApi, EthApiServer,
+        EthApiSettings, UserOperationEventProviderV0_6,
+    },
     health::{HealthChecker, SystemApiServer},
     metrics::RpcMetricsLogger,
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
@@ -91,8 +94,37 @@ where
         let ep =
             EthersEntryPointV0_6::new(self.args.chain_spec.entry_point_address, provider.clone());
 
+        // create the entry point router
+        let router = EntryPointRouterBuilder::default()
+            .v0_6(EntryPointRouteImpl::new(
+                ep.clone(),
+                GasEstimatorV0_6::new(
+                    self.args.chain_spec.clone(),
+                    provider.clone(),
+                    ep,
+                    self.args.estimation_settings,
+                    FeeEstimator::new(
+                        &self.args.chain_spec,
+                        Arc::clone(&provider),
+                        self.args.precheck_settings.priority_fee_mode,
+                        self.args
+                            .precheck_settings
+                            .bundle_priority_fee_overhead_percent,
+                    ),
+                ),
+                UserOperationEventProviderV0_6::new(
+                    self.args.chain_spec.id,
+                    self.args.chain_spec.entry_point_address,
+                    provider.clone(),
+                    self.args
+                        .eth_api_settings
+                        .user_operation_event_block_distance,
+                ),
+            ))
+            .build();
+
         let mut module = RpcModule::new(());
-        self.attach_namespaces(provider, ep, &mut module)?;
+        self.attach_namespaces(provider, router, &mut module)?;
 
         let servers: Vec<Box<dyn HealthCheck>> =
             vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];
@@ -148,48 +180,45 @@ where
         Box::new(self)
     }
 
-    fn attach_namespaces<E, C>(
+    fn attach_namespaces<C>(
         &self,
         provider: Arc<Provider<C>>,
-        entry_point: E,
+        entry_point_router: EntryPointRouter,
         module: &mut RpcModule<()>,
     ) -> anyhow::Result<()>
     where
-        E: EntryPoint
-            + SimulationProvider<UO = UserOperation>
-            + L1GasProvider<UO = UserOperation>
-            + Clone,
         C: JsonRpcClient + 'static,
     {
-        for api in &self.args.api_namespaces {
-            match api {
-                ApiNamespace::Eth => module.merge(
-                    EthApi::new(
-                        self.args.chain_spec.clone(),
-                        provider.clone(),
-                        // TODO: support multiple entry points
-                        vec![entry_point.clone()],
-                        self.pool.clone(),
-                        self.args.eth_api_settings,
-                        self.args.estimation_settings,
-                        self.args.precheck_settings,
-                    )
-                    .into_rpc(),
-                )?,
-                ApiNamespace::Debug => module
-                    .merge(DebugApi::new(self.pool.clone(), self.builder.clone()).into_rpc())?,
-                ApiNamespace::Admin => module.merge(AdminApi::new(self.pool.clone()).into_rpc())?,
-                ApiNamespace::Rundler => module.merge(
-                    RundlerApi::new(
-                        &self.args.chain_spec,
-                        provider.clone(),
-                        entry_point.clone(),
-                        self.pool.clone(),
-                        self.args.rundler_api_settings,
-                    )
-                    .into_rpc(),
-                )?,
-            }
+        if self.args.api_namespaces.contains(&ApiNamespace::Eth) {
+            module.merge(
+                EthApi::new(
+                    self.args.chain_spec.clone(),
+                    entry_point_router.clone(),
+                    self.pool.clone(),
+                )
+                .into_rpc(),
+            )?
+        }
+
+        if self.args.api_namespaces.contains(&ApiNamespace::Debug) {
+            module.merge(DebugApi::new(self.pool.clone(), self.builder.clone()).into_rpc())?;
+        }
+
+        if self.args.api_namespaces.contains(&ApiNamespace::Admin) {
+            module.merge(AdminApi::new(self.pool.clone()).into_rpc())?;
+        }
+
+        if self.args.api_namespaces.contains(&ApiNamespace::Rundler) {
+            module.merge(
+                RundlerApi::new(
+                    &self.args.chain_spec,
+                    provider.clone(),
+                    entry_point_router,
+                    self.pool.clone(),
+                    self.args.rundler_api_settings,
+                )
+                .into_rpc(),
+            )?;
         }
 
         Ok(())

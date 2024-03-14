@@ -15,15 +15,22 @@ mod api;
 pub(crate) use api::EthApi;
 pub use api::Settings as EthApiSettings;
 
+mod router;
+pub(crate) use router::*;
+
 mod error;
 pub(crate) use error::EthRpcError;
+mod events;
+pub(crate) use events::UserOperationEventProviderV0_6;
 mod server;
 
 use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_types::v0_6;
 
-use crate::types::{RichUserOperation, RpcGasEstimate, RpcUserOperation, UserOperationReceipt};
+use crate::types::{
+    RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
+    RpcUserOperationReceipt,
+};
 
 /// Eth API
 #[rpc(client, server, namespace = "eth")]
@@ -41,21 +48,24 @@ pub trait EthApi {
     #[method(name = "estimateUserOperationGas")]
     async fn estimate_user_operation_gas(
         &self,
-        op: v0_6::UserOperationOptionalGas,
+        op: RpcUserOperationOptionalGas,
         entry_point: Address,
         state_override: Option<spoof::State>,
     ) -> RpcResult<RpcGasEstimate>;
 
     /// Returns the user operation with the given hash.
     #[method(name = "getUserOperationByHash")]
-    async fn get_user_operation_by_hash(&self, hash: H256) -> RpcResult<Option<RichUserOperation>>;
+    async fn get_user_operation_by_hash(
+        &self,
+        hash: H256,
+    ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
     #[method(name = "getUserOperationReceipt")]
     async fn get_user_operation_receipt(
         &self,
         hash: H256,
-    ) -> RpcResult<Option<UserOperationReceipt>>;
+    ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses
     #[method(name = "supportedEntryPoints")]

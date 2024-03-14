@@ -11,32 +11,24 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-#![warn(missing_docs, unreachable_pub)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
-//! JSON-RPC server for the Rundler.
+use ethers::types::H256;
 
-mod debug;
-pub use debug::DebugApiClient;
+use super::UserOperationEventProvider;
+use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
 
-mod admin;
-pub use admin::AdminApiClient;
+#[derive(Debug)]
+pub(crate) struct UserOperationEventProviderV0_7;
 
-mod error;
+#[async_trait::async_trait]
+impl UserOperationEventProvider for UserOperationEventProviderV0_7 {
+    async fn get_mined_by_hash(
+        &self,
+        _hash: H256,
+    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+        unimplemented!()
+    }
 
-mod eth;
-pub use eth::{EthApiClient, EthApiSettings};
-
-mod health;
-mod metrics;
-
-mod rundler;
-pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
-
-mod task;
-pub use task::{Args as RpcTaskArgs, RpcTask};
-
-mod types;
+    async fn get_receipt(&self, _hash: H256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+        unimplemented!()
+    }
+}

@@ -21,15 +21,15 @@ use jsonrpsee::{
     types::error::{INTERNAL_ERROR_CODE, INVALID_REQUEST_CODE},
 };
 use rundler_pool::PoolServer;
-use rundler_provider::{EntryPoint, Provider, SimulationProvider};
+use rundler_provider::Provider;
 use rundler_sim::{gas, FeeEstimator};
-use rundler_types::{
-    chain::ChainSpec,
-    v0_6::{self, UserOperation},
-    UserOperationId,
-};
+use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
 
-use crate::{error::rpc_err, eth::EthRpcError, RpcUserOperation};
+use crate::{
+    error::rpc_err,
+    eth::{EntryPointRouter, EthRpcError},
+    types::RpcUserOperation,
+};
 
 /// Settings for the `rundler_` API
 #[derive(Copy, Clone, Debug)]
@@ -65,23 +65,22 @@ pub trait RundlerApi {
     ) -> RpcResult<Option<H256>>;
 }
 
-pub(crate) struct RundlerApi<P: Provider, E: EntryPoint, PS: PoolServer> {
+pub(crate) struct RundlerApi<P: Provider, PS: PoolServer> {
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
-    entry_point: E,
     pool_server: PS,
+    entry_point_router: EntryPointRouter,
 }
 
-impl<P, E, PS> RundlerApi<P, E, PS>
+impl<P, PS> RundlerApi<P, PS>
 where
     P: Provider,
-    E: EntryPoint,
     PS: PoolServer,
 {
     pub(crate) fn new(
         chain_spec: &ChainSpec,
         provider: Arc<P>,
-        entry_point: E,
+        entry_point_router: EntryPointRouter,
         pool_server: PS,
         settings: Settings,
     ) -> Self {
@@ -93,17 +92,16 @@ where
                 settings.priority_fee_mode,
                 settings.bundle_priority_fee_overhead_percent,
             ),
-            entry_point,
+            entry_point_router,
             pool_server,
         }
     }
 }
 
 #[async_trait]
-impl<P, E, PS> RundlerApiServer for RundlerApi<P, E, PS>
+impl<P, PS> RundlerApiServer for RundlerApi<P, PS>
 where
     P: Provider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation>,
     PS: PoolServer,
 {
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
@@ -123,23 +121,13 @@ where
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<Option<H256>> {
-        if entry_point != self.entry_point.address() {
-            return Err(rpc_err(
-                INVALID_REQUEST_CODE,
-                format!("entry point {} not supported", entry_point),
-            ));
-        }
+        let uo = UserOperationVariant::from(user_op);
+        let id = uo.id();
 
-        let uo: v0_6::UserOperation = user_op.try_into()?;
-        let id = UserOperationId {
-            sender: uo.sender,
-            nonce: uo.nonce,
-        };
-
-        if uo.pre_verification_gas != U256::zero()
-            || uo.call_gas_limit != U256::zero()
-            || uo.call_data.len() != 0
-            || uo.max_fee_per_gas != U256::zero()
+        if uo.pre_verification_gas() != U256::zero()
+            || uo.call_gas_limit() != U256::zero()
+            || uo.call_data().len() != 0
+            || uo.max_fee_per_gas() != U256::zero()
         {
             return Err(rpc_err(
                 INVALID_REQUEST_CODE,
@@ -147,16 +135,14 @@ where
             ));
         }
 
-        let output = self
-            .entry_point
-            .call_simulate_validation(uo, self.settings.max_verification_gas)
-            .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
-
-        if output.return_info.sig_failed {
+        let valid = self
+            .entry_point_router
+            .check_signature(&entry_point, uo, self.settings.max_verification_gas)
+            .await?;
+        if !valid {
             return Err(rpc_err(
                 INVALID_REQUEST_CODE,
-                "User operation for drop failed simulateValidation",
+                "Invalid user operation for drop: invalid signature",
             ));
         }
 

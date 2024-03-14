@@ -12,14 +12,23 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use ethers::{
-    types::{Address, Bytes, Log, TransactionReceipt, H160, H256, U256},
+    types::{Address, Log, TransactionReceipt, H160, H256, U256},
     utils::to_checksum,
 };
 use rundler_pool::{Reputation, ReputationStatus};
-use rundler_types::{v0_6, GasEstimate};
+use rundler_types::{GasEstimate, UserOperationOptionalGas, UserOperationVariant};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::eth::EthRpcError;
+mod v0_6;
+pub(crate) use v0_6::{
+    RpcUserOperation as RpcUserOperationV0_6,
+    RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_6,
+};
+mod v0_7;
+pub(crate) use v0_7::{
+    RpcUserOperation as RpcUserOperationV0_7,
+    RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_7,
+};
 
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
@@ -68,104 +77,102 @@ impl From<Address> for RpcAddress {
 /// Stake info definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RpcStakeStatus {
-    pub is_staked: bool,
-    pub stake_info: RpcStakeInfo,
+pub(crate) struct RpcStakeStatus {
+    pub(crate) is_staked: bool,
+    pub(crate) stake_info: RpcStakeInfo,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RpcStakeInfo {
-    pub addr: Address,
-    pub stake: u128,
-    pub unstake_delay_sec: u32,
+pub(crate) struct RpcStakeInfo {
+    pub(crate) addr: Address,
+    pub(crate) stake: u128,
+    pub(crate) unstake_delay_sec: u32,
 }
 
-/// User operation definition for RPC
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RpcUserOperation {
-    sender: RpcAddress,
-    nonce: U256,
-    init_code: Bytes,
-    call_data: Bytes,
-    call_gas_limit: U256,
-    verification_gas_limit: U256,
-    pre_verification_gas: U256,
-    max_fee_per_gas: U256,
-    max_priority_fee_per_gas: U256,
-    paymaster_and_data: Bytes,
-    signature: Bytes,
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(untagged)]
+pub(crate) enum RpcUserOperation {
+    V0_6(RpcUserOperationV0_6),
+    V0_7(RpcUserOperationV0_7),
 }
 
-impl From<v0_6::UserOperation> for RpcUserOperation {
-    fn from(op: v0_6::UserOperation) -> Self {
-        RpcUserOperation {
-            sender: op.sender.into(),
-            nonce: op.nonce,
-            init_code: op.init_code,
-            call_data: op.call_data,
-            call_gas_limit: op.call_gas_limit,
-            verification_gas_limit: op.verification_gas_limit,
-            pre_verification_gas: op.pre_verification_gas,
-            max_fee_per_gas: op.max_fee_per_gas,
-            max_priority_fee_per_gas: op.max_priority_fee_per_gas,
-            paymaster_and_data: op.paymaster_and_data,
-            signature: op.signature,
+impl From<UserOperationVariant> for RpcUserOperation {
+    fn from(op: UserOperationVariant) -> Self {
+        match op {
+            UserOperationVariant::V0_6(op) => RpcUserOperation::V0_6(op.into()),
+            UserOperationVariant::V0_7(op) => RpcUserOperation::V0_7(op.into()),
         }
     }
 }
 
-impl TryFrom<RpcUserOperation> for v0_6::UserOperation {
-    type Error = EthRpcError;
-
-    fn try_from(def: RpcUserOperation) -> Result<Self, Self::Error> {
-        if def.init_code.len() > 0 && def.init_code.len() < 20 {
-            return Err(EthRpcError::InvalidParams(
-                "init_code must be empty or at least 20 bytes".to_string(),
-            ));
-        } else if def.paymaster_and_data.len() > 0 && def.paymaster_and_data.len() < 20 {
-            return Err(EthRpcError::InvalidParams(
-                "paymaster_and_data must be empty or at least 20 bytes".to_string(),
-            ));
+impl From<RpcUserOperation> for UserOperationVariant {
+    fn from(op: RpcUserOperation) -> Self {
+        match op {
+            RpcUserOperation::V0_6(op) => UserOperationVariant::V0_6(op.into()),
+            RpcUserOperation::V0_7(op) => UserOperationVariant::V0_7(op.into()),
         }
-
-        Ok(v0_6::UserOperation {
-            sender: def.sender.into(),
-            nonce: def.nonce,
-            init_code: def.init_code,
-            call_data: def.call_data,
-            call_gas_limit: def.call_gas_limit,
-            verification_gas_limit: def.verification_gas_limit,
-            pre_verification_gas: def.pre_verification_gas,
-            max_fee_per_gas: def.max_fee_per_gas,
-            max_priority_fee_per_gas: def.max_priority_fee_per_gas,
-            paymaster_and_data: def.paymaster_and_data,
-            signature: def.signature,
-        })
     }
 }
 
 /// User operation with additional metadata
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RpcUserOperationByHash {
+    /// The full user operation
+    pub(crate) user_operation: RpcUserOperation,
+    /// The entry point address this operation was sent to
+    pub(crate) entry_point: RpcAddress,
+    /// The number of the block this operation was included in
+    pub(crate) block_number: Option<U256>,
+    /// The hash of the block this operation was included in
+    pub(crate) block_hash: Option<H256>,
+    /// The hash of the transaction this operation was included in
+    pub(crate) transaction_hash: Option<H256>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub(crate) enum RpcUserOperationOptionalGas {
+    V0_6(RpcUserOperationOptionalGasV0_6),
+    V0_7(RpcUserOperationOptionalGasV0_7),
+}
+
+impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
+    fn from(op: RpcUserOperationOptionalGas) -> Self {
+        match op {
+            RpcUserOperationOptionalGas::V0_6(op) => UserOperationOptionalGas::V0_6(op.into()),
+            RpcUserOperationOptionalGas::V0_7(op) => UserOperationOptionalGas::V0_7(op.into()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct RichUserOperation {
-    /// The full user operation
-    pub user_operation: RpcUserOperation,
-    /// The entry point address this operation was sent to
-    pub entry_point: RpcAddress,
-    /// The number of the block this operation was included in
-    pub block_number: Option<U256>,
-    /// The hash of the block this operation was included in
-    pub block_hash: Option<H256>,
-    /// The hash of the transaction this operation was included in
-    pub transaction_hash: Option<H256>,
+pub(crate) struct RpcGasEstimate {
+    pre_verification_gas: U256,
+    call_gas_limit: U256,
+    verification_gas_limit: U256,
+    paymaster_verification_gas_limit: Option<U256>,
+    paymaster_post_op_gas_limit: Option<U256>,
+}
+
+impl From<GasEstimate> for RpcGasEstimate {
+    fn from(estimate: GasEstimate) -> Self {
+        RpcGasEstimate {
+            pre_verification_gas: estimate.pre_verification_gas,
+            call_gas_limit: estimate.call_gas_limit,
+            verification_gas_limit: estimate.verification_gas_limit,
+            paymaster_verification_gas_limit: estimate.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: estimate.paymaster_post_op_gas_limit,
+        }
+    }
 }
 
 /// User operation receipt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserOperationReceipt {
+pub struct RpcUserOperationReceipt {
     /// The hash of the user operation
     pub user_op_hash: H256,
     /// The entry point address this operation was sent to
@@ -272,35 +279,4 @@ pub struct RpcDebugPaymasterBalance {
     pub pending_balance: U256,
     /// Paymaster confirmed balance onchain
     pub confirmed_balance: U256,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct RpcGasEstimate {
-    /// The pre-verification gas estimate
-    pub pre_verification_gas: U256,
-    /// The call gas limit estimate
-    pub call_gas_limit: U256,
-    /// The verification gas limit estimate
-    pub verification_gas_limit: U256,
-    /// The paymaster verification gas limit estimate
-    /// 0.6: unused
-    /// 0.7: populated if a paymaster is used
-    pub paymaster_verification_gas_limit: Option<U256>,
-    /// The paymaster post op gas limit
-    /// 0.6: unused
-    /// 0.7: populated if a paymaster is used
-    pub paymaster_post_op_gas_limit: Option<U256>,
-}
-
-impl From<GasEstimate> for RpcGasEstimate {
-    fn from(estimate: GasEstimate) -> Self {
-        RpcGasEstimate {
-            pre_verification_gas: estimate.pre_verification_gas,
-            call_gas_limit: estimate.call_gas_limit,
-            verification_gas_limit: estimate.verification_gas_limit,
-            paymaster_verification_gas_limit: estimate.paymaster_verification_gas_limit,
-            paymaster_post_op_gas_limit: estimate.paymaster_post_op_gas_limit,
-        }
-    }
 }
