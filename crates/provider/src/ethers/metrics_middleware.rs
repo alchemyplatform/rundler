@@ -31,6 +31,7 @@ enum RpcCode {
     MethodNotFound,
     InvalidRequest,
     ParseError,
+    ExecutionFailed,
     Success,
     Other,
 }
@@ -90,7 +91,8 @@ where
         };
 
         let rpc = match rpc_code {
-            x if x == -32000 => RpcCode::ParseError,
+            x if x == -32000 => RpcCode::ExecutionFailed,
+            x if x == -32700 => RpcCode::ParseError,
             x if x == -32600 => RpcCode::InvalidRequest,
             x if x == -32601 => RpcCode::MethodNotFound,
             x if x == -32602 => RpcCode::InvalidParams,
