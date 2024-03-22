@@ -25,9 +25,8 @@ use ethers::{
 use ethers_signers::Signer;
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
-    http_client::{transport::HttpBackend, HttpClient, HttpClientBuilder},
+    http_client::{transport::HttpBackend, HeaderMap, HeaderValue, HttpClient, HttpClientBuilder},
 };
-use reqwest::header::{HeaderMap, HeaderValue};
 use rundler_sim::ExpectedStorage;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;

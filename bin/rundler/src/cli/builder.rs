@@ -153,6 +153,16 @@ pub struct BuilderArgs {
     )]
     max_fee_increases: u64,
 
+    /// A list of builders to pass into the Flashbots Relay RPC. Only used when BUILDER_SENDER is "flashbots" and BUILDER_SUBMIT_URL is a Flashbots RPC
+    #[arg(
+        long = "builder.flashbots_relay_builders",
+        name = "builder.flashbots_relay_builders",
+        env = "BUILDER_FLASHBOTS_RELAY_BUILDERS",
+        value_delimiter = ',',
+        default_value = "flashbots"
+    )]
+    flashbots_relay_builders: Vec<String>,
+
     /// If using Polygon Mainnet, the auth header to use
     /// for Bloxroute polygon_private_tx sender
     #[arg(
@@ -222,6 +232,7 @@ impl BuilderArgs {
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
             remote_address,
+            flashbots_relay_builders: self.flashbots_relay_builders.clone(),
             bloxroute_auth_header: self.bloxroute_auth_header.clone(),
             num_bundle_builders: common.num_builders,
             bundle_builder_index_offset: self.builder_index_offset,
