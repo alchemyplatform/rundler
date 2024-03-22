@@ -176,7 +176,7 @@ mod tests {
     use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PriorityFeeMode};
     use rundler_types::{
         contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
-        pool::{IntoPoolOperationVariant, MockPool, PoolOperation},
+        pool::{MockPool, PoolOperation},
         v0_6::UserOperation,
         EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
     };
@@ -193,7 +193,7 @@ mod tests {
         let hash = uo.hash(ep, 1);
 
         let po = PoolOperation {
-            uo: uo.clone(),
+            uo: uo.clone().into(),
             entry_point: ep,
             aggregator: None,
             valid_time_range: ValidTimeRange::default(),
@@ -209,7 +209,7 @@ mod tests {
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .times(1)
-            .returning(move |_| Ok(Some(po.clone().into_variant())));
+            .returning(move |_| Ok(Some(po.clone())));
 
         let mut provider = MockProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));

@@ -93,6 +93,7 @@ where
             EthersEntryPointV0_6::new(self.args.chain_spec.entry_point_address, provider.clone());
 
         // create the entry point router
+        // TODO(danc) create 0.7 route, requires 0.7 estimator and 0.7 event provider
         let router = EntryPointRouterBuilder::default()
             .v0_6(EntryPointRouteImpl::new(
                 ep.clone(),

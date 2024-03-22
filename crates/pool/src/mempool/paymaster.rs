@@ -21,7 +21,7 @@ use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
 use rundler_types::{
     pool::{MempoolError, PaymasterMetadata, PoolOperation, StakeStatus},
-    StakeInfo, UserOperation, UserOperationId,
+    StakeInfo, UserOperation, UserOperationId, UserOperationVariant,
 };
 use rundler_utils::cache::LruMap;
 
@@ -30,9 +30,9 @@ use crate::chain::{BalanceUpdate, MinedOp};
 
 /// Keeps track of current and pending paymaster balances
 #[derive(Debug)]
-pub(crate) struct PaymasterTracker<UO, E> {
+pub(crate) struct PaymasterTracker<E> {
     entry_point: E,
-    state: RwLock<PaymasterTrackerInner<UO>>,
+    state: RwLock<PaymasterTrackerInner>,
     config: PaymasterConfig,
 }
 
@@ -60,9 +60,8 @@ impl PaymasterConfig {
     }
 }
 
-impl<UO, E> PaymasterTracker<UO, E>
+impl<E> PaymasterTracker<E>
 where
-    UO: UserOperation,
     E: EntryPoint,
 {
     pub(crate) fn new(entry_point: E, config: PaymasterConfig) -> Self {
@@ -151,7 +150,10 @@ where
         Ok(paymaster_meta)
     }
 
-    pub(crate) async fn check_operation_cost(&self, op: &UO) -> MempoolResult<()> {
+    pub(crate) async fn check_operation_cost(
+        &self,
+        op: &UserOperationVariant,
+    ) -> MempoolResult<()> {
         if let Some(paymaster) = op.paymaster() {
             let balance = self.paymaster_balance(paymaster).await?;
             self.state.read().check_operation_cost(op, &balance)?
@@ -206,7 +208,7 @@ where
             .unmine_actual_cost(paymaster, actual_cost);
     }
 
-    pub(crate) async fn add_or_update_balance(&self, po: &PoolOperation<UO>) -> MempoolResult<()> {
+    pub(crate) async fn add_or_update_balance(&self, po: &PoolOperation) -> MempoolResult<()> {
         if let Some(paymaster) = po.uo.paymaster() {
             let paymaster_metadata = self.paymaster_balance(paymaster).await?;
             return self
@@ -221,23 +223,21 @@ where
 
 // Keeps track of current and pending paymaster balances
 #[derive(Debug)]
-struct PaymasterTrackerInner<UO> {
+struct PaymasterTrackerInner {
     // map for userop based on id
     user_op_fees: HashMap<UserOperationId, UserOpFees>,
     // map for paymaster balance status
     paymaster_balances: LruMap<Address, PaymasterBalance>,
     // boolean for operation of tracker
     tracker_enabled: bool,
-    _uo_type: std::marker::PhantomData<UO>,
 }
 
-impl<UO: UserOperation> PaymasterTrackerInner<UO> {
+impl PaymasterTrackerInner {
     fn new(tracker_enabled: bool, cache_size: u32) -> Self {
         Self {
             user_op_fees: HashMap::new(),
             tracker_enabled,
             paymaster_balances: LruMap::new(cache_size),
-            _uo_type: std::marker::PhantomData,
         }
     }
 
@@ -251,7 +251,7 @@ impl<UO: UserOperation> PaymasterTrackerInner<UO> {
 
     fn check_operation_cost(
         &self,
-        op: &UO,
+        op: &UserOperationVariant,
         paymaster_metadata: &PaymasterMetadata,
     ) -> MempoolResult<()> {
         let max_op_cost = op.max_gas_cost();
@@ -370,7 +370,7 @@ impl<UO: UserOperation> PaymasterTrackerInner<UO> {
 
     fn add_or_update_balance(
         &mut self,
-        po: &PoolOperation<UO>,
+        po: &PoolOperation,
         paymaster_metadata: &PaymasterMetadata,
     ) -> MempoolResult<()> {
         let id = po.uo.id();
@@ -534,9 +534,9 @@ mod tests {
     use super::*;
     use crate::{chain::BalanceUpdate, mempool::paymaster::PaymasterTracker};
 
-    fn demo_pool_op(uo: UserOperation) -> PoolOperation<UserOperation> {
+    fn demo_pool_op(uo: UserOperation) -> PoolOperation {
         PoolOperation {
-            uo,
+            uo: uo.into(),
             entry_point: Address::random(),
             aggregator: None,
             valid_time_range: ValidTimeRange::all_time(),
@@ -947,7 +947,7 @@ mod tests {
 
     #[test]
     fn test_inner_cache_full() {
-        let mut inner = PaymasterTrackerInner::<UserOperation>::new(true, 2);
+        let mut inner = PaymasterTrackerInner::new(true, 2);
 
         let paymaster_0 = Address::random();
         let paymaster_1 = Address::random();
@@ -966,7 +966,7 @@ mod tests {
         assert!(inner.paymaster_exists(paymaster_2));
     }
 
-    fn new_paymaster_tracker() -> PaymasterTracker<UserOperation, MockEntryPointV0_6> {
+    fn new_paymaster_tracker() -> PaymasterTracker<MockEntryPointV0_6> {
         let mut entrypoint = MockEntryPointV0_6::new();
 
         entrypoint.expect_get_deposit_info().returning(|_| {
@@ -992,7 +992,7 @@ mod tests {
         PaymasterTracker::new(entrypoint, config)
     }
 
-    impl PaymasterTracker<UserOperation, MockEntryPointV0_6> {
+    impl PaymasterTracker<MockEntryPointV0_6> {
         fn add_new_user_op(
             &self,
             id: &UserOperationId,

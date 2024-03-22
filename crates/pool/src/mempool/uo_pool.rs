@@ -25,7 +25,8 @@ use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
-    Entity, EntityUpdate, EntityUpdateType, UserOperation, UserOperationId, UserOperationVariant,
+    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, UserOperation, UserOperationId,
+    UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
@@ -48,16 +49,17 @@ use crate::{
 /// block on write locks.
 pub(crate) struct UoPool<UO: UserOperation, P: Prechecker, S: Simulator, E: EntryPoint> {
     config: PoolConfig,
-    state: RwLock<UoPoolState<UO>>,
-    paymaster: PaymasterTracker<UO, E>,
+    state: RwLock<UoPoolState>,
+    paymaster: PaymasterTracker<E>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
     simulator: S,
+    _uo_type: std::marker::PhantomData<UO>,
 }
 
-struct UoPoolState<UO: UserOperation> {
-    pool: PoolInner<UO>,
+struct UoPoolState {
+    pool: PoolInner,
     throttled_ops: HashSet<H256>,
     block_number: u64,
 }
@@ -74,7 +76,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         prechecker: P,
         simulator: S,
-        paymaster: PaymasterTracker<UO, E>,
+        paymaster: PaymasterTracker<E>,
         reputation: Arc<AddressReputation>,
     ) -> Self {
         Self {
@@ -89,6 +91,7 @@ where
             prechecker,
             simulator,
             config,
+            _uo_type: std::marker::PhantomData,
         }
     }
 
@@ -135,13 +138,11 @@ where
 #[async_trait]
 impl<UO, P, S, E> Mempool for UoPool<UO, P, S, E>
 where
-    UO: UserOperation + Into<UserOperationVariant>,
+    UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
     P: Prechecker<UO = UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint,
 {
-    type UO = UO;
-
     async fn on_chain_update(&self, update: &ChainUpdate) {
         {
             let deduped_ops = update.deduped_ops();
@@ -312,6 +313,10 @@ where
         self.config.entry_point
     }
 
+    fn entry_point_version(&self) -> EntryPointVersion {
+        self.config.entry_point_version
+    }
+
     fn set_tracking(&self, paymaster: bool, reputation: bool) {
         self.paymaster.set_tracking(paymaster);
         self.reputation.set_tracking(reputation);
@@ -325,7 +330,11 @@ where
         self.paymaster.get_stake_status(address).await
     }
 
-    async fn add_operation(&self, origin: OperationOrigin, op: UO) -> MempoolResult<H256> {
+    async fn add_operation(
+        &self,
+        origin: OperationOrigin,
+        op: UserOperationVariant,
+    ) -> MempoolResult<H256> {
         // TODO(danc) aggregator reputation is not implemented
         // TODO(danc) catch ops with aggregators prior to simulation and reject
 
@@ -376,12 +385,13 @@ where
         self.paymaster.check_operation_cost(&op).await?;
 
         // Prechecks
-        self.prechecker.check(&op).await?;
+        let versioned_op = op.clone().into();
+        self.prechecker.check(&versioned_op).await?;
 
         // Only let ops with successful simulations through
         let sim_result = self
             .simulator
-            .simulate_validation(op.clone(), None, None)
+            .simulate_validation(versioned_op, None, None)
             .await?;
 
         // No aggregators supported for now
@@ -470,7 +480,7 @@ where
         let valid_until = pool_op.valid_time_range.valid_until;
         self.emit(OpPoolEvent::ReceivedOp {
             op_hash,
-            op: pool_op.uo.into(),
+            op: pool_op.uo,
             block_number: pool_op.sim_block_number,
             origin,
             valid_after,
@@ -563,7 +573,7 @@ where
         &self,
         max: usize,
         shard_index: u64,
-    ) -> MempoolResult<Vec<Arc<PoolOperation<UO>>>> {
+    ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
         if shard_index >= self.config.num_shards {
             Err(anyhow::anyhow!("Invalid shard ID"))?;
         }
@@ -586,14 +596,15 @@ where
                 senders.insert(op.uo.sender())
             })
             .take(max)
+            .map(Into::into)
             .collect())
     }
 
-    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation<UO>>> {
+    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
         self.state.read().pool.best_operations().take(max).collect()
     }
 
-    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation<UO>>> {
+    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
@@ -679,8 +690,8 @@ mod tests {
         contracts::v0_6::verifying_paymaster::DepositInfo,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::UserOperation,
-        EntityInfo, EntityInfos, EntityType, GasFees, UserOperation as UserOperationTrait,
-        ValidTimeRange,
+        EntityInfo, EntityInfos, EntityType, EntryPointVersion, GasFees,
+        UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
     use super::*;
@@ -772,8 +783,8 @@ mod tests {
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
                 hash: uos[0].hash(pool.config.entry_point, 1),
-                sender: uos[0].sender,
-                nonce: uos[0].nonce,
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
                 actual_gas_cost: U256::zero(),
                 paymaster: None,
             }],
@@ -812,10 +823,11 @@ mod tests {
 
         // add pending max cost of 30 for each uo
         for op in &mut ops {
-            op.op.call_gas_limit = 10.into();
-            op.op.verification_gas_limit = 10.into();
-            op.op.pre_verification_gas = 10.into();
-            op.op.max_fee_per_gas = 1.into();
+            let uo: &mut UserOperation = op.op.as_mut();
+            uo.call_gas_limit = 10.into();
+            uo.verification_gas_limit = 10.into();
+            uo.pre_verification_gas = 10.into();
+            uo.max_fee_per_gas = 1.into();
         }
 
         let (pool, uos) = create_pool_insert_ops(ops).await;
@@ -834,8 +846,8 @@ mod tests {
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
                 hash: uos[0].hash(pool.config.entry_point, 1),
-                sender: uos[0].sender,
-                nonce: uos[0].nonce,
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
                 actual_gas_cost: 10.into(),
                 paymaster: Some(paymaster),
             }],
@@ -874,8 +886,8 @@ mod tests {
             unmined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
                 hash: uos[0].hash(pool.config.entry_point, 1),
-                sender: uos[0].sender,
-                nonce: uos[0].nonce,
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
                 actual_gas_cost: 10.into(),
                 paymaster: None,
             }],
@@ -915,8 +927,8 @@ mod tests {
             mined_ops: vec![MinedOp {
                 entry_point: Address::random(),
                 hash: uos[0].hash(pool.config.entry_point, 1),
-                sender: uos[0].sender,
-                nonce: uos[0].nonce,
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
                 actual_gas_cost: U256::zero(),
                 paymaster: None,
             }],
@@ -957,8 +969,8 @@ mod tests {
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
                 hash: uos[0].hash(pool.config.entry_point, 1),
-                sender: uos[0].sender,
-                nonce: uos[0].nonce,
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
                 actual_gas_cost: U256::zero(),
                 paymaster: None,
             }],
@@ -1033,8 +1045,8 @@ mod tests {
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
                 hash: uos[0].hash(pool.config.entry_point, 1),
-                sender: uos[0].sender,
-                nonce: uos[0].nonce,
+                sender: uos[0].sender(),
+                nonce: uos[0].nonce(),
                 actual_gas_cost: U256::zero(),
                 paymaster: None,
             }],
@@ -1089,10 +1101,11 @@ mod tests {
     async fn test_paymaster_balance_insufficient() {
         let paymaster = Address::random();
         let mut op = create_op(Address::random(), 0, 0, Some(paymaster));
-        op.op.call_gas_limit = 1000.into();
-        op.op.verification_gas_limit = 1000.into();
-        op.op.pre_verification_gas = 1000.into();
-        op.op.max_fee_per_gas = 1.into();
+        let uo: &mut UserOperation = op.op.as_mut();
+        uo.call_gas_limit = 1000.into();
+        uo.verification_gas_limit = 1000.into();
+        uo.pre_verification_gas = 1000.into();
+        uo.max_fee_per_gas = 1.into();
 
         let uo = op.op.clone();
         let pool = create_pool(vec![op]);
@@ -1178,7 +1191,8 @@ mod tests {
             .unwrap();
 
         let mut replacement = op.op.clone();
-        replacement.max_fee_per_gas = replacement.max_fee_per_gas + 1;
+        let r: &mut UserOperation = replacement.as_mut();
+        r.max_fee_per_gas = r.max_fee_per_gas + 1;
 
         let err = pool
             .add_operation(OperationOrigin::Local, replacement)
@@ -1207,10 +1221,11 @@ mod tests {
         let paymaster = Address::random();
 
         let mut op = create_op(Address::random(), 0, 5, Some(paymaster));
-        op.op.call_gas_limit = 10.into();
-        op.op.verification_gas_limit = 10.into();
-        op.op.pre_verification_gas = 10.into();
-        op.op.max_fee_per_gas = 1.into();
+        let uo: &mut UserOperation = op.op.as_mut();
+        uo.call_gas_limit = 10.into();
+        uo.verification_gas_limit = 10.into();
+        uo.pre_verification_gas = 10.into();
+        uo.max_fee_per_gas = 1.into();
 
         let pool = create_pool(vec![op.clone()]);
 
@@ -1220,7 +1235,8 @@ mod tests {
             .unwrap();
 
         let mut replacement = op.op.clone();
-        replacement.max_fee_per_gas = replacement.max_fee_per_gas + 1;
+        let r: &mut UserOperation = replacement.as_mut();
+        r.max_fee_per_gas = r.max_fee_per_gas + 1;
 
         let _ = pool
             .add_operation(OperationOrigin::Local, replacement.clone())
@@ -1233,7 +1249,7 @@ mod tests {
         assert_eq!(paymaster_balance.pending_balance, U256::from(900));
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
-        assert_eq!(rep[0].address, op.op.sender);
+        assert_eq!(rep[0].address, op.op.sender());
         assert_eq!(rep[0].ops_seen, 1);
         assert_eq!(rep[0].ops_included, 0);
     }
@@ -1371,7 +1387,7 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct OpWithErrors {
-        op: UserOperation,
+        op: UserOperationVariant,
         valid_time_range: ValidTimeRange,
         precheck_error: Option<PrecheckViolation>,
         simulation_error: Option<SimulationViolation>,
@@ -1388,6 +1404,7 @@ mod tests {
     > {
         let args = PoolConfig {
             entry_point: Address::random(),
+            entry_point_version: EntryPointVersion::V0_6,
             chain_id: 1,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 10000,
@@ -1471,7 +1488,7 @@ mod tests {
                             valid_time_range: op.valid_time_range,
                             entity_infos: EntityInfos {
                                 sender: EntityInfo {
-                                    address: op.op.sender,
+                                    address: op.op.sender(),
                                     is_staked: false,
                                 },
                                 ..EntityInfos::default()
@@ -1503,7 +1520,7 @@ mod tests {
             impl Simulator<UO = UserOperation>,
             impl EntryPoint,
         >,
-        Vec<UserOperation>,
+        Vec<UserOperationVariant>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
         let pool = create_pool(ops);
@@ -1532,7 +1549,8 @@ mod tests {
                 max_fee_per_gas: max_fee_per_gas.into(),
                 paymaster_and_data,
                 ..UserOperation::default()
-            },
+            }
+            .into(),
             valid_time_range: ValidTimeRange::default(),
             precheck_error: None,
             simulation_error: None,
@@ -1554,7 +1572,8 @@ mod tests {
                 nonce: nonce.into(),
                 max_fee_per_gas: max_fee_per_gas.into(),
                 ..UserOperation::default()
-            },
+            }
+            .into(),
             valid_time_range: ValidTimeRange::default(),
             precheck_error,
             simulation_error,
@@ -1562,7 +1581,7 @@ mod tests {
         }
     }
 
-    fn check_ops(ops: Vec<Arc<PoolOperation<UserOperation>>>, expected: Vec<UserOperation>) {
+    fn check_ops(ops: Vec<Arc<PoolOperation>>, expected: Vec<UserOperationVariant>) {
         assert_eq!(ops.len(), expected.len());
         for (actual, expected) in ops.into_iter().zip(expected) {
             assert_eq!(actual.uo, expected);

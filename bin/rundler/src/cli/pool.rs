@@ -19,7 +19,7 @@ use ethers::types::H256;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfig;
 use rundler_task::spawn_tasks_with_shutdown;
-use rundler_types::chain::ChainSpec;
+use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
@@ -181,8 +181,10 @@ impl PoolArgs {
         tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
 
         let chain_id = chain_spec.id;
+        // TODO(danc): multiple pool configs
         let pool_config = PoolConfig {
             entry_point: chain_spec.entry_point_address,
+            entry_point_version: EntryPointVersion::V0_6,
             chain_id,
             // Currently use the same shard count as the number of builders
             num_shards: common.num_builders,

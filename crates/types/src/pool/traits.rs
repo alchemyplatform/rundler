@@ -43,15 +43,12 @@ pub trait Pool: Send + Sync + 'static {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
-    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>>;
+    ) -> PoolResult<Vec<PoolOperation>>;
 
     /// Get an operation from the pool by hash
     /// Checks each entry point in order until the operation is found
     /// Returns None if the operation is not found
-    async fn get_op_by_hash(
-        &self,
-        hash: H256,
-    ) -> PoolResult<Option<PoolOperation<UserOperationVariant>>>;
+    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>>;
 
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()>;
@@ -99,10 +96,7 @@ pub trait Pool: Send + Sync + 'static {
     ) -> PoolResult<()>;
 
     /// Dump all operations in the pool, used for debug methods
-    async fn debug_dump_mempool(
-        &self,
-        entry_point: Address,
-    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>>;
+    async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>>;
 
     /// Set reputations for entities, used for debug methods
     async fn debug_set_reputations(

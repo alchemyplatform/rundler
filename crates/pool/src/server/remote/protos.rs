@@ -270,8 +270,8 @@ impl From<RundlerStakeStatus> for StakeStatus {
     }
 }
 
-impl From<&PoolOperation<UserOperationVariant>> for MempoolOp {
-    fn from(op: &PoolOperation<UserOperationVariant>) -> Self {
+impl From<&PoolOperation> for MempoolOp {
+    fn from(op: &PoolOperation) -> Self {
         MempoolOp {
             uo: Some(UserOperation::from(&op.uo)),
             entry_point: op.entry_point.as_bytes().to_vec(),
@@ -291,7 +291,7 @@ impl From<&PoolOperation<UserOperationVariant>> for MempoolOp {
 }
 
 pub const MISSING_USER_OP_ERR_STR: &str = "Mempool op should contain user operation";
-impl TryFrom<MempoolOp> for PoolOperation<UserOperationVariant> {
+impl TryFrom<MempoolOp> for PoolOperation {
     type Error = anyhow::Error;
 
     fn try_from(op: MempoolOp) -> Result<Self, Self::Error> {

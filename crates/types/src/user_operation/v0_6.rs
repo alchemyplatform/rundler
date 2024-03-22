@@ -56,6 +56,10 @@ impl UserOperationTrait for UserOperation {
         self.sender
     }
 
+    fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
     fn factory(&self) -> Option<Address> {
         Self::get_address_from_field(&self.init_code)
     }
@@ -188,6 +192,24 @@ impl From<UserOperationVariant> for UserOperation {
 impl From<UserOperation> for super::UserOperationVariant {
     fn from(op: UserOperation) -> Self {
         super::UserOperationVariant::V0_6(op)
+    }
+}
+
+impl AsRef<UserOperation> for super::UserOperationVariant {
+    fn as_ref(&self) -> &UserOperation {
+        match self {
+            super::UserOperationVariant::V0_6(op) => op,
+            _ => panic!("Expected UserOperationV0_6"),
+        }
+    }
+}
+
+impl AsMut<UserOperation> for super::UserOperationVariant {
+    fn as_mut(&mut self) -> &mut UserOperation {
+        match self {
+            super::UserOperationVariant::V0_6(op) => op,
+            _ => panic!("Expected UserOperationV0_6"),
+        }
     }
 }
 
