@@ -62,6 +62,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Get the user operation sender address
     fn sender(&self) -> Address;
 
+    /// Get the user operation nonce
+    fn nonce(&self) -> U256;
+
     /// Get the user operation paymaster address, if any
     fn paymaster(&self) -> Option<Address>;
 
@@ -170,6 +173,13 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.sender(),
             UserOperationVariant::V0_7(op) => op.sender(),
+        }
+    }
+
+    fn nonce(&self) -> U256 {
+        match self {
+            UserOperationVariant::V0_6(op) => op.nonce(),
+            UserOperationVariant::V0_7(op) => op.nonce(),
         }
     }
 
