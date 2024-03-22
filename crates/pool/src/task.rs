@@ -16,10 +16,10 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::providers::Middleware;
-use rundler_provider::{EntryPoint, EthersEntryPointV0_6, Provider};
-use rundler_sim::{simulation::v0_6 as sim_v0_6, Prechecker, PrecheckerImpl, Simulator};
+use rundler_provider::{EthersEntryPointV0_6, Provider};
+use rundler_sim::{simulation::v0_6 as sim_v0_6, PrecheckerImpl};
 use rundler_task::Task;
-use rundler_types::{chain::ChainSpec, v0_6};
+use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::{emit::WithEntryPoint, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -28,7 +28,9 @@ use super::mempool::PoolConfig;
 use crate::{
     chain::{self, Chain},
     emit::OpPoolEvent,
-    mempool::{AddressReputation, PaymasterConfig, PaymasterTracker, ReputationParams, UoPool},
+    mempool::{
+        AddressReputation, Mempool, PaymasterConfig, PaymasterTracker, ReputationParams, UoPool,
+    },
     server::{spawn_remote_mempool_server, LocalPoolBuilder},
 };
 
@@ -73,7 +75,7 @@ impl Task for PoolTask {
                 .args
                 .pool_configs
                 .iter()
-                .map(|config| config.entry_point)
+                .map(|config| (config.entry_point, config.entry_point_version))
                 .collect(),
         };
         let provider = rundler_provider::new_provider(
@@ -87,6 +89,39 @@ impl Task for PoolTask {
         // create mempools
         let mut mempools = HashMap::new();
         for pool_config in &self.args.pool_configs {
+            match pool_config.entry_point_version {
+                EntryPointVersion::V0_6 => {
+                    let pool = PoolTask::create_mempool_v0_6(
+                        self.args.chain_spec.clone(),
+                        pool_config,
+                        self.event_sender.clone(),
+                        provider.clone(),
+                    )
+                    .await
+                    .context("should have created mempool")?;
+
+                    mempools.insert(pool_config.entry_point, pool);
+                }
+                EntryPointVersion::V0_7 => {
+                    let pool = PoolTask::create_mempool_v0_7(
+                        self.args.chain_spec.clone(),
+                        pool_config,
+                        self.event_sender.clone(),
+                        provider.clone(),
+                    )
+                    .await
+                    .context("should have created mempool")?;
+
+                    mempools.insert(pool_config.entry_point, pool);
+                }
+                EntryPointVersion::Unspecified => {
+                    bail!(
+                        "Unsupported entry point version: {:?}",
+                        pool_config.entry_point_version
+                    );
+                }
+            }
+
             let pool = PoolTask::create_mempool_v0_6(
                 self.args.chain_spec.clone(),
                 pool_config,
@@ -96,7 +131,7 @@ impl Task for PoolTask {
             .await
             .context("should have created mempool")?;
 
-            mempools.insert(pool_config.entry_point, Arc::new(pool));
+            mempools.insert(pool_config.entry_point, pool);
         }
 
         let pool_handle = self.pool_builder.get_handle();
@@ -155,19 +190,23 @@ impl PoolTask {
         Box::new(self)
     }
 
+    async fn create_mempool_v0_7<P: Provider + Middleware>(
+        _chain_spec: ChainSpec,
+        _pool_config: &PoolConfig,
+        _event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        _provider: Arc<P>,
+    ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
+        // TODO: implement
+        // requires 0.7 simulation
+        todo!()
+    }
+
     async fn create_mempool_v0_6<P: Provider + Middleware>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
-    ) -> anyhow::Result<
-        UoPool<
-            v0_6::UserOperation,
-            impl Prechecker<UO = v0_6::UserOperation>,
-            impl Simulator<UO = v0_6::UserOperation>,
-            impl EntryPoint,
-        >,
-    > {
+    ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
         let ep = EthersEntryPointV0_6::new(pool_config.entry_point, Arc::clone(&provider));
 
         let prechecker = PrecheckerImpl::new(
@@ -216,6 +255,6 @@ impl PoolTask {
             reputation,
         );
 
-        Ok(uo_pool)
+        Ok(Arc::new(Box::new(uo_pool)))
     }
 }

@@ -37,7 +37,7 @@ use rundler_sim::{
 };
 use rundler_types::{
     chain::ChainSpec,
-    pool::{FromPoolOperationVariant, Pool, PoolOperation, SimulationViolation},
+    pool::{Pool, PoolOperation, SimulationViolation},
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
     GasOverheads, Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator,
 };
@@ -144,6 +144,7 @@ pub(crate) struct Settings {
 impl<UO, S, E, P, C> BundleProposer for BundleProposerImpl<UO, S, E, P, C>
 where
     UO: UserOperation + From<UserOperationVariant>,
+    UserOperationVariant: AsRef<UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
     P: Provider,
@@ -249,6 +250,7 @@ where
 impl<UO, S, E, P, C> BundleProposerImpl<UO, S, E, P, C>
 where
     UO: UserOperation + From<UserOperationVariant>,
+    UserOperationVariant: AsRef<UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
     P: Provider,
@@ -289,11 +291,13 @@ where
     // - any errors
     async fn filter_and_simulate(
         &self,
-        op: PoolOperation<UO>,
+        op: PoolOperation,
         block_hash: H256,
         base_fee: U256,
         required_op_fees: GasFees,
-    ) -> Option<(PoolOperation<UO>, Result<SimulationResult, SimulationError>)> {
+    ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
+        let op_hash = self.op_hash(&op.uo);
+
         // filter by fees
         if op.uo.max_fee_per_gas() < required_op_fees.max_fee_per_gas
             || op.uo.max_priority_fee_per_gas() < required_op_fees.max_priority_fee_per_gas
@@ -316,14 +320,14 @@ where
         let required_pvg = gas::calc_required_pre_verification_gas(
             &self.settings.chain_spec,
             &self.entry_point,
-            &op.uo,
+            op.uo.as_ref(),
             base_fee,
         )
         .await
         .map_err(|e| {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_index,
-                self.op_hash(&op.uo),
+                op_hash,
                 SkipReason::Other {
                     reason: Arc::new(format!(
                         "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
@@ -337,7 +341,7 @@ where
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_index,
-                self.op_hash(&op.uo),
+                op_hash,
                 SkipReason::InsufficientPreVerificationGas {
                     base_fee,
                     op_fees: GasFees {
@@ -354,7 +358,11 @@ where
         // Simulate
         let result = self
             .simulator
-            .simulate_validation(op.uo.clone(), Some(block_hash), Some(op.expected_code_hash))
+            .simulate_validation(
+                op.uo.clone().into(),
+                Some(block_hash),
+                Some(op.expected_code_hash),
+            )
             .await;
         let result = match result {
             Ok(success) => (op, Ok(success)),
@@ -369,7 +377,7 @@ where
                 } => {
                     self.emit(BuilderEvent::skipped_op(
                         self.builder_index,
-                        self.op_hash(&op.uo),
+                        op_hash,
                         SkipReason::Other {
                             reason: Arc::new(format!("Failed to simulate op: {error:?}, skipping")),
                         },
@@ -384,14 +392,14 @@ where
 
     async fn assemble_context(
         &self,
-        ops_with_simulations: Vec<(PoolOperation<UO>, Result<SimulationResult, SimulationError>)>,
+        ops_with_simulations: Vec<(PoolOperation, Result<SimulationResult, SimulationError>)>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext<UO> {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
             .map(|(op, _)| op.uo.sender())
             .collect();
-        let mut context = ProposalContext::new();
+        let mut context = ProposalContext::<UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
         let ov = GasOverheads::default();
@@ -417,7 +425,7 @@ where
                         // try to use EntityInfos from the latest simulation, but if it doesn't exist use the EntityInfos from the previous simulation
                         let infos = entity_infos.map_or(po.entity_infos, |e| e);
                         context.process_simulation_violations(violations, infos);
-                        context.rejected_ops.push((op, po.entity_infos));
+                        context.rejected_ops.push((op.into(), po.entity_infos));
                     }
                     continue;
                 }
@@ -435,7 +443,7 @@ where
                         valid_range: simulation.valid_time_range,
                     },
                 ));
-                context.rejected_ops.push((op, po.entity_infos));
+                context.rejected_ops.push((op.into(), po.entity_infos));
                 continue;
             }
 
@@ -501,7 +509,10 @@ where
                 .entry(simulation.aggregator_address())
                 .or_default()
                 .ops_with_simulations
-                .push(OpWithSimulation { op, simulation });
+                .push(OpWithSimulation {
+                    op: op.into(),
+                    simulation,
+                });
         }
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
@@ -608,7 +619,7 @@ where
         }
     }
 
-    async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<PoolOperation<UO>>> {
+    async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<PoolOperation>> {
         // Use builder's index as the shard index to ensure that two builders don't
         // attempt to bundle the same operations.
         //
@@ -624,7 +635,6 @@ where
             .await
             .context("should get ops from pool")?
             .into_iter()
-            .map(PoolOperation::<UO>::from_variant)
             .collect())
     }
 
@@ -848,8 +858,8 @@ where
 
     fn limit_user_operations_for_simulation(
         &self,
-        ops: Vec<PoolOperation<UO>>,
-    ) -> (Vec<PoolOperation<UO>>, u64) {
+        ops: Vec<PoolOperation>,
+    ) -> (Vec<PoolOperation>, u64) {
         // Make the bundle gas limit 10% higher here so that we simulate more UOs than we need in case that we end up dropping some UOs later so we can still pack a full bundle
         let mut gas_left = math::increase_by_percent(U256::from(self.settings.max_bundle_gas), 10);
         let mut ops_in_bundle = Vec::new();
@@ -884,7 +894,10 @@ where
         });
     }
 
-    fn op_hash(&self, op: &UO) -> H256 {
+    fn op_hash<T>(&self, op: &T) -> H256
+    where
+        T: UserOperation,
+    {
         op.hash(self.entry_point.address(), self.settings.chain_spec.id)
     }
 }
@@ -1280,7 +1293,7 @@ mod tests {
     use rundler_provider::{AggregatorSimOut, MockEntryPointV0_6, MockProvider};
     use rundler_sim::MockSimulator;
     use rundler_types::{
-        pool::{IntoPoolOperationVariant, MockPool, SimulationViolation},
+        pool::{MockPool, SimulationViolation},
         v0_6::UserOperation,
         UserOperation as UserOperationTrait, ValidTimeRange,
     };
@@ -2055,7 +2068,7 @@ mod tests {
         let ops: Vec<_> = mock_ops
             .iter()
             .map(|MockOp { op, .. }| PoolOperation {
-                uo: op.clone(),
+                uo: op.clone().into(),
                 expected_code_hash,
                 entry_point: entry_point_address,
                 sim_block_hash: current_block_hash,
@@ -2069,13 +2082,9 @@ mod tests {
             .collect();
 
         let mut pool_client = MockPool::new();
-        pool_client.expect_get_ops().returning(move |_, _, _| {
-            Ok(ops
-                .iter()
-                .cloned()
-                .map(IntoPoolOperationVariant::into_variant)
-                .collect())
-        });
+        pool_client
+            .expect_get_ops()
+            .returning(move |_, _, _| Ok(ops.clone()));
 
         let simulations_by_op: HashMap<_, _> = mock_ops
             .into_iter()

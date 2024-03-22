@@ -36,7 +36,7 @@ use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
-    EntityUpdate, UserOperation, UserOperationId,
+    EntityUpdate, EntryPointVersion, UserOperationId, UserOperationVariant,
 };
 use tonic::async_trait;
 pub(crate) use uo_pool::UoPool;
@@ -45,21 +45,25 @@ use super::chain::ChainUpdate;
 
 pub(crate) type MempoolResult<T> = std::result::Result<T, MempoolError>;
 
-#[cfg_attr(test, automock(type UO = rundler_types::v0_6::UserOperation;))]
+#[cfg_attr(test, automock)]
 #[async_trait]
 /// In-memory operation pool
 pub trait Mempool: Send + Sync + 'static {
-    /// The type of user operation this pool stores
-    type UO: UserOperation;
-
     /// Call to update the mempool with a new chain update
     async fn on_chain_update(&self, update: &ChainUpdate);
 
     /// Returns the entry point address this pool targets.
     fn entry_point(&self) -> Address;
 
+    /// Returns the entry point version this pool targets.
+    fn entry_point_version(&self) -> EntryPointVersion;
+
     /// Adds a user operation to the pool
-    async fn add_operation(&self, origin: OperationOrigin, op: Self::UO) -> MempoolResult<H256>;
+    async fn add_operation(
+        &self,
+        origin: OperationOrigin,
+        op: UserOperationVariant,
+    ) -> MempoolResult<H256>;
 
     /// Removes a set of operations from the pool.
     fn remove_operations(&self, hashes: &[H256]);
@@ -82,13 +86,13 @@ pub trait Mempool: Send + Sync + 'static {
         &self,
         max: usize,
         shard_index: u64,
-    ) -> MempoolResult<Vec<Arc<PoolOperation<Self::UO>>>>;
+    ) -> MempoolResult<Vec<Arc<PoolOperation>>>;
 
     /// Returns the all operations from the pool up to a max size
-    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation<Self::UO>>>;
+    fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
 
     /// Looks up a user operation by hash, returns None if not found
-    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation<Self::UO>>>;
+    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>>;
 
     /// Debug methods
 
@@ -122,6 +126,8 @@ pub trait Mempool: Send + Sync + 'static {
 pub struct PoolConfig {
     /// Address of the entry point this pool targets
     pub entry_point: Address,
+    /// Version of the entry point this pool targets
+    pub entry_point_version: EntryPointVersion,
     /// Chain ID this pool targets
     pub chain_id: u64,
     /// The maximum number of operations an unstaked sender can have in the mempool
@@ -192,7 +198,8 @@ mod tests {
                 paymaster_and_data: paymaster.as_fixed_bytes().into(),
                 init_code: factory.as_fixed_bytes().into(),
                 ..Default::default()
-            },
+            }
+            .into(),
             entry_point: Address::random(),
             aggregator: Some(aggregator),
             valid_time_range: ValidTimeRange::all_time(),
