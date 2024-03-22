@@ -18,8 +18,8 @@ pub use error::ProviderError;
 
 mod entry_point;
 pub use entry_point::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, EntryPoint, HandleOpsOut, L1GasProvider,
-    SignatureAggregator, SimulationProvider,
+    AggregatorOut, AggregatorSimOut, BundleHandler, EntryPoint, EntryPointProvider, HandleOpsOut,
+    L1GasProvider, SignatureAggregator, SimulationProvider,
 };
 
 mod provider;

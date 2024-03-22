@@ -183,3 +183,13 @@ pub trait SimulationProvider: Send + Sync + 'static {
         revert_data: Bytes,
     ) -> Result<ExecutionResult, String>;
 }
+
+/// Trait for a provider that provides all entry point functionality
+pub trait EntryPointProvider<UO>:
+    EntryPoint
+    + SignatureAggregator<UO = UO>
+    + BundleHandler<UO = UO>
+    + SimulationProvider<UO = UO>
+    + L1GasProvider<UO = UO>
+{
+}
