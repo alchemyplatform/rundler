@@ -100,6 +100,10 @@ impl UserOperationTrait for UserOperation {
         self.sender
     }
 
+    fn nonce(&self) -> U256 {
+        self.nonce
+    }
+
     fn paymaster(&self) -> Option<Address> {
         self.paymaster
     }
@@ -224,6 +228,24 @@ impl From<UserOperationVariant> for UserOperation {
 impl From<UserOperation> for super::UserOperationVariant {
     fn from(op: UserOperation) -> Self {
         super::UserOperationVariant::V0_7(op)
+    }
+}
+
+impl AsRef<UserOperation> for super::UserOperationVariant {
+    fn as_ref(&self) -> &UserOperation {
+        match self {
+            super::UserOperationVariant::V0_7(op) => op,
+            _ => panic!("Expected UserOperationV0_7"),
+        }
+    }
+}
+
+impl AsMut<UserOperation> for super::UserOperationVariant {
+    fn as_mut(&mut self) -> &mut UserOperation {
+        match self {
+            super::UserOperationVariant::V0_7(op) => op,
+            _ => panic!("Expected UserOperationV0_7"),
+        }
     }
 }
 

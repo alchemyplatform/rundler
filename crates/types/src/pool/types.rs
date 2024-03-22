@@ -110,9 +110,9 @@ pub struct PaymasterMetadata {
 
 /// A user operation with additional metadata from validation.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PoolOperation<UO: UserOperation> {
+pub struct PoolOperation {
     /// The user operation stored in the pool
-    pub uo: UO,
+    pub uo: UserOperationVariant,
     /// The entry point address for this operation
     pub entry_point: Address,
     /// The aggregator address for this operation, if any.
@@ -133,7 +133,7 @@ pub struct PoolOperation<UO: UserOperation> {
     pub entity_infos: EntityInfos,
 }
 
-impl<UO: UserOperation> PoolOperation<UO> {
+impl PoolOperation {
     /// Returns true if the operation contains the given entity.
     pub fn contains_entity(&self, entity: &Entity) -> bool {
         if let Some(e) = self.entity_infos.get(entity.kind) {
@@ -194,57 +194,5 @@ impl<UO: UserOperation> PoolOperation<UO> {
         std::mem::size_of::<Self>()
             + self.uo.heap_size()
             + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
-    }
-}
-
-/// Trait to convert a [PoolOperation] holding a [UserOperationVariant] to a [PoolOperation] with a different user operation type.
-pub trait FromPoolOperationVariant {
-    /// Conversion
-    fn from_variant(op: PoolOperation<UserOperationVariant>) -> Self;
-}
-
-/// Trait to convert a [PoolOperation] holding a user operation to a [PoolOperation] with a [UserOperationVariant].
-pub trait IntoPoolOperationVariant {
-    /// Conversion
-    fn into_variant(self) -> PoolOperation<UserOperationVariant>;
-}
-
-impl<UO> FromPoolOperationVariant for PoolOperation<UO>
-where
-    UO: UserOperation + From<UserOperationVariant>,
-{
-    fn from_variant(op: PoolOperation<UserOperationVariant>) -> Self {
-        PoolOperation {
-            uo: op.uo.into(),
-            entry_point: op.entry_point,
-            aggregator: op.aggregator,
-            valid_time_range: op.valid_time_range,
-            expected_code_hash: op.expected_code_hash,
-            sim_block_hash: op.sim_block_hash,
-            sim_block_number: op.sim_block_number,
-            entities_needing_stake: op.entities_needing_stake,
-            account_is_staked: op.account_is_staked,
-            entity_infos: op.entity_infos,
-        }
-    }
-}
-
-impl<UO> IntoPoolOperationVariant for PoolOperation<UO>
-where
-    UO: UserOperation + Into<UserOperationVariant>,
-{
-    fn into_variant(self) -> PoolOperation<UserOperationVariant> {
-        PoolOperation {
-            uo: self.uo.into(),
-            entry_point: self.entry_point,
-            aggregator: self.aggregator,
-            valid_time_range: self.valid_time_range,
-            expected_code_hash: self.expected_code_hash,
-            sim_block_hash: self.sim_block_hash,
-            sim_block_number: self.sim_block_number,
-            entities_needing_stake: self.entities_needing_stake,
-            account_is_staked: self.account_is_staked,
-            entity_infos: self.entity_infos,
-        }
     }
 }
