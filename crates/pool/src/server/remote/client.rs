@@ -168,7 +168,7 @@ impl Pool for RemotePoolClient {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
-    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
+    ) -> PoolResult<Vec<PoolOperation>> {
         let res = self
             .op_pool_client
             .clone()
@@ -196,10 +196,7 @@ impl Pool for RemotePoolClient {
         }
     }
 
-    async fn get_op_by_hash(
-        &self,
-        hash: H256,
-    ) -> PoolResult<Option<PoolOperation<UserOperationVariant>>> {
+    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
         let res = self
             .op_pool_client
             .clone()
@@ -367,10 +364,7 @@ impl Pool for RemotePoolClient {
         }
     }
 
-    async fn debug_dump_mempool(
-        &self,
-        entry_point: Address,
-    ) -> PoolResult<Vec<PoolOperation<UserOperationVariant>>> {
+    async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>> {
         let res = self
             .op_pool_client
             .clone()
