@@ -18,6 +18,7 @@ version: "3.8"
 services:
   rundler:
     image: rundler
+    command: node
     ports:
       # RPC port
       - "3000:3000"
