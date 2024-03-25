@@ -210,12 +210,13 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
 
         // Make one attempt at max gas, to see if success is possible.
         // Capture the gas usage of this attempt and use as the initial guess in the binary search
-
+        let fee = gas_fee
+            .checked_div(simulation_gas + op.pre_verification_gas)
+            .unwrap_or(U256::MAX);
         let initial_op = UserOperation {
             verification_gas_limit: simulation_gas,
-            max_fee_per_gas: gas_fee
-                .checked_div(simulation_gas + op.pre_verification_gas)
-                .unwrap_or(U256::MAX),
+            max_fee_per_gas: fee,
+            max_priority_fee_per_gas: fee,
             call_gas_limit: 0.into(),
             ..op.clone()
         };
@@ -245,11 +246,12 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         }
 
         let run_attempt_returning_error = |gas: u64| async move {
-            let max_fee_per_gas = gas_fee
+            let fee = gas_fee
                 .checked_div(U256::from(gas) + op.pre_verification_gas)
                 .unwrap_or(U256::MAX);
             let op = UserOperation {
-                max_fee_per_gas,
+                max_fee_per_gas: fee,
+                max_priority_fee_per_gas: fee,
                 verification_gas_limit: gas.into(),
                 call_gas_limit: 0.into(),
                 ..op.clone()
@@ -273,6 +275,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
                     || error_message.contains("AA33")
                     || error_message.contains("AA40")
                     || error_message.contains("AA41")
+                    || error_message.contains("AA51")
                 {
                     // This error occurs when out of gas, return false.
                     Ok(false)
