@@ -22,7 +22,10 @@
 //! A provider is a type that provides access to blockchain data and functions
 
 mod ethers;
-pub use ethers::{provider::new_provider, EntryPointV0_6 as EthersEntryPointV0_6};
+pub use ethers::{
+    provider::new_provider, EntryPointV0_6 as EthersEntryPointV0_6,
+    EntryPointV0_7 as EthersEntryPointV0_7,
+};
 
 mod traits;
 #[cfg(any(test, feature = "test-utils"))]
