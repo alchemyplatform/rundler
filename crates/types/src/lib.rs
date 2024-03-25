@@ -48,4 +48,6 @@ mod storage;
 pub use storage::StorageSlot;
 
 mod validation_results;
-pub use validation_results::{AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo};
+pub use validation_results::{
+    parse_validation_data, AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo,
+};

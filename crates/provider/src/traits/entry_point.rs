@@ -181,11 +181,11 @@ pub trait SimulationProvider: Send + Sync + 'static {
     type UO: UserOperation;
 
     /// Construct a call for the entry point contract's `simulateValidation` function
-    async fn get_simulate_validation_call(
+    fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
         max_validation_gas: u64,
-    ) -> anyhow::Result<TypedTransaction>;
+    ) -> (TypedTransaction, spoof::State);
 
     /// Call the entry point contract's `simulateValidation` function.
     async fn call_simulate_validation(
