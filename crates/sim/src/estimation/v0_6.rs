@@ -439,10 +439,10 @@ mod tests {
         types::U64,
         utils::hex,
     };
-    use rundler_provider::{MockEntryPointV0_6, MockProvider};
+    use rundler_provider::{ExecutionResult, MockEntryPointV0_6, MockProvider};
     use rundler_types::{
         chain::L1GasOracleContractType,
-        contracts::{utils::get_gas_used::GasUsedResult, v0_6::i_entry_point::ExecutionResult},
+        contracts::utils::get_gas_used::GasUsedResult,
         v0_6::{UserOperation, UserOperationOptionalGas},
         UserOperation as UserOperationTrait,
     };
@@ -715,8 +715,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
@@ -772,8 +772,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
@@ -829,8 +829,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
@@ -925,8 +925,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
@@ -967,8 +967,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
@@ -1167,8 +1167,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
@@ -1250,8 +1250,8 @@ mod tests {
                 Ok(ExecutionResult {
                     pre_op_gas: U256::from(10000),
                     paid: U256::from(100000),
-                    valid_after: 100000000000,
-                    valid_until: 100000000001,
+                    valid_after: 100000000000.into(),
+                    valid_until: 100000000001.into(),
                     target_success: true,
                     target_result: Bytes::new(),
                 })
