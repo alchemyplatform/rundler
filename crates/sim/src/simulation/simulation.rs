@@ -413,8 +413,6 @@ where
                                         .insert(ent, (addr, entity_type, slot));
                                 }
                             }
-                        } else if !entity_info.is_staked {
-                            entity_types_needing_stake.insert(entity, (addr, entity_type, slot));
                         }
                     }
                     StorageRestriction::Banned(slot) => {
