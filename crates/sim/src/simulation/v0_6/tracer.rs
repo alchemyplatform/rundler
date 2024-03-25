@@ -101,10 +101,9 @@ where
         block_id: BlockId,
         max_validation_gas: u64,
     ) -> anyhow::Result<SimulationTracerOutput> {
-        let tx = self
+        let (tx, state_override) = self
             .entry_point
-            .get_simulate_validation_call(op, max_validation_gas)
-            .await?;
+            .get_tracer_simulate_validation_call(op, max_validation_gas);
 
         SimulationTracerOutput::try_from(
             self.provider
@@ -118,7 +117,7 @@ where
                             )),
                             ..Default::default()
                         },
-                        ..Default::default()
+                        state_overrides: Some(state_override),
                     },
                 )
                 .await?,
