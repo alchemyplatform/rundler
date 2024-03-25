@@ -1599,7 +1599,7 @@ mod tests {
             accessed_address: factory_address,
             slot: sender_address.as_bytes().into(),
             entity: Entity::new(EntityType::Factory, factory_address),
-            min_stake: U256::from(1000000000000000000 as u64),
+            min_stake: U256::from(1000000000000000000_u64),
             min_unstake_delay: 84600.into(),
         };
 
