@@ -43,7 +43,7 @@ use ethers::{
 };
 use rundler_types::{
     contracts::v0_6::{
-        entry_point::EntryPoint, simple_account::SimpleAccount,
+        i_entry_point::IEntryPoint, simple_account::SimpleAccount,
         simple_account_factory::SimpleAccountFactory, verifying_paymaster::VerifyingPaymaster,
     },
     v0_6, UserOperation,
@@ -281,7 +281,7 @@ pub async fn deploy_dev_contracts(entry_point_bytecode: &str) -> anyhow::Result<
     let entry_point_address = deterministic_deploy
         .deploy_bytecode(entry_point_bytecode, 0)
         .await?;
-    let entry_point = EntryPoint::new(entry_point_address, Arc::clone(&deployer_client));
+    let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&deployer_client));
 
     // TODO use deterministic deployment
     // account factory
@@ -348,7 +348,7 @@ pub struct DevClients {
     /// The client used by the bundler.
     pub bundler_client: Arc<SimpleSignerMiddleware>,
     /// The entry point contract.
-    pub entry_point: EntryPoint<SimpleSignerMiddleware>,
+    pub entry_point: IEntryPoint<SimpleSignerMiddleware>,
     /// The account factory contract.
     pub factory: SimpleAccountFactory<Provider<Http>>,
     /// The wallet contract.
@@ -373,7 +373,7 @@ impl DevClients {
         let provider = new_local_provider();
         let bundler_client = new_test_client(Arc::clone(&provider), BUNDLER_ACCOUNT_ID);
         let wallet_owner_client = new_test_client(Arc::clone(&provider), WALLET_OWNER_ACCOUNT_ID);
-        let entry_point = EntryPoint::new(entry_point_address, Arc::clone(&bundler_client));
+        let entry_point = IEntryPoint::new(entry_point_address, Arc::clone(&bundler_client));
         let factory = SimpleAccountFactory::new(factory_address, Arc::clone(&provider));
         let wallet = SimpleAccount::new(wallet_address, Arc::clone(&provider));
         let paymaster = VerifyingPaymaster::new(paymaster_address, Arc::clone(&provider));
