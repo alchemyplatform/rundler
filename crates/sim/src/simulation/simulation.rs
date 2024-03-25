@@ -343,10 +343,7 @@ where
             let Some(entity_info) = entity_infos.get(kind) else {
                 continue;
             };
-            let entity = Entity {
-                kind,
-                address: entity_info.address,
-            };
+            let entity = Entity::new(kind, entity_info.address);
             for opcode in &phase.forbidden_opcodes_used {
                 let (contract, opcode) = parse_combined_tracer_str(opcode)?;
 
@@ -408,7 +405,15 @@ where
                 match violation {
                     StorageRestriction::Allowed => {}
                     StorageRestriction::NeedsStake(addr, entity_type, slot) => {
-                        if !entity_info.is_staked {
+                        if let Some(et) = entity_type {
+                            if let Some(et_info) = entity_infos.get(et) {
+                                if !et_info.is_staked {
+                                    let ent = Entity::new(et, et_info.address);
+                                    entity_types_needing_stake
+                                        .insert(ent, (addr, entity_type, slot));
+                                }
+                            }
+                        } else if !entity_info.is_staked {
                             entity_types_needing_stake.insert(entity, (addr, entity_type, slot));
                         }
                     }
@@ -975,7 +980,14 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
                         .expect("Factory needs to be present and staked")
                         .is_staked)
             {
-                required_stake_slot = Some(slot);
+                return Ok(StorageRestriction::NeedsStake(
+                    entity_infos
+                        .factory
+                        .expect("Factory must be present")
+                        .address,
+                    Some(EntityType::Factory),
+                    *slot,
+                ));
             }
         } else if is_entity_associated || is_same_address || is_read_permission {
             required_stake_slot = Some(slot);
