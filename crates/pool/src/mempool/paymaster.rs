@@ -524,9 +524,10 @@ impl PaymasterBalance {
 mod tests {
     use ethers::types::{Address, H256, U256};
     use rundler_provider::{DepositInfo, MockEntryPointV0_6};
-    use rundler_sim::EntityInfos;
     use rundler_types::{
-        v0_6::UserOperation, UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
+        pool::{PaymasterMetadata, PoolOperation},
+        v0_6::UserOperation,
+        EntityInfos, UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
     };
 
     use super::*;

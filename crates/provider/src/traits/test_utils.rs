@@ -52,11 +52,11 @@ mockall::mock! {
     #[async_trait::async_trait]
     impl SimulationProvider for EntryPointV0_6 {
         type UO = v0_6::UserOperation;
-        async fn get_simulate_validation_call(
+        fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_6::UserOperation,
             max_validation_gas: u64,
-        ) -> anyhow::Result<TypedTransaction>;
+        ) -> (TypedTransaction, spoof::State);
         async fn call_simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
