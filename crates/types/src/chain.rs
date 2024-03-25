@@ -32,6 +32,8 @@ pub struct ChainSpec {
     pub id: u64,
     /// entry point address
     pub entry_point_address: Address,
+    /// cost of transferring native tokens
+    pub native_transfer_gas: U256,
 
     /*
      * Gas estimation
@@ -114,6 +116,7 @@ impl Default for ChainSpec {
             name: "Unknown".to_string(),
             id: 0,
             entry_point_address: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
+            native_transfer_gas: U256::from(6800),
             eip1559_enabled: true,
             calldata_pre_verification_gas: false,
             l1_gas_oracle_contract_type: L1GasOracleContractType::default(),

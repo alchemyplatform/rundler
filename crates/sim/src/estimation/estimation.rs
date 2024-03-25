@@ -316,7 +316,16 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
             timer.elapsed().as_millis()
         );
 
-        Ok(min_success_gas.into())
+        let mut min_success_gas = U256::from(min_success_gas);
+
+        // If not using a paymaster, always add the cost of a native transfer to the verification gas.
+        // This may be missed if the account already has a deposit balance that was covered by the
+        // static estimation gas fee, but ends up not being enough to cover the actual gas cost onchain.
+        if op.paymaster_and_data.is_empty() {
+            min_success_gas = min_success_gas.add(self.chain_spec.native_transfer_gas);
+        }
+
+        Ok(min_success_gas)
     }
 
     async fn estimate_call_gas(
@@ -756,8 +765,9 @@ mod tests {
             .await
             .unwrap();
 
-        // the estimation should be the same as the gas usage
-        assert_eq!(gas_usage, estimation);
+        // the estimation should be the same as the gas usage plus the buffer
+        let expected = gas_usage + ChainSpec::default().native_transfer_gas;
+        assert_eq!(expected, estimation);
     }
 
     #[tokio::test]
@@ -1209,11 +1219,12 @@ mod tests {
         assert_eq!(estimation.pre_verification_gas, U256::from(43296));
 
         // gas used increased by 10%
+        let expected = gas_usage + ChainSpec::default().native_transfer_gas;
         assert_eq!(
             estimation.verification_gas_limit,
             cmp::max(
-                math::increase_by_percent(gas_usage, 10),
-                gas_usage + simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER
+                math::increase_by_percent(expected, 10),
+                expected + simulation::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER
             )
         );
 
