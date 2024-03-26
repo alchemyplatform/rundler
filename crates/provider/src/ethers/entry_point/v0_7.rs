@@ -310,6 +310,7 @@ where
         &self,
         user_op: UserOperation,
         max_validation_gas: u64,
+        block_hash: Option<H256>,
     ) -> anyhow::Result<ValidationOutput> {
         let addr = self.i_entry_point.address();
         let pvg = user_op.pre_verification_gas;
@@ -319,9 +320,15 @@ where
             .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
 
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
-        let result = ep_simulations
+        let blockless = ep_simulations
             .simulate_validation(user_op.pack())
-            .gas(U256::from(max_validation_gas) + pvg)
+            .gas(U256::from(max_validation_gas) + pvg);
+        let call = match block_hash {
+            Some(block_hash) => blockless.block(block_hash),
+            None => blockless,
+        };
+
+        let result = call
             .call_raw()
             .state(&spoof_ep)
             .await

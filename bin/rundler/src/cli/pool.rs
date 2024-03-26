@@ -206,6 +206,7 @@ impl PoolArgs {
 
         Ok(PoolTaskArgs {
             chain_spec,
+            unsafe_mode: common.unsafe_mode,
             http_url: common
                 .node_http
                 .clone()

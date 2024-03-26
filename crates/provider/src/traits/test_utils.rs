@@ -61,6 +61,7 @@ mockall::mock! {
             &self,
             user_op: v0_6::UserOperation,
             max_validation_gas: u64,
+            block_hash: Option<H256>
         ) -> anyhow::Result<ValidationOutput>;
         async fn call_spoofed_simulate_op(
             &self,

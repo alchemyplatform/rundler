@@ -39,6 +39,8 @@ use crate::{
 pub struct Args {
     /// Chain specification.
     pub chain_spec: ChainSpec,
+    /// True if using unsafe mode.
+    pub unsafe_mode: bool,
     /// HTTP URL for the full node.
     pub http_url: String,
     /// Poll interval for full node requests.
@@ -94,6 +96,7 @@ impl Task for PoolTask {
                     let pool = PoolTask::create_mempool_v0_6(
                         self.args.chain_spec.clone(),
                         pool_config,
+                        self.args.unsafe_mode,
                         self.event_sender.clone(),
                         provider.clone(),
                     )
@@ -121,17 +124,6 @@ impl Task for PoolTask {
                     );
                 }
             }
-
-            let pool = PoolTask::create_mempool_v0_6(
-                self.args.chain_spec.clone(),
-                pool_config,
-                self.event_sender.clone(),
-                provider.clone(),
-            )
-            .await
-            .context("should have created mempool")?;
-
-            mempools.insert(pool_config.entry_point, pool);
         }
 
         let pool_handle = self.pool_builder.get_handle();
@@ -204,6 +196,7 @@ impl PoolTask {
     async fn create_mempool_v0_6<P: Provider + Middleware>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
+        unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
     ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
@@ -214,16 +207,6 @@ impl PoolTask {
             Arc::clone(&provider),
             ep.clone(),
             pool_config.precheck_settings,
-        );
-
-        let simulate_validation_tracer =
-            sim_v0_6::SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
-        let simulator = sim_v0_6::Simulator::new(
-            Arc::clone(&provider),
-            ep.clone(),
-            simulate_validation_tracer,
-            pool_config.sim_settings,
-            pool_config.mempool_channel_configs.clone(),
         );
 
         let reputation = Arc::new(AddressReputation::new(
@@ -246,15 +229,44 @@ impl PoolTask {
             ),
         );
 
-        let uo_pool = UoPool::new(
-            pool_config.clone(),
-            event_sender,
-            prechecker,
-            simulator,
-            paymaster,
-            reputation,
-        );
+        if unsafe_mode {
+            let simulator = sim_v0_6::UnsafeSimulator::new(
+                Arc::clone(&provider),
+                ep.clone(),
+                pool_config.sim_settings,
+            );
 
-        Ok(Arc::new(Box::new(uo_pool)))
+            let uo_pool = UoPool::new(
+                pool_config.clone(),
+                event_sender,
+                prechecker,
+                simulator,
+                paymaster,
+                reputation,
+            );
+
+            Ok(Arc::new(Box::new(uo_pool)))
+        } else {
+            let simulate_validation_tracer =
+                sim_v0_6::SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
+            let simulator = sim_v0_6::Simulator::new(
+                Arc::clone(&provider),
+                ep.clone(),
+                simulate_validation_tracer,
+                pool_config.sim_settings,
+                pool_config.mempool_channel_configs.clone(),
+            );
+
+            let uo_pool = UoPool::new(
+                pool_config.clone(),
+                event_sender,
+                prechecker,
+                simulator,
+                paymaster,
+                reputation,
+            );
+
+            Ok(Arc::new(Box::new(uo_pool)))
+        }
     }
 }

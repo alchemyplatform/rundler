@@ -113,11 +113,6 @@ where
         }
     }
 
-    /// Return the associated settings
-    pub fn settings(&self) -> &Settings {
-        &self.sim_settings
-    }
-
     // Run the tracer and transform the output.
     // Any violations during this stage are errors.
     async fn create_context(

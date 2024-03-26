@@ -97,6 +97,7 @@ impl RpcArgs {
 
         Ok(RpcTaskArgs {
             chain_spec,
+            unsafe_mode: common.unsafe_mode,
             port: self.port,
             host: self.host.clone(),
             rpc_url: common

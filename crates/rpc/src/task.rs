@@ -48,6 +48,8 @@ use crate::{
 pub struct Args {
     /// Chain spec
     pub chain_spec: ChainSpec,
+    /// True if using unsafe mode
+    pub unsafe_mode: bool,
     /// Port to listen on.
     pub port: u16,
     /// Host to listen on.
