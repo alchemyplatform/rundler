@@ -191,7 +191,6 @@ impl BuilderArgs {
             .context("should have a node HTTP URL")?;
         let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
 
-        // TODO these should be scoped by entry point
         let mempool_configs = match &common.mempool_config_path {
             Some(path) => {
                 get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
@@ -200,14 +199,31 @@ impl BuilderArgs {
         };
 
         Ok(BuilderTaskArgs {
-            // TODO: support multiple entry points
-            entry_points: vec![EntryPointBuilderSettings {
-                address: chain_spec.entry_point_address,
-                version: EntryPointVersion::V0_6,
-                num_bundle_builders: common.num_builders,
-                bundle_builder_index_offset: self.builder_index_offset,
-                mempool_configs,
-            }],
+            // TODO determine better builder config settings
+            entry_points: vec![
+                EntryPointBuilderSettings {
+                    address: chain_spec.entry_point_address_v0_6,
+                    version: EntryPointVersion::V0_6,
+                    num_bundle_builders: common.num_builders / 2,
+                    bundle_builder_index_offset: self.builder_index_offset,
+                    mempool_configs: mempool_configs
+                        .iter()
+                        .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
+                        .map(|(k, v)| (*k, v.clone()))
+                        .collect(),
+                },
+                EntryPointBuilderSettings {
+                    address: chain_spec.entry_point_address_v0_7,
+                    version: EntryPointVersion::V0_7,
+                    num_bundle_builders: common.num_builders / 2,
+                    bundle_builder_index_offset: self.builder_index_offset,
+                    mempool_configs: mempool_configs
+                        .iter()
+                        .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
+                        .map(|(k, v)| (*k, v.clone()))
+                        .collect(),
+                },
+            ],
             chain_spec,
             unsafe_mode: common.unsafe_mode,
             rpc_url,

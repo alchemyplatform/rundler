@@ -31,7 +31,7 @@ use rundler_types::{
         v0_7::{
             entry_point_simulations::{
                 EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
-                ENTRYPOINTSIMULATIONS_BYTECODE,
+                ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
             },
             get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
             i_aggregator::IAggregator,
@@ -64,7 +64,7 @@ const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
 ]);
 
 /// Entry point for the v0.7 contract.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EntryPoint<P> {
     i_entry_point: IEntryPoint<P>,
     provider: Arc<P>,
@@ -86,6 +86,20 @@ where
                 Arc::clone(&provider),
             ),
             opt_gas_oracle: GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, provider),
+        }
+    }
+}
+
+impl<P> Clone for EntryPoint<P>
+where
+    P: Provider + Middleware,
+{
+    fn clone(&self) -> Self {
+        Self {
+            i_entry_point: self.i_entry_point.clone(),
+            provider: self.provider.clone(),
+            arb_node: self.arb_node.clone(),
+            opt_gas_oracle: self.opt_gas_oracle.clone(),
         }
     }
 }
@@ -295,7 +309,7 @@ where
         let mut spoof_ep = spoof::State::default();
         spoof_ep
             .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
 
         let call = ep_simulations
@@ -317,22 +331,20 @@ where
         let mut spoof_ep = spoof::State::default();
         spoof_ep
             .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
 
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
         let blockless = ep_simulations
-            .simulate_validation(user_op.pack())
+            .simulate_validation(user_op.clone().pack())
             .gas(U256::from(max_validation_gas) + pvg);
         let call = match block_hash {
             Some(block_hash) => blockless.block(block_hash),
             None => blockless,
         };
 
-        let result = call
-            .call_raw()
-            .state(&spoof_ep)
-            .await
-            .context("should simulate validation")?;
+        let result = call.call_raw().state(&spoof_ep).await;
+        // TODO we should handle the error here, this context covers up any reverts from the contract
+        let result = result.context("should simulate validation")?;
         Ok(result.into())
     }
 
@@ -365,7 +377,7 @@ where
         let mut spoof_ep = spoofed_state.clone();
         spoof_ep
             .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
 
         let contract_error = ep_simulations

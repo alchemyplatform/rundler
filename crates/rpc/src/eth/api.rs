@@ -45,7 +45,7 @@ impl Settings {
 }
 
 pub(crate) struct EthApi<P> {
-    chain_spec: ChainSpec,
+    pub(crate) chain_spec: ChainSpec,
     pool: P,
     router: EntryPointRouter,
 }

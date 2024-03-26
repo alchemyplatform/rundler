@@ -12,10 +12,12 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use ethers::types::{Address, Bytes, H256, U128, U256};
-use rundler_types::v0_7::{UserOperation, UserOperationOptionalGas};
+use rundler_types::v0_7::{
+    UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
+};
 use serde::{Deserialize, Serialize};
 
-use super::RpcAddress;
+use super::{FromRpc, RpcAddress};
 
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -39,14 +41,57 @@ pub(crate) struct RpcUserOperation {
 }
 
 impl From<UserOperation> for RpcUserOperation {
-    fn from(_op: UserOperation) -> Self {
-        todo!()
+    fn from(op: UserOperation) -> Self {
+        RpcUserOperation {
+            sender: op.sender,
+            nonce: op.nonce,
+            call_data: op.call_data,
+            call_gas_limit: op.call_gas_limit,
+            verification_gas_limit: op.verification_gas_limit,
+            pre_verification_gas: op.pre_verification_gas,
+            max_priority_fee_per_gas: op.max_priority_fee_per_gas,
+            max_fee_per_gas: op.max_fee_per_gas,
+            factory: op.factory,
+            factory_data: Some(op.factory_data),
+            paymaster: op.paymaster,
+            paymaster_verification_gas_limit: Some(op.paymaster_verification_gas_limit),
+            paymaster_post_op_gas_limit: Some(op.paymaster_post_op_gas_limit),
+            paymaster_data: Some(op.paymaster_data),
+            signature: op.signature,
+        }
     }
 }
 
-impl From<RpcUserOperation> for UserOperation {
-    fn from(_def: RpcUserOperation) -> Self {
-        todo!()
+impl FromRpc<RpcUserOperation> for UserOperation {
+    fn from_rpc(def: RpcUserOperation, entry_point: Address, chain_id: u64) -> Self {
+        let mut builder = UserOperationBuilder::new(
+            entry_point,
+            chain_id,
+            UserOperationRequiredFields {
+                sender: def.sender,
+                nonce: def.nonce,
+                call_data: def.call_data,
+                call_gas_limit: def.call_gas_limit,
+                verification_gas_limit: def.verification_gas_limit,
+                pre_verification_gas: def.pre_verification_gas,
+                max_priority_fee_per_gas: def.max_priority_fee_per_gas,
+                max_fee_per_gas: def.max_fee_per_gas,
+                signature: def.signature,
+            },
+        );
+        if def.paymaster.is_some() {
+            builder = builder.paymaster(
+                def.paymaster.unwrap(),
+                def.paymaster_verification_gas_limit.unwrap_or_default(),
+                def.paymaster_post_op_gas_limit.unwrap_or_default(),
+                def.paymaster_data.unwrap_or_default(),
+            );
+        }
+        if def.factory.is_some() {
+            builder = builder.factory(def.factory.unwrap(), def.factory_data.unwrap_or_default());
+        }
+
+        builder.build()
     }
 }
 
@@ -82,7 +127,23 @@ pub(crate) struct RpcUserOperationOptionalGas {
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
-    fn from(_def: RpcUserOperationOptionalGas) -> Self {
-        todo!()
+    fn from(def: RpcUserOperationOptionalGas) -> Self {
+        UserOperationOptionalGas {
+            sender: def.sender,
+            nonce: def.nonce,
+            call_data: def.call_data,
+            call_gas_limit: def.call_gas_limit,
+            verification_gas_limit: def.verification_gas_limit,
+            pre_verification_gas: def.pre_verification_gas,
+            max_priority_fee_per_gas: def.max_priority_fee_per_gas,
+            max_fee_per_gas: def.max_fee_per_gas,
+            factory: def.factory,
+            factory_data: def.factory_data.unwrap_or_default(),
+            paymaster: def.paymaster,
+            paymaster_verification_gas_limit: def.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: def.paymaster_post_op_gas_limit,
+            paymaster_data: def.paymaster_data.unwrap_or_default(),
+            signature: def.signature,
+        }
     }
 }

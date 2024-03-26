@@ -16,6 +16,7 @@ use ethers::{
     types::{Address, Bytes, H256, U128, U256},
     utils::keccak256,
 };
+use rand::RngCore;
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{
@@ -290,6 +291,139 @@ pub struct UserOperationOptionalGas {
     pub paymaster_data: Bytes,
 }
 
+impl UserOperationOptionalGas {
+    /// Fill in the optional and dummy fields of the user operation with values
+    /// that will cause the maximum possible calldata gas cost.
+    pub fn max_fill(
+        &self,
+        entry_point: Address,
+        chain_id: u64,
+        max_call_gas: U128,
+        max_verification_gas: U128,
+    ) -> UserOperation {
+        let mut uo = self.clone().into_user_operation(
+            entry_point,
+            chain_id,
+            max_call_gas,
+            max_verification_gas,
+        );
+
+        // Modify all of the variable fields to be the maximum possible value
+        uo.call_gas_limit = U128::MAX;
+        uo.verification_gas_limit = U128::MAX;
+        uo.pre_verification_gas = U256::MAX;
+        uo.max_fee_per_gas = U128::MAX;
+        uo.max_priority_fee_per_gas = U128::MAX;
+        uo.signature = vec![255_u8; self.signature.len()].into();
+        uo.paymaster_data = vec![255_u8; self.paymaster_data.len()].into();
+        uo.paymaster_verification_gas_limit = self.paymaster.map(|_| U128::MAX).unwrap_or_default();
+        uo.paymaster_post_op_gas_limit = self.paymaster.map(|_| U128::MAX).unwrap_or_default();
+        uo.factory_data = vec![255_u8; self.factory_data.len()].into();
+
+        uo
+    }
+
+    /// Fill in the optional and dummy fields of the user operation with random values.
+    ///
+    /// When estimating pre-verification gas, specifically on networks that use
+    /// compression algorithms on their data that they post to their data availability
+    /// layer (like Arbitrum), it is important to make sure that the data that is
+    /// random such that it compresses to a representative size.
+    //
+    /// Note that this will slightly overestimate the calldata gas needed as it uses
+    /// the worst case scenario for the unknown gas values and paymaster_and_data.
+    pub fn random_fill(
+        &self,
+        entry_point: Address,
+        chain_id: u64,
+        max_call_gas: U128,
+        max_verification_gas: U128,
+    ) -> UserOperation {
+        let mut uo = self.clone().into_user_operation(
+            entry_point,
+            chain_id,
+            max_call_gas,
+            max_verification_gas,
+        );
+
+        // Modify all of the variable fields to be random
+        uo.call_gas_limit = U128::from_big_endian(&Self::random_bytes(4)); // 30M max
+        uo.verification_gas_limit = U128::from_big_endian(&Self::random_bytes(4)); // 30M max
+        uo.pre_verification_gas = U256::from_big_endian(&Self::random_bytes(4)); // 30M max
+        uo.max_fee_per_gas = U128::from_big_endian(&Self::random_bytes(8)); // 2^64 max
+        uo.max_priority_fee_per_gas = U128::from_big_endian(&Self::random_bytes(8)); // 2^64 max
+        uo.signature = Self::random_bytes(self.signature.len());
+        uo.paymaster_data = Self::random_bytes(self.paymaster_data.len());
+        uo.paymaster_verification_gas_limit = U128::from_big_endian(&Self::random_bytes(4));
+        uo.paymaster_post_op_gas_limit = U128::from_big_endian(&Self::random_bytes(4));
+        uo.factory_data = Self::random_bytes(self.factory_data.len());
+
+        uo
+    }
+
+    /// Convert into a full user operation.
+    /// Fill in the optional fields of the user operation with default values if unset
+    pub fn into_user_operation(
+        self,
+        entry_point: Address,
+        chain_id: u64,
+        max_call_gas: U128,
+        max_verification_gas: U128,
+    ) -> UserOperation {
+        let builder = UserOperationBuilder::new(
+            entry_point,
+            chain_id,
+            UserOperationRequiredFields {
+                sender: self.sender,
+                nonce: self.nonce,
+                call_data: self.call_data,
+                signature: self.signature,
+                // These are overwritten in gas estimation
+                call_gas_limit: self.call_gas_limit.unwrap_or(max_call_gas),
+                verification_gas_limit: self.verification_gas_limit.unwrap_or(max_verification_gas),
+                // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
+                pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
+                max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
+                max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
+            },
+        );
+        let builder = if let Some(factory) = self.factory {
+            builder.factory(factory, self.factory_data)
+        } else {
+            builder
+        };
+        let builder = if let Some(paymaster) = self.paymaster {
+            builder.paymaster(
+                paymaster,
+                self.paymaster_verification_gas_limit
+                    .unwrap_or(max_verification_gas),
+                self.paymaster_post_op_gas_limit
+                    .unwrap_or(max_verification_gas),
+                self.paymaster_data,
+            )
+        } else {
+            builder
+        };
+
+        builder.build()
+    }
+
+    fn random_bytes(len: usize) -> Bytes {
+        let mut bytes = vec![0_u8; len];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        bytes.into()
+    }
+}
+
+impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
+    fn from(op: super::UserOperationOptionalGas) -> Self {
+        match op {
+            super::UserOperationOptionalGas::V0_7(op) => op,
+            _ => panic!("Expected UserOperationOptionalGasV0_7"),
+        }
+    }
+}
+
 /// Builder for UserOperation
 ///
 /// Used to create a v0.7 while ensuring all required fields and grouped fields are present
@@ -416,21 +550,21 @@ fn pack_user_operation(uo: UserOperation) -> PackedUserOperation {
     };
 
     let account_gas_limits = concat_128(
-        uo.verification_gas_limit.low_u128().to_le_bytes(),
-        uo.call_gas_limit.low_u128().to_le_bytes(),
+        uo.verification_gas_limit.low_u128().to_be_bytes(),
+        uo.call_gas_limit.low_u128().to_be_bytes(),
     );
 
     let gas_fees = concat_128(
-        uo.max_priority_fee_per_gas.low_u128().to_le_bytes(),
-        uo.max_fee_per_gas.low_u128().to_le_bytes(),
+        uo.max_priority_fee_per_gas.low_u128().to_be_bytes(),
+        uo.max_fee_per_gas.low_u128().to_be_bytes(),
     );
 
     let paymaster_and_data = if let Some(paymaster) = uo.paymaster {
         let mut paymaster_and_data = paymaster.as_bytes().to_vec();
         paymaster_and_data
-            .extend_from_slice(&uo.paymaster_verification_gas_limit.low_u128().to_le_bytes());
+            .extend_from_slice(&uo.paymaster_verification_gas_limit.low_u128().to_be_bytes());
         paymaster_and_data
-            .extend_from_slice(&uo.paymaster_post_op_gas_limit.low_u128().to_le_bytes());
+            .extend_from_slice(&uo.paymaster_post_op_gas_limit.low_u128().to_be_bytes());
         paymaster_and_data.extend_from_slice(&uo.paymaster_data);
         Bytes::from(paymaster_and_data)
     } else {
@@ -464,7 +598,7 @@ fn unpack_user_operation(puo: PackedUserOperation) -> UserOperation {
     }
 
     if !puo.paymaster_and_data.is_empty() {
-        paymaster = Some(Address::from_slice(&puo.paymaster_and_data));
+        paymaster = Some(Address::from_slice(&puo.paymaster_and_data[..20]));
         paymaster_verification_gas_limit = U128::from_big_endian(&puo.paymaster_and_data[20..36]);
         paymaster_post_op_gas_limit = U128::from_big_endian(&puo.paymaster_and_data[36..52]);
         paymaster_data = Bytes::from_iter(&puo.paymaster_and_data[52..]);
