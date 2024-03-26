@@ -29,5 +29,8 @@ jobs:
       - name: Build and test executor
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest && ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
 
+      - name: log runner output
+        run: cat ./bundler-test-executors/build/out/rundler.log
+
       - name: Parse spec results
         run: ./rundler/.github/scripts/compliance-parser.sh ./bundler-test-executors/build/out/rundler.xml
