@@ -14,10 +14,7 @@
 use ethers::types::{
     spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
 };
-use rundler_types::{
-    contracts::v0_6::i_entry_point::ExecutionResult, DepositInfoV0_6, GasFees, UserOperation,
-    UserOpsPerAggregator, ValidationOutput,
-};
+use rundler_types::{GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput};
 
 /// Output of a successful signature aggregator simulation call
 #[derive(Clone, Debug, Default)]
@@ -53,6 +50,38 @@ pub enum HandleOpsOut {
     PostOpRevert,
 }
 
+/// Deposit info for an address from the entry point contract
+#[derive(Clone, Debug, Default)]
+pub struct DepositInfo {
+    /// Amount deposited on the entry point
+    pub deposit: U256,
+    /// Whether the address has staked
+    pub staked: bool,
+    /// Amount staked on the entry point
+    pub stake: u128,
+    /// The amount of time in sections that must pass before the stake can be withdrawn
+    pub unstake_delay_sec: u32,
+    /// The time at which the stake can be withdrawn
+    pub withdraw_time: u64,
+}
+
+/// Result of an execution
+#[derive(Clone, Debug, Default)]
+pub struct ExecutionResult {
+    /// Gas used before the operation execution
+    pub pre_op_gas: U256,
+    /// Amount paid by the operation
+    pub paid: U256,
+    /// Time which the operation is valid after
+    pub valid_after: Timestamp,
+    /// Time which the operation is valid until
+    pub valid_until: Timestamp,
+    /// True if the operation execution succeeded
+    pub target_success: bool,
+    /// Result of the operation execution
+    pub target_result: Bytes,
+}
+
 /// Trait for interacting with an entry point contract.
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, Arc)]
@@ -65,7 +94,7 @@ pub trait EntryPoint: Send + Sync + 'static {
         -> anyhow::Result<U256>;
 
     /// Get the deposit info for an address
-    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfoV0_6>;
+    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
 
     /// Get the balances of a list of addresses in order
     async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
@@ -152,11 +181,11 @@ pub trait SimulationProvider: Send + Sync + 'static {
     type UO: UserOperation;
 
     /// Construct a call for the entry point contract's `simulateValidation` function
-    async fn get_simulate_validation_call(
+    fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
         max_validation_gas: u64,
-    ) -> anyhow::Result<TypedTransaction>;
+    ) -> (TypedTransaction, spoof::State);
 
     /// Call the entry point contract's `simulateValidation` function.
     async fn call_simulate_validation(

@@ -192,6 +192,14 @@ impl ValidTimeRange {
     pub fn contains(self, timestamp: Timestamp, buffer: Duration) -> bool {
         self.valid_after <= timestamp && (timestamp + buffer) <= self.valid_until
     }
+
+    /// Intersect two time ranges into a single time range that is valid whenever both are valid
+    pub fn intersect(self, other: Self) -> Self {
+        Self {
+            valid_after: self.valid_after.max(other.valid_after),
+            valid_until: self.valid_until.min(other.valid_until),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -284,6 +292,15 @@ mod test {
         let json = serde_json::to_string(&Timestamp::new(100))
             .expect("serialization should always succeed");
         assert_eq!(json, "\"0x64\"");
+    }
+
+    #[test]
+    fn test_merge_time_ranges() {
+        let range1 = ValidTimeRange::new(Timestamp::new(100), Timestamp::new(200));
+        let range2 = ValidTimeRange::new(Timestamp::new(150), Timestamp::new(250));
+        let intersect = range1.intersect(range2);
+        assert_eq!(intersect.valid_after, Timestamp::new(150));
+        assert_eq!(intersect.valid_until, Timestamp::new(200));
     }
 
     fn get_timestamp_out_of_bounds_for_datetime() -> Timestamp {

@@ -23,7 +23,7 @@ use strum::IntoEnumIterator;
 use super::{
     GasOverheads, UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant,
 };
-pub use crate::contracts::v0_6::shared_types::{UserOperation, UserOpsPerAggregator};
+pub use crate::contracts::v0_6::i_entry_point::{UserOperation, UserOpsPerAggregator};
 use crate::{
     entity::{Entity, EntityType},
     EntryPointVersion,

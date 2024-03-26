@@ -14,14 +14,11 @@
 use ethers::types::{
     spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
 };
-use rundler_types::{
-    contracts::v0_6::i_entry_point::ExecutionResult, v0_6, DepositInfoV0_6, GasFees,
-    UserOpsPerAggregator, ValidationOutput,
-};
+use rundler_types::{v0_6, GasFees, UserOpsPerAggregator, ValidationOutput};
 
 use crate::{
-    AggregatorOut, BundleHandler, EntryPoint, HandleOpsOut, L1GasProvider, SignatureAggregator,
-    SimulationProvider,
+    AggregatorOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult, HandleOpsOut,
+    L1GasProvider, SignatureAggregator, SimulationProvider,
 };
 
 mockall::mock! {
@@ -32,7 +29,7 @@ mockall::mock! {
         fn address(&self) -> Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> anyhow::Result<U256>;
-        async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfoV0_6>;
+        async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
         async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
     }
 
@@ -55,11 +52,11 @@ mockall::mock! {
     #[async_trait::async_trait]
     impl SimulationProvider for EntryPointV0_6 {
         type UO = v0_6::UserOperation;
-        async fn get_simulate_validation_call(
+        fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_6::UserOperation,
             max_validation_gas: u64,
-        ) -> anyhow::Result<TypedTransaction>;
+        ) -> (TypedTransaction, spoof::State);
         async fn call_simulate_validation(
             &self,
             user_op: v0_6::UserOperation,

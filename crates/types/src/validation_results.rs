@@ -12,15 +12,28 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use ethers::{
-    abi,
-    abi::{AbiDecode, AbiError},
-    types::{Address, Bytes, U256},
+    abi::{self, AbiDecode, AbiError},
+    types::{Address, Bytes, H160, U256},
 };
 
 use crate::{
-    contracts::v0_6::entry_point::{ValidationResult, ValidationResultWithAggregation},
-    Timestamp,
+    contracts::{
+        v0_6::i_entry_point::{
+            ValidationResult as ValidationResultV0_6,
+            ValidationResultWithAggregation as ValidationResultWithAggregationV0_6,
+        },
+        v0_7::entry_point_simulations::{
+            AggregatorStakeInfo as AggregatorStakeInfoV0_7, ReturnInfo as ReturnInfoV0_7,
+            StakeInfo as StakeInfoV0_7, ValidationResult as ValidationResultV0_7,
+        },
+    },
+    Timestamp, ValidTimeRange,
 };
+
+/// Both v0.6 and v0.7 contracts use this aggregator address to indicate that the signature validation failed
+/// Zero is also used to indicate that no aggregator is used AND that the signature validation failed.
+const SIG_VALIDATION_FAILED: Address =
+    H160([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
 /// Equivalent to the generated `ValidationResult` or
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs
@@ -39,21 +52,42 @@ pub struct ValidationOutput {
     pub aggregator_info: Option<AggregatorInfo>,
 }
 
-impl AbiDecode for ValidationOutput {
-    fn decode(bytes: impl AsRef<[u8]>) -> Result<Self, AbiError> {
-        if let Ok(result) = ValidationResult::decode(bytes.as_ref()) {
+impl ValidationOutput {
+    /// Decode a v0.6 validation result from bytes.
+    pub fn decode_v0_6(bytes: impl AsRef<[u8]>) -> Result<Self, AbiError> {
+        if let Ok(result) = ValidationResultV0_6::decode(bytes.as_ref()) {
             return Ok(result.into());
         }
-        if let Ok(result) = ValidationResultWithAggregation::decode(bytes) {
+        if let Ok(result) = ValidationResultWithAggregationV0_6::decode(bytes) {
             return Ok(result.into());
         }
         Err(AbiError::DecodingError(abi::Error::InvalidData))
     }
+
+    /// Decode a v0.6 validation result from hex.
+    pub fn decode_v0_6_hex(hex: impl AsRef<str>) -> Result<Self, AbiError> {
+        let bytes: Bytes = hex.as_ref().parse()?;
+        Self::decode_v0_6(&bytes)
+    }
+
+    /// Decode a v0.7 validation result from bytes.
+    pub fn decode_v0_7(bytes: impl AsRef<[u8]>) -> Result<Self, AbiError> {
+        if let Ok(result) = ValidationResultV0_7::decode(bytes.as_ref()) {
+            return Ok(result.into());
+        }
+        Err(AbiError::DecodingError(abi::Error::InvalidData))
+    }
+
+    /// Decode a v0.7 validation result from hex.
+    pub fn decode_v0_7_hex(hex: impl AsRef<str>) -> Result<Self, AbiError> {
+        let bytes: Bytes = hex.as_ref().parse()?;
+        Self::decode_v0_7(&bytes)
+    }
 }
 
-impl From<ValidationResult> for ValidationOutput {
-    fn from(value: ValidationResult) -> Self {
-        let ValidationResult {
+impl From<ValidationResultV0_6> for ValidationOutput {
+    fn from(value: ValidationResultV0_6) -> Self {
+        let ValidationResultV0_6 {
             return_info,
             sender_info,
             factory_info,
@@ -69,9 +103,9 @@ impl From<ValidationResult> for ValidationOutput {
     }
 }
 
-impl From<ValidationResultWithAggregation> for ValidationOutput {
-    fn from(value: ValidationResultWithAggregation) -> Self {
-        let ValidationResultWithAggregation {
+impl From<ValidationResultWithAggregationV0_6> for ValidationOutput {
+    fn from(value: ValidationResultWithAggregationV0_6) -> Self {
+        let ValidationResultWithAggregationV0_6 {
             return_info,
             sender_info,
             factory_info,
@@ -88,13 +122,41 @@ impl From<ValidationResultWithAggregation> for ValidationOutput {
     }
 }
 
+impl From<ValidationResultV0_7> for ValidationOutput {
+    fn from(value: ValidationResultV0_7) -> Self {
+        let ValidationResultV0_7 {
+            return_info,
+            sender_info,
+            factory_info,
+            paymaster_info,
+            aggregator_info,
+        } = value;
+
+        let aggregator_info = if aggregator_info.aggregator.is_zero() {
+            None
+        } else {
+            Some(aggregator_info.into())
+        };
+
+        Self {
+            return_info: return_info.into(),
+            sender_info: sender_info.into(),
+            factory_info: factory_info.into(),
+            paymaster_info: paymaster_info.into(),
+            aggregator_info,
+        }
+    }
+}
+
 /// ValidationReturnInfo from EntryPoint contract
 #[derive(Debug)]
 pub struct ValidationReturnInfo {
     /// The amount of gas used before the op was executed (pre verification gas and validation gas)
     pub pre_op_gas: U256,
-    /// Whether the signature verification failed
-    pub sig_failed: bool,
+    /// Whether the account signature verification failed
+    pub account_sig_failed: bool,
+    /// Whether the paymaster signature verification failed
+    pub paymaster_sig_failed: bool,
     /// The time after which the op is valid
     pub valid_after: Timestamp,
     /// The time until which the op is valid
@@ -103,6 +165,7 @@ pub struct ValidationReturnInfo {
     pub paymaster_context: Bytes,
 }
 
+// Conversion for v0.6
 impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
     fn from(value: (U256, U256, bool, u64, u64, Bytes)) -> Self {
         let (
@@ -113,13 +176,93 @@ impl From<(U256, U256, bool, u64, u64, Bytes)> for ValidationReturnInfo {
             valid_until,
             paymaster_context,
         ) = value;
+        // In v0.6 if one signature fails both do
         Self {
             pre_op_gas,
-            sig_failed,
+            account_sig_failed: sig_failed,
+            paymaster_sig_failed: sig_failed,
             valid_after: valid_after.into(),
             valid_until: valid_until.into(),
             paymaster_context,
         }
+    }
+}
+
+impl From<ReturnInfoV0_7> for ValidationReturnInfo {
+    fn from(value: ReturnInfoV0_7) -> Self {
+        let ReturnInfoV0_7 {
+            pre_op_gas,
+            prefund: _,
+            account_validation_data,
+            paymaster_validation_data,
+            paymaster_context,
+        } = value;
+
+        let account = parse_validation_data(account_validation_data);
+        let paymaster = parse_validation_data(paymaster_validation_data);
+
+        let intersect_range = account
+            .valid_time_range()
+            .intersect(paymaster.valid_time_range());
+
+        Self {
+            pre_op_gas,
+            account_sig_failed: !account.signature_valid(),
+            paymaster_sig_failed: !paymaster.signature_valid(),
+            valid_after: intersect_range.valid_after,
+            valid_until: intersect_range.valid_until,
+            paymaster_context,
+        }
+    }
+}
+
+/// ValidationData from EntryPoint contract
+pub struct ValidationData {
+    aggregator: Address,
+    valid_after: u64,
+    valid_until: u64,
+}
+
+impl ValidationData {
+    /// Valid time range for the validation data
+    pub fn valid_time_range(&self) -> ValidTimeRange {
+        ValidTimeRange::new(self.valid_after.into(), self.valid_until.into())
+    }
+
+    /// Whether the signature is valid
+    pub fn signature_valid(&self) -> bool {
+        self.aggregator != SIG_VALIDATION_FAILED
+    }
+
+    /// The aggregator address, if any
+    pub fn aggregator(&self) -> Option<Address> {
+        if self.aggregator == SIG_VALIDATION_FAILED || self.aggregator.is_zero() {
+            None
+        } else {
+            Some(self.aggregator)
+        }
+    }
+}
+
+/// Parse the validation data from a U256
+///
+/// Works for both v0.6 and v0.7 validation data
+pub fn parse_validation_data(data: U256) -> ValidationData {
+    let slice: [u8; 32] = data.into();
+    let aggregator = Address::from_slice(&slice[0..20]);
+
+    let mut buf = [0_u8; 8];
+    buf[..6].copy_from_slice(&slice[20..26]);
+    let valid_after = u64::from_le_bytes(buf);
+
+    let mut buf = [0_u8; 8];
+    buf[..6].copy_from_slice(&slice[26..32]);
+    let valid_until = u64::from_le_bytes(buf);
+
+    ValidationData {
+        aggregator,
+        valid_after,
+        valid_until,
     }
 }
 
@@ -134,6 +277,19 @@ pub struct StakeInfo {
 
 impl From<(U256, U256)> for StakeInfo {
     fn from((stake, unstake_delay_sec): (U256, U256)) -> Self {
+        Self {
+            stake,
+            unstake_delay_sec,
+        }
+    }
+}
+
+impl From<StakeInfoV0_7> for StakeInfo {
+    fn from(value: StakeInfoV0_7) -> Self {
+        let StakeInfoV0_7 {
+            stake,
+            unstake_delay_sec,
+        } = value;
         Self {
             stake,
             unstake_delay_sec,
@@ -156,5 +312,37 @@ impl From<(Address, (U256, U256))> for AggregatorInfo {
             address,
             stake_info: stake_info.into(),
         }
+    }
+}
+
+impl From<AggregatorStakeInfoV0_7> for AggregatorInfo {
+    fn from(value: AggregatorStakeInfoV0_7) -> Self {
+        let AggregatorStakeInfoV0_7 {
+            aggregator,
+            stake_info,
+        } = value;
+        Self {
+            address: aggregator,
+            stake_info: stake_info.into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_validation_data;
+
+    #[test]
+    fn test_parse_validation_data() {
+        let data = "0x00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+        let parsed = parse_validation_data(data.into());
+        assert_eq!(
+            parsed.aggregator,
+            "0x00112233445566778899aabbccddeeff00112233"
+                .parse()
+                .unwrap()
+        );
+        assert_eq!(parsed.valid_after, 0x998877665544); // solidity is LE
+        assert_eq!(parsed.valid_until, 0xffeeddccbbaa);
     }
 }

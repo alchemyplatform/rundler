@@ -289,7 +289,7 @@ where
             .call_simulate_validation(uo.into(), max_verification_gas)
             .await?;
 
-        Ok(!output.return_info.sig_failed)
+        Ok(!output.return_info.account_sig_failed)
     }
 }
 

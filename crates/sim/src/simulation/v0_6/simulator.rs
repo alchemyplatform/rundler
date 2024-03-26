@@ -175,7 +175,7 @@ where
                 entity_infos: None,
             })?
         }
-        let Ok(entry_point_out) = ValidationOutput::decode_hex(revert_data) else {
+        let Ok(entry_point_out) = ValidationOutput::decode_v0_6_hex(revert_data) else {
             let entity_addr = match last_entity_type {
                 EntityType::Factory => factory_address,
                 EntityType::Paymaster => paymaster_address,
@@ -256,7 +256,11 @@ where
 
         let mut violations = vec![];
 
-        if entry_point_out.return_info.sig_failed {
+        // v0.6 doesn't distinguish between the different types of signature failures
+        // both of these will be set to true if the signature failed.
+        if entry_point_out.return_info.account_sig_failed
+            || entry_point_out.return_info.paymaster_sig_failed
+        {
             violations.push(SimulationViolation::InvalidSignature);
         }
 

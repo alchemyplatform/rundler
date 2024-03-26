@@ -17,10 +17,10 @@ use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
     contract::{ContractError, FunctionCall},
-    providers::{spoof, Middleware, RawCall},
+    providers::{Middleware, RawCall},
     types::{
-        transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
-        H160, H256, U256,
+        spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes,
+        Eip1559TransactionRequest, H160, H256, U256,
     },
     utils::hex,
 };
@@ -28,65 +28,55 @@ use rundler_types::{
     contracts::{
         arbitrum::node_interface::NodeInterface,
         optimism::gas_price_oracle::GasPriceOracle,
-        v0_6::{
+        v0_7::{
+            entry_point_simulations::{
+                EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
+                ENTRYPOINTSIMULATIONS_BYTECODE,
+            },
             get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
             i_aggregator::IAggregator,
             i_entry_point::{
-                DepositInfo as DepositInfoV0_6, ExecutionResult as ExecutionResultV0_6, FailedOp,
-                IEntryPoint, SignatureValidationFailed,
-                UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
+                DepositInfo as DepositInfoV0_7, FailedOp, IEntryPoint, SignatureValidationFailed,
+                UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
             },
         },
     },
-    v0_6::UserOperation,
+    v0_7::UserOperation,
     GasFees, UserOpsPerAggregator, ValidationOutput,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::{
-    traits::HandleOpsOut, AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo,
-    EntryPointProvider, ExecutionResult, L1GasProvider, Provider, SignatureAggregator,
+    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPointProvider,
+    ExecutionResult, HandleOpsOut, L1GasProvider, Provider, SignatureAggregator,
     SimulationProvider,
 };
 
+// From v0.7 EP contract
+const REVERT_REASON_MAX_LEN: usize = 2048;
+
+// TODO(danc): These should be configurable from chain spec
 const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc8,
 ]);
-
 const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
     0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0F,
 ]);
 
-const REVERT_REASON_MAX_LEN: usize = 2048;
-
-/// Implementation of the `EntryPoint` trait for the v0.6 version of the entry point contract using ethers
-#[derive(Debug)]
-pub struct EntryPoint<P: Provider + Middleware> {
+/// Entry point for the v0.7 contract.
+#[derive(Debug, Clone)]
+pub struct EntryPoint<P> {
     i_entry_point: IEntryPoint<P>,
     provider: Arc<P>,
     arb_node: NodeInterface<P>,
     opt_gas_oracle: GasPriceOracle<P>,
 }
 
-impl<P> Clone for EntryPoint<P>
-where
-    P: Provider + Middleware,
-{
-    fn clone(&self) -> Self {
-        Self {
-            i_entry_point: self.i_entry_point.clone(),
-            provider: self.provider.clone(),
-            arb_node: self.arb_node.clone(),
-            opt_gas_oracle: self.opt_gas_oracle.clone(),
-        }
-    }
-}
-
 impl<P> EntryPoint<P>
 where
-    P: Provider + Middleware,
+    P: Middleware,
 {
-    /// Create a new `EntryPointV0_6` instance
+    /// Create a new `EntryPoint` instance for v0.7
     pub fn new(entry_point_address: Address, provider: Arc<P>) -> Self {
         Self {
             i_entry_point: IEntryPoint::new(entry_point_address, Arc::clone(&provider)),
@@ -160,8 +150,12 @@ where
         ops: Vec<UserOperation>,
     ) -> anyhow::Result<Option<Bytes>> {
         let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
+
+        // pack the ops
+        let packed_ops = ops.into_iter().map(|op| op.pack()).collect();
+
         // TODO: Cap the gas here.
-        let result = aggregator.aggregate_signatures(ops).call().await;
+        let result = aggregator.aggregate_signatures(packed_ops).call().await;
         match result {
             Ok(bytes) => Ok(Some(bytes)),
             Err(ContractError::Revert(_)) => Ok(None),
@@ -178,7 +172,7 @@ where
         let aggregator = IAggregator::new(aggregator_address, Arc::clone(&self.provider));
 
         let result = aggregator
-            .validate_user_op_signature(user_op)
+            .validate_user_op_signature(user_op.pack())
             .gas(gas_cap)
             .call()
             .await;
@@ -217,19 +211,13 @@ where
         if let ContractError::Revert(revert_data) = &error {
             if let Ok(FailedOp { op_index, reason }) = FailedOp::decode(revert_data) {
                 match &reason[..4] {
+                    // This revert is a bundler issue, not a user op issue, handle it differently
                     "AA95" => anyhow::bail!("Handle ops called with insufficient gas"),
                     _ => return Ok(HandleOpsOut::FailedOp(op_index.as_usize(), reason)),
                 }
             }
             if let Ok(failure) = SignatureValidationFailed::decode(revert_data) {
                 return Ok(HandleOpsOut::SignatureValidationFailed(failure.aggregator));
-            }
-            // Special handling for a bug in the 0.6 entry point contract to detect the bug where
-            // the `returndatacopy` opcode reverts due to a postOp revert and the revert data is too short.
-            // See https://github.com/eth-infinitism/account-abstraction/pull/325 for more details.
-            // NOTE: this error message is copied directly from Geth and assumes it will not change.
-            if error.to_string().contains("return data out of bounds") {
-                return Ok(HandleOpsOut::PostOpRevert);
             }
         }
         Err(error)?
@@ -266,7 +254,7 @@ where
     ) -> anyhow::Result<U256> {
         let data = self
             .i_entry_point
-            .handle_ops(vec![user_op], Address::random())
+            .handle_ops(vec![user_op.pack()], Address::random())
             .calldata()
             .context("should get calldata for entry point handle ops")?;
 
@@ -281,7 +269,7 @@ where
     ) -> anyhow::Result<U256> {
         let data = self
             .i_entry_point
-            .handle_ops(vec![user_op], Address::random())
+            .handle_ops(vec![user_op.pack()], Address::random())
             .calldata()
             .context("should get calldata for entry point handle ops")?;
 
@@ -302,13 +290,20 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
     ) -> (TypedTransaction, spoof::State) {
+        let addr = self.i_entry_point.address();
         let pvg = user_op.pre_verification_gas;
-        let call = self
-            .i_entry_point
-            .simulate_validation(user_op)
+        let mut spoof_ep = spoof::State::default();
+        spoof_ep
+            .account(addr)
+            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+        let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
+
+        let call = ep_simulations
+            .simulate_validation(user_op.pack())
             .gas(U256::from(max_validation_gas) + pvg)
             .tx;
-        (call, spoof::State::default())
+
+        (call, spoof_ep)
     }
 
     async fn call_simulate_validation(
@@ -316,26 +311,29 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
     ) -> anyhow::Result<ValidationOutput> {
+        let addr = self.i_entry_point.address();
         let pvg = user_op.pre_verification_gas;
-        match self
-            .i_entry_point
-            .simulate_validation(user_op)
+        let mut spoof_ep = spoof::State::default();
+        spoof_ep
+            .account(addr)
+            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+
+        let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
+        let result = ep_simulations
+            .simulate_validation(user_op.pack())
             .gas(U256::from(max_validation_gas) + pvg)
-            .call()
+            .call_raw()
+            .state(&spoof_ep)
             .await
-        {
-            Ok(()) => anyhow::bail!("simulateValidation should always revert"),
-            Err(ContractError::Revert(revert_data)) => ValidationOutput::decode_v0_6(revert_data)
-                .context("entry point should return validation output"),
-            Err(error) => Err(error).context("call simulation RPC failed")?,
-        }
+            .context("should simulate validation")?;
+        Ok(result.into())
     }
 
     fn decode_simulate_handle_ops_revert(
         &self,
         revert_data: Bytes,
     ) -> Result<ExecutionResult, String> {
-        if let Ok(result) = ExecutionResultV0_6::decode(&revert_data) {
+        if let Ok(result) = ExecutionResultV0_7::decode(&revert_data) {
             Ok(result.into())
         } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
             Err(failed_op.reason)
@@ -346,6 +344,7 @@ where
         }
     }
 
+    // NOTE: A spoof of the entry point code will be ignored by this function.
     async fn call_spoofed_simulate_op(
         &self,
         user_op: UserOperation,
@@ -355,9 +354,15 @@ where
         gas: U256,
         spoofed_state: &spoof::State,
     ) -> anyhow::Result<Result<ExecutionResult, String>> {
-        let contract_error = self
-            .i_entry_point
-            .simulate_handle_op(user_op, target, target_call_data)
+        let addr = self.i_entry_point.address();
+        let mut spoof_ep = spoofed_state.clone();
+        spoof_ep
+            .account(addr)
+            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+        let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
+
+        let contract_error = ep_simulations
+            .simulate_handle_op(user_op.pack(), target, target_call_data)
             .block(block_hash)
             .gas(gas)
             .call_raw()
@@ -382,10 +387,10 @@ fn get_handle_ops_call<M: Middleware>(
     beneficiary: Address,
     gas: U256,
 ) -> FunctionCall<Arc<M>, M, ()> {
-    let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
+    let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
         .into_iter()
-        .map(|uoa| UserOpsPerAggregatorV0_6 {
-            user_ops: uoa.user_ops,
+        .map(|uoa| UserOpsPerAggregatorV0_7 {
+            user_ops: uoa.user_ops.into_iter().map(|op| op.pack()).collect(),
             aggregator: uoa.aggregator,
             signature: uoa.signature,
         })
@@ -399,27 +404,33 @@ fn get_handle_ops_call<M: Middleware>(
     call.gas(gas)
 }
 
-impl From<ExecutionResultV0_6> for ExecutionResult {
-    fn from(result: ExecutionResultV0_6) -> Self {
+impl From<ExecutionResultV0_7> for ExecutionResult {
+    fn from(result: ExecutionResultV0_7) -> Self {
+        let account = rundler_types::parse_validation_data(result.account_validation_data);
+        let paymaster = rundler_types::parse_validation_data(result.paymaster_validation_data);
+        let intersect_range = account
+            .valid_time_range()
+            .intersect(paymaster.valid_time_range());
+
         ExecutionResult {
             pre_op_gas: result.pre_op_gas,
             paid: result.paid,
-            valid_after: result.valid_after.into(),
-            valid_until: result.valid_until.into(),
+            valid_after: intersect_range.valid_after,
+            valid_until: intersect_range.valid_until,
             target_success: result.target_success,
             target_result: result.target_result,
         }
     }
 }
 
-impl From<DepositInfoV0_6> for DepositInfo {
-    fn from(info: DepositInfoV0_6) -> Self {
-        DepositInfo {
-            deposit: info.deposit.into(),
-            staked: info.staked,
-            stake: info.stake,
-            unstake_delay_sec: info.unstake_delay_sec,
-            withdraw_time: info.withdraw_time,
+impl From<DepositInfoV0_7> for DepositInfo {
+    fn from(deposit_info: DepositInfoV0_7) -> Self {
+        Self {
+            deposit: deposit_info.deposit,
+            staked: deposit_info.staked,
+            stake: deposit_info.stake,
+            unstake_delay_sec: deposit_info.unstake_delay_sec,
+            withdraw_time: deposit_info.withdraw_time,
         }
     }
 }

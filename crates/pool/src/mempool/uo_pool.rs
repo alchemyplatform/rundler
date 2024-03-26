@@ -681,13 +681,12 @@ mod tests {
     use std::collections::HashMap;
 
     use ethers::types::{Bytes, H160};
-    use rundler_provider::MockEntryPointV0_6;
+    use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, SimulationError,
         SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
-        contracts::v0_6::verifying_paymaster::DepositInfo,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::UserOperation,
         EntityInfo, EntityInfos, EntityType, EntryPointVersion, GasFees,
@@ -1428,7 +1427,7 @@ mod tests {
         let mut entrypoint = MockEntryPointV0_6::new();
         entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
-                deposit: 1000,
+                deposit: 1000.into(),
                 staked: true,
                 stake: 10000,
                 unstake_delay_sec: 100,
