@@ -50,7 +50,7 @@ impl EntryPointRouterBuilder {
         self
     }
 
-    pub(crate) fn _v0_7<R>(mut self, route: R) -> Self
+    pub(crate) fn v0_7<R>(mut self, route: R) -> Self
     where
         R: EntryPointRoute,
     {
@@ -60,6 +60,7 @@ impl EntryPointRouterBuilder {
                 route.version()
             );
         }
+        tracing::info!("Adding route for v0.7 entry point {:?}", route.address());
 
         self.entry_points.push(route.address());
         self.v0_7 = Some((route.address(), Arc::new(Box::new(route))));
@@ -186,7 +187,8 @@ impl EntryPointRouter {
             if addr == *entry_point {
                 return Ok(EntryPointVersion::V0_6);
             }
-        } else if let Some((addr, _)) = self.v0_7 {
+        }
+        if let Some((addr, _)) = self.v0_7 {
             if addr == *entry_point {
                 return Ok(EntryPointVersion::V0_7);
             }
