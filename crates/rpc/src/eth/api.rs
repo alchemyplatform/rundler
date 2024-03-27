@@ -871,7 +871,7 @@ mod tests {
                     max_verification_gas: 1_000_000,
                     max_call_gas: 1_000_000,
                     max_simulate_handle_ops_gas: 1_000_000,
-                    validation_estimation_gas_fee: 1_000_000_000_000,
+                    verification_estimation_gas_fee: 1_000_000_000_000,
                 },
                 FeeEstimator::new(
                     &chain_spec,
