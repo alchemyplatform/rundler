@@ -26,11 +26,11 @@ jobs:
           repository: alchemyplatform/bundler-test-executor
           ref: releases/v0.6
 
-      - name: Build and test executor
-        run: docker buildx build ./rundler -t alchemyplatform/rundler:latest && ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
+      - name: Build rundler image locally
+        run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
 
-      - name: log runner output
-        run: cat ./bundler-test-executors/build/out/rundler.log
+      - name: Run bundle executor
+        run: ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
 
       - name: Parse spec results
         run: ./rundler/.github/scripts/compliance-parser.sh ./bundler-test-executors/build/out/rundler.xml
