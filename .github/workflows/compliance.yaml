@@ -1,0 +1,37 @@
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+name: compliance
+jobs:
+  compliance:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -sSL https://raw.githubusercontent.com/pdm-project/pdm/main/install-pdm.py | python3 -
+      - run: pip install jq yq
+      - run: sudo apt install -y libxml2-utils
+
+
+      - name: Checkout Rundler
+        uses: actions/checkout@v4
+        with:
+          path: rundler
+          submodules: recursive
+
+      - name: Clone Test Executor
+        uses: actions/checkout@v4
+        with:
+          path: bundler-test-executors
+          repository: alchemyplatform/bundler-test-executor
+          ref: releases/v0.6
+
+      - name: Build rundler image locally
+        run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
+
+      - name: Run bundle executor
+        run: ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
+
+      - name: Parse spec results
+        run: ./rundler/.github/scripts/compliance_parser.sh ./bundler-test-executors/build/out/rundler.xml
