@@ -338,40 +338,66 @@ NOTE: Since the dynamic portion of PVG can change, users on networks that contai
 
 ### `verificationGasLimit` Estimation
 
-To estimate `verificationGasLimit` Rundler uses a binary search to find the minimum gas value where validation succeeds. The procedure follows:
+To estimate `verificationGasLimit` Rundler uses binary search to find the minimum gas value where verification succeeds. The procedure follows:
 
-1. Run an initial attempt at max limit using the gas measurement helper contract. If validation fails here it will never succeed and the UO is rejected.
+1. Run an initial attempt at max limit using the gas measurement helper contract. If verification fails here it will never succeed and the UO is rejected.
 2. Set the initial guess to the gas used in the initial attempt * 2 to account for the 63/64ths rule.
 3. Run the binary search algorithm until the minimum successful gas value and the maximum failure gas value are within 10%.
 
 This approach allows for minimal `eth_call` requests while providing an accurate gas limit.
 
-#### Gas Fee, Token Transfers, and State Overrides
+#### Gas Fees and Token Transfers
 
-During ERC-4337 verification a transfer of an asset to pay for gas typically occurs. For example:
+During ERC-4337 verification a transfer of an asset to pay for gas always occurs. For example:
 
-- When there is no paymaster and the sender's deposit is less than the maximum gas fee, the sender must transfer ETH to the entrypoint.
-- When an ERC20 paymaster is used, there is typically an ERC20 token transfer from the sender to the paymaster.
+- When there is no paymaster and the sender's deposit is less than the maximum gas cost, the sender must transfer ETH to the entrypoint.
+- When an ERC-20 paymaster is used, there is typically an ERC-20 token transfer from the sender to the paymaster and then the paymaster transfers ETH to the entry point.
 
-To correctly capture the gas cost of this transfer, a non-zero gas fee must be used. This fee must be:
+We split this into two cases for estimation: no paymaster, and paymaster.
+
+##### No Paymaster Case
+
+When no paymaster is used, verification gas is always estimated using **zero fees**. The cost of a native transfer is added to the result of the binary search to account for the transfer of funds from the account to the entry point. 
+
+**Note:** This may overestimate the verification gas by the cost of a native transfer in the case where the account has enough deposited on the entry point to cover the full prefund cost. This will not impact the onchain cost of the operation.
+
+##### Paymaster Case
+
+Paymasters may perform more complicated logic on the fee fields, including triggering ERC-20 transfers, that must be accounted for during estimation. Unlike the no paymaster case, this gas cost cannot be known beforehand as it varies by paymaster implementation.
+
+To correctly estimate the verification gas, a non-zero gas fee must be used. This fee must be:
 
 - Large enough that it triggers a transfer of tokens.
   - I.e. USDC only uses 6 decimals, if the gas fee in USDC is < 1e-6 the transfer won't trigger. Its reasonable to assume that users will have a few USD cents worth of their fee token to avoid this case.
 - Small enough that a fee-payer with a small amount of the fee token can pay for the maximum gas.
 
-This value can be controlled by the `validation_estimation_gas_fee` configuration variable. A default value of 10K gwei is provided.
+During estimation the gas cost is kept constant by varying the `maxFeePerGas` based on the current binary search guess. Therefore, as long as the fee-payer can pay for the gas cost initially, Rundler should be able to successfully estimate gas.
 
-During estimation the gas fee is kept constant by varying the `max_fee_per_gas` based on the current binary search guess. Therefore, as long as the fee-payer can pay for the gas fee initially, Rundler should be able to successfully estimate gas.
+This value can be controlled by the `VERIFICATION_ESTIMATION_GAS_FEE` configuration variable. A default value of 10K gwei is provided.
 
-What if the fee payer does not own enough of the payment token? A common use case may be to estimate the gas fee prior to transferring the gas token to the fee-payer. In this case, callers should use the state override functionality of `eth_estimateUserOperationGas`. Callers can override the balance (ETH, ERC20, or any arbitrary payment method) such that the fee-payer can pay the `validation_estimation_gas_fee`.
+Paymasters should ensure that they have at least this value available in order for estimation to succeed. If the paymaster is causing token transfers from the account (ERC-20 paymaster case), they'll need to handle when the account doesn't have enough tokens. Three possible ways to do this:
+
+- The paymaster can absorb the balance error, and write their contract in such a way that it will estimate the correct amount of gas even when the transfer fails. If the transfer fails the paymaster can return the signature invalid code.
+- Use state overrides to ensure that the account has the full gas fee. See below.
+- Use hardcoded values for paymaster gas. The paymaster provider can decide beforehand a maximum gas limit. The client can estimate gas without a paymaster, and then account for this hardcoded paymaster gas limit.
+  - In entry point v0.6 the client should set `verificationGasLimit` to the maximum of the account verification gas limit estimation and the paymaster hardcoded value.
+  - In entry point v0.7 the client can directly set the `paymasterVerificationGasLimit` and use the estimation only for the `verificationGasLimit`.
 
 ### `callGasLimit` Estimation
 
-`callGasLimit` estimation is similar to `verificationGasLimit` estimation in that it also uses a binary search. The majority of the binary search, however, is performed in Solidity to limit network calls.
+`callGasLimit` estimation is similar to `verificationGasLimit` estimation in that it also uses a binary search. The majority of the binary search, however, is performed in Solidity to limit network calls. Call gas is always estimated with zero gas fees.
 
 This scheme requires the use of a spoofed entry point contract via `eth_call` state overrides. The original entry point contract is moved and a proxy is loaded in its place. This allows us to write additional logic to support gas estimation into the entry point contract.
 
 More information on gas estimation can be found [here](https://www.alchemy.com/blog/erc-4337-gas-estimation).
+
+### State Overrides
+
+The `eth_estimateUserOperationGas` accepts an optional state override set as the 3rd positional RPC parameter. It accepts the same format as Geth's `eth_call` [state overrides](https://geth.ethereum.org/docs/interacting-with-geth/rpc/ns-eth#eth-call).
+
+This parameter can be used to modify the state of the chain before preforming gas estimation.
+
+A typical use case for this could be to spoof some funds into a user's account while using an ERC-20 paymaster. Callers can override the balance (ETH, ERC20, or any arbitrary payment method) such that the fee-payer can pay the `verification_estimation_gas_fee`.
 
 ## Fee Estimation
 

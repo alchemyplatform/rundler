@@ -206,13 +206,30 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
     ) -> Result<U256, GasEstimationError> {
         let timer = std::time::Instant::now();
         let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
-        let gas_fee = U256::from(self.settings.validation_estimation_gas_fee);
+        let paymaster_gas_fee = U256::from(self.settings.verification_estimation_gas_fee);
+
+        // Fee logic for gas estimation:
+        //
+        // If there is no paymaster, verification estimation is always performed
+        // with zero fees. The cost of the native transfer is added to the verification gas
+        // at the end of estimation.
+        //
+        // If using a paymaster, the total cost is kept constant, and the fee is adjusted
+        // based on the gas used in the simulation. The total cost is set by a configuration
+        // setting.
+        let get_fee = |gas: U256| -> U256 {
+            if op.paymaster().is_none() {
+                U256::zero()
+            } else {
+                paymaster_gas_fee
+                    .checked_div(gas + op.pre_verification_gas)
+                    .unwrap_or(U256::MAX)
+            }
+        };
 
         // Make one attempt at max gas, to see if success is possible.
         // Capture the gas usage of this attempt and use as the initial guess in the binary search
-        let fee = gas_fee
-            .checked_div(simulation_gas + op.pre_verification_gas)
-            .unwrap_or(U256::MAX);
+        let fee = get_fee(simulation_gas);
         let initial_op = UserOperation {
             verification_gas_limit: simulation_gas,
             max_fee_per_gas: fee,
@@ -246,9 +263,7 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         }
 
         let run_attempt_returning_error = |gas: u64| async move {
-            let fee = gas_fee
-                .checked_div(U256::from(gas) + op.pre_verification_gas)
-                .unwrap_or(U256::MAX);
+            let fee = get_fee(gas.into());
             let op = UserOperation {
                 max_fee_per_gas: fee,
                 max_priority_fee_per_gas: fee,
@@ -319,10 +334,10 @@ impl<P: Provider, E: EntryPoint> GasEstimatorImpl<P, E> {
         let mut min_success_gas = U256::from(min_success_gas);
 
         // If not using a paymaster, always add the cost of a native transfer to the verification gas.
-        // This may be missed if the account already has a deposit balance that was covered by the
-        // static estimation gas fee, but ends up not being enough to cover the actual gas cost onchain.
+        // This may cause an over estimation when the account does have enough deposit to pay for the
+        // max cost, but it is better to overestimate than underestimate.
         if op.paymaster_and_data.is_empty() {
-            min_success_gas = min_success_gas.add(self.chain_spec.native_transfer_gas);
+            min_success_gas = min_success_gas.add(self.chain_spec.deposit_transfer_overhead);
         }
 
         Ok(min_success_gas)
@@ -503,7 +518,7 @@ mod tests {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
-            validation_estimation_gas_fee: 1_000_000_000_000,
+            verification_estimation_gas_fee: 1_000_000_000_000,
         };
         let provider = Arc::new(provider);
         let estimator: GasEstimatorImpl<MockProvider, MockEntryPoint> = GasEstimatorImpl::new(
@@ -605,7 +620,7 @@ mod tests {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
-            validation_estimation_gas_fee: 1_000_000_000_000,
+            verification_estimation_gas_fee: 1_000_000_000_000,
         };
 
         // Chose arbitrum
@@ -664,7 +679,7 @@ mod tests {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
-            validation_estimation_gas_fee: 1_000_000_000_000,
+            verification_estimation_gas_fee: 1_000_000_000_000,
         };
 
         // Chose OP
@@ -766,7 +781,7 @@ mod tests {
             .unwrap();
 
         // the estimation should be the same as the gas usage plus the buffer
-        let expected = gas_usage + ChainSpec::default().native_transfer_gas;
+        let expected = gas_usage + ChainSpec::default().deposit_transfer_overhead;
         assert_eq!(expected, estimation);
     }
 
@@ -1219,7 +1234,7 @@ mod tests {
         assert_eq!(estimation.pre_verification_gas, U256::from(43296));
 
         // gas used increased by 10%
-        let expected = gas_usage + ChainSpec::default().native_transfer_gas;
+        let expected = gas_usage + ChainSpec::default().deposit_transfer_overhead;
         assert_eq!(
             estimation.verification_gas_limit,
             cmp::max(
@@ -1296,7 +1311,7 @@ mod tests {
             max_verification_gas: 10,
             max_call_gas: 10,
             max_simulate_handle_ops_gas: 10,
-            validation_estimation_gas_fee: 1_000_000_000_000,
+            verification_estimation_gas_fee: 1_000_000_000_000,
         };
 
         let provider = Arc::new(provider);

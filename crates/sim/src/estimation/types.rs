@@ -27,12 +27,12 @@ pub struct Settings {
     pub max_call_gas: u64,
     /// The maximum amount of gas that can be used in a call to `simulateHandleOps`
     pub max_simulate_handle_ops_gas: u64,
-    /// The gas fee to use during validation gas estimation, required to be held by the fee-payer
+    /// The gas fee to use during verification gas estimation, required to be held by the fee-payer
     /// during estimation. If using a paymaster, the fee-payer must have 3x this value.
     /// As the gas limit is varied during estimation, the fee is held constant by varied the
     /// gas price.
     /// Clients can use state overrides to set the balance of the fee-payer to at least this value.
-    pub validation_estimation_gas_fee: u64,
+    pub verification_estimation_gas_fee: u64,
 }
 
 impl Settings {

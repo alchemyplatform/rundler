@@ -32,8 +32,12 @@ pub struct ChainSpec {
     pub id: u64,
     /// entry point address
     pub entry_point_address: Address,
-    /// cost of transferring native tokens
-    pub native_transfer_gas: U256,
+    /// Overhead when preforming gas estimation to account for the deposit storage
+    /// and transfer overhead.
+    ///
+    /// NOTE: This must take into account when the storage slot was originally 0
+    /// and is now non-zero, making the overhead slightly higher for most operations.
+    pub deposit_transfer_overhead: U256,
 
     /*
      * Gas estimation
@@ -116,7 +120,7 @@ impl Default for ChainSpec {
             name: "Unknown".to_string(),
             id: 0,
             entry_point_address: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
-            native_transfer_gas: U256::from(6800),
+            deposit_transfer_overhead: U256::from(30000),
             eip1559_enabled: true,
             calldata_pre_verification_gas: false,
             l1_gas_oracle_contract_type: L1GasOracleContractType::default(),
