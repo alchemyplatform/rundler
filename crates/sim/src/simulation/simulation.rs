@@ -343,7 +343,10 @@ where
             let Some(entity_info) = entity_infos.get(kind) else {
                 continue;
             };
-            let entity = Entity::new(kind, entity_info.address);
+            let entity = Entity {
+                kind,
+                address: entity_info.address,
+            };
             for opcode in &phase.forbidden_opcodes_used {
                 let (contract, opcode) = parse_combined_tracer_str(opcode)?;
 
@@ -405,15 +408,7 @@ where
                 match violation {
                     StorageRestriction::Allowed => {}
                     StorageRestriction::NeedsStake(addr, entity_type, slot) => {
-                        if let Some(et) = entity_type {
-                            if let Some(e_info) = entity_infos.get(et) {
-                                if !e_info.is_staked {
-                                    let ent = Entity::new(et, e_info.address);
-                                    entity_types_needing_stake
-                                        .insert(ent, (addr, entity_type, slot));
-                                }
-                            }
-                        } else if !entity_info.is_staked {
+                        if !entity_info.is_staked {
                             entity_types_needing_stake.insert(entity, (addr, entity_type, slot));
                         }
                     }
@@ -980,11 +975,7 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
                         .expect("Factory needs to be present and staked")
                         .is_staked)
             {
-                return Ok(StorageRestriction::NeedsStake(
-                    entity_infos.factory.unwrap().address,
-                    Some(EntityType::Factory),
-                    *slot,
-                ));
+                required_stake_slot = Some(slot);
             }
         } else if is_entity_associated || is_same_address || is_read_permission {
             required_stake_slot = Some(slot);
@@ -1511,111 +1502,5 @@ mod tests {
             .is_staked = true;
         let res = simulator.gather_context_violations(&mut validation_context);
         assert_eq!(res.unwrap(), vec![SimulationViolation::InvalidSignature]);
-    }
-
-    #[tokio::test]
-    async fn test_factory_staking_logic() {
-        let (provider, tracer) = create_base_config();
-
-        let mut writes: HashMap<U256, u32> = HashMap::new();
-
-        let sender_address =
-            Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap();
-
-        let factory_address =
-            Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap();
-
-        let paymaster_address = "0x8abb13360b87be5eeb1b98647a016add927a136c"
-            .parse()
-            .unwrap();
-
-        let sender_bytes = sender_address.as_bytes().into();
-
-        writes.insert(sender_bytes, 1);
-
-        let mut tracer_output = get_test_tracer_output();
-        tracer_output.phases[2].storage_accesses.insert(
-            paymaster_address,
-            AccessInfo {
-                reads: HashMap::new(),
-                writes,
-            },
-        );
-
-        let mut validation_context = ValidationContext {
-            op: UserOperation {
-                verification_gas_limit: U256::from(100000),
-                pre_verification_gas: U256::from(1000),
-                ..Default::default()
-            },
-            initcode_length: 10,
-            associated_addresses: HashSet::new(),
-            block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: EntityInfos::new(
-                Some(factory_address),
-                sender_address,
-                Some(paymaster_address),
-                &ValidationOutput {
-                    return_info: ValidationReturnInfo::from((
-                        U256::default(),
-                        U256::default(),
-                        false,
-                        0,
-                        0,
-                        Bytes::default(),
-                    )),
-                    sender_info: StakeInfo::from((U256::default(), U256::default())),
-                    factory_info: StakeInfo::from((U256::default(), U256::default())),
-                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                    aggregator_info: None,
-                },
-                Settings::default(),
-            ),
-            tracer_out: tracer_output,
-            entry_point_out: ValidationOutput {
-                return_info: ValidationReturnInfo::from((
-                    3000.into(),
-                    U256::default(),
-                    false,
-                    0,
-                    0,
-                    Bytes::default(),
-                )),
-                sender_info: StakeInfo::from((U256::default(), U256::default())),
-                factory_info: StakeInfo::from((U256::default(), U256::default())),
-                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                aggregator_info: None,
-            },
-            entities_needing_stake: vec![],
-            accessed_addresses: HashSet::new(),
-        };
-
-        // Create the simulator using the provider and tracer
-        let simulator = create_simulator(provider, tracer);
-        let res = simulator.gather_context_violations(&mut validation_context);
-
-        let expected = NeedsStakeInformation {
-            accessed_entity: Some(EntityType::Factory),
-            accessed_address: factory_address,
-            slot: sender_address.as_bytes().into(),
-            entity: Entity::new(EntityType::Factory, factory_address),
-            min_stake: U256::from(1000000000000000000_u64),
-            min_unstake_delay: 84600.into(),
-        };
-
-        assert_eq!(
-            res.unwrap(),
-            vec![SimulationViolation::NotStaked(Box::new(expected))]
-        );
-
-        // staked causes no errors
-        validation_context
-            .entity_infos
-            .factory
-            .as_mut()
-            .unwrap()
-            .is_staked = true;
-        let res = simulator.gather_context_violations(&mut validation_context);
-        assert_eq!(res.unwrap(), vec![]);
     }
 }
