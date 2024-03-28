@@ -158,7 +158,7 @@ impl AllowlistEntry {
             }
             AllowRule::NotStaked => {
                 if let SimulationViolation::NotStaked(stake_data) = violation {
-                    self.entity.is_allowed(&stake_data.entity)
+                    self.entity.is_allowed(&stake_data.needs_stake)
                 } else {
                     false
                 }
@@ -437,12 +437,10 @@ mod tests {
         let entry = AllowlistEntry::new(AllowEntity::Address(entity_addr), AllowRule::NotStaked);
 
         let violation = SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
-            entity: Entity {
-                kind: EntityType::Account,
-                address: entity_addr,
-            },
+            needs_stake: Entity::paymaster(entity_addr),
+            accessing_entity: EntityType::Paymaster,
             accessed_entity: Some(EntityType::Paymaster),
-            accessed_address: Address::random(),
+            accessed_address: entity_addr,
             slot: U256::zero(),
             min_stake: U256::zero(),
             min_unstake_delay: U256::zero(),
@@ -451,12 +449,10 @@ mod tests {
         assert!(entry.is_allowed(&violation));
 
         let violation = SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
-            entity: Entity {
-                kind: EntityType::Account,
-                address: Address::random(),
-            },
+            needs_stake: Entity::paymaster(Address::random()),
+            accessing_entity: EntityType::Paymaster,
             accessed_entity: Some(EntityType::Paymaster),
-            accessed_address: Address::random(),
+            accessed_address: entity_addr,
             slot: U256::zero(),
             min_stake: U256::zero(),
             min_unstake_delay: U256::zero(),

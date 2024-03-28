@@ -391,7 +391,7 @@ where
                 let address = *addr;
                 accessed_addresses.insert(address);
 
-                let violation = parse_storage_accesses(ParseStorageAccess {
+                let violations = parse_storage_accesses(ParseStorageAccess {
                     access_info,
                     slots_by_address: &tracer_out.associated_slots_by_address,
                     address,
@@ -399,26 +399,31 @@ where
                     entrypoint: self.entry_point_address,
                     initcode_length,
                     entity: &entity,
-                    entity_infos,
                 })?;
 
-                match violation {
-                    StorageRestriction::Allowed => {}
-                    StorageRestriction::NeedsStake(addr, entity_type, slot) => {
-                        if let Some(et) = entity_type {
-                            if let Some(e_info) = entity_infos.get(et) {
-                                if !e_info.is_staked {
-                                    let ent = Entity::new(et, e_info.address);
-                                    entity_types_needing_stake
-                                        .insert(ent, (addr, entity_type, slot));
-                                }
+                for violation in violations {
+                    match violation {
+                        StorageRestriction::NeedsStake(
+                            needs_stake,
+                            accessing_entity,
+                            accessed_entity,
+                            addr,
+                            slot,
+                        ) => {
+                            let needs_stake_entity = entity_infos
+                                .get(needs_stake)
+                                .expect("entity type not found in entity_infos");
+
+                            if !needs_stake_entity.is_staked {
+                                entity_types_needing_stake.insert(
+                                    Entity::new(needs_stake, needs_stake_entity.address),
+                                    (accessing_entity, accessed_entity, addr, slot),
+                                );
                             }
-                        } else if !entity_info.is_staked {
-                            entity_types_needing_stake.insert(entity, (addr, entity_type, slot));
                         }
-                    }
-                    StorageRestriction::Banned(slot) => {
-                        banned_slots_accessed.insert(StorageSlot { address, slot });
+                        StorageRestriction::Banned(slot) => {
+                            banned_slots_accessed.insert(StorageSlot { address, slot });
+                        }
                     }
                 }
             }
@@ -453,14 +458,17 @@ where
             }
         }
 
-        for (ent, (accessed_address, accessed_entity, slot)) in entity_types_needing_stake {
+        for (ent, (accessing_entity, accessed_entity, accessed_address, slot)) in
+            entity_types_needing_stake
+        {
             entities_needing_stake.push(ent.kind);
 
             violations.push(SimulationViolation::NotStaked(Box::new(
                 NeedsStakeInformation {
-                    entity: ent,
-                    accessed_address,
+                    needs_stake: ent,
+                    accessing_entity,
                     accessed_entity,
+                    accessed_address,
                     slot,
                     min_stake: self.sim_settings.min_stake_value.into(),
                     min_unstake_delay: self.sim_settings.min_unstake_delay.into(),
@@ -700,7 +708,7 @@ pub enum SimulationViolation {
     #[display("code accessed by validation has changed since the last time validation was run")]
     CodeHashChanged,
     /// The user operation contained an entity that accessed storage without being staked
-    #[display("Unstaked {0.entity} accessed {0.accessed_address} ({0.accessed_entity:?}) at slot {0.slot}")]
+    #[display("{0.needs_stake} needs to be staked: {0.accessing_entity} accessed storage at {0.accessed_address} slot {0.slot} (associated with {0.accessed_entity:?})")]
     NotStaked(Box<NeedsStakeInformation>),
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[display("Unstaked paymaster must not return context")]
@@ -864,32 +872,6 @@ impl EntityInfos {
         }
     }
 
-    fn type_from_address(self, address: Address) -> Option<EntityType> {
-        if address.eq(&self.sender.address) {
-            return Some(EntityType::Account);
-        }
-
-        if let Some(factory) = self.factory {
-            if address.eq(&factory.address) {
-                return Some(EntityType::Factory);
-            }
-        }
-
-        if let Some(paymaster) = self.paymaster {
-            if address.eq(&paymaster.address) {
-                return Some(EntityType::Paymaster);
-            }
-        }
-
-        if let Some(aggregator) = self.aggregator {
-            if address.eq(&aggregator.address) {
-                return Some(EntityType::Aggregator);
-            }
-        }
-
-        None
-    }
-
     fn sender_address(self) -> Address {
         self.sender.address
     }
@@ -902,20 +884,22 @@ fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum StorageRestriction {
-    Allowed,
-    NeedsStake(Address, Option<EntityType>, U256),
+    /// (Entity needing stake, accessing entity type, accessed entity type, accessed address, accessed slot)
+    NeedsStake(EntityType, EntityType, Option<EntityType>, Address, U256),
     Banned(U256),
 }
 
 /// Information about a storage violation based on stake status
 #[derive(Debug, PartialEq, Clone, PartialOrd, Eq, Ord)]
 pub struct NeedsStakeInformation {
-    /// Entity of stake information
-    pub entity: Entity,
+    /// Entity needing stake info
+    pub needs_stake: Entity,
+    /// The entity that accessed the storage requiring stake
+    pub accessing_entity: EntityType,
+    /// Type of accessed entity, if it is a known entity
+    pub accessed_entity: Option<EntityType>,
     /// Address that was accessed while unstaked
     pub accessed_address: Address,
-    /// Type of accessed entity if it is a known entity
-    pub accessed_entity: Option<EntityType>,
     /// The accessed slot number
     pub slot: U256,
     /// Minumum stake
@@ -933,27 +917,29 @@ struct ParseStorageAccess<'a> {
     entrypoint: Address,
     initcode_length: usize,
     entity: &'a Entity,
-    entity_infos: &'a EntityInfos,
 }
 
-fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestriction, Error> {
+fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<Vec<StorageRestriction>, Error> {
     let ParseStorageAccess {
         access_info,
         address,
         sender,
         entrypoint,
-        entity_infos,
         entity,
         slots_by_address,
         initcode_length,
         ..
     } = args;
 
-    if address.eq(&sender) || address.eq(&entrypoint) {
-        return Ok(StorageRestriction::Allowed);
-    }
+    let mut restrictions = vec![];
 
-    let mut required_stake_slot = None;
+    // STO-010 - always allowed to access storage on the account
+    // [OP-051, OP-054] - block access to the entrypoint, except for depositTo and fallback
+    //   - this is handled at another level, so we don't need to check for it here
+    //   - at this level we can allow any entry point access through
+    if address.eq(&sender) || address.eq(&entrypoint) {
+        return Ok(restrictions);
+    }
 
     let slots: Vec<&U256> = access_info
         .reads
@@ -970,46 +956,55 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<StorageRestric
         // [STO-033]
         let is_read_permission = !access_info.writes.contains_key(slot);
 
-        if is_sender_associated {
-            if initcode_length > 2
-                // special case: account.validateUserOp is allowed to use assoc storage if factory is staked.
-                // [STO-022], [STO-021]
-                && !(entity.address.eq(&sender)
-                    && entity_infos
-                        .factory
-                        .expect("Factory needs to be present and staked")
-                        .is_staked)
-            {
-                return Ok(StorageRestriction::NeedsStake(
-                    entity_infos.factory.unwrap().address,
-                    Some(EntityType::Factory),
-                    *slot,
-                ));
+        // STO-021 - Associated storage on external contracts is allowed
+        if is_sender_associated && !is_same_address {
+            // STO-022 - Factory must be staked to access associated storage in a deploy
+            if initcode_length > 2 {
+                match entity.kind {
+                    EntityType::Paymaster | EntityType::Aggregator => {
+                        // If its a paymaster/aggregator, then the paymaster must be staked to access associated storage
+                        // during a deploy
+                        restrictions.push(StorageRestriction::NeedsStake(
+                            entity.kind,
+                            entity.kind,
+                            Some(EntityType::Account),
+                            address,
+                            *slot,
+                        ));
+                    }
+                    EntityType::Account | EntityType::Factory => {
+                        restrictions.push(StorageRestriction::NeedsStake(
+                            EntityType::Factory,
+                            entity.kind,
+                            Some(EntityType::Account),
+                            address,
+                            *slot,
+                        ));
+                    }
+                }
             }
-        } else if is_entity_associated || is_same_address || is_read_permission {
-            required_stake_slot = Some(slot);
-        } else {
-            return Ok(StorageRestriction::Banned(*slot));
-        }
-    }
-
-    if let Some(required_stake_slot) = required_stake_slot {
-        if let Some(entity_type) = entity_infos.type_from_address(address) {
-            return Ok(StorageRestriction::NeedsStake(
+        } else if is_entity_associated || is_same_address {
+            restrictions.push(StorageRestriction::NeedsStake(
+                entity.kind,
+                entity.kind,
+                Some(entity.kind),
                 address,
-                Some(entity_type),
-                *required_stake_slot,
+                *slot,
             ));
+        } else if is_read_permission {
+            restrictions.push(StorageRestriction::NeedsStake(
+                entity.kind,
+                entity.kind,
+                None,
+                address,
+                *slot,
+            ));
+        } else {
+            restrictions.push(StorageRestriction::Banned(*slot));
         }
-
-        return Ok(StorageRestriction::NeedsStake(
-            address,
-            None,
-            *required_stake_slot,
-        ));
     }
 
-    Ok(StorageRestriction::Allowed)
+    Ok(restrictions)
 }
 
 /// Simulation Settings
@@ -1525,17 +1520,15 @@ mod tests {
         let factory_address =
             Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap();
 
-        let paymaster_address = "0x8abb13360b87be5eeb1b98647a016add927a136c"
-            .parse()
-            .unwrap();
+        let external_access_address = Address::random();
 
         let sender_bytes = sender_address.as_bytes().into();
 
         writes.insert(sender_bytes, 1);
 
         let mut tracer_output = get_test_tracer_output();
-        tracer_output.phases[2].storage_accesses.insert(
-            paymaster_address,
+        tracer_output.phases[1].storage_accesses.insert(
+            external_access_address,
             AccessInfo {
                 reads: HashMap::new(),
                 writes,
@@ -1554,7 +1547,7 @@ mod tests {
             entity_infos: EntityInfos::new(
                 Some(factory_address),
                 sender_address,
-                Some(paymaster_address),
+                None,
                 &ValidationOutput {
                     return_info: ValidationReturnInfo::from((
                         U256::default(),
@@ -1595,10 +1588,11 @@ mod tests {
         let res = simulator.gather_context_violations(&mut validation_context);
 
         let expected = NeedsStakeInformation {
-            accessed_entity: Some(EntityType::Factory),
-            accessed_address: factory_address,
+            needs_stake: Entity::factory(factory_address),
+            accessing_entity: EntityType::Account,
+            accessed_entity: Some(EntityType::Account),
+            accessed_address: external_access_address,
             slot: sender_address.as_bytes().into(),
-            entity: Entity::new(EntityType::Factory, factory_address),
             min_stake: U256::from(1000000000000000000_u64),
             min_unstake_delay: 84600.into(),
         };
