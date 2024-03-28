@@ -15,7 +15,7 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
-use ethers::types::H256;
+use ethers::types::{Address, H256};
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfig;
 use rundler_task::spawn_tasks_with_shutdown;
@@ -182,12 +182,14 @@ impl PoolArgs {
 
         let chain_id = chain_spec.id;
         // TODO(danc): multiple pool configs
-        let pool_config = PoolConfig {
-            entry_point: chain_spec.entry_point_address,
-            entry_point_version: EntryPointVersion::V0_6,
+        let pool_config_base = PoolConfig {
+            // update per entry point
+            entry_point: Address::default(),
+            entry_point_version: EntryPointVersion::Unspecified,
+            num_shards: 0,
+            mempool_channel_configs: HashMap::new(),
+            // Base config
             chain_id,
-            // Currently use the same shard count as the number of builders
-            num_shards: common.num_builders,
             same_sender_mempool_count: self.same_sender_mempool_count,
             min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
             max_size_of_pool_bytes: self.max_size_in_bytes,
@@ -195,13 +197,35 @@ impl PoolArgs {
             allowlist: allowlist.clone(),
             precheck_settings: common.try_into()?,
             sim_settings: common.into(),
-            mempool_channel_configs: mempool_channel_configs.clone(),
             throttled_entity_mempool_count: self.throttled_entity_mempool_count,
             throttled_entity_live_blocks: self.throttled_entity_live_blocks,
             paymaster_tracking_enabled: self.paymaster_tracking_enabled,
             paymaster_cache_length: self.paymaster_cache_length,
             reputation_tracking_enabled: self.reputation_tracking_enabled,
             drop_min_num_blocks: self.drop_min_num_blocks,
+        };
+
+        let pool_config_v0_6 = PoolConfig {
+            entry_point: chain_spec.entry_point_address_v0_6,
+            entry_point_version: EntryPointVersion::V0_6,
+            num_shards: common.num_builders / 2,
+            mempool_channel_configs: mempool_channel_configs
+                .iter()
+                .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+            ..pool_config_base.clone()
+        };
+        let pool_config_v0_7 = PoolConfig {
+            entry_point: chain_spec.entry_point_address_v0_7,
+            entry_point_version: EntryPointVersion::V0_7,
+            num_shards: common.num_builders / 2,
+            mempool_channel_configs: mempool_channel_configs
+                .iter()
+                .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+            ..pool_config_base.clone()
         };
 
         Ok(PoolTaskArgs {
@@ -212,7 +236,7 @@ impl PoolArgs {
                 .clone()
                 .context("pool requires node_http arg")?,
             http_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
-            pool_configs: vec![pool_config],
+            pool_configs: vec![pool_config_v0_6, pool_config_v0_7],
             remote_address,
             chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
         })

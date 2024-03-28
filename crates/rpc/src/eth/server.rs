@@ -13,11 +13,11 @@
 
 use ethers::types::{spoof, Address, H256, U64};
 use jsonrpsee::core::RpcResult;
-use rundler_types::pool::Pool;
+use rundler_types::{pool::Pool, UserOperationVariant};
 
 use super::{api::EthApi, EthApiServer};
 use crate::types::{
-    RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
+    FromRpc, RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
     RpcUserOperationReceipt,
 };
 
@@ -31,7 +31,12 @@ where
         op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<H256> {
-        Ok(EthApi::send_user_operation(self, op.into(), entry_point).await?)
+        Ok(EthApi::send_user_operation(
+            self,
+            UserOperationVariant::from_rpc(op, entry_point, self.chain_spec.id),
+            entry_point,
+        )
+        .await?)
     }
 
     async fn estimate_user_operation_gas(

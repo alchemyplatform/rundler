@@ -31,6 +31,9 @@ pub mod v0_6;
 mod mempool;
 pub use mempool::MempoolConfig;
 
+mod unsafe_sim;
+pub use unsafe_sim::UnsafeSimulator;
+
 use crate::{ExpectedStorage, ViolationError};
 
 /// The result of a successful simulation

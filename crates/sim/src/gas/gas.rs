@@ -15,7 +15,7 @@ use std::{cmp, fmt::Debug, sync::Arc};
 
 use anyhow::Context;
 use ethers::types::U256;
-use rundler_provider::{L1GasProvider, Provider};
+use rundler_provider::{EntryPoint, L1GasProvider, Provider};
 use rundler_types::{
     chain::{self, ChainSpec, L1GasOracleContractType},
     GasFees, UserOperation,
@@ -40,9 +40,12 @@ use super::oracle::{
 ///
 /// Networks that require dynamic pre_verification_gas are typically those that charge extra calldata fees
 /// that can scale based on dynamic gas prices.
-pub async fn estimate_pre_verification_gas<UO: UserOperation, E: L1GasProvider<UO = UO>>(
+pub async fn estimate_pre_verification_gas<
+    UO: UserOperation,
+    E: EntryPoint + L1GasProvider<UO = UO>,
+>(
     chain_spec: &ChainSpec,
-    enty_point: &E,
+    entry_point: &E,
     full_op: &UO,
     random_op: &UO,
     gas_price: U256,
@@ -55,13 +58,13 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: L1GasProvider<U
     let dynamic_gas = match chain_spec.l1_gas_oracle_contract_type {
         L1GasOracleContractType::None => panic!("Chain spec requires calldata pre_verification_gas but no l1_gas_oracle_contract_type is set"),
         L1GasOracleContractType::ArbitrumNitro => {
-            enty_point
-                .calc_arbitrum_l1_gas(chain_spec.entry_point_address, random_op.clone())
+            entry_point
+                .calc_arbitrum_l1_gas(entry_point.address(), random_op.clone())
                 .await?
         },
         L1GasOracleContractType::OptimismBedrock => {
-            enty_point
-                .calc_optimism_l1_gas(chain_spec.entry_point_address, random_op.clone(), gas_price)
+            entry_point
+                .calc_optimism_l1_gas(entry_point.address(), random_op.clone(), gas_price)
                 .await?
         },
     };
@@ -72,7 +75,10 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: L1GasProvider<U
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
 ///
 /// The effective gas price is calculated as min(base_fee + max_priority_fee_per_gas, max_fee_per_gas)
-pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: L1GasProvider<UO = UO>>(
+pub async fn calc_required_pre_verification_gas<
+    UO: UserOperation,
+    E: EntryPoint + L1GasProvider<UO = UO>,
+>(
     chain_spec: &ChainSpec,
     entry_point: &E,
     op: &UO,
@@ -87,14 +93,14 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: L1GasProvi
         L1GasOracleContractType::None => panic!("Chain spec requires calldata pre_verification_gas but no l1_gas_oracle_contract_type is set"),
         L1GasOracleContractType::ArbitrumNitro => {
             entry_point
-                .calc_arbitrum_l1_gas(chain_spec.entry_point_address, op.clone())
+                .calc_arbitrum_l1_gas(entry_point.address(), op.clone())
                 .await?
         },
         L1GasOracleContractType::OptimismBedrock => {
             let gas_price = cmp::min(base_fee + op.max_priority_fee_per_gas(), op.max_fee_per_gas());
 
             entry_point
-                .calc_optimism_l1_gas(chain_spec.entry_point_address, op.clone(), gas_price)
+                .calc_optimism_l1_gas(entry_point.address(), op.clone(), gas_price)
                 .await?
         },
     };

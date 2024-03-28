@@ -16,10 +16,13 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::providers::Middleware;
-use rundler_provider::{EthersEntryPointV0_6, Provider};
-use rundler_sim::{simulation::v0_6 as sim_v0_6, PrecheckerImpl};
+use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
+use rundler_sim::{
+    simulation::{v0_6 as sim_v0_6, UnsafeSimulator},
+    PrecheckerImpl, Simulator,
+};
 use rundler_task::Task;
-use rundler_types::{chain::ChainSpec, EntryPointVersion};
+use rundler_types::{chain::ChainSpec, EntryPointVersion, UserOperation, UserOperationVariant};
 use rundler_utils::{emit::WithEntryPoint, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -100,7 +103,6 @@ impl Task for PoolTask {
                         self.event_sender.clone(),
                         provider.clone(),
                     )
-                    .await
                     .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
@@ -109,10 +111,10 @@ impl Task for PoolTask {
                     let pool = PoolTask::create_mempool_v0_7(
                         self.args.chain_spec.clone(),
                         pool_config,
+                        self.args.unsafe_mode,
                         self.event_sender.clone(),
                         provider.clone(),
                     )
-                    .await
                     .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
@@ -182,18 +184,32 @@ impl PoolTask {
         Box::new(self)
     }
 
-    async fn create_mempool_v0_7<P: Provider + Middleware>(
-        _chain_spec: ChainSpec,
-        _pool_config: &PoolConfig,
-        _event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        _provider: Arc<P>,
+    fn create_mempool_v0_7<P: Provider + Middleware>(
+        chain_spec: ChainSpec,
+        pool_config: &PoolConfig,
+        unsafe_mode: bool,
+        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        provider: Arc<P>,
     ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
-        // TODO: implement
-        // requires 0.7 simulation
-        todo!()
+        let ep = EthersEntryPointV0_7::new(pool_config.entry_point, Arc::clone(&provider));
+
+        if unsafe_mode {
+            let simulator =
+                UnsafeSimulator::new(Arc::clone(&provider), ep.clone(), pool_config.sim_settings);
+            Self::create_mempool(
+                chain_spec,
+                pool_config,
+                event_sender,
+                provider,
+                ep,
+                simulator,
+            )
+        } else {
+            panic!("V0_7 safe simulation not supported")
+        }
     }
 
-    async fn create_mempool_v0_6<P: Provider + Middleware>(
+    fn create_mempool_v0_6<P: Provider + Middleware>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
@@ -202,6 +218,53 @@ impl PoolTask {
     ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
         let ep = EthersEntryPointV0_6::new(pool_config.entry_point, Arc::clone(&provider));
 
+        if unsafe_mode {
+            let simulator =
+                UnsafeSimulator::new(Arc::clone(&provider), ep.clone(), pool_config.sim_settings);
+            Self::create_mempool(
+                chain_spec,
+                pool_config,
+                event_sender,
+                provider,
+                ep,
+                simulator,
+            )
+        } else {
+            let simulate_validation_tracer =
+                sim_v0_6::SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
+            let simulator = sim_v0_6::Simulator::new(
+                Arc::clone(&provider),
+                ep.clone(),
+                simulate_validation_tracer,
+                pool_config.sim_settings,
+                pool_config.mempool_channel_configs.clone(),
+            );
+            Self::create_mempool(
+                chain_spec,
+                pool_config,
+                event_sender,
+                provider,
+                ep,
+                simulator,
+            )
+        }
+    }
+
+    fn create_mempool<UO, P, E, S>(
+        chain_spec: ChainSpec,
+        pool_config: &PoolConfig,
+        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        provider: Arc<P>,
+        ep: E,
+        simulator: S,
+    ) -> anyhow::Result<Arc<Box<dyn Mempool>>>
+    where
+        UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
+        UserOperationVariant: From<UO>,
+        P: Provider,
+        E: EntryPointProvider<UO> + Clone,
+        S: Simulator<UO = UO>,
+    {
         let prechecker = PrecheckerImpl::new(
             chain_spec,
             Arc::clone(&provider),
@@ -229,44 +292,15 @@ impl PoolTask {
             ),
         );
 
-        if unsafe_mode {
-            let simulator = sim_v0_6::UnsafeSimulator::new(
-                Arc::clone(&provider),
-                ep.clone(),
-                pool_config.sim_settings,
-            );
+        let uo_pool = UoPool::new(
+            pool_config.clone(),
+            event_sender,
+            prechecker,
+            simulator,
+            paymaster,
+            reputation,
+        );
 
-            let uo_pool = UoPool::new(
-                pool_config.clone(),
-                event_sender,
-                prechecker,
-                simulator,
-                paymaster,
-                reputation,
-            );
-
-            Ok(Arc::new(Box::new(uo_pool)))
-        } else {
-            let simulate_validation_tracer =
-                sim_v0_6::SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
-            let simulator = sim_v0_6::Simulator::new(
-                Arc::clone(&provider),
-                ep.clone(),
-                simulate_validation_tracer,
-                pool_config.sim_settings,
-                pool_config.mempool_channel_configs.clone(),
-            );
-
-            let uo_pool = UoPool::new(
-                pool_config.clone(),
-                event_sender,
-                prechecker,
-                simulator,
-                paymaster,
-                reputation,
-            );
-
-            Ok(Arc::new(Box::new(uo_pool)))
-        }
+        Ok(Arc::new(Box::new(uo_pool)))
     }
 }
