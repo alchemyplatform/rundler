@@ -405,16 +405,17 @@ where
                 match violation {
                     StorageRestriction::Allowed => {}
                     StorageRestriction::NeedsStake(addr, entity_type, slot) => {
-                        if let Some(et) = entity_type {
-                            if let Some(e_info) = entity_infos.get(et) {
-                                if !e_info.is_staked {
+                        if !entity_info.is_staked {
+                            if let Some(et) = entity_type {
+                                if let Some(e_info) = entity_infos.get(et) {
                                     let ent = Entity::new(et, e_info.address);
                                     entity_types_needing_stake
                                         .insert(ent, (addr, entity_type, slot));
                                 }
+                            } else {
+                                entity_types_needing_stake
+                                    .insert(entity, (addr, entity_type, slot));
                             }
-                        } else if !entity_info.is_staked {
-                            entity_types_needing_stake.insert(entity, (addr, entity_type, slot));
                         }
                     }
                     StorageRestriction::Banned(slot) => {
