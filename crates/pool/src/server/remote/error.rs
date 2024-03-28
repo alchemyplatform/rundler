@@ -530,7 +530,8 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
             SimulationViolation::NotStaked(stake_data) => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::NotStaked(
                     NotStaked {
-                        entity: Some((&stake_data.entity).into()),
+                        needs_stake: Some((&stake_data.needs_stake).into()),
+                        accessing_entity: EntityType::from(stake_data.accessing_entity) as i32,
                         accessed_address: stake_data.accessed_address.as_bytes().to_vec(),
                         accessed_entity: EntityType::from(stake_data.accessed_entity) as i32,
                         slot: to_le_bytes(stake_data.slot),
@@ -684,6 +685,10 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 )
             }
             Some(simulation_violation_error::Violation::NotStaked(e)) => {
+                let accessing_entity = rundler_types::EntityType::try_from(
+                    EntityType::try_from(e.accessing_entity).context("unknown entity type")?,
+                )
+                .context("invalid entity type")?;
                 let accessed_entity = match rundler_types::EntityType::try_from(
                     EntityType::try_from(e.accessed_entity).context("unknown entity type")?,
                 ) {
@@ -692,7 +697,9 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 };
 
                 SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
-                    entity: (&e.entity.context("should have entity in error")?).try_into()?,
+                    needs_stake: (&e.needs_stake.context("should have entity in error")?)
+                        .try_into()?,
+                    accessing_entity,
                     accessed_address: from_bytes(&e.accessed_address)?,
                     accessed_entity,
                     slot: from_bytes(&e.slot)?,
