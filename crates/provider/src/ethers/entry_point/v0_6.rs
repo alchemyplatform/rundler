@@ -315,15 +315,19 @@ where
         &self,
         user_op: UserOperation,
         max_validation_gas: u64,
+        block_hash: Option<H256>,
     ) -> anyhow::Result<ValidationOutput> {
         let pvg = user_op.pre_verification_gas;
-        match self
+        let blockless = self
             .i_entry_point
             .simulate_validation(user_op)
-            .gas(U256::from(max_validation_gas) + pvg)
-            .call()
-            .await
-        {
+            .gas(U256::from(max_validation_gas) + pvg);
+        let call = match block_hash {
+            Some(block_hash) => blockless.block(block_hash),
+            None => blockless,
+        };
+
+        match call.call().await {
             Ok(()) => anyhow::bail!("simulateValidation should always revert"),
             Err(ContractError::Revert(revert_data)) => ValidationOutput::decode_v0_6(revert_data)
                 .context("entry point should return validation output"),
