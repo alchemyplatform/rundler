@@ -209,6 +209,7 @@ impl BuilderArgs {
                 mempool_configs,
             }],
             chain_spec,
+            unsafe_mode: common.unsafe_mode,
             rpc_url,
             private_key: self.private_key.clone(),
             aws_kms_key_ids: self.aws_kms_key_ids.clone(),
