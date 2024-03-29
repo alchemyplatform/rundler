@@ -16,22 +16,24 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::{
-    providers::{JsonRpcClient, Provider},
-    types::H256,
+    providers::{JsonRpcClient, Provider as EthersProvider},
+    types::{Address, H256},
 };
 use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
-use rundler_provider::EthersEntryPointV0_6;
+use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, Provider};
 use rundler_sim::{
     simulation::v0_6::{
         SimulateValidationTracerImpl as SimulateValidationTracerImplV0_6,
         Simulator as SimulatorV0_6,
     },
-    MempoolConfig, PriorityFeeMode, SimulationSettings,
+    MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
 use rundler_task::Task;
-use rundler_types::{chain::ChainSpec, pool::Pool};
+use rundler_types::{
+    chain::ChainSpec, pool::Pool, v0_6, EntryPointVersion, UserOperation, UserOperationVariant,
+};
 use rundler_utils::{emit::WithEntryPoint, handle};
 use rusoto_core::Region;
 use tokio::{
@@ -87,8 +89,6 @@ pub struct Args {
     pub eth_poll_interval: Duration,
     /// Operation simulation settings
     pub sim_settings: SimulationSettings,
-    /// Alt-mempool configs
-    pub mempool_configs: HashMap<H256, MempoolConfig>,
     /// Maximum number of blocks to wait for a transaction to be mined
     pub max_blocks_to_wait_for_mine: u64,
     /// Percentage to increase the fees by when replacing a bundle transaction
@@ -103,10 +103,23 @@ pub struct Args {
     ///
     /// Checked ~after~ checking for conditional sender or Flashbots sender.
     pub bloxroute_auth_header: Option<String>,
+    /// Entry points to start builders for
+    pub entry_points: Vec<EntryPointBuilderSettings>,
+}
+
+/// Builder settings for an entrypoint
+#[derive(Debug)]
+pub struct EntryPointBuilderSettings {
+    /// Entry point address
+    pub address: Address,
+    /// Entry point version
+    pub version: EntryPointVersion,
     /// Number of bundle builders to start
     pub num_bundle_builders: u64,
     /// Index offset for bundle builders
     pub bundle_builder_index_offset: u64,
+    /// Mempool configs
+    pub mempool_configs: HashMap<H256, MempoolConfig>,
 }
 
 /// Builder task
@@ -124,23 +137,43 @@ where
     P: Pool + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        info!("Mempool config: {:?}", self.args.mempool_configs);
-
         let provider =
             rundler_provider::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
 
+        let ep_v0_6 = EthersEntryPointV0_6::new(
+            self.args.chain_spec.entry_point_address,
+            Arc::clone(&provider),
+        );
+
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
-        for i in 0..self.args.num_bundle_builders {
-            let (spawn_guard, bundle_sender_action) = self
-                .create_bundle_builder(
-                    i + self.args.bundle_builder_index_offset,
-                    Arc::clone(&provider),
-                )
-                .await?;
-            sender_handles.push(spawn_guard);
-            bundle_sender_actions.push(bundle_sender_action);
+
+        for ep in &self.args.entry_points {
+            // TODO entry point v0.7: needs 0.7 EP and simulator
+            if ep.version != EntryPointVersion::V0_6 {
+                bail!("Unsupported entry point version: {:?}", ep.version);
+            }
+
+            info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
+
+            for i in 0..ep.num_bundle_builders {
+                let (spawn_guard, bundle_sender_action) = self
+                    .create_bundle_builder(
+                        i + ep.bundle_builder_index_offset,
+                        Arc::clone(&provider),
+                        ep_v0_6.clone(),
+                        self.create_simulator_v0_6(
+                            Arc::clone(&provider),
+                            ep_v0_6.clone(),
+                            ep.mempool_configs.clone(),
+                        ),
+                    )
+                    .await?;
+                sender_handles.push(spawn_guard);
+                bundle_sender_actions.push(bundle_sender_action);
+            }
         }
+
         // flatten the senders handles to one handle, short-circuit on errors
         let sender_handle = tokio::spawn(
             future::try_join_all(sender_handles)
@@ -211,14 +244,23 @@ where
         Box::new(self)
     }
 
-    async fn create_bundle_builder<C: JsonRpcClient + 'static>(
+    async fn create_bundle_builder<UO, E, S, C>(
         &self,
         index: u64,
-        provider: Arc<Provider<C>>,
+        provider: Arc<EthersProvider<C>>,
+        entry_point: E,
+        simulator: S,
     ) -> anyhow::Result<(
         JoinHandle<anyhow::Result<()>>,
         mpsc::Sender<BundleSenderAction>,
-    )> {
+    )>
+    where
+        UO: UserOperation + From<UserOperationVariant>,
+        UserOperationVariant: AsRef<UO>,
+        E: EntryPointProvider<UO> + Clone,
+        S: Simulator<UO = UO>,
+        C: JsonRpcClient + 'static,
+    {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
         let signer = if let Some(pk) = &self.args.private_key {
@@ -265,20 +307,6 @@ where
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
 
-        let ep = EthersEntryPointV0_6::new(
-            self.args.chain_spec.entry_point_address,
-            Arc::clone(&provider),
-        );
-        let simulate_validation_tracer =
-            SimulateValidationTracerImplV0_6::new(Arc::clone(&provider), ep.clone());
-        let simulator = SimulatorV0_6::new(
-            Arc::clone(&provider),
-            ep.clone(),
-            simulate_validation_tracer,
-            self.args.sim_settings,
-            self.args.mempool_configs.clone(),
-        );
-
         let submit_provider = rundler_provider::new_provider(
             &self.args.submit_url,
             Some(self.args.eth_poll_interval),
@@ -315,7 +343,7 @@ where
             index,
             self.pool.clone(),
             simulator,
-            ep.clone(),
+            entry_point.clone(),
             Arc::clone(&provider),
             proposer_settings,
             self.event_sender.clone(),
@@ -326,7 +354,7 @@ where
             self.args.chain_spec.clone(),
             beneficiary,
             proposer,
-            ep,
+            entry_point,
             transaction_tracker,
             self.pool.clone(),
             builder_settings,
@@ -335,5 +363,26 @@ where
 
         // Spawn each sender as its own independent task
         Ok((tokio::spawn(builder.send_bundles_in_loop()), send_bundle_tx))
+    }
+
+    fn create_simulator_v0_6<C, E>(
+        &self,
+        provider: Arc<C>,
+        ep: E,
+        mempool_configs: HashMap<H256, MempoolConfig>,
+    ) -> SimulatorV0_6<C, E, SimulateValidationTracerImplV0_6<C, E>>
+    where
+        C: Provider,
+        E: EntryPointProvider<v0_6::UserOperation> + Clone,
+    {
+        let simulate_validation_tracer =
+            SimulateValidationTracerImplV0_6::new(Arc::clone(&provider), ep.clone());
+        SimulatorV0_6::new(
+            Arc::clone(&provider),
+            ep,
+            simulate_validation_tracer,
+            self.args.sim_settings,
+            mempool_configs,
+        )
     }
 }
