@@ -22,17 +22,21 @@ use ethers::{
 use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
-use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, Provider};
+use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
 use rundler_sim::{
-    simulation::v0_6::{
-        SimulateValidationTracerImpl as SimulateValidationTracerImplV0_6,
-        Simulator as SimulatorV0_6, UnsafeSimulator as UnsafeSimulatorV0_6,
+    simulation::{
+        v0_6::{
+            SimulateValidationTracerImpl as SimulateValidationTracerImplV0_6,
+            Simulator as SimulatorV0_6,
+        },
+        UnsafeSimulator,
     },
     MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
 use rundler_task::Task;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, v0_6, EntryPointVersion, UserOperation, UserOperationVariant,
+    chain::ChainSpec, pool::Pool, v0_6, v0_7, EntryPointVersion, UserOperation,
+    UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, handle};
 use rusoto_core::Region;
@@ -143,7 +147,11 @@ where
             rundler_provider::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
 
         let ep_v0_6 = EthersEntryPointV0_6::new(
-            self.args.chain_spec.entry_point_address,
+            self.args.chain_spec.entry_point_address_v0_6,
+            Arc::clone(&provider),
+        );
+        let ep_v0_7 = EthersEntryPointV0_7::new(
+            self.args.chain_spec.entry_point_address_v0_7,
             Arc::clone(&provider),
         );
 
@@ -151,37 +159,24 @@ where
         let mut bundle_sender_actions = vec![];
 
         for ep in &self.args.entry_points {
-            // TODO entry point v0.7: needs 0.7 EP and simulator
-            if ep.version != EntryPointVersion::V0_6 {
-                bail!("Unsupported entry point version: {:?}", ep.version);
-            }
-
-            info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
-
-            for i in 0..ep.num_bundle_builders {
-                let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
-                    self.create_bundle_builder(
-                        i + ep.bundle_builder_index_offset,
-                        Arc::clone(&provider),
-                        ep_v0_6.clone(),
-                        self.create_unsafe_simulator_v0_6(Arc::clone(&provider), ep_v0_6.clone()),
-                    )
-                    .await?
-                } else {
-                    self.create_bundle_builder(
-                        i + ep.bundle_builder_index_offset,
-                        Arc::clone(&provider),
-                        ep_v0_6.clone(),
-                        self.create_simulator_v0_6(
-                            Arc::clone(&provider),
-                            ep_v0_6.clone(),
-                            ep.mempool_configs.clone(),
-                        ),
-                    )
-                    .await?
-                };
-                sender_handles.push(spawn_guard);
-                bundle_sender_actions.push(bundle_sender_action);
+            match ep.version {
+                EntryPointVersion::V0_6 => {
+                    let (handles, actions) = self
+                        .create_builders_v0_6(ep, Arc::clone(&provider), ep_v0_6.clone())
+                        .await?;
+                    sender_handles.extend(handles);
+                    bundle_sender_actions.extend(actions);
+                }
+                EntryPointVersion::V0_7 => {
+                    let (handles, actions) = self
+                        .create_builders_v0_7(ep, Arc::clone(&provider), ep_v0_7.clone())
+                        .await?;
+                    sender_handles.extend(handles);
+                    bundle_sender_actions.extend(actions);
+                }
+                EntryPointVersion::Unspecified => {
+                    panic!("Unspecified entry point version")
+                }
             }
         }
 
@@ -195,7 +190,7 @@ where
         let builder_handle = self.builder_builder.get_handle();
         let builder_runnder_handle = self.builder_builder.run(
             bundle_sender_actions,
-            vec![self.args.chain_spec.entry_point_address],
+            vec![self.args.chain_spec.entry_point_address_v0_6],
             shutdown_token.clone(),
         );
 
@@ -253,6 +248,93 @@ where
     /// Convert this task into a boxed task
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
+    }
+
+    // TODO(danc): Can we DRY these create functions?
+    async fn create_builders_v0_6<C, E>(
+        &self,
+        ep: &EntryPointBuilderSettings,
+        provider: Arc<EthersProvider<C>>,
+        ep_v0_6: E,
+    ) -> anyhow::Result<(
+        Vec<JoinHandle<anyhow::Result<()>>>,
+        Vec<mpsc::Sender<BundleSenderAction>>,
+    )>
+    where
+        C: JsonRpcClient + 'static,
+        E: EntryPointProvider<v0_6::UserOperation> + Clone,
+    {
+        info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
+        let mut sender_handles = vec![];
+        let mut bundle_sender_actions = vec![];
+        for i in 0..ep.num_bundle_builders {
+            let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
+                self.create_bundle_builder(
+                    i + ep.bundle_builder_index_offset,
+                    Arc::clone(&provider),
+                    ep_v0_6.clone(),
+                    UnsafeSimulator::new(
+                        Arc::clone(&provider),
+                        ep_v0_6.clone(),
+                        self.args.sim_settings,
+                    ),
+                )
+                .await?
+            } else {
+                self.create_bundle_builder(
+                    i + ep.bundle_builder_index_offset,
+                    Arc::clone(&provider),
+                    ep_v0_6.clone(),
+                    self.create_simulator_v0_6(
+                        Arc::clone(&provider),
+                        ep_v0_6.clone(),
+                        ep.mempool_configs.clone(),
+                    ),
+                )
+                .await?
+            };
+            sender_handles.push(spawn_guard);
+            bundle_sender_actions.push(bundle_sender_action);
+        }
+        Ok((sender_handles, bundle_sender_actions))
+    }
+
+    async fn create_builders_v0_7<C, E>(
+        &self,
+        ep: &EntryPointBuilderSettings,
+        provider: Arc<EthersProvider<C>>,
+        ep_v0_7: E,
+    ) -> anyhow::Result<(
+        Vec<JoinHandle<anyhow::Result<()>>>,
+        Vec<mpsc::Sender<BundleSenderAction>>,
+    )>
+    where
+        C: JsonRpcClient + 'static,
+        E: EntryPointProvider<v0_7::UserOperation> + Clone,
+    {
+        info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
+        let mut sender_handles = vec![];
+        let mut bundle_sender_actions = vec![];
+        for i in 0..ep.num_bundle_builders {
+            let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
+                self.create_bundle_builder(
+                    i + ep.bundle_builder_index_offset,
+                    Arc::clone(&provider),
+                    ep_v0_7.clone(),
+                    UnsafeSimulator::new(
+                        Arc::clone(&provider),
+                        ep_v0_7.clone(),
+                        self.args.sim_settings,
+                    ),
+                )
+                .await?
+            } else {
+                panic!("V0.7 safe simulation not implemented")
+            };
+            sender_handles.push(spawn_guard);
+            bundle_sender_actions.push(bundle_sender_action);
+        }
+        Ok((sender_handles, bundle_sender_actions))
     }
 
     async fn create_bundle_builder<UO, E, S, C>(
@@ -395,17 +477,5 @@ where
             self.args.sim_settings,
             mempool_configs,
         )
-    }
-
-    fn create_unsafe_simulator_v0_6<C, E>(
-        &self,
-        provider: Arc<C>,
-        ep: E,
-    ) -> UnsafeSimulatorV0_6<C, E>
-    where
-        C: Provider,
-        E: EntryPointProvider<v0_6::UserOperation> + Clone,
-    {
-        UnsafeSimulatorV0_6::new(Arc::clone(&provider), ep, self.args.sim_settings)
     }
 }

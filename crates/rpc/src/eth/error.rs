@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::fmt::Display;
+
 use ethers::types::{Address, Bytes, Opcode, U256};
 use jsonrpsee::types::{
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
@@ -20,7 +22,7 @@ use rundler_provider::ProviderError;
 use rundler_sim::GasEstimationError;
 use rundler_types::{
     pool::{MempoolError, PoolError, PrecheckViolation, SimulationViolation},
-    Entity, EntityType, Timestamp,
+    Entity, EntityType, Timestamp, ValidationRevert,
 };
 use serde::Serialize;
 
@@ -117,6 +119,8 @@ pub enum EthRpcError {
     PrecheckFailed(PrecheckViolation),
     #[error("validation simulation failed: {0}")]
     SimulationFailed(SimulationViolation),
+    #[error("validation reverted: {0}")]
+    ValidationRevert(ValidationRevertData),
     #[error("{0}")]
     ExecutionReverted(String),
     #[error("execution reverted")]
@@ -171,6 +175,25 @@ impl StakeTooLowData {
             minimum_stake,
             minimum_unstake_delay,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationRevertData {
+    reason: Option<String>,
+    data: Option<Bytes>,
+}
+
+impl Display for ValidationRevertData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(reason) = &self.reason {
+            write!(f, "{}", reason)?;
+        }
+        if let Some(data) = &self.data {
+            write!(f, " data len: {}", data.len())?;
+        }
+        Ok(())
     }
 }
 
@@ -306,6 +329,23 @@ impl From<SimulationViolation> for EthRpcError {
             }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             SimulationViolation::OutOfGas(entity) => Self::OutOfGas(entity),
+            SimulationViolation::ValidationRevert(revert) => {
+                let data = match revert {
+                    ValidationRevert::EntryPoint(reason) => ValidationRevertData {
+                        reason: Some(reason),
+                        data: None,
+                    },
+                    ValidationRevert::Operation(reason, data) => ValidationRevertData {
+                        reason: Some(reason),
+                        data: Some(data),
+                    },
+                    ValidationRevert::Unknown(data) => ValidationRevertData {
+                        reason: None,
+                        data: Some(data),
+                    },
+                };
+                Self::ValidationRevert(data)
+            }
             _ => Self::SimulationFailed(value),
         }
     }
@@ -355,6 +395,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::ExecutionRevertedWithBytes(data) => {
                 rpc_err_with_data(EXECUTION_REVERTED, msg, data)
             }
+            EthRpcError::ValidationRevert(data) => rpc_err_with_data(EXECUTION_REVERTED, msg, data),
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
         }
     }

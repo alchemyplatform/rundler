@@ -39,6 +39,7 @@ services:
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
       - PRIORITY_FEE_MODE_VALUE=0
       - POOL_HOST=0.0.0.0
+      - ENTRY_POINT_V0_7_ENABLED=false
 
   rundler-builder:
     image: alchemy-platform/rundler:latest
@@ -57,6 +58,7 @@ services:
       - BUILDER_POOL_URL=https://rundler-pool:50051
       - BUILDER_HOST=0.0.0.0
       - BUILDER_PORT=50051
+      - ENTRY_POINT_V0_7_ENABLED=false
 
   rundler-rpc:
     image: alchemy-platform/rundler:latest
@@ -75,6 +77,7 @@ services:
       - RPC_API=eth,debug
       - RPC_POOL_URL=https://rundler-pool:50051
       - RPC_BUILDER_URL=https://rundler-builder:50051
+      - ENTRY_POINT_V0_7_ENABLED=false
     healthcheck:
       test: curl --fail http://localhost:3000/health || exit 1
       interval: 1s
