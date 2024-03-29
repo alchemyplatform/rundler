@@ -36,13 +36,13 @@ use rundler_types::{
             get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
             i_aggregator::IAggregator,
             i_entry_point::{
-                DepositInfo as DepositInfoV0_7, FailedOp, IEntryPoint, SignatureValidationFailed,
-                UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
+                DepositInfo as DepositInfoV0_7, FailedOp, FailedOpWithRevert, IEntryPoint,
+                SignatureValidationFailed, UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
             },
         },
     },
     v0_7::UserOperation,
-    GasFees, UserOpsPerAggregator, ValidationOutput,
+    GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
@@ -325,7 +325,7 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
         block_hash: Option<H256>,
-    ) -> anyhow::Result<ValidationOutput> {
+    ) -> Result<ValidationOutput, ValidationError> {
         let addr = self.i_entry_point.address();
         let pvg = user_op.pre_verification_gas;
         let mut spoof_ep = spoof::State::default();
@@ -342,10 +342,13 @@ where
             None => blockless,
         };
 
-        let result = call.call_raw().state(&spoof_ep).await;
-        // TODO we should handle the error here, this context covers up any reverts from the contract
-        let result = result.context("should simulate validation")?;
-        Ok(result.into())
+        match call.call_raw().state(&spoof_ep).await {
+            Ok(output) => Ok(output.into()),
+            Err(ContractError::Revert(revert_data)) => {
+                Err(decode_simulate_validation_revert(revert_data))?
+            }
+            Err(error) => Err(error).context("call simulation RPC failed")?,
+        }
     }
 
     fn decode_simulate_handle_ops_revert(
@@ -398,6 +401,26 @@ where
 impl<P> EntryPointProvider<UserOperation> for EntryPoint<P> where
     P: Provider + Middleware + Send + Sync + 'static
 {
+}
+
+// Return a human readable string from the revert data
+fn decode_simulate_validation_revert(revert_data: Bytes) -> ValidationRevert {
+    if let Ok(result) = FailedOpWithRevert::decode(&revert_data) {
+        if let Ok(inner_result) = ContractRevertError::decode(&result.inner) {
+            ValidationRevert::Operation(
+                format!("{} : {}", result.reason, inner_result.reason),
+                Bytes::default(),
+            )
+        } else {
+            ValidationRevert::Operation(result.reason, result.inner)
+        }
+    } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+        ValidationRevert::EntryPoint(failed_op.reason)
+    } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
+        ValidationRevert::EntryPoint(err.reason)
+    } else {
+        ValidationRevert::Unknown(revert_data)
+    }
 }
 
 fn get_handle_ops_call<M: Middleware>(

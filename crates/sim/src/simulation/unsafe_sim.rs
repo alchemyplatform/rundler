@@ -19,6 +19,7 @@ use rundler_provider::{
 };
 use rundler_types::{
     pool::SimulationViolation, EntityInfo, EntityInfos, UserOperation, ValidTimeRange,
+    ValidationError,
 };
 
 use crate::{
@@ -91,8 +92,25 @@ where
                 self.sim_settings.max_verification_gas,
                 Some(block_hash),
             )
-            .await
-            .map_err(anyhow::Error::from)?;
+            .await;
+
+        let validation_result = match validation_result {
+            Ok(res) => res,
+            Err(err) => match err {
+                ValidationError::Revert(revert) => {
+                    return Err(SimulationError {
+                        violation_error: vec![SimulationViolation::ValidationRevert(revert)].into(),
+                        entity_infos: None,
+                    })
+                }
+                ValidationError::Other(err) => {
+                    return Err(SimulationError {
+                        violation_error: ViolationError::Other(err),
+                        entity_infos: None,
+                    })
+                }
+            },
+        };
 
         let valid_until = if validation_result.return_info.valid_until == 0.into() {
             u64::MAX.into()
