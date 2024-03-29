@@ -25,8 +25,18 @@ use crate::simulation::SimulationViolation;
 /// Typically read from a JSON file using the `Deserialize` trait.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct MempoolConfig {
+    /// Entry point address this mempool is associated with.
+    #[serde(rename = "camelCase")]
+    pub(crate) entry_point: Address,
     /// Allowlist to match violations against.
     pub(crate) allowlist: Vec<AllowlistEntry>,
+}
+
+impl MempoolConfig {
+    /// Return the entrypoint address this mempool is associated with
+    pub fn entry_point(&self) -> Address {
+        self.entry_point
+    }
 }
 
 /// The entity allowed by an allowlist entry.
@@ -468,6 +478,7 @@ mod tests {
             (
                 H256::random(),
                 MempoolConfig {
+                    entry_point: Address::random(),
                     allowlist: vec![AllowlistEntry::new(
                         AllowEntity::Type(EntityType::Account),
                         AllowRule::ForbiddenOpcode {
@@ -500,6 +511,7 @@ mod tests {
             (
                 H256::random(),
                 MempoolConfig {
+                    entry_point: Address::random(),
                     allowlist: vec![AllowlistEntry::new(
                         AllowEntity::Type(EntityType::Account),
                         AllowRule::ForbiddenOpcode {
@@ -544,6 +556,7 @@ mod tests {
             (
                 mempool1,
                 MempoolConfig {
+                    entry_point: Address::random(),
                     allowlist: vec![AllowlistEntry::new(
                         AllowEntity::Type(EntityType::Account),
                         AllowRule::ForbiddenOpcode {
@@ -579,6 +592,7 @@ mod tests {
             (
                 mempool1,
                 MempoolConfig {
+                    entry_point: Address::random(),
                     allowlist: vec![
                         AllowlistEntry::new(
                             AllowEntity::Type(EntityType::Account),
@@ -600,6 +614,7 @@ mod tests {
             (
                 mempool2,
                 MempoolConfig {
+                    entry_point: Address::random(),
                     allowlist: vec![
                         AllowlistEntry::new(
                             AllowEntity::Type(EntityType::Account),

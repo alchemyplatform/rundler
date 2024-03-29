@@ -17,6 +17,8 @@ use ethers::{
 };
 use rundler_types::{
     pool::{Reputation, ReputationStatus},
+    v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7,
     GasEstimate, UserOperationOptionalGas, UserOperationVariant,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -40,6 +42,11 @@ pub enum ApiNamespace {
     Debug,
     Rundler,
     Admin,
+}
+
+/// Conversion trait for RPC types adding the context of the entry point and chain id
+pub(crate) trait FromRpc<R> {
+    fn from_rpc(rpc: R, entry_point: Address, chain_id: u64) -> Self;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,11 +115,15 @@ impl From<UserOperationVariant> for RpcUserOperation {
     }
 }
 
-impl From<RpcUserOperation> for UserOperationVariant {
-    fn from(op: RpcUserOperation) -> Self {
+impl FromRpc<RpcUserOperation> for UserOperationVariant {
+    fn from_rpc(op: RpcUserOperation, entry_point: Address, chain_id: u64) -> Self {
         match op {
-            RpcUserOperation::V0_6(op) => UserOperationVariant::V0_6(op.into()),
-            RpcUserOperation::V0_7(op) => UserOperationVariant::V0_7(op.into()),
+            RpcUserOperation::V0_6(op) => {
+                UserOperationVariant::V0_6(UserOperationV0_6::from_rpc(op, entry_point, chain_id))
+            }
+            RpcUserOperation::V0_7(op) => {
+                UserOperationVariant::V0_7(UserOperationV0_7::from_rpc(op, entry_point, chain_id))
+            }
         }
     }
 }

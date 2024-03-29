@@ -15,7 +15,7 @@ use ethers::types::{Address, Bytes, U256};
 use rundler_types::v0_6::{UserOperation, UserOperationOptionalGas};
 use serde::{Deserialize, Serialize};
 
-use super::RpcAddress;
+use super::{FromRpc, RpcAddress};
 
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -52,8 +52,8 @@ impl From<UserOperation> for RpcUserOperation {
     }
 }
 
-impl From<RpcUserOperation> for UserOperation {
-    fn from(def: RpcUserOperation) -> Self {
+impl FromRpc<RpcUserOperation> for UserOperation {
+    fn from_rpc(def: RpcUserOperation, _entry_point: Address, _chain_id: u64) -> Self {
         UserOperation {
             sender: def.sender.into(),
             nonce: def.nonce,
