@@ -19,5 +19,8 @@ pub use simulator::Simulator;
 mod tracer;
 pub use tracer::{SimulateValidationTracer, SimulateValidationTracerImpl};
 
+mod unsafe_sim;
+pub use unsafe_sim::UnsafeSimulator;
+
 /// Required buffer for verification gas limit when targeting the 0.6 entrypoint contract
 pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: U256 = U256([2000, 0, 0, 0]);
