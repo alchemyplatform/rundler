@@ -20,6 +20,7 @@ package op_pool;
 message UserOperation {
   oneof uo {
     UserOperationV06 v06 = 1;
+    UserOperationV07 v07 = 2;
   }
 }
 
@@ -49,9 +50,46 @@ message UserOperationV06 {
   // Address of paymaster sponsoring the transaction, followed by extra data to
   // send to the paymaster (empty for self-sponsored transaction)
   bytes paymaster_and_data = 10;
-  // Data passed into the account along with the nonce during the verification
-  // step
+  // Signature over the hash of the packed representation of the user operation
   bytes signature = 11;
+}
+
+message UserOperationV07 {
+  // The account making the operation
+  bytes sender = 1;
+  // Anti-replay parameter (see “Semi-abstracted Nonce Support” )
+  bytes nonce = 2;
+  // The data to pass to the sender during the main execution call
+  bytes call_data = 3;
+  // The amount of gas to allocate the main execution call
+  bytes call_gas_limit = 4;
+  // The amount of gas to allocate for the verification step
+  bytes verification_gas_limit = 5;
+  // The amount of gas to pay for to compensate the bundler for pre-verification
+  // execution and calldata
+  bytes pre_verification_gas = 6;
+  // Maximum fee per gas (similar to EIP-1559 max_fee_per_gas)
+  bytes max_fee_per_gas = 7;
+  // Maximum priority fee per gas (similar to EIP-1559 max_priority_fee_per_gas)
+  bytes max_priority_fee_per_gas = 8;
+  // Signature over the hash of the packed representation of the user operation
+  bytes signature = 9;
+  // Address of paymaster sponsoring the transaction, empty if none
+  bytes paymaster = 10;
+  // Extra data to send to the paymaster, zero if no paymaster
+  bytes paymaster_data = 11;
+  // Paymaster verification gas limit, zero if no paymaster
+  bytes paymaster_verification_gas_limit = 12;
+  // Paymaster post-op gas limit, zero if no paymaster
+  bytes paymaster_post_op_gas_limit = 13;
+  // Address of the factory to use to create the sender account, empty if none
+  bytes factory = 14;
+  // Extra data to send to the factory, empty if no factory
+  bytes factory_data = 15;
+
+  // Extra data to compute the hash of the user operation
+  bytes entry_point = 16;
+  uint64 chain_id = 17;
 }
 
 enum EntityType {
