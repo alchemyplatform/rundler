@@ -14,7 +14,9 @@
 use ethers::types::{
     spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
 };
-use rundler_types::{GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput};
+use rundler_types::{
+    GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationError, ValidationOutput,
+};
 
 /// Output of a successful signature aggregator simulation call
 #[derive(Clone, Debug, Default)]
@@ -193,7 +195,7 @@ pub trait SimulationProvider: Send + Sync + 'static {
         user_op: Self::UO,
         max_validation_gas: u64,
         block_hash: Option<H256>,
-    ) -> anyhow::Result<ValidationOutput>;
+    ) -> Result<ValidationOutput, ValidationError>;
 
     /// Call the entry point contract's `simulateHandleOps` function
     /// with a spoofed state
