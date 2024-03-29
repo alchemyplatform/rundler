@@ -18,26 +18,26 @@ use rundler_types::{
     pool::{
         MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation, SimulationViolation,
     },
-    StorageSlot, ViolationOpCode,
+    StorageSlot, ValidationRevert, ViolationOpCode,
 };
 
 use super::protos::{
-    mempool_error, precheck_violation_error, simulation_violation_error,
+    mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
     AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, ExistingSenderWithInitCode,
-    FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidSignature, InvalidStorageAccess,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
-    OperationAlreadyKnownError, OperationDropTooSoon, OutOfGas, PaymasterBalanceTooLow,
-    PaymasterDepositTooLow, PaymasterIsNotContract, PreVerificationGasTooLow,
-    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
-    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnstakedAggregator,
-    UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh,
-    WrongNumberOfPhases,
+    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
+    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidSignature,
+    InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
+    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
+    NotStaked, OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
+    PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
+    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
+    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
+    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
+    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
+    UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
+    UsedForbiddenOpcode, UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -523,6 +523,11 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
+            SimulationViolation::ValidationRevert(revert) => ProtoSimulationViolationError {
+                violation: Some(simulation_violation_error::Violation::ValidationRevert(
+                    revert.into(),
+                )),
+            },
             SimulationViolation::DidNotRevert => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::DidNotRevert(
                     DidNotRevert {},
@@ -685,6 +690,9 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                     },
                 )
             }
+            Some(simulation_violation_error::Violation::ValidationRevert(e)) => {
+                SimulationViolation::ValidationRevert(e.try_into()?)
+            }
             Some(simulation_violation_error::Violation::DidNotRevert(_)) => {
                 SimulationViolation::DidNotRevert
             }
@@ -729,6 +737,51 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             }
             None => {
                 bail!("unknown proto mempool simulation violation")
+            }
+        })
+    }
+}
+
+impl From<ValidationRevert> for ProtoValidationRevert {
+    fn from(revert: ValidationRevert) -> Self {
+        let inner = match revert {
+            ValidationRevert::EntryPoint(reason) => {
+                validation_revert::Revert::EntryPoint(EntryPointRevert { reason })
+            }
+            ValidationRevert::Operation(reason, revert_bytes) => {
+                validation_revert::Revert::Operation(OperationRevert {
+                    reason,
+                    revert_bytes: revert_bytes.to_vec(),
+                })
+            }
+            ValidationRevert::Unknown(revert_bytes) => {
+                validation_revert::Revert::Unknown(UnknownRevert {
+                    revert_bytes: revert_bytes.to_vec(),
+                })
+            }
+        };
+        ProtoValidationRevert {
+            revert: Some(inner),
+        }
+    }
+}
+
+impl TryFrom<ProtoValidationRevert> for ValidationRevert {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ProtoValidationRevert) -> Result<Self, Self::Error> {
+        Ok(match value.revert {
+            Some(validation_revert::Revert::EntryPoint(e)) => {
+                ValidationRevert::EntryPoint(e.reason)
+            }
+            Some(validation_revert::Revert::Operation(e)) => {
+                ValidationRevert::Operation(e.reason, e.revert_bytes.into())
+            }
+            Some(validation_revert::Revert::Unknown(e)) => {
+                ValidationRevert::Unknown(e.revert_bytes.into())
+            }
+            None => {
+                bail!("unknown proto validation revert")
             }
         })
     }
