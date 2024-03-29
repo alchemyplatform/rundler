@@ -198,32 +198,37 @@ impl BuilderArgs {
             None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
         };
 
+        let mut entry_points = vec![];
+
+        if common.entry_point_v0_6_enabled {
+            entry_points.push(EntryPointBuilderSettings {
+                address: chain_spec.entry_point_address_v0_6,
+                version: EntryPointVersion::V0_6,
+                num_bundle_builders: common.num_builders_v0_6,
+                bundle_builder_index_offset: self.builder_index_offset,
+                mempool_configs: mempool_configs
+                    .iter()
+                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
+            });
+        }
+        if common.entry_point_v0_7_enabled {
+            entry_points.push(EntryPointBuilderSettings {
+                address: chain_spec.entry_point_address_v0_7,
+                version: EntryPointVersion::V0_7,
+                num_bundle_builders: common.num_builders_v0_7,
+                bundle_builder_index_offset: self.builder_index_offset,
+                mempool_configs: mempool_configs
+                    .iter()
+                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
+            });
+        }
+
         Ok(BuilderTaskArgs {
-            // TODO determine better builder config settings
-            entry_points: vec![
-                EntryPointBuilderSettings {
-                    address: chain_spec.entry_point_address_v0_6,
-                    version: EntryPointVersion::V0_6,
-                    num_bundle_builders: common.num_builders / 2,
-                    bundle_builder_index_offset: self.builder_index_offset,
-                    mempool_configs: mempool_configs
-                        .iter()
-                        .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
-                        .map(|(k, v)| (*k, v.clone()))
-                        .collect(),
-                },
-                EntryPointBuilderSettings {
-                    address: chain_spec.entry_point_address_v0_7,
-                    version: EntryPointVersion::V0_7,
-                    num_bundle_builders: common.num_builders / 2,
-                    bundle_builder_index_offset: self.builder_index_offset,
-                    mempool_configs: mempool_configs
-                        .iter()
-                        .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
-                        .map(|(k, v)| (*k, v.clone()))
-                        .collect(),
-                },
-            ],
+            entry_points,
             chain_spec,
             unsafe_mode: common.unsafe_mode,
             rpc_url,

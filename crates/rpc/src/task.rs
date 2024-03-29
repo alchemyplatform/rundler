@@ -72,6 +72,10 @@ pub struct Args {
     pub rpc_timeout: Duration,
     /// Max number of connections.
     pub max_connections: u32,
+    /// Whether to enable entry point v0.6.
+    pub entry_point_v0_6_enabled: bool,
+    /// Whether to enable entry point v0.7.
+    pub entry_point_v0_7_enabled: bool,
 }
 
 /// JSON-RPC server task.
@@ -102,9 +106,9 @@ where
             provider.clone(),
         );
 
-        // create the entry point router
-        let router = EntryPointRouterBuilder::default()
-            .v0_6(EntryPointRouteImpl::new(
+        let mut router_builder = EntryPointRouterBuilder::default();
+        if self.args.entry_point_v0_6_enabled {
+            router_builder = router_builder.v0_6(EntryPointRouteImpl::new(
                 ep_v0_6.clone(),
                 GasEstimatorV0_6::new(
                     self.args.chain_spec.clone(),
@@ -128,8 +132,11 @@ where
                         .eth_api_settings
                         .user_operation_event_block_distance,
                 ),
-            ))
-            .v0_7(EntryPointRouteImpl::new(
+            ));
+        }
+
+        if self.args.entry_point_v0_7_enabled {
+            router_builder = router_builder.v0_7(EntryPointRouteImpl::new(
                 ep_v0_7.clone(),
                 GasEstimatorV0_7::new(
                     self.args.chain_spec.clone(),
@@ -152,8 +159,11 @@ where
                         .eth_api_settings
                         .user_operation_event_block_distance,
                 ),
-            ))
-            .build();
+            ));
+        }
+
+        // create the entry point router
+        let router = router_builder.build();
 
         let mut module = RpcModule::new(());
         self.attach_namespaces(provider, router, &mut module)?;
