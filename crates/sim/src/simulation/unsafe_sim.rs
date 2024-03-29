@@ -18,8 +18,8 @@ use rundler_provider::{
     AggregatorOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
 use rundler_types::{
-    pool::SimulationViolation, v0_6::UserOperation, EntityInfo, EntityInfos,
-    UserOperation as UserOperationTrait, ValidTimeRange,
+    pool::SimulationViolation, EntityInfo, EntityInfos, UserOperation, ValidTimeRange,
+    ValidationError,
 };
 
 use crate::{
@@ -32,40 +32,40 @@ use crate::{
 ///
 /// WARNING: This is "unsafe" for a reason. None of the ERC-7562 checks are
 /// performed.
-pub struct UnsafeSimulator<P, E> {
+pub struct UnsafeSimulator<UO, P, E> {
     provider: Arc<P>,
     entry_point: E,
     sim_settings: Settings,
+    _uo_type: std::marker::PhantomData<UO>,
 }
 
-impl<P, E> UnsafeSimulator<P, E> {
+impl<UO, P, E> UnsafeSimulator<UO, P, E> {
     /// Creates a new unsafe simulator
     pub fn new(provider: Arc<P>, entry_point: E, sim_settings: Settings) -> Self {
         Self {
             provider,
             entry_point,
             sim_settings,
+            _uo_type: std::marker::PhantomData,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<P, E> Simulator for UnsafeSimulator<P, E>
+impl<UO, P, E> Simulator for UnsafeSimulator<UO, P, E>
 where
+    UO: UserOperation,
     P: Provider,
-    E: EntryPoint
-        + SimulationProvider<UO = UserOperation>
-        + SignatureAggregator<UO = UserOperation>
-        + Clone,
+    E: EntryPoint + SimulationProvider<UO = UO> + SignatureAggregator<UO = UO> + Clone,
 {
-    type UO = UserOperation;
+    type UO = UO;
 
     // Run an unsafe simulation
     //
     // The only validation checks that are performed are signature checks
     async fn simulate_validation(
         &self,
-        op: UserOperation,
+        op: UO,
         block_hash: Option<H256>,
         _expected_code_hash: Option<H256>,
     ) -> Result<SimulationResult, SimulationError> {
@@ -92,14 +92,35 @@ where
                 self.sim_settings.max_verification_gas,
                 Some(block_hash),
             )
-            .await
-            .map_err(anyhow::Error::from)?;
+            .await;
+
+        let validation_result = match validation_result {
+            Ok(res) => res,
+            Err(err) => match err {
+                ValidationError::Revert(revert) => {
+                    return Err(SimulationError {
+                        violation_error: vec![SimulationViolation::ValidationRevert(revert)].into(),
+                        entity_infos: None,
+                    })
+                }
+                ValidationError::Other(err) => {
+                    return Err(SimulationError {
+                        violation_error: ViolationError::Other(err),
+                        entity_infos: None,
+                    })
+                }
+            },
+        };
+
+        let valid_until = if validation_result.return_info.valid_until == 0.into() {
+            u64::MAX.into()
+        } else {
+            validation_result.return_info.valid_until
+        };
 
         let pre_op_gas = validation_result.return_info.pre_op_gas;
-        let valid_time_range = ValidTimeRange::new(
-            validation_result.return_info.valid_after,
-            validation_result.return_info.valid_until,
-        );
+        let valid_time_range =
+            ValidTimeRange::new(validation_result.return_info.valid_after, valid_until);
         let requires_post_op = !validation_result.return_info.paymaster_context.is_empty();
 
         let entity_infos = EntityInfos {

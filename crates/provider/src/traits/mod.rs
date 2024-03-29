@@ -17,10 +17,7 @@ mod error;
 pub use error::ProviderError;
 
 mod entry_point;
-pub use entry_point::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint, EntryPointProvider,
-    ExecutionResult, HandleOpsOut, L1GasProvider, SignatureAggregator, SimulationProvider,
-};
+pub use entry_point::*;
 
 mod provider;
 #[cfg(feature = "test-utils")]

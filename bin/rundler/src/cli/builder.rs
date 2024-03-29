@@ -191,7 +191,6 @@ impl BuilderArgs {
             .context("should have a node HTTP URL")?;
         let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
 
-        // TODO these should be scoped by entry point
         let mempool_configs = match &common.mempool_config_path {
             Some(path) => {
                 get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
@@ -199,15 +198,37 @@ impl BuilderArgs {
             None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
         };
 
-        Ok(BuilderTaskArgs {
-            // TODO: support multiple entry points
-            entry_points: vec![EntryPointBuilderSettings {
-                address: chain_spec.entry_point_address,
+        let mut entry_points = vec![];
+
+        if common.entry_point_v0_6_enabled {
+            entry_points.push(EntryPointBuilderSettings {
+                address: chain_spec.entry_point_address_v0_6,
                 version: EntryPointVersion::V0_6,
-                num_bundle_builders: common.num_builders,
+                num_bundle_builders: common.num_builders_v0_6,
                 bundle_builder_index_offset: self.builder_index_offset,
-                mempool_configs,
-            }],
+                mempool_configs: mempool_configs
+                    .iter()
+                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
+            });
+        }
+        if common.entry_point_v0_7_enabled {
+            entry_points.push(EntryPointBuilderSettings {
+                address: chain_spec.entry_point_address_v0_7,
+                version: EntryPointVersion::V0_7,
+                num_bundle_builders: common.num_builders_v0_7,
+                bundle_builder_index_offset: self.builder_index_offset,
+                mempool_configs: mempool_configs
+                    .iter()
+                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
+            });
+        }
+
+        Ok(BuilderTaskArgs {
+            entry_points,
             chain_spec,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
