@@ -30,7 +30,7 @@ pub use traits::test_utils::*;
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::MockProvider;
 pub use traits::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult,
-    HandleOpsOut, L1GasProvider, Provider, ProviderError, ProviderResult, SignatureAggregator,
-    SimulationProvider,
+    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint, EntryPointProvider,
+    ExecutionResult, HandleOpsOut, L1GasProvider, Provider, ProviderError, ProviderResult,
+    SignatureAggregator, SimulationProvider,
 };
