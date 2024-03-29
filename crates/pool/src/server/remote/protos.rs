@@ -13,14 +13,14 @@
 
 use anyhow::{anyhow, Context};
 use ethers::types::{Address, H256};
-use rundler_task::grpc::protos::{from_bytes, to_le_bytes, ConversionError};
+use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
     pool::{
         NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
     },
-    v0_6, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
+    v0_6, v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
     EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
     StakeInfo as RundlerStakeInfo, UserOperationVariant, ValidTimeRange,
 };
@@ -34,9 +34,7 @@ impl From<&UserOperationVariant> for UserOperation {
     fn from(op: &UserOperationVariant) -> Self {
         match op {
             UserOperationVariant::V0_6(op) => op.into(),
-            UserOperationVariant::V0_7(_) => {
-                unimplemented!("V0_7 user operation is not supported")
-            }
+            UserOperationVariant::V0_7(op) => op.into(),
         }
     }
 }
@@ -44,17 +42,17 @@ impl From<&UserOperationVariant> for UserOperation {
 impl From<&v0_6::UserOperation> for UserOperation {
     fn from(op: &v0_6::UserOperation) -> Self {
         let op = UserOperationV06 {
-            sender: op.sender.0.to_vec(),
-            nonce: to_le_bytes(op.nonce),
-            init_code: op.init_code.to_vec(),
-            call_data: op.call_data.to_vec(),
-            call_gas_limit: to_le_bytes(op.call_gas_limit),
-            verification_gas_limit: to_le_bytes(op.verification_gas_limit),
-            pre_verification_gas: to_le_bytes(op.pre_verification_gas),
-            max_fee_per_gas: to_le_bytes(op.max_fee_per_gas),
-            max_priority_fee_per_gas: to_le_bytes(op.max_priority_fee_per_gas),
-            paymaster_and_data: op.paymaster_and_data.to_vec(),
-            signature: op.signature.to_vec(),
+            sender: op.sender.to_proto_bytes(),
+            nonce: op.nonce.to_proto_bytes(),
+            init_code: op.init_code.to_proto_bytes(),
+            call_data: op.call_data.to_proto_bytes(),
+            call_gas_limit: op.call_gas_limit.to_proto_bytes(),
+            verification_gas_limit: op.verification_gas_limit.to_proto_bytes(),
+            pre_verification_gas: op.pre_verification_gas.to_proto_bytes(),
+            max_fee_per_gas: op.max_fee_per_gas.to_proto_bytes(),
+            max_priority_fee_per_gas: op.max_priority_fee_per_gas.to_proto_bytes(),
+            paymaster_and_data: op.paymaster_and_data.to_proto_bytes(),
+            signature: op.signature.to_proto_bytes(),
         };
         UserOperation {
             uo: Some(user_operation::Uo::V06(op)),
@@ -82,6 +80,70 @@ impl TryFrom<UserOperationV06> for v0_6::UserOperation {
     }
 }
 
+impl From<&v0_7::UserOperation> for UserOperation {
+    fn from(op: &v0_7::UserOperation) -> Self {
+        let op = UserOperationV07 {
+            sender: op.sender.to_proto_bytes(),
+            nonce: op.nonce.to_proto_bytes(),
+            call_data: op.call_data.to_proto_bytes(),
+            call_gas_limit: op.call_gas_limit.to_proto_bytes(),
+            verification_gas_limit: op.verification_gas_limit.to_proto_bytes(),
+            pre_verification_gas: op.pre_verification_gas.to_proto_bytes(),
+            max_fee_per_gas: op.max_fee_per_gas.to_proto_bytes(),
+            max_priority_fee_per_gas: op.max_priority_fee_per_gas.to_proto_bytes(),
+            signature: op.signature.to_proto_bytes(),
+            paymaster: op.paymaster.map(|p| p.to_proto_bytes()).unwrap_or_default(),
+            paymaster_data: op.paymaster_data.to_proto_bytes(),
+            paymaster_verification_gas_limit: op.paymaster_verification_gas_limit.to_proto_bytes(),
+            paymaster_post_op_gas_limit: op.paymaster_post_op_gas_limit.to_proto_bytes(),
+            factory: op.factory.map(|f| f.to_proto_bytes()).unwrap_or_default(),
+            factory_data: op.factory_data.to_proto_bytes(),
+            entry_point: op.entry_point.to_proto_bytes(),
+            chain_id: op.chain_id,
+        };
+        UserOperation {
+            uo: Some(user_operation::Uo::V07(op)),
+        }
+    }
+}
+
+impl TryFrom<UserOperationV07> for v0_7::UserOperation {
+    type Error = ConversionError;
+
+    fn try_from(op: UserOperationV07) -> Result<Self, Self::Error> {
+        let mut builder = v0_7::UserOperationBuilder::new(
+            from_bytes(&op.entry_point)?,
+            op.chain_id,
+            v0_7::UserOperationRequiredFields {
+                sender: from_bytes(&op.sender)?,
+                nonce: from_bytes(&op.nonce)?,
+                call_data: op.call_data.into(),
+                call_gas_limit: from_bytes(&op.call_gas_limit)?,
+                verification_gas_limit: from_bytes(&op.verification_gas_limit)?,
+                pre_verification_gas: from_bytes(&op.pre_verification_gas)?,
+                max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
+                max_fee_per_gas: from_bytes(&op.max_fee_per_gas)?,
+                signature: op.signature.into(),
+            },
+        );
+
+        if !op.paymaster.is_empty() {
+            builder = builder.paymaster(
+                from_bytes(&op.paymaster)?,
+                from_bytes(&op.paymaster_verification_gas_limit)?,
+                from_bytes(&op.paymaster_post_op_gas_limit)?,
+                op.paymaster_data.into(),
+            );
+        }
+
+        if !op.factory.is_empty() {
+            builder = builder.factory(from_bytes(&op.factory)?, op.factory_data.into());
+        }
+
+        Ok(builder.build())
+    }
+}
+
 impl TryFrom<UserOperation> for UserOperationVariant {
     type Error = ConversionError;
 
@@ -92,6 +154,7 @@ impl TryFrom<UserOperation> for UserOperationVariant {
 
         match op {
             user_operation::Uo::V06(op) => Ok(UserOperationVariant::V0_6(op.try_into()?)),
+            user_operation::Uo::V07(op) => Ok(UserOperationVariant::V0_7(op.try_into()?)),
         }
     }
 }
@@ -172,7 +235,7 @@ impl From<&RundlerEntity> for Entity {
     fn from(entity: &RundlerEntity) -> Self {
         Entity {
             kind: EntityType::from(entity.kind).into(),
-            address: entity.address.as_bytes().to_vec(),
+            address: entity.address.to_proto_bytes(),
         }
     }
 }
@@ -221,7 +284,7 @@ impl TryFrom<ReputationStatus> for PoolReputationStatus {
 impl From<PoolReputation> for Reputation {
     fn from(rep: PoolReputation) -> Self {
         Reputation {
-            address: rep.address.as_bytes().to_vec(),
+            address: rep.address.to_proto_bytes(),
             ops_seen: rep.ops_seen,
             ops_included: rep.ops_included,
         }
@@ -274,12 +337,12 @@ impl From<&PoolOperation> for MempoolOp {
     fn from(op: &PoolOperation) -> Self {
         MempoolOp {
             uo: Some(UserOperation::from(&op.uo)),
-            entry_point: op.entry_point.as_bytes().to_vec(),
-            aggregator: op.aggregator.map_or(vec![], |a| a.as_bytes().to_vec()),
+            entry_point: op.entry_point.to_proto_bytes(),
+            aggregator: op.aggregator.map_or(vec![], |a| a.to_proto_bytes()),
             valid_after: op.valid_time_range.valid_after.seconds_since_epoch(),
             valid_until: op.valid_time_range.valid_until.seconds_since_epoch(),
-            expected_code_hash: op.expected_code_hash.as_bytes().to_vec(),
-            sim_block_hash: op.sim_block_hash.as_bytes().to_vec(),
+            expected_code_hash: op.expected_code_hash.to_proto_bytes(),
+            sim_block_hash: op.sim_block_hash.to_proto_bytes(),
             entities_needing_stake: op
                 .entities_needing_stake
                 .iter()
@@ -348,7 +411,7 @@ impl TryFrom<NewHead> for PoolNewHead {
 impl From<PoolNewHead> for NewHead {
     fn from(head: PoolNewHead) -> Self {
         Self {
-            block_hash: head.block_hash.as_bytes().to_vec(),
+            block_hash: head.block_hash.to_proto_bytes(),
             block_number: head.block_number,
         }
     }
@@ -370,8 +433,8 @@ impl From<PoolPaymasterMetadata> for PaymasterBalance {
     fn from(paymaster_metadata: PoolPaymasterMetadata) -> Self {
         Self {
             address: paymaster_metadata.address.as_bytes().to_vec(),
-            confirmed_balance: to_le_bytes(paymaster_metadata.confirmed_balance),
-            pending_balance: to_le_bytes(paymaster_metadata.pending_balance),
+            confirmed_balance: paymaster_metadata.confirmed_balance.to_proto_bytes(),
+            pending_balance: paymaster_metadata.pending_balance.to_proto_bytes(),
         }
     }
 }

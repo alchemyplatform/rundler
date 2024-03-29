@@ -14,7 +14,7 @@
 use ethers::types::{
     spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
 };
-use rundler_types::{v0_6, GasFees, UserOpsPerAggregator, ValidationOutput};
+use rundler_types::{v0_6, GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput};
 
 use crate::{
     AggregatorOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult, HandleOpsOut,
@@ -62,7 +62,7 @@ mockall::mock! {
             user_op: v0_6::UserOperation,
             max_validation_gas: u64,
             block_hash: Option<H256>
-        ) -> anyhow::Result<ValidationOutput>;
+        ) -> Result<ValidationOutput, ValidationError>;
         async fn call_spoofed_simulate_op(
             &self,
             op: v0_6::UserOperation,

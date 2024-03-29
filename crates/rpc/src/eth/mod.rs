@@ -21,7 +21,7 @@ pub(crate) use router::*;
 mod error;
 pub(crate) use error::EthRpcError;
 mod events;
-pub(crate) use events::UserOperationEventProviderV0_6;
+pub(crate) use events::{UserOperationEventProviderV0_6, UserOperationEventProviderV0_7};
 mod server;
 
 use ethers::types::{spoof, Address, H256, U64};
