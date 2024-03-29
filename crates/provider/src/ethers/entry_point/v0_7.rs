@@ -31,18 +31,18 @@ use rundler_types::{
         v0_7::{
             entry_point_simulations::{
                 EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
-                ENTRYPOINTSIMULATIONS_BYTECODE,
+                ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
             },
             get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
             i_aggregator::IAggregator,
             i_entry_point::{
-                DepositInfo as DepositInfoV0_7, FailedOp, IEntryPoint, SignatureValidationFailed,
-                UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
+                DepositInfo as DepositInfoV0_7, FailedOp, FailedOpWithRevert, IEntryPoint,
+                SignatureValidationFailed, UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
             },
         },
     },
     v0_7::UserOperation,
-    GasFees, UserOpsPerAggregator, ValidationOutput,
+    GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
@@ -64,7 +64,7 @@ const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
 ]);
 
 /// Entry point for the v0.7 contract.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EntryPoint<P> {
     i_entry_point: IEntryPoint<P>,
     provider: Arc<P>,
@@ -86,6 +86,20 @@ where
                 Arc::clone(&provider),
             ),
             opt_gas_oracle: GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, provider),
+        }
+    }
+}
+
+impl<P> Clone for EntryPoint<P>
+where
+    P: Provider + Middleware,
+{
+    fn clone(&self) -> Self {
+        Self {
+            i_entry_point: self.i_entry_point.clone(),
+            provider: self.provider.clone(),
+            arb_node: self.arb_node.clone(),
+            opt_gas_oracle: self.opt_gas_oracle.clone(),
         }
     }
 }
@@ -295,7 +309,7 @@ where
         let mut spoof_ep = spoof::State::default();
         spoof_ep
             .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
 
         let call = ep_simulations
@@ -311,29 +325,30 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
         block_hash: Option<H256>,
-    ) -> anyhow::Result<ValidationOutput> {
+    ) -> Result<ValidationOutput, ValidationError> {
         let addr = self.i_entry_point.address();
         let pvg = user_op.pre_verification_gas;
         let mut spoof_ep = spoof::State::default();
         spoof_ep
             .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
 
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
         let blockless = ep_simulations
-            .simulate_validation(user_op.pack())
+            .simulate_validation(user_op.clone().pack())
             .gas(U256::from(max_validation_gas) + pvg);
         let call = match block_hash {
             Some(block_hash) => blockless.block(block_hash),
             None => blockless,
         };
 
-        let result = call
-            .call_raw()
-            .state(&spoof_ep)
-            .await
-            .context("should simulate validation")?;
-        Ok(result.into())
+        match call.call_raw().state(&spoof_ep).await {
+            Ok(output) => Ok(output.into()),
+            Err(ContractError::Revert(revert_data)) => {
+                Err(decode_simulate_validation_revert(revert_data))?
+            }
+            Err(error) => Err(error).context("call simulation RPC failed")?,
+        }
     }
 
     fn decode_simulate_handle_ops_revert(
@@ -365,7 +380,7 @@ where
         let mut spoof_ep = spoofed_state.clone();
         spoof_ep
             .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_BYTECODE.clone());
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
 
         let contract_error = ep_simulations
@@ -386,6 +401,26 @@ where
 impl<P> EntryPointProvider<UserOperation> for EntryPoint<P> where
     P: Provider + Middleware + Send + Sync + 'static
 {
+}
+
+// Return a human readable string from the revert data
+fn decode_simulate_validation_revert(revert_data: Bytes) -> ValidationRevert {
+    if let Ok(result) = FailedOpWithRevert::decode(&revert_data) {
+        if let Ok(inner_result) = ContractRevertError::decode(&result.inner) {
+            ValidationRevert::Operation(
+                format!("{} : {}", result.reason, inner_result.reason),
+                Bytes::default(),
+            )
+        } else {
+            ValidationRevert::Operation(result.reason, result.inner)
+        }
+    } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+        ValidationRevert::EntryPoint(failed_op.reason)
+    } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
+        ValidationRevert::EntryPoint(err.reason)
+    } else {
+        ValidationRevert::Unknown(revert_data)
+    }
 }
 
 fn get_handle_ops_call<M: Middleware>(

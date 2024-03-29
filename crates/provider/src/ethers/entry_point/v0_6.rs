@@ -39,7 +39,7 @@ use rundler_types::{
         },
     },
     v0_6::UserOperation,
-    GasFees, UserOpsPerAggregator, ValidationOutput,
+    GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
@@ -316,7 +316,7 @@ where
         user_op: UserOperation,
         max_validation_gas: u64,
         block_hash: Option<H256>,
-    ) -> anyhow::Result<ValidationOutput> {
+    ) -> Result<ValidationOutput, ValidationError> {
         let pvg = user_op.pre_verification_gas;
         let blockless = self
             .i_entry_point
@@ -328,9 +328,18 @@ where
         };
 
         match call.call().await {
-            Ok(()) => anyhow::bail!("simulateValidation should always revert"),
-            Err(ContractError::Revert(revert_data)) => ValidationOutput::decode_v0_6(revert_data)
-                .context("entry point should return validation output"),
+            Ok(()) => Err(anyhow::anyhow!("simulateValidation should always revert"))?,
+            Err(ContractError::Revert(revert_data)) => {
+                if let Ok(result) = ValidationOutput::decode_v0_6(&revert_data) {
+                    Ok(result)
+                } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+                    Err(ValidationRevert::EntryPoint(failed_op.reason))?
+                } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
+                    Err(ValidationRevert::EntryPoint(err.reason))?
+                } else {
+                    Err(ValidationRevert::Unknown(revert_data))?
+                }
+            }
             Err(error) => Err(error).context("call simulation RPC failed")?,
         }
     }

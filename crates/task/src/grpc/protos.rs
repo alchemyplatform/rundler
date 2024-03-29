@@ -13,7 +13,7 @@
 
 //! Protobuf utilities
 
-use ethers::types::{Address, H256, U256};
+use ethers::types::{Address, Bytes, H256, U128, U256};
 
 /// Error type for conversions from protobuf types to Ethers/local types.
 #[derive(Debug, thiserror::Error)]
@@ -27,13 +27,6 @@ pub enum ConversionError {
     /// Invalid enum value, does not map to a valid enum variant
     #[error("Invalid enum value {0}")]
     InvalidEnumValue(i32),
-}
-
-/// Convert an Ethers U256 to little endian bytes for packing into a proto struct.
-pub fn to_le_bytes(n: U256) -> Vec<u8> {
-    let mut vec = vec![0_u8; 32];
-    n.to_little_endian(&mut vec);
-    vec
 }
 
 /// Convert proto bytes into a type that implements `FromProtoBytes`.
@@ -79,6 +72,14 @@ impl FromFixedLengthProtoBytes for Address {
     }
 }
 
+impl FromFixedLengthProtoBytes for U128 {
+    const LEN: usize = 16;
+
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        Self::from_little_endian(bytes)
+    }
+}
+
 impl FromFixedLengthProtoBytes for U256 {
     const LEN: usize = 32;
 
@@ -92,5 +93,45 @@ impl FromFixedLengthProtoBytes for H256 {
 
     fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
         Self::from_slice(bytes)
+    }
+}
+
+/// Trait for a type that can be converted to protobuf bytes.
+pub trait ToProtoBytes {
+    /// Convert to protobuf bytes.
+    fn to_proto_bytes(&self) -> Vec<u8>;
+}
+
+impl ToProtoBytes for Address {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+}
+
+impl ToProtoBytes for U128 {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        let mut vec = vec![0_u8; 16];
+        self.to_little_endian(&mut vec);
+        vec
+    }
+}
+
+impl ToProtoBytes for U256 {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        let mut vec = vec![0_u8; 32];
+        self.to_little_endian(&mut vec);
+        vec
+    }
+}
+
+impl ToProtoBytes for H256 {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        self.as_bytes().to_vec()
+    }
+}
+
+impl ToProtoBytes for Bytes {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        self.to_vec()
     }
 }

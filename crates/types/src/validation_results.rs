@@ -35,6 +35,31 @@ use crate::{
 const SIG_VALIDATION_FAILED: Address =
     H160([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
+/// Error during validation simulation
+#[derive(Clone, Debug, thiserror::Error, Ord, PartialOrd, Eq, PartialEq)]
+pub enum ValidationRevert {
+    /// The entry point reverted
+    #[error("{0}")]
+    EntryPoint(String),
+    /// The operation reverted
+    #[error("{0} : {1:?}")]
+    Operation(String, Bytes),
+    /// Validation everted with an unknown signature
+    #[error("revert with bytes: {0:?}")]
+    Unknown(Bytes),
+}
+
+/// Error during validation simulation
+#[derive(Debug, thiserror::Error)]
+pub enum ValidationError {
+    /// The validation reverted
+    #[error(transparent)]
+    Revert(#[from] ValidationRevert),
+    /// Other error
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Equivalent to the generated `ValidationResult` or
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs
 /// instead of tuples and with a helper for deserializing.
