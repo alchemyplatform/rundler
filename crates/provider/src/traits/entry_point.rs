@@ -192,6 +192,7 @@ pub trait SimulationProvider: Send + Sync + 'static {
         &self,
         user_op: Self::UO,
         max_validation_gas: u64,
+        block_hash: Option<H256>,
     ) -> anyhow::Result<ValidationOutput>;
 
     /// Call the entry point contract's `simulateHandleOps` function
