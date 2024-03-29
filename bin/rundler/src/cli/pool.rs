@@ -181,7 +181,6 @@ impl PoolArgs {
         tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
 
         let chain_id = chain_spec.id;
-        // TODO(danc): multiple pool configs
         let pool_config_base = PoolConfig {
             // update per entry point
             entry_point: Address::default(),
@@ -205,28 +204,34 @@ impl PoolArgs {
             drop_min_num_blocks: self.drop_min_num_blocks,
         };
 
-        let pool_config_v0_6 = PoolConfig {
-            entry_point: chain_spec.entry_point_address_v0_6,
-            entry_point_version: EntryPointVersion::V0_6,
-            num_shards: common.num_builders / 2,
-            mempool_channel_configs: mempool_channel_configs
-                .iter()
-                .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
-                .map(|(k, v)| (*k, v.clone()))
-                .collect(),
-            ..pool_config_base.clone()
-        };
-        let pool_config_v0_7 = PoolConfig {
-            entry_point: chain_spec.entry_point_address_v0_7,
-            entry_point_version: EntryPointVersion::V0_7,
-            num_shards: common.num_builders / 2,
-            mempool_channel_configs: mempool_channel_configs
-                .iter()
-                .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
-                .map(|(k, v)| (*k, v.clone()))
-                .collect(),
-            ..pool_config_base.clone()
-        };
+        let mut pool_configs = vec![];
+
+        if common.entry_point_v0_6_enabled {
+            pool_configs.push(PoolConfig {
+                entry_point: chain_spec.entry_point_address_v0_6,
+                entry_point_version: EntryPointVersion::V0_6,
+                num_shards: common.num_builders_v0_6,
+                mempool_channel_configs: mempool_channel_configs
+                    .iter()
+                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
+                ..pool_config_base.clone()
+            });
+        }
+        if common.entry_point_v0_7_enabled {
+            pool_configs.push(PoolConfig {
+                entry_point: chain_spec.entry_point_address_v0_7,
+                entry_point_version: EntryPointVersion::V0_7,
+                num_shards: common.num_builders_v0_7,
+                mempool_channel_configs: mempool_channel_configs
+                    .iter()
+                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect(),
+                ..pool_config_base.clone()
+            });
+        }
 
         Ok(PoolTaskArgs {
             chain_spec,
@@ -236,7 +241,7 @@ impl PoolArgs {
                 .clone()
                 .context("pool requires node_http arg")?,
             http_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
-            pool_configs: vec![pool_config_v0_6, pool_config_v0_7],
+            pool_configs,
             remote_address,
             chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
         })
