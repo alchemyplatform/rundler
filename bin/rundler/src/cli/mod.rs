@@ -258,12 +258,38 @@ pub struct CommonArgs {
     pub mempool_config_path: Option<String>,
 
     #[arg(
-        long = "num_builders",
-        name = "num_builders",
-        env = "NUM_BUILDERS",
+        long = "entry_point_v0_6_enabled",
+        name = "entry_point_v0_6_enabled",
+        env = "ENTRY_POINT_V0_6_ENABLED",
+        default_value = "true"
+    )]
+    pub entry_point_v0_6_enabled: bool,
+
+    // Ignored if entry_point_v0_6_enabled is false
+    #[arg(
+        long = "num_builders_v0_6",
+        name = "num_builders_v0_6",
+        env = "NUM_BUILDERS_V0_6",
         default_value = "1"
     )]
-    pub num_builders: u64,
+    pub num_builders_v0_6: u64,
+
+    #[arg(
+        long = "entry_point_v0_7_enabled",
+        name = "entry_point_v0_7_enabled",
+        env = "ENTRY_POINT_V0_7_ENABLED",
+        default_value = "true"
+    )]
+    pub entry_point_v0_7_enabled: bool,
+
+    // Ignored if entry_point_v0_7_enabled is false
+    #[arg(
+        long = "num_builders_v0_7",
+        name = "num_builders_v0_7",
+        env = "NUM_BUILDERS_V0_7",
+        default_value = "1"
+    )]
+    pub num_builders_v0_7: u64,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;

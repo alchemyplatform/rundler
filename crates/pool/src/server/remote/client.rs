@@ -16,7 +16,7 @@ use std::{pin::Pin, str::FromStr};
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::{
-    grpc::protos::{from_bytes, to_le_bytes, ConversionError},
+    grpc::protos::{from_bytes, ConversionError, ToProtoBytes},
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
@@ -255,9 +255,9 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .remove_op_by_id(protos::RemoveOpByIdRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-                sender: id.sender.as_bytes().to_vec(),
-                nonce: to_le_bytes(id.nonce),
+                entry_point: entry_point.to_proto_bytes(),
+                sender: id.sender.to_proto_bytes(),
+                nonce: id.nonce.to_proto_bytes(),
             })
             .await
             .map_err(anyhow::Error::from)?
