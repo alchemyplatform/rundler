@@ -123,6 +123,10 @@ pub struct CommonArgs {
     )]
     node_http: Option<String>,
 
+    /// Flag for turning unsafe bundling mode on
+    #[arg(long = "unsafe", env = "UNSAFE", global = true)]
+    unsafe_mode: bool,
+
     #[arg(
         long = "max_verification_gas",
         name = "max_verification_gas",
