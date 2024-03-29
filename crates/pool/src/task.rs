@@ -184,31 +184,7 @@ impl PoolTask {
         Box::new(self)
     }
 
-    fn create_mempool_v0_7<P: Provider + Middleware>(
-        chain_spec: ChainSpec,
-        pool_config: &PoolConfig,
-        unsafe_mode: bool,
-        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: Arc<P>,
-    ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
-        let ep = EthersEntryPointV0_7::new(pool_config.entry_point, Arc::clone(&provider));
-
-        if unsafe_mode {
-            let simulator =
-                UnsafeSimulator::new(Arc::clone(&provider), ep.clone(), pool_config.sim_settings);
-            Self::create_mempool(
-                chain_spec,
-                pool_config,
-                event_sender,
-                provider,
-                ep,
-                simulator,
-            )
-        } else {
-            panic!("V0_7 safe simulation not supported")
-        }
-    }
-
+    // TODO(danc): when safe simulation for 0.7 is implemented, DRY these functions
     fn create_mempool_v0_6<P: Provider + Middleware>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
@@ -247,6 +223,31 @@ impl PoolTask {
                 ep,
                 simulator,
             )
+        }
+    }
+
+    fn create_mempool_v0_7<P: Provider + Middleware>(
+        chain_spec: ChainSpec,
+        pool_config: &PoolConfig,
+        unsafe_mode: bool,
+        event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        provider: Arc<P>,
+    ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
+        let ep = EthersEntryPointV0_7::new(pool_config.entry_point, Arc::clone(&provider));
+
+        if unsafe_mode {
+            let simulator =
+                UnsafeSimulator::new(Arc::clone(&provider), ep.clone(), pool_config.sim_settings);
+            Self::create_mempool(
+                chain_spec,
+                pool_config,
+                event_sender,
+                provider,
+                ep,
+                simulator,
+            )
+        } else {
+            panic!("V0_7 safe simulation not supported")
         }
     }
 

@@ -60,7 +60,6 @@ impl EntryPointRouterBuilder {
                 route.version()
             );
         }
-        tracing::info!("Adding route for v0.7 entry point {:?}", route.address());
 
         self.entry_points.push(route.address());
         self.v0_7 = Some((route.address(), Arc::new(Box::new(route))));
