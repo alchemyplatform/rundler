@@ -45,7 +45,8 @@ use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::{
     traits::HandleOpsOut, AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo,
-    ExecutionResult, L1GasProvider, Provider, SignatureAggregator, SimulationProvider,
+    EntryPointProvider, ExecutionResult, L1GasProvider, Provider, SignatureAggregator,
+    SimulationProvider,
 };
 
 const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
@@ -386,6 +387,11 @@ where
             .context("simulateHandleOps should return revert data")?;
         return Ok(self.decode_simulate_handle_ops_revert(revert_data));
     }
+}
+
+impl<P> EntryPointProvider<UserOperation> for EntryPoint<P> where
+    P: Provider + Middleware + Send + Sync + 'static
+{
 }
 
 fn get_handle_ops_call<M: Middleware>(

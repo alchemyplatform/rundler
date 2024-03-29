@@ -34,6 +34,6 @@ pub use server::{LocalBuilderBuilder, LocalBuilderHandle, RemoteBuilderClient};
 mod signer;
 
 mod task;
-pub use task::{Args as BuilderTaskArgs, BuilderTask};
+pub use task::{Args as BuilderTaskArgs, BuilderTask, EntryPointBuilderSettings};
 
 mod transaction_tracker;
