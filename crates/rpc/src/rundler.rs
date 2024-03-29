@@ -27,7 +27,7 @@ use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVa
 use crate::{
     error::rpc_err,
     eth::{EntryPointRouter, EthRpcError},
-    types::RpcUserOperation,
+    types::{FromRpc, RpcUserOperation},
 };
 
 /// Settings for the `rundler_` API
@@ -65,6 +65,7 @@ pub trait RundlerApi {
 }
 
 pub(crate) struct RundlerApi<P, PL> {
+    chain_spec: ChainSpec,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
     pool_server: PL,
@@ -84,6 +85,7 @@ where
         settings: Settings,
     ) -> Self {
         Self {
+            chain_spec: chain_spec.clone(),
             settings,
             fee_estimator: FeeEstimator::new(
                 chain_spec,
@@ -120,7 +122,7 @@ where
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> RpcResult<Option<H256>> {
-        let uo = UserOperationVariant::from(user_op);
+        let uo = UserOperationVariant::from_rpc(user_op, entry_point, self.chain_spec.id);
         let id = uo.id();
 
         if uo.pre_verification_gas() != U256::zero()

@@ -19,6 +19,7 @@ use ethers::types::{Address, U256};
 use serde::{Deserialize, Serialize};
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
+const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
 /// Chain specification for Rundler
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -30,8 +31,10 @@ pub struct ChainSpec {
     pub name: String,
     /// chain id
     pub id: u64,
-    /// entry point address
-    pub entry_point_address: Address,
+    /// entry point address for v0_6
+    pub entry_point_address_v0_6: Address,
+    /// entry point address for v0_7
+    pub entry_point_address_v0_7: Address,
     /// Overhead when preforming gas estimation to account for the deposit storage
     /// and transfer overhead.
     ///
@@ -119,7 +122,8 @@ impl Default for ChainSpec {
         Self {
             name: "Unknown".to_string(),
             id: 0,
-            entry_point_address: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
+            entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
+            entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V7_0).unwrap(),
             deposit_transfer_overhead: U256::from(30000),
             eip1559_enabled: true,
             calldata_pre_verification_gas: false,

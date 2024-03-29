@@ -16,9 +16,12 @@ use ethers::types::{Log, TransactionReceipt, H256};
 
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
 
+mod common;
+
 mod v0_6;
 pub(crate) use v0_6::UserOperationEventProviderV0_6;
 mod v0_7;
+pub(crate) use v0_7::UserOperationEventProviderV0_7;
 
 #[async_trait::async_trait]
 pub(crate) trait UserOperationEventProvider: Send + Sync + 'static {
