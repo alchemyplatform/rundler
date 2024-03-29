@@ -26,7 +26,7 @@ use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, Provider};
 use rundler_sim::{
     simulation::v0_6::{
         SimulateValidationTracerImpl as SimulateValidationTracerImplV0_6,
-        Simulator as SimulatorV0_6,
+        Simulator as SimulatorV0_6, UnsafeSimulator as UnsafeSimulatorV0_6,
     },
     MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
@@ -61,6 +61,8 @@ pub struct Args {
     pub chain_spec: ChainSpec,
     /// Full node RPC url
     pub rpc_url: String,
+    /// True if using unsafe mode
+    pub unsafe_mode: bool,
     /// Private key to use for signing transactions
     /// If not provided, AWS KMS will be used
     pub private_key: Option<String>,
@@ -157,8 +159,16 @@ where
             info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
 
             for i in 0..ep.num_bundle_builders {
-                let (spawn_guard, bundle_sender_action) = self
-                    .create_bundle_builder(
+                let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
+                    self.create_bundle_builder(
+                        i + ep.bundle_builder_index_offset,
+                        Arc::clone(&provider),
+                        ep_v0_6.clone(),
+                        self.create_unsafe_simulator_v0_6(Arc::clone(&provider), ep_v0_6.clone()),
+                    )
+                    .await?
+                } else {
+                    self.create_bundle_builder(
                         i + ep.bundle_builder_index_offset,
                         Arc::clone(&provider),
                         ep_v0_6.clone(),
@@ -168,7 +178,8 @@ where
                             ep.mempool_configs.clone(),
                         ),
                     )
-                    .await?;
+                    .await?
+                };
                 sender_handles.push(spawn_guard);
                 bundle_sender_actions.push(bundle_sender_action);
             }
@@ -383,5 +394,17 @@ where
             self.args.sim_settings,
             mempool_configs,
         )
+    }
+
+    fn create_unsafe_simulator_v0_6<C, E>(
+        &self,
+        provider: Arc<C>,
+        ep: E,
+    ) -> UnsafeSimulatorV0_6<C, E>
+    where
+        C: Provider,
+        E: EntryPointProvider<v0_6::UserOperation> + Clone,
+    {
+        UnsafeSimulatorV0_6::new(Arc::clone(&provider), ep, self.args.sim_settings)
     }
 }

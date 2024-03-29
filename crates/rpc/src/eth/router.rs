@@ -286,7 +286,7 @@ where
     ) -> anyhow::Result<bool> {
         let output = self
             .entry_point
-            .call_simulate_validation(uo.into(), max_verification_gas)
+            .call_simulate_validation(uo.into(), max_verification_gas, None)
             .await?;
 
         Ok(!output.return_info.account_sig_failed)
