@@ -294,33 +294,42 @@ pub struct UserOperationOptionalGas {
 impl UserOperationOptionalGas {
     /// Fill in the optional and dummy fields of the user operation with values
     /// that will cause the maximum possible calldata gas cost.
-    pub fn max_fill(
-        &self,
-        entry_point: Address,
-        chain_id: u64,
-        max_call_gas: U128,
-        max_verification_gas: U128,
-    ) -> UserOperation {
-        let mut uo = self.clone().into_user_operation(
+    pub fn max_fill(&self, entry_point: Address, chain_id: u64) -> UserOperation {
+        let max_4 = U128::from(u32::MAX);
+        let max_8 = U128::from(u64::MAX);
+
+        let mut builder = UserOperationBuilder::new(
             entry_point,
             chain_id,
-            max_call_gas,
-            max_verification_gas,
+            UserOperationRequiredFields {
+                sender: self.sender,
+                nonce: self.nonce,
+                call_data: self.call_data.clone(),
+                signature: vec![255_u8; self.signature.len()].into(),
+                call_gas_limit: max_4,
+                verification_gas_limit: max_4,
+                pre_verification_gas: max_4.into(),
+                max_priority_fee_per_gas: max_8,
+                max_fee_per_gas: max_8,
+            },
         );
 
-        // Modify all of the variable fields to be the maximum possible value
-        uo.call_gas_limit = U128::MAX;
-        uo.verification_gas_limit = U128::MAX;
-        uo.pre_verification_gas = U256::MAX;
-        uo.max_fee_per_gas = U128::MAX;
-        uo.max_priority_fee_per_gas = U128::MAX;
-        uo.signature = vec![255_u8; self.signature.len()].into();
-        uo.paymaster_data = vec![255_u8; self.paymaster_data.len()].into();
-        uo.paymaster_verification_gas_limit = self.paymaster.map(|_| U128::MAX).unwrap_or_default();
-        uo.paymaster_post_op_gas_limit = self.paymaster.map(|_| U128::MAX).unwrap_or_default();
-        uo.factory_data = vec![255_u8; self.factory_data.len()].into();
+        if self.paymaster.is_some() {
+            builder = builder.paymaster(
+                self.paymaster.unwrap(),
+                max_4,
+                max_4,
+                vec![255_u8; self.paymaster_data.len()].into(),
+            );
+        }
+        if self.factory.is_some() {
+            builder = builder.factory(
+                self.factory.unwrap(),
+                vec![255_u8; self.factory_data.len()].into(),
+            );
+        }
 
-        uo
+        builder.build()
     }
 
     /// Fill in the optional and dummy fields of the user operation with random values.
@@ -332,78 +341,37 @@ impl UserOperationOptionalGas {
     //
     /// Note that this will slightly overestimate the calldata gas needed as it uses
     /// the worst case scenario for the unknown gas values and paymaster_and_data.
-    pub fn random_fill(
-        &self,
-        entry_point: Address,
-        chain_id: u64,
-        max_call_gas: U128,
-        max_verification_gas: U128,
-    ) -> UserOperation {
-        let mut uo = self.clone().into_user_operation(
-            entry_point,
-            chain_id,
-            max_call_gas,
-            max_verification_gas,
-        );
-
-        // Modify all of the variable fields to be random
-        uo.call_gas_limit = U128::from_big_endian(&Self::random_bytes(4)); // 30M max
-        uo.verification_gas_limit = U128::from_big_endian(&Self::random_bytes(4)); // 30M max
-        uo.pre_verification_gas = U256::from_big_endian(&Self::random_bytes(4)); // 30M max
-        uo.max_fee_per_gas = U128::from_big_endian(&Self::random_bytes(8)); // 2^64 max
-        uo.max_priority_fee_per_gas = U128::from_big_endian(&Self::random_bytes(8)); // 2^64 max
-        uo.signature = Self::random_bytes(self.signature.len());
-        uo.paymaster_data = Self::random_bytes(self.paymaster_data.len());
-        uo.paymaster_verification_gas_limit = U128::from_big_endian(&Self::random_bytes(4));
-        uo.paymaster_post_op_gas_limit = U128::from_big_endian(&Self::random_bytes(4));
-        uo.factory_data = Self::random_bytes(self.factory_data.len());
-
-        uo
-    }
-
-    /// Convert into a full user operation.
-    /// Fill in the optional fields of the user operation with default values if unset
-    pub fn into_user_operation(
-        self,
-        entry_point: Address,
-        chain_id: u64,
-        max_call_gas: U128,
-        max_verification_gas: U128,
-    ) -> UserOperation {
-        let builder = UserOperationBuilder::new(
+    pub fn random_fill(&self, entry_point: Address, chain_id: u64) -> UserOperation {
+        let mut builder = UserOperationBuilder::new(
             entry_point,
             chain_id,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
-                call_data: self.call_data,
-                signature: self.signature,
-                // These are overwritten in gas estimation
-                call_gas_limit: self.call_gas_limit.unwrap_or(max_call_gas),
-                verification_gas_limit: self.verification_gas_limit.unwrap_or(max_verification_gas),
-                // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
-                pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
-                max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
-                max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
+                call_data: self.call_data.clone(),
+                signature: Self::random_bytes(self.signature.len()),
+                call_gas_limit: U128::from_big_endian(&Self::random_bytes(4)),
+                verification_gas_limit: U128::from_big_endian(&Self::random_bytes(4)),
+                pre_verification_gas: U256::from_big_endian(&Self::random_bytes(4)),
+                max_priority_fee_per_gas: U128::from_big_endian(&Self::random_bytes(8)),
+                max_fee_per_gas: U128::from_big_endian(&Self::random_bytes(8)),
             },
         );
-        let builder = if let Some(factory) = self.factory {
-            builder.factory(factory, self.factory_data)
-        } else {
-            builder
-        };
-        let builder = if let Some(paymaster) = self.paymaster {
-            builder.paymaster(
-                paymaster,
-                self.paymaster_verification_gas_limit
-                    .unwrap_or(max_verification_gas),
-                self.paymaster_post_op_gas_limit
-                    .unwrap_or(max_verification_gas),
-                self.paymaster_data,
+
+        if self.paymaster.is_some() {
+            builder = builder.paymaster(
+                self.paymaster.unwrap(),
+                U128::from_big_endian(&Self::random_bytes(4)),
+                U128::from_big_endian(&Self::random_bytes(4)),
+                Self::random_bytes(self.paymaster_data.len()),
             )
-        } else {
-            builder
-        };
+        }
+        if self.factory.is_some() {
+            builder = builder.factory(
+                self.factory.unwrap(),
+                Self::random_bytes(self.factory_data.len()),
+            )
+        }
 
         builder.build()
     }
