@@ -20,8 +20,10 @@ use jsonrpsee::{
     server::{middleware::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use rundler_provider::EthersEntryPointV0_6;
-use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PrecheckSettings};
+use rundler_provider::{EthersEntryPointV0_6, EthersEntryPointV0_7};
+use rundler_sim::{
+    EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
+};
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
@@ -35,7 +37,7 @@ use crate::{
     debug::{DebugApi, DebugApiServer},
     eth::{
         EntryPointRouteImpl, EntryPointRouter, EntryPointRouterBuilder, EthApi, EthApiServer,
-        EthApiSettings, UserOperationEventProviderV0_6,
+        EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
     metrics::RpcMetricsLogger,
@@ -70,6 +72,10 @@ pub struct Args {
     pub rpc_timeout: Duration,
     /// Max number of connections.
     pub max_connections: u32,
+    /// Whether to enable entry point v0.6.
+    pub entry_point_v0_6_enabled: bool,
+    /// Whether to enable entry point v0.7.
+    pub entry_point_v0_7_enabled: bool,
 }
 
 /// JSON-RPC server task.
@@ -91,18 +97,23 @@ where
         tracing::info!("Starting rpc server on {}", addr);
 
         let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
-        let ep =
-            EthersEntryPointV0_6::new(self.args.chain_spec.entry_point_address, provider.clone());
+        let ep_v0_6 = EthersEntryPointV0_6::new(
+            self.args.chain_spec.entry_point_address_v0_6,
+            provider.clone(),
+        );
+        let ep_v0_7 = EthersEntryPointV0_7::new(
+            self.args.chain_spec.entry_point_address_v0_7,
+            provider.clone(),
+        );
 
-        // create the entry point router
-        // TODO(danc) create 0.7 route, requires 0.7 estimator and 0.7 event provider
-        let router = EntryPointRouterBuilder::default()
-            .v0_6(EntryPointRouteImpl::new(
-                ep.clone(),
+        let mut router_builder = EntryPointRouterBuilder::default();
+        if self.args.entry_point_v0_6_enabled {
+            router_builder = router_builder.v0_6(EntryPointRouteImpl::new(
+                ep_v0_6.clone(),
                 GasEstimatorV0_6::new(
                     self.args.chain_spec.clone(),
                     provider.clone(),
-                    ep,
+                    ep_v0_6,
                     self.args.estimation_settings,
                     FeeEstimator::new(
                         &self.args.chain_spec,
@@ -115,14 +126,44 @@ where
                 ),
                 UserOperationEventProviderV0_6::new(
                     self.args.chain_spec.id,
-                    self.args.chain_spec.entry_point_address,
+                    self.args.chain_spec.entry_point_address_v0_6,
                     provider.clone(),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
                 ),
-            ))
-            .build();
+            ));
+        }
+
+        if self.args.entry_point_v0_7_enabled {
+            router_builder = router_builder.v0_7(EntryPointRouteImpl::new(
+                ep_v0_7.clone(),
+                GasEstimatorV0_7::new(
+                    self.args.chain_spec.clone(),
+                    ep_v0_7,
+                    self.args.estimation_settings,
+                    FeeEstimator::new(
+                        &self.args.chain_spec,
+                        Arc::clone(&provider),
+                        self.args.precheck_settings.priority_fee_mode,
+                        self.args
+                            .precheck_settings
+                            .bundle_priority_fee_overhead_percent,
+                    ),
+                ),
+                UserOperationEventProviderV0_7::new(
+                    self.args.chain_spec.id,
+                    self.args.chain_spec.entry_point_address_v0_7,
+                    provider.clone(),
+                    self.args
+                        .eth_api_settings
+                        .user_operation_event_block_distance,
+                ),
+            ));
+        }
+
+        // create the entry point router
+        let router = router_builder.build();
 
         let mut module = RpcModule::new(());
         self.attach_namespaces(provider, router, &mut module)?;

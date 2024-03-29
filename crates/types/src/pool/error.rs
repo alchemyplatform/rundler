@@ -13,7 +13,9 @@
 
 use ethers::types::{Address, U256};
 
-use crate::{Entity, EntityType, StorageSlot, ViolationOpCode};
+use crate::{
+    validation_results::ValidationRevert, Entity, EntityType, StorageSlot, ViolationOpCode,
+};
 
 /// Pool server error type
 #[derive(Debug, thiserror::Error)]
@@ -188,6 +190,9 @@ pub enum SimulationViolation {
     /// Simulation reverted with an unintended reason
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(EntityType, Option<Address>),
+    /// Validation revert (only used for unsafe sim)
+    #[display("validation revert: {0}")]
+    ValidationRevert(ValidationRevert),
     /// Simulation did not revert, a revert is always expected
     #[display("simulateValidation did not revert. Make sure your EntryPoint is valid")]
     DidNotRevert,

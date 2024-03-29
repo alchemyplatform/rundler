@@ -11,24 +11,102 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::H256;
+use ethers::{
+    abi::{AbiDecode, RawLog},
+    prelude::EthEvent,
+    types::{Address, Bytes, Log, TransactionReceipt, H256},
+};
+use rundler_types::{
+    contracts::v0_7::i_entry_point::{
+        IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
+    },
+    v0_7::UserOperation,
+};
 
-use super::UserOperationEventProvider;
-use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
+use super::common::{EntryPointFilters, UserOperationEventProviderImpl};
+use crate::types::RpcUserOperationReceipt;
 
-#[derive(Debug)]
-pub(crate) struct UserOperationEventProviderV0_7;
+pub(crate) type UserOperationEventProviderV0_7<P> =
+    UserOperationEventProviderImpl<P, EntryPointFiltersV0_7>;
 
-#[async_trait::async_trait]
-impl UserOperationEventProvider for UserOperationEventProviderV0_7 {
-    async fn get_mined_by_hash(
-        &self,
-        _hash: H256,
-    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
-        unimplemented!()
+pub(crate) struct EntryPointFiltersV0_7;
+
+impl EntryPointFilters for EntryPointFiltersV0_7 {
+    type UO = UserOperation;
+    type UserOperationEventFilter = UserOperationEventFilter;
+    type UserOperationRevertReasonFilter = UserOperationRevertReasonFilter;
+
+    fn construct_receipt(
+        event: Self::UserOperationEventFilter,
+        hash: H256,
+        entry_point: Address,
+        logs: Vec<Log>,
+        tx_receipt: TransactionReceipt,
+    ) -> RpcUserOperationReceipt {
+        // get failure reason
+        let reason: String = if event.success {
+            "".to_owned()
+        } else {
+            let revert_reason_evt: Option<Self::UserOperationRevertReasonFilter> = logs
+                .iter()
+                .filter(|l| l.topics.len() > 1 && l.topics[1] == hash)
+                .map_while(|l| {
+                    Self::UserOperationRevertReasonFilter::decode_log(&RawLog {
+                        topics: l.topics.clone(),
+                        data: l.data.to_vec(),
+                    })
+                    .ok()
+                })
+                .next();
+
+            revert_reason_evt
+                .map(|r| r.revert_reason.to_string())
+                .unwrap_or_default()
+        };
+
+        RpcUserOperationReceipt {
+            user_op_hash: hash,
+            entry_point: entry_point.into(),
+            sender: event.sender.into(),
+            nonce: event.nonce,
+            paymaster: event.paymaster.into(),
+            actual_gas_cost: event.actual_gas_cost,
+            actual_gas_used: event.actual_gas_used,
+            success: event.success,
+            logs,
+            receipt: tx_receipt,
+            reason,
+        }
     }
 
-    async fn get_receipt(&self, _hash: H256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
-        unimplemented!()
+    fn get_user_operations_from_tx_data(
+        tx_data: Bytes,
+        address: Address,
+        chain_id: u64,
+    ) -> Vec<Self::UO> {
+        let entry_point_calls = match IEntryPointCalls::decode(tx_data) {
+            Ok(entry_point_calls) => entry_point_calls,
+            Err(_) => return vec![],
+        };
+
+        match entry_point_calls {
+            IEntryPointCalls::HandleOps(handle_ops_call) => handle_ops_call
+                .ops
+                .into_iter()
+                .map(|op| op.unpack(address, chain_id))
+                .collect(),
+            IEntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
+                handle_aggregated_ops_call
+                    .ops_per_aggregator
+                    .into_iter()
+                    .flat_map(|ops| {
+                        ops.user_ops
+                            .into_iter()
+                            .map(|op| op.unpack(address, chain_id))
+                    })
+                    .collect()
+            }
+            _ => vec![],
+        }
     }
 }
