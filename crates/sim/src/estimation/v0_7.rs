@@ -29,7 +29,7 @@ use crate::{gas, FeeEstimator};
 pub struct GasEstimator<P, E> {
     chain_spec: ChainSpec,
     entry_point: E,
-    settings: Settings,
+    _settings: Settings,
     fee_estimator: FeeEstimator<P>,
 }
 
@@ -87,7 +87,7 @@ where
         Self {
             chain_spec,
             entry_point,
-            settings,
+            _settings: settings,
             fee_estimator,
         }
     }
@@ -100,22 +100,10 @@ where
         Ok(gas::estimate_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
-            &op.max_fill(
-                self.entry_point.address(),
-                self.chain_spec.id,
-                self.settings.max_call_gas.into(),
-                self.settings.max_verification_gas.into(),
-            ),
-            &op.random_fill(
-                self.entry_point.address(),
-                self.chain_spec.id,
-                self.settings.max_call_gas.into(),
-                self.settings.max_verification_gas.into(),
-            ),
+            &op.max_fill(self.entry_point.address(), self.chain_spec.id),
+            &op.random_fill(self.entry_point.address(), self.chain_spec.id),
             gas_price,
         )
-        .await?
-        // TODO(danc): figure out why this is needed
-        + U256::from(5000))
+        .await?)
     }
 }
