@@ -17,8 +17,8 @@ use anyhow::Context;
 use clap::Args;
 use ethers::types::H256;
 use rundler_builder::{
-    self, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs, LocalBuilderBuilder,
-    TransactionSenderType,
+    self, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs, EntryPointBuilderSettings,
+    LocalBuilderBuilder, TransactionSenderType,
 };
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfig, PriorityFeeMode};
@@ -26,7 +26,7 @@ use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
     spawn_tasks_with_shutdown,
 };
-use rundler_types::chain::ChainSpec;
+use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
@@ -109,8 +109,8 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// Choice of what sender type to use for transaction submission.
-    /// Defaults to the value of `raw`. Other options inclue `flashbots`,
+    /// Choice of what sender type to to use for transaction submission.
+    /// Defaults to the value of `raw`. Other options include `flashbots`,
     /// `conditional` and `polygon_bloxroute`
     #[arg(
         long = "builder.sender",
@@ -191,6 +191,7 @@ impl BuilderArgs {
             .context("should have a node HTTP URL")?;
         let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
 
+        // TODO these should be scoped by entry point
         let mempool_configs = match &common.mempool_config_path {
             Some(path) => {
                 get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
@@ -199,6 +200,14 @@ impl BuilderArgs {
         };
 
         Ok(BuilderTaskArgs {
+            // TODO: support multiple entry points
+            entry_points: vec![EntryPointBuilderSettings {
+                address: chain_spec.entry_point_address,
+                version: EntryPointVersion::V0_6,
+                num_bundle_builders: common.num_builders,
+                bundle_builder_index_offset: self.builder_index_offset,
+                mempool_configs,
+            }],
             chain_spec,
             rpc_url,
             private_key: self.private_key.clone(),
@@ -217,14 +226,11 @@ impl BuilderArgs {
             sender_type: self.sender_type,
             eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             sim_settings: common.into(),
-            mempool_configs,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
             remote_address,
             bloxroute_auth_header: self.bloxroute_auth_header.clone(),
-            num_bundle_builders: common.num_builders,
-            bundle_builder_index_offset: self.builder_index_offset,
         })
     }
 }
