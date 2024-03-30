@@ -29,8 +29,8 @@ use crate::{
 #[derive(Default)]
 pub(crate) struct EntryPointRouterBuilder {
     entry_points: Vec<Address>,
-    v0_6: Option<(Address, Arc<Box<dyn EntryPointRoute>>)>,
-    v0_7: Option<(Address, Arc<Box<dyn EntryPointRoute>>)>,
+    v0_6: Option<(Address, Arc<dyn EntryPointRoute>)>,
+    v0_7: Option<(Address, Arc<dyn EntryPointRoute>)>,
 }
 
 impl EntryPointRouterBuilder {
@@ -46,7 +46,7 @@ impl EntryPointRouterBuilder {
         }
 
         self.entry_points.push(route.address());
-        self.v0_6 = Some((route.address(), Arc::new(Box::new(route))));
+        self.v0_6 = Some((route.address(), Arc::new(route)));
         self
     }
 
@@ -62,7 +62,7 @@ impl EntryPointRouterBuilder {
         }
 
         self.entry_points.push(route.address());
-        self.v0_7 = Some((route.address(), Arc::new(Box::new(route))));
+        self.v0_7 = Some((route.address(), Arc::new(route)));
         self
     }
 
@@ -78,8 +78,8 @@ impl EntryPointRouterBuilder {
 #[derive(Clone)]
 pub(crate) struct EntryPointRouter {
     entry_points: Vec<Address>,
-    v0_6: Option<(Address, Arc<Box<dyn EntryPointRoute>>)>,
-    v0_7: Option<(Address, Arc<Box<dyn EntryPointRoute>>)>,
+    v0_6: Option<(Address, Arc<dyn EntryPointRoute>)>,
+    v0_7: Option<(Address, Arc<dyn EntryPointRoute>)>,
 }
 
 impl EntryPointRouter {
@@ -91,7 +91,7 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         uo: &UserOperationVariant,
-    ) -> EthResult<&Arc<Box<dyn EntryPointRoute>>> {
+    ) -> EthResult<&Arc<dyn EntryPointRoute>> {
         match self.get_ep_version(entry_point)? {
             EntryPointVersion::V0_6 => {
                 if !matches!(uo, UserOperationVariant::V0_6(_)) {
@@ -199,7 +199,7 @@ impl EntryPointRouter {
         )))
     }
 
-    fn get_route(&self, entry_point: &Address) -> EthResult<&Arc<Box<dyn EntryPointRoute>>> {
+    fn get_route(&self, entry_point: &Address) -> EthResult<&Arc<dyn EntryPointRoute>> {
         let ep = self.get_ep_version(entry_point)?;
 
         match ep {

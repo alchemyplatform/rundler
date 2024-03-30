@@ -188,7 +188,7 @@ impl PoolTask {
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
-    ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
+    ) -> anyhow::Result<Arc<dyn Mempool>> {
         let ep = EthersEntryPointV0_6::new(pool_config.entry_point, Arc::clone(&provider));
 
         if unsafe_mode {
@@ -229,7 +229,7 @@ impl PoolTask {
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
-    ) -> anyhow::Result<Arc<Box<dyn Mempool>>> {
+    ) -> anyhow::Result<Arc<dyn Mempool>> {
         let ep = EthersEntryPointV0_7::new(pool_config.entry_point, Arc::clone(&provider));
 
         if unsafe_mode {
@@ -255,7 +255,7 @@ impl PoolTask {
         provider: Arc<P>,
         ep: E,
         simulator: S,
-    ) -> anyhow::Result<Arc<Box<dyn Mempool>>>
+    ) -> anyhow::Result<Arc<dyn Mempool>>
     where
         UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
         UserOperationVariant: From<UO>,
@@ -299,6 +299,6 @@ impl PoolTask {
             reputation,
         );
 
-        Ok(Arc::new(Box::new(uo_pool)))
+        Ok(Arc::new(uo_pool))
     }
 }
