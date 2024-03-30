@@ -120,10 +120,7 @@ impl Task for PoolTask {
                     mempools.insert(pool_config.entry_point, pool);
                 }
                 EntryPointVersion::Unspecified => {
-                    bail!(
-                        "Unsupported entry point version: {:?}",
-                        pool_config.entry_point_version
-                    );
+                    bail!("Unsupported entry point version");
                 }
             }
         }
