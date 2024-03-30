@@ -172,9 +172,8 @@ mod tests {
         types::{Bytes, Log, Transaction},
     };
     use mockall::predicate::eq;
-    use rundler_pool::{IntoPoolOperationVariant, MockPoolServer, PoolOperation};
-    use rundler_provider::{MockEntryPoint, MockEntryPointV0_6, MockProvider};
-    use rundler_sim::{EntityInfos, PriorityFeeMode};
+    use rundler_provider::{EntryPoint, MockEntryPointV0_6, MockProvider};
+    use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PriorityFeeMode};
     use rundler_types::{
         contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
         pool::{MockPool, PoolOperation},
@@ -319,38 +318,42 @@ mod tests {
         ep: MockEntryPointV0_6,
         pool: MockPool,
     ) -> EthApi<MockPool> {
+        let ep = Arc::new(ep);
         let provider = Arc::new(provider);
         let chain_spec = ChainSpec {
             id: 1,
             ..Default::default()
         };
-        contexts_by_entry_point
-            .insert(
-                ep.address(),
-                EntryPointContext::new(
-                    chain_spec.clone(),
-                    Arc::clone(&provider),
-                    ep,
-                    EstimationSettings {
-                        max_verification_gas: 1_000_000,
-                        max_call_gas: 1_000_000,
-                        max_simulate_handle_ops_gas: 1_000_000,
-                        verification_estimation_gas_fee: 1_000_000_000_000,
-                    },
-                    FeeEstimator::new(
-                        &chain_spec,
-                        Arc::clone(&provider),
-                        PriorityFeeMode::BaseFeePercent(0),
-                        0,
-                    ),
-                    UserOperationEventProviderV0_6::new(
-                        chain_spec.id,
-                        ep.address(),
-                        provider.clone(),
-                        None,
-                    ),
+
+        let gas_estimator = GasEstimatorV0_6::new(
+            chain_spec.clone(),
+            provider.clone(),
+            ep.clone(),
+            EstimationSettings {
+                max_verification_gas: 1_000_000,
+                max_call_gas: 1_000_000,
+                max_simulate_handle_ops_gas: 1_000_000,
+                verification_estimation_gas_fee: 1_000_000_000_000,
+            },
+            FeeEstimator::new(
+                &chain_spec,
+                Arc::clone(&provider),
+                PriorityFeeMode::BaseFeePercent(0),
+                0,
+            ),
+        );
+
+        let router = EntryPointRouterBuilder::default()
+            .v0_6(EntryPointRouteImpl::new(
+                ep.clone(),
+                gas_estimator,
+                UserOperationEventProviderV0_6::new(
+                    chain_spec.id,
+                    ep.address(),
+                    provider.clone(),
+                    None,
                 ),
-            )
+            ))
             .build();
 
         EthApi {
