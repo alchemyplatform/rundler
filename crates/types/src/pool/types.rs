@@ -20,21 +20,12 @@ use crate::{
 };
 
 /// The new head of the chain, as viewed by the pool
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct NewHead {
     /// The hash of the new head
     pub block_hash: H256,
     /// The number of the new head
     pub block_number: u64,
-}
-
-impl Default for NewHead {
-    fn default() -> NewHead {
-        NewHead {
-            block_hash: H256::zero(),
-            block_number: 0,
-        }
-    }
 }
 
 /// The reputation of an entity
