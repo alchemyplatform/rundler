@@ -257,7 +257,7 @@ pub struct FeeEstimator<P> {
     provider: Arc<P>,
     priority_fee_mode: PriorityFeeMode,
     bundle_priority_fee_overhead_percent: u64,
-    fee_oracle: Arc<Box<dyn FeeOracle>>,
+    fee_oracle: Arc<dyn FeeOracle>,
 }
 
 impl<P: Provider> FeeEstimator<P> {
@@ -333,26 +333,26 @@ impl<P: Provider> FeeEstimator<P> {
     }
 }
 
-fn get_fee_oracle<P>(chain_spec: &ChainSpec, provider: Arc<P>) -> Arc<Box<dyn FeeOracle>>
+fn get_fee_oracle<P>(chain_spec: &ChainSpec, provider: Arc<P>) -> Arc<dyn FeeOracle>
 where
     P: Provider + Debug,
 {
     if !chain_spec.eip1559_enabled {
-        return Arc::new(Box::new(ConstantOracle::new(U256::zero())));
+        return Arc::new(ConstantOracle::new(U256::zero()));
     }
 
     match chain_spec.priority_fee_oracle_type {
-        chain::PriorityFeeOracleType::Provider => Arc::new(Box::new(ProviderOracle::new(
+        chain::PriorityFeeOracleType::Provider => Arc::new(ProviderOracle::new(
             provider,
             chain_spec.min_max_priority_fee_per_gas,
-        ))),
+        )),
         chain::PriorityFeeOracleType::UsageBased => {
             let config = UsageBasedFeeOracleConfig {
                 minimum_fee: chain_spec.min_max_priority_fee_per_gas,
                 maximum_fee: chain_spec.max_max_priority_fee_per_gas,
                 ..Default::default()
             };
-            Arc::new(Box::new(UsageBasedFeeOracle::new(provider, config)))
+            Arc::new(UsageBasedFeeOracle::new(provider, config))
         }
     }
 }
