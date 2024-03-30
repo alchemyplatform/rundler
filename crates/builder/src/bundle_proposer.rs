@@ -118,9 +118,9 @@ pub(crate) trait BundleProposer: Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-pub(crate) struct BundleProposerImpl<UO, S, E, P, C> {
+pub(crate) struct BundleProposerImpl<UO, S, E, P, M> {
     builder_index: u64,
-    pool: C,
+    pool: M,
     simulator: S,
     entry_point: E,
     provider: Arc<P>,
@@ -141,14 +141,14 @@ pub(crate) struct Settings {
 }
 
 #[async_trait]
-impl<UO, S, E, P, C> BundleProposer for BundleProposerImpl<UO, S, E, P, C>
+impl<UO, S, E, P, M> BundleProposer for BundleProposerImpl<UO, S, E, P, M>
 where
     UO: UserOperation + From<UserOperationVariant>,
     UserOperationVariant: AsRef<UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
     P: Provider,
-    C: Pool,
+    M: Pool,
 {
     type UO = UO;
 
@@ -247,18 +247,18 @@ where
     }
 }
 
-impl<UO, S, E, P, C> BundleProposerImpl<UO, S, E, P, C>
+impl<UO, S, E, P, M> BundleProposerImpl<UO, S, E, P, M>
 where
     UO: UserOperation + From<UserOperationVariant>,
     UserOperationVariant: AsRef<UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
     P: Provider,
-    C: Pool,
+    M: Pool,
 {
     pub(crate) fn new(
         builder_index: u64,
-        pool: C,
+        pool: M,
         simulator: S,
         entry_point: E,
         provider: Arc<P>,
