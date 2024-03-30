@@ -1009,7 +1009,7 @@ mod tests {
             has_factory: true,
             associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: EntityInfos::new(
+            entity_infos: simulation::infos_from_validation_output(
                 Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
                 Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
                 Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
@@ -1126,7 +1126,7 @@ mod tests {
             has_factory: true,
             associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: EntityInfos::new(
+            entity_infos: simulation::infos_from_validation_output(
                 Some(factory_address),
                 sender_address,
                 None,
