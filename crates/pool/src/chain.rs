@@ -449,7 +449,6 @@ impl<P: Provider> Chain<P> {
                         "Log with unknown entry point address: {:?}. Ignoring.",
                         log.address
                     );
-                    continue;
                 }
             }
         }
