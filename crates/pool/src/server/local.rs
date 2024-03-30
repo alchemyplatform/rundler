@@ -68,7 +68,7 @@ impl LocalPoolBuilder {
     /// Run the local pool server, consumes the builder
     pub fn run(
         self,
-        mempools: HashMap<Address, Arc<Box<dyn Mempool>>>,
+        mempools: HashMap<Address, Arc<dyn Mempool>>,
         chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
         shutdown_token: CancellationToken,
     ) -> JoinHandle<anyhow::Result<()>> {
@@ -93,7 +93,7 @@ pub struct LocalPoolHandle {
 struct LocalPoolServerRunner {
     req_receiver: mpsc::Receiver<ServerRequest>,
     block_sender: broadcast::Sender<NewHead>,
-    mempools: HashMap<Address, Arc<Box<dyn Mempool>>>,
+    mempools: HashMap<Address, Arc<dyn Mempool>>,
     chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
 }
 
@@ -357,7 +357,7 @@ impl LocalPoolServerRunner {
     fn new(
         req_receiver: mpsc::Receiver<ServerRequest>,
         block_sender: broadcast::Sender<NewHead>,
-        mempools: HashMap<Address, Arc<Box<dyn Mempool>>>,
+        mempools: HashMap<Address, Arc<dyn Mempool>>,
         chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
     ) -> Self {
         Self {
@@ -368,7 +368,7 @@ impl LocalPoolServerRunner {
         }
     }
 
-    fn get_pool(&self, entry_point: Address) -> PoolResult<&Arc<Box<dyn Mempool>>> {
+    fn get_pool(&self, entry_point: Address) -> PoolResult<&Arc<dyn Mempool>> {
         self.mempools
             .get(&entry_point)
             .ok_or_else(|| PoolError::MempoolError(MempoolError::UnknownEntryPoint(entry_point)))
@@ -496,7 +496,7 @@ impl LocalPoolServerRunner {
         response: oneshot::Sender<Result<ServerResponse, PoolError>>,
         f: F,
     ) where
-        F: FnOnce(Arc<Box<dyn Mempool>>, oneshot::Sender<Result<ServerResponse, PoolError>>) -> Fut,
+        F: FnOnce(Arc<dyn Mempool>, oneshot::Sender<Result<ServerResponse, PoolError>>) -> Fut,
         Fut: Future<Output = ()> + Send + 'static,
     {
         match self.get_pool(entry_point) {
@@ -546,7 +546,7 @@ impl LocalPoolServerRunner {
                         // Async methods
                         // Responses are sent in the spawned task
                         ServerRequestKind::AddOp { entry_point, op, origin } => {
-                            let fut = |mempool: Arc<Box<dyn Mempool>>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
+                            let fut = |mempool: Arc<dyn Mempool>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
                                 let resp = 'resp: {
                                     match mempool.entry_point_version() {
                                         EntryPointVersion::V0_6 => {
@@ -579,7 +579,7 @@ impl LocalPoolServerRunner {
                             continue;
                         },
                         ServerRequestKind::GetStakeStatus { entry_point, address }=> {
-                            let fut = |mempool: Arc<Box<dyn Mempool>>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
+                            let fut = |mempool: Arc<dyn Mempool>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
                                 let resp = match mempool.get_stake_status(address).await {
                                     Ok(status) => Ok(ServerResponse::GetStakeStatus { status }),
                                     Err(e) => Err(e.into()),
@@ -818,7 +818,7 @@ mod tests {
             .returning(move |_, _| Ok(hash0));
 
         let ep = Address::random();
-        let pool: Arc<Box<dyn Mempool>> = Arc::new(Box::new(mock_pool));
+        let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
         let state = setup(HashMap::from([(ep, pool)]));
 
         let hash1 = state.handle.add_op(ep, mock_op()).await.unwrap();
@@ -831,7 +831,7 @@ mod tests {
         mock_pool.expect_on_chain_update().returning(|_| ());
 
         let ep = Address::random();
-        let pool: Arc<Box<dyn Mempool>> = Arc::new(Box::new(mock_pool));
+        let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
         let state = setup(HashMap::from([(ep, pool)]));
 
         let mut sub = state.handle.subscribe_new_heads().await.unwrap();
@@ -859,7 +859,7 @@ mod tests {
         let state = setup(
             eps0.iter()
                 .map(|ep| {
-                    let pool: Arc<Box<dyn Mempool>> = Arc::new(Box::new(MockMempool::new()));
+                    let pool: Arc<dyn Mempool> = Arc::new(MockMempool::new());
                     (*ep, pool)
                 })
                 .collect(),
@@ -902,7 +902,7 @@ mod tests {
         let state = setup(
             zip(eps.iter(), pools.into_iter())
                 .map(|(ep, pool)| {
-                    let pool: Arc<Box<dyn Mempool>> = Arc::new(Box::new(pool));
+                    let pool: Arc<dyn Mempool> = Arc::new(pool);
                     (*ep, pool)
                 })
                 .collect(),
@@ -919,7 +919,7 @@ mod tests {
         _run_handle: JoinHandle<anyhow::Result<()>>,
     }
 
-    fn setup(pools: HashMap<Address, Arc<Box<dyn Mempool>>>) -> State {
+    fn setup(pools: HashMap<Address, Arc<dyn Mempool>>) -> State {
         let builder = LocalPoolBuilder::new(10, 10);
         let handle = builder.get_handle();
         let (tx, rx) = broadcast::channel(10);
