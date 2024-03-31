@@ -11,7 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::{Arc, RwLock};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
@@ -75,7 +78,7 @@ pub struct PrecheckerImpl<UO, P, E> {
     settings: Settings,
     fee_estimator: gas::FeeEstimator<P>,
     cache: RwLock<AsyncDataCache>,
-    _uo_type: std::marker::PhantomData<UO>,
+    _uo_type: PhantomData<UO>,
 }
 
 /// Precheck settings
@@ -192,7 +195,7 @@ where
             settings,
             fee_estimator,
             cache: RwLock::new(AsyncDataCache { fees: None }),
-            _uo_type: std::marker::PhantomData,
+            _uo_type: PhantomData,
         }
     }
 
