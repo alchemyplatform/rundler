@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{sync::Arc, time::Duration};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -58,7 +58,7 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-    _uo_type: std::marker::PhantomData<UO>,
+    _uo_type: PhantomData<UO>,
 }
 
 #[derive(Debug)]
@@ -275,7 +275,7 @@ where
             pool,
             settings,
             event_sender,
-            _uo_type: std::marker::PhantomData,
+            _uo_type: PhantomData,
         }
     }
 
