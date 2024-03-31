@@ -130,15 +130,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn clear_signature(&mut self);
 }
 
-/// User operation type enum
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum UserOperationType {
-    /// User operation type for EntryPoint v0.6
-    V0_6,
-    /// User operation type for EntryPoint v0.7
-    V0_7,
-}
-
 /// User operation enum
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum UserOperationVariant {
@@ -309,10 +300,10 @@ impl UserOperationVariant {
     }
 
     /// Returns the user operation type
-    pub fn uo_type(&self) -> UserOperationType {
+    pub fn uo_type(&self) -> EntryPointVersion {
         match self {
-            UserOperationVariant::V0_6(_) => UserOperationType::V0_6,
-            UserOperationVariant::V0_7(_) => UserOperationType::V0_7,
+            UserOperationVariant::V0_6(_) => EntryPointVersion::V0_6,
+            UserOperationVariant::V0_7(_) => EntryPointVersion::V0_7,
         }
     }
 }

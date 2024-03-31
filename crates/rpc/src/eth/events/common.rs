@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, marker::PhantomData, sync::Arc};
 
 use anyhow::Context;
 use ethers::{
@@ -34,7 +34,7 @@ pub(crate) struct UserOperationEventProviderImpl<P, F> {
     address: Address,
     provider: Arc<P>,
     event_block_distance: Option<u64>,
-    _f_type: std::marker::PhantomData<F>,
+    _f_type: PhantomData<F>,
 }
 
 pub(crate) trait EntryPointFilters: Send + Sync + 'static {
@@ -177,7 +177,7 @@ where
             address,
             provider,
             event_block_distance,
-            _f_type: std::marker::PhantomData,
+            _f_type: PhantomData,
         }
     }
 

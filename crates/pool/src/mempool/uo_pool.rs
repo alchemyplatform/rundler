@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use ethers::{
     types::{Address, H256, U256},
@@ -55,7 +55,7 @@ pub(crate) struct UoPool<UO: UserOperation, P: Prechecker, S: Simulator, E: Entr
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     prechecker: P,
     simulator: S,
-    _uo_type: std::marker::PhantomData<UO>,
+    _uo_type: PhantomData<UO>,
 }
 
 struct UoPoolState {
@@ -91,7 +91,7 @@ where
             prechecker,
             simulator,
             config,
-            _uo_type: std::marker::PhantomData,
+            _uo_type: PhantomData,
         }
     }
 

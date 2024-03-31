@@ -45,8 +45,8 @@ use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::{
     traits::HandleOpsOut, AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo,
-    EntryPointProvider, ExecutionResult, L1GasProvider, Provider, SignatureAggregator,
-    SimulationProvider,
+    EntryPoint as EntryPointTrait, EntryPointProvider, ExecutionResult, L1GasProvider, Provider,
+    SignatureAggregator, SimulationProvider,
 };
 
 const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
@@ -101,7 +101,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<P> crate::traits::EntryPoint for EntryPoint<P>
+impl<P> EntryPointTrait for EntryPoint<P>
 where
     P: Provider + Middleware + Send + Sync + 'static,
 {

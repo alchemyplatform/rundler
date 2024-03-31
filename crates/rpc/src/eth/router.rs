@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{fmt::Debug, sync::Arc};
+use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
 use ethers::types::{spoof, Address, H256};
 use rundler_provider::{EntryPoint, SimulationProvider};
@@ -239,7 +239,7 @@ pub(crate) struct EntryPointRouteImpl<UO, E, G, EV> {
     entry_point: E,
     gas_estimator: G,
     event_provider: EV,
-    _uo_type: std::marker::PhantomData<UO>,
+    _uo_type: PhantomData<UO>,
 }
 
 #[async_trait::async_trait]
@@ -300,7 +300,7 @@ impl<UO, E, G, EP> EntryPointRouteImpl<UO, E, G, EP> {
             entry_point,
             gas_estimator,
             event_provider,
-            _uo_type: std::marker::PhantomData,
+            _uo_type: PhantomData,
         }
     }
 }
