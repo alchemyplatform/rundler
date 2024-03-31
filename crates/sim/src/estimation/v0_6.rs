@@ -43,7 +43,10 @@ use rundler_utils::{eth, math};
 use tokio::join;
 
 use super::{GasEstimationError, Settings};
-use crate::{gas, precheck::MIN_CALL_GAS_LIMIT, simulation, utils, FeeEstimator};
+use crate::{
+    gas, precheck::MIN_CALL_GAS_LIMIT, simulation, utils, FeeEstimator,
+    GasEstimator as GasEstimatorTrait,
+};
 
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary
@@ -79,7 +82,7 @@ pub struct GasEstimator<P, E> {
 }
 
 #[async_trait::async_trait]
-impl<P, E> crate::estimation::GasEstimator for GasEstimator<P, E>
+impl<P, E> GasEstimatorTrait for GasEstimator<P, E>
 where
     P: Provider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,

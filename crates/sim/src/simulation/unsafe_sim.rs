@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use ethers::types::H256;
 use rundler_provider::{
@@ -36,7 +36,7 @@ pub struct UnsafeSimulator<UO, P, E> {
     provider: Arc<P>,
     entry_point: E,
     sim_settings: Settings,
-    _uo_type: std::marker::PhantomData<UO>,
+    _uo_type: PhantomData<UO>,
 }
 
 impl<UO, P, E> UnsafeSimulator<UO, P, E> {
@@ -46,7 +46,7 @@ impl<UO, P, E> UnsafeSimulator<UO, P, E> {
             provider,
             entry_point,
             sim_settings,
-            _uo_type: std::marker::PhantomData,
+            _uo_type: PhantomData,
         }
     }
 }
