@@ -47,9 +47,9 @@ use rundler_types::{
 use rundler_utils::eth::{self, ContractRevertError};
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPointProvider,
-    ExecutionResult, HandleOpsOut, L1GasProvider, Provider, SignatureAggregator,
-    SimulationProvider,
+    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint as EntryPointTrait,
+    EntryPointProvider, ExecutionResult, HandleOpsOut, L1GasProvider, Provider,
+    SignatureAggregator, SimulationProvider,
 };
 
 // From v0.7 EP contract
@@ -105,7 +105,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<P> crate::traits::EntryPoint for EntryPoint<P>
+impl<P> EntryPointTrait for EntryPoint<P>
 where
     P: Provider + Middleware + Send + Sync + 'static,
 {

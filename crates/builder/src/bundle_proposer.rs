@@ -14,6 +14,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     future::Future,
+    marker::PhantomData,
     mem,
     pin::Pin,
     sync::Arc,
@@ -127,7 +128,7 @@ pub(crate) struct BundleProposerImpl<UO, S, E, P, M> {
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-    _uo_type: std::marker::PhantomData<UO>,
+    _uo_type: PhantomData<UO>,
 }
 
 #[derive(Debug)]
@@ -279,7 +280,7 @@ where
             ),
             settings,
             event_sender,
-            _uo_type: std::marker::PhantomData,
+            _uo_type: PhantomData,
         }
     }
 
