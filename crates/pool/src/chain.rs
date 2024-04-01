@@ -54,6 +54,8 @@ pub(crate) struct Chain<P: Provider> {
     blocks: VecDeque<BlockSummary>,
     /// Semaphore to limit the number of concurrent `eth_getLogs` calls.
     load_ops_semaphore: Semaphore,
+    /// Filter template
+    filter_template: Filter,
 }
 
 #[derive(Default, Debug, Eq, PartialEq)]
@@ -124,11 +126,44 @@ impl<P: Provider> Chain<P> {
     pub(crate) fn new(provider: Arc<P>, settings: Settings) -> Self {
         let history_size = settings.history_size as usize;
         assert!(history_size > 0, "history size should be positive");
+
+        let mut events = vec![];
+
+        if settings
+            .entry_point_addresses
+            .values()
+            .any(|v| *v == EntryPointVersion::V0_6)
+        {
+            events.push(entry_point_v0_6::UserOperationEventFilter::abi_signature());
+            events.push(entry_point_v0_6::DepositedFilter::abi_signature());
+            events.push(entry_point_v0_6::WithdrawnFilter::abi_signature());
+        }
+        if settings
+            .entry_point_addresses
+            .values()
+            .any(|v| *v == EntryPointVersion::V0_7)
+        {
+            events.push(entry_point_v0_7::UserOperationEventFilter::abi_signature());
+            events.push(entry_point_v0_7::DepositedFilter::abi_signature());
+            events.push(entry_point_v0_7::WithdrawnFilter::abi_signature());
+        }
+
+        let filter_template = Filter::new()
+            .address(
+                settings
+                    .entry_point_addresses
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+            .events(events.iter().map(|e| e.as_ref()));
+
         Self {
             provider,
             settings,
             blocks: VecDeque::new(),
             load_ops_semaphore: Semaphore::new(MAX_LOAD_OPS_CONCURRENCY),
+            filter_template,
         }
     }
 
@@ -399,35 +434,7 @@ impl<P: Provider> Chain<P> {
             .await
             .expect("semaphore should not be closed");
 
-        // Load events for both entry point versions.
-        // v0.6
-        let uo_filter_v0_6 = entry_point_v0_6::UserOperationEventFilter::abi_signature();
-        let deposit_v0_6 = entry_point_v0_6::DepositedFilter::abi_signature();
-        let withdrawn_v0_6 = entry_point_v0_6::WithdrawnFilter::abi_signature();
-        // v0.7
-        let uo_filter_v0_7 = entry_point_v0_7::UserOperationEventFilter::abi_signature();
-        let deposit_v0_7 = entry_point_v0_7::DepositedFilter::abi_signature();
-        let withdrawn_v0_7 = entry_point_v0_7::WithdrawnFilter::abi_signature();
-
-        let events: Vec<&str> = vec![
-            &uo_filter_v0_6,
-            &deposit_v0_6,
-            &withdrawn_v0_6,
-            &uo_filter_v0_7,
-            &deposit_v0_7,
-            &withdrawn_v0_7,
-        ];
-
-        let filter = Filter::new()
-            .address(
-                self.settings
-                    .entry_point_addresses
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            )
-            .events(events)
-            .at_block_hash(block_hash);
+        let filter = self.filter_template.clone().at_block_hash(block_hash);
         let logs = self
             .provider
             .get_logs(&filter)

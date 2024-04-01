@@ -15,9 +15,9 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
-use ethers::types::{Address, H256};
+use ethers::types::Address;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
-use rundler_sim::MempoolConfig;
+use rundler_sim::MempoolConfigs;
 use rundler_task::spawn_tasks_with_shutdown;
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
@@ -173,10 +173,8 @@ impl PoolArgs {
         tracing::info!("allowlist: {:?}", allowlist);
 
         let mempool_channel_configs = match &common.mempool_config_path {
-            Some(path) => {
-                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
-            }
-            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
+            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region).await?,
+            None => MempoolConfigs::default(),
         };
         tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
 
@@ -212,10 +210,7 @@ impl PoolArgs {
                 entry_point_version: EntryPointVersion::V0_6,
                 num_shards: common.num_builders_v0_6,
                 mempool_channel_configs: mempool_channel_configs
-                    .iter()
-                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect(),
+                    .get_for_entry_point(chain_spec.entry_point_address_v0_6),
                 ..pool_config_base.clone()
             });
         }
@@ -225,10 +220,7 @@ impl PoolArgs {
                 entry_point_version: EntryPointVersion::V0_7,
                 num_shards: common.num_builders_v0_7,
                 mempool_channel_configs: mempool_channel_configs
-                    .iter()
-                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect(),
+                    .get_for_entry_point(chain_spec.entry_point_address_v0_7),
                 ..pool_config_base.clone()
             });
         }

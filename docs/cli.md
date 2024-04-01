@@ -59,12 +59,20 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - (*Only required if using other AWS features*)
 - `--eth_poll_interval_millis`: Interval at which the builder polls an RPC node for new blocks and mined transactions (default: `100`)
   - env: *ETH_POLL_INTERVAL_MILLIS*
+- `--unsafe`: Flag for unsafe bundling mode. When set Rundler will skip checking simulation rules (and any `debug_traceCall`). (default: `false`).
+  - env: *UNSAFE*
 - `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
   - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
-- `--num_builders`: The number of bundle builders to run (default: `1`)
-  - env: *NUM_BUILDERS*
+- `--entry_point_v0_6_enabled`: Enable entry point v0.6 support. (default: `true`).
+  - env: *ENTRY_POINT_V0_6_ENABLED*
+- `--num_builders_v0_6`: The number of bundle builders to run on entry point v0.6 (default: `1`)
+  - env: *NUM_BUILDERS_V0_6*
+- `--entry_point_v0_7_enabled`: Enable entry point v0.7 support. (default: `true`).
+  - env: *ENTRY_POINT_V0_7_ENABLED*
+- `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
+  - env: *NUM_BUILDERS_V0_7*
 
 ## Metrics Options
 

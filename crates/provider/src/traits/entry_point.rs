@@ -159,15 +159,10 @@ pub trait L1GasProvider: Send + Sync + 'static {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
 
-    /// Calculate the L1 portion of the gas for a user operation on Arbitrum
-    async fn calc_arbitrum_l1_gas(
-        &self,
-        entry_point_address: Address,
-        op: Self::UO,
-    ) -> anyhow::Result<U256>;
-
-    /// Calculate the L1 portion of the gas for a user operation on optimism
-    async fn calc_optimism_l1_gas(
+    /// Calculate the L1 portion of the gas for a user operation
+    ///
+    /// Returns zero for operations that do not require L1 gas
+    async fn calc_l1_gas(
         &self,
         entry_point_address: Address,
         op: Self::UO,

@@ -201,8 +201,9 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn clear_signature(&mut self) {
-        // TODO: repack and rehash
         self.signature = Bytes::new();
+        self.packed = pack_user_operation(self.clone());
+        self.hash = hash_packed_user_operation(&self.packed, self.entry_point, self.chain_id);
     }
 }
 
@@ -237,6 +238,10 @@ impl From<UserOperation> for super::UserOperationVariant {
 }
 
 impl AsRef<UserOperation> for super::UserOperationVariant {
+    /// # Panics
+    ///
+    /// Panics if the variant is not v0.7. This is for use in contexts
+    /// where the variant is known to be v0.7.
     fn as_ref(&self) -> &UserOperation {
         match self {
             super::UserOperationVariant::V0_7(op) => op,
@@ -246,6 +251,10 @@ impl AsRef<UserOperation> for super::UserOperationVariant {
 }
 
 impl AsMut<UserOperation> for super::UserOperationVariant {
+    /// # Panics
+    ///
+    /// Panics if the variant is not v0.7. This is for use in contexts
+    /// where the variant is known to be v0.7.
     fn as_mut(&mut self) -> &mut UserOperation {
         match self {
             super::UserOperationVariant::V0_7(op) => op,
@@ -388,6 +397,10 @@ impl UserOperationOptionalGas {
 }
 
 impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
+    /// # Panics
+    ///
+    /// Panics if the variant is not v0.7. This is for use in contexts
+    /// where the variant is known to be v0.7.
     fn from(op: super::UserOperationOptionalGas) -> Self {
         match op {
             super::UserOperationOptionalGas::V0_7(op) => op,
