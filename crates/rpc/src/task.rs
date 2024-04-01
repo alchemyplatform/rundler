@@ -23,6 +23,7 @@ use jsonrpsee::{
 use rundler_provider::{EthersEntryPointV0_6, EthersEntryPointV0_7};
 use rundler_sim::{
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
+    VerificationGasEstimatorImpl,
 };
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
@@ -117,7 +118,7 @@ where
                 GasEstimatorV0_6::new(
                     self.args.chain_spec.clone(),
                     provider.clone(),
-                    ep_v0_6,
+                    ep_v0_6.clone(),
                     self.args.estimation_settings,
                     FeeEstimator::new(
                         &self.args.chain_spec,
@@ -126,6 +127,12 @@ where
                         self.args
                             .precheck_settings
                             .bundle_priority_fee_overhead_percent,
+                    ),
+                    VerificationGasEstimatorImpl::new(
+                        self.args.chain_spec.clone(),
+                        provider.clone(),
+                        ep_v0_6,
+                        self.args.estimation_settings,
                     ),
                 ),
                 UserOperationEventProviderV0_6::new(
@@ -144,7 +151,8 @@ where
                 ep_v0_7.clone(),
                 GasEstimatorV0_7::new(
                     self.args.chain_spec.clone(),
-                    ep_v0_7,
+                    Arc::clone(&provider),
+                    ep_v0_7.clone(),
                     self.args.estimation_settings,
                     FeeEstimator::new(
                         &self.args.chain_spec,
@@ -153,6 +161,12 @@ where
                         self.args
                             .precheck_settings
                             .bundle_priority_fee_overhead_percent,
+                    ),
+                    VerificationGasEstimatorImpl::new(
+                        self.args.chain_spec.clone(),
+                        provider.clone(),
+                        ep_v0_7,
+                        self.args.estimation_settings,
                     ),
                 ),
                 UserOperationEventProviderV0_7::new(
