@@ -11,13 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    cmp,
-    ops::{Add, Deref},
-    sync::Arc,
-};
+use std::{cmp, ops::Add, sync::Arc};
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use ethers::{
     abi::AbiDecode,
     contract::EthCall,
@@ -28,23 +24,20 @@ use rand::Rng;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
-    contracts::v0_6::{
-        call_gas_estimation_proxy::{
-            EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
-            EstimateCallGasResult, EstimateCallGasRevertAtMax,
-            CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
-        },
-        i_entry_point,
+    contracts::v0_6::call_gas_estimation_proxy::{
+        EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
+        EstimateCallGasResult, EstimateCallGasRevertAtMax,
+        CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
     },
     v0_6::{UserOperation, UserOperationOptionalGas},
-    GasEstimate, UserOperation as UserOperationTrait,
+    GasEstimate,
 };
 use rundler_utils::{eth, math};
 use tokio::join;
 
-use super::{GasEstimationError, Settings};
+use super::{GasEstimationError, Settings, VerificationGasEstimator};
 use crate::{
-    gas, precheck::MIN_CALL_GAS_LIMIT, simulation, utils, FeeEstimator,
+    estimation::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT, simulation, FeeEstimator,
     GasEstimator as GasEstimatorTrait,
 };
 
@@ -53,10 +46,6 @@ use crate::{
 /// search, e.g. a value of 1024 means ten fewer `eth_call`s needed for each of
 /// verification gas and call gas.
 const GAS_ROUNDING: u64 = 4096;
-
-/// Gas estimation will stop when the binary search bounds are within
-/// `GAS_ESTIMATION_ERROR_MARGIN` of each other.
-const GAS_ESTIMATION_ERROR_MARGIN: f64 = 0.1;
 
 /// Percentage by which to increase the verification gas limit after binary search
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
@@ -72,19 +61,21 @@ const PROXY_TARGET_OFFSET: usize = 137;
 
 /// Gas estimator implementation
 #[derive(Debug)]
-pub struct GasEstimator<P, E> {
+pub struct GasEstimator<P, E, VGE> {
     chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
+    verification_gas_estimator: VGE,
 }
 
 #[async_trait::async_trait]
-impl<P, E> GasEstimatorTrait for GasEstimator<P, E>
+impl<P, E, VGE> GasEstimatorTrait for GasEstimator<P, E, VGE>
 where
     P: Provider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    VGE: VerificationGasEstimator<UO = UserOperation>,
 {
     type UserOperationOptionalGas = UserOperationOptionalGas;
 
@@ -126,8 +117,7 @@ where
             )
         };
 
-        let verification_future =
-            self.binary_search_verification_gas(&op, block_hash, &state_override);
+        let verification_future = self.estimate_verification_gas(&op, block_hash, &state_override);
         let call_future = self.estimate_call_gas(&op, block_hash, state_override.clone());
 
         // Not try_join! because then the output is nondeterministic if both
@@ -166,10 +156,11 @@ where
     }
 }
 
-impl<P, E> GasEstimator<P, E>
+impl<P, E, VGE> GasEstimator<P, E, VGE>
 where
     P: Provider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    VGE: VerificationGasEstimator<UO = UserOperation>,
 {
     /// Create a new gas estimator
     pub fn new(
@@ -178,6 +169,7 @@ where
         entry_point: E,
         settings: Settings,
         fee_estimator: FeeEstimator<P>,
+        verification_gas_estimator: VGE,
     ) -> Self {
         Self {
             chain_spec,
@@ -185,152 +177,37 @@ where
             entry_point,
             settings,
             fee_estimator,
+            verification_gas_estimator,
         }
     }
 
-    async fn binary_search_verification_gas(
+    async fn estimate_verification_gas(
         &self,
         op: &UserOperation,
         block_hash: H256,
         state_override: &spoof::State,
     ) -> Result<U256, GasEstimationError> {
-        let timer = std::time::Instant::now();
-        let simulation_gas = U256::from(self.settings.max_simulate_handle_ops_gas);
-        let paymaster_gas_fee = U256::from(self.settings.verification_estimation_gas_fee);
-
-        // Fee logic for gas estimation:
-        //
-        // If there is no paymaster, verification estimation is always performed
-        // with zero fees. The cost of the native transfer is added to the verification gas
-        // at the end of estimation.
-        //
-        // If using a paymaster, the total cost is kept constant, and the fee is adjusted
-        // based on the gas used in the simulation. The total cost is set by a configuration
-        // setting.
-        let get_fee = |gas: U256| -> U256 {
-            if op.paymaster().is_none() {
-                U256::zero()
-            } else {
-                paymaster_gas_fee
-                    .checked_div(gas + op.pre_verification_gas)
-                    .unwrap_or(U256::MAX)
-            }
-        };
-
-        // Make one attempt at max gas, to see if success is possible.
-        // Capture the gas usage of this attempt and use as the initial guess in the binary search
-        let fee = get_fee(simulation_gas);
-        let initial_op = UserOperation {
-            verification_gas_limit: simulation_gas,
-            max_fee_per_gas: fee,
-            max_priority_fee_per_gas: fee,
-            call_gas_limit: 0.into(),
-            ..op.clone()
-        };
-        let gas_used = utils::get_gas_used(
-            self.provider.deref(),
-            self.entry_point.address(),
-            U256::zero(),
-            utils::call_data_of(
-                i_entry_point::SimulateHandleOpCall::selector(),
-                (initial_op, Address::zero(), Bytes::new()),
-            ),
-            state_override,
-        )
-        .await
-        .context("failed to run initial guess")?;
-        if gas_used.success {
-            Err(anyhow!(
-                "simulateHandleOp succeeded but should always revert, make sure the entry point contract is deployed and the address is correct"
-            ))?;
-        }
-        if let Some(message) = self
-            .entry_point
-            .decode_simulate_handle_ops_revert(gas_used.result)
-            .err()
-        {
-            return Err(GasEstimationError::RevertInValidation(message));
-        }
-
-        let run_attempt_returning_error = |gas: u64| async move {
-            let fee = get_fee(gas.into());
-            let op = UserOperation {
-                max_fee_per_gas: fee,
-                max_priority_fee_per_gas: fee,
+        fn get_op_with_limit(op: UserOperation, args: GetOpWithLimitArgs) -> UserOperation {
+            let GetOpWithLimitArgs { gas, fee } = args;
+            UserOperation {
                 verification_gas_limit: gas.into(),
-                call_gas_limit: 0.into(),
-                ..op.clone()
-            };
-            let error_message = self
-                .entry_point
-                .call_spoofed_simulate_op(
-                    op,
-                    Address::zero(),
-                    Bytes::new(),
-                    block_hash,
-                    simulation_gas,
-                    state_override,
-                )
-                .await?
-                .err();
-
-            if let Some(error_message) = error_message {
-                if error_message.contains("AA13")
-                    || error_message.contains("AA23")
-                    || error_message.contains("AA33")
-                    || error_message.contains("AA40")
-                    || error_message.contains("AA41")
-                    || error_message.contains("AA51")
-                {
-                    // This error occurs when out of gas, return false.
-                    Ok(false)
-                } else {
-                    // This is a different error, return it
-                    Err(GasEstimationError::RevertInValidation(error_message))
-                }
-            } else {
-                // This succeeded, return true
-                Ok(true)
+                max_fee_per_gas: fee.into(),
+                max_priority_fee_per_gas: fee.into(),
+                call_gas_limit: U256::zero(),
+                ..op
             }
-        };
-
-        let mut max_failure_gas = 1;
-        let mut min_success_gas = self.settings.max_verification_gas;
-
-        if gas_used.gas_used.cmp(&U256::from(u64::MAX)).is_gt() {
-            return Err(GasEstimationError::RevertInValidation(
-                "gas_used cannot be larger than a u64 integer".to_string(),
-            ));
-        }
-        let mut guess = gas_used.gas_used.as_u64() * 2;
-        let mut num_rounds = 0;
-        while (min_success_gas as f64) / (max_failure_gas as f64)
-            > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
-        {
-            num_rounds += 1;
-            if run_attempt_returning_error(guess).await? {
-                min_success_gas = guess;
-            } else {
-                max_failure_gas = guess;
-            }
-            guess = (max_failure_gas + min_success_gas) / 2;
         }
 
-        tracing::debug!(
-            "binary search for verification gas took {num_rounds} rounds, {}ms",
-            timer.elapsed().as_millis()
-        );
-
-        let mut min_success_gas = U256::from(min_success_gas);
-
-        // If not using a paymaster, always add the cost of a native transfer to the verification gas.
-        // This may cause an over estimation when the account does have enough deposit to pay for the
-        // max cost, but it is better to overestimate than underestimate.
-        if op.paymaster_and_data.is_empty() {
-            min_success_gas = min_success_gas.add(self.chain_spec.deposit_transfer_overhead);
-        }
-
-        Ok(min_success_gas)
+        self.verification_gas_estimator
+            .estimate_verification_gas(
+                op,
+                block_hash,
+                state_override,
+                self.settings.max_verification_gas.into(),
+                get_op_with_limit,
+            )
+            .await
+            .map(|gas_u128| gas_u128.into())
     }
 
     async fn estimate_call_gas(
@@ -372,7 +249,7 @@ where
         let mut is_continuation = false;
         let mut num_rounds = U256::zero();
         loop {
-            let target_call_data = utils::call_data_of(
+            let target_call_data = eth::call_data_of(
                 EstimateCallGasCall::selector(),
                 (EstimateCallGasArgs {
                     sender: op.sender,
@@ -472,10 +349,10 @@ mod tests {
         types::U64,
         utils::hex,
     };
-    use rundler_provider::{ExecutionResult, MockEntryPointV0_6, MockProvider};
+    use rundler_provider::{ExecutionResult, MockEntryPointV0_6, MockProvider, SimulateOpCallData};
     use rundler_types::{
         chain::L1GasOracleContractType,
-        contracts::utils::get_gas_used::GasUsedResult,
+        contracts::{utils::get_gas_used::GasUsedResult, v0_6::i_entry_point},
         v0_6::{UserOperation, UserOperationOptionalGas},
         UserOperation as UserOperationTrait,
     };
@@ -484,6 +361,7 @@ mod tests {
     use crate::{
         estimation::GasEstimator as GasEstimatorTrait,
         simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER, PriorityFeeMode,
+        VerificationGasEstimatorImpl,
     };
 
     // Gas overhead defaults
@@ -495,9 +373,31 @@ mod tests {
     /// Must match the constant in `CallGasEstimationProxy.sol`.
     const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
 
+    // Alises for complex types (which also satisfy Clippy)
+    type VerificationGasEstimatorWithMocks =
+        VerificationGasEstimatorImpl<MockProvider, Arc<MockEntryPointV0_6>>;
+    type GasEstimatorWithMocks =
+        GasEstimator<MockProvider, Arc<MockEntryPointV0_6>, VerificationGasEstimatorWithMocks>;
+
     fn create_base_config() -> (MockEntryPointV0_6, MockProvider) {
-        let entry = MockEntryPointV0_6::new();
+        let mut entry = MockEntryPointV0_6::new();
         let provider = MockProvider::new();
+
+        // Fill in concrete implementations of call data and
+        // `simulation_should_revert`
+        entry
+            .expect_get_simulate_op_call_data()
+            .returning(|op, spoofed_state| {
+                let call_data = eth::call_data_of(
+                    i_entry_point::SimulateHandleOpCall::selector(),
+                    (op.clone(), Address::zero(), Bytes::new()),
+                );
+                SimulateOpCallData {
+                    call_data,
+                    spoofed_state: spoofed_state.clone(),
+                }
+            });
+        entry.expect_simulation_should_revert().return_const(true);
 
         (entry, provider)
     }
@@ -511,25 +411,37 @@ mod tests {
         )
     }
 
+    fn create_custom_estimator(
+        chain_spec: ChainSpec,
+        provider: MockProvider,
+        entry: MockEntryPointV0_6,
+        settings: Settings,
+    ) -> GasEstimatorWithMocks {
+        let provider = Arc::new(provider);
+        let entry = Arc::new(entry);
+        GasEstimator::new(
+            chain_spec.clone(),
+            Arc::clone(&provider),
+            Arc::clone(&entry),
+            settings,
+            create_fee_estimator(Arc::clone(&provider)),
+            VerificationGasEstimatorImpl::new(chain_spec, provider, entry, settings),
+        )
+    }
+
     fn create_estimator(
         entry: MockEntryPointV0_6,
         provider: MockProvider,
-    ) -> (GasEstimator<MockProvider, MockEntryPointV0_6>, Settings) {
+    ) -> (GasEstimatorWithMocks, Settings) {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
+            max_paymaster_verification_gas: 10000000000,
+            max_paymaster_post_op_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
-        let provider = Arc::new(provider);
-        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
-            ChainSpec::default(),
-            provider.clone(),
-            entry,
-            settings,
-            create_fee_estimator(provider),
-        );
-
+        let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);
         (estimator, settings)
     }
 
@@ -623,6 +535,8 @@ mod tests {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
+            max_paymaster_verification_gas: 10000000000,
+            max_paymaster_post_op_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -635,12 +549,14 @@ mod tests {
             ..Default::default()
         };
         let provider = Arc::new(provider);
-        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
-            cs,
-            provider.clone(),
-            entry,
+        let entry = Arc::new(entry);
+        let estimator = GasEstimator::new(
+            cs.clone(),
+            Arc::clone(&provider),
+            Arc::clone(&entry),
             settings,
-            create_fee_estimator(provider),
+            create_fee_estimator(Arc::clone(&provider)),
+            VerificationGasEstimatorImpl::new(cs, provider, entry, settings),
         );
 
         let user_op = demo_user_op_optional_gas();
@@ -685,6 +601,8 @@ mod tests {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_call_gas: 10000000000,
+            max_paymaster_verification_gas: 10000000000,
+            max_paymaster_post_op_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -696,14 +614,7 @@ mod tests {
             l1_gas_oracle_contract_type: L1GasOracleContractType::OptimismBedrock,
             ..Default::default()
         };
-        let provider = Arc::new(provider);
-        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
-            cs,
-            provider.clone(),
-            entry,
-            settings,
-            create_fee_estimator(provider),
-        );
+        let estimator = create_custom_estimator(cs, provider, entry, settings);
 
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator
@@ -786,7 +697,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
+            .estimate_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await
             .unwrap();
 
@@ -842,7 +753,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
+            .estimate_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await
             .err();
 
@@ -899,7 +810,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
+            .estimate_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -942,7 +853,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
+            .estimate_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -984,7 +895,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
+            .estimate_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -1035,7 +946,7 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .binary_search_verification_gas(&user_op, H256::zero(), &spoof::state())
+            .estimate_verification_gas(&user_op, H256::zero(), &spoof::state())
             .await;
 
         assert!(estimation.is_err());
@@ -1320,19 +1231,13 @@ mod tests {
         let settings = Settings {
             max_verification_gas: 10,
             max_call_gas: 10,
+            max_paymaster_post_op_gas: 10,
+            max_paymaster_verification_gas: 10,
             max_simulate_handle_ops_gas: 10,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
 
-        let provider = Arc::new(provider);
-        let entry = entry;
-        let estimator: GasEstimator<MockProvider, MockEntryPointV0_6> = GasEstimator::new(
-            ChainSpec::default(),
-            provider.clone(),
-            entry,
-            settings,
-            create_fee_estimator(provider),
-        );
+        let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);
         let user_op = demo_user_op_optional_gas();
         let estimation = estimator
             .estimate_op_gas(user_op, spoof::state())

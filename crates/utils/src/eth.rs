@@ -14,11 +14,22 @@
 //! Utilities for working with an Ethereum-like chain via Ethers.
 
 use ethers::{
-    abi::{AbiDecode, RawLog},
+    abi::{AbiDecode, AbiEncode, RawLog},
     contract::ContractError,
     providers::Middleware,
-    types::{Address, Bytes, Log},
+    types::{Address, Bytes, Log, Selector},
 };
+
+/// Creates call data from a method and its arguments. The arguments should be
+/// passed as a tuple.
+///
+/// Important: if the method takes a single argument, then this function should
+/// be passed a single-element tuple, and not just the argument by itself.
+pub fn call_data_of(selector: Selector, args: impl AbiEncode) -> Bytes {
+    let mut bytes = selector.to_vec();
+    bytes.extend(args.encode());
+    bytes.into()
+}
 
 /// Gets the revert data from a contract error if it is a revert error,
 /// otherwise returns the original error.

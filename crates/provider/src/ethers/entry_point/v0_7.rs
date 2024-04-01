@@ -16,7 +16,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::{ContractError, FunctionCall},
+    contract::{ContractError, EthCall as _, FunctionCall},
     providers::{Middleware, RawCall},
     types::{
         spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes,
@@ -28,7 +28,7 @@ use rundler_types::{
     chain::ChainSpec,
     contracts::v0_7::{
         entry_point_simulations::{
-            EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
+            self, EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
             ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
         },
         get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
@@ -47,7 +47,7 @@ use super::L1GasOracle;
 use crate::{
     AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint as EntryPointTrait,
     EntryPointProvider, ExecutionResult, HandleOpsOut, L1GasProvider, Provider,
-    SignatureAggregator, SimulationProvider,
+    SignatureAggregator, SimulateOpCallData, SimulationProvider,
 };
 
 // From v0.7 EP contract
@@ -333,18 +333,35 @@ where
         }
     }
 
+    // Always returns `Err(String)`. The v0.7 entry point does not use reverts
+    // to indicate successful simulations.
     fn decode_simulate_handle_ops_revert(
         &self,
         revert_data: Bytes,
     ) -> Result<ExecutionResult, String> {
-        if let Ok(result) = ExecutionResultV0_7::decode(&revert_data) {
-            Ok(result.into())
-        } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+        if let Ok(failed_op) = FailedOp::decode(&revert_data) {
+            Err(failed_op.reason)
+        } else if let Ok(failed_op) = FailedOpWithRevert::decode(&revert_data) {
             Err(failed_op.reason)
         } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
             Err(err.reason)
         } else {
             Err(hex::encode(&revert_data[..REVERT_REASON_MAX_LEN]))
+        }
+    }
+
+    fn get_simulate_op_call_data(
+        &self,
+        op: UserOperation,
+        spoofed_state: &spoof::State,
+    ) -> SimulateOpCallData {
+        let call_data = eth::call_data_of(
+            entry_point_simulations::SimulateHandleOpCall::selector(),
+            (op.pack(), Address::zero(), Bytes::new()),
+        );
+        SimulateOpCallData {
+            call_data,
+            spoofed_state: self.get_simulate_op_spoofed_state(spoofed_state),
         }
     }
 
@@ -359,10 +376,7 @@ where
         spoofed_state: &spoof::State,
     ) -> anyhow::Result<Result<ExecutionResult, String>> {
         let addr = self.i_entry_point.address();
-        let mut spoof_ep = spoofed_state.clone();
-        spoof_ep
-            .account(addr)
-            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
+        let spoofed_state = &self.get_simulate_op_spoofed_state(spoofed_state);
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
 
         let contract_error = ep_simulations
@@ -371,12 +385,33 @@ where
             .gas(gas)
             .call_raw()
             .state(spoofed_state)
-            .await
-            .err()
-            .context("simulateHandleOp succeeded, but should always revert")?;
-        let revert_data = eth::get_revert_bytes(contract_error)
-            .context("simulateHandleOps should return revert data")?;
-        return Ok(self.decode_simulate_handle_ops_revert(revert_data));
+            .await;
+        Ok(match contract_error {
+            Ok(execution_result) => Ok(execution_result.into()),
+            Err(contract_error) => {
+                let revert_data = eth::get_revert_bytes(contract_error)
+                    .context("simulateHandleOps should return revert data")?;
+                self.decode_simulate_handle_ops_revert(revert_data)
+            }
+        })
+    }
+
+    fn simulation_should_revert(&self) -> bool {
+        false
+    }
+}
+
+// Private helper functions for `SimulationProvider`.
+impl<P> EntryPoint<P>
+where
+    P: Provider + Middleware + Send + Sync + 'static,
+{
+    fn get_simulate_op_spoofed_state(&self, base_state: &spoof::State) -> spoof::State {
+        let mut spoof_ep = base_state.clone();
+        spoof_ep
+            .account(self.address())
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
+        spoof_ep
     }
 }
 

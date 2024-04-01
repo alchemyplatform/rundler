@@ -173,7 +173,7 @@ mod tests {
     };
     use mockall::predicate::eq;
     use rundler_provider::{EntryPoint, MockEntryPointV0_6, MockProvider};
-    use rundler_sim::{EstimationSettings, FeeEstimator, GasEstimatorV0_6, PriorityFeeMode};
+    use rundler_sim::MockGasEstimator;
     use rundler_types::{
         contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
         pool::{MockPool, PoolOperation},
@@ -217,7 +217,7 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().returning(move || ep);
 
-        let api = create_api(provider, entry_point, pool);
+        let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
@@ -276,7 +276,7 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().returning(move || ep);
 
-        let api = create_api(provider, entry_point, pool);
+        let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
@@ -307,7 +307,7 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().returning(move || ep);
 
-        let api = create_api(provider, entry_point, pool);
+        let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         assert_eq!(res, None);
     }
@@ -316,6 +316,7 @@ mod tests {
         provider: MockProvider,
         ep: MockEntryPointV0_6,
         pool: MockPool,
+        gas_estimator: MockGasEstimator,
     ) -> EthApi<MockPool> {
         let ep = Arc::new(ep);
         let provider = Arc::new(provider);
@@ -323,24 +324,6 @@ mod tests {
             id: 1,
             ..Default::default()
         };
-
-        let gas_estimator = GasEstimatorV0_6::new(
-            chain_spec.clone(),
-            provider.clone(),
-            ep.clone(),
-            EstimationSettings {
-                max_verification_gas: 1_000_000,
-                max_call_gas: 1_000_000,
-                max_simulate_handle_ops_gas: 1_000_000,
-                verification_estimation_gas_fee: 1_000_000_000_000,
-            },
-            FeeEstimator::new(
-                &chain_spec,
-                Arc::clone(&provider),
-                PriorityFeeMode::BaseFeePercent(0),
-                0,
-            ),
-        );
 
         let router = EntryPointRouterBuilder::default()
             .v0_6(EntryPointRouteImpl::new(
