@@ -319,6 +319,8 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
         Ok(Self {
             max_verification_gas: value.max_verification_gas,
             max_call_gas,
+            max_paymaster_verification_gas: value.max_verification_gas,
+            max_paymaster_post_op_gas: max_call_gas,
             max_simulate_handle_ops_gas: value.max_simulate_handle_ops_gas,
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
         })

@@ -12,26 +12,12 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use anyhow::Context;
-use ethers::{
-    abi::AbiEncode,
-    types::{spoof, Address, BlockId, Bytes, Selector, H256, U256},
-};
+use ethers::types::{spoof, Address, BlockId, Bytes, H256, U256};
 use rundler_provider::Provider;
 use rundler_types::contracts::utils::{
     get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
     get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
 };
-
-/// Creates call data from a method and its arguments. The arguments should be
-/// passed as a tuple.
-///
-/// Important: if the method takes a single argument, then this function should
-/// be passed a single-element tuple, and not just the argument by itself.
-pub(crate) fn call_data_of(selector: Selector, args: impl AbiEncode) -> Bytes {
-    let mut bytes = selector.to_vec();
-    bytes.extend(args.encode());
-    bytes.into()
-}
 
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.

@@ -170,6 +170,18 @@ pub trait L1GasProvider: Send + Sync + 'static {
     ) -> anyhow::Result<U256>;
 }
 
+/// Call data along with necessary state overrides for calling the entry
+/// point's `simulateHandleOp` function.
+#[derive(Debug)]
+pub struct SimulateOpCallData {
+    /// Call data representing a call to `simulateHandleOp`
+    pub call_data: Bytes,
+    /// Required state override. Necessary with the v0.7 entry point, where the
+    /// simulation methods aren't deployed on-chain but instead must be added
+    /// via state overrides
+    pub spoofed_state: spoof::State,
+}
+
 /// Trait for simulating user operations on an entry point contract
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, Arc)]
@@ -192,7 +204,14 @@ pub trait SimulationProvider: Send + Sync + 'static {
         block_hash: Option<H256>,
     ) -> Result<ValidationOutput, ValidationError>;
 
-    /// Call the entry point contract's `simulateHandleOps` function
+    /// Get call data and state overrides needed to call `simulateHandleOp`
+    fn get_simulate_op_call_data(
+        &self,
+        op: Self::UO,
+        spoofed_state: &spoof::State,
+    ) -> SimulateOpCallData;
+
+    /// Call the entry point contract's `simulateHandleOp` function
     /// with a spoofed state
     async fn call_spoofed_simulate_op(
         &self,
@@ -209,6 +228,10 @@ pub trait SimulationProvider: Send + Sync + 'static {
         &self,
         revert_data: Bytes,
     ) -> Result<ExecutionResult, String>;
+
+    /// Returns true if this entry point uses reverts to communicate simulation
+    /// results.
+    fn simulation_should_revert(&self) -> bool;
 }
 
 /// Trait for a provider that provides all entry point functionality

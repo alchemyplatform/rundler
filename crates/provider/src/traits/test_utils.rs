@@ -18,7 +18,7 @@ use rundler_types::{v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationError, 
 
 use crate::{
     AggregatorOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult, HandleOpsOut,
-    L1GasProvider, SignatureAggregator, SimulationProvider,
+    L1GasProvider, SignatureAggregator, SimulateOpCallData, SimulationProvider,
 };
 
 mockall::mock! {
@@ -63,6 +63,11 @@ mockall::mock! {
             max_validation_gas: u64,
             block_hash: Option<H256>
         ) -> Result<ValidationOutput, ValidationError>;
+        fn get_simulate_op_call_data(
+            &self,
+            op: v0_6::UserOperation,
+            spoofed_state: &spoof::State,
+        ) -> SimulateOpCallData;
         async fn call_spoofed_simulate_op(
             &self,
             op: v0_6::UserOperation,
@@ -76,6 +81,7 @@ mockall::mock! {
             &self,
             revert_data: Bytes,
         ) -> Result<ExecutionResult, String>;
+        fn simulation_should_revert(&self) -> bool;
     }
 
     #[async_trait::async_trait]
@@ -150,6 +156,11 @@ mockall::mock! {
             max_validation_gas: u64,
             block_hash: Option<H256>
         ) -> Result<ValidationOutput, ValidationError>;
+        fn get_simulate_op_call_data(
+            &self,
+            op: v0_7::UserOperation,
+            spoofed_state: &spoof::State,
+        ) -> SimulateOpCallData;
         async fn call_spoofed_simulate_op(
             &self,
             op: v0_7::UserOperation,
@@ -163,6 +174,7 @@ mockall::mock! {
             &self,
             revert_data: Bytes,
         ) -> Result<ExecutionResult, String>;
+        fn simulation_should_revert(&self) -> bool;
     }
 
     #[async_trait::async_trait]
