@@ -52,7 +52,8 @@ pub mod simulation;
 #[cfg(feature = "test-utils")]
 pub use simulation::MockSimulator;
 pub use simulation::{
-    MempoolConfig, Settings as SimulationSettings, SimulationError, SimulationResult, Simulator,
+    MempoolConfig, MempoolConfigs, Settings as SimulationSettings, SimulationError,
+    SimulationResult, Simulator,
 };
 
 mod types;

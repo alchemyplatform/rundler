@@ -99,10 +99,14 @@ where
         let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
         let ep_v0_6 = EthersEntryPointV0_6::new(
             self.args.chain_spec.entry_point_address_v0_6,
+            &self.args.chain_spec,
+            self.args.estimation_settings.max_simulate_handle_ops_gas,
             provider.clone(),
         );
         let ep_v0_7 = EthersEntryPointV0_7::new(
             self.args.chain_spec.entry_point_address_v0_7,
+            &self.args.chain_spec,
+            self.args.estimation_settings.max_simulate_handle_ops_gas,
             provider.clone(),
         );
 

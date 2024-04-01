@@ -39,6 +39,21 @@ impl MempoolConfig {
     }
 }
 
+/// A collection of mempool configurations keyed by their ID.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MempoolConfigs(HashMap<H256, MempoolConfig>);
+
+impl MempoolConfigs {
+    /// Get the mempool configs for a specific entry point address
+    pub fn get_for_entry_point(&self, entry_point: Address) -> HashMap<H256, MempoolConfig> {
+        self.0
+            .iter()
+            .filter(|(_, config)| config.entry_point == entry_point)
+            .map(|(id, config)| (*id, config.clone()))
+            .collect()
+    }
+}
+
 /// The entity allowed by an allowlist entry.
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum AllowEntity {
