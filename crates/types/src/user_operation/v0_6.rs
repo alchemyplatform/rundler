@@ -196,6 +196,10 @@ impl From<UserOperation> for super::UserOperationVariant {
 }
 
 impl AsRef<UserOperation> for super::UserOperationVariant {
+    /// # Panics
+    ///
+    /// Panics if the variant is not v0.6. This is for use in contexts
+    /// where the variant is known to be v0.6.
     fn as_ref(&self) -> &UserOperation {
         match self {
             super::UserOperationVariant::V0_6(op) => op,
@@ -205,6 +209,10 @@ impl AsRef<UserOperation> for super::UserOperationVariant {
 }
 
 impl AsMut<UserOperation> for super::UserOperationVariant {
+    /// # Panics
+    ///
+    /// Panics if the variant is not v0.6. This is for use in contexts
+    /// where the variant is known to be v0.6.
     fn as_mut(&mut self) -> &mut UserOperation {
         match self {
             super::UserOperationVariant::V0_6(op) => op,
@@ -322,6 +330,10 @@ impl UserOperationOptionalGas {
 }
 
 impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
+    /// # Panics
+    ///
+    /// Panics if the variant is not v0.6. This is for use in contexts
+    /// where the variant is known to be v0.6.
     fn from(op: super::UserOperationOptionalGas) -> Self {
         match op {
             super::UserOperationOptionalGas::V0_6(op) => op,
