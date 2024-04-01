@@ -28,7 +28,8 @@ const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([10_000, 0, 0, 0]);
 /// User Operation for Entry Point v0.7
 ///
 /// Offchain version, must be packed before sending onchain
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive] // Prevent instantiation except with UserOperationBuilder
 pub struct UserOperation {
     /*
      * Required fields
@@ -217,6 +218,34 @@ impl UserOperation {
     pub fn packed(&self) -> &PackedUserOperation {
         &self.packed
     }
+
+    /// Returns a builder with the same values as this user operation. Should be
+    /// used instead of mutating this user operation directly when updating
+    /// fields.
+    pub fn into_builder(self) -> UserOperationBuilder {
+        UserOperationBuilder {
+            entry_point: self.entry_point,
+            chain_id: self.chain_id,
+            required: UserOperationRequiredFields {
+                sender: self.sender,
+                nonce: self.nonce,
+                call_data: self.call_data,
+                call_gas_limit: self.call_gas_limit,
+                verification_gas_limit: self.verification_gas_limit,
+                pre_verification_gas: self.pre_verification_gas,
+                max_priority_fee_per_gas: self.max_priority_fee_per_gas,
+                max_fee_per_gas: self.max_fee_per_gas,
+                signature: self.signature,
+            },
+            factory: self.factory,
+            factory_data: self.factory_data,
+            paymaster: self.paymaster,
+            paymaster_verification_gas_limit: self.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
+            paymaster_data: self.paymaster_data,
+            packed_uo: None,
+        }
+    }
 }
 
 impl From<UserOperationVariant> for UserOperation {
@@ -389,6 +418,62 @@ impl UserOperationOptionalGas {
         builder.build()
     }
 
+    /// Convert into a builder for producing a full user operation.
+    /// Fill in the optional fields of the user operation with default values if unset
+    pub fn into_user_operation_builder(
+        self,
+        entry_point: Address,
+        chain_id: u64,
+        max_call_gas: U128,
+        max_verification_gas: U128,
+        max_paymaster_verification_gas: U128,
+        max_paymaster_post_op_gas: U128,
+    ) -> UserOperationBuilder {
+        let mut builder = UserOperationBuilder::new(
+            entry_point,
+            chain_id,
+            UserOperationRequiredFields {
+                sender: self.sender,
+                nonce: self.nonce,
+                call_data: self.call_data,
+                signature: self.signature,
+                // If unset, default these to gas limits from settings
+                // Cap their values to the gas limits from settings
+                call_gas_limit: self
+                    .call_gas_limit
+                    .unwrap_or(max_call_gas)
+                    .min(max_call_gas),
+                verification_gas_limit: self
+                    .verification_gas_limit
+                    .unwrap_or(max_verification_gas)
+                    .min(max_verification_gas),
+                pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
+                max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
+                max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
+            },
+        );
+        if let Some(factory) = self.factory {
+            builder = builder.factory(factory, self.factory_data);
+        }
+        if let Some(paymaster) = self.paymaster {
+            let paymaster_verification_gas_limit = self
+                .paymaster_verification_gas_limit
+                .unwrap_or(max_paymaster_verification_gas)
+                .min(max_paymaster_verification_gas);
+            let paymaster_post_op_gas_limit = self
+                .paymaster_post_op_gas_limit
+                .unwrap_or(max_paymaster_post_op_gas)
+                .min(max_paymaster_post_op_gas);
+            builder = builder.paymaster(
+                paymaster,
+                paymaster_verification_gas_limit,
+                paymaster_post_op_gas_limit,
+                self.paymaster_data,
+            );
+        }
+        builder
+    }
+
     fn random_bytes(len: usize) -> Bytes {
         let mut bytes = vec![0_u8; len];
         rand::thread_rng().fill_bytes(&mut bytes);
@@ -488,6 +573,51 @@ impl UserOperationBuilder {
         self.paymaster_verification_gas_limit = paymaster_verification_gas_limit;
         self.paymaster_post_op_gas_limit = paymaster_post_op_gas_limit;
         self.paymaster_data = paymaster_data;
+        self
+    }
+
+    /// Sets the pre-verification gas
+    pub fn pre_verification_gas(mut self, pre_verification_gas: U256) -> Self {
+        self.required.pre_verification_gas = pre_verification_gas;
+        self
+    }
+
+    /// Sets the verification gas limit
+    pub fn verification_gas_limit(mut self, verification_gas_limit: U128) -> Self {
+        self.required.verification_gas_limit = verification_gas_limit;
+        self
+    }
+
+    /// Sets the call gas limit
+    pub fn call_gas_limit(mut self, call_gas_limit: U128) -> Self {
+        self.required.call_gas_limit = call_gas_limit;
+        self
+    }
+
+    /// Sets the max fee per gas
+    pub fn max_fee_per_gas(mut self, max_fee_per_gas: U128) -> Self {
+        self.required.max_fee_per_gas = max_fee_per_gas;
+        self
+    }
+
+    /// Sets the max priority fee per gas
+    pub fn max_priority_fee_per_gas(mut self, max_priority_fee_per_gas: U128) -> Self {
+        self.required.max_priority_fee_per_gas = max_priority_fee_per_gas;
+        self
+    }
+
+    /// Sets the paymaster verification gas limit
+    pub fn paymaster_verification_gas_limit(
+        mut self,
+        paymaster_verification_gas_limit: U128,
+    ) -> Self {
+        self.paymaster_verification_gas_limit = paymaster_verification_gas_limit;
+        self
+    }
+
+    /// Sets the paymaster post-op gas limit
+    pub fn paymaster_post_op_gas_limit(mut self, paymaster_post_op_gas_limit: U128) -> Self {
+        self.paymaster_post_op_gas_limit = paymaster_post_op_gas_limit;
         self
     }
 

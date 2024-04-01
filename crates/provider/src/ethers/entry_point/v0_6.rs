@@ -16,7 +16,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::{ContractError, FunctionCall},
+    contract::{ContractError, EthCall as _, FunctionCall},
     providers::{spoof, Middleware, RawCall},
     types::{
         transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
@@ -30,7 +30,7 @@ use rundler_types::{
         get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
         i_aggregator::IAggregator,
         i_entry_point::{
-            DepositInfo as DepositInfoV0_6, ExecutionResult as ExecutionResultV0_6, FailedOp,
+            self, DepositInfo as DepositInfoV0_6, ExecutionResult as ExecutionResultV0_6, FailedOp,
             IEntryPoint, SignatureValidationFailed,
             UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
         },
@@ -44,7 +44,7 @@ use super::L1GasOracle;
 use crate::{
     traits::HandleOpsOut, AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo,
     EntryPoint as EntryPointTrait, EntryPointProvider, ExecutionResult, L1GasProvider, Provider,
-    SignatureAggregator, SimulationProvider,
+    SignatureAggregator, SimulateOpCallData, SimulationProvider,
 };
 
 const REVERT_REASON_MAX_LEN: usize = 2048;
@@ -341,6 +341,21 @@ where
         }
     }
 
+    fn get_simulate_op_call_data(
+        &self,
+        op: UserOperation,
+        spoofed_state: &spoof::State,
+    ) -> SimulateOpCallData {
+        let call_data = eth::call_data_of(
+            i_entry_point::SimulateHandleOpCall::selector(),
+            (op.clone(), Address::zero(), Bytes::new()),
+        );
+        SimulateOpCallData {
+            call_data,
+            spoofed_state: spoofed_state.clone(),
+        }
+    }
+
     async fn call_spoofed_simulate_op(
         &self,
         user_op: UserOperation,
@@ -363,6 +378,10 @@ where
         let revert_data = eth::get_revert_bytes(contract_error)
             .context("simulateHandleOps should return revert data")?;
         return Ok(self.decode_simulate_handle_ops_revert(revert_data));
+    }
+
+    fn simulation_should_revert(&self) -> bool {
+        true
     }
 }
 
