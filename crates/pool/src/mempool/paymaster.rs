@@ -423,7 +423,6 @@ impl PaymasterTrackerInner {
 
         *existing_user_op = UserOpFees::new(paymaster_metadata.address, max_op_cost);
 
-        // TODO handle this
         if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster_metadata.address) {
             // check to see if paymaster has changed
             if prev_paymaster.ne(&paymaster_metadata.address) {

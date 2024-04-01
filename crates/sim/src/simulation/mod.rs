@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 pub mod v0_6;
 
 mod mempool;
-pub use mempool::MempoolConfig;
+pub use mempool::{MempoolConfig, MempoolConfigs};
 
 mod unsafe_sim;
 pub use unsafe_sim::UnsafeSimulator;
@@ -238,7 +238,7 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Result<Vec<StorageRes
             if has_factory {
                 match entity.kind {
                     EntityType::Paymaster | EntityType::Aggregator => {
-                        // If its a paymaster/aggregator, then the paymaster must be staked to access associated storage
+                        // If its a paymaster/aggregator, then the entity must be staked to access associated storage
                         // during a deploy
                         restrictions.push(StorageRestriction::NeedsStake(
                             entity.kind,
