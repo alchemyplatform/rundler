@@ -61,7 +61,6 @@ const GAS_ESTIMATION_ERROR_MARGIN: f64 = 0.1;
 /// Percentage by which to increase the verification gas limit after binary search
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 /// Absolute value by which to increase the call gas limit after binary search
-/// TODO(danc): remove this in 0.7 entry point else users will get overcharged
 const CALL_GAS_BUFFER_VALUE: U256 = U256([3000, 0, 0, 0]);
 
 /// Offset at which the proxy target address appears in the proxy bytecode. Must
@@ -618,8 +617,8 @@ mod tests {
         let (mut entry, provider) = create_base_config();
         entry.expect_address().return_const(Address::zero());
         entry
-            .expect_calc_arbitrum_l1_gas()
-            .returning(|_a, _b| Ok(U256::from(1000)));
+            .expect_calc_l1_gas()
+            .returning(|_a, _b, _c| Ok(U256::from(1000)));
 
         let settings = Settings {
             max_verification_gas: 10000000000,
@@ -680,7 +679,7 @@ mod tests {
 
         entry.expect_address().return_const(Address::zero());
         entry
-            .expect_calc_optimism_l1_gas()
+            .expect_calc_l1_gas()
             .returning(|_a, _b, _c| Ok(U256::from(1000)));
 
         let settings = Settings {

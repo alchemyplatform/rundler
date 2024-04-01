@@ -418,8 +418,6 @@ mod tests {
 
     use ethers::types::Bytes;
     use rundler_provider::{MockEntryPointV0_6, MockProvider};
-    // TODO: these tests should be made generic on any UserOperation type, can use a mock
-    // First, need to fix the EntryPoint interface for DepositInfo
     use rundler_types::v0_6::UserOperation;
 
     use super::*;

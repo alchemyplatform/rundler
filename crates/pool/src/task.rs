@@ -189,7 +189,12 @@ impl PoolTask {
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
     ) -> anyhow::Result<Arc<dyn Mempool>> {
-        let ep = EthersEntryPointV0_6::new(pool_config.entry_point, Arc::clone(&provider));
+        let ep = EthersEntryPointV0_6::new(
+            pool_config.entry_point,
+            &chain_spec,
+            pool_config.sim_settings.max_simulate_handle_ops_gas,
+            Arc::clone(&provider),
+        );
 
         if unsafe_mode {
             let simulator =
@@ -230,7 +235,12 @@ impl PoolTask {
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: Arc<P>,
     ) -> anyhow::Result<Arc<dyn Mempool>> {
-        let ep = EthersEntryPointV0_7::new(pool_config.entry_point, Arc::clone(&provider));
+        let ep = EthersEntryPointV0_7::new(
+            pool_config.entry_point,
+            &chain_spec,
+            pool_config.sim_settings.max_simulate_handle_ops_gas,
+            Arc::clone(&provider),
+        );
 
         if unsafe_mode {
             let simulator =
