@@ -351,8 +351,6 @@ pub struct UserOpsPerAggregator<UO: UserOperation> {
     pub signature: Bytes,
 }
 
-// TODO(danc): move this to chain spec
-
 /// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
 #[derive(Clone, Copy, Debug)]
 pub struct GasOverheads {

@@ -11,16 +11,73 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use ethers::{
     providers::Middleware,
     types::{Address, Bytes, Eip1559TransactionRequest, U256, U64},
 };
-use rundler_types::contracts::{
-    arbitrum::node_interface::NodeInterface, optimism::gas_price_oracle::GasPriceOracle,
+use rundler_types::{
+    chain::{ChainSpec, L1GasOracleContractType},
+    contracts::{
+        arbitrum::node_interface::NodeInterface, optimism::gas_price_oracle::GasPriceOracle,
+    },
 };
 
 pub(crate) mod v0_6;
 pub(crate) mod v0_7;
+
+#[derive(Debug, Default)]
+pub(crate) enum L1GasOracle<P> {
+    ArbitrumNitro(NodeInterface<P>),
+    OptimismBedrock(GasPriceOracle<P>),
+    #[default]
+    None,
+}
+
+impl<P> L1GasOracle<P>
+where
+    P: Middleware + 'static,
+{
+    fn new(chain_spec: &ChainSpec, provider: Arc<P>) -> L1GasOracle<P> {
+        match chain_spec.l1_gas_oracle_contract_type {
+            L1GasOracleContractType::ArbitrumNitro => L1GasOracle::ArbitrumNitro(
+                NodeInterface::new(chain_spec.l1_gas_oracle_contract_address, provider),
+            ),
+            L1GasOracleContractType::OptimismBedrock => L1GasOracle::OptimismBedrock(
+                GasPriceOracle::new(chain_spec.l1_gas_oracle_contract_address, provider),
+            ),
+            L1GasOracleContractType::None => L1GasOracle::None,
+        }
+    }
+
+    async fn estimate_l1_gas(
+        &self,
+        address: Address,
+        data: Bytes,
+        gas_price: U256,
+    ) -> anyhow::Result<U256> {
+        match self {
+            L1GasOracle::ArbitrumNitro(arb_node) => {
+                estimate_arbitrum_l1_gas(arb_node, address, data).await
+            }
+            L1GasOracle::OptimismBedrock(opt_oracle) => {
+                estimate_optimism_l1_gas(opt_oracle, address, data, gas_price).await
+            }
+            L1GasOracle::None => Ok(U256::zero()),
+        }
+    }
+}
+
+impl<P> Clone for L1GasOracle<P> {
+    fn clone(&self) -> Self {
+        match self {
+            L1GasOracle::ArbitrumNitro(node) => L1GasOracle::ArbitrumNitro(node.clone()),
+            L1GasOracle::OptimismBedrock(oracle) => L1GasOracle::OptimismBedrock(oracle.clone()),
+            L1GasOracle::None => L1GasOracle::None,
+        }
+    }
+}
 
 async fn estimate_arbitrum_l1_gas<P: Middleware + 'static>(
     arb_node: &NodeInterface<P>,

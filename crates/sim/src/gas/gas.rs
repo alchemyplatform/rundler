@@ -17,7 +17,7 @@ use anyhow::Context;
 use ethers::types::U256;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider};
 use rundler_types::{
-    chain::{self, ChainSpec, L1GasOracleContractType},
+    chain::{self, ChainSpec},
     GasFees, UserOperation,
 };
 use rundler_utils::math;
@@ -55,19 +55,9 @@ pub async fn estimate_pre_verification_gas<
         return Ok(static_gas);
     }
 
-    let dynamic_gas = match chain_spec.l1_gas_oracle_contract_type {
-        L1GasOracleContractType::None => panic!("Chain spec requires calldata pre_verification_gas but no l1_gas_oracle_contract_type is set"),
-        L1GasOracleContractType::ArbitrumNitro => {
-            entry_point
-                .calc_arbitrum_l1_gas(entry_point.address(), random_op.clone())
-                .await?
-        },
-        L1GasOracleContractType::OptimismBedrock => {
-            entry_point
-                .calc_optimism_l1_gas(entry_point.address(), random_op.clone(), gas_price)
-                .await?
-        },
-    };
+    let dynamic_gas = entry_point
+        .calc_l1_gas(entry_point.address(), random_op.clone(), gas_price)
+        .await?;
 
     Ok(static_gas.saturating_add(dynamic_gas))
 }
@@ -89,21 +79,14 @@ pub async fn calc_required_pre_verification_gas<
         return Ok(static_gas);
     }
 
-    let dynamic_gas = match chain_spec.l1_gas_oracle_contract_type {
-        L1GasOracleContractType::None => panic!("Chain spec requires calldata pre_verification_gas but no l1_gas_oracle_contract_type is set"),
-        L1GasOracleContractType::ArbitrumNitro => {
-            entry_point
-                .calc_arbitrum_l1_gas(entry_point.address(), op.clone())
-                .await?
-        },
-        L1GasOracleContractType::OptimismBedrock => {
-            let gas_price = cmp::min(base_fee + op.max_priority_fee_per_gas(), op.max_fee_per_gas());
+    let gas_price = cmp::min(
+        base_fee + op.max_priority_fee_per_gas(),
+        op.max_fee_per_gas(),
+    );
 
-            entry_point
-                .calc_optimism_l1_gas(entry_point.address(), op.clone(), gas_price)
-                .await?
-        },
-    };
+    let dynamic_gas = entry_point
+        .calc_l1_gas(entry_point.address(), op.clone(), gas_price)
+        .await?;
 
     Ok(static_gas + dynamic_gas)
 }

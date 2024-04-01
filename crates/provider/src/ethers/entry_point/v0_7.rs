@@ -20,25 +20,22 @@ use ethers::{
     providers::{Middleware, RawCall},
     types::{
         spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes,
-        Eip1559TransactionRequest, H160, H256, U256,
+        Eip1559TransactionRequest, H256, U256,
     },
     utils::hex,
 };
 use rundler_types::{
-    contracts::{
-        arbitrum::node_interface::NodeInterface,
-        optimism::gas_price_oracle::GasPriceOracle,
-        v0_7::{
-            entry_point_simulations::{
-                EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
-                ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
-            },
-            get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
-            i_aggregator::IAggregator,
-            i_entry_point::{
-                DepositInfo as DepositInfoV0_7, FailedOp, FailedOpWithRevert, IEntryPoint,
-                SignatureValidationFailed, UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
-            },
+    chain::ChainSpec,
+    contracts::v0_7::{
+        entry_point_simulations::{
+            EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
+            ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
+        },
+        get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
+        i_aggregator::IAggregator,
+        i_entry_point::{
+            DepositInfo as DepositInfoV0_7, FailedOp, FailedOpWithRevert, IEntryPoint,
+            SignatureValidationFailed, UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
         },
     },
     v0_7::UserOperation,
@@ -46,6 +43,7 @@ use rundler_types::{
 };
 use rundler_utils::eth::{self, ContractRevertError};
 
+use super::L1GasOracle;
 use crate::{
     AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint as EntryPointTrait,
     EntryPointProvider, ExecutionResult, HandleOpsOut, L1GasProvider, Provider,
@@ -55,37 +53,31 @@ use crate::{
 // From v0.7 EP contract
 const REVERT_REASON_MAX_LEN: usize = 2048;
 
-// TODO(danc): These should be configurable from chain spec
-const ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS: Address = H160([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc8,
-]);
-const OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS: Address = H160([
-    0x42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x0F,
-]);
-
 /// Entry point for the v0.7 contract.
 #[derive(Debug)]
 pub struct EntryPoint<P> {
     i_entry_point: IEntryPoint<P>,
     provider: Arc<P>,
-    arb_node: NodeInterface<P>,
-    opt_gas_oracle: GasPriceOracle<P>,
+    l1_gas_oracle: L1GasOracle<P>,
+    max_aggregation_gas: u64,
 }
 
 impl<P> EntryPoint<P>
 where
-    P: Middleware,
+    P: Middleware + 'static,
 {
     /// Create a new `EntryPoint` instance for v0.7
-    pub fn new(entry_point_address: Address, provider: Arc<P>) -> Self {
+    pub fn new(
+        entry_point_address: Address,
+        chain_spec: &ChainSpec,
+        max_aggregation_gas: u64,
+        provider: Arc<P>,
+    ) -> Self {
         Self {
             i_entry_point: IEntryPoint::new(entry_point_address, Arc::clone(&provider)),
             provider: Arc::clone(&provider),
-            arb_node: NodeInterface::new(
-                ARBITRUM_NITRO_NODE_INTERFACE_ADDRESS,
-                Arc::clone(&provider),
-            ),
-            opt_gas_oracle: GasPriceOracle::new(OPTIMISM_BEDROCK_GAS_ORACLE_ADDRESS, provider),
+            l1_gas_oracle: L1GasOracle::new(chain_spec, provider),
+            max_aggregation_gas,
         }
     }
 }
@@ -98,8 +90,8 @@ where
         Self {
             i_entry_point: self.i_entry_point.clone(),
             provider: self.provider.clone(),
-            arb_node: self.arb_node.clone(),
-            opt_gas_oracle: self.opt_gas_oracle.clone(),
+            l1_gas_oracle: self.l1_gas_oracle.clone(),
+            max_aggregation_gas: self.max_aggregation_gas,
         }
     }
 }
@@ -168,8 +160,11 @@ where
         // pack the ops
         let packed_ops = ops.into_iter().map(|op| op.pack()).collect();
 
-        // TODO: Cap the gas here.
-        let result = aggregator.aggregate_signatures(packed_ops).call().await;
+        let result = aggregator
+            .aggregate_signatures(packed_ops)
+            .gas(self.max_aggregation_gas)
+            .call()
+            .await;
         match result {
             Ok(bytes) => Ok(Some(bytes)),
             Err(ContractError::Revert(_)) => Ok(None),
@@ -261,21 +256,7 @@ where
 {
     type UO = UserOperation;
 
-    async fn calc_arbitrum_l1_gas(
-        &self,
-        entry_point_address: Address,
-        user_op: UserOperation,
-    ) -> anyhow::Result<U256> {
-        let data = self
-            .i_entry_point
-            .handle_ops(vec![user_op.pack()], Address::random())
-            .calldata()
-            .context("should get calldata for entry point handle ops")?;
-
-        super::estimate_arbitrum_l1_gas(&self.arb_node, entry_point_address, data).await
-    }
-
-    async fn calc_optimism_l1_gas(
+    async fn calc_l1_gas(
         &self,
         entry_point_address: Address,
         user_op: UserOperation,
@@ -287,7 +268,8 @@ where
             .calldata()
             .context("should get calldata for entry point handle ops")?;
 
-        super::estimate_optimism_l1_gas(&self.opt_gas_oracle, entry_point_address, data, gas_price)
+        self.l1_gas_oracle
+            .estimate_l1_gas(entry_point_address, data, gas_price)
             .await
     }
 }

@@ -11,17 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{net::SocketAddr, time::Duration};
 
 use anyhow::Context;
 use clap::Args;
-use ethers::types::H256;
 use rundler_builder::{
     self, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs, EntryPointBuilderSettings,
     LocalBuilderBuilder, TransactionSenderType,
 };
 use rundler_pool::RemotePoolClient;
-use rundler_sim::{MempoolConfig, PriorityFeeMode};
+use rundler_sim::{MempoolConfigs, PriorityFeeMode};
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
     spawn_tasks_with_shutdown,
@@ -192,10 +191,8 @@ impl BuilderArgs {
         let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
 
         let mempool_configs = match &common.mempool_config_path {
-            Some(path) => {
-                get_json_config::<HashMap<H256, MempoolConfig>>(path, &common.aws_region).await?
-            }
-            None => HashMap::from([(H256::zero(), MempoolConfig::default())]),
+            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region).await?,
+            None => MempoolConfigs::default(),
         };
 
         let mut entry_points = vec![];
@@ -207,10 +204,7 @@ impl BuilderArgs {
                 num_bundle_builders: common.num_builders_v0_6,
                 bundle_builder_index_offset: self.builder_index_offset,
                 mempool_configs: mempool_configs
-                    .iter()
-                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_6)
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect(),
+                    .get_for_entry_point(chain_spec.entry_point_address_v0_6),
             });
         }
         if common.entry_point_v0_7_enabled {
@@ -220,10 +214,7 @@ impl BuilderArgs {
                 num_bundle_builders: common.num_builders_v0_7,
                 bundle_builder_index_offset: self.builder_index_offset,
                 mempool_configs: mempool_configs
-                    .iter()
-                    .filter(|(_, v)| v.entry_point() == chain_spec.entry_point_address_v0_7)
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect(),
+                    .get_for_entry_point(chain_spec.entry_point_address_v0_7),
             });
         }
 

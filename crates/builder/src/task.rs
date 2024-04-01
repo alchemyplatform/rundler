@@ -148,10 +148,14 @@ where
 
         let ep_v0_6 = EthersEntryPointV0_6::new(
             self.args.chain_spec.entry_point_address_v0_6,
+            &self.args.chain_spec,
+            self.args.sim_settings.max_simulate_handle_ops_gas,
             Arc::clone(&provider),
         );
         let ep_v0_7 = EthersEntryPointV0_7::new(
             self.args.chain_spec.entry_point_address_v0_7,
+            &self.args.chain_spec,
+            self.args.sim_settings.max_simulate_handle_ops_gas,
             Arc::clone(&provider),
         );
 
@@ -250,7 +254,6 @@ where
         Box::new(self)
     }
 
-    // TODO(danc): Can we DRY these create functions?
     async fn create_builders_v0_6<C, E>(
         &self,
         ep: &EntryPointBuilderSettings,
