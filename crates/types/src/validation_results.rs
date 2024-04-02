@@ -63,7 +63,7 @@ pub enum ValidationError {
 /// Equivalent to the generated `ValidationResult` or
 /// `ValidationResultWithAggregation` from `EntryPoint`, but with named structs
 /// instead of tuples and with a helper for deserializing.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ValidationOutput {
     /// The return info from the validation function
     pub return_info: ValidationReturnInfo,
@@ -174,7 +174,7 @@ impl From<ValidationResultV0_7> for ValidationOutput {
 }
 
 /// ValidationReturnInfo from EntryPoint contract
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ValidationReturnInfo {
     /// The amount of gas used before the op was executed (pre verification gas and validation gas)
     pub pre_op_gas: U256,
