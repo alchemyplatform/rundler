@@ -13,41 +13,60 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    marker::PhantomData,
     mem,
     ops::Deref,
     sync::Arc,
 };
 
 use async_trait::async_trait;
-use ethers::{
-    abi::AbiDecode,
-    types::{Address, BlockId, Opcode, H256},
-};
+use ethers::types::{Address, Opcode, H256, U256};
 use indexmap::IndexSet;
 use rundler_provider::{
     AggregatorOut, AggregatorSimOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
 use rundler_types::{
-    contracts::v0_6::i_entry_point::FailedOp,
     pool::{NeedsStakeInformation, SimulationViolation},
-    v0_6::UserOperation,
-    Entity, EntityInfos, EntityType, StorageSlot, UserOperation as UserOperationTrait,
-    ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
+    v0_6::UserOperation as UserOperationV0_6,
+    Entity, EntityInfo, EntityInfos, EntityType, StorageSlot, UserOperation, ValidTimeRange,
+    ValidationOutput, ValidationReturnInfo, ViolationOpCode,
 };
 
-use super::{
-    tracer::{parse_combined_tracer_str, SimulateValidationTracer, SimulationTracerOutput},
-    REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
+use super::context::{
+    self, AccessInfo, AssociatedSlotsByAddress, ValidationContext, ValidationContextProvider,
 };
 use crate::{
     simulation::{
-        self, entity_type_from_simulation_phase,
-        mempool::{match_mempools, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
-        ParseStorageAccess, Settings, StorageRestriction,
+        mempool::{self, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
+        v0_6::ValidationContextProvider as ValidationContextProviderV0_6,
+        Settings, Simulator,
     },
     types::ViolationError,
     utils, SimulationError, SimulationResult,
 };
+
+/// Create a new simulator for v0.6 entry point contracts
+pub fn new_v0_6_simulator<P, E>(
+    provider: Arc<P>,
+    entry_point: E,
+    sim_settings: Settings,
+    mempool_configs: HashMap<H256, MempoolConfig>,
+) -> impl Simulator<UO = UserOperationV0_6>
+where
+    P: Provider,
+    E: EntryPoint
+        + SignatureAggregator<UO = UserOperationV0_6>
+        + SimulationProvider<UO = UserOperationV0_6>
+        + Clone,
+{
+    SimulatorImpl::new(
+        provider.clone(),
+        entry_point.clone(),
+        ValidationContextProviderV0_6::new(provider, entry_point, sim_settings),
+        sim_settings,
+        mempool_configs,
+    )
+}
 
 /// Simulator implementation.
 ///
@@ -61,23 +80,22 @@ use crate::{
 /// If no mempools are found, the simulator will return an error containing
 /// the violations.
 #[derive(Debug)]
-pub struct Simulator<P, E, T> {
+pub struct SimulatorImpl<UO, P, E, V> {
     provider: Arc<P>,
     entry_point: E,
-    simulate_validation_tracer: T,
+    validation_context_provider: V,
     sim_settings: Settings,
     mempool_configs: HashMap<H256, MempoolConfig>,
     allow_unstaked_addresses: HashSet<Address>,
+    _uo_type: PhantomData<UO>,
 }
 
-impl<P, E, T> Simulator<P, E, T>
+impl<UO, P, E, V> SimulatorImpl<UO, P, E, V>
 where
+    UO: UserOperation,
     P: Provider,
-    E: EntryPoint
-        + SimulationProvider<UO = UserOperation>
-        + SignatureAggregator<UO = UserOperation>
-        + Clone,
-    T: SimulateValidationTracer,
+    E: EntryPoint + SignatureAggregator<UO = UO> + Clone,
+    V: ValidationContextProvider<UO = UO>,
 {
     /// Create a new simulator
     ///
@@ -87,7 +105,7 @@ where
     pub fn new(
         provider: Arc<P>,
         entry_point: E,
-        simulate_validation_tracer: T,
+        validation_context_provider: V,
         sim_settings: Settings,
         mempool_configs: HashMap<H256, MempoolConfig>,
     ) -> Self {
@@ -106,118 +124,17 @@ where
         Self {
             provider,
             entry_point,
-            simulate_validation_tracer,
+            validation_context_provider,
             sim_settings,
             mempool_configs,
             allow_unstaked_addresses,
+            _uo_type: PhantomData,
         }
-    }
-
-    // Run the tracer and transform the output.
-    // Any violations during this stage are errors.
-    async fn create_context(
-        &self,
-        op: UserOperation,
-        block_id: BlockId,
-    ) -> Result<ValidationContext, SimulationError> {
-        let factory_address = op.factory();
-        let sender_address = op.sender;
-        let paymaster_address = op.paymaster();
-        let tracer_out = self
-            .simulate_validation_tracer
-            .trace_simulate_validation(op.clone(), block_id, self.sim_settings.max_verification_gas)
-            .await?;
-        let num_phases = tracer_out.phases.len() as u32;
-        // Check if there are too many phases here, then check too few at the
-        // end. We are detecting cases where the entry point is broken. Too many
-        // phases definitely means it's broken, but too few phases could still
-        // mean the entry point is fine if one of the phases fails and it
-        // doesn't reach the end of execution.
-        if num_phases > 3 {
-            Err(SimulationError {
-                violation_error: ViolationError::Violations(vec![
-                    SimulationViolation::WrongNumberOfPhases(num_phases),
-                ]),
-                entity_infos: None,
-            })?
-        }
-        let Some(ref revert_data) = tracer_out.revert_data else {
-            Err(SimulationError {
-                violation_error: ViolationError::Violations(vec![
-                    SimulationViolation::DidNotRevert,
-                ]),
-                entity_infos: None,
-            })?
-        };
-        let last_entity_type =
-            entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
-
-        if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
-            let entity_addr = match last_entity_type {
-                EntityType::Factory => factory_address,
-                EntityType::Paymaster => paymaster_address,
-                EntityType::Account => Some(sender_address),
-                _ => None,
-            };
-            Err(SimulationError {
-                violation_error: ViolationError::Violations(vec![
-                    SimulationViolation::UnintendedRevertWithMessage(
-                        last_entity_type,
-                        failed_op.reason,
-                        entity_addr,
-                    ),
-                ]),
-                entity_infos: None,
-            })?
-        }
-        let Ok(entry_point_out) = ValidationOutput::decode_v0_6_hex(revert_data) else {
-            let entity_addr = match last_entity_type {
-                EntityType::Factory => factory_address,
-                EntityType::Paymaster => paymaster_address,
-                EntityType::Account => Some(sender_address),
-                _ => None,
-            };
-            Err(SimulationError {
-                violation_error: ViolationError::Violations(vec![
-                    SimulationViolation::UnintendedRevert(last_entity_type, entity_addr),
-                ]),
-                entity_infos: None,
-            })?
-        };
-        let entity_infos = simulation::infos_from_validation_output(
-            factory_address,
-            sender_address,
-            paymaster_address,
-            &entry_point_out,
-            self.sim_settings,
-        );
-        if num_phases < 3 {
-            Err(SimulationError {
-                violation_error: ViolationError::Violations(vec![
-                    SimulationViolation::WrongNumberOfPhases(num_phases),
-                ]),
-                entity_infos: Some(entity_infos),
-            })?
-        };
-
-        let associated_addresses = tracer_out.associated_slots_by_address.addresses();
-        let has_factory = op.factory().is_some();
-        Ok(ValidationContext {
-            op,
-            block_id,
-            entity_infos,
-            tracer_out,
-            entry_point_out,
-            associated_addresses,
-            entities_needing_stake: vec![],
-            accessed_addresses: HashSet::new(),
-            has_factory,
-        })
     }
 
     async fn validate_aggregator_signature(
         &self,
-        op: UserOperation,
+        op: UO,
         aggregator_address: Option<Address>,
         gas_cap: u64,
     ) -> anyhow::Result<AggregatorOut> {
@@ -236,10 +153,9 @@ where
     // to the list of allowlisted violations on a given mempool.
     fn gather_context_violations(
         &self,
-        context: &mut ValidationContext,
+        context: &mut ValidationContext<UO>,
     ) -> anyhow::Result<Vec<SimulationViolation>> {
         let &mut ValidationContext {
-            ref op,
             ref entity_infos,
             ref tracer_out,
             ref entry_point_out,
@@ -251,25 +167,17 @@ where
 
         let mut violations = vec![];
 
-        // v0.6 doesn't distinguish between the different types of signature failures
-        // both of these will be set to true if the signature failed.
-        if entry_point_out.return_info.account_sig_failed
-            || entry_point_out.return_info.paymaster_sig_failed
-        {
-            violations.push(SimulationViolation::InvalidSignature);
-        }
-
         let sender_address = entity_infos.sender_address();
         let mut entity_types_needing_stake = HashMap::new();
 
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
-            let kind = entity_type_from_simulation_phase(index).unwrap();
+            let kind = context::entity_type_from_simulation_phase(index).unwrap();
             let Some(entity_info) = entity_infos.get(kind) else {
                 continue;
             };
             let entity = Entity::new(kind, entity_info.address);
             for opcode in &phase.forbidden_opcodes_used {
-                let (contract, opcode) = parse_combined_tracer_str(opcode)?;
+                let (contract, opcode) = context::parse_combined_context_str(opcode)?;
 
                 // OP-080: staked entities are allowed to use BALANCE and SELFBALANCE
                 if entity_info.is_staked
@@ -296,7 +204,7 @@ where
             }
 
             for precompile in &phase.forbidden_precompiles_used {
-                let (contract, precompile) = parse_combined_tracer_str(precompile)?;
+                let (contract, precompile) = context::parse_combined_context_str(precompile)?;
                 violations.push(SimulationViolation::UsedForbiddenPrecompile(
                     entity, contract, precompile,
                 ));
@@ -315,7 +223,7 @@ where
                 let address = *addr;
                 accessed_addresses.insert(address);
 
-                let restrictions = simulation::parse_storage_accesses(ParseStorageAccess {
+                let restrictions = parse_storage_accesses(ParseStorageAccess {
                     access_info,
                     slots_by_address: &tracer_out.associated_slots_by_address,
                     address,
@@ -323,7 +231,7 @@ where
                     entrypoint: self.entry_point.address(),
                     has_factory,
                     entity: &entity,
-                })?;
+                });
 
                 for restriction in restrictions {
                     match restriction {
@@ -377,7 +285,7 @@ where
         }
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
-            if !simulation::is_staked(aggregator_info.stake_info, self.sim_settings) {
+            if !context::is_staked(aggregator_info.stake_info, self.sim_settings) {
                 violations.push(SimulationViolation::UnstakedAggregator)
             }
         }
@@ -418,22 +326,11 @@ where
             }
         }
 
-        // This is a special case to cover a bug in the 0.6 entrypoint contract where a specially
-        // crafted UO can use extra verification gas that isn't caught during simulation, but when
-        // it runs on chain causes the transaction to revert.
-        let verification_gas_used = entry_point_out
-            .return_info
-            .pre_op_gas
-            .saturating_sub(op.pre_verification_gas);
-        let verification_buffer = op
-            .total_verification_gas_limit()
-            .saturating_sub(verification_gas_used);
-        if verification_buffer < REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER {
-            violations.push(SimulationViolation::VerificationGasLimitBufferTooLow(
-                op.total_verification_gas_limit(),
-                verification_gas_used + REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
-            ));
-        }
+        // Get violations specific to the implemented entry point from the context provider
+        violations.extend(
+            self.validation_context_provider
+                .get_specific_violations(context),
+        );
 
         Ok(violations)
     }
@@ -443,8 +340,8 @@ where
     // Violations during this stage are always errors.
     async fn check_contracts(
         &self,
-        op: UserOperation,
-        context: &mut ValidationContext,
+        op: UO,
+        context: &mut ValidationContext<UO>,
         expected_code_hash: Option<H256>,
     ) -> Result<(H256, Option<AggregatorSimOut>), SimulationError> {
         let &mut ValidationContext {
@@ -498,20 +395,18 @@ where
 }
 
 #[async_trait]
-impl<P, E, T> simulation::Simulator for Simulator<P, E, T>
+impl<UO, P, E, V> Simulator for SimulatorImpl<UO, P, E, V>
 where
+    UO: UserOperation,
     P: Provider,
-    E: EntryPoint
-        + SimulationProvider<UO = UserOperation>
-        + SignatureAggregator<UO = UserOperation>
-        + Clone,
-    T: SimulateValidationTracer,
+    E: EntryPoint + SignatureAggregator<UO = UO> + Clone,
+    V: ValidationContextProvider<UO = UO>,
 {
-    type UO = UserOperation;
+    type UO = UO;
 
     async fn simulate_validation(
         &self,
-        op: UserOperation,
+        op: UO,
         block_hash: Option<H256>,
         expected_code_hash: Option<H256>,
     ) -> Result<SimulationResult, SimulationError> {
@@ -528,7 +423,11 @@ where
             }
         };
         let block_id = block_hash.into();
-        let mut context = match self.create_context(op.clone(), block_id).await {
+        let mut context = match self
+            .validation_context_provider
+            .get_context(op.clone(), block_id)
+            .await
+        {
             Ok(context) => context,
             error @ Err(_) => error?,
         };
@@ -538,7 +437,8 @@ where
         // Sort violations so that the final error message is deterministic
         overridable_violations.sort();
         // Check violations against mempool rules, find supporting mempools, error if none found
-        let mempools = match match_mempools(&self.mempool_configs, &overridable_violations) {
+        let mempools = match mempool::match_mempools(&self.mempool_configs, &overridable_violations)
+        {
             MempoolMatchResult::Matches(pools) => pools,
             MempoolMatchResult::NoMatch(i) => {
                 return Err(SimulationError {
@@ -569,7 +469,7 @@ where
             sender_info,
             ..
         } = entry_point_out;
-        let account_is_staked = simulation::is_staked(sender_info, self.sim_settings);
+        let account_is_staked = context::is_staked(sender_info, self.sim_settings);
         let ValidationReturnInfo {
             pre_op_gas,
             valid_after,
@@ -579,10 +479,7 @@ where
         } = return_info;
 
         // Conduct any stake overrides before assigning entity_infos
-        simulation::override_infos_staked(
-            &mut context.entity_infos,
-            &self.allow_unstaked_addresses,
-        );
+        override_infos_staked(&mut context.entity_infos, &self.allow_unstaked_addresses);
 
         Ok(SimulationResult {
             mempools,
@@ -603,51 +500,175 @@ where
     }
 }
 
-#[derive(Debug)]
-struct ValidationContext {
-    op: UserOperation,
-    block_id: BlockId,
-    entity_infos: EntityInfos,
-    tracer_out: SimulationTracerOutput,
-    entry_point_out: ValidationOutput,
-    entities_needing_stake: Vec<EntityType>,
-    accessed_addresses: HashSet<Address>,
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StorageRestriction {
+    /// (Entity needing stake, accessing entity type, accessed entity type, accessed address, accessed slot)
+    NeedsStake(EntityType, EntityType, Option<EntityType>, Address, U256),
+    Banned(U256),
+}
+
+#[derive(Clone, Debug)]
+struct ParseStorageAccess<'a> {
+    access_info: &'a AccessInfo,
+    slots_by_address: &'a AssociatedSlotsByAddress,
+    address: Address,
+    sender: Address,
+    entrypoint: Address,
     has_factory: bool,
-    associated_addresses: HashSet<Address>,
+    entity: &'a Entity,
+}
+
+fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Vec<StorageRestriction> {
+    let ParseStorageAccess {
+        access_info,
+        address,
+        sender,
+        entrypoint,
+        entity,
+        slots_by_address,
+        has_factory,
+        ..
+    } = args;
+
+    let mut restrictions = vec![];
+
+    // STO-010 - always allowed to access storage on the account
+    // [OP-051, OP-054] - block access to the entrypoint, except for depositTo and fallback
+    //   - this is handled at another level, so we don't need to check for it here
+    //   - at this level we can allow any entry point access through
+    if address.eq(&sender) || address.eq(&entrypoint) {
+        return restrictions;
+    }
+
+    let slots: Vec<&U256> = access_info
+        .reads
+        .keys()
+        .chain(access_info.writes.keys())
+        .collect();
+
+    for slot in slots {
+        let is_sender_associated = slots_by_address.is_associated_slot(sender, *slot);
+        // [STO-032]
+        let is_entity_associated = slots_by_address.is_associated_slot(entity.address, *slot);
+        // [STO-031]
+        let is_same_address = address.eq(&entity.address);
+        // [STO-033]
+        let is_read_permission = !access_info.writes.contains_key(slot);
+
+        // STO-021 - Associated storage on external contracts is allowed
+        if is_sender_associated && !is_same_address {
+            // STO-022 - Factory must be staked to access associated storage in a deploy
+            if has_factory {
+                match entity.kind {
+                    EntityType::Paymaster | EntityType::Aggregator => {
+                        // If its a paymaster/aggregator, then the entity must be staked to access associated storage
+                        // during a deploy
+                        restrictions.push(StorageRestriction::NeedsStake(
+                            entity.kind,
+                            entity.kind,
+                            Some(EntityType::Account),
+                            address,
+                            *slot,
+                        ));
+                    }
+                    EntityType::Account | EntityType::Factory => {
+                        restrictions.push(StorageRestriction::NeedsStake(
+                            EntityType::Factory,
+                            entity.kind,
+                            Some(EntityType::Account),
+                            address,
+                            *slot,
+                        ));
+                    }
+                }
+            }
+        } else if is_entity_associated || is_same_address {
+            restrictions.push(StorageRestriction::NeedsStake(
+                entity.kind,
+                entity.kind,
+                Some(entity.kind),
+                address,
+                *slot,
+            ));
+        } else if is_read_permission {
+            restrictions.push(StorageRestriction::NeedsStake(
+                entity.kind,
+                entity.kind,
+                None,
+                address,
+                *slot,
+            ));
+        } else {
+            restrictions.push(StorageRestriction::Banned(*slot));
+        }
+    }
+
+    restrictions
+}
+
+fn override_is_staked(ei: &mut EntityInfo, allow_unstaked_addresses: &HashSet<Address>) {
+    ei.is_staked = allow_unstaked_addresses.contains(&ei.address) || ei.is_staked;
+}
+
+fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashSet<Address>) {
+    override_is_staked(&mut eis.sender, allow_unstaked_addresses);
+
+    if let Some(mut factory) = eis.factory {
+        override_is_staked(&mut factory, allow_unstaked_addresses);
+    }
+    if let Some(mut paymaster) = eis.paymaster {
+        override_is_staked(&mut paymaster, allow_unstaked_addresses);
+    }
+    if let Some(mut aggregator) = eis.aggregator {
+        override_is_staked(&mut aggregator, allow_unstaked_addresses);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use ethers::{
-        abi::AbiEncode,
-        types::{Address, BlockNumber, Bytes, Opcode, U256, U64},
-        utils::hex,
-    };
+    use ethers::types::{Address, BlockId, BlockNumber, Bytes, Opcode, U256, U64};
     use rundler_provider::{AggregatorOut, MockEntryPointV0_6, MockProvider};
-    use rundler_types::{contracts::utils::get_code_hashes::CodeHashesResult, StakeInfo};
-
-    use super::*;
-    use crate::simulation::{
-        v0_6::tracer::{MockSimulateValidationTracer, Phase},
-        AccessInfo, Simulator as SimulatorTrait,
+    use rundler_types::{
+        contracts::utils::get_code_hashes::CodeHashesResult, v0_6::UserOperation, StakeInfo,
     };
+
+    use self::context::{Phase, TracerOutput};
+    use super::*;
+
+    mockall::mock! {
+        ValidationContextProviderV0_6 {}
+
+        #[async_trait::async_trait]
+        impl ValidationContextProvider for ValidationContextProviderV0_6 {
+            type UO = UserOperation;
+            async fn get_context(
+                &self,
+                op: UserOperationV0_6,
+                block_id: ethers::types::BlockId,
+            ) -> Result<ValidationContext<UserOperationV0_6>, ViolationError<SimulationViolation>>;
+            fn get_specific_violations(
+                &self,
+                context: &ValidationContext<UserOperationV0_6>,
+            ) -> Vec<SimulationViolation>;
+        }
+    }
 
     fn create_base_config() -> (
         MockProvider,
         MockEntryPointV0_6,
-        MockSimulateValidationTracer,
+        MockValidationContextProviderV0_6,
     ) {
         (
             MockProvider::new(),
             MockEntryPointV0_6::new(),
-            MockSimulateValidationTracer::new(),
+            MockValidationContextProviderV0_6::new(),
         )
     }
 
-    fn get_test_tracer_output() -> SimulationTracerOutput {
-        SimulationTracerOutput {
+    fn get_test_context() -> ValidationContext<UserOperation> {
+        let tracer_out = TracerOutput {
             accessed_contract_addresses: vec![
                 Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
                 Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
@@ -711,14 +732,67 @@ mod tests {
                 }
             ],
             revert_data: Some("0xe0cff05f00000000000000000000000000000000000000000000000000000000000000e00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000014eff00000000000000000000000000000000000000000000000000000b7679c50c24000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ffffffffffff00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000000".into()),
+        };
+
+        ValidationContext {
+            op: UserOperation {
+                verification_gas_limit: U256::from(2000),
+                pre_verification_gas: U256::from(1000),
+                ..Default::default()
+            },
+            has_factory: true,
+            associated_addresses: HashSet::new(),
+            block_id: BlockId::Number(BlockNumber::Latest),
+            entity_infos: context::infos_from_validation_output(
+                Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
+                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
+                &ValidationOutput {
+                    return_info: ValidationReturnInfo::from((
+                        U256::default(),
+                        U256::default(),
+                        false,
+                        0,
+                        0,
+                        Bytes::default(),
+                    )),
+                    sender_info: StakeInfo::from((U256::default(), U256::default())),
+                    factory_info: StakeInfo::from((U256::default(), U256::default())),
+                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                    aggregator_info: None,
+                },
+                Settings::default(),
+            ),
+            tracer_out,
+            entry_point_out: ValidationOutput {
+                return_info: ValidationReturnInfo::from((
+                    3000.into(),
+                    U256::default(),
+                    true,
+                    0,
+                    0,
+                    Bytes::default(),
+                )),
+                sender_info: StakeInfo::from((U256::default(), U256::default())),
+                factory_info: StakeInfo::from((U256::default(), U256::default())),
+                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                aggregator_info: None,
+            },
+            entities_needing_stake: vec![],
+            accessed_addresses: HashSet::new(),
         }
     }
 
     fn create_simulator(
         provider: MockProvider,
         entry_point: MockEntryPointV0_6,
-        simulate_validation_tracer: MockSimulateValidationTracer,
-    ) -> Simulator<MockProvider, Arc<MockEntryPointV0_6>, MockSimulateValidationTracer> {
+        context: MockValidationContextProviderV0_6,
+    ) -> SimulatorImpl<
+        UserOperation,
+        MockProvider,
+        Arc<MockEntryPointV0_6>,
+        MockValidationContextProviderV0_6,
+    > {
         let settings = Settings::default();
 
         let mut mempool_configs = HashMap::new();
@@ -726,24 +800,18 @@ mod tests {
 
         let provider = Arc::new(provider);
 
-        let simulator: Simulator<
-            MockProvider,
-            Arc<MockEntryPointV0_6>,
-            MockSimulateValidationTracer,
-        > = Simulator::new(
+        SimulatorImpl::new(
             Arc::clone(&provider),
             Arc::new(entry_point),
-            simulate_validation_tracer,
+            context,
             settings,
             mempool_configs,
-        );
-
-        simulator
+        )
     }
 
     #[tokio::test]
     async fn test_simulate_validation() {
-        let (mut provider, mut entry_point, mut tracer) = create_base_config();
+        let (mut provider, mut entry_point, mut context) = create_base_config();
 
         provider
             .expect_get_latest_block_hash_and_number()
@@ -757,9 +825,12 @@ mod tests {
                 ))
             });
 
-        tracer
-            .expect_trace_simulate_validation()
-            .returning(move |_, _, _| Ok(get_test_tracer_output()));
+        context
+            .expect_get_context()
+            .returning(move |_, _| Ok(get_test_context()));
+        context
+            .expect_get_specific_violations()
+            .return_const(vec![]);
 
         // The underlying call constructor when getting the code hash in check_contracts
         provider
@@ -792,7 +863,7 @@ mod tests {
             signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
         };
 
-        let simulator = create_simulator(provider, entry_point, tracer);
+        let simulator = create_simulator(provider, entry_point, context);
         let res = simulator
             .simulate_validation(user_operation, None, None)
             .await;
@@ -800,70 +871,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_context_two_phases_unintended_revert() {
-        let (provider, entry_point, mut tracer) = create_base_config();
-
-        tracer
-            .expect_trace_simulate_validation()
-            .returning(|_, _, _| {
-                let mut tracer_output = get_test_tracer_output();
-                tracer_output.revert_data = Some(hex::encode(
-                    FailedOp {
-                        op_index: U256::from(100),
-                        reason: "AA23 reverted (or OOG)".to_string(),
-                    }
-                    .encode(),
-                ));
-                Ok(tracer_output)
-            });
-
-        let user_operation = UserOperation {
-            sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-            nonce: U256::from(264),
-            init_code: Bytes::from_str("0x").unwrap(),
-            call_data: Bytes::from_str("0xb61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000").unwrap(),
-            call_gas_limit: U256::from(9100),
-            verification_gas_limit: U256::from(64805),
-            pre_verification_gas: U256::from(46128),
-            max_fee_per_gas: U256::from(105000100),
-            max_priority_fee_per_gas: U256::from(105000000),
-            paymaster_and_data: Bytes::from_str("0x").unwrap(),
-            signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
-        };
-
-        let simulator = create_simulator(provider, entry_point, tracer);
-        let res = simulator
-            .create_context(user_operation, BlockId::Number(BlockNumber::Latest))
-            .await;
-
-        assert!(matches!(
-            res,
-            Err(SimulationError { violation_error: ViolationError::Violations(violations), entity_infos: None}) if matches!(
-                violations.first(),
-                Some(&SimulationViolation::UnintendedRevertWithMessage(
-                    EntityType::Paymaster,
-                    ref reason,
-                    _
-                )) if reason == "AA23 reverted (or OOG)"
-            )
-        ));
-    }
-
-    #[tokio::test]
     async fn test_gather_context_violations() {
-        let (provider, mut entry_point, tracer) = create_base_config();
+        let (provider, mut entry_point, mut context_provider) = create_base_config();
         entry_point
             .expect_address()
             .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+        context_provider
+            .expect_get_specific_violations()
+            .return_const(vec![]);
 
-        let mut tracer_output = get_test_tracer_output();
+        let mut context = get_test_context();
 
         // add forbidden opcodes and precompiles
-        tracer_output.phases[1].forbidden_opcodes_used = vec![
+        context.tracer_out.phases[1].forbidden_opcodes_used = vec![
             String::from("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4:GASPRICE"),
             String::from("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4:COINBASE"),
         ];
-        tracer_output.phases[1].forbidden_precompiles_used = vec![String::from(
+        context.tracer_out.phases[1].forbidden_precompiles_used = vec![String::from(
             "0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4:0x0000000000000000000000000000000000000019",
         )];
 
@@ -878,7 +902,7 @@ mod tests {
             1,
         );
 
-        tracer_output.phases[1].storage_accesses.insert(
+        context.tracer_out.phases[1].storage_accesses.insert(
             Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6").unwrap(),
             AccessInfo {
                 reads: HashMap::new(),
@@ -886,61 +910,12 @@ mod tests {
             },
         );
 
-        let mut validation_context = ValidationContext {
-            op: UserOperation {
-                verification_gas_limit: U256::from(2000),
-                pre_verification_gas: U256::from(1000),
-                ..Default::default()
-            },
-            has_factory: true,
-            associated_addresses: HashSet::new(),
-            block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: simulation::infos_from_validation_output(
-                Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
-                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
-                &ValidationOutput {
-                    return_info: ValidationReturnInfo::from((
-                        U256::default(),
-                        U256::default(),
-                        false,
-                        0,
-                        0,
-                        Bytes::default(),
-                    )),
-                    sender_info: StakeInfo::from((U256::default(), U256::default())),
-                    factory_info: StakeInfo::from((U256::default(), U256::default())),
-                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                    aggregator_info: None,
-                },
-                Settings::default(),
-            ),
-            tracer_out: tracer_output,
-            entry_point_out: ValidationOutput {
-                return_info: ValidationReturnInfo::from((
-                    3000.into(),
-                    U256::default(),
-                    true,
-                    0,
-                    0,
-                    Bytes::default(),
-                )),
-                sender_info: StakeInfo::from((U256::default(), U256::default())),
-                factory_info: StakeInfo::from((U256::default(), U256::default())),
-                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                aggregator_info: None,
-            },
-            entities_needing_stake: vec![],
-            accessed_addresses: HashSet::new(),
-        };
-
-        let simulator = create_simulator(provider, entry_point, tracer);
-        let res = simulator.gather_context_violations(&mut validation_context);
+        let simulator = create_simulator(provider, entry_point, context_provider);
+        let res = simulator.gather_context_violations(&mut context);
 
         assert_eq!(
             res.unwrap(),
             vec![
-                SimulationViolation::InvalidSignature,
                 SimulationViolation::UsedForbiddenOpcode(
                     Entity {
                         kind: EntityType::Account,
@@ -983,79 +958,32 @@ mod tests {
                         .unwrap()
                     }
                 ),
-                SimulationViolation::VerificationGasLimitBufferTooLow(2000.into(), 4000.into())
             ]
         );
     }
 
     #[tokio::test]
     async fn test_op_080() {
-        let (provider, ep, tracer) = create_base_config();
+        let (provider, ep, mut context_provider) = create_base_config();
+        context_provider
+            .expect_get_specific_violations()
+            .return_const(vec![]);
 
-        let mut tracer_output = get_test_tracer_output();
+        let mut context = get_test_context();
 
         // add forbidden opcodes and precompiles
-        tracer_output.phases[2].forbidden_opcodes_used = vec![
+        context.tracer_out.phases[2].forbidden_opcodes_used = vec![
             String::from("0x8abb13360b87be5eeb1b98647a016add927a136c:SELFBALANCE"),
             String::from("0x8abb13360b87be5eeb1b98647a016add927a136c:BALANCE"),
         ];
 
-        let mut validation_context = ValidationContext {
-            op: UserOperation {
-                verification_gas_limit: U256::from(100000),
-                pre_verification_gas: U256::from(1000),
-                ..Default::default()
-            },
-            has_factory: true,
-            associated_addresses: HashSet::new(),
-            block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: simulation::infos_from_validation_output(
-                Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
-                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
-                &ValidationOutput {
-                    return_info: ValidationReturnInfo::from((
-                        U256::default(),
-                        U256::default(),
-                        false,
-                        0,
-                        0,
-                        Bytes::default(),
-                    )),
-                    sender_info: StakeInfo::from((U256::default(), U256::default())),
-                    factory_info: StakeInfo::from((U256::default(), U256::default())),
-                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                    aggregator_info: None,
-                },
-                Settings::default(),
-            ),
-            tracer_out: tracer_output,
-            entry_point_out: ValidationOutput {
-                return_info: ValidationReturnInfo::from((
-                    3000.into(),
-                    U256::default(),
-                    true,
-                    0,
-                    0,
-                    Bytes::default(),
-                )),
-                sender_info: StakeInfo::from((U256::default(), U256::default())),
-                factory_info: StakeInfo::from((U256::default(), U256::default())),
-                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                aggregator_info: None,
-            },
-            entities_needing_stake: vec![],
-            accessed_addresses: HashSet::new(),
-        };
-
-        let simulator = create_simulator(provider, ep, tracer);
-        let res = simulator.gather_context_violations(&mut validation_context);
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator.gather_context_violations(&mut context);
 
         // unstaked causes errors
         assert_eq!(
             res.unwrap(),
             vec![
-                SimulationViolation::InvalidSignature,
                 SimulationViolation::UsedForbiddenOpcode(
                     Entity {
                         kind: EntityType::Paymaster,
@@ -1078,21 +1006,19 @@ mod tests {
         );
 
         // staked causes no errors
-        validation_context
-            .entity_infos
-            .paymaster
-            .as_mut()
-            .unwrap()
-            .is_staked = true;
-        let res = simulator.gather_context_violations(&mut validation_context);
-        assert_eq!(res.unwrap(), vec![SimulationViolation::InvalidSignature]);
+        context.entity_infos.paymaster.as_mut().unwrap().is_staked = true;
+        let res = simulator.gather_context_violations(&mut context);
+        assert!(res.unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn test_factory_staking_logic() {
-        let (provider, mut ep, tracer) = create_base_config();
+        let (provider, mut ep, mut context_provider) = create_base_config();
         ep.expect_address()
             .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+        context_provider
+            .expect_get_specific_violations()
+            .return_const(vec![]);
 
         let mut writes: HashMap<U256, u32> = HashMap::new();
 
@@ -1108,8 +1034,8 @@ mod tests {
 
         writes.insert(sender_bytes, 1);
 
-        let mut tracer_output = get_test_tracer_output();
-        tracer_output.phases[1].storage_accesses.insert(
+        let mut context = get_test_context();
+        context.tracer_out.phases[1].storage_accesses.insert(
             external_access_address,
             AccessInfo {
                 reads: HashMap::new(),
@@ -1117,57 +1043,9 @@ mod tests {
             },
         );
 
-        let mut validation_context = ValidationContext {
-            op: UserOperation {
-                verification_gas_limit: U256::from(100000),
-                pre_verification_gas: U256::from(1000),
-                ..Default::default()
-            },
-            has_factory: true,
-            associated_addresses: HashSet::new(),
-            block_id: BlockId::Number(BlockNumber::Latest),
-            entity_infos: simulation::infos_from_validation_output(
-                Some(factory_address),
-                sender_address,
-                None,
-                &ValidationOutput {
-                    return_info: ValidationReturnInfo::from((
-                        U256::default(),
-                        U256::default(),
-                        false,
-                        0,
-                        0,
-                        Bytes::default(),
-                    )),
-                    sender_info: StakeInfo::from((U256::default(), U256::default())),
-                    factory_info: StakeInfo::from((U256::default(), U256::default())),
-                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                    aggregator_info: None,
-                },
-                Settings::default(),
-            ),
-            tracer_out: tracer_output,
-            entry_point_out: ValidationOutput {
-                return_info: ValidationReturnInfo::from((
-                    3000.into(),
-                    U256::default(),
-                    false,
-                    0,
-                    0,
-                    Bytes::default(),
-                )),
-                sender_info: StakeInfo::from((U256::default(), U256::default())),
-                factory_info: StakeInfo::from((U256::default(), U256::default())),
-                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
-                aggregator_info: None,
-            },
-            entities_needing_stake: vec![],
-            accessed_addresses: HashSet::new(),
-        };
-
         // Create the simulator using the provider and tracer
-        let simulator = create_simulator(provider, ep, tracer);
-        let res = simulator.gather_context_violations(&mut validation_context);
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator.gather_context_violations(&mut context);
 
         let expected = NeedsStakeInformation {
             needs_stake: Entity::factory(factory_address),
@@ -1185,13 +1063,8 @@ mod tests {
         );
 
         // staked causes no errors
-        validation_context
-            .entity_infos
-            .factory
-            .as_mut()
-            .unwrap()
-            .is_staked = true;
-        let res = simulator.gather_context_violations(&mut validation_context);
-        assert_eq!(res.unwrap(), vec![]);
+        context.entity_infos.factory.as_mut().unwrap().is_staked = true;
+        let res = simulator.gather_context_violations(&mut context);
+        assert!(res.unwrap().is_empty());
     }
 }

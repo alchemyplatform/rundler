@@ -13,11 +13,10 @@
 
 use ethers::types::U256;
 
-mod simulator;
-pub use simulator::Simulator;
+mod context;
+pub(crate) use context::ValidationContextProvider;
 
 mod tracer;
-pub use tracer::{SimulateValidationTracer, SimulateValidationTracerImpl};
 
 /// Required buffer for verification gas limit when targeting the 0.6 entrypoint contract
 pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: U256 = U256([2000, 0, 0, 0]);
