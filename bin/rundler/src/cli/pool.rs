@@ -173,7 +173,9 @@ impl PoolArgs {
         tracing::info!("allowlist: {:?}", allowlist);
 
         let mempool_channel_configs = match &common.mempool_config_path {
-            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region).await?,
+            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region)
+                .await
+                .with_context(|| format!("should load mempool configurations from {path}"))?,
             None => MempoolConfigs::default(),
         };
         tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);

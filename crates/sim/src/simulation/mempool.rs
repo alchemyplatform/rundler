@@ -24,9 +24,9 @@ use crate::simulation::SimulationViolation;
 ///
 /// Typically read from a JSON file using the `Deserialize` trait.
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct MempoolConfig {
     /// Entry point address this mempool is associated with.
-    #[serde(rename = "camelCase")]
     pub(crate) entry_point: Address,
     /// Allowlist to match violations against.
     pub(crate) allowlist: Vec<AllowlistEntry>,
