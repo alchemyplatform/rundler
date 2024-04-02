@@ -191,7 +191,9 @@ impl BuilderArgs {
         let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
 
         let mempool_configs = match &common.mempool_config_path {
-            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region).await?,
+            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region)
+                .await
+                .with_context(|| format!("should load mempool configurations from {path}"))?,
             None => MempoolConfigs::default(),
         };
 
