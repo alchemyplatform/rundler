@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use ethers::providers::Middleware;
 use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
 use rundler_sim::{
-    simulation::{v0_6 as sim_v0_6, UnsafeSimulator},
+    simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
 };
 use rundler_task::Task;
@@ -208,12 +208,9 @@ impl PoolTask {
                 simulator,
             )
         } else {
-            let simulate_validation_tracer =
-                sim_v0_6::SimulateValidationTracerImpl::new(Arc::clone(&provider), ep.clone());
-            let simulator = sim_v0_6::Simulator::new(
+            let simulator = simulation::new_v0_6_simulator(
                 Arc::clone(&provider),
                 ep.clone(),
-                simulate_validation_tracer,
                 pool_config.sim_settings,
                 pool_config.mempool_channel_configs.clone(),
             );
