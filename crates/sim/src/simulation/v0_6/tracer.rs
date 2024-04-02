@@ -10,41 +10,24 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, convert::TryFrom, fmt::Debug, sync::Arc};
+use std::{convert::TryFrom, fmt::Debug, sync::Arc};
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use async_trait::async_trait;
 use ethers::types::{
-    Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
-    GethTrace, Opcode,
+    BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
-#[cfg(test)]
-use mockall::automock;
 use rundler_provider::{Provider, SimulationProvider};
 use rundler_types::v0_6::UserOperation;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-use crate::{
-    simulation::{AccessInfo, AssociatedSlotsByAddress},
-    ExpectedStorage,
-};
+use crate::simulation::context::TracerOutput;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SimulationTracerOutput {
-    pub(crate) phases: Vec<Phase>,
-    pub(crate) revert_data: Option<String>,
-    pub(crate) accessed_contract_addresses: Vec<Address>,
-    pub(crate) associated_slots_by_address: AssociatedSlotsByAddress,
-    pub(crate) factory_called_create2_twice: bool,
-    pub(crate) expected_storage: ExpectedStorage,
-}
-
-impl TryFrom<GethTrace> for SimulationTracerOutput {
+impl TryFrom<GethTrace> for TracerOutput {
     type Error = anyhow::Error;
     fn try_from(trace: GethTrace) -> Result<Self, Self::Error> {
         match trace {
-            GethTrace::Unknown(value) => Ok(SimulationTracerOutput::deserialize(&value)?),
+            GethTrace::Unknown(value) => Ok(TracerOutput::deserialize(&value)?),
             GethTrace::Known(_) => {
                 bail!("Failed to deserialize simulation trace")
             }
@@ -52,36 +35,21 @@ impl TryFrom<GethTrace> for SimulationTracerOutput {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Phase {
-    pub(crate) forbidden_opcodes_used: Vec<String>,
-    pub(crate) forbidden_precompiles_used: Vec<String>,
-    pub(crate) storage_accesses: HashMap<Address, AccessInfo>,
-    pub(crate) called_banned_entry_point_method: bool,
-    pub(crate) addresses_calling_with_value: Vec<Address>,
-    pub(crate) called_non_entry_point_with_value: bool,
-    pub(crate) ran_out_of_gas: bool,
-    pub(crate) undeployed_contract_accesses: Vec<Address>,
-    pub(crate) ext_code_access_info: HashMap<Address, Opcode>,
-}
-
 /// Trait for tracing the simulation of a user operation.
-#[cfg_attr(test, automock)]
 #[async_trait]
-pub trait SimulateValidationTracer: Send + Sync + 'static {
+pub(super) trait SimulateValidationTracer: Send + Sync + 'static {
     /// Traces the simulation of a user operation.
     async fn trace_simulate_validation(
         &self,
         op: UserOperation,
         block_id: BlockId,
         max_validation_gas: u64,
-    ) -> anyhow::Result<SimulationTracerOutput>;
+    ) -> anyhow::Result<TracerOutput>;
 }
 
 /// Tracer implementation for the bundler's custom tracer.
 #[derive(Debug)]
-pub struct SimulateValidationTracerImpl<P, E> {
+pub(crate) struct SimulateValidationTracerImpl<P, E> {
     provider: Arc<P>,
     entry_point: E,
 }
@@ -100,12 +68,12 @@ where
         op: UserOperation,
         block_id: BlockId,
         max_validation_gas: u64,
-    ) -> anyhow::Result<SimulationTracerOutput> {
+    ) -> anyhow::Result<TracerOutput> {
         let (tx, state_override) = self
             .entry_point
             .get_tracer_simulate_validation_call(op, max_validation_gas);
 
-        SimulationTracerOutput::try_from(
+        TracerOutput::try_from(
             self.provider
                 .debug_trace_call(
                     tx,
@@ -127,7 +95,7 @@ where
 
 impl<P, E> SimulateValidationTracerImpl<P, E> {
     /// Creates a new instance of the bundler's custom tracer.
-    pub fn new(provider: Arc<P>, entry_point: E) -> Self {
+    pub(crate) fn new(provider: Arc<P>, entry_point: E) -> Self {
         Self {
             provider,
             entry_point,
@@ -137,17 +105,4 @@ impl<P, E> SimulateValidationTracerImpl<P, E> {
 
 fn validation_tracer_js() -> &'static str {
     include_str!("../../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
-}
-
-pub(crate) fn parse_combined_tracer_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>
-where
-    A: std::str::FromStr,
-    B: std::str::FromStr,
-    <A as std::str::FromStr>::Err: std::error::Error + Send + Sync + 'static,
-    <B as std::str::FromStr>::Err: std::error::Error + Send + Sync + 'static,
-{
-    let (a, b) = combined
-        .split_once(':')
-        .context("tracer combined should contain two parts")?;
-    Ok((a.parse()?, b.parse()?))
 }

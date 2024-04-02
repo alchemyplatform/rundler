@@ -22,15 +22,9 @@ use ethers::{
 use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
-use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
+use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7};
 use rundler_sim::{
-    simulation::{
-        v0_6::{
-            SimulateValidationTracerImpl as SimulateValidationTracerImplV0_6,
-            Simulator as SimulatorV0_6,
-        },
-        UnsafeSimulator,
-    },
+    simulation::{self, UnsafeSimulator},
     MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
 use rundler_task::Task;
@@ -288,9 +282,10 @@ where
                     i + ep.bundle_builder_index_offset,
                     Arc::clone(&provider),
                     ep_v0_6.clone(),
-                    self.create_simulator_v0_6(
+                    simulation::new_v0_6_simulator(
                         Arc::clone(&provider),
                         ep_v0_6.clone(),
+                        self.args.sim_settings,
                         ep.mempool_configs.clone(),
                     ),
                 )
@@ -459,26 +454,5 @@ where
 
         // Spawn each sender as its own independent task
         Ok((tokio::spawn(builder.send_bundles_in_loop()), send_bundle_tx))
-    }
-
-    fn create_simulator_v0_6<C, E>(
-        &self,
-        provider: Arc<C>,
-        ep: E,
-        mempool_configs: HashMap<H256, MempoolConfig>,
-    ) -> SimulatorV0_6<C, E, SimulateValidationTracerImplV0_6<C, E>>
-    where
-        C: Provider,
-        E: EntryPointProvider<v0_6::UserOperation> + Clone,
-    {
-        let simulate_validation_tracer =
-            SimulateValidationTracerImplV0_6::new(Arc::clone(&provider), ep.clone());
-        SimulatorV0_6::new(
-            Arc::clone(&provider),
-            ep,
-            simulate_validation_tracer,
-            self.args.sim_settings,
-            mempool_configs,
-        )
     }
 }
