@@ -14,13 +14,13 @@
 use std::collections::{btree_map, BTreeMap};
 
 use anyhow::bail;
-use ethers::types::{Address, H256};
+use ethers::types::{Address, U256};
 use serde::{Deserialize, Serialize};
 
 /// The expected storage values for a user operation that must
 /// be checked to determine if this operation is valid.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct ExpectedStorage(BTreeMap<Address, BTreeMap<H256, H256>>);
+pub struct ExpectedStorage(pub BTreeMap<Address, BTreeMap<U256, U256>>);
 
 impl ExpectedStorage {
     /// Merge this expected storage with another one, accounting for conflicts.

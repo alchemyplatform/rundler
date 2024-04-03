@@ -30,13 +30,15 @@ mod mempool;
 pub use mempool::{MempoolConfig, MempoolConfigs};
 
 mod simulator;
-pub use simulator::{new_v0_6_simulator, SimulatorImpl};
+pub use simulator::{new_v0_6_simulator, new_v0_7_simulator, SimulatorImpl};
 
 mod unsafe_sim;
 pub use unsafe_sim::UnsafeSimulator;
 
 /// Entry Point v0.6 Tracing
 pub mod v0_6;
+/// Entry Point v0.7 Tracing
+pub mod v0_7;
 
 use crate::{ExpectedStorage, ViolationError};
 

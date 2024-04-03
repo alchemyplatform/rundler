@@ -15,7 +15,8 @@ use std::{error, io::ErrorKind, process::Command};
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=tracer/package.json");
-    println!("cargo:rerun-if-changed=tracer/src/validationTracer.ts");
+    println!("cargo:rerun-if-changed=tracer/src/validationTracerV0_6.ts");
+    println!("cargo:rerun-if-changed=tracer/src/validationTracerV0_7.ts");
     compile_tracer()?;
     Ok(())
 }

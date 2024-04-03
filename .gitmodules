@@ -18,7 +18,11 @@
 	path = crates/types/contracts/lib/openzeppelin-contracts-versions/v4_9
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
 	branch = release-v4.9
-[submodule "test/spec-tests/bundler-spec-tests"]
-	path = test/spec-tests/bundler-spec-tests
-	url = https://github.com/alchemyplatform/bundler-spec-tests.git
+[submodule "test/spec-tests/v0_6/bundler-spec-tests"]
+	path = test/spec-tests/v0_6/bundler-spec-tests
+	url = git@github.com:alchemyplatform/bundler-spec-tests.git
+	ignore = dirty
+[submodule "test/spec-tests/v0_7/bundler-spec-tests"]
+	path = test/spec-tests/v0_7/bundler-spec-tests
+	url = git@github.com:alchemyplatform/bundler-spec-tests.git
 	ignore = dirty

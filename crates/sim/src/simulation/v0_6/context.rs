@@ -109,11 +109,6 @@ where
             &entry_point_out,
             self.sim_settings,
         );
-        if num_phases < 3 {
-            Err(ViolationError::Violations(vec![
-                SimulationViolation::WrongNumberOfPhases(num_phases),
-            ]))?
-        }
 
         let associated_addresses = tracer_out.associated_slots_by_address.addresses();
         let has_factory = op.factory().is_some();
@@ -230,7 +225,6 @@ mod tests {
             "#).unwrap(),
             phases: vec![
                 Phase {
-                    addresses_calling_with_value: vec![],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
                     forbidden_opcodes_used: vec![],
@@ -241,9 +235,8 @@ mod tests {
                     ext_code_access_info: HashMap::new(),
                 },
                 Phase {
-                    addresses_calling_with_value: vec![Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap()],
                     called_banned_entry_point_method: false,
-                    called_non_entry_point_with_value: false,
+                    called_non_entry_point_with_value: true,
                     forbidden_opcodes_used: vec![],
                     forbidden_precompiles_used: vec![],
                     ran_out_of_gas: false,
@@ -252,7 +245,6 @@ mod tests {
                     ext_code_access_info: HashMap::new(),
                 },
                 Phase {
-                    addresses_calling_with_value: vec![],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
                     forbidden_opcodes_used: vec![],
