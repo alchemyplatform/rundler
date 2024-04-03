@@ -63,10 +63,13 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
 
     MultiAbigen::from_abigens([
         abigen_of("v0_7", "IEntryPoint")?,
+        abigen_of("v0_7", "IAccount")?,
+        abigen_of("v0_7", "IPaymaster")?,
         abigen_of("v0_7", "IAggregator")?,
         abigen_of("v0_7", "IStakeManager")?,
         abigen_of("v0_7", "GetBalances")?,
         abigen_of("v0_7", "EntryPointSimulations")?,
+        abigen_of("v0_7", "SenderCreator")?,
     ])
     .build()?
     .write_to_module("src/contracts/v0_7", false)?;

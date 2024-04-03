@@ -181,7 +181,6 @@ impl PoolTask {
         Box::new(self)
     }
 
-    // TODO(danc): when safe simulation for 0.7 is implemented, DRY these functions
     fn create_mempool_v0_6<P: Provider + Middleware>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
@@ -251,7 +250,20 @@ impl PoolTask {
                 simulator,
             )
         } else {
-            panic!("V0_7 safe simulation not supported")
+            let simulator = simulation::new_v0_7_simulator(
+                Arc::clone(&provider),
+                ep.clone(),
+                pool_config.sim_settings,
+                pool_config.mempool_channel_configs.clone(),
+            );
+            Self::create_mempool(
+                chain_spec,
+                pool_config,
+                event_sender,
+                provider,
+                ep,
+                simulator,
+            )
         }
     }
 

@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{FromRpc, RpcAddress};
 
-/// User operation definition for RPC
+/// User operation definition for RPC inputs
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RpcUserOperation {
@@ -31,17 +31,39 @@ pub(crate) struct RpcUserOperation {
     pre_verification_gas: U256,
     max_priority_fee_per_gas: U128,
     max_fee_per_gas: U128,
+    #[serde(skip_serializing_if = "Option::is_none")]
     factory: Option<Address>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     factory_data: Option<Bytes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     paymaster: Option<Address>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     paymaster_verification_gas_limit: Option<U128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     paymaster_post_op_gas_limit: Option<U128>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     paymaster_data: Option<Bytes>,
     signature: Bytes,
 }
 
 impl From<UserOperation> for RpcUserOperation {
     fn from(op: UserOperation) -> Self {
+        let factory_data = if op.factory.is_some() {
+            Some(op.factory_data)
+        } else {
+            None
+        };
+        let (paymaster_data, paymaster_verification_gas_limit, paymaster_post_op_gas_limit) =
+            if op.paymaster.is_some() {
+                (
+                    Some(op.paymaster_data),
+                    Some(op.paymaster_verification_gas_limit),
+                    Some(op.paymaster_post_op_gas_limit),
+                )
+            } else {
+                (None, None, None)
+            };
+
         RpcUserOperation {
             sender: op.sender,
             nonce: op.nonce,
@@ -52,11 +74,11 @@ impl From<UserOperation> for RpcUserOperation {
             max_priority_fee_per_gas: op.max_priority_fee_per_gas,
             max_fee_per_gas: op.max_fee_per_gas,
             factory: op.factory,
-            factory_data: Some(op.factory_data),
+            factory_data,
             paymaster: op.paymaster,
-            paymaster_verification_gas_limit: Some(op.paymaster_verification_gas_limit),
-            paymaster_post_op_gas_limit: Some(op.paymaster_post_op_gas_limit),
-            paymaster_data: Some(op.paymaster_data),
+            paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit,
+            paymaster_data,
             signature: op.signature,
         }
     }

@@ -26,10 +26,11 @@ use super::protos::{
     AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
     DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
-    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidSignature,
-    InvalidStorageAccess, MaxFeePerGasTooLow, MaxOperationsReachedError,
-    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
-    NotStaked, OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
+    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
+    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
+    OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
     PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
     PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
     ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
@@ -429,6 +430,20 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     InvalidSignature {},
                 )),
             },
+            SimulationViolation::InvalidAccountSignature => ProtoSimulationViolationError {
+                violation: Some(
+                    simulation_violation_error::Violation::InvalidAccountSignature(
+                        InvalidAccountSignature {},
+                    ),
+                ),
+            },
+            SimulationViolation::InvalidPaymasterSignature => ProtoSimulationViolationError {
+                violation: Some(
+                    simulation_violation_error::Violation::InvalidPaymasterSignature(
+                        InvalidPaymasterSignature {},
+                    ),
+                ),
+            },
             SimulationViolation::UnstakedPaymasterContext => ProtoSimulationViolationError {
                 violation: Some(
                     simulation_violation_error::Violation::UnstakedPaymasterContext(
@@ -613,6 +628,12 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
         Ok(match value.violation {
             Some(simulation_violation_error::Violation::InvalidSignature(_)) => {
                 SimulationViolation::InvalidSignature
+            }
+            Some(simulation_violation_error::Violation::InvalidAccountSignature(_)) => {
+                SimulationViolation::InvalidAccountSignature
+            }
+            Some(simulation_violation_error::Violation::InvalidPaymasterSignature(_)) => {
+                SimulationViolation::InvalidPaymasterSignature
             }
             Some(simulation_violation_error::Violation::UnstakedPaymasterContext(_)) => {
                 SimulationViolation::UnstakedPaymasterContext

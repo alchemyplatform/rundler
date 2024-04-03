@@ -18,6 +18,7 @@ services:
       - --ignore-legacy-receipts
       - --allow-insecure-unlock
       - --rpc.allow-unprotected-txs
+      - --rpc.txfeecap=0
       - --dev
       - --verbosity=2
       - --nodiscover

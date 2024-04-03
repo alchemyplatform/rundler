@@ -51,6 +51,11 @@ pub enum OpPoolEvent {
         /// The removed entity
         entity: Entity,
     },
+    /// An Entity was throttled
+    ThrottledEntity {
+        /// The throttled entity
+        entity: Entity,
+    },
 }
 
 /// Summary of the entities associated with an operation
@@ -111,6 +116,11 @@ pub enum OpRemovalReason {
     /// ops removed
     EntityRemoved {
         /// The removed entity
+        entity: Entity,
+    },
+    /// Op was removed because an associated entity was throttled
+    EntityThrottled {
+        /// The throttled entity
         entity: Entity,
     },
     /// Op was removed because it expired
@@ -178,6 +188,9 @@ impl Display for OpPoolEvent {
                     concat!("Removed entity from pool.", "    Entity: {}",),
                     entity,
                 )
+            }
+            OpPoolEvent::ThrottledEntity { entity } => {
+                write!(f, concat!("Throttled entity.", "    Entity: {}",), entity,)
             }
         }
     }
