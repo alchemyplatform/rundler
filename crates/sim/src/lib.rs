@@ -35,8 +35,9 @@ mod estimation;
 #[cfg(feature = "test-utils")]
 pub use estimation::MockGasEstimator;
 pub use estimation::{
-    GasEstimationError, GasEstimator, GasEstimatorV0_6, GasEstimatorV0_7,
-    Settings as EstimationSettings, VerificationGasEstimator, VerificationGasEstimatorImpl,
+    CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
+    GasEstimator, GasEstimatorV0_6, GasEstimatorV0_7, Settings as EstimationSettings,
+    VerificationGasEstimator, VerificationGasEstimatorImpl,
 };
 
 pub mod gas;

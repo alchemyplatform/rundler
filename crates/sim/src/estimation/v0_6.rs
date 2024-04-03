@@ -13,69 +13,52 @@
 
 use std::{cmp, ops::Add, sync::Arc};
 
-use anyhow::anyhow;
 use ethers::{
-    abi::AbiDecode,
-    contract::EthCall,
     providers::spoof,
-    types::{Address, Bytes, H256, U256},
+    types::{Bytes, H256, U256},
 };
-use rand::Rng;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
-    contracts::v0_6::call_gas_estimation_proxy::{
-        EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
-        EstimateCallGasResult, EstimateCallGasRevertAtMax,
-        CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
-    },
     v0_6::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
-use rundler_utils::{eth, math};
+use rundler_utils::math;
 use tokio::join;
 
-use super::{GasEstimationError, Settings, VerificationGasEstimator};
-use crate::{
-    estimation::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT, simulation, FeeEstimator,
-    GasEstimator as GasEstimatorTrait,
+use super::{
+    CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
+    Settings, VerificationGasEstimator, ENTRYPOINT_V0_6_DEPLOYED_BYTECODE,
 };
-
-/// Gas estimates will be rounded up to the next multiple of this. Increasing
-/// this value reduces the number of rounds of `eth_call` needed in binary
-/// search, e.g. a value of 1024 means ten fewer `eth_call`s needed for each of
-/// verification gas and call gas.
-const GAS_ROUNDING: u64 = 4096;
+use crate::{
+    estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
+    simulation, FeeEstimator, GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
+};
 
 /// Percentage by which to increase the verification gas limit after binary search
 const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
 /// Absolute value by which to increase the call gas limit after binary search
 const CALL_GAS_BUFFER_VALUE: U256 = U256([3000, 0, 0, 0]);
 
-/// Offset at which the proxy target address appears in the proxy bytecode. Must
-/// be updated whenever `CallGasEstimationProxy.sol` changes.
-///
-/// The easiest way to get the updated value is to run this module's tests. The
-/// failure will tell you the new value.
-const PROXY_TARGET_OFFSET: usize = 137;
-
 /// Gas estimator implementation
 #[derive(Debug)]
-pub struct GasEstimator<P, E, VGE> {
+pub struct GasEstimator<P, E, VGE, CGE> {
     chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
     verification_gas_estimator: VGE,
+    call_gas_estimator: CGE,
 }
 
 #[async_trait::async_trait]
-impl<P, E, VGE> GasEstimatorTrait for GasEstimator<P, E, VGE>
+impl<P, E, VGE, CGE> GasEstimatorTrait for GasEstimator<P, E, VGE, CGE>
 where
     P: Provider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
+    CGE: CallGasEstimator<UO = UserOperation>,
 {
     type UserOperationOptionalGas = UserOperationOptionalGas;
 
@@ -114,7 +97,11 @@ where
         };
 
         let verification_future = self.estimate_verification_gas(&op, block_hash, &state_override);
-        let call_future = self.estimate_call_gas(&op, block_hash, state_override.clone());
+        let call_future = self.call_gas_estimator.estimate_call_gas(
+            op.clone(),
+            block_hash,
+            state_override.clone(),
+        );
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
@@ -123,7 +110,7 @@ where
         tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
 
         let verification_gas_limit = verification_gas_limit?;
-        let call_gas_limit = call_gas_limit?;
+        let call_gas_limit = U256::from(call_gas_limit?);
 
         if let Some(err) = settings.validate() {
             return Err(GasEstimationError::InvalidSettings(err));
@@ -151,11 +138,19 @@ where
     }
 }
 
-impl<P, E, VGE> GasEstimator<P, E, VGE>
+impl<P, E>
+    GasEstimator<
+        P,
+        E,
+        VerificationGasEstimatorImpl<P, E>,
+        CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV06>,
+    >
 where
     P: Provider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
-    VGE: VerificationGasEstimator<UO = UserOperation>,
+    E: EntryPoint
+        + SimulationProvider<UO = UserOperation>
+        + L1GasProvider<UO = UserOperation>
+        + Clone,
 {
     /// Create a new gas estimator
     pub fn new(
@@ -164,8 +159,18 @@ where
         entry_point: E,
         settings: Settings,
         fee_estimator: FeeEstimator<P>,
-        verification_gas_estimator: VGE,
     ) -> Self {
+        let verification_gas_estimator = VerificationGasEstimatorImpl::new(
+            chain_spec.clone(),
+            Arc::clone(&provider),
+            entry_point.clone(),
+            settings,
+        );
+        let call_gas_estimator = CallGasEstimatorImpl::new(
+            entry_point.clone(),
+            settings,
+            CallGasEstimatorSpecializationV06,
+        );
         Self {
             chain_spec,
             provider,
@@ -173,9 +178,17 @@ where
             settings,
             fee_estimator,
             verification_gas_estimator,
+            call_gas_estimator,
         }
     }
+}
 
+impl<P, E, VGE, CGE> GasEstimator<P, E, VGE, CGE>
+where
+    P: Provider,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    VGE: VerificationGasEstimator<UO = UserOperation>,
+{
     async fn estimate_verification_gas(
         &self,
         op: &UserOperation,
@@ -329,32 +342,61 @@ where
     }
 }
 
-/// Replaces the address of the proxy target where it appears in the proxy
-/// bytecode so we don't need the same fixed address every time.
-fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
-    let mut vec = CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE.to_vec();
-    vec[PROXY_TARGET_OFFSET..PROXY_TARGET_OFFSET + 20].copy_from_slice(target.as_bytes());
-    vec.into()
+/// Implementation of functions that specialize the call gas estimator to the
+/// v0.6 entry point.
+#[derive(Debug)]
+pub struct CallGasEstimatorSpecializationV06;
+
+impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
+    type UO = UserOperation;
+
+    fn get_op_with_verification_gas_but_no_call_gas(
+        &self,
+        op: Self::UO,
+        settings: Settings,
+    ) -> Self::UO {
+        UserOperation {
+            call_gas_limit: 0.into(),
+            max_fee_per_gas: 0.into(),
+            verification_gas_limit: settings.max_verification_gas.into(),
+            ..op
+        }
+    }
+
+    fn entry_point_simulations_code(&self) -> Bytes {
+        // In v0.6, the entry point code contains the simulations code, so we
+        // just return the entry point code.
+        ENTRYPOINT_V0_6_DEPLOYED_BYTECODE.into()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
     use ethers::{
         abi::{AbiEncode, Address},
-        types::U64,
-        utils::hex,
+        contract::EthCall,
+        types::{U128, U64},
     };
     use rundler_provider::{ExecutionResult, MockEntryPointV0_6, MockProvider, SimulateOpCallData};
     use rundler_types::{
         chain::L1GasOracleContractType,
-        contracts::{utils::get_gas_used::GasUsedResult, v0_6::i_entry_point},
+        contracts::{
+            utils::{
+                call_gas_estimation_proxy::{
+                    EstimateCallGasContinuation, EstimateCallGasResult, EstimateCallGasRevertAtMax,
+                },
+                get_gas_used::GasUsedResult,
+            },
+            v0_6::i_entry_point,
+        },
         v0_6::{UserOperation, UserOperationOptionalGas},
         UserOperation as UserOperationTrait, ValidationRevert,
     };
+    use rundler_utils::eth;
 
     use super::*;
     use crate::{
-        estimation::GasEstimator as GasEstimatorTrait,
         simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER, PriorityFeeMode,
         VerificationGasEstimatorImpl,
     };
@@ -365,14 +407,17 @@ mod tests {
     const PER_USER_OP_WORD: u32 = 4;
     const BUNDLE_SIZE: u32 = 1;
 
-    /// Must match the constant in `CallGasEstimationProxy.sol`.
-    const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
-
     // Alises for complex types (which also satisfy Clippy)
     type VerificationGasEstimatorWithMocks =
         VerificationGasEstimatorImpl<MockProvider, Arc<MockEntryPointV0_6>>;
-    type GasEstimatorWithMocks =
-        GasEstimator<MockProvider, Arc<MockEntryPointV0_6>, VerificationGasEstimatorWithMocks>;
+    type CallGasEstimatorWithMocks =
+        CallGasEstimatorImpl<Arc<MockEntryPointV0_6>, CallGasEstimatorSpecializationV06>;
+    type GasEstimatorWithMocks = GasEstimator<
+        MockProvider,
+        Arc<MockEntryPointV0_6>,
+        VerificationGasEstimatorWithMocks,
+        CallGasEstimatorWithMocks,
+    >;
 
     fn create_base_config() -> (MockEntryPointV0_6, MockProvider) {
         let mut entry = MockEntryPointV0_6::new();
@@ -413,14 +458,12 @@ mod tests {
         settings: Settings,
     ) -> GasEstimatorWithMocks {
         let provider = Arc::new(provider);
-        let entry = Arc::new(entry);
         GasEstimator::new(
             chain_spec.clone(),
             Arc::clone(&provider),
-            Arc::clone(&entry),
+            Arc::new(entry),
             settings,
-            create_fee_estimator(Arc::clone(&provider)),
-            VerificationGasEstimatorImpl::new(chain_spec, provider, entry, settings),
+            create_fee_estimator(provider),
         )
     }
 
@@ -470,18 +513,6 @@ mod tests {
             paymaster_and_data: Bytes::new(),
             signature: Bytes::new(),
         }
-    }
-
-    #[test]
-    fn test_proxy_target_offset() {
-        let proxy_target_bytes = hex::decode(PROXY_TARGET_CONSTANT).unwrap();
-        let mut offsets = Vec::<usize>::new();
-        for i in 0..CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE.len() - 20 {
-            if CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE[i..i + 20] == proxy_target_bytes {
-                offsets.push(i);
-            }
-        }
-        assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
     }
 
     #[tokio::test]
@@ -544,14 +575,12 @@ mod tests {
             ..Default::default()
         };
         let provider = Arc::new(provider);
-        let entry = Arc::new(entry);
         let estimator = GasEstimator::new(
             cs.clone(),
             Arc::clone(&provider),
-            Arc::clone(&entry),
+            Arc::new(entry),
             settings,
-            create_fee_estimator(Arc::clone(&provider)),
-            VerificationGasEstimatorImpl::new(cs, provider, entry, settings),
+            create_fee_estimator(provider),
         );
 
         let user_op = demo_user_op_optional_gas();
@@ -978,13 +1007,14 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero(), spoof::state())
+            .call_gas_estimator
+            .estimate_call_gas(user_op, H256::zero(), spoof::state())
             .await
             .unwrap();
 
         // result is derived from the spoofed gas_estimate field
 
-        assert_eq!(estimation, U256::from(100));
+        assert_eq!(estimation, U128::from(100));
     }
 
     #[tokio::test]
@@ -1016,7 +1046,8 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero(), spoof::state())
+            .call_gas_estimator
+            .estimate_call_gas(user_op, H256::zero(), spoof::state())
             .await
             .err()
             .unwrap();
@@ -1071,14 +1102,15 @@ mod tests {
         let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op();
         let estimation = estimator
-            .estimate_call_gas(&user_op, H256::zero(), spoof::state())
+            .call_gas_estimator
+            .estimate_call_gas(user_op, H256::zero(), spoof::state())
             .await
             .unwrap();
 
         // on the second loop of the estimate gas continuation
         // I update the spoofed value to 200
 
-        assert_eq!(estimation, U256::from(200));
+        assert_eq!(estimation, U128::from(200));
     }
 
     #[tokio::test]
