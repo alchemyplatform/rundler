@@ -28,7 +28,7 @@ const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([10_000, 0, 0, 0]);
 /// User Operation for Entry Point v0.7
 ///
 /// Offchain version, must be packed before sending onchain
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive] // Prevent instantiation except with UserOperationBuilder
 pub struct UserOperation {
     /*
