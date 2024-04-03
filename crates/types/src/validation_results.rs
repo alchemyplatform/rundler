@@ -274,15 +274,15 @@ impl ValidationData {
 /// Works for both v0.6 and v0.7 validation data
 pub fn parse_validation_data(data: U256) -> ValidationData {
     let slice: [u8; 32] = data.into();
-    let aggregator = Address::from_slice(&slice[0..20]);
+    let aggregator = Address::from_slice(&slice[12..]);
 
     let mut buf = [0_u8; 8];
-    buf[..6].copy_from_slice(&slice[20..26]);
-    let valid_after = u64::from_le_bytes(buf);
+    buf[2..8].copy_from_slice(&slice[6..12]);
+    let valid_until = u64::from_be_bytes(buf);
 
     let mut buf = [0_u8; 8];
-    buf[..6].copy_from_slice(&slice[26..32]);
-    let valid_until = u64::from_le_bytes(buf);
+    buf[2..8].copy_from_slice(&slice[..6]);
+    let valid_after = u64::from_be_bytes(buf);
 
     ValidationData {
         aggregator,
@@ -363,11 +363,12 @@ mod tests {
         let parsed = parse_validation_data(data.into());
         assert_eq!(
             parsed.aggregator,
-            "0x00112233445566778899aabbccddeeff00112233"
+            "0xccddeeff00112233445566778899aabbccddeeff"
                 .parse()
                 .unwrap()
         );
-        assert_eq!(parsed.valid_after, 0x998877665544); // solidity is LE
-        assert_eq!(parsed.valid_until, 0xffeeddccbbaa);
+
+        assert_eq!(parsed.valid_until, 0x66778899aabb);
+        assert_eq!(parsed.valid_after, 0x001122334455);
     }
 }

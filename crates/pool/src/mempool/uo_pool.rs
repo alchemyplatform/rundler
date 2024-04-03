@@ -108,12 +108,12 @@ where
         let removed_op_hashes = state.pool.throttle_entity(entity, block_number);
 
         let count = removed_op_hashes.len();
-        self.emit(OpPoolEvent::RemovedEntity { entity });
+        self.emit(OpPoolEvent::ThrottledEntity { entity });
 
         for op_hash in removed_op_hashes {
             self.emit(OpPoolEvent::RemovedOp {
                 op_hash,
-                reason: OpRemovalReason::EntityRemoved { entity },
+                reason: OpRemovalReason::EntityThrottled { entity },
             })
         }
         UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);

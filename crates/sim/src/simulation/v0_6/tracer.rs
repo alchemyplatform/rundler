@@ -104,5 +104,5 @@ impl<P, E> SimulateValidationTracerImpl<P, E> {
 }
 
 fn validation_tracer_js() -> &'static str {
-    include_str!("../../../tracer/dist/validationTracer.js").trim_end_matches(";export{};")
+    include_str!("../../../tracer/dist/validationTracerV0_6.js").trim_end_matches(";export{};")
 }
