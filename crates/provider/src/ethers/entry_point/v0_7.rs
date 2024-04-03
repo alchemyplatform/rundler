@@ -16,7 +16,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::{ContractError, EthCall as _, FunctionCall},
+    contract::{ContractError, EthCall, FunctionCall},
     providers::{Middleware, RawCall},
     types::{
         spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes,
@@ -407,11 +407,18 @@ where
     P: Provider + Middleware + Send + Sync + 'static,
 {
     fn get_simulate_op_spoofed_state(&self, base_state: &spoof::State) -> spoof::State {
-        let mut spoof_ep = base_state.clone();
-        spoof_ep
-            .account(self.address())
-            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
-        spoof_ep
+        let mut state_overrides = base_state.clone();
+        let entry_point_overrides = state_overrides.account(self.address());
+        // Do nothing if the caller has already overridden the entry point code.
+        // We'll trust they know what they're doing and not replace their code.
+        // This is needed for call gas estimation, where the entry point is
+        // replaced with a proxy and the simulations bytecode is elsewhere.
+        if entry_point_overrides.code.is_none() {
+            state_overrides
+                .account(self.address())
+                .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
+        }
+        state_overrides
     }
 }
 

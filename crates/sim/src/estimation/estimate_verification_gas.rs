@@ -1,6 +1,6 @@
-use std::{ops::Deref as _, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use ethers::types::{spoof, Address, Bytes, H256, U128, U256};
 use rundler_provider::{EntryPoint, Provider, SimulateOpCallData, SimulationProvider};

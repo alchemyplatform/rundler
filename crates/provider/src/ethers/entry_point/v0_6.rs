@@ -16,7 +16,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::{ContractError, EthCall as _, FunctionCall},
+    contract::{ContractError, EthCall, FunctionCall},
     providers::{spoof, Middleware, RawCall},
     types::{
         transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,

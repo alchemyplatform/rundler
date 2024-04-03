@@ -13,35 +13,41 @@
 
 use std::{cmp, sync::Arc};
 
-use ethers::types::{spoof, H256, U128, U256};
+use ethers::types::{spoof, Bytes, H256, U128, U256};
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
+    contracts::v0_7::entry_point_simulations,
     v0_7::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
 use tokio::join;
 
-use super::{GasEstimationError, Settings};
-use crate::{estimation::GetOpWithLimitArgs, gas, FeeEstimator, VerificationGasEstimator};
+use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
+use crate::{
+    gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, FeeEstimator,
+    VerificationGasEstimator, VerificationGasEstimatorImpl,
+};
 
 /// Gas estimator for entry point v0.7
 #[derive(Debug)]
-pub struct GasEstimator<P, E, VGE> {
+pub struct GasEstimator<P, E, VGE, CGE> {
     chain_spec: ChainSpec,
     provider: Arc<P>,
     entry_point: E,
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
     verification_gas_estimator: VGE,
+    call_gas_estimator: CGE,
 }
 
 #[async_trait::async_trait]
-impl<P, E, VGE> super::GasEstimator for GasEstimator<P, E, VGE>
+impl<P, E, VGE, CGE> super::GasEstimator for GasEstimator<P, E, VGE, CGE>
 where
     P: Provider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
+    CGE: CallGasEstimator<UO = UserOperation>,
 {
     type UserOperationOptionalGas = UserOperationOptionalGas;
 
@@ -85,25 +91,33 @@ where
             .pre_verification_gas(pre_verification_gas)
             .build();
 
-        let verification_future = self.estimate_verification_gas(&op, block_hash, &state_override);
-        let paymaster_verification_future =
+        let verification_gas_future =
+            self.estimate_verification_gas(&op, block_hash, &state_override);
+        let paymaster_verification_gas_future =
             self.estimate_paymaster_verification_gas(&op, block_hash, &state_override);
-
-        // TODO(dphil): Estimate call gas too.
+        let call_gas_future = self.call_gas_estimator.estimate_call_gas(
+            op.clone(),
+            block_hash,
+            state_override.clone(),
+        );
 
         // Not try_join! because then the output is nondeterministic if multiple
         // calls fail.
         let timer = std::time::Instant::now();
-        let (verification_gas_limit, paymaster_verification_gas_limit) =
-            join!(verification_future, paymaster_verification_future);
+        let (verification_gas_limit, paymaster_verification_gas_limit, call_gas_limit) = join!(
+            verification_gas_future,
+            paymaster_verification_gas_future,
+            call_gas_future
+        );
         tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
 
         let verification_gas_limit = verification_gas_limit?.into();
         let paymaster_verification_gas_limit = paymaster_verification_gas_limit?.into();
+        let call_gas_limit = call_gas_limit?.into();
 
         Ok(GasEstimate {
             pre_verification_gas,
-            call_gas_limit: 1_000_000.into(),
+            call_gas_limit,
             verification_gas_limit,
             paymaster_verification_gas_limit: op
                 .paymaster
@@ -113,11 +127,19 @@ where
     }
 }
 
-impl<P, E, VGE> GasEstimator<P, E, VGE>
+impl<P, E>
+    GasEstimator<
+        P,
+        E,
+        VerificationGasEstimatorImpl<P, E>,
+        CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV07>,
+    >
 where
     P: Provider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
-    VGE: VerificationGasEstimator<UO = UserOperation>,
+    E: EntryPoint
+        + SimulationProvider<UO = UserOperation>
+        + L1GasProvider<UO = UserOperation>
+        + Clone,
 {
     /// Create a new gas estimator
     pub fn new(
@@ -126,8 +148,18 @@ where
         entry_point: E,
         settings: Settings,
         fee_estimator: FeeEstimator<P>,
-        verification_gas_estimator: VGE,
     ) -> Self {
+        let verification_gas_estimator = VerificationGasEstimatorImpl::new(
+            chain_spec.clone(),
+            Arc::clone(&provider),
+            entry_point.clone(),
+            settings,
+        );
+        let call_gas_estimator = CallGasEstimatorImpl::new(
+            entry_point.clone(),
+            settings,
+            CallGasEstimatorSpecializationV07,
+        );
         Self {
             chain_spec,
             provider,
@@ -135,9 +167,18 @@ where
             settings,
             fee_estimator,
             verification_gas_estimator,
+            call_gas_estimator,
         }
     }
+}
 
+impl<P, E, VGE, CGE> GasEstimator<P, E, VGE, CGE>
+where
+    P: Provider,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    VGE: VerificationGasEstimator<UO = UserOperation>,
+    CGE: CallGasEstimator<UO = UserOperation>,
+{
     async fn estimate_verification_gas(
         &self,
         op: &UserOperation,
@@ -220,5 +261,32 @@ where
             gas_price,
         )
         .await?)
+    }
+}
+
+/// Implementation of functions that specialize the call gas estimator to the
+/// v0.7 entry point.
+#[derive(Debug)]
+pub struct CallGasEstimatorSpecializationV07;
+
+impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
+    type UO = UserOperation;
+
+    fn get_op_with_verification_gas_but_no_call_gas(
+        &self,
+        op: Self::UO,
+        settings: Settings,
+    ) -> Self::UO {
+        op.into_builder()
+            .verification_gas_limit(settings.max_verification_gas.into())
+            .paymaster_verification_gas_limit(settings.max_verification_gas.into())
+            .paymaster_post_op_gas_limit(settings.max_paymaster_post_op_gas.into())
+            .call_gas_limit(U128::zero())
+            .max_fee_per_gas(U128::zero())
+            .build()
+    }
+
+    fn entry_point_simulations_code(&self) -> Bytes {
+        entry_point_simulations::ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone()
     }
 }
