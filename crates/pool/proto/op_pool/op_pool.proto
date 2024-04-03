@@ -648,10 +648,16 @@ message SimulationViolationError {
     UnstakedAggregator unstaked_aggregator = 18;
     VerificationGasLimitBufferTooLow verification_gas_limit_buffer_too_low = 19;
     ValidationRevert validation_revert = 20;
+    InvalidAccountSignature invalid_account_signature = 21;
+    InvalidPaymasterSignature invalid_paymaster_signature = 22;
   }
 }
 
 message InvalidSignature {}
+
+message InvalidAccountSignature {}
+
+message InvalidPaymasterSignature {}
 
 message UnstakedAggregator {}
 

@@ -48,14 +48,13 @@ pub(crate) struct TracerOutput {
     pub(crate) expected_storage: ExpectedStorage,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Phase {
     pub(crate) forbidden_opcodes_used: Vec<String>,
     pub(crate) forbidden_precompiles_used: Vec<String>,
     pub(crate) storage_accesses: HashMap<Address, AccessInfo>,
     pub(crate) called_banned_entry_point_method: bool,
-    pub(crate) addresses_calling_with_value: Vec<Address>,
     pub(crate) called_non_entry_point_with_value: bool,
     pub(crate) ran_out_of_gas: bool,
     pub(crate) undeployed_contract_accesses: Vec<Address>,
@@ -65,13 +64,13 @@ pub(crate) struct Phase {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AccessInfo {
     // slot value, just prior this current operation
-    pub(crate) reads: HashMap<U256, String>,
+    pub(crate) reads: HashMap<U256, U256>,
     // count of writes.
-    pub(crate) writes: HashMap<U256, u32>,
+    pub(crate) writes: HashMap<U256, u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct AssociatedSlotsByAddress(HashMap<Address, BTreeSet<U256>>);
+pub(crate) struct AssociatedSlotsByAddress(pub(crate) HashMap<Address, BTreeSet<U256>>);
 
 impl AssociatedSlotsByAddress {
     pub(crate) fn is_associated_slot(&self, address: Address, slot: U256) -> bool {
@@ -109,9 +108,7 @@ pub trait ValidationContextProvider: Send + Sync + 'static {
     fn get_specific_violations(
         &self,
         _context: &ValidationContext<Self::UO>,
-    ) -> Vec<SimulationViolation> {
-        vec![]
-    }
+    ) -> Vec<SimulationViolation>;
 }
 
 pub(crate) fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {

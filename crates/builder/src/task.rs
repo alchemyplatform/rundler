@@ -327,7 +327,18 @@ where
                 )
                 .await?
             } else {
-                panic!("V0.7 safe simulation not implemented")
+                self.create_bundle_builder(
+                    i + ep.bundle_builder_index_offset,
+                    Arc::clone(&provider),
+                    ep_v0_7.clone(),
+                    simulation::new_v0_7_simulator(
+                        Arc::clone(&provider),
+                        ep_v0_7.clone(),
+                        self.args.sim_settings,
+                        ep.mempool_configs.clone(),
+                    ),
+                )
+                .await?
             };
             sender_handles.push(spawn_guard);
             bundle_sender_actions.push(bundle_sender_action);

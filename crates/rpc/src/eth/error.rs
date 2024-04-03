@@ -115,6 +115,10 @@ pub enum EthRpcError {
     /// Other internal errors
     #[error("Invalid UserOp signature or paymaster signature")]
     SignatureCheckFailed,
+    #[error("Invalid account signature")]
+    AccountSignatureCheckFailed,
+    #[error("Invalid paymaster signature")]
+    PaymasterSignatureCheckFailed,
     #[error("precheck failed: {0}")]
     PrecheckFailed(PrecheckViolation),
     #[error("validation simulation failed: {0}")]
@@ -291,6 +295,8 @@ impl From<SimulationViolation> for EthRpcError {
     fn from(value: SimulationViolation) -> Self {
         match value {
             SimulationViolation::InvalidSignature => Self::SignatureCheckFailed,
+            SimulationViolation::InvalidAccountSignature => Self::AccountSignatureCheckFailed,
+            SimulationViolation::InvalidPaymasterSignature => Self::PaymasterSignatureCheckFailed,
             SimulationViolation::UnintendedRevertWithMessage(
                 EntityType::Paymaster,
                 reason,
@@ -389,13 +395,19 @@ impl From<EthRpcError> for ErrorObjectOwned {
             }
             EthRpcError::OperationAlreadyKnown => rpc_err(INVALID_PARAMS_CODE, msg),
             EthRpcError::MaxOperationsReached(_, _) => rpc_err(STAKE_TOO_LOW_CODE, msg),
-            EthRpcError::SignatureCheckFailed => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
+            EthRpcError::SignatureCheckFailed
+            | EthRpcError::AccountSignatureCheckFailed
+            | EthRpcError::PaymasterSignatureCheckFailed => {
+                rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg)
+            }
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
             EthRpcError::ExecutionRevertedWithBytes(data) => {
                 rpc_err_with_data(EXECUTION_REVERTED, msg, data)
             }
-            EthRpcError::ValidationRevert(data) => rpc_err_with_data(EXECUTION_REVERTED, msg, data),
+            EthRpcError::ValidationRevert(data) => {
+                rpc_err_with_data(ENTRYPOINT_VALIDATION_REJECTED_CODE, msg, data)
+            }
             EthRpcError::OperationRejected(_) => rpc_err(INVALID_PARAMS_CODE, msg),
         }
     }
