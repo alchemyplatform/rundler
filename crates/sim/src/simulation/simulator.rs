@@ -28,6 +28,7 @@ use rundler_provider::{
 use rundler_types::{
     pool::{NeedsStakeInformation, SimulationViolation},
     v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7,
     Entity, EntityInfo, EntityInfos, EntityType, StorageSlot, UserOperation, ValidTimeRange,
     ValidationOutput, ValidationReturnInfo, ViolationOpCode,
 };
@@ -39,6 +40,7 @@ use crate::{
     simulation::{
         mempool::{self, AllowEntity, AllowRule, MempoolConfig, MempoolMatchResult},
         v0_6::ValidationContextProvider as ValidationContextProviderV0_6,
+        v0_7::ValidationContextProvider as ValidationContextProviderV0_7,
         Settings, Simulator,
     },
     types::ViolationError,
@@ -63,6 +65,29 @@ where
         provider.clone(),
         entry_point.clone(),
         ValidationContextProviderV0_6::new(provider, entry_point, sim_settings),
+        sim_settings,
+        mempool_configs,
+    )
+}
+
+/// Create a new simulator for v0.6 entry point contracts
+pub fn new_v0_7_simulator<P, E>(
+    provider: Arc<P>,
+    entry_point: E,
+    sim_settings: Settings,
+    mempool_configs: HashMap<H256, MempoolConfig>,
+) -> impl Simulator<UO = UserOperationV0_7>
+where
+    P: Provider,
+    E: EntryPoint
+        + SignatureAggregator<UO = UserOperationV0_7>
+        + SimulationProvider<UO = UserOperationV0_7>
+        + Clone,
+{
+    SimulatorImpl::new(
+        provider.clone(),
+        entry_point.clone(),
+        ValidationContextProviderV0_7::new(provider, entry_point, sim_settings),
         sim_settings,
         mempool_configs,
     )
@@ -263,11 +288,9 @@ where
             for slot in banned_slots_accessed {
                 violations.push(SimulationViolation::InvalidStorageAccess(entity, slot));
             }
-            let non_sender_called_with_value = phase
-                .addresses_calling_with_value
-                .iter()
-                .any(|address| address != &sender_address);
-            if non_sender_called_with_value || phase.called_non_entry_point_with_value {
+
+            if phase.called_non_entry_point_with_value {
+                tracing::info!("VIOLATION: Called non-entry point with value");
                 violations.push(SimulationViolation::CallHadValue(entity));
             }
             if phase.called_banned_entry_point_method {
@@ -278,6 +301,11 @@ where
                 violations.push(SimulationViolation::OutOfGas(entity));
             }
             for &address in &phase.undeployed_contract_accesses {
+                // OP-042 - Factory can access undeployed sender
+                if entity.kind == EntityType::Factory && address == sender_address {
+                    continue;
+                }
+
                 violations.push(SimulationViolation::AccessedUndeployedContract(
                     entity, address,
                 ))
@@ -698,7 +726,6 @@ mod tests {
             "#).unwrap(),
             phases: vec![
                 Phase {
-                    addresses_calling_with_value: vec![],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
                     forbidden_opcodes_used: vec![],
@@ -709,7 +736,6 @@ mod tests {
                     ext_code_access_info: HashMap::new(),
                 },
                 Phase {
-                    addresses_calling_with_value: vec![Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap()],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
                     forbidden_opcodes_used: vec![],
@@ -720,7 +746,6 @@ mod tests {
                     ext_code_access_info: HashMap::new(),
                 },
                 Phase {
-                    addresses_calling_with_value: vec![],
                     called_banned_entry_point_method: false,
                     called_non_entry_point_with_value: false,
                     forbidden_opcodes_used: vec![],
@@ -1020,7 +1045,7 @@ mod tests {
             .expect_get_specific_violations()
             .return_const(vec![]);
 
-        let mut writes: HashMap<U256, u32> = HashMap::new();
+        let mut writes: HashMap<U256, u64> = HashMap::new();
 
         let sender_address =
             Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap();

@@ -4,7 +4,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "clean": "rm -rf dist/*",
-    "build": "swc src/validationTracer.ts -d dist",
+    "build": "swc src/validationTracerV0_6.ts -d dist && swc src/validationTracerV0_7.ts -d dist",
     "typecheck": "tsc --noEmit",
     "watch": "yarn build --watch"
   },

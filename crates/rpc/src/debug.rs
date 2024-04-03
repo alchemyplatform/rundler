@@ -133,17 +133,20 @@ where
     }
 
     async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
+        tracing::debug!("Sending bundle");
+
         let mut new_heads = self
             .pool
             .subscribe_new_heads()
             .await
             .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
 
-        let (tx, block_number) = self
-            .builder
-            .debug_send_bundle_now()
-            .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+        let (tx, block_number) = self.builder.debug_send_bundle_now().await.map_err(|e| {
+            tracing::error!("Error sending bundle {e:?}");
+            rpc_err(INTERNAL_ERROR_CODE, e.to_string())
+        })?;
+
+        tracing::debug!("Waiting for block number {block_number}");
 
         // After the bundle is sent, we need to make sure that the mempool
         // has processes the same block that the transaction was mined on.
@@ -166,6 +169,8 @@ where
     }
 
     async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
+        tracing::debug!("Setting bundling mode to {:?}", mode);
+
         self.builder
             .debug_set_bundling_mode(mode)
             .await

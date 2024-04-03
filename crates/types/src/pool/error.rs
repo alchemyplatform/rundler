@@ -145,9 +145,16 @@ pub enum PrecheckViolation {
 pub enum SimulationViolation {
     // Make sure to maintain the order here based on the importance
     // of the violation for converting to an JSON RPC error
-    /// The user operation signature is invalid
+    /// The signature is invalid for either the account or paymaster
+    /// This is used in v0.6 where the error is not attributable
     #[display("invalid signature")]
     InvalidSignature,
+    /// The signature is invalid for the account
+    #[display("invalid account signature")]
+    InvalidAccountSignature,
+    /// The signature is invalid for the paymaster
+    #[display("invalid paymaster signature")]
+    InvalidPaymasterSignature,
     /// The user operation used an opcode that is not allowed
     #[display("{0.kind} uses banned opcode: {2} in contract {1:?}")]
     UsedForbiddenOpcode(Entity, Address, ViolationOpCode),
