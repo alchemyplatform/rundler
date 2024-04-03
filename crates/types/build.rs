@@ -41,7 +41,6 @@ fn generate_v0_6_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("v0_6", "IAggregator")?,
         abigen_of("v0_6", "IStakeManager")?,
         abigen_of("v0_6", "GetBalances")?,
-        abigen_of("v0_6", "CallGasEstimationProxy")?,
         abigen_of("v0_6", "SimpleAccount")?,
         abigen_of("v0_6", "SimpleAccountFactory")?,
         abigen_of("v0_6", "VerifyingPaymaster")?,
@@ -85,6 +84,7 @@ fn generate_utils_bindings() -> Result<(), Box<dyn error::Error>> {
     )?;
 
     MultiAbigen::from_abigens([
+        abigen_of("utils", "CallGasEstimationProxy")?,
         abigen_of("utils", "GetCodeHashes")?,
         abigen_of("utils", "GetGasUsed")?,
     ])
