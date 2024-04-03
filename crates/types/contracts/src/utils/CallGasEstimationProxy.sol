@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
-import "account-abstraction/v0_6/interfaces/IEntryPoint.sol";
-import "@openzeppelin/contracts/proxy/Proxy.sol";
-import "@openzeppelin/contracts/utils/math/Math.sol";
+import "openzeppelin-contracts-versions/v5_0/contracts/proxy/Proxy.sol";
+import "openzeppelin-contracts-versions/v5_0/contracts/utils/math/Math.sol";
 
 /**
  * Contract used in `eth_call`'s "overrides" parameter in order to estimate the
@@ -36,13 +35,7 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 contract CallGasEstimationProxy is Proxy {
     using Math for uint256;
 
-    function _implementation()
-        internal
-        pure
-        virtual
-        override
-        returns (address)
-    {
+    function _implementation() internal pure virtual override returns (address) {
         // keccak("CallGasEstimationProxy")[:20]
         // Don't use an immutable constant. We want the "deployedBytecode" in
         // the generated JSON to contain this constant.
@@ -94,21 +87,14 @@ contract CallGasEstimationProxy is Proxy {
         uint256 scaledGuess = 0;
         if (!args.isContinuation) {
             // Make one call at full gas to make sure success is even possible.
-            (
-                bool success,
-                uint256 gasUsed,
-                bytes memory revertData
-            ) = innerCall(args.sender, args.callData, args.maxGas);
+            (bool success, uint256 gasUsed, bytes memory revertData) =
+                innerCall(args.sender, args.callData, args.maxGas);
             if (!success) {
                 revert EstimateCallGasRevertAtMax(revertData);
             }
             scaledGuess = (gasUsed * 2) / args.rounding;
         } else {
-            scaledGuess = chooseGuess(
-                scaledMaxFailureGas,
-                scaledMinSuccessGas,
-                scaledGasUsedInSuccess
-            );
+            scaledGuess = chooseGuess(scaledMaxFailureGas, scaledMinSuccessGas, scaledGasUsedInSuccess);
         }
         uint256 numRounds = 0;
         while (scaledMaxFailureGas + 1 < scaledMinSuccessGas) {
@@ -119,37 +105,24 @@ contract CallGasEstimationProxy is Proxy {
                 uint256 nextMax = scaledMinSuccessGas * args.rounding;
                 revert EstimateCallGasContinuation(nextMin, nextMax, numRounds);
             }
-            (bool success, uint256 gasUsed, ) = innerCall(
-                args.sender,
-                args.callData,
-                guess
-            );
+            (bool success, uint256 gasUsed,) = innerCall(args.sender, args.callData, guess);
             if (success) {
-                scaledGasUsedInSuccess = scaledGasUsedInSuccess.min(
-                    gasUsed.ceilDiv(args.rounding)
-                );
+                scaledGasUsedInSuccess = scaledGasUsedInSuccess.min(gasUsed.ceilDiv(args.rounding));
                 scaledMinSuccessGas = scaledGuess;
             } else {
                 scaledMaxFailureGas = scaledGuess;
             }
 
-            scaledGuess = chooseGuess(
-                scaledMaxFailureGas,
-                scaledMinSuccessGas,
-                scaledGasUsedInSuccess
-            );
+            scaledGuess = chooseGuess(scaledMaxFailureGas, scaledMinSuccessGas, scaledGasUsedInSuccess);
         }
-        revert EstimateCallGasResult(
-            args.maxGas.min(scaledMinSuccessGas * args.rounding),
-            numRounds
-        );
+        revert EstimateCallGasResult(args.maxGas.min(scaledMinSuccessGas * args.rounding), numRounds);
     }
 
-    function chooseGuess(
-        uint256 highestFailureGas,
-        uint256 lowestSuccessGas,
-        uint256 lowestGasUsedInSuccess
-    ) private pure returns (uint256) {
+    function chooseGuess(uint256 highestFailureGas, uint256 lowestSuccessGas, uint256 lowestGasUsedInSuccess)
+        private
+        pure
+        returns (uint256)
+    {
         uint256 average = (highestFailureGas + lowestSuccessGas) / 2;
         if (lowestGasUsedInSuccess <= highestFailureGas) {
             // Handle pathological cases where the contract requires a lot of
@@ -174,11 +147,10 @@ contract CallGasEstimationProxy is Proxy {
 
     error _InnerCallResult(bool success, uint256 gasUsed, bytes revertData);
 
-    function innerCall(
-        address sender,
-        bytes calldata callData,
-        uint256 gas
-    ) private returns (bool success, uint256 gasUsed, bytes memory revertData) {
+    function innerCall(address sender, bytes calldata callData, uint256 gas)
+        private
+        returns (bool success, uint256 gasUsed, bytes memory revertData)
+    {
         try this._innerCall(sender, callData, gas) {
             // Should never happen. _innerCall should always revert.
             revert();
@@ -187,21 +159,14 @@ contract CallGasEstimationProxy is Proxy {
             assembly {
                 innerCallRevertData := add(innerCallRevertData, 0x04)
             }
-            (success, gasUsed, revertData) = abi.decode(
-                innerCallRevertData,
-                (bool, uint256, bytes)
-            );
+            (success, gasUsed, revertData) = abi.decode(innerCallRevertData, (bool, uint256, bytes));
         }
     }
 
-    function _innerCall(
-        address sender,
-        bytes calldata callData,
-        uint256 gas
-    ) external {
+    function _innerCall(address sender, bytes calldata callData, uint256 gas) external {
         uint256 preGas = gasleft();
         (bool success, bytes memory data) = sender.call{gas: gas}(callData);
-        uint gasUsed = preGas - gasleft();
+        uint256 gasUsed = preGas - gasleft();
         bytes memory revertData = success ? bytes("") : data;
         revert _InnerCallResult(success, gasUsed, revertData);
     }
