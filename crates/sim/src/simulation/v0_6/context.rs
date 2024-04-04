@@ -137,6 +137,14 @@ where
             ..
         } = &context;
 
+        if context.op.paymaster().is_some()
+            && !entry_point_out.return_info.paymaster_context.is_empty()
+            && !context.entity_infos.paymaster.unwrap().is_staked
+        {
+            // [EREP-050] (only v0.6)
+            violations.push(SimulationViolation::UnstakedPaymasterContext);
+        }
+
         // v0.6 doesn't distinguish between the different types of signature failures
         // both of these will be set to true if the signature failed.
         if entry_point_out.return_info.account_sig_failed

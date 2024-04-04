@@ -204,13 +204,14 @@ where
             for opcode in &phase.forbidden_opcodes_used {
                 let (contract, opcode) = context::parse_combined_context_str(opcode)?;
 
-                // OP-080: staked entities are allowed to use BALANCE and SELFBALANCE
+                // [OP-080] - staked entities are allowed to use BALANCE and SELFBALANCE
                 if entity_info.is_staked
                     && (opcode == Opcode::BALANCE || opcode == Opcode::SELFBALANCE)
                 {
                     continue;
                 }
 
+                // [OP-011]
                 violations.push(SimulationViolation::UsedForbiddenOpcode(
                     entity,
                     contract,
@@ -220,6 +221,8 @@ where
 
             for (addr, opcode) in &phase.ext_code_access_info {
                 if *addr == self.entry_point.address() {
+                    // [OP-054]
+                    // [OP-051] - If calling `EXTCODESIZE ISZERO` the tracer won't add to this list
                     violations.push(SimulationViolation::UsedForbiddenOpcode(
                         entity,
                         *addr,
@@ -230,17 +233,10 @@ where
 
             for precompile in &phase.forbidden_precompiles_used {
                 let (contract, precompile) = context::parse_combined_context_str(precompile)?;
+                // [OP-062]
                 violations.push(SimulationViolation::UsedForbiddenPrecompile(
                     entity, contract, precompile,
                 ));
-            }
-
-            if entity.kind == EntityType::Paymaster
-                && !entry_point_out.return_info.paymaster_context.is_empty()
-                && !entity_info.is_staked
-            {
-                // [EREP-050]
-                violations.push(SimulationViolation::UnstakedPaymasterContext);
             }
 
             let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
@@ -286,18 +282,21 @@ where
             }
 
             for slot in banned_slots_accessed {
+                // [STO-*]
                 violations.push(SimulationViolation::InvalidStorageAccess(entity, slot));
             }
 
             if phase.called_non_entry_point_with_value {
-                tracing::info!("VIOLATION: Called non-entry point with value");
+                // [OP-061]
                 violations.push(SimulationViolation::CallHadValue(entity));
             }
             if phase.called_banned_entry_point_method {
+                // [OP-054]
                 violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
             }
 
             if phase.ran_out_of_gas {
+                // [OP-020]
                 violations.push(SimulationViolation::OutOfGas(entity));
             }
             for &address in &phase.undeployed_contract_accesses {
@@ -305,7 +304,7 @@ where
                 if entity.kind == EntityType::Factory && address == sender_address {
                     continue;
                 }
-
+                // OP-041 - Access to an address without deployed code is forbidden
                 violations.push(SimulationViolation::AccessedUndeployedContract(
                     entity, address,
                 ))
@@ -314,6 +313,7 @@ where
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
             if !context::is_staked(aggregator_info.stake_info, self.sim_settings) {
+                // [EREP-040]
                 violations.push(SimulationViolation::UnstakedAggregator)
             }
         }
@@ -322,7 +322,7 @@ where
             entity_types_needing_stake
         {
             entities_needing_stake.push(ent.kind);
-
+            // [STO-*]
             violations.push(SimulationViolation::NotStaked(Box::new(
                 NeedsStakeInformation {
                     needs_stake: ent,
@@ -340,11 +340,13 @@ where
             let factory = entity_infos.get(EntityType::Factory);
             match factory {
                 Some(factory) => {
+                    // [OP-031]
                     violations.push(SimulationViolation::FactoryCalledCreate2Twice(
                         factory.address,
                     ));
                 }
                 None => {
+                    // [OP-031]
                     // weird case where CREATE2 is called > 1, but there isn't a factory
                     // defined. This should never happen, blame the violation on the entry point.
                     violations.push(SimulationViolation::FactoryCalledCreate2Twice(
@@ -398,6 +400,7 @@ where
             tokio::try_join!(code_hash_future, aggregator_signature_future)?;
 
         if let Some(expected_code_hash) = expected_code_hash {
+            // [COD-010]
             if expected_code_hash != code_hash {
                 violations.push(SimulationViolation::CodeHashChanged)
             }
@@ -560,8 +563,8 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Vec<StorageRestrictio
 
     let mut restrictions = vec![];
 
-    // STO-010 - always allowed to access storage on the account
-    // [OP-051, OP-054] - block access to the entrypoint, except for depositTo and fallback
+    // [STO-010] - always allowed to access storage on the account
+    // [OP-054] - block access to the entrypoint, except for depositTo and fallback
     //   - this is handled at another level, so we don't need to check for it here
     //   - at this level we can allow any entry point access through
     if address.eq(&sender) || address.eq(&entrypoint) {
@@ -583,9 +586,9 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Vec<StorageRestrictio
         // [STO-033]
         let is_read_permission = !access_info.writes.contains_key(slot);
 
-        // STO-021 - Associated storage on external contracts is allowed
+        // [STO-021] - Associated storage on external contracts is allowed
         if is_sender_associated && !is_same_address {
-            // STO-022 - Factory must be staked to access associated storage in a deploy
+            // [STO-022] - Factory must be staked to access associated storage in a deploy
             if has_factory {
                 match entity.kind {
                     EntityType::Paymaster | EntityType::Aggregator => {

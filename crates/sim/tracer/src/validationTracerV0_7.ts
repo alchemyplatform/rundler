@@ -313,7 +313,8 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
       }
       this.lastOp = opcode
 
-      if (opcode === 'SLOAD' || opcode === 'SSTORE') {
+      // MODIFICATION: [OP-070] - Treat TLOAD and TSTORE as SLOAD and SSTORE
+      if (opcode === 'SLOAD' || opcode === 'SSTORE' || opcode === 'TLOAD' || opcode === 'TSTORE') {
         const slot = toWord(log.stack.peek(0).toString(16))
         const slotHex = toHex(slot)
         const addr = log.contract.getAddress()
@@ -326,7 +327,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
           }
           this.currentLevel.access[addrHex] = access
         }
-        if (opcode === 'SLOAD') {
+        if (opcode === 'SLOAD' || opcode === 'TLOAD') {
           // read slot values before this UserOp was created
           // (so saving it if it was written before the first read)
           if (access.reads[slotHex] == null && access.writes[slotHex] == null) {
