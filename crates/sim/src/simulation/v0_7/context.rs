@@ -30,7 +30,8 @@ use rundler_types::{
     },
     pool::SimulationViolation,
     v0_7::UserOperation,
-    EntityType, UserOperation as UserOperationTrait, ValidationOutput, ValidationRevert,
+    EntityInfos, EntityType, UserOperation as UserOperationTrait, ValidationOutput,
+    ValidationRevert,
 };
 use rundler_utils::eth::ContractRevertError;
 
@@ -103,12 +104,17 @@ where
 
         let call_stack = self.parse_call_stack(tracer_out.calls.clone())?;
 
-        let top = call_stack
-            .get(&self.entry_point_address)
-            .context("No calls to entry point in call stack")?
-            .iter()
-            .find(|call| call.method == SIMULATE_VALIDATION_METHOD)
-            .context("No top level call found in call stack")?;
+        let top = call_stack.last().context("No calls in call stack")?;
+        if top.to != self.entry_point_address {
+            Err(anyhow::anyhow!(
+                "Top call in call stack is not to entry point"
+            ))?
+        }
+        if top.method != SIMULATE_VALIDATION_METHOD {
+            Err(anyhow::anyhow!(
+                "Top call in call stack is not to simulateValidation"
+            ))?
+        }
 
         let mut entry_point_out = match self.parse_top_call(top)? {
             Ok(validation_output) => validation_output,
@@ -131,31 +137,30 @@ where
         let mut tracer_out = self.parse_tracer_out(&op, tracer_out)?;
 
         // Check the call stack for calls with value or to the entry point
-        for calls in call_stack.values() {
-            for call in calls {
-                // TODO(danc): try to attribute the call to the correct entity
-                if call.to == self.entry_point_address
-                    && (call.from != self.entry_point_address && call.from != Address::zero())
+        for (i, call) in call_stack.iter().enumerate() {
+            if call.to == self.entry_point_address
+                && (call.from != self.entry_point_address && call.from != Address::zero())
+            {
+                // [OP-053] - can only call fallback from sender
+                if call.method == "0x" && call.from == op.sender() {
+                    continue;
+                }
+                // [OP-052] - can only call depositTo() from sender or factory
+                if call.method == DEPOSIT_TO_METHOD
+                    && (call.from == op.sender() || Some(call.from) == op.factory())
                 {
-                    // [OP-053] - can only call fallback from sender
-                    if call.method == "0x" && call.from == op.sender() {
-                        continue;
-                    }
-                    // [OP-052] - can only call depositTo() from sender or factory
-                    if call.method == DEPOSIT_TO_METHOD
-                        && (call.from == op.sender() || Some(call.from) == op.factory())
-                    {
-                        continue;
-                    }
-
-                    // [OP-054] all other calls to entry point are banned
-                    tracer_out.phases[1].called_banned_entry_point_method = true;
+                    continue;
                 }
 
-                // [OP-061] calls with value are banned, except for the calls above
-                if call.value.is_some_and(|v| v != U256::zero()) {
-                    tracer_out.phases[1].called_non_entry_point_with_value = true;
-                }
+                // [OP-054] all other calls to entry point are banned
+                let phase = Self::get_nearest_entity_phase(&call_stack[i..], &entity_infos);
+                tracer_out.phases[phase].called_banned_entry_point_method = true;
+            }
+
+            // [OP-061] calls with value are banned, except for the calls above
+            if call.value.is_some_and(|v| v != U256::zero()) {
+                let phase = Self::get_nearest_entity_phase(&call_stack[i..], &entity_infos);
+                tracer_out.phases[phase].called_non_entry_point_with_value = true;
             }
         }
 
@@ -209,12 +214,9 @@ struct CallWithResult {
 }
 
 impl<T> ValidationContextProvider<T> {
-    fn parse_call_stack(
-        &self,
-        mut calls: Vec<CallInfo>,
-    ) -> anyhow::Result<HashMap<Address, Vec<CallWithResult>>> {
+    fn parse_call_stack(&self, mut calls: Vec<CallInfo>) -> anyhow::Result<Vec<CallWithResult>> {
         let mut call_stack = Vec::new();
-        let mut ret: HashMap<Address, Vec<CallWithResult>> = HashMap::new();
+        let mut ret: Vec<CallWithResult> = Vec::new();
         let last_exit_info = calls.pop().context("call stack had no calls")?;
         for call in calls {
             match call {
@@ -222,7 +224,7 @@ impl<T> ValidationContextProvider<T> {
                     let method_info: MethodInfo = call_stack
                         .pop()
                         .context("unbalanced call stack, exit without method call")?;
-                    ret.entry(method_info.to).or_default().push(CallWithResult {
+                    ret.push(CallWithResult {
                         call_type: method_info.method_type,
                         method: method_info.method,
                         to: method_info.to,
@@ -243,19 +245,17 @@ impl<T> ValidationContextProvider<T> {
         // final call is simulate handle ops, but is not part of the call stack
         match last_exit_info {
             CallInfo::Exit(exit_info) => {
-                ret.entry(self.entry_point_address)
-                    .or_default()
-                    .push(CallWithResult {
-                        call_type: Opcode::CALL,
-                        method: SIMULATE_VALIDATION_METHOD.to_string(),
-                        to: self.entry_point_address,
-                        from: Address::zero(),
-                        value: None,
-                        gas: 0,
-                        gas_used: exit_info.gas_used,
-                        exit_type: exit_info.exit_type,
-                        exit_data: exit_info.data,
-                    });
+                ret.push(CallWithResult {
+                    call_type: Opcode::CALL,
+                    method: SIMULATE_VALIDATION_METHOD.to_string(),
+                    to: self.entry_point_address,
+                    from: Address::zero(),
+                    value: None,
+                    gas: 0,
+                    gas_used: exit_info.gas_used,
+                    exit_type: exit_info.exit_type,
+                    exit_data: exit_info.data,
+                });
             }
             CallInfo::Method(info) => {
                 bail!("Final call stack entry is not an exit: {info:?}")
@@ -481,6 +481,27 @@ impl<T> ValidationContextProvider<T> {
             );
         }
         Ok(())
+    }
+
+    fn get_nearest_entity_phase(calls: &[CallWithResult], entities: &EntityInfos) -> usize {
+        // Call stack is ordered in order in which calls complete.
+        // To attribute a particular call to an entity, scan from that call forward until
+        // an entity address is found.
+        // If no entity address is found, attribute to the account, as the account must exist.
+        calls
+            .iter()
+            .find_map(|c| entities.type_from_address(c.to))
+            .map(entity_type_to_phase)
+            .unwrap_or(1)
+    }
+}
+
+fn entity_type_to_phase(entity_type: EntityType) -> usize {
+    match entity_type {
+        EntityType::Factory => 0,
+        EntityType::Account => 1,
+        EntityType::Paymaster => 2,
+        EntityType::Aggregator => 1, // map aggregator to account
     }
 }
 
