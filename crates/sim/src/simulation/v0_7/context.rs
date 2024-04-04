@@ -19,7 +19,7 @@ use std::{
 use anyhow::{bail, Context};
 use ethers::{
     abi::AbiDecode,
-    types::{Address, BlockId, Bytes, Opcode, U256},
+    types::{Address, BlockId, Bytes, Opcode, H160, U256},
     utils::{hex::FromHex, keccak256},
 };
 use rundler_provider::{EntryPoint, Provider, SimulationProvider};
@@ -73,6 +73,9 @@ const CREATE_SENDER_METHOD: &str = "0x570e1a36";
 const VALIDATE_USER_OP_METHOD: &str = "0x19822f7c";
 const VALIDATE_PAYMASTER_USER_OP_METHOD: &str = "0x52b7512c";
 const DEPOSIT_TO_METHOD: &str = "0xb760faf9";
+// Max precompile address 0x10000
+const MAX_PRECOMPILE_ADDRESS: Address =
+    H160([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]);
 
 /// A provider for creating `ValidationContext` for entry point v0.7.
 pub(crate) struct ValidationContextProvider<T> {
@@ -134,29 +137,27 @@ where
                 if call.to == self.entry_point_address
                     && (call.from != self.entry_point_address && call.from != Address::zero())
                 {
-                    // OP-053 - can only call fallback from sender
+                    // [OP-053] - can only call fallback from sender
                     if call.method == "0x" && call.from == op.sender() {
                         continue;
                     }
-                    // OP-052 - can only call depositTo() from sender or factory
+                    // [OP-052] - can only call depositTo() from sender or factory
                     if call.method == DEPOSIT_TO_METHOD
                         && (call.from == op.sender() || Some(call.from) == op.factory())
                     {
                         continue;
                     }
 
-                    // OP-054 all other calls to entry point are banned
+                    // [OP-054] all other calls to entry point are banned
                     tracer_out.phases[1].called_banned_entry_point_method = true;
                 }
 
-                // OP-061 calls with value are banned, except for the calls above
+                // [OP-061] calls with value are banned, except for the calls above
                 if call.value.is_some_and(|v| v != U256::zero()) {
                     tracer_out.phases[1].called_non_entry_point_with_value = true;
                 }
             }
         }
-
-        tracing::info!("TRACER OUT {tracer_out:?}");
 
         Ok(ValidationContext {
             has_factory: op.factory().is_some(),
@@ -325,6 +326,7 @@ impl<T> ValidationContextProvider<T> {
                 &mut expected_storage,
                 EntityType::Factory,
             );
+            // [OP-031] - create call can only be called once
             if let Some(count) = call_from_entry_point.opcodes.get(&Opcode::CREATE2) {
                 if *count > 1 {
                     factory_called_create2_twice = true;
@@ -403,14 +405,13 @@ impl<T> ValidationContextProvider<T> {
         expected_storage: &mut BTreeMap<Address, BTreeMap<U256, U256>>,
         entity_type: EntityType,
     ) -> Phase {
+        // [OP-011] - banned opcodes
+        // [OP-012] - tracer will not add GAS to list if followed by *CALL
         let mut forbidden_opcodes_used = vec![];
-
-        // TODO OP-062
-        let forbidden_precompiles_used = vec![];
-
         for opcode in call.opcodes.keys() {
             if BANNED_OPCODES.contains(opcode)
                 || (*opcode == Opcode::CREATE2 && entity_type != EntityType::Factory)
+            // [OP-031] - CREATE2 allowed by factory
             {
                 forbidden_opcodes_used
                     .push(format!("{}:{}", call.top_level_target_address, opcode));
@@ -439,17 +440,21 @@ impl<T> ValidationContextProvider<T> {
             })
             .collect();
 
-        let undeployed_contract_accesses = call
-            .contract_size
-            .iter()
-            .filter_map(|(address, info)| {
-                if info.contract_size == 0 {
-                    Some(*address)
+        let mut forbidden_precompiles_used = vec![];
+        let mut undeployed_contract_accesses = vec![];
+        call.contract_size.iter().for_each(|(address, info)| {
+            if info.contract_size == 0 {
+                if *address < MAX_PRECOMPILE_ADDRESS {
+                    // [OP-062] - banned precompiles
+                    // The tracer catches any allowed precompiles and does not add them to this list
+                    forbidden_precompiles_used
+                        .push(format!("{}:{}", call.top_level_target_address, *address,));
                 } else {
-                    None
+                    // [OP-041]
+                    undeployed_contract_accesses.push(*address);
                 }
-            })
-            .collect();
+            }
+        });
 
         Phase {
             forbidden_opcodes_used,
@@ -457,6 +462,7 @@ impl<T> ValidationContextProvider<T> {
             storage_accesses,
             called_banned_entry_point_method: false, // set during call stack parsing
             called_non_entry_point_with_value: false, // set during call stack parsing
+            // [OP-020]
             ran_out_of_gas: call.oog.unwrap_or(false),
             undeployed_contract_accesses,
             ext_code_access_info: call.ext_code_access_info.clone(),
