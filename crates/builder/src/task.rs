@@ -74,7 +74,7 @@ pub struct Args {
     pub max_bundle_gas: u64,
     /// URL to submit bundles too
     pub submit_url: String,
-    /// Percentage to add to the the network priority fee for the bundle priority fee
+    /// Percentage to add to the network priority fee for the bundle priority fee
     pub bundle_priority_fee_overhead_percent: u64,
     /// Priority fee mode to use for operation priority fee minimums
     pub priority_fee_mode: PriorityFeeMode,

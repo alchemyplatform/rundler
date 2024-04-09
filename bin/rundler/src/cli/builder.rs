@@ -109,7 +109,7 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// Choice of what sender type to to use for transaction submission.
+    /// Choice of what sender type to use for transaction submission.
     /// Defaults to the value of `raw`. Other options inclue `flashbots`,
     /// `conditional` and `polygon_bloxroute`
     #[arg(
