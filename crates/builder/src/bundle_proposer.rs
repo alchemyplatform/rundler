@@ -451,7 +451,7 @@ where
                 }
             }
 
-            // Update the running gas that would need to be be spent to execute the bundle so far.
+            // Update the running gas that would need to be spent to execute the bundle so far.
             gas_spent += gas::user_operation_execution_gas_limit(
                 &self.settings.chain_spec,
                 &op,
