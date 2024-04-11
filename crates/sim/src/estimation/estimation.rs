@@ -126,15 +126,19 @@ impl<P: Provider, E: EntryPoint> GasEstimator for GasEstimatorImpl<P, E> {
             .map_err(anyhow::Error::from)?;
 
         // Estimate pre verification gas at the current fees
-        // If the user provides fees, use them, otherwise use the current bundle fees
+        // If the user provides non-zero fees, use them, otherwise use the current bundle fees
         let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
-        let gas_price = if let (Some(max_fee), Some(prio_fee)) =
+        let mut gas_price = if let (Some(max_fee), Some(prio_fee)) =
             (op.max_fee_per_gas, op.max_priority_fee_per_gas)
         {
-            cmp::min(max_fee, base_fee + prio_fee)
+            cmp::min(max_fee, base_fee.saturating_add(prio_fee))
         } else {
-            base_fee + bundle_fees.max_priority_fee_per_gas
+            U256::zero()
         };
+        if gas_price.is_zero() {
+            gas_price = base_fee.saturating_add(bundle_fees.max_priority_fee_per_gas);
+        }
+
         let pre_verification_gas = self.estimate_pre_verification_gas(&op, gas_price).await?;
 
         let op = UserOperation {
