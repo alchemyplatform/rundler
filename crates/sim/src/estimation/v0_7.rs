@@ -65,7 +65,7 @@ where
         Ok(GasEstimate {
             pre_verification_gas,
             call_gas_limit: 100_000.into(),
-            verification_gas_limit: 100_000.into(),
+            verification_gas_limit: 500_000.into(),
             paymaster_verification_gas_limit: op.paymaster.map(|_| 100_000.into()),
             paymaster_post_op_gas_limit: op.paymaster.map(|_| 100_000.into()),
         })
