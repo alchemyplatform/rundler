@@ -644,22 +644,22 @@ struct UoPoolMetrics {}
 
 impl UoPoolMetrics {
     fn update_ops_seen(num_ops: isize, entry_point: Address) {
-        metrics::gauge!("op_pool_ops_seen", "entrypoint" => entry_point.to_string())
+        metrics::gauge!("op_pool_ops_seen", "entry_point" => entry_point.to_string())
             .increment(num_ops as f64);
     }
 
     fn increment_unmined_operations(num_ops: usize, entry_point: Address) {
-        metrics::counter!("op_pool_unmined_operations", "entrypoint" => entry_point.to_string())
+        metrics::counter!("op_pool_unmined_operations", "entry_point" => entry_point.to_string())
             .increment(num_ops as u64);
     }
 
     fn increment_removed_operations(num_ops: usize, entry_point: Address) {
-        metrics::counter!("op_pool_removed_operations", "entrypoint" => entry_point.to_string())
+        metrics::counter!("op_pool_removed_operations", "entry_point" => entry_point.to_string())
             .increment(num_ops as u64);
     }
 
     fn increment_removed_entities(entry_point: Address) {
-        metrics::counter!("op_pool_removed_entities", "entrypoint" => entry_point.to_string())
+        metrics::counter!("op_pool_removed_entities", "entry_point" => entry_point.to_string())
             .increment(1);
     }
 
