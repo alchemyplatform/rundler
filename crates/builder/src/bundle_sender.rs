@@ -27,7 +27,7 @@ use tokio::{
     join,
     sync::{broadcast, mpsc, oneshot},
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     bundle_proposer::BundleProposer,
@@ -105,6 +105,7 @@ where
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
+    #[instrument(skip_all, fields(entry_point = self.entry_point.address().to_string(), builder_index = self.builder_index))]
     async fn send_bundles_in_loop(mut self) -> anyhow::Result<()> {
         let Ok(mut new_heads) = self.pool.subscribe_new_heads().await else {
             error!("Failed to subscribe to new blocks");
@@ -227,7 +228,7 @@ where
                 } => info!("Bundle initially had {initial_op_count} operations, but after increasing gas fees {attempt_number} time(s) it was empty"),
                 SendBundleResult::StalledAtMaxFeeIncreases => warn!("Bundle failed to mine after {} fee increases", self.settings.max_fee_increases),
                 SendBundleResult::Error(error) => {
-                    BuilderMetrics::increment_bundle_txns_failed(self.builder_index);
+                    BuilderMetrics::increment_bundle_txns_failed(self.builder_index, self.entry_point.address());
                     error!("Failed to send bundle. Will retry next block: {error:#?}");
                 }
             }
@@ -300,8 +301,16 @@ where
                 gas_used,
                 ..
             } => {
-                BuilderMetrics::increment_bundle_txns_success(self.builder_index);
-                BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used, self.builder_index);
+                BuilderMetrics::increment_bundle_txns_success(
+                    self.builder_index,
+                    self.entry_point.address(),
+                );
+                BuilderMetrics::set_bundle_gas_stats(
+                    gas_limit,
+                    gas_used,
+                    self.builder_index,
+                    self.entry_point.address(),
+                );
                 if attempt_number == 0 {
                     info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
                 } else {
@@ -314,7 +323,10 @@ where
                     self.builder_index,
                     nonce.low_u64(),
                 ));
-                BuilderMetrics::increment_bundle_txns_dropped(self.builder_index);
+                BuilderMetrics::increment_bundle_txns_dropped(
+                    self.builder_index,
+                    self.entry_point.address(),
+                );
                 info!("Previous transaction dropped by sender");
             }
             TrackerUpdate::NonceUsedForOtherTx { nonce } => {
@@ -322,11 +334,17 @@ where
                     self.builder_index,
                     nonce.low_u64(),
                 ));
-                BuilderMetrics::increment_bundle_txns_nonce_used(self.builder_index);
+                BuilderMetrics::increment_bundle_txns_nonce_used(
+                    self.builder_index,
+                    self.entry_point.address(),
+                );
                 info!("Nonce used by external transaction")
             }
             TrackerUpdate::ReplacementUnderpriced => {
-                BuilderMetrics::increment_bundle_txn_replacement_underpriced(self.builder_index);
+                BuilderMetrics::increment_bundle_txn_replacement_underpriced(
+                    self.builder_index,
+                    self.entry_point.address(),
+                );
                 info!("Replacement transaction underpriced")
             }
         };
@@ -372,7 +390,10 @@ where
                 ));
                 return Ok(match initial_op_count {
                     Some(initial_op_count) => {
-                        BuilderMetrics::increment_bundle_txns_abandoned(self.builder_index);
+                        BuilderMetrics::increment_bundle_txns_abandoned(
+                            self.builder_index,
+                            self.entry_point.address(),
+                        );
                         SendBundleResult::NoOperationsAfterFeeIncreases {
                             initial_op_count,
                             attempt_number: fee_increase_count,
@@ -391,7 +412,10 @@ where
             }
             let current_fees = GasFees::from(&tx);
 
-            BuilderMetrics::increment_bundle_txns_sent(self.builder_index);
+            BuilderMetrics::increment_bundle_txns_sent(
+                self.builder_index,
+                self.entry_point.address(),
+            );
 
             let send_result = self
                 .transaction_tracker
@@ -429,8 +453,16 @@ where
                         nonce.low_u64(),
                         block_number,
                     ));
-                    BuilderMetrics::increment_bundle_txns_success(self.builder_index);
-                    BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used, self.builder_index);
+                    BuilderMetrics::increment_bundle_txns_success(
+                        self.builder_index,
+                        self.entry_point.address(),
+                    );
+                    BuilderMetrics::set_bundle_gas_stats(
+                        gas_limit,
+                        gas_used,
+                        self.builder_index,
+                        self.entry_point.address(),
+                    );
                     return Ok(SendBundleResult::Success {
                         block_number,
                         attempt_number,
@@ -445,7 +477,10 @@ where
                         self.builder_index,
                         nonce.low_u64(),
                     ));
-                    BuilderMetrics::increment_bundle_txns_dropped(self.builder_index);
+                    BuilderMetrics::increment_bundle_txns_dropped(
+                        self.builder_index,
+                        self.entry_point.address(),
+                    );
                     info!("Previous transaction dropped by sender");
                 }
                 TrackerUpdate::NonceUsedForOtherTx { nonce } => {
@@ -453,12 +488,16 @@ where
                         self.builder_index,
                         nonce.low_u64(),
                     ));
-                    BuilderMetrics::increment_bundle_txns_nonce_used(self.builder_index);
+                    BuilderMetrics::increment_bundle_txns_nonce_used(
+                        self.builder_index,
+                        self.entry_point.address(),
+                    );
                     bail!("nonce used by external transaction")
                 }
                 TrackerUpdate::ReplacementUnderpriced => {
                     BuilderMetrics::increment_bundle_txn_replacement_underpriced(
                         self.builder_index,
+                        self.entry_point.address(),
                     );
                     info!("Replacement transaction underpriced, increasing fees")
                 }
@@ -468,13 +507,19 @@ where
                 current_fees.max_fee_per_gas,
                 current_fees.max_priority_fee_per_gas,
             );
-            BuilderMetrics::increment_bundle_txn_fee_increases(self.builder_index);
+            BuilderMetrics::increment_bundle_txn_fee_increases(
+                self.builder_index,
+                self.entry_point.address(),
+            );
             required_fees = Some(
                 current_fees.increase_by_percent(self.settings.replacement_fee_percent_increase),
             );
             is_replacement = true;
         }
-        BuilderMetrics::increment_bundle_txns_abandoned(self.builder_index);
+        BuilderMetrics::increment_bundle_txns_abandoned(
+            self.builder_index,
+            self.entry_point.address(),
+        );
         Ok(SendBundleResult::StalledAtMaxFeeIncreases)
     }
 
@@ -569,47 +614,52 @@ where
 struct BuilderMetrics {}
 
 impl BuilderMetrics {
-    fn increment_bundle_txns_sent(builder_index: u64) {
-        metrics::counter!("builder_bundle_txns_sent", "builder_index" => builder_index.to_string())
+    fn increment_bundle_txns_sent(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_txns_sent", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string())
             .increment(1);
     }
 
-    fn increment_bundle_txns_success(builder_index: u64) {
-        metrics::counter!("builder_bundle_txns_success", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txns_success(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_txns_success", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn increment_bundle_txns_dropped(builder_index: u64) {
-        metrics::counter!("builder_bundle_txns_dropped", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txns_dropped(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_txns_dropped", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
     // used when we decide to stop trying a transaction
-    fn increment_bundle_txns_abandoned(builder_index: u64) {
-        metrics::counter!("builder_bundle_txns_abandoned", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txns_abandoned(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_txns_abandoned", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
     // used when sending a transaction fails
-    fn increment_bundle_txns_failed(builder_index: u64) {
-        metrics::counter!("builder_bundle_txns_failed", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txns_failed(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_txns_failed", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn increment_bundle_txns_nonce_used(builder_index: u64) {
-        metrics::counter!("builder_bundle_txns_nonce_used", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txns_nonce_used(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_txns_nonce_used", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn increment_bundle_txn_fee_increases(builder_index: u64) {
-        metrics::counter!("builder_bundle_fee_increases", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txn_fee_increases(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_fee_increases", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn increment_bundle_txn_replacement_underpriced(builder_index: u64) {
-        metrics::counter!("builder_bundle_replacement_underpriced", "builder_index" => builder_index.to_string()).increment(1);
+    fn increment_bundle_txn_replacement_underpriced(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_bundle_replacement_underpriced", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn set_bundle_gas_stats(gas_limit: Option<U256>, gas_used: Option<U256>, builder_index: u64) {
+    fn set_bundle_gas_stats(
+        gas_limit: Option<U256>,
+        gas_used: Option<U256>,
+        builder_index: u64,
+        entry_point: Address,
+    ) {
         if let Some(limit) = gas_limit {
-            metrics::counter!("builder_bundle_gas_limit", "builder_index" => builder_index.to_string()).increment(limit.as_u64());
+            metrics::counter!("builder_bundle_gas_limit", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(limit.as_u64());
         }
         if let Some(used) = gas_used {
-            metrics::counter!("builder_bundle_gas_used", "builder_index" => builder_index.to_string()).increment(used.as_u64());
+            metrics::counter!("builder_bundle_gas_used", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(used.as_u64());
         }
     }
 }
