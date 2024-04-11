@@ -167,17 +167,12 @@ where
         )?;
 
         // Limit the amount of gas in the bundle
-        tracing::debug!(
-            "Builder index: {}, starting bundle proposal with {} ops",
-            self.builder_index,
-            ops.len(),
-        );
+        tracing::debug!("Starting bundle proposal with {} ops", ops.len(),);
 
         // Do an initial filtering of ops that we want to simulate.
         let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
         tracing::debug!(
-            "Builder index: {}, bundle proposal after limit had {} ops and {:?} gas limit",
-            self.builder_index,
+            "Bundle proposal after limit had {} ops and {:?} gas limit",
             ops.len(),
             gas_limit
         );
@@ -217,8 +212,7 @@ where
             let gas_estimate = self.estimate_gas_rejecting_failed_ops(&mut context).await?;
             if let Some(gas_estimate) = gas_estimate {
                 tracing::debug!(
-                    "Builder index: {}, bundle proposal succeeded with {} ops and {:?} gas limit",
-                    self.builder_index,
+                    "Bundle proposal succeeded with {} ops and {:?} gas limit",
                     context.iter_ops().count(),
                     gas_estimate
                 );
