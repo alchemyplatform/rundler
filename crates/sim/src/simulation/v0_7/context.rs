@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -313,7 +313,7 @@ impl<T> ValidationContextProvider<T> {
     ) -> anyhow::Result<ContextTracerOutput> {
         let mut phases = vec![Phase::default(); 3];
         let mut factory_called_create2_twice = false;
-        let mut expected_storage: BTreeMap<Address, BTreeMap<U256, U256>> = BTreeMap::new();
+        let mut expected_storage = ExpectedStorage::default();
 
         // Check factory
         if let Some(call_from_entry_point) = tracer_out
@@ -396,13 +396,13 @@ impl<T> ValidationContextProvider<T> {
             accessed_contract_addresses,
             associated_slots_by_address: AssociatedSlotsByAddress(associated_slots_by_address),
             factory_called_create2_twice,
-            expected_storage: ExpectedStorage(expected_storage),
+            expected_storage,
         })
     }
 
     fn parse_call_to_phase(
         call: &TopLevelCallInfo,
-        expected_storage: &mut BTreeMap<Address, BTreeMap<U256, U256>>,
+        expected_storage: &mut ExpectedStorage,
         entity_type: EntityType,
     ) -> Phase {
         // [OP-011] - banned opcodes
@@ -423,10 +423,7 @@ impl<T> ValidationContextProvider<T> {
             .iter()
             .map(|(address, info)| {
                 let reads = info.reads.iter().map(|(slot, value)| {
-                    expected_storage
-                        .entry(*address)
-                        .or_default()
-                        .insert(*slot, *value);
+                    expected_storage.insert(*address, *slot, *value);
                     (*slot, *value)
                 });
                 let writes = info.writes.iter().map(|(slot, count)| (*slot, *count));

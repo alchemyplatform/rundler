@@ -276,11 +276,11 @@ pub fn parse_validation_data(data: U256) -> ValidationData {
     let slice: [u8; 32] = data.into();
     let aggregator = Address::from_slice(&slice[12..]);
 
-    let mut buf = [0_u8; 8];
+    let mut buf = [0; 8];
     buf[2..8].copy_from_slice(&slice[6..12]);
     let valid_until = u64::from_be_bytes(buf);
 
-    let mut buf = [0_u8; 8];
+    let mut buf = [0; 8];
     buf[2..8].copy_from_slice(&slice[..6]);
     let valid_after = u64::from_be_bytes(buf);
 
