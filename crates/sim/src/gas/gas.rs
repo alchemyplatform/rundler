@@ -94,7 +94,7 @@ pub async fn estimate_pre_verification_gas<P: Provider>(
         },
     };
 
-    Ok(static_gas + dynamic_gas)
+    Ok(static_gas.saturating_add(dynamic_gas))
 }
 
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
