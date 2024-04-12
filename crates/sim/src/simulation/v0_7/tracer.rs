@@ -22,6 +22,8 @@ use rundler_provider::{Provider, SimulationProvider};
 use rundler_types::v0_7::UserOperation;
 use serde::Deserialize;
 
+use crate::ExpectedStorage;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(unused)]
@@ -29,6 +31,7 @@ pub(super) struct TracerOutput {
     pub(super) calls_from_entry_point: Vec<TopLevelCallInfo>,
     pub(super) keccak: Vec<String>,
     pub(super) calls: Vec<CallInfo>,
+    pub(super) expected_storage: ExpectedStorage,
     pub(super) logs: Vec<LogInfo>,
     pub(super) debug: Option<Vec<String>>,
 }
