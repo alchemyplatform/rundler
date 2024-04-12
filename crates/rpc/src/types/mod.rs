@@ -167,7 +167,6 @@ pub(crate) struct RpcGasEstimate {
     call_gas_limit: U256,
     verification_gas_limit: U256,
     paymaster_verification_gas_limit: Option<U256>,
-    paymaster_post_op_gas_limit: Option<U256>,
 }
 
 impl From<GasEstimate> for RpcGasEstimate {
@@ -177,7 +176,6 @@ impl From<GasEstimate> for RpcGasEstimate {
             call_gas_limit: estimate.call_gas_limit,
             verification_gas_limit: estimate.verification_gas_limit,
             paymaster_verification_gas_limit: estimate.paymaster_verification_gas_limit,
-            paymaster_post_op_gas_limit: estimate.paymaster_post_op_gas_limit,
         }
     }
 }
