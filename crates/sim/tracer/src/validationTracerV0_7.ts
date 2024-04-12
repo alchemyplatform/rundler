@@ -46,8 +46,22 @@ export interface BundlerTracerResult {
    * values passed into KECCAK opcode
    */
   keccak: string[]
+
+  /**
+   * calls and returns, collected globally
+   */
   calls: Array<ExitInfo | MethodInfo>
+
+  /**
+   * logs, collected globally
+   */
   logs: LogInfo[]
+
+  /**
+   * expected storage slots, collected globally
+   */
+  expectedStorage: Record<string, Record<string, string>>
+
   debug: string[]
 }
 
@@ -86,7 +100,7 @@ export interface ContractSizeInfo {
 }
 
 export interface AccessInfo {
-  // slot value, just prior this operation
+  // slot value, just prior to this operation
   reads: { [slot: string]: string }
   // count of writes.
   writes: { [slot: string]: number }
@@ -113,8 +127,14 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
   stopCollecting: boolean
   currentLevel: TopLevelCallInfo
   topLevelCallCounter: number
+  allStorageAccesses: Record<string, Record<string, string | null>>
   countSlot: (list: { [key: string]: number | undefined }, key: any) => void
-}
+  computeIfAbsent<K extends keyof any, V>(
+    map: Record<K, V>,
+    key: K,
+    getValue: () => V
+  ): V
+} 
 
 /**
  * tracer to collect data for opcode banning.
@@ -131,6 +151,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
     callsFromEntryPoint: [],
     currentLevel: null as any,
     keccak: [],
+    expectedStorage: {},
     calls: [],
     logs: [],
     debug: [],
@@ -140,6 +161,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
     stopCollectingTopic: 'bb47ee3e183a558b1a2ff0874b079f3fc5478b7454eacf2bfc5af2ff5878f972',
     stopCollecting: false,
     topLevelCallCounter: 0,
+    allStorageAccesses: {},
 
     fault (log: LogStep, _db: LogDb): void {
       var err = "";
@@ -151,11 +173,28 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
     },
 
     result (_ctx: LogContext, _db: LogDb): BundlerTracerResult {
+      Object.keys(this.allStorageAccesses).forEach((address) => {
+        const slotAccesses = this.allStorageAccesses[address];
+        const valuesBySlot: Record<string, string> = {};
+        let hasValues = false;
+        Object.keys(slotAccesses).forEach((slot) => {
+          const value = slotAccesses[slot];
+          if (value) {
+            valuesBySlot[slot] = value;
+            hasValues = true;
+          }
+        });
+        if (hasValues) {
+          this.expectedStorage[address] = valuesBySlot;
+        }
+      });
+
       return {
         callsFromEntryPoint: this.callsFromEntryPoint,
         keccak: this.keccak,
         logs: this.logs,
         calls: this.calls,
+        expectedStorage: this.expectedStorage,
         debug: this.debug // for internal debugging.
       }
     },
@@ -189,6 +228,22 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
     countSlot (list: { [key: string]: number | undefined }, key: any) {
       list[key] = (list[key] ?? 0) + 1
     },
+
+    computeIfAbsent<K extends keyof any, V>(
+      map: Record<K, V>,
+      key: K,
+      getValue: () => V
+    ): V {
+      const value = map[key];
+      if (value !== undefined) {
+        return value;
+      }
+      const newValue = getValue();
+      map[key] = newValue;
+      return newValue;
+    },
+
+
     step (log: LogStep, db: LogDb): any {
       if (this.stopCollecting) {
         return
@@ -320,6 +375,13 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
         const addr = log.contract.getAddress()
         const addrHex = toHex(addr)
         let access = this.currentLevel.access[addrHex]
+
+        let initialValuesBySlot = this.computeIfAbsent(
+          this.allStorageAccesses,
+          addrHex,
+          (): Record<string, string | null> => ({})
+        );
+
         if (access == null) {
           access = {
             reads: {},
@@ -333,8 +395,16 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
           if (access.reads[slotHex] == null && access.writes[slotHex] == null) {
             access.reads[slotHex] = toHex(db.getState(addr, slot))
           }
+
+          if (!(slotHex in initialValuesBySlot)) {
+            initialValuesBySlot[slotHex] = toHex(db.getState(addr, slot));
+          }
         } else {
           this.countSlot(access.writes, slotHex)
+
+          if (!(slotHex in initialValuesBySlot)) {
+            initialValuesBySlot[slotHex] = null;
+          }
         }
       }
 
