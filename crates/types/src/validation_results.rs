@@ -15,15 +15,17 @@ use ethers::{
     abi::{self, AbiDecode, AbiError},
     types::{Address, Bytes, H160, U256},
 };
+use rundler_utils::eth::ContractRevertError;
 
 use crate::{
     contracts::{
         v0_6::i_entry_point::{
-            ValidationResult as ValidationResultV0_6,
+            FailedOp as FailedOpV0_6, ValidationResult as ValidationResultV0_6,
             ValidationResultWithAggregation as ValidationResultWithAggregationV0_6,
         },
         v0_7::entry_point_simulations::{
-            AggregatorStakeInfo as AggregatorStakeInfoV0_7, ReturnInfo as ReturnInfoV0_7,
+            AggregatorStakeInfo as AggregatorStakeInfoV0_7, FailedOp as FailedOpV0_7,
+            FailedOpWithRevert as FailedOpWithRevertV0_7, ReturnInfo as ReturnInfoV0_7,
             StakeInfo as StakeInfoV0_7, ValidationResult as ValidationResultV0_7,
         },
     },
@@ -42,11 +44,78 @@ pub enum ValidationRevert {
     #[error("{0}")]
     EntryPoint(String),
     /// The operation reverted
-    #[error("{0} : {1:?}")]
-    Operation(String, Bytes),
+    #[error("{}", Self::display_operation_error(.entry_point_reason, .inner_revert_reason))]
+    Operation {
+        /// Error message returned by entry point
+        entry_point_reason: String,
+        /// Revert data of the validation failure returned by an entity
+        inner_revert_data: Bytes,
+        /// Message parsed from the inner revert data, if the entity used the
+        /// `revert` or `require` Solidity keywords
+        inner_revert_reason: Option<String>,
+    },
     /// Validation everted with an unknown signature
     #[error("revert with bytes: {0:?}")]
     Unknown(Bytes),
+}
+
+impl ValidationRevert {
+    /// Extracts the error code string returned by the entry point, e.g.
+    /// `"AA24"`, if it exists.
+    pub fn entry_point_error_code(&self) -> Option<&str> {
+        let message = match self {
+            Self::EntryPoint(message) => Some(message),
+            Self::Operation {
+                entry_point_reason: entry_point_message,
+                ..
+            } => Some(entry_point_message),
+            Self::Unknown(_) => None,
+        };
+        message
+            .filter(|m| m.len() >= 4 && m.starts_with("AA"))
+            .map(|m| &m[..4])
+    }
+
+    fn display_operation_error(
+        entry_point_message: &str,
+        inner_message: &Option<String>,
+    ) -> String {
+        match inner_message {
+            Some(inner_message) => format!("{entry_point_message} : {inner_message}"),
+            None => entry_point_message.to_owned(),
+        }
+    }
+}
+
+impl From<ContractRevertError> for ValidationRevert {
+    fn from(value: ContractRevertError) -> Self {
+        ValidationRevert::EntryPoint(value.reason)
+    }
+}
+
+impl From<FailedOpV0_6> for ValidationRevert {
+    fn from(value: FailedOpV0_6) -> Self {
+        ValidationRevert::EntryPoint(value.reason)
+    }
+}
+
+impl From<FailedOpV0_7> for ValidationRevert {
+    fn from(value: FailedOpV0_7) -> Self {
+        ValidationRevert::EntryPoint(value.reason)
+    }
+}
+
+impl From<FailedOpWithRevertV0_7> for ValidationRevert {
+    fn from(value: FailedOpWithRevertV0_7) -> Self {
+        let inner_message = ContractRevertError::decode(&value.inner)
+            .ok()
+            .map(|err| err.reason);
+        ValidationRevert::Operation {
+            entry_point_reason: value.reason,
+            inner_revert_data: value.inner,
+            inner_revert_reason: inner_message,
+        }
+    }
 }
 
 /// Error during validation simulation

@@ -16,26 +16,25 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::{ContractError, EthCall as _, FunctionCall},
+    contract::{ContractError, EthCall, FunctionCall},
     providers::{Middleware, RawCall},
     types::{
         spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes,
         Eip1559TransactionRequest, H256, U256,
     },
-    utils::hex,
 };
 use rundler_types::{
     chain::ChainSpec,
     contracts::v0_7::{
         entry_point_simulations::{
-            self, EntryPointSimulations, ExecutionResult as ExecutionResultV0_7,
-            ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
+            self, EntryPointSimulations, ExecutionResult as ExecutionResultV0_7, FailedOp,
+            FailedOpWithRevert, ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
         },
         get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
         i_aggregator::IAggregator,
         i_entry_point::{
-            DepositInfo as DepositInfoV0_7, FailedOp, FailedOpWithRevert, IEntryPoint,
-            SignatureValidationFailed, UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
+            DepositInfo as DepositInfoV0_7, IEntryPoint, SignatureValidationFailed,
+            UserOpsPerAggregator as UserOpsPerAggregatorV0_7,
         },
     },
     v0_7::UserOperation,
@@ -49,9 +48,6 @@ use crate::{
     EntryPointProvider, ExecutionResult, HandleOpsOut, L1GasProvider, Provider,
     SignatureAggregator, SimulateOpCallData, SimulationProvider,
 };
-
-// From v0.7 EP contract
-const REVERT_REASON_MAX_LEN: usize = 2048;
 
 /// Entry point for the v0.7 contract.
 #[derive(Debug)]
@@ -333,21 +329,13 @@ where
         }
     }
 
-    // Always returns `Err(String)`. The v0.7 entry point does not use reverts
-    // to indicate successful simulations.
+    // Always returns `Err(ValidationRevert)`. The v0.7 entry point does not use
+    // reverts to indicate successful simulations.
     fn decode_simulate_handle_ops_revert(
         &self,
         revert_data: Bytes,
-    ) -> Result<ExecutionResult, String> {
-        if let Ok(failed_op) = FailedOp::decode(&revert_data) {
-            Err(failed_op.reason)
-        } else if let Ok(failed_op) = FailedOpWithRevert::decode(&revert_data) {
-            Err(failed_op.reason)
-        } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
-            Err(err.reason)
-        } else {
-            Err(hex::encode(&revert_data[..REVERT_REASON_MAX_LEN]))
-        }
+    ) -> Result<ExecutionResult, ValidationRevert> {
+        Err(decode_simulate_validation_revert(revert_data))
     }
 
     fn get_simulate_op_call_data(
@@ -374,7 +362,7 @@ where
         block_hash: H256,
         gas: U256,
         spoofed_state: &spoof::State,
-    ) -> anyhow::Result<Result<ExecutionResult, String>> {
+    ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>> {
         let addr = self.i_entry_point.address();
         let spoofed_state = &self.get_simulate_op_spoofed_state(spoofed_state);
         let ep_simulations = EntryPointSimulations::new(addr, Arc::clone(&self.provider));
@@ -420,21 +408,14 @@ impl<P> EntryPointProvider<UserOperation> for EntryPoint<P> where
 {
 }
 
-// Return a human readable string from the revert data
+// Parses the revert data into a structured error
 fn decode_simulate_validation_revert(revert_data: Bytes) -> ValidationRevert {
-    if let Ok(result) = FailedOpWithRevert::decode(&revert_data) {
-        if let Ok(inner_result) = ContractRevertError::decode(&result.inner) {
-            ValidationRevert::Operation(
-                format!("{} : {}", result.reason, inner_result.reason),
-                Bytes::default(),
-            )
-        } else {
-            ValidationRevert::Operation(result.reason, result.inner)
-        }
+    if let Ok(failed_op_with_revert) = FailedOpWithRevert::decode(&revert_data) {
+        failed_op_with_revert.into()
     } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
-        ValidationRevert::EntryPoint(failed_op.reason)
+        failed_op.into()
     } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
-        ValidationRevert::EntryPoint(err.reason)
+        err.into()
     } else {
         ValidationRevert::Unknown(revert_data)
     }
