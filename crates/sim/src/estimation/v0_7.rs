@@ -108,7 +108,6 @@ where
             paymaster_verification_gas_limit: op
                 .paymaster
                 .map(|_| paymaster_verification_gas_limit),
-            paymaster_post_op_gas_limit: op.paymaster.map(|_| 1_000_000.into()),
         })
     }
 }
