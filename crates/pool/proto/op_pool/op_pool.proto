@@ -145,17 +145,14 @@ message MempoolOp {
   // See rule (5) here:
   // https://github.com/ethereum/EIPs/blob/master/EIPS/eip-4337.md#specification-1
   bytes expected_code_hash = 5;
-  // A list of all entities that require stake to process this UO as identified in
-  // validation before entering the mempool
-  repeated EntityType entities_needing_stake = 6;
   // Block hash at which the UserOperation was simulated
-  bytes sim_block_hash = 7;
+  bytes sim_block_hash = 6;
   // Indicates if the account is staked. Staked accounts are allowed to have
   // multiple UserOperations in the mempool, otherwise just one UserOperation is
   // permitted
-  bool account_is_staked = 8;
+  bool account_is_staked = 7;
   // The entry point address of this operation
-  bytes entry_point = 9;
+  bytes entry_point = 8;
 }
 
 // Defines the gRPC endpoints for a UserOperation mempool service
@@ -650,6 +647,7 @@ message SimulationViolationError {
     ValidationRevert validation_revert = 20;
     InvalidAccountSignature invalid_account_signature = 21;
     InvalidPaymasterSignature invalid_paymaster_signature = 22;
+    AssociatedStorageDuringDeploy associated_storage_during_deploy = 23;
   }
 }
 
@@ -685,6 +683,12 @@ message FactoryCalledCreate2Twice {
 }
 
 message InvalidStorageAccess {
+  Entity entity = 1;
+  bytes contract_address = 2;
+  bytes slot = 3;
+}
+
+message AssociatedStorageDuringDeploy {
   Entity entity = 1;
   bytes contract_address = 2;
   bytes slot = 3;

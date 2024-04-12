@@ -170,7 +170,6 @@ where
             block_id,
             entity_infos,
             entry_point_out,
-            entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
             associated_addresses: tracer_out.associated_slots_by_address.addresses(),
             tracer_out,
