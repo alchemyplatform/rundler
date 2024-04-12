@@ -332,12 +332,6 @@ pub struct GasEstimate {
     ///
     /// v0.7: populated only if the user operation has a paymaster
     pub paymaster_verification_gas_limit: Option<U256>,
-    /// Paymaster post op gas limit
-    ///
-    /// v0.6: unused
-    ///
-    /// v0.7: populated only if the user operation has a paymaster
-    pub paymaster_post_op_gas_limit: Option<U256>,
 }
 
 /// User operations per aggregator

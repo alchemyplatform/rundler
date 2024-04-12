@@ -147,7 +147,6 @@ where
             verification_gas_limit,
             call_gas_limit,
             paymaster_verification_gas_limit: None,
-            paymaster_post_op_gas_limit: None,
         })
     }
 }
