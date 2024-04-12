@@ -16,8 +16,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use anyhow::Context;
 use ethers::types::{Address, BlockId, Opcode, U256};
 use rundler_types::{
-    pool::SimulationViolation, EntityInfo, EntityInfos, EntityType, StakeInfo, UserOperation,
-    ValidationOutput,
+    pool::SimulationViolation, EntityInfos, EntityType, StakeInfo, UserOperation, ValidationOutput,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +30,6 @@ pub struct ValidationContext<UO> {
     pub(crate) entity_infos: EntityInfos,
     pub(crate) tracer_out: TracerOutput,
     pub(crate) entry_point_out: ValidationOutput,
-    pub(crate) entities_needing_stake: Vec<EntityType>,
     pub(crate) accessed_addresses: HashSet<Address>,
     pub(crate) has_factory: bool,
     pub(crate) associated_addresses: HashSet<Address>,
@@ -127,31 +125,31 @@ pub(crate) fn infos_from_validation_output(
     entry_point_out: &ValidationOutput,
     sim_settings: Settings,
 ) -> EntityInfos {
-    let factory = factory_address.map(|address| EntityInfo {
-        address,
-        is_staked: is_staked(entry_point_out.factory_info, sim_settings),
-    });
-    let sender = EntityInfo {
-        address: sender_address,
-        is_staked: is_staked(entry_point_out.sender_info, sim_settings),
-    };
-    let paymaster = paymaster_address.map(|address| EntityInfo {
-        address,
-        is_staked: is_staked(entry_point_out.paymaster_info, sim_settings),
-    });
-    let aggregator = entry_point_out
-        .aggregator_info
-        .map(|aggregator_info| EntityInfo {
-            address: aggregator_info.address,
-            is_staked: is_staked(aggregator_info.stake_info, sim_settings),
-        });
-
-    EntityInfos {
-        factory,
-        sender,
-        paymaster,
-        aggregator,
+    let mut ei = EntityInfos::default();
+    ei.set_sender(
+        sender_address,
+        is_staked(entry_point_out.sender_info, sim_settings),
+    );
+    if let Some(factory_address) = factory_address {
+        ei.set_factory(
+            factory_address,
+            is_staked(entry_point_out.factory_info, sim_settings),
+        );
     }
+    if let Some(paymaster_address) = paymaster_address {
+        ei.set_paymaster(
+            paymaster_address,
+            is_staked(entry_point_out.paymaster_info, sim_settings),
+        );
+    }
+    if let Some(aggregator_info) = entry_point_out.aggregator_info {
+        ei.set_aggregator(
+            aggregator_info.address,
+            is_staked(aggregator_info.stake_info, sim_settings),
+        );
+    }
+
+    ei
 }
 
 pub(crate) fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {

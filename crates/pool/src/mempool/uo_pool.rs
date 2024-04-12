@@ -414,7 +414,6 @@ where
             expected_code_hash: sim_result.code_hash,
             sim_block_hash: sim_result.block_hash,
             sim_block_number: sim_result.block_number.unwrap(), // simulation always returns a block number when called without a specified block_hash
-            entities_needing_stake: sim_result.entities_needing_stake,
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
         };
@@ -435,7 +434,7 @@ where
             // Check unstaked non-sender entity counts in the mempool
             for entity in pool_op
                 .unstaked_entities()
-                .filter(|e| e.address != pool_op.entity_infos.sender.address)
+                .filter(|e| e.address != pool_op.entity_infos.sender.address())
             {
                 let ops_allowed = self.reputation.get_ops_allowed(entity.address);
                 if state.pool.address_count(&entity.address) >= ops_allowed as usize {
@@ -1487,7 +1486,7 @@ mod tests {
                             valid_time_range: op.valid_time_range,
                             entity_infos: EntityInfos {
                                 sender: EntityInfo {
-                                    address: op.op.sender(),
+                                    entity: Entity::account(op.op.sender()),
                                     is_staked: false,
                                 },
                                 ..EntityInfos::default()

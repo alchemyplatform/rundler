@@ -757,7 +757,7 @@ mod tests {
         for mut op in ops.into_iter() {
             op.aggregator = Some(agg);
             op.entity_infos.aggregator = Some(EntityInfo {
-                address: agg,
+                entity: Entity::aggregator(agg),
                 is_staked: false,
             });
             pool.add_operation(op.clone()).unwrap();
@@ -784,7 +784,7 @@ mod tests {
 
             uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
             op.entity_infos.paymaster = Some(EntityInfo {
-                address: op.uo.paymaster().unwrap(),
+                entity: Entity::paymaster(paymaster),
                 is_staked: false,
             });
             pool.add_operation(op.clone()).unwrap();
@@ -809,17 +809,17 @@ mod tests {
         let uo: &mut UserOperation = op.uo.as_mut();
         uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
         op.entity_infos.paymaster = Some(EntityInfo {
-            address: uo.paymaster().unwrap(),
+            entity: Entity::paymaster(paymaster),
             is_staked: false,
         });
         uo.init_code = factory.as_bytes().to_vec().into();
         op.entity_infos.factory = Some(EntityInfo {
-            address: op.uo.factory().unwrap(),
+            entity: Entity::factory(factory),
             is_staked: false,
         });
         op.aggregator = Some(aggregator);
         op.entity_infos.aggregator = Some(EntityInfo {
-            address: aggregator,
+            entity: Entity::aggregator(aggregator),
             is_staked: false,
         });
 
@@ -923,7 +923,7 @@ mod tests {
         uo1.max_priority_fee_per_gas = 10.into();
         uo1.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
         po1.entity_infos.paymaster = Some(EntityInfo {
-            address: po1.uo.paymaster().unwrap(),
+            entity: Entity::paymaster(paymaster1),
             is_staked: false,
         });
         let _ = pool.add_operation(po1).unwrap();
@@ -935,7 +935,7 @@ mod tests {
         uo2.max_priority_fee_per_gas = 11.into();
         uo2.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
         po2.entity_infos.paymaster = Some(EntityInfo {
-            address: po2.uo.paymaster().unwrap(),
+            entity: Entity::paymaster(paymaster2),
             is_staked: false,
         });
         let _ = pool.add_operation(po2.clone()).unwrap();
@@ -1038,7 +1038,7 @@ mod tests {
             entity_infos: EntityInfos {
                 factory: None,
                 sender: EntityInfo {
-                    address: sender,
+                    entity: Entity::account(sender),
                     is_staked: false,
                 },
                 paymaster: None,
@@ -1050,7 +1050,6 @@ mod tests {
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
             sim_block_number: 0,
-            entities_needing_stake: vec![],
             account_is_staked: false,
         }
     }

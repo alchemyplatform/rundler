@@ -21,7 +21,6 @@ use std::{
 
 use async_trait::async_trait;
 use ethers::types::{Address, Opcode, H256, U256};
-use indexmap::IndexSet;
 use rundler_provider::{
     AggregatorOut, AggregatorSimOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
@@ -184,7 +183,6 @@ where
             ref entity_infos,
             ref tracer_out,
             ref entry_point_out,
-            ref mut entities_needing_stake,
             ref mut accessed_addresses,
             has_factory,
             ..
@@ -193,27 +191,22 @@ where
         let mut violations = vec![];
 
         let sender_address = entity_infos.sender_address();
-        let mut entity_types_needing_stake = HashMap::new();
-
         for (index, phase) in tracer_out.phases.iter().enumerate().take(3) {
             let kind = context::entity_type_from_simulation_phase(index).unwrap();
-            let Some(entity_info) = entity_infos.get(kind) else {
+            let Some(ei) = entity_infos.get(kind) else {
                 continue;
             };
-            let entity = Entity::new(kind, entity_info.address);
             for opcode in &phase.forbidden_opcodes_used {
                 let (contract, opcode) = context::parse_combined_context_str(opcode)?;
 
                 // [OP-080] - staked entities are allowed to use BALANCE and SELFBALANCE
-                if entity_info.is_staked
-                    && (opcode == Opcode::BALANCE || opcode == Opcode::SELFBALANCE)
-                {
+                if ei.is_staked && (opcode == Opcode::BALANCE || opcode == Opcode::SELFBALANCE) {
                     continue;
                 }
 
                 // [OP-011]
                 violations.push(SimulationViolation::UsedForbiddenOpcode(
-                    entity,
+                    ei.entity,
                     contract,
                     ViolationOpCode(opcode),
                 ));
@@ -224,7 +217,7 @@ where
                     // [OP-054]
                     // [OP-051] - If calling `EXTCODESIZE ISZERO` the tracer won't add to this list
                     violations.push(SimulationViolation::UsedForbiddenOpcode(
-                        entity,
+                        ei.entity,
                         *addr,
                         ViolationOpCode(*opcode),
                     ));
@@ -235,11 +228,10 @@ where
                 let (contract, precompile) = context::parse_combined_context_str(precompile)?;
                 // [OP-062]
                 violations.push(SimulationViolation::UsedForbiddenPrecompile(
-                    entity, contract, precompile,
+                    ei.entity, contract, precompile,
                 ));
             }
 
-            let mut banned_slots_accessed = IndexSet::<StorageSlot>::new();
             for (addr, access_info) in &phase.storage_accesses {
                 let address = *addr;
                 accessed_addresses.insert(address);
@@ -251,7 +243,7 @@ where
                     sender: sender_address,
                     entrypoint: self.entry_point.address(),
                     has_factory,
-                    entity: &entity,
+                    entity: &ei.entity,
                 });
 
                 for restriction in restrictions {
@@ -260,7 +252,7 @@ where
                             needs_stake,
                             accessing_entity,
                             accessed_entity,
-                            addr,
+                            accessed_address,
                             slot,
                         ) => {
                             let needs_stake_entity = entity_infos
@@ -268,45 +260,79 @@ where
                                 .expect("entity type not found in entity_infos");
 
                             if !needs_stake_entity.is_staked {
-                                entity_types_needing_stake.insert(
-                                    Entity::new(needs_stake, needs_stake_entity.address),
-                                    (accessing_entity, accessed_entity, addr, slot),
-                                );
+                                // [STO-*]
+                                violations.push(SimulationViolation::NotStaked(Box::new(
+                                    NeedsStakeInformation {
+                                        needs_stake: ei.entity,
+                                        accessing_entity,
+                                        accessed_entity,
+                                        accessed_address,
+                                        slot,
+                                        min_stake: self.sim_settings.min_stake_value.into(),
+                                        min_unstake_delay: self
+                                            .sim_settings
+                                            .min_unstake_delay
+                                            .into(),
+                                    },
+                                )));
                             }
                         }
+                        StorageRestriction::AssociatedStorageDuringDeploy(
+                            needs_stake,
+                            address,
+                            slot,
+                        ) => {
+                            let needs_stake_entity = needs_stake.and_then(|t| entity_infos.get(t));
+                            if let Some(needs_stake_entity) = needs_stake_entity {
+                                if needs_stake_entity.is_staked {
+                                    tracing::info!("Associated storage accessed by staked entity during deploy, and entity is staked");
+                                    continue;
+                                }
+                            }
+                            if let Some(factory) = entity_infos.get(EntityType::Factory) {
+                                if factory.is_staked {
+                                    tracing::info!("Associated storage accessed by staked entity during deploy, and factory is staked");
+                                    continue;
+                                }
+                            }
+                            // [STO-022]
+                            violations.push(SimulationViolation::AssociatedStorageDuringDeploy(
+                                needs_stake_entity.map(|ei| ei.entity),
+                                StorageSlot { address, slot },
+                            ))
+                        }
                         StorageRestriction::Banned(slot) => {
-                            banned_slots_accessed.insert(StorageSlot { address, slot });
+                            // [STO-*]
+                            violations.push(SimulationViolation::InvalidStorageAccess(
+                                ei.entity,
+                                StorageSlot { address, slot },
+                            ));
                         }
                     }
                 }
             }
 
-            for slot in banned_slots_accessed {
-                // [STO-*]
-                violations.push(SimulationViolation::InvalidStorageAccess(entity, slot));
-            }
-
             if phase.called_non_entry_point_with_value {
                 // [OP-061]
-                violations.push(SimulationViolation::CallHadValue(entity));
+                violations.push(SimulationViolation::CallHadValue(ei.entity));
             }
             if phase.called_banned_entry_point_method {
                 // [OP-054]
-                violations.push(SimulationViolation::CalledBannedEntryPointMethod(entity));
+                violations.push(SimulationViolation::CalledBannedEntryPointMethod(ei.entity));
             }
 
             if phase.ran_out_of_gas {
                 // [OP-020]
-                violations.push(SimulationViolation::OutOfGas(entity));
+                violations.push(SimulationViolation::OutOfGas(ei.entity));
             }
             for &address in &phase.undeployed_contract_accesses {
                 // OP-042 - Factory can access undeployed sender
-                if entity.kind == EntityType::Factory && address == sender_address {
+                if ei.entity.kind == EntityType::Factory && address == sender_address {
                     continue;
                 }
                 // OP-041 - Access to an address without deployed code is forbidden
                 violations.push(SimulationViolation::AccessedUndeployedContract(
-                    entity, address,
+                    ei.entity, address,
                 ))
             }
         }
@@ -318,31 +344,13 @@ where
             }
         }
 
-        for (ent, (accessing_entity, accessed_entity, accessed_address, slot)) in
-            entity_types_needing_stake
-        {
-            entities_needing_stake.push(ent.kind);
-            // [STO-*]
-            violations.push(SimulationViolation::NotStaked(Box::new(
-                NeedsStakeInformation {
-                    needs_stake: ent,
-                    accessing_entity,
-                    accessed_entity,
-                    accessed_address,
-                    slot,
-                    min_stake: self.sim_settings.min_stake_value.into(),
-                    min_unstake_delay: self.sim_settings.min_unstake_delay.into(),
-                },
-            )));
-        }
-
         if tracer_out.factory_called_create2_twice {
             let factory = entity_infos.get(EntityType::Factory);
             match factory {
                 Some(factory) => {
                     // [OP-031]
                     violations.push(SimulationViolation::FactoryCalledCreate2Twice(
-                        factory.address,
+                        factory.entity.address,
                     ));
                 }
                 None => {
@@ -490,7 +498,6 @@ where
         let ValidationContext {
             tracer_out,
             entry_point_out,
-            entities_needing_stake,
             accessed_addresses,
             associated_addresses,
             ..
@@ -520,7 +527,6 @@ where
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
             aggregator,
             code_hash,
-            entities_needing_stake,
             account_is_staked,
             accessed_addresses,
             associated_addresses,
@@ -535,6 +541,7 @@ where
 enum StorageRestriction {
     /// (Entity needing stake, accessing entity type, accessed entity type, accessed address, accessed slot)
     NeedsStake(EntityType, EntityType, Option<EntityType>, Address, U256),
+    AssociatedStorageDuringDeploy(Option<EntityType>, Address, U256),
     Banned(U256),
 }
 
@@ -592,23 +599,18 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Vec<StorageRestrictio
             if has_factory {
                 match entity.kind {
                     EntityType::Paymaster | EntityType::Aggregator => {
-                        // If its a paymaster/aggregator, then the entity must be staked to access associated storage
+                        // If its a paymaster/aggregator, then the entity OR factory must be staked to access associated storage
                         // during a deploy
-                        restrictions.push(StorageRestriction::NeedsStake(
-                            entity.kind,
-                            entity.kind,
-                            Some(EntityType::Account),
+                        restrictions.push(StorageRestriction::AssociatedStorageDuringDeploy(
+                            Some(entity.kind),
                             address,
                             *slot,
                         ));
                     }
+                    // If its a factory/account, then the factory must be staked to access associated storage during a deploy
                     EntityType::Account | EntityType::Factory => {
-                        restrictions.push(StorageRestriction::NeedsStake(
-                            EntityType::Factory,
-                            entity.kind,
-                            Some(EntityType::Account),
-                            address,
-                            *slot,
+                        restrictions.push(StorageRestriction::AssociatedStorageDuringDeploy(
+                            None, address, *slot,
                         ));
                     }
                 }
@@ -638,7 +640,7 @@ fn parse_storage_accesses(args: ParseStorageAccess<'_>) -> Vec<StorageRestrictio
 }
 
 fn override_is_staked(ei: &mut EntityInfo, allow_unstaked_addresses: &HashSet<Address>) {
-    ei.is_staked = allow_unstaked_addresses.contains(&ei.address) || ei.is_staked;
+    ei.is_staked = allow_unstaked_addresses.contains(&ei.entity.address) || ei.is_staked;
 }
 
 fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashSet<Address>) {
@@ -806,7 +808,6 @@ mod tests {
                 paymaster_info: StakeInfo::from((U256::default(), U256::default())),
                 aggregator_info: None,
             },
-            entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
         }
     }
@@ -1040,7 +1041,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_factory_staking_logic() {
+    async fn test_factory_staking() {
         let (provider, mut ep, mut context_provider) = create_base_config();
         ep.expect_address()
             .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
@@ -1052,9 +1053,6 @@ mod tests {
 
         let sender_address =
             Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap();
-
-        let factory_address =
-            Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap();
 
         let external_access_address = Address::random();
 
@@ -1075,19 +1073,67 @@ mod tests {
         let simulator = create_simulator(provider, ep, context_provider);
         let res = simulator.gather_context_violations(&mut context);
 
-        let expected = NeedsStakeInformation {
-            needs_stake: Entity::factory(factory_address),
-            accessing_entity: EntityType::Account,
-            accessed_entity: Some(EntityType::Account),
-            accessed_address: external_access_address,
-            slot: sender_address.as_bytes().into(),
-            min_stake: U256::from(1000000000000000000_u64),
-            min_unstake_delay: 84600.into(),
-        };
+        assert_eq!(
+            res.unwrap(),
+            vec![SimulationViolation::AssociatedStorageDuringDeploy(
+                None,
+                StorageSlot {
+                    address: external_access_address,
+                    slot: sender_address.as_bytes().into()
+                }
+            )]
+        );
+
+        // staked causes no errors
+        context.entity_infos.factory.as_mut().unwrap().is_staked = true;
+        let res = simulator.gather_context_violations(&mut context);
+        assert!(res.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_paymaster_access_during_deploy() {
+        let (provider, mut ep, mut context_provider) = create_base_config();
+        ep.expect_address()
+            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+        context_provider
+            .expect_get_specific_violations()
+            .return_const(vec![]);
+
+        let mut writes: HashMap<U256, u64> = HashMap::new();
+
+        let sender_address =
+            Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap();
+        let paymaster_address =
+            Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap();
+
+        let external_access_address = Address::random();
+
+        let sender_bytes = sender_address.as_bytes().into();
+
+        writes.insert(sender_bytes, 1);
+
+        let mut context = get_test_context();
+        context.tracer_out.phases[2].storage_accesses.insert(
+            external_access_address,
+            AccessInfo {
+                reads: HashMap::new(),
+                writes,
+            },
+        );
+
+        // Create the simulator using the provider and tracer
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator.gather_context_violations(&mut context);
 
         assert_eq!(
             res.unwrap(),
-            vec![SimulationViolation::NotStaked(Box::new(expected))]
+            vec![SimulationViolation::AssociatedStorageDuringDeploy(
+                Some(Entity::paymaster(paymaster_address)),
+                StorageSlot {
+                    address: external_access_address,
+                    slot: sender_address.as_bytes().into()
+                }
+            )]
         );
 
         // staked causes no errors

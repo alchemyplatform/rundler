@@ -172,6 +172,10 @@ pub enum SimulationViolation {
     /// The user operation accessed a storage slot that is not allowed
     #[display("{0.kind} accessed forbidden storage at address {1:?} during validation")]
     InvalidStorageAccess(Entity, StorageSlot),
+    /// The user operation accessed a storage slot on the sender while being deployed
+    /// and the accessing entity or the factory is not staked
+    #[display("Sender storage at slot {1:?} accessed during deployment. Factory or accessing entity ({0:?}) must be staked")]
+    AssociatedStorageDuringDeploy(Option<Entity>, StorageSlot),
     /// The user operation called an entry point method that is not allowed
     #[display("{0.kind} called entry point method other than depositTo")]
     CalledBannedEntryPointMethod(Entity),
