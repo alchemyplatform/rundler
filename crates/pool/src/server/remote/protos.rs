@@ -343,11 +343,6 @@ impl From<&PoolOperation> for MempoolOp {
             valid_until: op.valid_time_range.valid_until.seconds_since_epoch(),
             expected_code_hash: op.expected_code_hash.to_proto_bytes(),
             sim_block_hash: op.sim_block_hash.to_proto_bytes(),
-            entities_needing_stake: op
-                .entities_needing_stake
-                .iter()
-                .map(|e| EntityType::from(*e).into())
-                .collect(),
             account_is_staked: op.account_is_staked,
         }
     }
@@ -372,15 +367,6 @@ impl TryFrom<MempoolOp> for PoolOperation {
 
         let expected_code_hash = H256::from_slice(&op.expected_code_hash);
         let sim_block_hash = H256::from_slice(&op.sim_block_hash);
-        let entities_needing_stake = op
-            .entities_needing_stake
-            .into_iter()
-            .map(|e| {
-                let pe =
-                    EntityType::try_from(e).map_err(|_| ConversionError::InvalidEnumValue(e))?;
-                pe.try_into()
-            })
-            .collect::<Result<Vec<_>, ConversionError>>()?;
 
         Ok(PoolOperation {
             uo,
@@ -388,7 +374,6 @@ impl TryFrom<MempoolOp> for PoolOperation {
             aggregator,
             valid_time_range,
             expected_code_hash,
-            entities_needing_stake,
             sim_block_hash,
             sim_block_number: 0,
             account_is_staked: op.account_is_staked,

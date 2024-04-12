@@ -481,8 +481,7 @@ where
         }
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
-            let _ =
-                context.reject_entity(Entity::paymaster(paymaster.address), paymaster.is_staked);
+            let _ = context.reject_entity(paymaster.entity, paymaster.is_staked);
         }
         self.compute_all_aggregator_signatures(&mut context).await;
         context
@@ -1099,12 +1098,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         if entity_infos.factory.map_or(false, |f| f.is_staked) {
             let factory = entity_infos.factory.unwrap();
             self.entity_updates.insert(
-                factory.address,
+                factory.address(),
                 EntityUpdate {
-                    entity: Entity {
-                        kind: EntityType::Factory,
-                        address: factory.address,
-                    },
+                    entity: factory.entity,
                     update_type: EntityUpdateType::StakedInvalidation,
                 },
             );
@@ -1114,12 +1110,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // [EREP-030] When there is a staked sender (without a staked factory) any error in validation is attributed to it.
         if entity_infos.sender.is_staked {
             self.entity_updates.insert(
-                entity_infos.sender.address,
+                entity_infos.sender.address(),
                 EntityUpdate {
-                    entity: Entity {
-                        kind: EntityType::Account,
-                        address: entity_infos.sender.address,
-                    },
+                    entity: entity_infos.sender.entity,
                     update_type: EntityUpdateType::StakedInvalidation,
                 },
             );
@@ -2038,7 +2031,6 @@ mod tests {
                 entry_point: entry_point_address,
                 sim_block_hash: current_block_hash,
                 sim_block_number: 0,
-                entities_needing_stake: vec![],
                 account_is_staked: false,
                 valid_time_range: ValidTimeRange::default(),
                 entity_infos: EntityInfos::default(),

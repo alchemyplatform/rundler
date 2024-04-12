@@ -15,8 +15,7 @@ use ethers::types::{Address, H256, U256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation, UserOperationVariant,
-    ValidTimeRange,
+    entity::EntityInfos, Entity, StakeInfo, UserOperation, UserOperationVariant, ValidTimeRange,
 };
 
 /// The new head of the chain, as viewed by the pool
@@ -116,8 +115,6 @@ pub struct PoolOperation {
     pub sim_block_hash: H256,
     /// The block number simulation was completed at
     pub sim_block_number: u64,
-    /// List of entities that need to stake for this operation.
-    pub entities_needing_stake: Vec<EntityType>,
     /// Whether the account is staked.
     pub account_is_staked: bool,
     /// Staking information about all the entities.
@@ -127,27 +124,10 @@ pub struct PoolOperation {
 impl PoolOperation {
     /// Returns true if the operation contains the given entity.
     pub fn contains_entity(&self, entity: &Entity) -> bool {
-        if let Some(e) = self.entity_infos.get(entity.kind) {
-            e.address == entity.address
+        if let Some(ei) = self.entity_infos.get(entity.kind) {
+            ei.entity.address == entity.address
         } else {
             false
-        }
-    }
-
-    /// Returns true if the operation requires the given entity to stake.
-    ///
-    /// For non-accounts, its possible that the entity is staked, but doesn't
-    /// _need_ to stake for this operation. For example, if the operation does not
-    /// access any storage slots that require staking. In that case this function
-    /// will return false.
-    ///
-    /// For staked accounts, this function will always return true. Staked accounts
-    /// are able to circumvent the mempool operation limits always need their reputation
-    /// checked to prevent them from filling the pool.
-    pub fn requires_stake(&self, entity: EntityType) -> bool {
-        match entity {
-            EntityType::Account => self.account_is_staked,
-            _ => self.entities_needing_stake.contains(&entity),
         }
     }
 
@@ -155,35 +135,22 @@ impl PoolOperation {
     pub fn entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         self.entity_infos
             .entities()
-            .map(|(t, entity)| Entity::new(t, entity.address))
-    }
-
-    /// Returns an iterator over all entities that need stake in this operation. This can be a subset of entities that are staked in the operation.
-    pub fn entities_requiring_stake(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        self.entity_infos.entities().filter_map(|(t, entity)| {
-            if self.requires_stake(t) {
-                Entity::new(t, entity.address).into()
-            } else {
-                None
-            }
-        })
+            .map(|(t, ei)| Entity::new(t, ei.entity.address))
     }
 
     /// Return all the unstaked entities that are used in this operation.
     pub fn unstaked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
-        self.entity_infos.entities().filter_map(|(t, entity)| {
-            if entity.is_staked {
+        self.entity_infos.entities().filter_map(|(t, ei)| {
+            if ei.is_staked {
                 None
             } else {
-                Entity::new(t, entity.address).into()
+                Entity::new(t, ei.entity.address).into()
             }
         })
     }
 
     /// Compute the amount of heap memory the PoolOperation takes up.
     pub fn mem_size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.uo.heap_size()
-            + self.entities_needing_stake.len() * std::mem::size_of::<EntityType>()
+        std::mem::size_of::<Self>() + self.uo.heap_size()
     }
 }

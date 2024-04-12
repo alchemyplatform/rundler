@@ -18,8 +18,7 @@ use rundler_provider::{
     AggregatorOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
 use rundler_types::{
-    pool::SimulationViolation, EntityInfo, EntityInfos, UserOperation, ValidTimeRange,
-    ValidationError,
+    pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange, ValidationError,
 };
 
 use crate::{
@@ -123,24 +122,17 @@ where
             ValidTimeRange::new(validation_result.return_info.valid_after, valid_until);
         let requires_post_op = !validation_result.return_info.paymaster_context.is_empty();
 
-        let entity_infos = EntityInfos {
-            sender: EntityInfo {
-                address: op.sender(),
-                is_staked: false,
-            },
-            factory: op.factory().map(|f| EntityInfo {
-                address: f,
-                is_staked: false,
-            }),
-            paymaster: op.paymaster().map(|p| EntityInfo {
-                address: p,
-                is_staked: false,
-            }),
-            aggregator: validation_result.aggregator_info.map(|a| EntityInfo {
-                address: a.address,
-                is_staked: false,
-            }),
-        };
+        let mut entity_infos = EntityInfos::default();
+        entity_infos.set_sender(op.sender(), false);
+        if let Some(f) = op.factory() {
+            entity_infos.set_factory(f, false);
+        }
+        if let Some(p) = op.paymaster() {
+            entity_infos.set_paymaster(p, false);
+        }
+        if let Some(a) = validation_result.aggregator_info {
+            entity_infos.set_aggregator(a.address, false);
+        }
 
         let mut violations = vec![];
 

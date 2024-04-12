@@ -540,7 +540,6 @@ mod tests {
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
-            entities_needing_stake: vec![],
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
             sim_block_number: 0,

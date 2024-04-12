@@ -181,7 +181,9 @@ pub enum OperationOrigin {
 
 #[cfg(test)]
 mod tests {
-    use rundler_types::{v0_6::UserOperation, EntityInfo, EntityInfos, EntityType, ValidTimeRange};
+    use rundler_types::{
+        v0_6::UserOperation, Entity, EntityInfo, EntityInfos, EntityType, ValidTimeRange,
+    };
 
     use super::*;
 
@@ -206,32 +208,26 @@ mod tests {
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
             sim_block_number: 0,
-            entities_needing_stake: vec![EntityType::Account, EntityType::Aggregator],
             account_is_staked: true,
             entity_infos: EntityInfos {
                 factory: Some(EntityInfo {
-                    address: factory,
+                    entity: Entity::factory(factory),
                     is_staked: false,
                 }),
                 sender: EntityInfo {
-                    address: sender,
+                    entity: Entity::account(sender),
                     is_staked: false,
                 },
                 paymaster: Some(EntityInfo {
-                    address: paymaster,
+                    entity: Entity::paymaster(paymaster),
                     is_staked: false,
                 }),
                 aggregator: Some(EntityInfo {
-                    address: aggregator,
+                    entity: Entity::aggregator(aggregator),
                     is_staked: false,
                 }),
             },
         };
-
-        assert!(po.requires_stake(EntityType::Account));
-        assert!(!po.requires_stake(EntityType::Paymaster));
-        assert!(!po.requires_stake(EntityType::Factory));
-        assert!(po.requires_stake(EntityType::Aggregator));
 
         let entities = po.entities().collect::<Vec<_>>();
         assert_eq!(entities.len(), 4);
