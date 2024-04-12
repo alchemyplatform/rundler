@@ -271,17 +271,14 @@ impl<T> ValidationContextProvider<T> {
         match top.exit_type {
             ExitType::Revert => {
                 if let Ok(result) = FailedOpWithRevert::decode_hex(top.exit_data.clone()) {
-                    if let Ok(inner_result) = ContractRevertError::decode(&result.inner) {
-                        Ok(Err(ValidationRevert::Operation(
-                            format!("{} : {}", result.reason, inner_result.reason),
-                            Bytes::default(),
-                        )))
-                    } else {
-                        Ok(Err(ValidationRevert::Operation(
-                            result.reason,
-                            result.inner,
-                        )))
-                    }
+                    let inner_revert_reason = ContractRevertError::decode(&result.inner)
+                        .ok()
+                        .map(|inner_result| inner_result.reason);
+                    Ok(Err(ValidationRevert::Operation {
+                        entry_point_reason: result.reason,
+                        inner_revert_data: result.inner,
+                        inner_revert_reason,
+                    }))
                 } else if let Ok(failed_op) = FailedOp::decode_hex(top.exit_data.clone()) {
                     Ok(Err(ValidationRevert::EntryPoint(failed_op.reason)))
                 } else if let Ok(err) = ContractRevertError::decode_hex(top.exit_data.clone()) {
