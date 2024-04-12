@@ -82,6 +82,9 @@ pub enum EthRpcError {
     /// Used for other simulation violations that map to Opcode Violations
     #[error("{0}")]
     OpcodeViolationMap(SimulationViolation),
+    /// Associated storage accessed during deployment with unstaked factory or accessing entity
+    #[error("Sender storage at (address: {1:?} slot: {2:#032x}) accessed during deployment. Factory (or {0:?}) must be staked")]
+    AssociatedStorageDuringDeploy(Option<EntityType>, Address, U256),
     /// Invalid storage access, maps to Opcode Violation
     #[error("{0} accesses inaccessible storage at address: {1:?} slot: {2:#032x}")]
     InvalidStorageAccess(EntityType, Address, U256),
@@ -319,6 +322,9 @@ impl From<SimulationViolation> for EthRpcError {
                 Self::OpcodeViolation(EntityType::Factory, Opcode::CREATE2)
             }
             SimulationViolation::UnstakedPaymasterContext => Self::UnstakedPaymasterContext,
+            SimulationViolation::AssociatedStorageDuringDeploy(e, s) => {
+                Self::AssociatedStorageDuringDeploy(e.map(|e| e.kind), s.address, s.slot)
+            }
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 Self::InvalidStorageAccess(entity.kind, slot.address, slot.slot)
             }
@@ -379,6 +385,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
             | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
             | EthRpcError::PaymasterBalanceTooLow(_, _)
             | EthRpcError::AssociatedStorageIsAlternateSender
+            | EthRpcError::AssociatedStorageDuringDeploy(_, _, _)
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
             EthRpcError::OutOfTimeRange(data) => {
                 rpc_err_with_data(OUT_OF_TIME_RANGE_CODE, msg, data)

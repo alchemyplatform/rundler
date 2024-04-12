@@ -119,7 +119,6 @@ where
             tracer_out,
             entry_point_out,
             associated_addresses,
-            entities_needing_stake: vec![],
             accessed_addresses: HashSet::new(),
             has_factory,
         })

@@ -20,7 +20,7 @@ use mockall::automock;
 use rundler_provider::AggregatorSimOut;
 use rundler_types::{
     pool::{MempoolError, SimulationViolation},
-    EntityInfos, EntityType, UserOperation, ValidTimeRange,
+    EntityInfos, UserOperation, ValidTimeRange,
 };
 
 mod context;
@@ -61,9 +61,6 @@ pub struct SimulationResult {
     pub aggregator: Option<AggregatorSimOut>,
     /// Code hash of all accessed contracts
     pub code_hash: H256,
-    /// List of used entities that need to be staked for this operation
-    /// to be valid
-    pub entities_needing_stake: Vec<EntityType>,
     /// Whether the sender account is staked
     pub account_is_staked: bool,
     /// List of all addresses accessed during validation

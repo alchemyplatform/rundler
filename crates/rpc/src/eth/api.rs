@@ -200,7 +200,6 @@ mod tests {
             expected_code_hash: H256::random(),
             sim_block_hash: H256::random(),
             sim_block_number: 1000,
-            entities_needing_stake: vec![],
             account_is_staked: false,
             entity_infos: EntityInfos::default(),
         };

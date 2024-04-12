@@ -23,21 +23,22 @@ use rundler_types::{
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
-    AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageIsAlternateSender,
-    CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
-    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
-    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
-    OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
-    PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
-    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
-    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
-    UsedForbiddenOpcode, UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageDuringDeploy,
+    AssociatedStorageIsAlternateSender, CallGasLimitTooLow, CallHadValue,
+    CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
+    EntityThrottledError, EntityType, EntryPointRevert, ExistingSenderWithInitCode,
+    FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidAccountSignature,
+    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, MaxFeePerGasTooLow,
+    MaxOperationsReachedError, MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError,
+    MultipleRolesViolation, NotStaked, OperationAlreadyKnownError, OperationDropTooSoon,
+    OperationRevert, OutOfGas, PaymasterBalanceTooLow, PaymasterDepositTooLow,
+    PaymasterIsNotContract, PreVerificationGasTooLow,
+    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
+    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
+    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert,
+    UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
+    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
     VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
@@ -502,6 +503,19 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     ),
                 ),
             },
+            SimulationViolation::AssociatedStorageDuringDeploy(entity, slot) => {
+                ProtoSimulationViolationError {
+                    violation: Some(
+                        simulation_violation_error::Violation::AssociatedStorageDuringDeploy(
+                            AssociatedStorageDuringDeploy {
+                                entity: entity.as_ref().map(|e| e.into()),
+                                contract_address: slot.address.to_proto_bytes(),
+                                slot: slot.slot.to_proto_bytes(),
+                            },
+                        ),
+                    ),
+                }
+            }
             SimulationViolation::InvalidStorageAccess(entity, slot) => {
                 ProtoSimulationViolationError {
                     violation: Some(simulation_violation_error::Violation::InvalidStorageAccess(
@@ -670,6 +684,15 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             }
             Some(simulation_violation_error::Violation::FactoryCalledCreate2Twice(e)) => {
                 SimulationViolation::FactoryCalledCreate2Twice(from_bytes(&e.factory_address)?)
+            }
+            Some(simulation_violation_error::Violation::AssociatedStorageDuringDeploy(e)) => {
+                SimulationViolation::AssociatedStorageDuringDeploy(
+                    e.entity.as_ref().map(|e| e.try_into()).transpose()?,
+                    StorageSlot {
+                        address: from_bytes(&e.contract_address)?,
+                        slot: from_bytes(&e.slot)?,
+                    },
+                )
             }
             Some(simulation_violation_error::Violation::InvalidStorageAccess(e)) => {
                 SimulationViolation::InvalidStorageAccess(
