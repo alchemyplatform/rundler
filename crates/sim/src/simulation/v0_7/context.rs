@@ -45,7 +45,7 @@ use crate::{
         TracerOutput as ContextTracerOutput, ValidationContext,
         ValidationContextProvider as ValidationContextProviderTrait,
     },
-    ExpectedStorage, SimulationSettings, ViolationError,
+    SimulationSettings, ViolationError,
 };
 
 // Banned opcodes
@@ -312,7 +312,6 @@ impl<T> ValidationContextProvider<T> {
     ) -> anyhow::Result<ContextTracerOutput> {
         let mut phases = vec![Phase::default(); 3];
         let mut factory_called_create2_twice = false;
-        let mut expected_storage = ExpectedStorage::default();
 
         // Check factory
         if let Some(call_from_entry_point) = tracer_out
@@ -320,11 +319,7 @@ impl<T> ValidationContextProvider<T> {
             .iter()
             .find(|c| c.top_level_method_sig == CREATE_SENDER_METHOD)
         {
-            phases[0] = Self::parse_call_to_phase(
-                call_from_entry_point,
-                &mut expected_storage,
-                EntityType::Factory,
-            );
+            phases[0] = Self::parse_call_to_phase(call_from_entry_point, EntityType::Factory);
             // [OP-031] - create call can only be called once
             if let Some(count) = call_from_entry_point.opcodes.get(&Opcode::CREATE2) {
                 if *count > 1 {
@@ -339,11 +334,7 @@ impl<T> ValidationContextProvider<T> {
             .iter()
             .find(|c| c.top_level_method_sig == VALIDATE_USER_OP_METHOD)
         {
-            phases[1] = Self::parse_call_to_phase(
-                call_from_entry_point,
-                &mut expected_storage,
-                EntityType::Account,
-            );
+            phases[1] = Self::parse_call_to_phase(call_from_entry_point, EntityType::Account);
         }
 
         // Check paymaster
@@ -352,11 +343,7 @@ impl<T> ValidationContextProvider<T> {
             .iter()
             .find(|c| c.top_level_method_sig == VALIDATE_PAYMASTER_USER_OP_METHOD)
         {
-            phases[2] = Self::parse_call_to_phase(
-                call_from_entry_point,
-                &mut expected_storage,
-                EntityType::Paymaster,
-            );
+            phases[2] = Self::parse_call_to_phase(call_from_entry_point, EntityType::Paymaster);
         }
 
         // Accessed contracts
@@ -395,15 +382,11 @@ impl<T> ValidationContextProvider<T> {
             accessed_contract_addresses,
             associated_slots_by_address: AssociatedSlotsByAddress(associated_slots_by_address),
             factory_called_create2_twice,
-            expected_storage,
+            expected_storage: tracer_out.expected_storage,
         })
     }
 
-    fn parse_call_to_phase(
-        call: &TopLevelCallInfo,
-        expected_storage: &mut ExpectedStorage,
-        entity_type: EntityType,
-    ) -> Phase {
+    fn parse_call_to_phase(call: &TopLevelCallInfo, entity_type: EntityType) -> Phase {
         // [OP-011] - banned opcodes
         // [OP-012] - tracer will not add GAS to list if followed by *CALL
         let mut forbidden_opcodes_used = vec![];
@@ -421,10 +404,7 @@ impl<T> ValidationContextProvider<T> {
             .access
             .iter()
             .map(|(address, info)| {
-                let reads = info.reads.iter().map(|(slot, value)| {
-                    expected_storage.insert(*address, *slot, *value);
-                    (*slot, *value)
-                });
+                let reads = info.reads.iter().map(|(slot, value)| (*slot, *value));
                 let writes = info.writes.iter().map(|(slot, count)| (*slot, *count));
                 (
                     *address,
