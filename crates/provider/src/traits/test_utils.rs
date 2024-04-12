@@ -14,7 +14,9 @@
 use ethers::types::{
     spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
 };
-use rundler_types::{v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput};
+use rundler_types::{
+    v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput, ValidationRevert,
+};
 
 use crate::{
     AggregatorOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult, HandleOpsOut,
@@ -76,11 +78,11 @@ mockall::mock! {
             block_hash: H256,
             gas: U256,
             spoofed_state: &spoof::State,
-        ) -> anyhow::Result<Result<ExecutionResult, String>>;
+        ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
             &self,
             revert_data: Bytes,
-        ) -> Result<ExecutionResult, String>;
+        ) -> Result<ExecutionResult, ValidationRevert>;
         fn simulation_should_revert(&self) -> bool;
     }
 
@@ -169,11 +171,11 @@ mockall::mock! {
             block_hash: H256,
             gas: U256,
             spoofed_state: &spoof::State,
-        ) -> anyhow::Result<Result<ExecutionResult, String>>;
+        ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
             &self,
             revert_data: Bytes,
-        ) -> Result<ExecutionResult, String>;
+        ) -> Result<ExecutionResult, ValidationRevert>;
         fn simulation_should_revert(&self) -> bool;
     }
 

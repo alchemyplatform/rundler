@@ -16,6 +16,7 @@ use ethers::types::{
 };
 use rundler_types::{
     GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationError, ValidationOutput,
+    ValidationRevert,
 };
 
 /// Output of a successful signature aggregator simulation call
@@ -221,13 +222,13 @@ pub trait SimulationProvider: Send + Sync + 'static {
         block_hash: H256,
         gas: U256,
         spoofed_state: &spoof::State,
-    ) -> anyhow::Result<Result<ExecutionResult, String>>;
+    ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>>;
 
     /// Decode the revert data from a call to `simulateHandleOps`
     fn decode_simulate_handle_ops_revert(
         &self,
         revert_data: Bytes,
-    ) -> Result<ExecutionResult, String>;
+    ) -> Result<ExecutionResult, ValidationRevert>;
 
     /// Returns true if this entry point uses reverts to communicate simulation
     /// results.

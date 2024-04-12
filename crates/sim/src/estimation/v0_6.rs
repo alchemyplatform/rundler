@@ -126,7 +126,7 @@ where
         let call_gas_limit = call_gas_limit?;
 
         if let Some(err) = settings.validate() {
-            return Err(GasEstimationError::RevertInValidation(err));
+            return Err(GasEstimationError::InvalidSettings(err));
         }
 
         // Add a buffer to the verification gas limit. Add 10% or 2000 gas, whichever is larger
@@ -266,7 +266,7 @@ where
                     &state_override,
                 )
                 .await?
-                .map_err(GasEstimationError::RevertInCallWithMessage)?
+                .map_err(GasEstimationError::RevertInValidation)?
                 .target_result;
             if let Ok(result) = EstimateCallGasResult::decode(&target_revert_data) {
                 num_rounds += result.num_rounds;
@@ -349,7 +349,7 @@ mod tests {
         chain::L1GasOracleContractType,
         contracts::{utils::get_gas_used::GasUsedResult, v0_6::i_entry_point},
         v0_6::{UserOperation, UserOperationOptionalGas},
-        UserOperation as UserOperationTrait,
+        UserOperation as UserOperationTrait, ValidationRevert,
     };
 
     use super::*;
@@ -664,7 +664,7 @@ mod tests {
             .expect_call_spoofed_simulate_op()
             .returning(move |op, _b, _c, _d, _e, _f| {
                 if op.total_verification_gas_limit() < gas_usage {
-                    return Ok(Err("AA23".to_string()));
+                    return Ok(Err(ValidationRevert::EntryPoint("AA23".to_string())));
                 }
 
                 Ok(Ok(ExecutionResult {
@@ -754,7 +754,7 @@ mod tests {
 
         assert!(matches!(
             estimation,
-            Some(GasEstimationError::RevertInValidation(..))
+            Some(GasEstimationError::GasUsedTooLarge)
         ));
     }
 
@@ -819,7 +819,11 @@ mod tests {
         // checking for this simulated revert
         entry
             .expect_decode_simulate_handle_ops_revert()
-            .returning(|_a| Err(String::from("Error with reverted message")));
+            .returning(|_a| {
+                Err(ValidationRevert::EntryPoint(
+                    "Error with reverted message".to_string(),
+                ))
+            });
         entry
             .expect_call_spoofed_simulate_op()
             .returning(|_a, _b, _c, _d, _e, _f| {
@@ -1087,7 +1091,7 @@ mod tests {
             .expect_call_spoofed_simulate_op()
             .returning(move |op, _b, _c, _d, _e, _f| {
                 if op.total_verification_gas_limit() < gas_usage {
-                    return Ok(Err("AA23".to_string()));
+                    return Ok(Err(ValidationRevert::EntryPoint("AA23".to_string())));
                 }
 
                 Ok(Ok(ExecutionResult {
@@ -1241,7 +1245,7 @@ mod tests {
 
         assert!(matches!(
             estimation,
-            Some(GasEstimationError::RevertInValidation(..))
+            Some(GasEstimationError::InvalidSettings(..))
         ));
     }
 }

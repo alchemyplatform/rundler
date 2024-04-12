@@ -1,6 +1,6 @@
-use std::{ops::Deref as _, sync::Arc};
+use std::{ops::Deref, sync::Arc};
 
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use ethers::types::{spoof, Address, Bytes, H256, U128, U256};
 use rundler_provider::{EntryPoint, Provider, SimulateOpCallData, SimulationProvider};
@@ -12,6 +12,11 @@ use crate::{utils, GasEstimationError};
 /// Gas estimation will stop when the binary search bounds are within
 /// `GAS_ESTIMATION_ERROR_MARGIN` of each other.
 const GAS_ESTIMATION_ERROR_MARGIN: f64 = 0.1;
+/// Error codes returned by the entry point when validation runs out of gas.
+/// These appear as the start of the "reason" string in the revert data.
+const OUT_OF_GAS_ERROR_CODES: &[&str] = &[
+    "AA13", "AA23", "AA26", "AA33", "AA36", "AA40", "AA41", "AA51",
+];
 
 /// Estimates a verification gas limit for a user operation. Can be used to
 /// estimate both verification gas and, in the v0.7 case, paymaster verification
@@ -121,17 +126,17 @@ where
                     "simulateHandleOp succeeded but should always revert. Make sure the entry point contract is deployed and the address is correct"
                 ))?;
             }
-        } else if let Some(message) = self
+        } else if let Some(revert) = self
             .entry_point
             .decode_simulate_handle_ops_revert(gas_used.result)
             .err()
         {
-            return Err(GasEstimationError::RevertInValidation(message));
+            return Err(GasEstimationError::RevertInValidation(revert));
         }
 
         let run_attempt_returning_error = |gas: u64| async move {
             let op = get_op(gas.into());
-            let error_message = self
+            let revert = self
                 .entry_point
                 .call_spoofed_simulate_op(
                     op,
@@ -144,22 +149,15 @@ where
                 .await?
                 .err();
 
-            if let Some(error_message) = error_message {
-                if error_message.starts_with("AA13")
-                    || error_message.starts_with("AA23")
-                    || error_message.starts_with("AA26")
-                    || error_message.starts_with("AA33")
-                    || error_message.starts_with("AA36")
-                    || error_message.starts_with("AA40")
-                    || error_message.starts_with("AA41")
-                    || error_message.starts_with("AA51")
-                {
-                    // This error occurs when out of gas, return false.
-                    Ok(false)
-                } else {
-                    // This is a different error, return it
-                    Err(GasEstimationError::RevertInValidation(error_message))
+            if let Some(revert) = revert {
+                if let Some(error_code) = revert.entry_point_error_code() {
+                    if OUT_OF_GAS_ERROR_CODES.contains(&error_code) {
+                        // This error occurs when out of gas, return false.
+                        return Ok(false);
+                    }
                 }
+                // This is a different error, return it
+                Err(GasEstimationError::RevertInValidation(revert))
             } else {
                 // This succeeded, return true
                 Ok(true)
@@ -169,10 +167,8 @@ where
         let mut max_failure_gas = 1;
         let mut min_success_gas = self.settings.max_verification_gas;
 
-        if gas_used.gas_used.cmp(&U256::from(u64::MAX)).is_gt() {
-            return Err(GasEstimationError::RevertInValidation(
-                "gas_used cannot be larger than a u64 integer".to_string(),
-            ));
+        if gas_used.gas_used.gt(&U256::from(u64::MAX)) {
+            return Err(GasEstimationError::GasUsedTooLarge);
         }
         let mut guess = gas_used.gas_used.as_u64() * 2;
         let mut num_rounds = 0;

@@ -14,7 +14,7 @@
 use ethers::types::{Bytes, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_types::GasEstimate;
+use rundler_types::{GasEstimate, ValidationRevert};
 
 use crate::precheck::MIN_CALL_GAS_LIMIT;
 
@@ -31,15 +31,21 @@ pub use v0_7::GasEstimator as GasEstimatorV0_7;
 /// Error type for gas estimation
 #[derive(Debug, thiserror::Error)]
 pub enum GasEstimationError {
+    /// Gas estimation was given an invalid settings struct
+    #[error("{0}")]
+    InvalidSettings(String),
     /// Validation reverted
     #[error("{0}")]
-    RevertInValidation(String),
+    RevertInValidation(ValidationRevert),
     /// Call reverted with a string message
     #[error("user operation's call reverted: {0}")]
     RevertInCallWithMessage(String),
     /// Call reverted with bytes
     #[error("user operation's call reverted: {0:#x}")]
     RevertInCallWithBytes(Bytes),
+    /// Call used too much gas
+    #[error("gas_used cannot be larger than a u64 integer")]
+    GasUsedTooLarge,
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),

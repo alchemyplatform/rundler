@@ -189,6 +189,7 @@ impl StakeTooLowData {
 #[serde(rename_all = "camelCase")]
 pub struct ValidationRevertData {
     reason: Option<String>,
+    inner_reason: Option<String>,
     data: Option<Bytes>,
 }
 
@@ -201,6 +202,32 @@ impl Display for ValidationRevertData {
             write!(f, " data len: {}", data.len())?;
         }
         Ok(())
+    }
+}
+
+impl From<ValidationRevert> for ValidationRevertData {
+    fn from(value: ValidationRevert) -> Self {
+        match value {
+            ValidationRevert::EntryPoint(reason) => Self {
+                reason: Some(reason),
+                inner_reason: None,
+                data: None,
+            },
+            ValidationRevert::Operation {
+                entry_point_reason,
+                inner_revert_data,
+                inner_revert_reason,
+            } => Self {
+                reason: Some(entry_point_reason),
+                inner_reason: inner_revert_reason,
+                data: Some(inner_revert_data),
+            },
+            ValidationRevert::Unknown(data) => Self {
+                reason: None,
+                inner_reason: None,
+                data: Some(data),
+            },
+        }
     }
 }
 
@@ -236,9 +263,9 @@ impl From<PoolError> for EthRpcError {
         match value {
             PoolError::MempoolError(e) => e.into(),
             PoolError::UnexpectedResponse => {
-                EthRpcError::Internal(anyhow::anyhow!("unexpected response from pool server"))
+                Self::Internal(anyhow::anyhow!("unexpected response from pool server"))
             }
-            PoolError::Other(e) => EthRpcError::Internal(e),
+            PoolError::Other(e) => Self::Internal(e),
         }
     }
 }
@@ -246,44 +273,40 @@ impl From<PoolError> for EthRpcError {
 impl From<MempoolError> for EthRpcError {
     fn from(value: MempoolError) -> Self {
         match value {
-            MempoolError::Other(e) => EthRpcError::Internal(e),
-            MempoolError::OperationAlreadyKnown => EthRpcError::OperationAlreadyKnown,
+            MempoolError::Other(e) => Self::Internal(e),
+            MempoolError::OperationAlreadyKnown => Self::OperationAlreadyKnown,
             MempoolError::ReplacementUnderpriced(priority_fee, fee) => {
-                EthRpcError::ReplacementUnderpriced(ReplacementUnderpricedData {
+                Self::ReplacementUnderpriced(ReplacementUnderpricedData {
                     current_max_priority_fee: priority_fee,
                     current_max_fee: fee,
                 })
             }
             MempoolError::MaxOperationsReached(count, address) => {
-                EthRpcError::MaxOperationsReached(count, address)
+                Self::MaxOperationsReached(count, address)
             }
-            MempoolError::EntityThrottled(entity) => EthRpcError::ThrottledOrBanned(entity),
-            MempoolError::MultipleRolesViolation(entity) => {
-                EthRpcError::MultipleRolesViolation(entity)
-            }
+            MempoolError::EntityThrottled(entity) => Self::ThrottledOrBanned(entity),
+            MempoolError::MultipleRolesViolation(entity) => Self::MultipleRolesViolation(entity),
             MempoolError::PaymasterBalanceTooLow(current_balance, required_balance) => {
-                EthRpcError::PaymasterBalanceTooLow(current_balance, required_balance)
+                Self::PaymasterBalanceTooLow(current_balance, required_balance)
             }
             MempoolError::AssociatedStorageIsAlternateSender => {
-                EthRpcError::AssociatedStorageIsAlternateSender
+                Self::AssociatedStorageIsAlternateSender
             }
             MempoolError::SenderAddressUsedAsAlternateEntity(address) => {
-                EthRpcError::SenderAddressUsedAsAlternateEntity(address)
+                Self::SenderAddressUsedAsAlternateEntity(address)
             }
             MempoolError::DiscardedOnInsert => {
-                EthRpcError::OperationRejected("discarded on insert".to_owned())
+                Self::OperationRejected("discarded on insert".to_owned())
             }
             MempoolError::PrecheckViolation(violation) => violation.into(),
             MempoolError::SimulationViolation(violation) => violation.into(),
             MempoolError::UnsupportedAggregator(a) => {
-                EthRpcError::UnsupportedAggregator(UnsupportedAggregatorData { aggregator: a })
+                Self::UnsupportedAggregator(UnsupportedAggregatorData { aggregator: a })
             }
             MempoolError::UnknownEntryPoint(a) => {
-                EthRpcError::EntryPointValidationRejected(format!("unknown entry point: {}", a))
+                Self::EntryPointValidationRejected(format!("unknown entry point: {}", a))
             }
-            MempoolError::OperationDropTooSoon(_, _, _) => {
-                EthRpcError::InvalidParams(value.to_string())
-            }
+            MempoolError::OperationDropTooSoon(_, _, _) => Self::InvalidParams(value.to_string()),
         }
     }
 }
@@ -341,23 +364,7 @@ impl From<SimulationViolation> for EthRpcError {
             }
             SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
             SimulationViolation::OutOfGas(entity) => Self::OutOfGas(entity),
-            SimulationViolation::ValidationRevert(revert) => {
-                let data = match revert {
-                    ValidationRevert::EntryPoint(reason) => ValidationRevertData {
-                        reason: Some(reason),
-                        data: None,
-                    },
-                    ValidationRevert::Operation(reason, data) => ValidationRevertData {
-                        reason: Some(reason),
-                        data: Some(data),
-                    },
-                    ValidationRevert::Unknown(data) => ValidationRevertData {
-                        reason: None,
-                        data: Some(data),
-                    },
-                };
-                Self::ValidationRevert(data)
-            }
+            SimulationViolation::ValidationRevert(revert) => Self::ValidationRevert(revert.into()),
             _ => Self::SimulationFailed(value),
         }
     }
@@ -422,7 +429,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
 
 impl From<tonic::Status> for EthRpcError {
     fn from(status: tonic::Status) -> Self {
-        EthRpcError::Internal(anyhow::anyhow!(
+        Self::Internal(anyhow::anyhow!(
             "internal server error code: {} message: {}",
             status.code(),
             status.message()
@@ -432,25 +439,27 @@ impl From<tonic::Status> for EthRpcError {
 
 impl From<ProviderError> for EthRpcError {
     fn from(e: ProviderError) -> Self {
-        EthRpcError::Internal(anyhow::anyhow!("provider error: {e:?}"))
+        Self::Internal(anyhow::anyhow!("provider error: {e:?}"))
     }
 }
 
 impl From<GasEstimationError> for EthRpcError {
     fn from(e: GasEstimationError) -> Self {
         match e {
-            GasEstimationError::RevertInValidation(message) => {
-                EthRpcError::EntryPointValidationRejected(message)
-            }
+            GasEstimationError::RevertInValidation(revert) => Self::ValidationRevert(revert.into()),
             GasEstimationError::RevertInCallWithMessage(message) => {
-                EthRpcError::ExecutionReverted(message)
+                Self::ExecutionReverted(message)
             }
             GasEstimationError::RevertInCallWithBytes(b) => {
-                EthRpcError::ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData {
-                    revert_data: b,
-                })
+                Self::ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData { revert_data: b })
             }
-            GasEstimationError::Other(error) => EthRpcError::Internal(error),
+            GasEstimationError::InvalidSettings(message) => {
+                Self::EntryPointValidationRejected(message)
+            }
+            error @ GasEstimationError::GasUsedTooLarge => {
+                Self::EntryPointValidationRejected(error.to_string())
+            }
+            GasEstimationError::Other(error) => Self::Internal(error),
         }
     }
 }

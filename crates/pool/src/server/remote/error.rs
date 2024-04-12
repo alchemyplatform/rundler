@@ -798,12 +798,15 @@ impl From<ValidationRevert> for ProtoValidationRevert {
             ValidationRevert::EntryPoint(reason) => {
                 validation_revert::Revert::EntryPoint(EntryPointRevert { reason })
             }
-            ValidationRevert::Operation(reason, revert_bytes) => {
-                validation_revert::Revert::Operation(OperationRevert {
-                    reason,
-                    revert_bytes: revert_bytes.to_vec(),
-                })
-            }
+            ValidationRevert::Operation {
+                entry_point_reason,
+                inner_revert_data,
+                inner_revert_reason,
+            } => validation_revert::Revert::Operation(OperationRevert {
+                entry_point_reason,
+                inner_revert_data: inner_revert_data.to_vec(),
+                inner_revert_reason: inner_revert_reason.unwrap_or_default(),
+            }),
             ValidationRevert::Unknown(revert_bytes) => {
                 validation_revert::Revert::Unknown(UnknownRevert {
                     revert_bytes: revert_bytes.to_vec(),
@@ -824,9 +827,11 @@ impl TryFrom<ProtoValidationRevert> for ValidationRevert {
             Some(validation_revert::Revert::EntryPoint(e)) => {
                 ValidationRevert::EntryPoint(e.reason)
             }
-            Some(validation_revert::Revert::Operation(e)) => {
-                ValidationRevert::Operation(e.reason, e.revert_bytes.into())
-            }
+            Some(validation_revert::Revert::Operation(e)) => ValidationRevert::Operation {
+                entry_point_reason: e.entry_point_reason,
+                inner_revert_data: e.inner_revert_data.into(),
+                inner_revert_reason: Some(e.inner_revert_reason).filter(|s| !s.is_empty()),
+            },
             Some(validation_revert::Revert::Unknown(e)) => {
                 ValidationRevert::Unknown(e.revert_bytes.into())
             }

@@ -751,8 +751,9 @@ message EntryPointRevert {
   string reason = 1;
 }
 message OperationRevert {
-  string reason = 1;
-  bytes revert_bytes = 2;
+  string entry_point_reason = 1;
+  bytes inner_revert_data = 2;
+  string inner_revert_reason = 3;
 }
 message UnknownRevert {
   bytes revert_bytes = 1;
