@@ -16,13 +16,12 @@ use std::sync::Arc;
 use anyhow::Context;
 use ethers::{
     abi::AbiDecode,
-    contract::{ContractError, EthCall as _, FunctionCall},
+    contract::{ContractError, EthCall, FunctionCall},
     providers::{spoof, Middleware, RawCall},
     types::{
         transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, Eip1559TransactionRequest,
         H256, U256,
     },
-    utils::hex,
 };
 use rundler_types::{
     chain::ChainSpec,
@@ -46,8 +45,6 @@ use crate::{
     EntryPoint as EntryPointTrait, EntryPointProvider, ExecutionResult, L1GasProvider, Provider,
     SignatureAggregator, SimulateOpCallData, SimulationProvider,
 };
-
-const REVERT_REASON_MAX_LEN: usize = 2048;
 
 /// Implementation of the `EntryPoint` trait for the v0.6 version of the entry point contract using ethers
 #[derive(Debug)]
@@ -315,9 +312,9 @@ where
                 if let Ok(result) = ValidationOutput::decode_v0_6(&revert_data) {
                     Ok(result)
                 } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
-                    Err(ValidationRevert::EntryPoint(failed_op.reason))?
+                    Err(ValidationRevert::from(failed_op))?
                 } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
-                    Err(ValidationRevert::EntryPoint(err.reason))?
+                    Err(ValidationRevert::from(err))?
                 } else {
                     Err(ValidationRevert::Unknown(revert_data))?
                 }
@@ -329,15 +326,15 @@ where
     fn decode_simulate_handle_ops_revert(
         &self,
         revert_data: Bytes,
-    ) -> Result<ExecutionResult, String> {
+    ) -> Result<ExecutionResult, ValidationRevert> {
         if let Ok(result) = ExecutionResultV0_6::decode(&revert_data) {
             Ok(result.into())
         } else if let Ok(failed_op) = FailedOp::decode(&revert_data) {
-            Err(failed_op.reason)
+            Err(ValidationRevert::EntryPoint(failed_op.reason))
         } else if let Ok(err) = ContractRevertError::decode(&revert_data) {
-            Err(err.reason)
+            Err(ValidationRevert::EntryPoint(err.reason))
         } else {
-            Err(hex::encode(&revert_data[..REVERT_REASON_MAX_LEN]))
+            Err(ValidationRevert::Unknown(revert_data))
         }
     }
 
@@ -364,7 +361,7 @@ where
         block_hash: H256,
         gas: U256,
         spoofed_state: &spoof::State,
-    ) -> anyhow::Result<Result<ExecutionResult, String>> {
+    ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>> {
         let contract_error = self
             .i_entry_point
             .simulate_handle_op(user_op, target, target_call_data)
