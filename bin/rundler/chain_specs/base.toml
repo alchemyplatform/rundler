@@ -8,3 +8,4 @@ include_l1_gas_in_gas_limit = false
 
 priority_fee_oracle_type = "USAGE_BASED"
 min_max_priority_fee_per_gas = "0x0186A0" # 100_000
+max_bundle_size_bytes = 130000

@@ -100,6 +100,15 @@ pub struct BuilderArgs {
     )]
     max_bundle_size: u64,
 
+    /// Maximum number of ops to include in one bundle.
+    #[arg(
+        long = "builder.max_bundle_size_bytes",
+        name = "builder.max_bundle_size_bytes",
+        env = "BUILDER_MAX_BUNDLE_SIZE_BYTES",
+        default_value = "100000"
+    )]
+    max_bundle_size_bytes: u64,
+
     /// If present, the url of the ETH provider that will be used to send
     /// transactions. Defaults to the value of `node_http`.
     #[arg(
@@ -210,6 +219,7 @@ impl BuilderArgs {
             redis_uri: self.redis_uri.clone(),
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             max_bundle_size: self.max_bundle_size,
+            max_bundle_size_bytes: self.max_bundle_size_bytes,
             max_bundle_gas: common.max_bundle_gas,
             submit_url,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,

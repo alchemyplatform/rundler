@@ -74,6 +74,8 @@ pub struct ChainSpec {
     /// This parameter is used to trigger the builder to send a bundle after a specified
     /// amount of time, before a new block is not received.
     pub bundle_max_send_interval_millis: u64,
+    /// The maximum size that an bundle can be in bytes.
+    pub max_bundle_size_bytes: u64,
 
     /*
      * Senders
@@ -129,6 +131,7 @@ impl Default for ChainSpec {
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: U256::zero(),
             max_max_priority_fee_per_gas: U256::MAX,
+            max_bundle_size_bytes: 100000,
             bundle_max_send_interval_millis: u64::MAX,
             flashbots_enabled: false,
             bloxroute_enabled: false,

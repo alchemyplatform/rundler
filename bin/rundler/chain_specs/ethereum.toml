@@ -2,3 +2,4 @@ name = "Ethereum"
 id = 1
 
 flashbots_enabled = true
+max_bundle_size_bytes = 300000
