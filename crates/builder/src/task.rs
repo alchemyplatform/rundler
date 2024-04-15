@@ -70,8 +70,6 @@ pub struct Args {
     pub redis_lock_ttl_millis: u64,
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
-    /// Maximum bundle size in bytes
-    pub max_bundle_size_bytes: u64,
     /// Maximum bundle size in gas limit
     pub max_bundle_gas: u64,
     /// URL to submit bundles too
