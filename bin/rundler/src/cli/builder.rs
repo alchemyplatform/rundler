@@ -100,7 +100,7 @@ pub struct BuilderArgs {
     )]
     max_bundle_size: u64,
 
-    /// Maximum number of ops to include in one bundle.
+    /// Maximum number of bytes within one bundle.
     #[arg(
         long = "builder.max_bundle_size_bytes",
         name = "builder.max_bundle_size_bytes",
