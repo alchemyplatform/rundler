@@ -85,9 +85,10 @@ make test-unit
 
 Run ERC-4337 spec tests:
 ```
-cd test/spec-tests/bundler-spec-tests && pdm install && pdm run update-deps
+cd test/spec-tests/${ENTRY_POINT_VERSION}/bundler-spec-tests && pdm install && pdm run update-deps
 make test-spec-integrated
 ```
+where `ENTRY_POINT_VERSION` is one of `v0_6` or `v0_7`.
 
 ### Help
 

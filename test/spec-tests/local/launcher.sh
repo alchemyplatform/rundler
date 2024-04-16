@@ -18,5 +18,9 @@ case $1 in
 	;;
 
  *)
-	echo "usage: $0 {start|stop|name}"
+  cat <<EOF
+usage:
+  $0 start {v0_6|v0_7}
+  $0 stop
+EOF
 esac
