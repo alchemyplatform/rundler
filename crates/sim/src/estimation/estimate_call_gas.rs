@@ -143,7 +143,7 @@ where
                     &state_override,
                 )
                 .await?
-                .map_err(GasEstimationError::RevertInCallWithMessage)?
+                .map_err(GasEstimationError::RevertInValidation)?
                 .target_result;
             if let Ok(result) = EstimateCallGasResult::decode(&target_revert_data) {
                 num_rounds += result.num_rounds;

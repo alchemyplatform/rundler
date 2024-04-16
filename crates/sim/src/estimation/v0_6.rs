@@ -20,6 +20,7 @@ use ethers::{
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
+    contracts::v0_6::entry_point,
     v0_6::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
@@ -28,7 +29,7 @@ use tokio::join;
 
 use super::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
-    Settings, VerificationGasEstimator, ENTRYPOINT_V0_6_DEPLOYED_BYTECODE,
+    Settings, VerificationGasEstimator,
 };
 use crate::{
     estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
@@ -218,108 +219,6 @@ where
             .map(|gas_u128| gas_u128.into())
     }
 
-    async fn estimate_call_gas(
-        &self,
-        op: &UserOperation,
-        block_hash: H256,
-        mut state_override: spoof::State,
-    ) -> Result<U256, GasEstimationError> {
-        let timer = std::time::Instant::now();
-        // For an explanation of what's going on here, see the comment at the
-        // top of `CallGasEstimationProxy.sol`.
-        let entry_point_code = self
-            .provider
-            .get_code(self.entry_point.address(), Some(block_hash))
-            .await
-            .map_err(anyhow::Error::from)?;
-        // Use a random address for the moved entry point so that users can't
-        // intentionally get bad estimates by interacting with the hardcoded
-        // address.
-        let moved_entry_point_address: Address = rand::thread_rng().gen();
-        let estimation_proxy_bytecode =
-            estimation_proxy_bytecode_with_target(moved_entry_point_address);
-        state_override
-            .account(moved_entry_point_address)
-            .code(entry_point_code);
-        state_override
-            .account(self.entry_point.address())
-            .code(estimation_proxy_bytecode);
-
-        let callless_op = UserOperation {
-            call_gas_limit: 0.into(),
-            max_fee_per_gas: 0.into(),
-            verification_gas_limit: self.settings.max_verification_gas.into(),
-            ..op.clone()
-        };
-
-        let mut min_gas = U256::zero();
-        let mut max_gas = U256::from(self.settings.max_call_gas);
-        let mut is_continuation = false;
-        let mut num_rounds = U256::zero();
-        loop {
-            let target_call_data = eth::call_data_of(
-                EstimateCallGasCall::selector(),
-                (EstimateCallGasArgs {
-                    sender: op.sender,
-                    call_data: Bytes::clone(&op.call_data),
-                    min_gas,
-                    max_gas,
-                    rounding: GAS_ROUNDING.into(),
-                    is_continuation,
-                },),
-            );
-            let target_revert_data = self
-                .entry_point
-                .call_spoofed_simulate_op(
-                    callless_op.clone(),
-                    self.entry_point.address(),
-                    target_call_data,
-                    block_hash,
-                    self.settings.max_simulate_handle_ops_gas.into(),
-                    &state_override,
-                )
-                .await?
-                .map_err(GasEstimationError::RevertInValidation)?
-                .target_result;
-            if let Ok(result) = EstimateCallGasResult::decode(&target_revert_data) {
-                num_rounds += result.num_rounds;
-                tracing::debug!(
-                    "binary search for call gas took {num_rounds} rounds, {}ms",
-                    timer.elapsed().as_millis()
-                );
-                return Ok(result.gas_estimate);
-            } else if let Ok(revert) = EstimateCallGasRevertAtMax::decode(&target_revert_data) {
-                let error = if let Some(message) = eth::parse_revert_message(&revert.revert_data) {
-                    GasEstimationError::RevertInCallWithMessage(message)
-                } else {
-                    GasEstimationError::RevertInCallWithBytes(revert.revert_data)
-                };
-                return Err(error);
-            } else if let Ok(continuation) =
-                EstimateCallGasContinuation::decode(&target_revert_data)
-            {
-                if is_continuation
-                    && continuation.min_gas <= min_gas
-                    && continuation.max_gas >= max_gas
-                {
-                    // This should never happen, but if it does, bail so we
-                    // don't end up in an infinite loop!
-                    Err(anyhow!(
-                        "estimateCallGas should make progress each time it is called"
-                    ))?;
-                }
-                is_continuation = true;
-                min_gas = min_gas.max(continuation.min_gas);
-                max_gas = max_gas.min(continuation.max_gas);
-                num_rounds += continuation.num_rounds;
-            } else {
-                Err(anyhow!(
-                    "estimateCallGas revert should be a Result or a Continuation"
-                ))?;
-            }
-        }
-    }
-
     async fn estimate_pre_verification_gas(
         &self,
         op: &UserOperationOptionalGas,
@@ -366,7 +265,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
     fn entry_point_simulations_code(&self) -> Bytes {
         // In v0.6, the entry point code contains the simulations code, so we
         // just return the entry point code.
-        ENTRYPOINT_V0_6_DEPLOYED_BYTECODE.into()
+        Bytes::clone(&entry_point::ENTRYPOINT_DEPLOYED_BYTECODE)
     }
 }
 
@@ -388,7 +287,7 @@ mod tests {
                 },
                 get_gas_used::GasUsedResult,
             },
-            v0_6::i_entry_point,
+            v0_6::entry_point,
         },
         v0_6::{UserOperation, UserOperationOptionalGas},
         UserOperation as UserOperationTrait, ValidationRevert,
@@ -429,7 +328,7 @@ mod tests {
             .expect_get_simulate_op_call_data()
             .returning(|op, spoofed_state| {
                 let call_data = eth::call_data_of(
-                    i_entry_point::SimulateHandleOpCall::selector(),
+                    entry_point::SimulateHandleOpCall::selector(),
                     (op.clone(), Address::zero(), Bytes::new()),
                 );
                 SimulateOpCallData {

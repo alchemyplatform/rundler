@@ -37,7 +37,7 @@ fn generate_v0_6_bindings() -> Result<(), Box<dyn error::Error>> {
     )?;
 
     MultiAbigen::from_abigens([
-        abigen_of("v0_6", "IEntryPoint")?,
+        abigen_of("v0_6", "EntryPoint")?,
         abigen_of("v0_6", "IAggregator")?,
         abigen_of("v0_6", "IStakeManager")?,
         abigen_of("v0_6", "GetBalances")?,
