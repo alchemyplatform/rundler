@@ -20,6 +20,7 @@ use ethers::{
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
+    contracts::v0_6::entry_point,
     v0_6::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
@@ -28,7 +29,7 @@ use tokio::join;
 
 use super::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
-    Settings, VerificationGasEstimator, ENTRYPOINT_V0_6_DEPLOYED_BYTECODE,
+    Settings, VerificationGasEstimator,
 };
 use crate::{
     estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
@@ -265,7 +266,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
     fn entry_point_simulations_code(&self) -> Bytes {
         // In v0.6, the entry point code contains the simulations code, so we
         // just return the entry point code.
-        ENTRYPOINT_V0_6_DEPLOYED_BYTECODE.into()
+        Bytes::clone(&entry_point::ENTRYPOINT_DEPLOYED_BYTECODE)
     }
 }
 
@@ -287,7 +288,7 @@ mod tests {
                 },
                 get_gas_used::GasUsedResult,
             },
-            v0_6::i_entry_point,
+            v0_6::entry_point,
         },
         v0_6::{UserOperation, UserOperationOptionalGas},
         UserOperation as UserOperationTrait,
@@ -328,7 +329,7 @@ mod tests {
             .expect_get_simulate_op_call_data()
             .returning(|op, spoofed_state| {
                 let call_data = eth::call_data_of(
-                    i_entry_point::SimulateHandleOpCall::selector(),
+                    entry_point::SimulateHandleOpCall::selector(),
                     (op.clone(), Address::zero(), Bytes::new()),
                 );
                 SimulateOpCallData {

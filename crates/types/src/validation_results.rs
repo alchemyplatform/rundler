@@ -18,7 +18,7 @@ use ethers::{
 
 use crate::{
     contracts::{
-        v0_6::i_entry_point::{
+        v0_6::entry_point::{
             ValidationResult as ValidationResultV0_6,
             ValidationResultWithAggregation as ValidationResultWithAggregationV0_6,
         },
