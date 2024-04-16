@@ -175,7 +175,7 @@ mod tests {
     use rundler_provider::{EntryPoint, MockEntryPointV0_6, MockProvider};
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
-        contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
+        contracts::v0_6::entry_point::{EntryPointCalls, HandleOpsCall},
         pool::{MockPool, PoolOperation},
         v0_6::UserOperation,
         EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
@@ -245,7 +245,7 @@ mod tests {
         let mut provider = MockProvider::default();
         provider.expect_get_block_number().returning(|| Ok(1000));
 
-        let tx_data: Bytes = IEntryPointCalls::HandleOps(HandleOpsCall {
+        let tx_data: Bytes = EntryPointCalls::HandleOps(HandleOpsCall {
             beneficiary: Address::zero(),
             ops: vec![uo.clone()],
         })
