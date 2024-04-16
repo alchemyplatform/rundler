@@ -55,9 +55,10 @@ const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
 /// 4 bytes for function signature
 /// 32 bytes for user op array offset
 /// 32 bytes for beneficiary
+/// 32 bytes for array count
 /// Ontop of this offset there needs to be another 32 bytes for each
 /// user operation in the bundle to store its offset within the array
-const BUNDLE_BYTE_OVERHEAD: u64 = 4 + 32 + 32;
+const BUNDLE_BYTE_OVERHEAD: u64 = 4 + 32 + 32 + 32;
 
 /// Size of word that stores offset of user op location
 /// within handleOps `ops` array
