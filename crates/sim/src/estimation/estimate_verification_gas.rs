@@ -170,7 +170,7 @@ where
         if gas_used.gas_used.gt(&U256::from(u64::MAX)) {
             return Err(GasEstimationError::GasUsedTooLarge);
         }
-        let mut guess = gas_used.gas_used.as_u64() * 2;
+        let mut guess = gas_used.gas_used.as_u64().saturating_mul(2);
         let mut num_rounds = 0;
         while (min_success_gas as f64) / (max_failure_gas as f64)
             > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
@@ -181,7 +181,7 @@ where
             } else {
                 max_failure_gas = guess;
             }
-            guess = (max_failure_gas + min_success_gas) / 2;
+            guess = max_failure_gas.saturating_add(min_success_gas) / 2;
         }
 
         tracing::debug!(

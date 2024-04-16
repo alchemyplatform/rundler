@@ -12,13 +12,18 @@ Rundler tools
 [dependencies]
 rundler-dev = { path = "../../crates/dev" }
 rundler-rpc = { path = "../../crates/rpc" }
+rundler-types = { path = "../../crates/types" }
 
 anyhow = "1.0.70"
 clap = { version = "4.2.4", features = ["derive", "env"] }
 dotenv = "0.15.0"
 ethers = "2.0.8"
-ethers-signers = {version = "2.0.8", features = ["aws"] }
-rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
-rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }
+ethers-signers = { version = "2.0.8", features = ["aws"] }
+rusoto_core = { version = "0.48.0", default-features = false, features = [
+  "rustls",
+] }
+rusoto_kms = { version = "0.48.0", default-features = false, features = [
+  "rustls",
+] }
 serde_json = "1.0.96"
 tokio.workspace = true
