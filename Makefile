@@ -28,11 +28,29 @@ test-unit: ## Run unit tests.
 
 .PHONY: test-spec-integrated
 test-spec-integrated: ## Run spec tests in integrated mode
-	test/spec-tests/local/run-spec-tests.sh
+	$(MAKE) test-spec-integrated-v0_6
+	$(MAKE) test-spec-integrated-v0_7
+
+.PHONY: test-spec-integrated-v0_6
+test-spec-integrated-v0_6: ## Run v0.6 spec tests in integrated mode
+	test/spec-tests/local/run-spec-tests-v0_6.sh
+
+.PHONY: test-spec-integrated-v0_7
+test-spec-integrated-v0_7: ## Run v0.7 spec tests in integrated mode
+	test/spec-tests/local/run-spec-tests-v0_7.sh
 
 .PHONY: test-spec-modular
 test-spec-modular: ## Run spec tests in modular mode
-	test/spec-tests/remote/run-spec-tests.sh
+	$(MAKE) test-spec-modular-v0_6
+	$(MAKE) test-spec-modular-v0_7
+
+.PHONY: test-spec-modular-v0_6
+test-spec-modular-v0_6: ## Run v0.6 spec tests in modular mode
+	test/spec-tests/remote/run-spec-tests-v0_6.sh
+
+.PHONY: test-spec-modular-v0_7
+test-spec-modular-v0_7: ## Run v0.7 spec tests in modular mode
+	test/spec-tests/remote/run-spec-tests-v0_7.sh
 
 .PHONY: submodule-update
 submodule-update: ## Update git submodules
