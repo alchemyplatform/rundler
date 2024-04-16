@@ -198,6 +198,9 @@ impl Display for ValidationRevertData {
         if let Some(reason) = &self.reason {
             write!(f, "{}", reason)?;
         }
+        if let Some(inner_reason) = &self.inner_reason {
+            write!(f, " inner reason: {}", inner_reason)?;
+        }
         if let Some(data) = &self.data {
             write!(f, " data len: {}", data.len())?;
         }
