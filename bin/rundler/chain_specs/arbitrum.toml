@@ -6,3 +6,4 @@ l1_gas_oracle_contract_type = "ARBITRUM_NITRO"
 l1_gas_oracle_contract_address = "0x00000000000000000000000000000000000000C8"
 
 supports_eip1559 = false
+max_bundle_size_bytes = 95000

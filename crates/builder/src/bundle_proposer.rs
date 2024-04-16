@@ -51,6 +51,19 @@ const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
 
+/// Overhead for bytes required for each bundle
+/// 4 bytes for function signature
+/// 32 bytes for user op array offset
+/// 32 bytes for beneficiary
+/// 32 bytes for array count
+/// Ontop of this offset there needs to be another 32 bytes for each
+/// user operation in the bundle to store its offset within the array
+const BUNDLE_BYTE_OVERHEAD: u64 = 4 + 32 + 32 + 32;
+
+/// Size of word that stores offset of user op location
+/// within handleOps `ops` array
+const USER_OP_OFFSET_WORD_SIZE: u64 = 32;
+
 #[derive(Debug, Default)]
 pub(crate) struct Bundle {
     pub(crate) ops_per_aggregator: Vec<UserOpsPerAggregator>,
@@ -367,6 +380,7 @@ where
 
         let ov = GasOverheads::default();
         let mut gas_spent = ov.transaction_gas_overhead;
+        let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
         for (po, simulation) in ops_with_simulations {
             let op = po.clone().uo;
             let simulation = match simulation {
@@ -406,6 +420,19 @@ where
                     },
                 ));
                 context.rejected_ops.push((op, po.entity_infos));
+                continue;
+            }
+
+            let op_size_bytes: u64 = op
+                .abi_encoded_size()
+                .try_into()
+                .expect("User operation size should fit within u64");
+
+            let op_size_with_offset_word = op_size_bytes.saturating_add(USER_OP_OFFSET_WORD_SIZE);
+
+            if op_size_with_offset_word.saturating_add(constructed_bundle_size)
+                >= self.settings.chain_spec.max_bundle_size_bytes
+            {
                 continue;
             }
 
@@ -458,6 +485,9 @@ where
                 false,
                 simulation.requires_post_op,
             );
+
+            constructed_bundle_size =
+                constructed_bundle_size.saturating_add(op_size_with_offset_word);
 
             context
                 .groups_by_aggregator
