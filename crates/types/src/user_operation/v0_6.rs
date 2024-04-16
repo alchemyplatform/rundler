@@ -29,6 +29,22 @@ use crate::{
     EntryPointVersion,
 };
 
+/// Number of bytes in the fixed size portion of an ABI encoded user operation
+/// sender = 32 bytes
+/// nonce = 32 bytes
+/// init_code = 32 bytes + 32 bytes num elems + var 32
+/// call_data = 32 bytes + 32 bytes num elems + var 32
+/// call_gas_limit = 32 bytes
+/// verification_gas_limit = 32 bytes
+/// pre_verification_gas = 32 bytes
+/// max_fee_per_gas = 32 bytes
+/// max_priority_fee_per_gas = 32 bytes
+/// paymaster_and_data = 32 bytes + 32 bytes num elems + var 32
+/// signature = 32 bytes + 32 bytes num elems + var 32
+///
+/// 15 * 32 = 480
+const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 480;
+
 impl UserOperationTrait for UserOperation {
     type OptionalGas = UserOperationOptionalGas;
 
@@ -135,6 +151,14 @@ impl UserOperationTrait for UserOperation {
 
     fn clear_signature(&mut self) {
         self.signature = Bytes::default();
+    }
+
+    fn abi_encoded_size(&self) -> usize {
+        ABI_ENCODED_USER_OPERATION_FIXED_LEN
+            + super::byte_array_abi_len(&self.init_code)
+            + super::byte_array_abi_len(&self.call_data)
+            + super::byte_array_abi_len(&self.paymaster_and_data)
+            + super::byte_array_abi_len(&self.signature)
     }
 }
 

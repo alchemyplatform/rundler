@@ -25,6 +25,20 @@ use crate::{
 
 const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([10_000, 0, 0, 0]);
 
+/// Number of bytes in the fixed size portion of an ABI encoded user operation
+/// sender = 32 bytes
+/// nonce = 32 bytes
+/// init_code = 32 bytes + 32 bytes for the length + var bytes
+/// call_data = 32 bytes + 32 bytes for the length + var bytes
+/// account_gas_limits = 32 bytes
+/// pre_verification_gas = 32 bytes
+/// gas_fees = 32 bytes
+/// paymaster_and_data = 32 bytes + 32 bytes for the length + var bytes
+/// signature = 32 bytes + 32 bytes for the length + var bytes
+///
+/// 13 * 32 = 416
+const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 416;
+
 /// User Operation for Entry Point v0.7
 ///
 /// Offchain version, must be packed before sending onchain
@@ -205,6 +219,14 @@ impl UserOperationTrait for UserOperation {
         self.signature = Bytes::new();
         self.packed = pack_user_operation(self.clone());
         self.hash = hash_packed_user_operation(&self.packed, self.entry_point, self.chain_id);
+    }
+
+    fn abi_encoded_size(&self) -> usize {
+        ABI_ENCODED_USER_OPERATION_FIXED_LEN
+            + super::byte_array_abi_len(&self.packed.init_code)
+            + super::byte_array_abi_len(&self.packed.call_data)
+            + super::byte_array_abi_len(&self.packed.paymaster_and_data)
+            + super::byte_array_abi_len(&self.packed.signature)
     }
 }
 
