@@ -128,6 +128,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// Used when a user op is using a signature aggregator prior to being submitted
     fn clear_signature(&mut self);
+
+    /// Abi encode size of the user operation
+    fn abi_encoded_size(&self) -> usize;
 }
 
 /// User operation enum
@@ -282,6 +285,13 @@ impl UserOperation for UserOperationVariant {
             UserOperationVariant::V0_7(op) => op.clear_signature(),
         }
     }
+
+    fn abi_encoded_size(&self) -> usize {
+        match self {
+            UserOperationVariant::V0_6(op) => op.abi_encoded_size(),
+            UserOperationVariant::V0_7(op) => op.abi_encoded_size(),
+        }
+    }
 }
 
 impl UserOperationVariant {
@@ -388,4 +398,25 @@ pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(uo: UO) -> U256 {
         .unwrap_or_default();
 
     call_data_cost + ov.per_user_op + ov.per_user_op_word * length_in_words
+}
+/// Calculates the size a byte array padded to the next largest multiple of 32
+pub(crate) fn byte_array_abi_len(b: &Bytes) -> usize {
+    (b.len() + 31) & !31
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_byte_array_abi_len() {
+        let b = Bytes::from(vec![0u8; 32]);
+        assert_eq!(byte_array_abi_len(&b), 32);
+
+        let b = Bytes::from(vec![0u8; 31]);
+        assert_eq!(byte_array_abi_len(&b), 32);
+
+        let b = Bytes::from(vec![0u8; 33]);
+        assert_eq!(byte_array_abi_len(&b), 64);
+    }
 }
