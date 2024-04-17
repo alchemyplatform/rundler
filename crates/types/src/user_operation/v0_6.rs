@@ -322,6 +322,17 @@ impl UserOperationOptionalGas {
         max_call_gas: U256,
         max_verification_gas: U256,
     ) -> UserOperation {
+        // If unset or zero, default these to gas limits from settings
+        // Cap their values to the gas limits from settings
+        let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, U256::zero());
+        let vgl = super::default_if_none_or_equal(
+            self.verification_gas_limit,
+            max_verification_gas,
+            U256::zero(),
+        );
+        let pvg =
+            super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, U256::zero());
+
         UserOperation {
             sender: self.sender,
             nonce: self.nonce,
@@ -329,18 +340,10 @@ impl UserOperationOptionalGas {
             call_data: self.call_data,
             paymaster_and_data: self.paymaster_and_data,
             signature: self.signature,
-            // If unset, default these to gas limits from settings
-            // Cap their values to the gas limits from settings
-            verification_gas_limit: self
-                .verification_gas_limit
-                .unwrap_or(max_verification_gas)
-                .min(max_verification_gas),
-            call_gas_limit: self
-                .call_gas_limit
-                .unwrap_or(max_call_gas)
-                .min(max_call_gas),
+            verification_gas_limit: vgl,
+            call_gas_limit: cgl,
+            pre_verification_gas: pvg,
             // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
-            pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
             max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
         }

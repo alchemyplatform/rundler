@@ -10,7 +10,7 @@ use rundler_provider::{EntryPoint, SimulationProvider};
 use rundler_types::{
     contracts::utils::call_gas_estimation_proxy::{
         EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
-        EstimateCallGasResult, EstimateCallGasRevertAtMax,
+        EstimateCallGasResult, EstimateCallGasRevertAtMax, TestCallGasCall, TestCallGasResult,
         CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
     },
     UserOperation,
@@ -31,7 +31,7 @@ const GAS_ROUNDING: u64 = 4096;
 ///
 /// The easiest way to get the updated value is to run this module's tests. The
 /// failure will tell you the new value.
-const PROXY_TARGET_OFFSET: usize = 120;
+const PROXY_TARGET_OFFSET: usize = 163;
 
 /// Estimates the gas limit for a user operation
 #[async_trait]
@@ -47,6 +47,15 @@ pub trait CallGasEstimator: Send + Sync + 'static {
         block_hash: H256,
         state_override: spoof::State,
     ) -> Result<U128, GasEstimationError>;
+
+    /// Calls simulate_handle_op, but captures the execution result. Returning an
+    /// error if the operation reverts or anyhow error on any other error
+    async fn simulate_handle_op_with_result(
+        &self,
+        op: Self::UO,
+        block_hash: H256,
+        state_override: spoof::State,
+    ) -> Result<(), GasEstimationError>;
 }
 
 /// Implementation of a call gas estimator which performs a binary search with
@@ -66,14 +75,9 @@ pub trait CallGasEstimatorSpecialization: Send + Sync + 'static {
     /// The user operation type estimated by this specialization
     type UO: UserOperation;
 
-    /// Returns the input user operation, modified to have high verification gas
-    /// limits but zero for the call gas limits. The intent is that the modified
-    /// operation should run its validation but do nothing during execution
-    fn get_op_with_verification_gas_but_no_call_gas(
-        &self,
-        op: Self::UO,
-        settings: Settings,
-    ) -> Self::UO;
+    /// Returns the input user operation, modified to have limits but zero for the call gas limits.
+    /// The intent is that the modified operation should run its validation but do nothing during execution
+    fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO;
 
     /// Returns the deployed bytecode of the entry point contract with
     /// simulation methods
@@ -98,23 +102,9 @@ where
         let timer = std::time::Instant::now();
         // For an explanation of what's going on here, see the comment at the
         // top of `CallGasEstimationProxy.sol`.
+        self.add_proxy_to_overrides(&mut state_override);
 
-        // Use a random address for the moved entry point so that users can't
-        // intentionally get bad estimates by interacting with the hardcoded
-        // address.
-        let moved_entry_point_address: Address = rand::thread_rng().gen();
-        let estimation_proxy_bytecode =
-            estimation_proxy_bytecode_with_target(moved_entry_point_address);
-        state_override
-            .account(moved_entry_point_address)
-            .code(self.specialization.entry_point_simulations_code());
-        state_override
-            .account(self.entry_point.address())
-            .code(estimation_proxy_bytecode);
-
-        let callless_op = self
-            .specialization
-            .get_op_with_verification_gas_but_no_call_gas(op.clone(), self.settings);
+        let callless_op = self.specialization.get_op_with_no_call_gas(op.clone());
 
         let mut min_gas = U256::zero();
         let mut max_gas = U256::from(self.settings.max_call_gas);
@@ -187,6 +177,54 @@ where
             }
         }
     }
+
+    async fn simulate_handle_op_with_result(
+        &self,
+        op: Self::UO,
+        block_hash: H256,
+        mut state_override: spoof::State,
+    ) -> Result<(), GasEstimationError> {
+        self.add_proxy_to_overrides(&mut state_override);
+
+        let target_call_data = eth::call_data_of(
+            TestCallGasCall::selector(),
+            (
+                op.sender(),
+                Bytes::clone(op.call_data()),
+                op.call_gas_limit(),
+            ),
+        );
+
+        let callless_op = self.specialization.get_op_with_no_call_gas(op);
+
+        let target_revert_data = self
+            .entry_point
+            .call_spoofed_simulate_op(
+                callless_op,
+                self.entry_point.address(),
+                target_call_data,
+                block_hash,
+                self.settings.max_simulate_handle_ops_gas.into(),
+                &state_override,
+            )
+            .await?
+            .map_err(GasEstimationError::RevertInValidation)?
+            .target_result;
+        if let Ok(result) = TestCallGasResult::decode(&target_revert_data) {
+            if result.success {
+                Ok(())
+            } else {
+                let error = if let Some(message) = eth::parse_revert_message(&result.revert_data) {
+                    GasEstimationError::RevertInCallWithMessage(message)
+                } else {
+                    GasEstimationError::RevertInCallWithBytes(result.revert_data)
+                };
+                Err(error)
+            }
+        } else {
+            Err(anyhow!("testCallGas revert should be a TestCallGasResult"))?
+        }
+    }
 }
 
 impl<UO, E, S> CallGasEstimatorImpl<E, S>
@@ -202,6 +240,21 @@ where
             settings,
             specialization,
         }
+    }
+
+    fn add_proxy_to_overrides(&self, state_override: &mut spoof::State) {
+        // Use a random address for the moved entry point so that users can't
+        // intentionally get bad estimates by interacting with the hardcoded
+        // address.
+        let moved_entry_point_address: Address = rand::thread_rng().gen();
+        let estimation_proxy_bytecode =
+            estimation_proxy_bytecode_with_target(moved_entry_point_address);
+        state_override
+            .account(moved_entry_point_address)
+            .code(self.specialization.entry_point_simulations_code());
+        state_override
+            .account(self.entry_point.address())
+            .code(estimation_proxy_bytecode);
     }
 }
 
