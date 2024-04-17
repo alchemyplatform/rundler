@@ -449,8 +449,26 @@ impl UserOperationOptionalGas {
         max_call_gas: U128,
         max_verification_gas: U128,
         max_paymaster_verification_gas: U128,
-        max_paymaster_post_op_gas: U128,
     ) -> UserOperationBuilder {
+        // If unset or zero, default these to gas limits from settings
+        // Cap their values to the gas limits from settings
+        let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, U128::zero());
+        let vgl = super::default_if_none_or_equal(
+            self.verification_gas_limit,
+            max_verification_gas,
+            U128::zero(),
+        );
+        let pgl = super::default_if_none_or_equal(
+            self.paymaster_verification_gas_limit,
+            max_paymaster_verification_gas,
+            U128::zero(),
+        );
+        let pvg = super::default_if_none_or_equal(
+            self.pre_verification_gas,
+            max_call_gas.into(),
+            U256::zero(),
+        );
+
         let mut builder = UserOperationBuilder::new(
             entry_point,
             chain_id,
@@ -459,17 +477,10 @@ impl UserOperationOptionalGas {
                 nonce: self.nonce,
                 call_data: self.call_data,
                 signature: self.signature,
-                // If unset, default these to gas limits from settings
-                // Cap their values to the gas limits from settings
-                call_gas_limit: self
-                    .call_gas_limit
-                    .unwrap_or(max_call_gas)
-                    .min(max_call_gas),
-                verification_gas_limit: self
-                    .verification_gas_limit
-                    .unwrap_or(max_verification_gas)
-                    .min(max_verification_gas),
-                pre_verification_gas: self.pre_verification_gas.unwrap_or_default(),
+                call_gas_limit: cgl,
+                verification_gas_limit: vgl,
+                pre_verification_gas: pvg,
+                // These are unused in gas estimation, so default to zero
                 max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
                 max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
             },
@@ -478,14 +489,9 @@ impl UserOperationOptionalGas {
             builder = builder.factory(factory, self.factory_data);
         }
         if let Some(paymaster) = self.paymaster {
-            let paymaster_verification_gas_limit = self
-                .paymaster_verification_gas_limit
-                .unwrap_or(max_paymaster_verification_gas)
-                .min(max_paymaster_verification_gas);
-            let paymaster_post_op_gas_limit = self
-                .paymaster_post_op_gas_limit
-                .unwrap_or(max_paymaster_post_op_gas)
-                .min(max_paymaster_post_op_gas);
+            let paymaster_verification_gas_limit = pgl;
+            // If the user doesn't supply a post op, assume unused and zero
+            let paymaster_post_op_gas_limit = self.paymaster_post_op_gas_limit.unwrap_or_default();
             builder = builder.paymaster(
                 paymaster,
                 paymaster_verification_gas_limit,
