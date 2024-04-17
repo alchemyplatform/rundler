@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Bytes, U256};
+use ethers::types::{Bytes, U128};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_types::{GasEstimate, ValidationRevert};
@@ -31,12 +31,14 @@ pub use v0_6::GasEstimator as GasEstimatorV0_6;
 mod v0_7;
 pub use v0_7::GasEstimator as GasEstimatorV0_7;
 
+/// Percentage by which to increase the verification gas limit after binary search
+const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
+/// Absolute value by which to increase the call gas limit after binary search
+const CALL_GAS_BUFFER_VALUE: U128 = U128([3000, 0]);
+
 /// Error type for gas estimation
 #[derive(Debug, thiserror::Error)]
 pub enum GasEstimationError {
-    /// Gas estimation was given an invalid settings struct
-    #[error("{0}")]
-    InvalidSettings(String),
     /// Validation reverted
     #[error("{0}")]
     RevertInValidation(ValidationRevert),
@@ -49,6 +51,9 @@ pub enum GasEstimationError {
     /// Call used too much gas
     #[error("gas_used cannot be larger than a u64 integer")]
     GasUsedTooLarge,
+    /// Supplied gas was too large
+    #[error("{0} cannot be larger than {1}")]
+    GasFieldTooLarge(&'static str, u64),
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -94,7 +99,7 @@ pub struct Settings {
 impl Settings {
     /// Check if the settings are valid
     pub fn validate(&self) -> Option<String> {
-        if U256::from(self.max_call_gas)
+        if U128::from(self.max_call_gas)
             .cmp(&MIN_CALL_GAS_LIMIT)
             .is_lt()
         {

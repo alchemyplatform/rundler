@@ -404,6 +404,15 @@ pub(crate) fn byte_array_abi_len(b: &Bytes) -> usize {
     (b.len() + 31) & !31
 }
 
+/// Returns the default value if the option is None or the value is equal to the equal value
+pub(crate) fn default_if_none_or_equal<V: Copy + PartialEq>(
+    v: Option<V>,
+    default: V,
+    equal: V,
+) -> V {
+    v.filter(|v| v != &equal).unwrap_or(default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

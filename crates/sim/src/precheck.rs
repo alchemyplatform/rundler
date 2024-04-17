@@ -18,7 +18,7 @@ use std::{
 
 use anyhow::Context;
 use arrayvec::ArrayVec;
-use ethers::types::{Address, U256};
+use ethers::types::{Address, U128, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider};
@@ -32,7 +32,7 @@ use rundler_utils::math;
 use crate::{gas, types::ViolationError};
 
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
-pub const MIN_CALL_GAS_LIMIT: U256 = U256([9100, 0, 0, 0]);
+pub const MIN_CALL_GAS_LIMIT: U128 = U128([9100, 0]);
 
 /// Trait for checking if a user operation is valid before simulation
 /// according to the spec rules.
@@ -291,10 +291,10 @@ where
             ));
         }
 
-        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
+        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT.into() {
             violations.push(PrecheckViolation::CallGasLimitTooLow(
                 op.call_gas_limit(),
-                MIN_CALL_GAS_LIMIT,
+                MIN_CALL_GAS_LIMIT.into(),
             ));
         }
         violations
@@ -566,7 +566,7 @@ mod tests {
                 settings.pre_verification_gas_accept_percent,
             )
             .into(),
-            call_gas_limit: MIN_CALL_GAS_LIMIT,
+            call_gas_limit: MIN_CALL_GAS_LIMIT.into(),
             ..Default::default()
         };
 
@@ -592,7 +592,7 @@ mod tests {
             max_fee_per_gas: math::percent(5000, settings.base_fee_accept_percent - 10).into(),
             max_priority_fee_per_gas: 0.into(),
             pre_verification_gas: 1_000.into(),
-            call_gas_limit: MIN_CALL_GAS_LIMIT,
+            call_gas_limit: MIN_CALL_GAS_LIMIT.into(),
             ..Default::default()
         };
 
@@ -629,7 +629,7 @@ mod tests {
             max_fee_per_gas: U256::from(5_000) + mintip,
             max_priority_fee_per_gas: undertip,
             pre_verification_gas: 1_000.into(),
-            call_gas_limit: MIN_CALL_GAS_LIMIT,
+            call_gas_limit: MIN_CALL_GAS_LIMIT.into(),
             ..Default::default()
         };
 
@@ -665,7 +665,7 @@ mod tests {
                 settings.pre_verification_gas_accept_percent - 10,
             )
             .into(),
-            call_gas_limit: MIN_CALL_GAS_LIMIT,
+            call_gas_limit: MIN_CALL_GAS_LIMIT.into(),
             ..Default::default()
         };
 

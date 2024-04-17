@@ -57,6 +57,8 @@ contract CallGasEstimationProxy is Proxy {
 
     error EstimateCallGasRevertAtMax(bytes revertData);
 
+    error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
+
     /**
      * Runs a binary search to find the smallest amount of gas at which the call
      * succeeds.
@@ -116,6 +118,14 @@ contract CallGasEstimationProxy is Proxy {
             scaledGuess = chooseGuess(scaledMaxFailureGas, scaledMinSuccessGas, scaledGasUsedInSuccess);
         }
         revert EstimateCallGasResult(args.maxGas.min(scaledMinSuccessGas * args.rounding), numRounds);
+    }
+
+    /**
+     * A helper function for testing execution at a given gas limit.
+     */
+    function testCallGas(address sender, bytes calldata callData, uint256 callGasLimit) external {
+        (bool success, uint256 gasUsed, bytes memory revertData) = innerCall(sender, callData, callGasLimit);
+        revert TestCallGasResult(success, gasUsed, revertData);
     }
 
     function chooseGuess(uint256 highestFailureGas, uint256 lowestSuccessGas, uint256 lowestGasUsedInSuccess)

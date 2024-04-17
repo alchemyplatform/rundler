@@ -456,11 +456,11 @@ impl From<GasEstimationError> for EthRpcError {
             GasEstimationError::RevertInCallWithBytes(b) => {
                 Self::ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData { revert_data: b })
             }
-            GasEstimationError::InvalidSettings(message) => {
-                Self::EntryPointValidationRejected(message)
-            }
             error @ GasEstimationError::GasUsedTooLarge => {
                 Self::EntryPointValidationRejected(error.to_string())
+            }
+            error @ GasEstimationError::GasFieldTooLarge(_, _) => {
+                Self::InvalidParams(error.to_string())
             }
             GasEstimationError::Other(error) => Self::Internal(error),
         }
