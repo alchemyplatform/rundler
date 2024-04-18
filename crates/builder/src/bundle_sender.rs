@@ -303,7 +303,7 @@ where
                 ..
             } => {
                 BuilderMetrics::increment_bundle_txns_success(self.builder_index);
-                BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used);
+                BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used, self.builder_index);
                 if attempt_number == 0 {
                     info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
                 } else {
@@ -394,7 +394,7 @@ where
             let current_fees = GasFees::from(&tx);
 
             BuilderMetrics::increment_bundle_txns_sent(self.builder_index);
-            BuilderMetrics::set_current_fees(&current_fees);
+            BuilderMetrics::set_current_fees(&current_fees, self.builder_index);
 
             let send_result = self
                 .transaction_tracker
@@ -433,7 +433,7 @@ where
                         block_number,
                     ));
                     BuilderMetrics::increment_bundle_txns_success(self.builder_index);
-                    BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used);
+                    BuilderMetrics::set_bundle_gas_stats(gas_limit, gas_used, self.builder_index);
                     return Ok(SendBundleResult::Success {
                         block_number,
                         attempt_number,
@@ -607,18 +607,19 @@ impl BuilderMetrics {
         metrics::counter!("builder_bundle_replacement_underpriced", "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn set_bundle_gas_stats(gas_limit: Option<U256>, gas_used: Option<U256>) {
+    fn set_bundle_gas_stats(gas_limit: Option<U256>, gas_used: Option<U256>, builder_index: u64) {
         if let Some(limit) = gas_limit {
-            metrics::counter!("builder_bundle_gas_limit").increment(limit.as_u64());
+            metrics::counter!("builder_bundle_gas_limit", "builder_index" => builder_index.to_string()).increment(limit.as_u64());
         }
         if let Some(used) = gas_used {
-            metrics::counter!("builder_bundle_gas_used").increment(used.as_u64());
+            metrics::counter!("builder_bundle_gas_used", "builder_index" => builder_index.to_string()).increment(used.as_u64());
         }
     }
 
-    fn set_current_fees(fees: &GasFees) {
-        metrics::gauge!("builder_current_max_fee").set(fees.max_fee_per_gas.as_u128() as f64);
-        metrics::gauge!("builder_current_max_priority_fee")
+    fn set_current_fees(fees: &GasFees, builder_index: u64) {
+        metrics::gauge!("builder_current_max_fee", "builder_index" => builder_index.to_string())
+            .set(fees.max_fee_per_gas.as_u128() as f64);
+        metrics::gauge!("builder_current_max_priority_fee", "builder_index" => builder_index.to_string())
             .set(fees.max_priority_fee_per_gas.as_u128() as f64);
     }
 }
