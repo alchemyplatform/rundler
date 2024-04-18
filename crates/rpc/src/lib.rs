@@ -40,3 +40,4 @@ mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};
 
 mod types;
+mod utils;
