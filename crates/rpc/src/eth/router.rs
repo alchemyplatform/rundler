@@ -23,7 +23,10 @@ use rundler_types::{
 use super::events::UserOperationEventProvider;
 use crate::{
     eth::{error::EthResult, EthRpcError},
-    types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt},
+    types::{
+        RpcGasEstimate, RpcGasEstimateV0_6, RpcGasEstimateV0_7, RpcUserOperationByHash,
+        RpcUserOperationReceipt,
+    },
 };
 
 #[derive(Default)]
@@ -143,7 +146,7 @@ impl EntryPointRouter {
         uo: UserOperationOptionalGas,
         state_override: Option<spoof::State>,
     ) -> EthResult<RpcGasEstimate> {
-        let route = match self.get_ep_version(entry_point)? {
+        match self.get_ep_version(entry_point)? {
             EntryPointVersion::V0_6 => {
                 if !matches!(uo, UserOperationOptionalGas::V0_6(_)) {
                     return Err(EthRpcError::InvalidParams(format!(
@@ -151,7 +154,16 @@ impl EntryPointRouter {
                         entry_point
                     )));
                 }
-                &self.v0_6.as_ref().unwrap().1
+
+                let e = self
+                    .v0_6
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .estimate_gas(uo, state_override)
+                    .await?;
+
+                Ok(RpcGasEstimateV0_6::from(e).into())
             }
             EntryPointVersion::V0_7 => {
                 if !matches!(uo, UserOperationOptionalGas::V0_7(_)) {
@@ -160,13 +172,19 @@ impl EntryPointRouter {
                         entry_point
                     )));
                 }
-                &self.v0_7.as_ref().unwrap().1
+
+                let e = self
+                    .v0_7
+                    .as_ref()
+                    .unwrap()
+                    .1
+                    .estimate_gas(uo, state_override)
+                    .await?;
+
+                Ok(RpcGasEstimateV0_7::from(e).into())
             }
             EntryPointVersion::Unspecified => unreachable!("unspecified entry point version"),
-        };
-
-        let estimate = route.estimate_gas(uo, state_override).await?;
-        Ok(estimate.into())
+        }
     }
 
     pub(crate) async fn check_signature(
