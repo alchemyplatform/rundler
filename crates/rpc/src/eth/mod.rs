@@ -19,7 +19,7 @@ mod router;
 pub(crate) use router::*;
 
 mod error;
-pub(crate) use error::EthRpcError;
+pub(crate) use error::{EthResult, EthRpcError};
 mod events;
 pub(crate) use events::{UserOperationEventProviderV0_6, UserOperationEventProviderV0_7};
 mod server;
