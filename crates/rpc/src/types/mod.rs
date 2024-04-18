@@ -19,18 +19,18 @@ use rundler_types::{
     pool::{Reputation, ReputationStatus},
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
-    GasEstimate, UserOperationOptionalGas, UserOperationVariant,
+    UserOperationOptionalGas, UserOperationVariant,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 mod v0_6;
 pub(crate) use v0_6::{
-    RpcUserOperation as RpcUserOperationV0_6,
+    RpcGasEstimate as RpcGasEstimateV0_6, RpcUserOperation as RpcUserOperationV0_6,
     RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_6,
 };
 mod v0_7;
 pub(crate) use v0_7::{
-    RpcUserOperation as RpcUserOperationV0_7,
+    RpcGasEstimate as RpcGasEstimateV0_7, RpcUserOperation as RpcUserOperationV0_7,
     RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_7,
 };
 
@@ -161,22 +161,21 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct RpcGasEstimate {
-    pre_verification_gas: U256,
-    call_gas_limit: U256,
-    verification_gas_limit: U256,
-    paymaster_verification_gas_limit: Option<U256>,
+#[serde(untagged)]
+pub(crate) enum RpcGasEstimate {
+    V0_6(RpcGasEstimateV0_6),
+    V0_7(RpcGasEstimateV0_7),
 }
 
-impl From<GasEstimate> for RpcGasEstimate {
-    fn from(estimate: GasEstimate) -> Self {
-        RpcGasEstimate {
-            pre_verification_gas: estimate.pre_verification_gas,
-            call_gas_limit: estimate.call_gas_limit,
-            verification_gas_limit: estimate.verification_gas_limit,
-            paymaster_verification_gas_limit: estimate.paymaster_verification_gas_limit,
-        }
+impl From<RpcGasEstimateV0_6> for RpcGasEstimate {
+    fn from(estimate: RpcGasEstimateV0_6) -> Self {
+        RpcGasEstimate::V0_6(estimate)
+    }
+}
+
+impl From<RpcGasEstimateV0_7> for RpcGasEstimate {
+    fn from(estimate: RpcGasEstimateV0_7) -> Self {
+        RpcGasEstimate::V0_7(estimate)
     }
 }
 

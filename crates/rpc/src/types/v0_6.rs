@@ -12,7 +12,10 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use ethers::types::{Address, Bytes, U256};
-use rundler_types::v0_6::{UserOperation, UserOperationOptionalGas};
+use rundler_types::{
+    v0_6::{UserOperation, UserOperationOptionalGas},
+    GasEstimate,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{FromRpc, RpcAddress};
@@ -100,6 +103,24 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             max_priority_fee_per_gas: def.max_priority_fee_per_gas,
             paymaster_and_data: def.paymaster_and_data,
             signature: def.signature,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RpcGasEstimate {
+    pre_verification_gas: U256,
+    call_gas_limit: U256,
+    verification_gas_limit: U256,
+}
+
+impl From<GasEstimate> for RpcGasEstimate {
+    fn from(estimate: GasEstimate) -> Self {
+        RpcGasEstimate {
+            pre_verification_gas: estimate.pre_verification_gas,
+            call_gas_limit: estimate.call_gas_limit,
+            verification_gas_limit: estimate.verification_gas_limit,
         }
     }
 }
