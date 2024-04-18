@@ -11,21 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use anyhow::Context;
 use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
-use jsonrpsee::{core::RpcResult, proc_macros::rpc, types::error::INTERNAL_ERROR_CODE};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::{
     builder::{Builder, BundlingMode},
     pool::Pool,
 };
 
 use crate::{
-    error::rpc_err,
     types::{
         RpcDebugPaymasterBalance, RpcReputationInput, RpcReputationOutput, RpcStakeInfo,
         RpcStakeStatus, RpcUserOperation,
     },
+    utils::{self, InternalRpcResult},
 };
 
 /// Debug API
@@ -102,48 +103,138 @@ where
     B: Builder,
 {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
-        let _ = self
-            .pool
-            .debug_clear_state(true, true, true)
+        utils::safe_call_rpc_handler("bundler_clearState", DebugApi::bundler_clear_state(self))
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
-
-        Ok("ok".to_string())
     }
 
     async fn bundler_clear_mempool(&self) -> RpcResult<String> {
-        let _ = self
-            .pool
-            .debug_clear_state(true, true, false)
+        utils::safe_call_rpc_handler(
+            "bundler_clearMempool",
+            DebugApi::bundler_clear_mempool(self),
+        )
+        .await
+    }
+
+    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
+        utils::safe_call_rpc_handler(
+            "bundler_dumpMempool",
+            DebugApi::bundler_dump_mempool(self, entry_point),
+        )
+        .await
+    }
+
+    async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
+        utils::safe_call_rpc_handler(
+            "bundler_sendBundleNow",
+            DebugApi::bundler_send_bundle_now(self),
+        )
+        .await
+    }
+
+    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
+        utils::safe_call_rpc_handler(
+            "bundler_setBundlingMode",
+            DebugApi::bundler_set_bundling_mode(self, mode),
+        )
+        .await
+    }
+
+    async fn bundler_set_reputation(
+        &self,
+        reputations: Vec<RpcReputationInput>,
+        entry_point: Address,
+    ) -> RpcResult<String> {
+        utils::safe_call_rpc_handler(
+            "bundler_setReputation",
+            DebugApi::bundler_set_reputation(self, reputations, entry_point),
+        )
+        .await
+    }
+
+    async fn bundler_dump_reputation(
+        &self,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcReputationOutput>> {
+        utils::safe_call_rpc_handler(
+            "bundler_dumpReputation",
+            DebugApi::bundler_dump_reputation(self, entry_point),
+        )
+        .await
+    }
+
+    async fn bundler_get_stake_status(
+        &self,
+        address: Address,
+        entry_point: Address,
+    ) -> RpcResult<RpcStakeStatus> {
+        utils::safe_call_rpc_handler(
+            "bundler_getStakeStatus",
+            DebugApi::bundler_get_stake_status(self, address, entry_point),
+        )
+        .await
+    }
+
+    async fn bundler_dump_paymaster_balances(
+        &self,
+        entry_point: Address,
+    ) -> RpcResult<Vec<RpcDebugPaymasterBalance>> {
+        utils::safe_call_rpc_handler(
+            "bundler_dumpPaymasterBalances",
+            DebugApi::bundler_dump_paymaster_balances(self, entry_point),
+        )
+        .await
+    }
+}
+
+impl<P, B> DebugApi<P, B>
+where
+    P: Pool,
+    B: Builder,
+{
+    async fn bundler_clear_state(&self) -> InternalRpcResult<String> {
+        self.pool
+            .debug_clear_state(true, true, true)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should clear state")?;
 
         Ok("ok".to_string())
     }
 
-    async fn bundler_dump_mempool(&self, entry_point: Address) -> RpcResult<Vec<RpcUserOperation>> {
+    async fn bundler_clear_mempool(&self) -> InternalRpcResult<String> {
+        self.pool
+            .debug_clear_state(true, true, false)
+            .await
+            .context("should clear mempool")?;
+
+        Ok("ok".to_string())
+    }
+
+    async fn bundler_dump_mempool(
+        &self,
+        entry_point: Address,
+    ) -> InternalRpcResult<Vec<RpcUserOperation>> {
         Ok(self
             .pool
             .debug_dump_mempool(entry_point)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?
+            .context("should dump mempool")?
             .into_iter()
             .map(|pop| pop.uo.into())
             .collect::<Vec<RpcUserOperation>>())
     }
 
-    async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
+    async fn bundler_send_bundle_now(&self) -> InternalRpcResult<H256> {
         tracing::debug!("Sending bundle");
 
         let mut new_heads = self
             .pool
             .subscribe_new_heads()
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should subscribe new heads")?;
 
         let (tx, block_number) = self.builder.debug_send_bundle_now().await.map_err(|e| {
             tracing::error!("Error sending bundle {e:?}");
-            rpc_err(INTERNAL_ERROR_CODE, e.to_string())
+            anyhow::anyhow!(e)
         })?;
 
         tracing::debug!("Waiting for block number {block_number}");
@@ -160,7 +251,7 @@ where
                     }
                 }
                 None => {
-                    return Err(rpc_err(INTERNAL_ERROR_CODE, "Next block not available"));
+                    Err(anyhow::anyhow!("Next block not available"))?;
                 }
             }
         }
@@ -168,13 +259,13 @@ where
         Ok(tx)
     }
 
-    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> RpcResult<String> {
+    async fn bundler_set_bundling_mode(&self, mode: BundlingMode) -> InternalRpcResult<String> {
         tracing::debug!("Setting bundling mode to {:?}", mode);
 
         self.builder
             .debug_set_bundling_mode(mode)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should set bundling mode")?;
 
         Ok("ok".to_string())
     }
@@ -183,7 +274,7 @@ where
         &self,
         reputations: Vec<RpcReputationInput>,
         entry_point: Address,
-    ) -> RpcResult<String> {
+    ) -> InternalRpcResult<String> {
         let _ = self
             .pool
             .debug_set_reputations(
@@ -198,12 +289,12 @@ where
     async fn bundler_dump_reputation(
         &self,
         entry_point: Address,
-    ) -> RpcResult<Vec<RpcReputationOutput>> {
+    ) -> InternalRpcResult<Vec<RpcReputationOutput>> {
         let result = self
             .pool
             .debug_dump_reputation(entry_point)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should dump reputation")?;
 
         let mut results = Vec::new();
         for r in result {
@@ -211,7 +302,7 @@ where
                 .pool
                 .get_reputation_status(entry_point, r.address)
                 .await
-                .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+                .context("should get reputation status")?;
 
             let reputation = RpcReputationOutput {
                 address: r.address,
@@ -230,12 +321,12 @@ where
         &self,
         address: Address,
         entry_point: Address,
-    ) -> RpcResult<RpcStakeStatus> {
+    ) -> InternalRpcResult<RpcStakeStatus> {
         let result = self
             .pool
             .get_stake_status(entry_point, address)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should get stake status")?;
 
         Ok(RpcStakeStatus {
             is_staked: result.is_staked,
@@ -250,12 +341,12 @@ where
     async fn bundler_dump_paymaster_balances(
         &self,
         entry_point: Address,
-    ) -> RpcResult<Vec<RpcDebugPaymasterBalance>> {
+    ) -> InternalRpcResult<Vec<RpcDebugPaymasterBalance>> {
         let result = self
             .pool
             .debug_dump_paymaster_balances(entry_point)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should dump paymaster balances")?;
 
         let mut results = Vec::new();
         for b in result {

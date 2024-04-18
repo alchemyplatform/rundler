@@ -13,21 +13,18 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use ethers::types::{Address, H256, U256};
-use jsonrpsee::{
-    core::RpcResult,
-    proc_macros::rpc,
-    types::error::{INTERNAL_ERROR_CODE, INVALID_REQUEST_CODE},
-};
+use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::Provider;
 use rundler_sim::{gas, FeeEstimator};
 use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
 
 use crate::{
-    error::rpc_err,
-    eth::{EntryPointRouter, EthRpcError},
+    eth::{EntryPointRouter, EthResult, EthRpcError},
     types::{FromRpc, RpcUserOperation},
+    utils,
 };
 
 /// Settings for the `rundler_` API
@@ -72,6 +69,33 @@ pub(crate) struct RundlerApi<P, PL> {
     entry_point_router: EntryPointRouter,
 }
 
+#[async_trait]
+impl<P, PL> RundlerApiServer for RundlerApi<P, PL>
+where
+    P: Provider,
+    PL: Pool,
+{
+    async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
+        utils::safe_call_rpc_handler(
+            "rundler_maxPriorityFeePerGas",
+            RundlerApi::max_priority_fee_per_gas(self),
+        )
+        .await
+    }
+
+    async fn drop_local_user_operation(
+        &self,
+        user_op: RpcUserOperation,
+        entry_point: Address,
+    ) -> RpcResult<Option<H256>> {
+        utils::safe_call_rpc_handler(
+            "rundler_dropLocalUserOperation",
+            RundlerApi::drop_local_user_operation(self, user_op, entry_point),
+        )
+        .await
+    }
+}
+
 impl<P, PL> RundlerApi<P, PL>
 where
     P: Provider,
@@ -97,20 +121,13 @@ where
             pool_server,
         }
     }
-}
 
-#[async_trait]
-impl<P, PL> RundlerApiServer for RundlerApi<P, PL>
-where
-    P: Provider,
-    PL: Pool,
-{
-    async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
+    async fn max_priority_fee_per_gas(&self) -> EthResult<U256> {
         let (bundle_fees, _) = self
             .fee_estimator
             .required_bundle_fees(None)
             .await
-            .map_err(|e| rpc_err(INTERNAL_ERROR_CODE, e.to_string()))?;
+            .context("should get required fees")?;
         Ok(self
             .fee_estimator
             .required_op_fees(bundle_fees)
@@ -121,7 +138,7 @@ where
         &self,
         user_op: RpcUserOperation,
         entry_point: Address,
-    ) -> RpcResult<Option<H256>> {
+    ) -> EthResult<Option<H256>> {
         let uo = UserOperationVariant::from_rpc(user_op, entry_point, self.chain_spec.id);
         let id = uo.id();
 
@@ -130,10 +147,7 @@ where
             || uo.call_data().len() != 0
             || uo.max_fee_per_gas() != U256::zero()
         {
-            return Err(rpc_err(
-                INVALID_REQUEST_CODE,
-                "Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero",
-            ));
+            Err(EthRpcError::InvalidParams("Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero".to_string()))?;
         }
 
         let valid = self
@@ -141,10 +155,9 @@ where
             .check_signature(&entry_point, uo, self.settings.max_verification_gas)
             .await?;
         if !valid {
-            return Err(rpc_err(
-                INVALID_REQUEST_CODE,
-                "Invalid user operation for drop: invalid signature",
-            ));
+            Err(EthRpcError::InvalidParams(
+                "Invalid user operation for drop: invalid signature".to_string(),
+            ))?;
         }
 
         // remove the op from the pool
