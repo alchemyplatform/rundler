@@ -394,7 +394,6 @@ where
             let current_fees = GasFees::from(&tx);
 
             BuilderMetrics::increment_bundle_txns_sent(self.builder_index);
-            BuilderMetrics::set_current_fees(&current_fees, self.builder_index);
 
             let send_result = self
                 .transaction_tracker
@@ -614,12 +613,5 @@ impl BuilderMetrics {
         if let Some(used) = gas_used {
             metrics::counter!("builder_bundle_gas_used", "builder_index" => builder_index.to_string()).increment(used.as_u64());
         }
-    }
-
-    fn set_current_fees(fees: &GasFees, builder_index: u64) {
-        metrics::gauge!("builder_current_max_fee", "builder_index" => builder_index.to_string())
-            .set(fees.max_fee_per_gas.as_u128() as f64);
-        metrics::gauge!("builder_current_max_priority_fee", "builder_index" => builder_index.to_string())
-            .set(fees.max_priority_fee_per_gas.as_u128() as f64);
     }
 }

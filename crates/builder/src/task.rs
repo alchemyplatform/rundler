@@ -299,6 +299,7 @@ where
             Arc::clone(&provider),
             transaction_sender,
             tracker_settings,
+            index,
         )
         .await?;
 
