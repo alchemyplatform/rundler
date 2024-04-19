@@ -190,19 +190,16 @@ impl StakeTooLowData {
 pub struct ValidationRevertData {
     reason: Option<String>,
     inner_reason: Option<String>,
-    data: Option<Bytes>,
+    revert_data: Option<Bytes>,
 }
 
 impl Display for ValidationRevertData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(reason) = &self.reason {
-            write!(f, "{}", reason)?;
+            write!(f, "[reason]: {}", reason)?;
         }
         if let Some(inner_reason) = &self.inner_reason {
-            write!(f, " inner reason: {}", inner_reason)?;
-        }
-        if let Some(data) = &self.data {
-            write!(f, " data len: {}", data.len())?;
+            write!(f, " | [inner reason]: {}", inner_reason)?;
         }
         Ok(())
     }
@@ -214,7 +211,7 @@ impl From<ValidationRevert> for ValidationRevertData {
             ValidationRevert::EntryPoint(reason) => Self {
                 reason: Some(reason),
                 inner_reason: None,
-                data: None,
+                revert_data: None,
             },
             ValidationRevert::Operation {
                 entry_point_reason,
@@ -223,12 +220,12 @@ impl From<ValidationRevert> for ValidationRevertData {
             } => Self {
                 reason: Some(entry_point_reason),
                 inner_reason: inner_revert_reason,
-                data: Some(inner_revert_data),
+                revert_data: Some(inner_revert_data),
             },
             ValidationRevert::Unknown(data) => Self {
                 reason: None,
                 inner_reason: None,
-                data: Some(data),
+                revert_data: Some(data),
             },
         }
     }
