@@ -4045,7 +4045,7 @@ dependencies = [
 
 [[package]]
 name = "rundler"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4083,7 +4083,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-builder"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4124,7 +4124,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-dev"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "ethers",
@@ -4133,7 +4133,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-pool"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4167,7 +4167,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-provider"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4186,7 +4186,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-rpc"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4215,7 +4215,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-sim"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -4242,7 +4242,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-task"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4262,7 +4262,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-tools"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4279,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-types"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4294,7 +4294,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-utils"
-version = "0.1.0-rc0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "derive_more",
