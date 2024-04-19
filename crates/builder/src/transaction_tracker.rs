@@ -105,6 +105,7 @@ where
     provider: Arc<P>,
     sender: T,
     settings: Settings,
+    builder_index: u64,
     nonce: U256,
     transactions: Vec<PendingTransaction>,
     has_dropped: bool,
@@ -161,8 +162,10 @@ where
         provider: Arc<P>,
         sender: T,
         settings: Settings,
+        builder_index: u64,
     ) -> anyhow::Result<Self> {
-        let inner = TransactionTrackerImplInner::new(provider, sender, settings).await?;
+        let inner =
+            TransactionTrackerImplInner::new(provider, sender, settings, builder_index).await?;
         Ok(Self(tokio::sync::Mutex::new(inner)))
     }
 
@@ -180,7 +183,12 @@ where
     P: Provider,
     T: TransactionSender,
 {
-    async fn new(provider: Arc<P>, sender: T, settings: Settings) -> anyhow::Result<Self> {
+    async fn new(
+        provider: Arc<P>,
+        sender: T,
+        settings: Settings,
+        builder_index: u64,
+    ) -> anyhow::Result<Self> {
         let nonce = provider
             .get_transaction_count(sender.address())
             .await
@@ -189,6 +197,7 @@ where
             provider,
             sender,
             settings,
+            builder_index,
             nonce,
             transactions: vec![],
             has_dropped: false,
@@ -387,13 +396,16 @@ where
     }
 
     fn update_metrics(&self) {
-        TransactionTrackerMetrics::set_num_pending_transactions(self.transactions.len());
-        TransactionTrackerMetrics::set_nonce(self.nonce);
-        TransactionTrackerMetrics::set_attempt_count(self.attempt_count);
+        TransactionTrackerMetrics::set_num_pending_transactions(
+            self.builder_index,
+            self.transactions.len(),
+        );
+        TransactionTrackerMetrics::set_nonce(self.builder_index, self.nonce);
+        TransactionTrackerMetrics::set_attempt_count(self.builder_index, self.attempt_count);
         if let Some(tx) = self.transactions.last() {
-            TransactionTrackerMetrics::set_current_fees(Some(tx.gas_fees));
+            TransactionTrackerMetrics::set_current_fees(self.builder_index, Some(tx.gas_fees));
         } else {
-            TransactionTrackerMetrics::set_current_fees(None);
+            TransactionTrackerMetrics::set_current_fees(self.builder_index, None);
         }
     }
 
@@ -423,25 +435,26 @@ where
 struct TransactionTrackerMetrics {}
 
 impl TransactionTrackerMetrics {
-    fn set_num_pending_transactions(num_pending_transactions: usize) {
-        metrics::gauge!("builder_tracker_num_pending_transactions")
+    fn set_num_pending_transactions(builder_index: u64, num_pending_transactions: usize) {
+        metrics::gauge!("builder_tracker_num_pending_transactions", "builder_index" => builder_index.to_string())
             .set(num_pending_transactions as f64);
     }
 
-    fn set_nonce(nonce: U256) {
-        metrics::gauge!("builder_tracker_nonce").set(nonce.as_u64() as f64);
+    fn set_nonce(builder_index: u64, nonce: U256) {
+        metrics::gauge!("builder_tracker_nonce", "builder_index" => builder_index.to_string())
+            .set(nonce.as_u64() as f64);
     }
 
-    fn set_attempt_count(attempt_count: u64) {
-        metrics::gauge!("builder_tracker_attempt_count").set(attempt_count as f64);
+    fn set_attempt_count(builder_index: u64, attempt_count: u64) {
+        metrics::gauge!("builder_tracker_attempt_count", "builder_index" => builder_index.to_string()).set(attempt_count as f64);
     }
 
-    fn set_current_fees(current_fees: Option<GasFees>) {
+    fn set_current_fees(builder_index: u64, current_fees: Option<GasFees>) {
         let fees = current_fees.unwrap_or_default();
 
-        metrics::gauge!("builder_tracker_current_max_fee_per_gas")
+        metrics::gauge!("builder_tracker_current_max_fee_per_gas", "builder_index" => builder_index.to_string())
             .set(fees.max_fee_per_gas.as_u64() as f64);
-        metrics::gauge!("builder_tracker_current_max_priority_fee_per_gas")
+        metrics::gauge!("builder_tracker_current_max_priority_fee_per_gas", "builder_index" => builder_index.to_string())
             .set(fees.max_priority_fee_per_gas.as_u64() as f64);
     }
 }
@@ -475,7 +488,7 @@ mod tests {
         };
 
         let tracker: TransactionTrackerImpl<MockProvider, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings)
+            TransactionTrackerImpl::new(Arc::new(provider), sender, settings, 0)
                 .await
                 .unwrap();
 
