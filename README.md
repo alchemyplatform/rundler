@@ -125,4 +125,4 @@ The Rundler binaries (i.e. all code inside of the `bin` directory) are licensed 
 
 Copyright 2023 Alchemy Insights, Inc.
 
-Contact: Alchemy Insights, Inc., 548 Market St., PMB 49099, San Francisco, CA 94104; legal@alchemy.com
+Contact: Alchemy Insights, Inc., 548 Market St., PMB 49099, San Francisco, CA 94104; legal@alchemy.com 
