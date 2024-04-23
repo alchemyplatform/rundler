@@ -28,6 +28,8 @@ pub use estimate_call_gas::{
 /// Gas estimation module for Entry Point v0.6
 mod v0_6;
 pub use v0_6::GasEstimator as GasEstimatorV0_6;
+mod v0_6_entry_point_bytecode;
+pub(crate) use v0_6_entry_point_bytecode::ENTRYPOINT_V0_6_DEPLOYED_BYTECODE;
 mod v0_7;
 pub use v0_7::GasEstimator as GasEstimatorV0_7;
 

@@ -19,7 +19,7 @@ use rundler_utils::eth::ContractRevertError;
 
 use crate::{
     contracts::{
-        v0_6::entry_point::{
+        v0_6::i_entry_point::{
             FailedOp as FailedOpV0_6, ValidationResult as ValidationResultV0_6,
             ValidationResultWithAggregation as ValidationResultWithAggregationV0_6,
         },

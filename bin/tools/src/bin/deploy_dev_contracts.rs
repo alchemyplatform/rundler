@@ -15,12 +15,13 @@ use ethers::utils::hex;
 use rundler_dev::{
     self, DevAddresses, BUNDLER_ACCOUNT_ID, PAYMASTER_SIGNER_ACCOUNT_ID, WALLET_OWNER_ACCOUNT_ID,
 };
-use rundler_types::contracts::v0_6::entry_point::entry_point;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let bytecode = hex::encode_prefixed(&entry_point::ENTRYPOINT_BYTECODE);
-    let addresses = rundler_dev::deploy_dev_contracts(&bytecode).await?;
+    let bytecode = include_str!(
+        "../../../../crates/types/contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789.txt",
+    );
+    let addresses = rundler_dev::deploy_dev_contracts(bytecode).await?;
     addresses.write_to_env_file()?;
 
     let DevAddresses {

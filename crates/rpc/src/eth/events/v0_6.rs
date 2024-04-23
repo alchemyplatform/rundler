@@ -17,8 +17,8 @@ use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H256},
 };
 use rundler_types::{
-    contracts::v0_6::entry_point::{
-        EntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
+    contracts::v0_6::i_entry_point::{
+        IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
     v0_6::UserOperation,
 };
@@ -84,14 +84,14 @@ impl EntryPointFilters for EntryPointFiltersV0_6 {
         _address: Address,
         _chain_id: u64,
     ) -> Vec<Self::UO> {
-        let entry_point_calls = match EntryPointCalls::decode(tx_data) {
+        let entry_point_calls = match IEntryPointCalls::decode(tx_data) {
             Ok(entry_point_calls) => entry_point_calls,
             Err(_) => return vec![],
         };
 
         match entry_point_calls {
-            EntryPointCalls::HandleOps(handle_ops_call) => handle_ops_call.ops,
-            EntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
+            IEntryPointCalls::HandleOps(handle_ops_call) => handle_ops_call.ops,
+            IEntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
                 handle_aggregated_ops_call
                     .ops_per_aggregator
                     .into_iter()
