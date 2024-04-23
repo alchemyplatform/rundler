@@ -166,7 +166,7 @@ List of command line options for configuring the Builder.
   - *Only required when running in distributed mode* 
 - `--builder.private_key`: Private key to use for signing transactions
   - env: *BUILDER_PRIVATE_KEY*
-  - *Only required if BUILDER_AWS_KMS_KEY_IDS is not provided* 
+  - *Always used if provided. If not provided builder.aws_kms_key_ids is used*
 - `--builder.aws_kms_key_ids`: AWS KMS key IDs to use for signing transactions (comma-separated)
   - env: *BUILDER_AWS_KMS_KEY_IDS*
   - *Only required if BUILDER_PRIVATE_KEY is not provided* 
