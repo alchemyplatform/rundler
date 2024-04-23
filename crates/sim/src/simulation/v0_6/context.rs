@@ -16,7 +16,7 @@ use std::{collections::HashSet, sync::Arc};
 use ethers::{abi::AbiDecode, types::BlockId};
 use rundler_provider::{Provider, SimulationProvider};
 use rundler_types::{
-    contracts::v0_6::entry_point::FailedOp, pool::SimulationViolation, v0_6::UserOperation,
+    contracts::v0_6::i_entry_point::FailedOp, pool::SimulationViolation, v0_6::UserOperation,
     EntityType, UserOperation as UserOperationTrait, ValidationOutput,
 };
 
@@ -196,7 +196,7 @@ mod tests {
         types::{Address, Bytes, U256},
         utils::hex,
     };
-    use rundler_types::{contracts::v0_6::entry_point::FailedOp, v0_6::UserOperation};
+    use rundler_types::{contracts::v0_6::i_entry_point::FailedOp, v0_6::UserOperation};
 
     use super::*;
     use crate::simulation::context::{Phase, TracerOutput};

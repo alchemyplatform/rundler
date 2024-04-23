@@ -27,7 +27,7 @@ use futures::future;
 use rundler_provider::Provider;
 use rundler_task::block_watcher;
 use rundler_types::{
-    contracts::{v0_6::entry_point as entry_point_v0_6, v0_7::i_entry_point as entry_point_v0_7},
+    contracts::{v0_6::i_entry_point as entry_point_v0_6, v0_7::i_entry_point as entry_point_v0_7},
     EntryPointVersion, Timestamp, UserOperationId,
 };
 use tokio::{
@@ -465,9 +465,9 @@ impl<P: Provider> Chain<P> {
 
     fn load_v0_6(log: Log, mined_ops: &mut Vec<MinedOp>, balance_updates: &mut Vec<BalanceUpdate>) {
         let address = log.address;
-        if let Ok(event) = entry_point_v0_6::EntryPointEvents::decode_log(&log.into()) {
+        if let Ok(event) = entry_point_v0_6::IEntryPointEvents::decode_log(&log.into()) {
             match event {
-                entry_point_v0_6::EntryPointEvents::UserOperationEventFilter(event) => {
+                entry_point_v0_6::IEntryPointEvents::UserOperationEventFilter(event) => {
                     let paymaster = if event.paymaster.is_zero() {
                         None
                     } else {
@@ -483,7 +483,7 @@ impl<P: Provider> Chain<P> {
                     };
                     mined_ops.push(mined);
                 }
-                entry_point_v0_6::EntryPointEvents::DepositedFilter(event) => {
+                entry_point_v0_6::IEntryPointEvents::DepositedFilter(event) => {
                     let info = BalanceUpdate {
                         entrypoint: address,
                         address: event.account,
@@ -492,7 +492,7 @@ impl<P: Provider> Chain<P> {
                     };
                     balance_updates.push(info);
                 }
-                entry_point_v0_6::EntryPointEvents::WithdrawnFilter(event) => {
+                entry_point_v0_6::IEntryPointEvents::WithdrawnFilter(event) => {
                     let info = BalanceUpdate {
                         entrypoint: address,
                         address: event.account,

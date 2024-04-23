@@ -26,13 +26,13 @@ use ethers::{
 use rundler_types::{
     chain::ChainSpec,
     contracts::v0_6::{
-        entry_point::{
-            self, DepositInfo as DepositInfoV0_6, EntryPoint as EntryPointContract,
-            ExecutionResult as ExecutionResultV0_6, FailedOp, SignatureValidationFailed,
-            UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
-        },
         get_balances::{GetBalancesResult, GETBALANCES_BYTECODE},
         i_aggregator::IAggregator,
+        i_entry_point::{
+            self, DepositInfo as DepositInfoV0_6, ExecutionResult as ExecutionResultV0_6, FailedOp,
+            IEntryPoint, SignatureValidationFailed,
+            UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
+        },
     },
     v0_6::UserOperation,
     GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput, ValidationRevert,
@@ -49,7 +49,7 @@ use crate::{
 /// Implementation of the `EntryPoint` trait for the v0.6 version of the entry point contract using ethers
 #[derive(Debug)]
 pub struct EntryPoint<P: Provider + Middleware> {
-    i_entry_point: EntryPointContract<P>,
+    i_entry_point: IEntryPoint<P>,
     provider: Arc<P>,
     l1_gas_oracle: L1GasOracle<P>,
     max_aggregation_gas: u64,
@@ -81,7 +81,7 @@ where
         provider: Arc<P>,
     ) -> Self {
         Self {
-            i_entry_point: EntryPointContract::new(entry_point_address, Arc::clone(&provider)),
+            i_entry_point: IEntryPoint::new(entry_point_address, Arc::clone(&provider)),
             provider: Arc::clone(&provider),
             l1_gas_oracle: L1GasOracle::new(chain_spec, provider),
             max_aggregation_gas,
@@ -344,7 +344,7 @@ where
         spoofed_state: &spoof::State,
     ) -> SimulateOpCallData {
         let call_data = eth::call_data_of(
-            entry_point::SimulateHandleOpCall::selector(),
+            i_entry_point::SimulateHandleOpCall::selector(),
             (op.clone(), Address::zero(), Bytes::new()),
         );
         SimulateOpCallData {
@@ -388,7 +388,7 @@ impl<P> EntryPointProvider<UserOperation> for EntryPoint<P> where
 }
 
 fn get_handle_ops_call<M: Middleware>(
-    entry_point: &EntryPointContract<M>,
+    entry_point: &IEntryPoint<M>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     beneficiary: Address,
     gas: U256,

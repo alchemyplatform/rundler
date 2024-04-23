@@ -4245,7 +4245,6 @@ dependencies = [
  "ethers-signers",
  "rundler-dev",
  "rundler-rpc",
- "rundler-types",
  "rusoto_core",
  "rusoto_kms",
  "serde_json",
