@@ -198,6 +198,7 @@ impl BuilderArgs {
         };
 
         let mut entry_points = vec![];
+        let mut num_builders = 0;
 
         if common.entry_point_v0_6_enabled {
             entry_points.push(EntryPointBuilderSettings {
@@ -208,6 +209,7 @@ impl BuilderArgs {
                 mempool_configs: mempool_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_6),
             });
+            num_builders += common.num_builders_v0_6;
         }
         if common.entry_point_v0_7_enabled {
             entry_points.push(EntryPointBuilderSettings {
@@ -218,6 +220,20 @@ impl BuilderArgs {
                 mempool_configs: mempool_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_7),
             });
+            num_builders += common.num_builders_v0_7;
+        }
+
+        if self.private_key.is_some() {
+            if num_builders > 1 {
+                return Err(anyhow::anyhow!(
+                    "Cannot use a private key with multiple builders. You may need to disable one of the entry points."
+                ));
+            }
+        } else if self.aws_kms_key_ids.len() < num_builders as usize {
+            return Err(anyhow::anyhow!(
+                "Not enough AWS KMS key IDs for the number of builders. Need {} keys, found {}. You may need to disable one of the entry points.",
+                num_builders, self.aws_kms_key_ids.len()
+            ));
         }
 
         Ok(BuilderTaskArgs {
