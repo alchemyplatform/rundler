@@ -17,8 +17,23 @@
 #![allow(clippy::all)]
 #![allow(missing_docs)]
 
+use ethers::types::Bytes;
+
 pub mod arbitrum;
 pub mod optimism;
 pub mod utils;
 pub mod v0_6;
 pub mod v0_7;
+
+// https://etherscan.io/address/0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789#code
+const __ENTRY_POINT_V0_6_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+    "../../contracts/bytecode/entrypoint/0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789_deployed.txt"
+);
+const __ENTRY_POINT_V0_6_DEPLOYED_BYTECODE: [u8; 23689] = {
+    match const_hex::const_decode_to_array(__ENTRY_POINT_V0_6_DEPLOYED_BYTECODE_HEX) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode entrypoint hex"),
+    }
+};
+pub static ENTRY_POINT_V0_6_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__ENTRY_POINT_V0_6_DEPLOYED_BYTECODE);

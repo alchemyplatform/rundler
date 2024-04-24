@@ -13,6 +13,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 chrono = "0.4.24"
 constcat = "0.4.1"
+const-hex = "1.11.3"
 ethers.workspace = true
 futures-util.workspace = true
 parse-display.workspace = true

@@ -20,6 +20,7 @@ use ethers::{
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
+    contracts::ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
     v0_6::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
@@ -28,7 +29,7 @@ use tokio::join;
 
 use super::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
-    Settings, VerificationGasEstimator, ENTRYPOINT_V0_6_DEPLOYED_BYTECODE,
+    Settings, VerificationGasEstimator,
 };
 use crate::{
     estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
@@ -338,7 +339,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
     fn entry_point_simulations_code(&self) -> Bytes {
         // In v0.6, the entry point code contains the simulations code, so we
         // just return the entry point code.
-        ENTRYPOINT_V0_6_DEPLOYED_BYTECODE.into()
+        Bytes::clone(&ENTRY_POINT_V0_6_DEPLOYED_BYTECODE)
     }
 }
 
