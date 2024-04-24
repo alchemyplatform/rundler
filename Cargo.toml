@@ -31,7 +31,7 @@ serde = "1.0.160"
 serde_json = "1.0.64"
 rand = "0.8.5"
 reqwest = { version = "0.11.18", default-features = false, features = ["rustls-tls"] }
-rustls = "0.22.2"
+rustls = "0.22.4"
 thiserror = "1.0.40"
 tokio = { version = "1.27.0", default-features = false }
 tokio-util = "0.7.8"
