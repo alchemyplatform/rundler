@@ -328,8 +328,10 @@ where
             // If the user provides fees, use them, otherwise use the current bundle fees
             let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
             if let (Some(max_fee), Some(prio_fee)) = (
-                optional_op.max_fee_per_gas,
-                optional_op.max_priority_fee_per_gas,
+                optional_op.max_fee_per_gas.filter(|fee| !fee.is_zero()),
+                optional_op
+                    .max_priority_fee_per_gas
+                    .filter(|fee| !fee.is_zero()),
             ) {
                 cmp::min(max_fee.into(), base_fee.saturating_add(prio_fee.into()))
             } else {
