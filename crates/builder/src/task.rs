@@ -46,7 +46,7 @@ use crate::{
     bundle_proposer::{self, BundleProposerImpl},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
-    sender::TransactionSenderType,
+    sender::TransactionSenderArgs,
     server::{spawn_remote_builder_server, LocalBuilderBuilder},
     signer::{BundlerSigner, KmsSigner, LocalSigner},
     transaction_tracker::{self, TransactionTrackerImpl},
@@ -84,7 +84,7 @@ pub struct Args {
     /// Priority fee mode to use for operation priority fee minimums
     pub priority_fee_mode: PriorityFeeMode,
     /// Sender to be used by the builder
-    pub sender_type: TransactionSenderType,
+    pub sender_args: TransactionSenderArgs,
     /// RPC node poll interval
     pub eth_poll_interval: Duration,
     /// Operation simulation settings
@@ -97,14 +97,6 @@ pub struct Args {
     pub max_fee_increases: u64,
     /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
-    /// A list of builders to pass into the Flashbots relay RPC
-    pub flashbots_relay_builders: Vec<String>,
-    /// Optional Bloxroute auth header
-    ///
-    /// This is only used for Polygon.
-    ///
-    /// Checked ~after~ checking for conditional sender or Flashbots sender.
-    pub bloxroute_auth_header: Option<String>,
     /// Entry points to start builders for
     pub entry_points: Vec<EntryPointBuilderSettings>,
 }
@@ -416,13 +408,10 @@ where
             Some(self.args.eth_poll_interval),
         )?;
 
-        let transaction_sender = self.args.sender_type.into_sender(
-            &self.args.chain_spec,
+        let transaction_sender = self.args.sender_args.clone().into_sender(
             submit_provider,
             signer,
             self.args.eth_poll_interval,
-            self.args.flashbots_relay_builders.clone(),
-            &self.args.bloxroute_auth_header,
         )?;
 
         let tracker_settings = transaction_tracker::Settings {

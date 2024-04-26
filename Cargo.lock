@@ -4086,6 +4086,7 @@ dependencies = [
  "rusoto_kms",
  "serde",
  "serde_json",
+ "strum 0.26.1",
  "thiserror",
  "tokio",
  "tokio-util",

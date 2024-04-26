@@ -188,7 +188,8 @@ List of command line options for configuring the Builder.
   - env: *BUILDER_REPLACEMENT_FEE_PERCENT_INCREASE*
 - `--builder.max_fee_increases`: Maximum number of fee increases to attempt (Seven increases of 10% is roughly 2x the initial fees) (default: `7`)
   - env: *BUILDER_MAX_FEE_INCREASES*
-- `--builder.flashbots_relay_builders`: additional builders to send bundles to through the Flashbots relay RPC (comma-separated). List of builders that the Flashbots RPC supports can be found at https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#eth_sendprivatetransaction. (default: `flashbots`)
+- `--builder.flashbots_relay_builders`: additional builders to send bundles to through the Flashbots relay RPC (comma-separated). List of builders that the Flashbots RPC supports can be found [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#eth_sendprivatetransaction). (default: `flashbots`)
+- `--builder.flashbots_relay_auth_key`: authorization key to use with the flashbots relay. See [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#authentication) for more info. (default: None)
   - env: *BUILDER_FLASHBOTS_RELAY_BUILDERS*
 - `--builder.bloxroute_auth_header`: If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
   - env: `BUILDER_BLOXROUTE_AUTH_HEADER`

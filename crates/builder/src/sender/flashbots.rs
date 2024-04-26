@@ -26,69 +26,39 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::{interval, JsonRpcClient, Middleware, Provider},
     types::{
-        transaction::eip2718::TypedTransaction, Address, TransactionReceipt, TxHash, H256, U256,
-        U64,
+        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, TxHash, H256,
+        U256, U64,
     },
     utils,
 };
 use ethers_signers::Signer;
 use futures_timer::Delay;
 use futures_util::{Stream, StreamExt, TryFutureExt};
-use jsonrpsee::core::traits::ToRpcParams;
 use pin_project::pin_project;
 use reqwest::{
-    header::{HeaderMap, CONTENT_TYPE},
+    header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client,
 };
 use serde::{de, Deserialize, Serialize};
-use serde_json::{json, value::RawValue, Value};
+use serde_json::{json, Value};
 use tonic::async_trait;
 
 use super::{
     fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
 };
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Preferences {
-    fast: bool,
-    privacy: Option<Privacy>,
-    validity: Option<Validity>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Privacy {
-    hints: Option<Vec<String>>,
-    builders: Option<Vec<String>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Validity {
-    refund: Option<Vec<Refund>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Refund {
-    address: String,
-    percent: u8,
-}
-
 #[derive(Debug)]
-pub(crate) struct FlashbotsTransactionSender<C, S>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-{
+pub(crate) struct FlashbotsTransactionSender<C, S, FS> {
     provider: SignerMiddleware<Arc<Provider<C>>, S>,
-    flashbots_client: FlashbotsClient,
-    http_client: Client,
-    builders: Vec<String>,
+    flashbots_client: FlashbotsClient<FS>,
 }
 
 #[async_trait]
-impl<C, S> TransactionSender for FlashbotsTransactionSender<C, S>
+impl<C, S, FS> TransactionSender for FlashbotsTransactionSender<C, S, FS>
 where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
+    FS: Signer + 'static,
 {
     async fn send_transaction(
         &self,
@@ -97,55 +67,12 @@ where
     ) -> Result<SentTxInfo> {
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
 
-        let preferences = Preferences {
-            fast: false,
-            privacy: Some(Privacy {
-                hints: None,
-                builders: Some(self.builders.clone()),
-            }),
-            validity: None,
-        };
+        let tx_hash = self
+            .flashbots_client
+            .send_private_transaction(raw_tx)
+            .await?;
 
-        let body = json!({
-            "jsonrpc": "2.0",
-            "method": "eth_sendPrivateRawTransaction",
-            "params": [raw_tx, preferences],
-            "id": 1
-        });
-
-        let flashbots_header = format!(
-            "{}:{}",
-            self.provider.signer().address(),
-            self.provider
-                .signer()
-                .sign_message(utils::keccak256(body.to_string()))
-                .await
-                .unwrap()
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-        headers.insert("X-Flashbots-Signature", flashbots_header.parse().unwrap());
-
-        // Send the request
-        let response = self
-            .http_client
-            .post("https://relay.flashbots.net")
-            .headers(headers)
-            .body(body.to_string())
-            .send()
-            .await
-            .map_err(|e| anyhow!("failed to send transaction to Flashbots: {:?}", e))?;
-
-        let parsed_response = response
-            .json::<FlashbotsResponse>()
-            .await
-            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
-
-        Ok(SentTxInfo {
-            nonce,
-            tx_hash: parsed_response.tx_hash,
-        })
+        Ok(SentTxInfo { nonce, tx_hash })
     }
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
@@ -170,13 +97,14 @@ where
                 }
                 TxStatus::Pending
             }
-            FlashbotsAPITransactionStatus::Failed | FlashbotsAPITransactionStatus::Unknown => {
+            FlashbotsAPITransactionStatus::Unknown => {
                 return Err(TxSenderError::Other(anyhow!(
-                    "Transaction {tx_hash:?} failed in Flashbots with status {:?}",
-                    status.status,
+                    "Transaction {tx_hash:?} unknown in Flashbots API",
                 )));
             }
-            FlashbotsAPITransactionStatus::Cancelled => TxStatus::Dropped,
+            FlashbotsAPITransactionStatus::Failed | FlashbotsAPITransactionStatus::Cancelled => {
+                TxStatus::Dropped
+            }
         })
     }
 
@@ -196,23 +124,68 @@ where
     }
 }
 
-impl<C, S> FlashbotsTransactionSender<C, S>
+impl<C, S, FS> FlashbotsTransactionSender<C, S, FS>
 where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
+    FS: Signer + 'static,
 {
     pub(crate) fn new(
         provider: Arc<Provider<C>>,
-        signer: S,
+        tx_signer: S,
+        flashbots_signer: FS,
         builders: Vec<String>,
+        relay_url: String,
+        status_url: String,
     ) -> Result<Self> {
         Ok(Self {
-            provider: SignerMiddleware::new(provider, signer),
-            flashbots_client: FlashbotsClient::new(),
-            http_client: Client::new(),
-            builders,
+            provider: SignerMiddleware::new(provider, tx_signer),
+            flashbots_client: FlashbotsClient::new(
+                flashbots_signer,
+                builders,
+                relay_url,
+                status_url,
+            ),
         })
     }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Preferences {
+    fast: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    privacy: Option<Privacy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    validity: Option<Validity>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Privacy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hints: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    builders: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Validity {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refund: Option<Vec<Refund>>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Refund {
+    address: String,
+    percent: u8,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FlashbotsPrivateTransaction {
+    tx: Bytes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_block_number: Option<U256>,
+    preferences: Preferences,
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,40 +231,98 @@ struct FlashbotsAPIResponse {
 }
 
 #[derive(Debug)]
-struct FlashbotsClient {}
+struct FlashbotsClient<S> {
+    http_client: Client,
+    signer: S,
+    builders: Vec<String>,
+    relay_url: String,
+    status_url: String,
+}
 
-impl FlashbotsClient {
-    fn new() -> Self {
-        Self {}
+impl<S> FlashbotsClient<S> {
+    fn new(signer: S, builders: Vec<String>, relay_url: String, status_url: String) -> Self {
+        Self {
+            http_client: Client::new(),
+            signer,
+            builders,
+            relay_url,
+            status_url,
+        }
     }
 
     async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
-        let url = format!("https://protect.flashbots.net/tx/{:?}", tx_hash);
-        let resp = reqwest::get(&url).await?;
+        let url = format!("{}{:?}", self.status_url, tx_hash);
+        let resp = self.http_client.get(&url).send().await?;
         resp.json::<FlashbotsAPIResponse>()
             .await
             .context("should deserialize FlashbotsAPIResponse")
     }
 }
 
-#[derive(Serialize)]
-struct FlashbotsRequest {
-    transaction: String,
-}
+impl<S> FlashbotsClient<S>
+where
+    S: Signer,
+{
+    async fn send_private_transaction(&self, raw_tx: Bytes) -> anyhow::Result<H256> {
+        let preferences = Preferences {
+            fast: false,
+            privacy: Some(Privacy {
+                hints: None,
+                builders: Some(self.builders.clone()),
+            }),
+            validity: None,
+        };
 
-impl ToRpcParams for FlashbotsRequest {
-    fn to_rpc_params(self) -> std::result::Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
-        let s = String::from_utf8(serde_json::to_vec(&self)?).expect("Valid UTF8 format");
-        RawValue::from_string(s)
-            .map(Some)
-            .map_err(jsonrpsee::core::Error::ParseError)
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_sendPrivateTransaction",
+            "params": [
+                FlashbotsPrivateTransaction {
+                    tx: raw_tx,
+                    max_block_number: None,
+                    preferences,
+                }],
+            "id": 1
+        });
+
+        let signature = self
+            .signer
+            .sign_message(format!(
+                "0x{:x}",
+                H256::from(utils::keccak256(body.to_string()))
+            ))
+            .await
+            .expect("Signature failed");
+        let header_val =
+            HeaderValue::from_str(&format!("{:?}:0x{}", self.signer.address(), signature))
+                .expect("Header contains invalid characters");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        headers.insert("x-flashbots-signature", header_val);
+
+        // Send the request
+        let response = self
+            .http_client
+            .post(&self.relay_url)
+            .headers(headers)
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| anyhow!("failed to send transaction to Flashbots: {:?}", e))?;
+
+        let parsed_response = response
+            .json::<FlashbotsResponse>()
+            .await
+            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
+
+        Ok(parsed_response.result)
     }
 }
 
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
 struct FlashbotsResponse {
-    tx_hash: TxHash,
+    result: TxHash,
 }
 
 type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;
@@ -306,16 +337,16 @@ enum PendingFlashbotsTxState<'a> {
 }
 
 #[pin_project]
-struct PendingFlashbotsTransaction<'a, P> {
+struct PendingFlashbotsTransaction<'a, P, S> {
     tx_hash: H256,
     provider: &'a Provider<P>,
-    client: &'a FlashbotsClient,
+    client: &'a FlashbotsClient<S>,
     state: PendingFlashbotsTxState<'a>,
     interval: Box<dyn Stream<Item = ()> + Send + Unpin>,
 }
 
-impl<'a, P: JsonRpcClient> PendingFlashbotsTransaction<'a, P> {
-    fn new(tx_hash: H256, provider: &'a Provider<P>, client: &'a FlashbotsClient) -> Self {
+impl<'a, P: JsonRpcClient, S> PendingFlashbotsTransaction<'a, P, S> {
+    fn new(tx_hash: H256, provider: &'a Provider<P>, client: &'a FlashbotsClient<S>) -> Self {
         let delay = Box::pin(Delay::new(provider.get_interval()));
 
         Self {
@@ -328,7 +359,7 @@ impl<'a, P: JsonRpcClient> PendingFlashbotsTransaction<'a, P> {
     }
 }
 
-impl<'a, P: JsonRpcClient> Future for PendingFlashbotsTransaction<'a, P> {
+impl<'a, P: JsonRpcClient, S: Send + Sync> Future for PendingFlashbotsTransaction<'a, P, S> {
     type Output = anyhow::Result<Option<TransactionReceipt>>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut TaskContext<'_>) -> Poll<Self::Output> {
