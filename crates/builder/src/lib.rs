@@ -26,7 +26,9 @@ mod emit;
 pub use emit::{BuilderEvent, BuilderEventKind};
 
 mod sender;
-pub use sender::TransactionSenderType;
+pub use sender::{
+    BloxrouteSenderArgs, FlashbotsSenderArgs, TransactionSenderArgs, TransactionSenderKind,
+};
 
 mod server;
 pub use server::{LocalBuilderBuilder, LocalBuilderHandle, RemoteBuilderClient};

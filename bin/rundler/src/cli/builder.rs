@@ -16,8 +16,9 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::Context;
 use clap::Args;
 use rundler_builder::{
-    self, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs, EntryPointBuilderSettings,
-    LocalBuilderBuilder, TransactionSenderType,
+    self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs,
+    EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder, TransactionSenderArgs,
+    TransactionSenderKind,
 };
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
@@ -99,18 +100,9 @@ pub struct BuilderArgs {
     )]
     max_bundle_size: u64,
 
-    /// If present, the url of the ETH provider that will be used to send
-    /// transactions. Defaults to the value of `node_http`.
-    #[arg(
-        long = "builder.submit_url",
-        name = "builder.submit_url",
-        env = "BUILDER_SUBMIT_URL"
-    )]
-    pub submit_url: Option<String>,
-
     /// Choice of what sender type to to use for transaction submission.
     /// Defaults to the value of `raw`. Other options include `flashbots`,
-    /// `conditional` and `polygon_bloxroute`
+    /// `conditional` and `bloxroute`
     #[arg(
         long = "builder.sender",
         name = "builder.sender",
@@ -118,7 +110,51 @@ pub struct BuilderArgs {
         value_enum,
         default_value = "raw"
     )]
-    pub sender_type: TransactionSenderType,
+    pub sender_type: TransactionSenderKind,
+
+    /// If present, the url of the ETH provider that will be used to send
+    /// transactions. Defaults to the value of `node_http`.
+    ///
+    /// Only used when BUILDER_SENDER is "raw" or "conditional"
+    #[arg(
+        long = "builder.submit_url",
+        name = "builder.submit_url",
+        env = "BUILDER_SUBMIT_URL"
+    )]
+    pub submit_url: Option<String>,
+
+    /// A list of builders to pass into the Flashbots Relay RPC.
+    ///
+    /// Only used when BUILDER_SENDER is "flashbots"
+    #[arg(
+        long = "builder.flashbots_relay_builders",
+        name = "builder.flashbots_relay_builders",
+        env = "BUILDER_FLASHBOTS_RELAY_BUILDERS",
+        value_delimiter = ',',
+        default_value = "flashbots"
+    )]
+    flashbots_relay_builders: Vec<String>,
+
+    /// A private key used to authenticate with the Flashbots relay.
+    ///
+    /// Only used when BUILDER_SENDER is "flashbots"
+    #[arg(
+        long = "builder.flashbots_relay_auth_key",
+        name = "builder.flashbots_relay_auth_key",
+        env = "BUILDER_FLASHBOTS_RELAY_AUTH_KEY",
+        value_delimiter = ','
+    )]
+    flashbots_relay_auth_key: Option<String>,
+
+    /// Auth header to use for Bloxroute polygon_private_tx sender
+    ///
+    /// Only used when BUILDER_SENDER is "bloxroute"
+    #[arg(
+        long = "builder.bloxroute_auth_header",
+        name = "builder.bloxroute_auth_header",
+        env = "BUILDER_BLOXROUTE_AUTH_HEADER"
+    )]
+    bloxroute_auth_header: Option<String>,
 
     /// After submitting a bundle transaction, the maximum number of blocks to
     /// wait for that transaction to mine before we try resending with higher
@@ -152,24 +188,6 @@ pub struct BuilderArgs {
     )]
     max_fee_increases: u64,
 
-    /// A list of builders to pass into the Flashbots Relay RPC. Only used when BUILDER_SENDER is "flashbots" and BUILDER_SUBMIT_URL is a Flashbots RPC
-    #[arg(
-        long = "builder.flashbots_relay_builders",
-        name = "builder.flashbots_relay_builders",
-        env = "BUILDER_FLASHBOTS_RELAY_BUILDERS",
-        value_delimiter = ',',
-        default_value = "flashbots"
-    )]
-    flashbots_relay_builders: Vec<String>,
-
-    /// If using Polygon Mainnet, the auth header to use
-    /// for Bloxroute polygon_private_tx sender
-    #[arg(
-        long = "builder.bloxroute_auth_header",
-        name = "builder.bloxroute_auth_header",
-        env = "BUILDER_BLOXROUTE_AUTH_HEADER"
-    )]
-    bloxroute_auth_header: Option<String>,
     /// The index offset to apply to the builder index
     #[arg(
         long = "builder_index_offset",
@@ -246,6 +264,8 @@ impl BuilderArgs {
             ));
         }
 
+        let sender_args = self.sender_args(&chain_spec)?;
+
         Ok(BuilderTaskArgs {
             entry_points,
             chain_spec,
@@ -264,16 +284,52 @@ impl BuilderArgs {
             submit_url,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
-            sender_type: self.sender_type,
+            sender_args,
             eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             sim_settings: common.into(),
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,
             remote_address,
-            flashbots_relay_builders: self.flashbots_relay_builders.clone(),
-            bloxroute_auth_header: self.bloxroute_auth_header.clone(),
         })
+    }
+
+    fn sender_args(&self, chain_spec: &ChainSpec) -> anyhow::Result<TransactionSenderArgs> {
+        match self.sender_type {
+            TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw),
+            TransactionSenderKind::Conditional => Ok(TransactionSenderArgs::Conditional),
+            TransactionSenderKind::Flashbots => {
+                if !chain_spec.flashbots_enabled {
+                    return Err(anyhow::anyhow!("Flashbots sender is not enabled for chain"));
+                }
+
+                Ok(TransactionSenderArgs::Flashbots(FlashbotsSenderArgs {
+                    builders: self.flashbots_relay_builders.clone(),
+                    relay_url: chain_spec
+                        .flashbots_relay_url
+                        .clone()
+                        .context("should have a relay URL (chain spec: flashbots_relay_url)")?,
+                    status_url: chain_spec.flashbots_status_url.clone().context(
+                        "should have a flashbots status URL (chain spec: flashbots_status_url)",
+                    )?,
+                    auth_key: self.flashbots_relay_auth_key.clone().context(
+                        "should have a flashbots relay auth key (cli: flashbots_relay_auth_key)",
+                    )?,
+                }))
+            }
+            TransactionSenderKind::Bloxroute => {
+                if !chain_spec.bloxroute_enabled {
+                    return Err(anyhow::anyhow!("Flashbots sender is not enabled for chain"));
+                }
+
+                Ok(TransactionSenderArgs::Bloxroute(BloxrouteSenderArgs {
+                    header: self
+                        .bloxroute_auth_header
+                        .clone()
+                        .context("should have a bloxroute auth header")?,
+                }))
+            }
+        }
     }
 }
 

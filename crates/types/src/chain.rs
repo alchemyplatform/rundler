@@ -85,6 +85,10 @@ pub struct ChainSpec {
      */
     /// True if the flashbots sender is enabled on this chain
     pub flashbots_enabled: bool,
+    /// URL for the flashbots relay, must be set if flashbots is enabled
+    pub flashbots_relay_url: Option<String>,
+    /// URL for the flashbots status, must be set if flashbots is enabled
+    pub flashbots_status_url: Option<String>,
     /// True if the bloxroute sender is enabled on this chain
     pub bloxroute_enabled: bool,
 
@@ -138,6 +142,8 @@ impl Default for ChainSpec {
             max_bundle_size_bytes: 100000,
             bundle_max_send_interval_millis: u64::MAX,
             flashbots_enabled: false,
+            flashbots_relay_url: None,
+            flashbots_status_url: None,
             bloxroute_enabled: false,
             chain_history_size: 64,
         }
