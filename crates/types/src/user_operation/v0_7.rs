@@ -763,7 +763,7 @@ fn unpack_user_operation(
     builder = builder.packed(puo.clone());
 
     if !puo.init_code.is_empty() {
-        let factory = Address::from_slice(&puo.init_code);
+        let factory = Address::from_slice(&puo.init_code[..20]);
         let factory_data = Bytes::from_iter(&puo.init_code[20..]);
 
         builder = builder.factory(factory, factory_data);
@@ -864,6 +864,39 @@ mod tests {
                 signature: Bytes::new(),
             },
         );
+
+        let uo = builder.build();
+        let packed = uo.clone().pack();
+        let unpacked = packed.unpack(Address::zero(), 1);
+
+        assert_eq!(uo, unpacked);
+    }
+
+    #[test]
+    fn test_pack_unpack_2() {
+        let builder = UserOperationBuilder::new(
+            Address::zero(),
+            1,
+            UserOperationRequiredFields {
+                sender: Address::zero(),
+                nonce: 0.into(),
+                call_data: Bytes::new(),
+                call_gas_limit: 0.into(),
+                verification_gas_limit: 0.into(),
+                pre_verification_gas: 0.into(),
+                max_priority_fee_per_gas: 0.into(),
+                max_fee_per_gas: 0.into(),
+                signature: Bytes::new(),
+            },
+        );
+        let builder = builder
+            .factory(Address::random(), "0xdeadbeef".parse().unwrap())
+            .paymaster(
+                Address::random(),
+                0.into(),
+                0.into(),
+                "0xbeefdead".parse().unwrap(),
+            );
 
         let uo = builder.build();
         let packed = uo.clone().pack();
