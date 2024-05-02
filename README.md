@@ -41,18 +41,25 @@ The documentation is work in progress, and we are working to improve it. Please 
 
 **Use in production at your own risk.**
 
-### ERC-4337 Support
+### ERC-4337 Entry Point Version Support
 
-Rundler currently supports the [v0.6 release](https://github.com/eth-infinitism/account-abstraction/tree/v0.6.0) of Entry Point contract.
+Rundler currently supports the following Entry Point versions:
+  * [v0.6.0](https://github.com/eth-infinitism/account-abstraction/tree/v0.6.0)
+  * [v0.7.0](https://github.com/eth-infinitism/account-abstraction/tree/v0.7.0)
+
+See more on Entry Point support [here](docs/architecture/entry_point.md).
 
 ### Chain Support
 
-Rundler currently supports and has been tested on the following networks and their testnets:
+Rundler has been tested on the following networks and their testnets:
 
 * Ethereum
-* Optimism
-* Base
-* Arbitrum One
+* OP Stack
+    * Generally any OP stack chain should work.
+    * Rundler has been explicitly tested on Optimism, Base, Zora, and Frax.
+* Arbitrum Orbit
+    * Generally any Arbitrum Orbit chain should work.
+    * Rundler has been explicitly tested on Arbitrum One.
 * Polygon POS
 
 ## Developers
@@ -85,10 +92,13 @@ make test-unit
 
 Run ERC-4337 spec tests:
 ```
-cd test/spec-tests/${ENTRY_POINT_VERSION}/bundler-spec-tests && pdm install && pdm run update-deps
+# Only need to run once to install testing frameworks
+cd test/spec-tests/v0_6/bundler-spec-tests && pdm install && pdm run update-deps
+cd test/spec-tests/v0_7/bundler-spec-tests && pdm install && pdm run update-deps
+
+# Run the v0.6 and v0.7 tests
 make test-spec-integrated
 ```
-where `ENTRY_POINT_VERSION` is one of `v0_6` or `v0_7`.
 
 ### Help
 
