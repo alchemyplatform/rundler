@@ -140,8 +140,8 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256 {
-        let ov = GasOverheads::default();
-        super::op_calldata_gas_cost(self.clone())
+        let ov = GasOverheads::v0_6();
+        super::op_calldata_gas_cost(self.clone(), &ov)
             + (if include_fixed_gas_overhead {
                 ov.transaction_gas_overhead
             } else {
@@ -159,6 +159,11 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.call_data)
             + super::byte_array_abi_len(&self.paymaster_and_data)
             + super::byte_array_abi_len(&self.signature)
+    }
+
+    /// Return the gas overheads for this user operation type
+    fn gas_overheads() -> GasOverheads {
+        GasOverheads::v0_6()
     }
 }
 
