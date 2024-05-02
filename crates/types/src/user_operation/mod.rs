@@ -131,6 +131,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
 
     /// Abi encode size of the user operation
     fn abi_encoded_size(&self) -> usize;
+
+    /// Return the gas overheads for this user operation type
+    fn gas_overheads() -> GasOverheads;
 }
 
 /// User operation enum
@@ -292,6 +295,15 @@ impl UserOperation for UserOperationVariant {
             UserOperationVariant::V0_7(op) => op.abi_encoded_size(),
         }
     }
+
+    /// Return the gas overheads for this user operation type
+    fn gas_overheads() -> GasOverheads {
+        match Self::entry_point_version() {
+            EntryPointVersion::V0_6 => GasOverheads::v0_6(),
+            EntryPointVersion::V0_7 => GasOverheads::v0_7(),
+            EntryPointVersion::Unspecified => unreachable!(),
+        }
+    }
 }
 
 impl UserOperationVariant {
@@ -368,8 +380,9 @@ pub struct GasOverheads {
     non_zero_byte: U256,
 }
 
-impl Default for GasOverheads {
-    fn default() -> Self {
+impl GasOverheads {
+    /// Gas overheads for entry point v0.6
+    pub fn v0_6() -> Self {
         Self {
             bundle_transaction_gas_buffer: 5_000.into(),
             transaction_gas_overhead: 21_000.into(),
@@ -379,12 +392,23 @@ impl Default for GasOverheads {
             non_zero_byte: 16.into(),
         }
     }
+
+    /// Gas overheads for entry point v0.7
+    pub fn v0_7() -> Self {
+        Self {
+            bundle_transaction_gas_buffer: 5_000.into(),
+            transaction_gas_overhead: 21_000.into(),
+            per_user_op: 19_500.into(),
+            per_user_op_word: 4.into(),
+            zero_byte: 4.into(),
+            non_zero_byte: 16.into(),
+        }
+    }
 }
 
-pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(uo: UO) -> U256 {
-    let ov = GasOverheads::default();
+pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(uo: UO, ov: &GasOverheads) -> U256 {
     let encoded_op = uo.encode();
-    let length_in_words = encoded_op.len() / 32; // size of packed user op is always a multiple of 32 bytes
+    let length_in_words = (encoded_op.len() + 31) >> 5; // ceil(encoded_op.len() / 32)
     let call_data_cost: U256 = encoded_op
         .iter()
         .map(|&x| {
@@ -399,6 +423,7 @@ pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(uo: UO) -> U256 {
 
     call_data_cost + ov.per_user_op + ov.per_user_op_word * length_in_words
 }
+
 /// Calculates the size a byte array padded to the next largest multiple of 32
 pub(crate) fn byte_array_abi_len(b: &Bytes) -> usize {
     (b.len() + 31) & !31

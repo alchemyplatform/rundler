@@ -40,7 +40,7 @@ use rundler_types::{
     chain::ChainSpec,
     pool::{Pool, PoolOperation, SimulationViolation},
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
-    GasOverheads, Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator,
+    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -397,7 +397,7 @@ where
         let mut context = ProposalContext::<UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
-        let ov = GasOverheads::default();
+        let ov = UO::gas_overheads();
         let mut gas_spent = ov.transaction_gas_overhead;
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
         for (po, simulation) in ops_with_simulations {
@@ -1105,7 +1105,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         self.iter_ops_with_simulations()
             .map(|sim_op| gas::user_operation_gas_limit(chain_spec, &sim_op.op, false))
             .fold(U256::zero(), |acc, i| acc + i)
-            + GasOverheads::default().transaction_gas_overhead
+            + UO::gas_overheads().transaction_gas_overhead
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -1303,7 +1303,7 @@ mod tests {
         }])
         .await;
 
-        let ov = GasOverheads::default();
+        let ov = UserOperation::gas_overheads();
         let expected_gas = math::increase_by_percent(
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
