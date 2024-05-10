@@ -29,6 +29,9 @@ use ethers::{
     },
 };
 use reqwest::Url;
+use rundler_types::contracts::utils::get_gas_used::{
+    GasUsedResult, GetGasUsed, GETGASUSED_DEPLOYED_BYTECODE,
+};
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::metrics_middleware::MetricsMiddleware;
@@ -181,6 +184,28 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
 
     async fn get_transaction_count(&self, address: Address) -> ProviderResult<U256> {
         Ok(Middleware::get_transaction_count(self, address, None).await?)
+    }
+
+    async fn get_gas_used(
+        self: &Arc<Self>,
+        target: Address,
+        value: U256,
+        data: Bytes,
+        mut state_overrides: spoof::State,
+    ) -> ProviderResult<GasUsedResult> {
+        let helper_addr = Address::random();
+        let helper = GetGasUsed::new(helper_addr, Arc::clone(self));
+
+        state_overrides
+            .account(helper_addr)
+            .code(GETGASUSED_DEPLOYED_BYTECODE.clone());
+
+        Ok(helper
+            .get_gas(target, value, data)
+            .call_raw()
+            .state(&state_overrides)
+            .await
+            .context("should get gas used")?)
     }
 }
 

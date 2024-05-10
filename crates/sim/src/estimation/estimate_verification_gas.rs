@@ -1,4 +1,4 @@
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -7,7 +7,7 @@ use rundler_provider::{EntryPoint, Provider, SimulateOpCallData, SimulationProvi
 use rundler_types::{chain::ChainSpec, UserOperation};
 
 use super::Settings;
-use crate::{utils, GasEstimationError};
+use crate::GasEstimationError;
 
 /// Gas estimation will stop when the binary search bounds are within
 /// `GAS_ESTIMATION_ERROR_MARGIN` of each other.
@@ -111,15 +111,17 @@ where
         } = self
             .entry_point
             .get_simulate_op_call_data(initial_op, state_override);
-        let gas_used = utils::get_gas_used(
-            self.provider.deref(),
-            self.entry_point.address(),
-            U256::zero(),
-            call_data,
-            &spoofed_state,
-        )
-        .await
-        .context("failed to run initial guess")?;
+        let gas_used = self
+            .provider
+            .get_gas_used(
+                self.entry_point.address(),
+                U256::zero(),
+                call_data,
+                spoofed_state.clone(),
+            )
+            .await
+            .context("failed to run initial guess")?;
+
         if gas_used.success {
             if self.entry_point.simulation_should_revert() {
                 Err(anyhow!(

@@ -41,6 +41,8 @@ pub struct ChainSpec {
     /// NOTE: This must take into account when the storage slot was originally 0
     /// and is now non-zero, making the overhead slightly higher for most operations.
     pub deposit_transfer_overhead: U256,
+    /// The maximum size of a transaction in bytes
+    pub max_transaction_size_bytes: usize,
 
     /*
      * Gas estimation
@@ -77,8 +79,6 @@ pub struct ChainSpec {
     /// This parameter is used to trigger the builder to send a bundle after a specified
     /// amount of time, before a new block is not received.
     pub bundle_max_send_interval_millis: u64,
-    /// The maximum size that an bundle can be in bytes.
-    pub max_bundle_size_bytes: u64,
 
     /*
      * Senders
@@ -139,7 +139,7 @@ impl Default for ChainSpec {
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: U256::zero(),
             max_max_priority_fee_per_gas: U256::MAX,
-            max_bundle_size_bytes: 100000,
+            max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: u64::MAX,
             flashbots_enabled: false,
             flashbots_relay_url: None,

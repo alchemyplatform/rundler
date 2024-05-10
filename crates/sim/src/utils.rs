@@ -12,12 +12,9 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use anyhow::Context;
-use ethers::types::{spoof, Address, BlockId, Bytes, H256, U256};
+use ethers::types::{spoof, Address, BlockId, H256};
 use rundler_provider::Provider;
-use rundler_types::contracts::utils::{
-    get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE},
-    get_gas_used::{GasUsedResult, GETGASUSED_BYTECODE},
-};
+use rundler_types::contracts::utils::get_code_hashes::{CodeHashesResult, GETCODEHASHES_BYTECODE};
 
 /// Hashes together the code from all the provided addresses. The order of the input addresses does
 /// not matter.
@@ -37,22 +34,4 @@ pub(crate) async fn get_code_hash<P: Provider>(
         .await
         .context("should compute code hashes")?;
     Ok(H256(out.hash))
-}
-
-/// Measures the gas used by a call to target with value and data.
-pub(crate) async fn get_gas_used<P: Provider>(
-    provider: &P,
-    target: Address,
-    value: U256,
-    data: Bytes,
-    state_overrides: &spoof::State,
-) -> anyhow::Result<GasUsedResult> {
-    provider
-        .call_constructor(
-            &GETGASUSED_BYTECODE,
-            (target, value, data),
-            None,
-            state_overrides,
-        )
-        .await
 }

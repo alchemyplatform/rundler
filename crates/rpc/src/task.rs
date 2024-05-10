@@ -188,6 +188,13 @@ where
             .set_logger(RpcMetricsLogger)
             .set_middleware(service_builder)
             .max_connections(self.args.max_connections)
+            // Set max request body size to 2x the max transaction size as none of our
+            // APIs should require more than that.
+            .max_request_body_size(
+                (self.args.chain_spec.max_transaction_size_bytes * 2)
+                    .try_into()
+                    .expect("max_transaction_size_bytes * 2 overflowed u32"),
+            )
             .http_only()
             .build(addr)
             .await?;

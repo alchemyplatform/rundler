@@ -13,7 +13,7 @@
 
 //! Trait for interacting with chain data and contracts.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use ethers::{
     abi::{AbiDecode, AbiEncode},
@@ -25,6 +25,7 @@ use ethers::{
 };
 #[cfg(feature = "test-utils")]
 use mockall::automock;
+use rundler_types::contracts::utils::get_gas_used::GasUsedResult;
 use serde::{de::DeserializeOwned, Serialize};
 
 use super::error::ProviderError;
@@ -127,4 +128,13 @@ pub trait Provider: Send + Sync + Debug + 'static {
 
     /// Get the logs matching a filter
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>>;
+
+    /// Measures the gas used by a call to target with value and data.
+    async fn get_gas_used(
+        self: &Arc<Self>,
+        target: Address,
+        value: U256,
+        data: Bytes,
+        state_overrides: spoof::State,
+    ) -> ProviderResult<GasUsedResult>;
 }

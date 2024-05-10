@@ -507,6 +507,21 @@ impl UserOperationOptionalGas {
         builder
     }
 
+    /// Abi encoded size of the user operation (with its dummy fields)
+    pub fn abi_encoded_size(&self) -> usize {
+        let mut base = ABI_ENCODED_USER_OPERATION_FIXED_LEN
+            + super::byte_array_abi_len(&self.call_data)
+            + super::byte_array_abi_len(&self.signature);
+        if self.factory.is_some() {
+            base += super::byte_array_abi_len(&self.factory_data) + 32; // account for factory address
+        }
+        if self.paymaster.is_some() {
+            base += super::byte_array_abi_len(&self.paymaster_data) + 64; // account for paymaster address and gas limits
+        }
+
+        base
+    }
+
     fn random_bytes(len: usize) -> Bytes {
         let mut bytes = vec![0_u8; len];
         rand::thread_rng().fill_bytes(&mut bytes);

@@ -18,7 +18,9 @@ use ethers::{
     utils::to_checksum,
 };
 use futures_util::future;
-use rundler_types::{chain::ChainSpec, pool::Pool, UserOperationOptionalGas, UserOperationVariant};
+use rundler_types::{
+    chain::ChainSpec, pool::Pool, UserOperation, UserOperationOptionalGas, UserOperationVariant,
+};
 use rundler_utils::log::LogOnError;
 use tracing::Level;
 
@@ -67,6 +69,14 @@ where
         op: UserOperationVariant,
         entry_point: Address,
     ) -> EthResult<H256> {
+        let bundle_size = op.single_uo_bundle_size_bytes();
+        if bundle_size > self.chain_spec.max_transaction_size_bytes {
+            return Err(EthRpcError::InvalidParams(format!(
+                "User operation in bundle size {} exceeds max transaction size {}",
+                bundle_size, self.chain_spec.max_transaction_size_bytes
+            )));
+        }
+
         self.router.check_and_get_route(&entry_point, &op)?;
 
         self.pool
@@ -78,12 +88,20 @@ where
 
     pub(crate) async fn estimate_user_operation_gas(
         &self,
-        uo: UserOperationOptionalGas,
+        op: UserOperationOptionalGas,
         entry_point: Address,
         state_override: Option<spoof::State>,
     ) -> EthResult<RpcGasEstimate> {
+        let bundle_size = op.single_uo_bundle_size_bytes();
+        if bundle_size > self.chain_spec.max_transaction_size_bytes {
+            return Err(EthRpcError::InvalidParams(format!(
+                "User operation in bundle size {} exceeds max transaction size {}",
+                bundle_size, self.chain_spec.max_transaction_size_bytes
+            )));
+        }
+
         self.router
-            .estimate_gas(&entry_point, uo, state_override)
+            .estimate_gas(&entry_point, op, state_override)
             .await
     }
 
