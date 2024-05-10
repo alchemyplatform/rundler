@@ -15,7 +15,7 @@ It also supports a health check endpoint.
 
 ### `eth_` Namespace
 
-Methods defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#rpc-methods-eth-namespace).
+Methods defined by the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#rpc-methods-eth-namespace).
 
 | Method | Supported |
 | ------ | :-----------: |
@@ -28,7 +28,7 @@ Methods defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account
 
 ### `debug_` Namespace
 
-Method defined by the [ERC-4337 spec](https://github.com/eth-infinitism/account-abstraction/blob/develop/erc/ERCS/erc-4337.md#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
+Method defined by the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
 
 | Method | Supported | Non-Standard |
 | ------ | :-----------: | :--: |
