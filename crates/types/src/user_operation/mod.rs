@@ -25,6 +25,19 @@ pub mod v0_7;
 
 use crate::Entity;
 
+/// Overhead for bytes required for each bundle
+/// 4 bytes for function signature
+/// 32 bytes for user op array offset
+/// 32 bytes for beneficiary
+/// 32 bytes for array count
+/// Ontop of this offset there needs to be another 32 bytes for each
+/// user operation in the bundle to store its offset within the array
+pub const BUNDLE_BYTE_OVERHEAD: usize = 4 + 32 + 32 + 32;
+
+/// Size of word that stores offset of user op location
+/// within handleOps `ops` array
+pub const USER_OP_OFFSET_WORD_SIZE: usize = 32;
+
 /// ERC-4337 Entry point version
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum EntryPointVersion {
@@ -134,6 +147,11 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
 
     /// Return the gas overheads for this user operation type
     fn gas_overheads() -> GasOverheads;
+
+    /// Calculate the size of the user operation in single UO bundle in bytes
+    fn single_uo_bundle_size_bytes(&self) -> usize {
+        self.abi_encoded_size() + BUNDLE_BYTE_OVERHEAD + USER_OP_OFFSET_WORD_SIZE
+    }
 }
 
 /// User operation enum
@@ -337,6 +355,17 @@ pub enum UserOperationOptionalGas {
     V0_6(v0_6::UserOperationOptionalGas),
     /// User operation optional gas for version 0.7
     V0_7(v0_7::UserOperationOptionalGas),
+}
+
+impl UserOperationOptionalGas {
+    /// Returns the user operation type
+    pub fn single_uo_bundle_size_bytes(&self) -> usize {
+        let abi_size = match self {
+            UserOperationOptionalGas::V0_6(op) => op.abi_encoded_size(),
+            UserOperationOptionalGas::V0_7(op) => op.abi_encoded_size(),
+        };
+        abi_size + BUNDLE_BYTE_OVERHEAD + USER_OP_OFFSET_WORD_SIZE
+    }
 }
 
 /// Gas estimate

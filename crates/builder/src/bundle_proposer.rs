@@ -40,7 +40,8 @@ use rundler_types::{
     chain::ChainSpec,
     pool::{Pool, PoolOperation, SimulationViolation},
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator,
+    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, BUNDLE_BYTE_OVERHEAD,
+    USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -52,19 +53,6 @@ use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
-
-/// Overhead for bytes required for each bundle
-/// 4 bytes for function signature
-/// 32 bytes for user op array offset
-/// 32 bytes for beneficiary
-/// 32 bytes for array count
-/// Ontop of this offset there needs to be another 32 bytes for each
-/// user operation in the bundle to store its offset within the array
-const BUNDLE_BYTE_OVERHEAD: u64 = 4 + 32 + 32 + 32;
-
-/// Size of word that stores offset of user op location
-/// within handleOps `ops` array
-const USER_OP_OFFSET_WORD_SIZE: u64 = 32;
 
 #[derive(Debug)]
 pub(crate) struct Bundle<UO: UserOperation> {
@@ -442,15 +430,12 @@ where
                 continue;
             }
 
-            let op_size_bytes: u64 = op
-                .abi_encoded_size()
-                .try_into()
-                .expect("User operation size should fit within u64");
+            let op_size_bytes: usize = op.abi_encoded_size();
 
             let op_size_with_offset_word = op_size_bytes.saturating_add(USER_OP_OFFSET_WORD_SIZE);
 
             if op_size_with_offset_word.saturating_add(constructed_bundle_size)
-                >= self.settings.chain_spec.max_bundle_size_bytes
+                >= self.settings.chain_spec.max_transaction_size_bytes
             {
                 continue;
             }

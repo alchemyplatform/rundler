@@ -354,6 +354,15 @@ impl UserOperationOptionalGas {
         }
     }
 
+    /// Abi encoded size of the user operation (with its dummy fields)
+    pub fn abi_encoded_size(&self) -> usize {
+        ABI_ENCODED_USER_OPERATION_FIXED_LEN
+            + super::byte_array_abi_len(&self.init_code)
+            + super::byte_array_abi_len(&self.call_data)
+            + super::byte_array_abi_len(&self.paymaster_and_data)
+            + super::byte_array_abi_len(&self.signature)
+    }
+
     fn random_bytes(len: usize) -> Bytes {
         let mut bytes = vec![0_u8; len];
         rand::thread_rng().fill_bytes(&mut bytes);

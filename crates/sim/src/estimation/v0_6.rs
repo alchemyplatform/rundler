@@ -698,15 +698,15 @@ mod tests {
                 }))
             });
 
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
                 Ok(GasUsedResult {
                     gas_used: gas_usage * 2,
                     success: false,
                     result: Bytes::new(),
                 })
-            },
-        );
+            });
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
@@ -757,15 +757,15 @@ mod tests {
 
         // this gas used number is larger than a u64 max number so we need to
         // check for this overflow
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
                 Ok(GasUsedResult {
                     gas_used: U256::from(18446744073709551616_u128),
                     success: false,
                     result: Bytes::new(),
                 })
-            },
-        );
+            });
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
@@ -814,15 +814,15 @@ mod tests {
 
         // the success field should not be true as the
         // call should always revert
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
                 Ok(GasUsedResult {
                     gas_used: U256::from(20000),
                     success: true,
                     result: Bytes::new(),
                 })
-            },
-        );
+            });
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
@@ -861,15 +861,15 @@ mod tests {
                 }))
             });
 
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
                 Ok(GasUsedResult {
                     gas_used: U256::from(20000),
                     success: false,
                     result: Bytes::new(),
                 })
-            },
-        );
+            });
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
@@ -903,15 +903,15 @@ mod tests {
             .expect_call_spoofed_simulate_op()
             .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error")));
 
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
                 Ok(GasUsedResult {
                     gas_used: U256::from(20000),
                     success: false,
                     result: Bytes::new(),
                 })
-            },
-        );
+            });
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
@@ -956,13 +956,11 @@ mod tests {
                 }))
             });
 
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
-                let ret: Result<GasUsedResult, anyhow::Error> =
-                    Err(anyhow::anyhow!("This should always revert"));
-                ret
-            },
-        );
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
+                Err(anyhow::anyhow!("This should always revert").into())
+            });
 
         let (estimator, _) = create_estimator(entry, provider);
         let optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
@@ -1146,15 +1144,15 @@ mod tests {
         provider
             .expect_get_latest_block_hash_and_number()
             .returning(|| Ok((H256::zero(), U64::zero())));
-        provider.expect_call_constructor().returning(
-            move |_a, _b: (Address, U256, Bytes), _c, _d| {
+        provider
+            .expect_get_gas_used()
+            .returning(move |_a, _b, _c, _d| {
                 Ok(GasUsedResult {
                     gas_used: gas_usage,
                     success: false,
                     result: Bytes::new(),
                 })
-            },
-        );
+            });
 
         provider.expect_get_base_fee().returning(|| Ok(TEST_FEE));
         provider
