@@ -154,18 +154,9 @@ where
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
 
-        // Limit the amount of gas in the bundle
-        tracing::debug!("Starting bundle proposal with {} ops", ops.len(),);
+        tracing::info!("Starting bundle proposal with {} ops", ops.len());
 
-        // Do an initial filtering of ops that we want to simulate.
-        let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
-        tracing::debug!(
-            "Bundle proposal after limit had {} ops and {:?} gas limit",
-            ops.len(),
-            gas_limit
-        );
-
-        // Determine fees required for ops to be included in a bundle
+        // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
         let required_op_fees = if is_replacement {
             bundle_fees
@@ -177,10 +168,32 @@ where
             .filter_map(|op| op.uo.paymaster())
             .collect::<Vec<Address>>();
 
-        // Filter ops and simulate
+        // (1) Filter out ops that don't pay enough to be included
+        let fee_futs = ops
+            .into_iter()
+            .map(|op| self.check_fees(op, base_fee, required_op_fees))
+            .collect::<Vec<_>>();
+        let ops = future::join_all(fee_futs)
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        tracing::info!("Bundle proposal after fee limit had {} ops", ops.len());
+
+        // (2) Limit the amount of operations for simulation
+        let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
+
+        tracing::info!(
+            "Bundle proposal after gas limit had {} ops and {:?} gas limit",
+            ops.len(),
+            gas_limit
+        );
+
+        // (3) simulate ops
         let simulation_futures = ops
             .into_iter()
-            .map(|op| self.filter_and_simulate(op, block_hash, base_fee, required_op_fees))
+            .map(|op| self.simulate_op(op, block_hash))
             .collect::<Vec<_>>();
 
         let ops_with_simulations_future = future::join_all(simulation_futures);
@@ -266,19 +279,17 @@ where
         }
     }
 
-    // Filter and simulate a single op. Returns None if the op should be skipped.
+    // Check fees for a single user op. Returns None if the op should be skipped.
     //
     // Filters on:
-    // - gas fees
-    // - pre-verification gas
-    // - any errors
-    async fn filter_and_simulate(
+    // - insufficient gas fees
+    // - insufficient pre-verification gas
+    async fn check_fees(
         &self,
         op: PoolOperation,
-        block_hash: H256,
         base_fee: U256,
         required_op_fees: GasFees,
-    ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
+    ) -> Option<PoolOperation> {
         let op_hash = self.op_hash(&op.uo);
 
         // filter by fees
@@ -300,26 +311,29 @@ where
         }
 
         // Check if the pvg is enough
-        let required_pvg = gas::calc_required_pre_verification_gas(
+        let required_pvg = match gas::calc_required_pre_verification_gas(
             &self.settings.chain_spec,
             &self.entry_point,
             op.uo.as_ref(),
             base_fee,
         )
         .await
-        .map_err(|e| {
-            self.emit(BuilderEvent::skipped_op(
-                self.builder_index,
-                op_hash,
-                SkipReason::Other {
-                    reason: Arc::new(format!(
-                        "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
-                    )),
-                },
-            ));
-            e
-        })
-        .ok()?;
+        {
+            Ok(pvg) => pvg,
+            Err(e) => {
+                error!("Failed to calculate required pre-verification gas for op: {e:?}, skipping");
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    op_hash,
+                    SkipReason::Other {
+                        reason: Arc::new(format!(
+                            "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
+                        )),
+                    },
+                ));
+                return None;
+            }
+        };
 
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
@@ -337,6 +351,19 @@ where
             ));
             return None;
         }
+
+        Some(op)
+    }
+
+    // Simulate a single op. Returns None if the op should be skipped.
+    //
+    // Filters on any errors
+    async fn simulate_op(
+        &self,
+        op: PoolOperation,
+        block_hash: H256,
+    ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
+        let op_hash = self.op_hash(&op.uo);
 
         // Simulate
         let result = self
