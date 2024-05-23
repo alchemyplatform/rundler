@@ -19,7 +19,7 @@ use std::{
 use anyhow::{bail, Context};
 use ethers::{
     abi::AbiDecode,
-    types::{Address, BlockId, Bytes, Opcode, H160, U256},
+    types::{Address, BlockId, Bytes, H160, U256},
     utils::{hex::FromHex, keccak256},
 };
 use rundler_provider::{EntryPoint, Provider, SimulationProvider};
@@ -30,7 +30,7 @@ use rundler_types::{
     },
     pool::SimulationViolation,
     v0_7::UserOperation,
-    EntityInfos, EntityType, UserOperation as UserOperationTrait, ValidationOutput,
+    EntityInfos, EntityType, Opcode, UserOperation as UserOperationTrait, ValidationOutput,
     ValidationRevert,
 };
 use rundler_utils::eth::ContractRevertError;
@@ -59,6 +59,8 @@ const BANNED_OPCODES: &[Opcode] = &[
     Opcode::TIMESTAMP,
     Opcode::BASEFEE,
     Opcode::BLOCKHASH,
+    Opcode::BLOBBASEFEE,
+    Opcode::BLOBHASH,
     Opcode::NUMBER,
     Opcode::SELFBALANCE,
     Opcode::BALANCE,

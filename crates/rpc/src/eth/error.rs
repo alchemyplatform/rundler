@@ -13,7 +13,7 @@
 
 use std::fmt::Display;
 
-use ethers::types::{Address, Bytes, Opcode, U256};
+use ethers::types::{Address, Bytes, U256};
 use jsonrpsee::types::{
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
     ErrorObjectOwned,
@@ -22,7 +22,7 @@ use rundler_provider::ProviderError;
 use rundler_sim::GasEstimationError;
 use rundler_types::{
     pool::{MempoolError, PoolError, PrecheckViolation, SimulationViolation},
-    Entity, EntityType, Timestamp, ValidationRevert,
+    Entity, EntityType, Opcode, Timestamp, ValidationRevert,
 };
 use serde::Serialize;
 

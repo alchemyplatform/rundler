@@ -16,10 +16,10 @@ use anyhow::bail;
 use async_trait::async_trait;
 use ethers::types::{
     Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
-    GethTrace, Opcode, U256,
+    GethTrace, U256,
 };
 use rundler_provider::{Provider, SimulationProvider};
-use rundler_types::v0_7::UserOperation;
+use rundler_types::{v0_7::UserOperation, Opcode};
 use serde::Deserialize;
 
 use crate::ExpectedStorage;

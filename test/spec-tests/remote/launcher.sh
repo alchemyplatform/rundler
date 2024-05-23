@@ -29,7 +29,7 @@ EOF
 	esac
 	docker-compose up -d --wait
 	cast send --unlocked --from $(cast rpc eth_accounts | tail -n 1 | tr -d '[]"') --value 1ether 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 > /dev/null
-    cd ../$2/bundler-spec-tests/@account-abstraction && yarn deploy --network localhost
+	cd ../$2/bundler-spec-tests/@account-abstraction && yarn deploy --network localhost
 	;;
  stop)
  	docker-compose down -t 3

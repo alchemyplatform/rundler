@@ -12,13 +12,12 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use anyhow::{bail, Context};
-use ethers::types::Opcode;
 use rundler_task::grpc::protos::{from_bytes, ToProtoBytes};
 use rundler_types::{
     pool::{
         MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation, SimulationViolation,
     },
-    StorageSlot, ValidationRevert, ViolationOpCode,
+    Opcode, StorageSlot, ValidationRevert, ViolationOpCode,
 };
 
 use super::protos::{

@@ -14,9 +14,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use anyhow::Context;
-use ethers::types::{Address, BlockId, Opcode, U256};
+use ethers::types::{Address, BlockId, U256};
 use rundler_types::{
-    pool::SimulationViolation, EntityInfos, EntityType, StakeInfo, UserOperation, ValidationOutput,
+    pool::SimulationViolation, EntityInfos, EntityType, Opcode, StakeInfo, UserOperation,
+    ValidationOutput,
 };
 use serde::{Deserialize, Serialize};
 

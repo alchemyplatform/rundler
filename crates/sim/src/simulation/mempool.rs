@@ -13,8 +13,8 @@
 
 use std::{collections::HashMap, str::FromStr};
 
-use ethers::types::{Address, Opcode, H256, U256};
-use rundler_types::{Entity, EntityType};
+use ethers::types::{Address, H256, U256};
+use rundler_types::{Entity, EntityType, Opcode};
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
 
