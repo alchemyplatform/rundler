@@ -27,17 +27,17 @@ use super::protos::{
     CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
     EntityThrottledError, EntityType, EntryPointRevert, ExistingSenderWithInitCode,
     FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidAccountSignature,
-    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, MaxFeePerGasTooLow,
-    MaxOperationsReachedError, MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError,
-    MultipleRolesViolation, NotStaked, OperationAlreadyKnownError, OperationDropTooSoon,
-    OperationRevert, OutOfGas, PaymasterBalanceTooLow, PaymasterDepositTooLow,
-    PaymasterIsNotContract, PreVerificationGasTooLow,
-    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
-    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert,
-    UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, InvalidTimeRange,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
+    OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
+    PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
+    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
+    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
+    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
+    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
+    UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
+    UsedForbiddenOpcode, UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
     VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
@@ -611,6 +611,11 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     CodeHashChanged {},
                 )),
             },
+            SimulationViolation::InvalidTimeRange => ProtoSimulationViolationError {
+                violation: Some(simulation_violation_error::Violation::InvalidTimeRange(
+                    InvalidTimeRange {},
+                )),
+            },
             SimulationViolation::AggregatorValidationFailed => ProtoSimulationViolationError {
                 violation: Some(
                     simulation_violation_error::Violation::AggregatorValidationFailed(
@@ -641,6 +646,9 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
         Ok(match value.violation {
             Some(simulation_violation_error::Violation::InvalidSignature(_)) => {
                 SimulationViolation::InvalidSignature
+            }
+            Some(simulation_violation_error::Violation::InvalidTimeRange(_)) => {
+                SimulationViolation::InvalidTimeRange
             }
             Some(simulation_violation_error::Violation::InvalidAccountSignature(_)) => {
                 SimulationViolation::InvalidAccountSignature

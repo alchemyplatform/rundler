@@ -648,10 +648,13 @@ message SimulationViolationError {
     InvalidAccountSignature invalid_account_signature = 21;
     InvalidPaymasterSignature invalid_paymaster_signature = 22;
     AssociatedStorageDuringDeploy associated_storage_during_deploy = 23;
+    InvalidTimeRange invalid_time_range = 24;
   }
 }
 
 message InvalidSignature {}
+
+message InvalidTimeRange {}
 
 message InvalidAccountSignature {}
 

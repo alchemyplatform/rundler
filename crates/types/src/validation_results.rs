@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::{ops::Add, time::Duration};
+
 use ethers::{
     abi::{self, AbiDecode, AbiError},
     types::{Address, Bytes, H160, U256},
@@ -257,6 +259,17 @@ pub struct ValidationReturnInfo {
     pub valid_until: Timestamp,
     /// The paymaster context
     pub paymaster_context: Bytes,
+}
+
+const VALID_UNTIL_FUTURE_SECONDS: u64 = 15;
+
+impl ValidationReturnInfo {
+    /// helper function to check if the returned time range is valid
+    pub fn is_valid_time_range(&self) -> bool {
+        let now = Timestamp::now();
+        self.valid_after > now
+            || self.valid_until <= now.add(Duration::from_secs(VALID_UNTIL_FUTURE_SECONDS))
+    }
 }
 
 // Conversion for v0.6
