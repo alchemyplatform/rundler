@@ -154,7 +154,7 @@ where
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
 
-        tracing::info!("Starting bundle proposal with {} ops", ops.len());
+        tracing::debug!("Starting bundle proposal with {} ops", ops.len());
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
@@ -179,12 +179,12 @@ where
             .flatten()
             .collect::<Vec<_>>();
 
-        tracing::info!("Bundle proposal after fee limit had {} ops", ops.len());
+        tracing::debug!("Bundle proposal after fee limit had {} ops", ops.len());
 
         // (2) Limit the amount of operations for simulation
         let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
 
-        tracing::info!(
+        tracing::debug!(
             "Bundle proposal after gas limit had {} ops and {:?} gas limit",
             ops.len(),
             gas_limit

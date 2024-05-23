@@ -20,7 +20,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use ethers::types::{Address, Opcode, H256, U256};
+use ethers::types::{Address, H256, U256};
 use rundler_provider::{
     AggregatorOut, AggregatorSimOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
 };
@@ -28,8 +28,8 @@ use rundler_types::{
     pool::{NeedsStakeInformation, SimulationViolation},
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
-    Entity, EntityInfo, EntityInfos, EntityType, StorageSlot, UserOperation, ValidTimeRange,
-    ValidationOutput, ValidationReturnInfo, ViolationOpCode,
+    Entity, EntityInfo, EntityInfos, EntityType, Opcode, StorageSlot, UserOperation,
+    ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
 };
 
 use super::context::{
@@ -661,10 +661,10 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 mod tests {
     use std::str::FromStr;
 
-    use ethers::types::{Address, BlockId, BlockNumber, Bytes, Opcode, U256, U64};
+    use ethers::types::{Address, BlockId, BlockNumber, Bytes, U256, U64};
     use rundler_provider::{AggregatorOut, MockEntryPointV0_6, MockProvider};
     use rundler_types::{
-        contracts::utils::get_code_hashes::CodeHashesResult, v0_6::UserOperation, StakeInfo,
+        contracts::utils::get_code_hashes::CodeHashesResult, v0_6::UserOperation, Opcode, StakeInfo,
     };
 
     use self::context::{Phase, TracerOutput};

@@ -2,27 +2,18 @@ version: "3.8"
 
 services:
   geth:
-    image: ethereum/client-go:v1.10.26
-    ports:
-      - "8545:8545"
-      - "8546:8546"
-    command:
-      - --miner.gaslimit=12000000
-      - --http
-      - --http.api=personal,eth,net,web3,debug
-      - --http.vhosts=*
-      - --http.addr=0.0.0.0
-      - --ws
-      - --ws.api=personal,eth,net,web3,debug
-      - --ws.addr=0.0.0.0
-      - --ignore-legacy-receipts
-      - --allow-insecure-unlock
-      - --rpc.allow-unprotected-txs
-      - --rpc.txfeecap=0
-      - --dev
-      - --verbosity=2
-      - --nodiscover
-      - --maxpeers=0
-      - --mine
-      - --miner.threads=1
-      - --networkid=1337
+    image: ethereum/client-go:release-1.14
+    ports: [ '8545:8545' ]
+    command: --verbosity 1
+      --http.vhosts '*,localhost,host.docker.internal'
+      --http
+      --http.api eth,net,web3,debug
+      --http.corsdomain '*'
+      --http.addr "0.0.0.0"
+      --networkid 1337
+      --dev
+      --dev.period 0
+      --allow-insecure-unlock
+      --rpc.allow-unprotected-txs
+      --rpc.txfeecap 0
+      --dev.gaslimit 20000000

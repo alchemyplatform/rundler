@@ -31,7 +31,7 @@ mod entity;
 pub use entity::{Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType};
 
 mod opcode;
-pub use opcode::ViolationOpCode;
+pub use opcode::{Opcode, ViolationOpCode};
 
 mod gas;
 pub use gas::GasFees;

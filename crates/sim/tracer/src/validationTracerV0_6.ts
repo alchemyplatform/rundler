@@ -84,6 +84,8 @@ type StringSet = Record<string, boolean | undefined>;
     "TIMESTAMP",
     "BASEFEE",
     "BLOCKHASH",
+    "BLOBBASEFEE",
+    "BLOBHASH",
     "NUMBER",
     "SELFBALANCE",
     "BALANCE",
@@ -104,7 +106,7 @@ type StringSet = Record<string, boolean | undefined>;
   // address as their *first* argument, or modify the handling below.
   const EXT_OPCODES = stringSet(["EXTCODECOPY", "EXTCODEHASH", "EXTCODESIZE"]);
 
-  const READ_WRITE_OPCODES = stringSet(["SSTORE", "SLOAD"]);
+  const READ_WRITE_OPCODES = stringSet(["SSTORE", "SLOAD", "TSTORE", "TLOAD"]);
   // Whitelisted precompile addresses.
   const PRECOMPILE_WHITELIST = stringSet([
     "0x0000000000000000000000000000000000000001", // ecRecover

@@ -16,6 +16,7 @@ constcat = "0.4.1"
 const-hex = "1.11.3"
 ethers.workspace = true
 futures-util.workspace = true
+num_enum = "0.7.2"
 parse-display.workspace = true
 rand.workspace = true
 serde.workspace = true
