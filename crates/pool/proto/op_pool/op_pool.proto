@@ -654,8 +654,6 @@ message SimulationViolationError {
 
 message InvalidSignature {}
 
-message InvalidTimeRange {}
-
 message InvalidAccountSignature {}
 
 message InvalidPaymasterSignature {}
@@ -663,6 +661,11 @@ message InvalidPaymasterSignature {}
 message UnstakedAggregator {}
 
 message UnstakedPaymasterContext {}
+
+message InvalidTimeRange {
+  uint64 valid_until = 1;
+  uint64 valud_after = 2;
+}
 
 message UnintendedRevertWithMessage {
   Entity entity = 1;

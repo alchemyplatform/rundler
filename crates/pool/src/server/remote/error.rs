@@ -17,7 +17,7 @@ use rundler_types::{
     pool::{
         MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation, SimulationViolation,
     },
-    Opcode, StorageSlot, ValidationRevert, ViolationOpCode,
+    Opcode, StorageSlot, Timestamp, ValidationRevert, ViolationOpCode,
 };
 
 use super::protos::{
@@ -611,11 +611,16 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     CodeHashChanged {},
                 )),
             },
-            SimulationViolation::InvalidTimeRange => ProtoSimulationViolationError {
-                violation: Some(simulation_violation_error::Violation::InvalidTimeRange(
-                    InvalidTimeRange {},
-                )),
-            },
+            SimulationViolation::InvalidTimeRange(valid_until, valid_after) => {
+                ProtoSimulationViolationError {
+                    violation: Some(simulation_violation_error::Violation::InvalidTimeRange(
+                        InvalidTimeRange {
+                            valid_until: valid_until.seconds_since_epoch(),
+                            valud_after: valid_after.seconds_since_epoch(),
+                        },
+                    )),
+                }
+            }
             SimulationViolation::AggregatorValidationFailed => ProtoSimulationViolationError {
                 violation: Some(
                     simulation_violation_error::Violation::AggregatorValidationFailed(
@@ -647,8 +652,11 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             Some(simulation_violation_error::Violation::InvalidSignature(_)) => {
                 SimulationViolation::InvalidSignature
             }
-            Some(simulation_violation_error::Violation::InvalidTimeRange(_)) => {
-                SimulationViolation::InvalidTimeRange
+            Some(simulation_violation_error::Violation::InvalidTimeRange(e)) => {
+                SimulationViolation::InvalidTimeRange(
+                    Timestamp::new(e.valid_until),
+                    Timestamp::new(e.valud_after),
+                )
             }
             Some(simulation_violation_error::Violation::InvalidAccountSignature(_)) => {
                 SimulationViolation::InvalidAccountSignature

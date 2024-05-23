@@ -338,7 +338,10 @@ where
         }
 
         if !entry_point_out.return_info.is_valid_time_range() {
-            violations.push(SimulationViolation::InvalidTimeRange);
+            violations.push(SimulationViolation::InvalidTimeRange(
+                entry_point_out.return_info.valid_until,
+                entry_point_out.return_info.valid_after,
+            ));
         }
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
