@@ -14,7 +14,8 @@
 use ethers::types::{Address, U256};
 
 use crate::{
-    validation_results::ValidationRevert, Entity, EntityType, StorageSlot, ViolationOpCode,
+    validation_results::ValidationRevert, Entity, EntityType, StorageSlot, Timestamp,
+    ViolationOpCode,
 };
 
 /// Pool server error type
@@ -152,6 +153,11 @@ pub enum SimulationViolation {
     /// The signature is invalid for the account
     #[display("invalid account signature")]
     InvalidAccountSignature,
+    /// The user operation has an invalid time range based on the `valid_until` and `valid_after` fields
+    #[display(
+        "User Operation expired or has an invalid time range. validUntil: {0}, validAfter: {1}"
+    )]
+    InvalidTimeRange(Timestamp, Timestamp),
     /// The signature is invalid for the paymaster
     #[display("invalid paymaster signature")]
     InvalidPaymasterSignature,
