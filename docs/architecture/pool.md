@@ -10,7 +10,7 @@ Upon each `add_operation` call the `Pool` will preforms a series of checks.
 
 2. Simulate the UO via a `debug_traceCall` as per the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#simulation).
 
-If violations are found, the UO is rejected. Else, the UO is added to the pool. 
+If violations are found, the UO is rejected. Else, the UO is added to the pool. We only accept User Operations into the pool if the `validUntil` field has over 60 seconds to expire from the time of entry or the `validAfter` field is before the time of entry.
 
 ### Tracer
 
