@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, time::Duration};
 
 use ethers::{
     abi::AbiEncode,
@@ -24,6 +24,9 @@ pub mod v0_6;
 pub mod v0_7;
 
 use crate::Entity;
+
+/// A user op must be valid for at least this long into the future to be included.
+pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 
 /// Overhead for bytes required for each bundle
 /// 4 bytes for function signature

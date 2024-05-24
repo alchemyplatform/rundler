@@ -18,7 +18,6 @@ use std::{
     mem,
     pin::Pin,
     sync::Arc,
-    time::Duration,
 };
 
 use anyhow::Context;
@@ -41,7 +40,7 @@ use rundler_types::{
     pool::{Pool, PoolOperation, SimulationViolation},
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
     Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, BUNDLE_BYTE_OVERHEAD,
-    USER_OP_OFFSET_WORD_SIZE,
+    TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -49,8 +48,6 @@ use tracing::{error, info, warn};
 
 use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
 
-/// A user op must be valid for at least this long into the future to be included.
-const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
 
@@ -1286,16 +1283,17 @@ impl<UO: UserOperation> ProposalContext<UO> {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use ethers::{
-        types::{H160, U64},
-        utils::parse_units,
-    };
+    use std::time::Duration;
     use rundler_provider::{AggregatorSimOut, MockEntryPointV0_6, MockProvider};
     use rundler_sim::MockSimulator;
     use rundler_types::{
         pool::{MockPool, SimulationViolation},
         v0_6::UserOperation,
         UserOperation as UserOperationTrait, ValidTimeRange,
+    };
+    use ethers::{
+        types::{H160, U64},
+        utils::parse_units,
     };
 
     use super::*;

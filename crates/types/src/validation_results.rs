@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{ops::Add, time::Duration};
+use std::ops::Add;
 
 use ethers::{
     abi::{self, AbiDecode, AbiError},
@@ -31,7 +31,7 @@ use crate::{
             StakeInfo as StakeInfoV0_7, ValidationResult as ValidationResultV0_7,
         },
     },
-    Timestamp, ValidTimeRange,
+    Timestamp, ValidTimeRange, TIME_RANGE_BUFFER,
 };
 
 /// Both v0.6 and v0.7 contracts use this aggregator address to indicate that the signature validation failed
@@ -261,14 +261,11 @@ pub struct ValidationReturnInfo {
     pub paymaster_context: Bytes,
 }
 
-const VALID_UNTIL_FUTURE_SECONDS: u64 = 15;
-
 impl ValidationReturnInfo {
     /// helper function to check if the returned time range is valid
     pub fn is_valid_time_range(&self) -> bool {
         let now = Timestamp::now();
-        self.valid_after <= now
-            || self.valid_until > now.add(Duration::from_secs(VALID_UNTIL_FUTURE_SECONDS))
+        self.valid_after <= now || self.valid_until > now.add(TIME_RANGE_BUFFER)
     }
 }
 
