@@ -1282,18 +1282,19 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
 #[cfg(test)]
 mod tests {
-    use anyhow::anyhow;
     use std::time::Duration;
+
+    use anyhow::anyhow;
+    use ethers::{
+        types::{H160, U64},
+        utils::parse_units,
+    };
     use rundler_provider::{AggregatorSimOut, MockEntryPointV0_6, MockProvider};
     use rundler_sim::MockSimulator;
     use rundler_types::{
         pool::{MockPool, SimulationViolation},
         v0_6::UserOperation,
         UserOperation as UserOperationTrait, ValidTimeRange,
-    };
-    use ethers::{
-        types::{H160, U64},
-        utils::parse_units,
     };
 
     use super::*;
