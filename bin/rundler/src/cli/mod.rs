@@ -195,7 +195,8 @@ pub struct CommonArgs {
         long = "bundle_priority_fee_overhead_percent",
         name = "bundle_priority_fee_overhead_percent",
         env = "BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT",
-        default_value = "0"
+        default_value = "0",
+        global = true
     )]
     bundle_priority_fee_overhead_percent: u64,
 
@@ -204,7 +205,8 @@ pub struct CommonArgs {
         name = "priority_fee_mode_kind",
         env = "PRIORITY_FEE_MODE_KIND",
         value_parser = PossibleValuesParser::new(["base_fee_percent", "priority_fee_increase_percent"]),
-        default_value = "priority_fee_increase_percent"
+        default_value = "priority_fee_increase_percent",
+        global = true
     )]
     priority_fee_mode_kind: String,
 
@@ -212,7 +214,8 @@ pub struct CommonArgs {
         long = "priority_fee_mode_value",
         name = "priority_fee_mode_value",
         env = "PRIORITY_FEE_MODE_VALUE",
-        default_value = "0"
+        default_value = "0",
+        global = true
     )]
     priority_fee_mode_value: u64,
 
@@ -220,7 +223,8 @@ pub struct CommonArgs {
         long = "base_fee_accept_percent",
         name = "base_fee_accept_percent",
         env = "BASE_FEE_ACCEPT_PERCENT",
-        default_value = "50"
+        default_value = "50",
+        global = true
     )]
     base_fee_accept_percent: u64,
 
@@ -228,7 +232,8 @@ pub struct CommonArgs {
         long = "pre_verification_gas_accept_percent",
         name = "pre_verification_gas_accept_percent",
         env = "PRE_VERIFICATION_GAS_ACCEPT_PERCENT",
-        default_value = "50"
+        default_value = "50",
+        global = true
     )]
     pre_verification_gas_accept_percent: u64,
 
@@ -238,7 +243,8 @@ pub struct CommonArgs {
         long = "eth_poll_interval_millis",
         name = "eth_poll_interval_millis",
         env = "ETH_POLL_INTERVAL_MILLIS",
-        default_value = "100"
+        default_value = "100",
+        global = true
     )]
     pub eth_poll_interval_millis: u64,
 
@@ -246,14 +252,16 @@ pub struct CommonArgs {
         long = "aws_region",
         name = "aws_region",
         env = "AWS_REGION",
-        default_value = "us-east-1"
+        default_value = "us-east-1",
+        global = true
     )]
     aws_region: String,
 
     #[arg(
         long = "mempool_config_path",
         name = "mempool_config_path",
-        env = "MEMPOOL_CONFIG_PATH"
+        env = "MEMPOOL_CONFIG_PATH",
+        global = true
     )]
     pub mempool_config_path: Option<String>,
 
@@ -261,7 +269,8 @@ pub struct CommonArgs {
         long = "entry_point_v0_6_enabled",
         name = "entry_point_v0_6_enabled",
         env = "ENTRY_POINT_V0_6_ENABLED",
-        default_value = "true"
+        default_value = "true",
+        global = true
     )]
     pub entry_point_v0_6_enabled: bool,
 
@@ -270,7 +279,8 @@ pub struct CommonArgs {
         long = "num_builders_v0_6",
         name = "num_builders_v0_6",
         env = "NUM_BUILDERS_V0_6",
-        default_value = "1"
+        default_value = "1",
+        global = true
     )]
     pub num_builders_v0_6: u64,
 
@@ -278,7 +288,8 @@ pub struct CommonArgs {
         long = "entry_point_v0_7_enabled",
         name = "entry_point_v0_7_enabled",
         env = "ENTRY_POINT_V0_7_ENABLED",
-        default_value = "true"
+        default_value = "true",
+        global = true
     )]
     pub entry_point_v0_7_enabled: bool,
 
@@ -287,7 +298,8 @@ pub struct CommonArgs {
         long = "num_builders_v0_7",
         name = "num_builders_v0_7",
         env = "NUM_BUILDERS_V0_7",
-        default_value = "1"
+        default_value = "1",
+        global = true
     )]
     pub num_builders_v0_7: u64,
 }
