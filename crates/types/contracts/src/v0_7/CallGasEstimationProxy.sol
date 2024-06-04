@@ -3,6 +3,11 @@ pragma solidity ^0.8.13;
 
 import "openzeppelin-contracts-versions/v5_0/contracts/proxy/Proxy.sol";
 import "openzeppelin-contracts-versions/v5_0/contracts/utils/math/Math.sol";
+import "account-abstraction/v0_7/interfaces/IAccountExecute.sol";
+import "account-abstraction/v0_7/interfaces/PackedUserOperation.sol";
+import "account-abstraction/v0_7/interfaces/IEntryPoint.sol";
+
+import "../utils/CallGasEstimationProxyTypes.sol";
 
 /**
  * Contract used in `eth_call`'s "overrides" parameter in order to estimate the
@@ -36,28 +41,16 @@ contract CallGasEstimationProxy is Proxy {
     using Math for uint256;
 
     function _implementation() internal pure virtual override returns (address) {
-        // keccak("CallGasEstimationProxy")[:20]
-        // Don't use an immutable constant. We want the "deployedBytecode" in
-        // the generated JSON to contain this constant.
-        return 0xA13dB4eCfbce0586E57D1AeE224FbE64706E8cd3;
+        return IMPLEMENTATION_ADDRESS_MARKER;
     }
 
     struct EstimateCallGasArgs {
-        address sender;
-        bytes callData;
+        PackedUserOperation userOp;
         uint256 minGas;
         uint256 maxGas;
         uint256 rounding;
         bool isContinuation;
     }
-
-    error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
-
-    error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
-
-    error EstimateCallGasRevertAtMax(bytes revertData);
-
-    error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
 
     /**
      * Runs a binary search to find the smallest amount of gas at which the call
@@ -87,10 +80,10 @@ contract CallGasEstimationProxy is Proxy {
         uint256 scaledMinSuccessGas = args.maxGas.ceilDiv(args.rounding);
         uint256 scaledGasUsedInSuccess = scaledMinSuccessGas;
         uint256 scaledGuess = 0;
+        bytes32 userOpHash = _getUserOpHashInternal(args.userOp);
         if (!args.isContinuation) {
             // Make one call at full gas to make sure success is even possible.
-            (bool success, uint256 gasUsed, bytes memory revertData) =
-                innerCall(args.sender, args.callData, args.maxGas);
+            (bool success, uint256 gasUsed, bytes memory revertData) = innerCall(args.userOp, userOpHash, args.maxGas);
             if (!success) {
                 revert EstimateCallGasRevertAtMax(revertData);
             }
@@ -107,7 +100,7 @@ contract CallGasEstimationProxy is Proxy {
                 uint256 nextMax = scaledMinSuccessGas * args.rounding;
                 revert EstimateCallGasContinuation(nextMin, nextMax, numRounds);
             }
-            (bool success, uint256 gasUsed,) = innerCall(args.sender, args.callData, guess);
+            (bool success, uint256 gasUsed,) = innerCall(args.userOp, userOpHash, guess);
             if (success) {
                 scaledGasUsedInSuccess = scaledGasUsedInSuccess.min(gasUsed.ceilDiv(args.rounding));
                 scaledMinSuccessGas = scaledGuess;
@@ -123,8 +116,9 @@ contract CallGasEstimationProxy is Proxy {
     /**
      * A helper function for testing execution at a given gas limit.
      */
-    function testCallGas(address sender, bytes calldata callData, uint256 callGasLimit) external {
-        (bool success, uint256 gasUsed, bytes memory revertData) = innerCall(sender, callData, callGasLimit);
+    function testCallGas(PackedUserOperation calldata userOp, uint256 callGasLimit) external {
+        bytes32 userOpHash = _getUserOpHashInternal(userOp);
+        (bool success, uint256 gasUsed, bytes memory revertData) = innerCall(userOp, userOpHash, callGasLimit);
         revert TestCallGasResult(success, gasUsed, revertData);
     }
 
@@ -157,11 +151,25 @@ contract CallGasEstimationProxy is Proxy {
 
     error _InnerCallResult(bool success, uint256 gasUsed, bytes revertData);
 
-    function innerCall(address sender, bytes calldata callData, uint256 gas)
+    function innerCall(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 gas)
         private
         returns (bool success, uint256 gasUsed, bytes memory revertData)
     {
-        try this._innerCall(sender, callData, gas) {
+        bytes calldata callData = userOp.callData;
+        bytes4 methodSig;
+        assembly {
+            let len := callData.length
+            if gt(len, 3) { methodSig := calldataload(callData.offset) }
+        }
+
+        bytes memory executeCall;
+        if (methodSig == IAccountExecute.executeUserOp.selector) {
+            executeCall = abi.encodeCall(IAccountExecute.executeUserOp, (userOp, userOpHash));
+        } else {
+            executeCall = callData;
+        }
+
+        try this._innerCall(userOp.sender, executeCall, gas) {
             // Should never happen. _innerCall should always revert.
             revert();
         } catch (bytes memory innerCallRevertData) {
@@ -179,5 +187,12 @@ contract CallGasEstimationProxy is Proxy {
         uint256 gasUsed = preGas - gasleft();
         bytes memory revertData = success ? bytes("") : data;
         revert _InnerCallResult(success, gasUsed, revertData);
+    }
+
+    function _getUserOpHashInternal(PackedUserOperation calldata userOp) internal returns (bytes32) {
+        (bool success, bytes memory data) =
+            address(this).call(abi.encodeWithSelector(IEntryPoint.getUserOpHash.selector, userOp));
+        require(success, "Call to getUserOpHash failed");
+        return abi.decode(data, (bytes32));
     }
 }

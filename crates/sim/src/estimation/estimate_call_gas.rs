@@ -2,16 +2,16 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use ethers::{
     abi::AbiDecode,
-    contract::EthCall,
     types::{spoof, Address, Bytes, H256, U128, U256},
 };
-use rand::Rng;
 use rundler_provider::{EntryPoint, SimulationProvider};
 use rundler_types::{
-    contracts::utils::call_gas_estimation_proxy::{
-        EstimateCallGasArgs, EstimateCallGasCall, EstimateCallGasContinuation,
-        EstimateCallGasResult, EstimateCallGasRevertAtMax, TestCallGasCall, TestCallGasResult,
-        CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
+    contracts::v0_7::call_gas_estimation_proxy::{
+        // Errors are shared between v0.6 and v0.7 proxies
+        EstimateCallGasContinuation,
+        EstimateCallGasResult,
+        EstimateCallGasRevertAtMax,
+        TestCallGasResult,
     },
     UserOperation,
 };
@@ -26,12 +26,10 @@ use crate::GasEstimationError;
 /// verification gas and call gas.
 const GAS_ROUNDING: u64 = 4096;
 
-/// Offset at which the proxy target address appears in the proxy bytecode. Must
-/// be updated whenever `CallGasEstimationProxy.sol` changes.
-///
-/// The easiest way to get the updated value is to run this module's tests. The
-/// failure will tell you the new value.
-const PROXY_TARGET_OFFSET: usize = 163;
+/// Must match the constant in `CallGasEstimationProxyTypes.sol`.
+#[allow(dead_code)]
+pub(crate) const PROXY_IMPLEMENTATION_ADDRESS_MARKER: &str =
+    "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
 
 /// Estimates the gas limit for a user operation
 #[async_trait]
@@ -75,13 +73,25 @@ pub trait CallGasEstimatorSpecialization: Send + Sync + 'static {
     /// The user operation type estimated by this specialization
     type UO: UserOperation;
 
+    /// Add the required CallGasEstimation proxy to the overrides at the given entrypoint address
+    fn add_proxy_to_overrides(&self, ep_to_override: Address, state_override: &mut spoof::State);
+
     /// Returns the input user operation, modified to have limits but zero for the call gas limits.
     /// The intent is that the modified operation should run its validation but do nothing during execution
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO;
 
-    /// Returns the deployed bytecode of the entry point contract with
-    /// simulation methods
-    fn entry_point_simulations_code(&self) -> Bytes;
+    /// Returns the calldata for the `estimateCallGas` function of the proxy
+    fn get_estimate_call_gas_calldata(
+        &self,
+        callless_op: Self::UO,
+        min_gas: U256,
+        max_gas: U256,
+        rounding: U256,
+        is_continuation: bool,
+    ) -> Bytes;
+
+    /// Returns the calldata for the `testCallGas` function of the proxy
+    fn get_test_call_gas_calldata(&self, callless_op: Self::UO, call_gas_limit: U256) -> Bytes;
 }
 
 #[async_trait]
@@ -100,9 +110,8 @@ where
         mut state_override: spoof::State,
     ) -> Result<U128, GasEstimationError> {
         let timer = std::time::Instant::now();
-        // For an explanation of what's going on here, see the comment at the
-        // top of `CallGasEstimationProxy.sol`.
-        self.add_proxy_to_overrides(&mut state_override);
+        self.specialization
+            .add_proxy_to_overrides(self.entry_point.address(), &mut state_override);
 
         let callless_op = self.specialization.get_op_with_no_call_gas(op.clone());
 
@@ -111,16 +120,12 @@ where
         let mut is_continuation = false;
         let mut num_rounds = U256::zero();
         loop {
-            let target_call_data = eth::call_data_of(
-                EstimateCallGasCall::selector(),
-                (EstimateCallGasArgs {
-                    sender: op.sender(),
-                    call_data: Bytes::clone(op.call_data()),
-                    min_gas,
-                    max_gas,
-                    rounding: GAS_ROUNDING.into(),
-                    is_continuation,
-                },),
+            let target_call_data = self.specialization.get_estimate_call_gas_calldata(
+                callless_op.clone(),
+                min_gas,
+                max_gas,
+                GAS_ROUNDING.into(),
+                is_continuation,
             );
             let target_revert_data = self
                 .entry_point
@@ -184,18 +189,14 @@ where
         block_hash: H256,
         mut state_override: spoof::State,
     ) -> Result<(), GasEstimationError> {
-        self.add_proxy_to_overrides(&mut state_override);
+        self.specialization
+            .add_proxy_to_overrides(self.entry_point.address(), &mut state_override);
 
-        let target_call_data = eth::call_data_of(
-            TestCallGasCall::selector(),
-            (
-                op.sender(),
-                Bytes::clone(op.call_data()),
-                op.call_gas_limit(),
-            ),
-        );
-
+        let call_gas_limit = op.call_gas_limit();
         let callless_op = self.specialization.get_op_with_no_call_gas(op);
+        let target_call_data = self
+            .specialization
+            .get_test_call_gas_calldata(callless_op.clone(), call_gas_limit);
 
         let target_revert_data = self
             .entry_point
@@ -240,50 +241,5 @@ where
             settings,
             specialization,
         }
-    }
-
-    fn add_proxy_to_overrides(&self, state_override: &mut spoof::State) {
-        // Use a random address for the moved entry point so that users can't
-        // intentionally get bad estimates by interacting with the hardcoded
-        // address.
-        let moved_entry_point_address: Address = rand::thread_rng().gen();
-        let estimation_proxy_bytecode =
-            estimation_proxy_bytecode_with_target(moved_entry_point_address);
-        state_override
-            .account(moved_entry_point_address)
-            .code(self.specialization.entry_point_simulations_code());
-        state_override
-            .account(self.entry_point.address())
-            .code(estimation_proxy_bytecode);
-    }
-}
-
-/// Replaces the address of the proxy target where it appears in the proxy
-/// bytecode so we don't need the same fixed address every time.
-fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
-    let mut vec = CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE.to_vec();
-    vec[PROXY_TARGET_OFFSET..PROXY_TARGET_OFFSET + 20].copy_from_slice(target.as_bytes());
-    vec.into()
-}
-
-#[cfg(test)]
-mod tests {
-    use ethers::utils::hex;
-
-    use super::*;
-
-    /// Must match the constant in `CallGasEstimationProxy.sol`.
-    const PROXY_TARGET_CONSTANT: &str = "A13dB4eCfbce0586E57D1AeE224FbE64706E8cd3";
-
-    #[test]
-    fn test_proxy_target_offset() {
-        let proxy_target_bytes = hex::decode(PROXY_TARGET_CONSTANT).unwrap();
-        let mut offsets = Vec::<usize>::new();
-        for i in 0..CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE.len() - 20 {
-            if CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE[i..i + 20] == proxy_target_bytes {
-                offsets.push(i);
-            }
-        }
-        assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
     }
 }
