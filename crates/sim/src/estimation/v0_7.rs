@@ -13,15 +13,25 @@
 
 use std::{cmp, ops::Add, sync::Arc};
 
-use ethers::types::{spoof, Bytes, H256, U128, U256};
+use ethers::{
+    contract::EthCall,
+    types::{spoof, Address, Bytes, H256, U128, U256},
+};
+use rand::Rng;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider, SimulationProvider};
 use rundler_types::{
     chain::ChainSpec,
-    contracts::v0_7::entry_point_simulations,
+    contracts::v0_7::{
+        call_gas_estimation_proxy::{
+            EstimateCallGasArgs, EstimateCallGasCall, TestCallGasCall,
+            CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE,
+        },
+        entry_point_simulations::ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
+    },
     v0_7::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
-use rundler_utils::math;
+use rundler_utils::{eth, math};
 use tokio::join;
 
 use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
@@ -389,6 +399,23 @@ pub struct CallGasEstimatorSpecializationV07;
 impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
     type UO = UserOperation;
 
+    fn add_proxy_to_overrides(&self, ep_to_override: Address, state_override: &mut spoof::State) {
+        // For an explanation of what's going on here, see the comment at the
+        // top of `CallGasEstimationProxy.sol`.
+        // Use a random address for the moved entry point so that users can't
+        // intentionally get bad estimates by interacting with the hardcoded
+        // address.
+        let moved_entry_point_address: Address = rand::thread_rng().gen();
+        let estimation_proxy_bytecode =
+            estimation_proxy_bytecode_with_target(moved_entry_point_address);
+        state_override
+            .account(moved_entry_point_address)
+            .code(ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone());
+        state_override
+            .account(ep_to_override)
+            .code(estimation_proxy_bytecode);
+    }
+
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO {
         op.into_builder()
             .call_gas_limit(U128::zero())
@@ -396,9 +423,47 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
             .build()
     }
 
-    fn entry_point_simulations_code(&self) -> Bytes {
-        entry_point_simulations::ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE.clone()
+    fn get_estimate_call_gas_calldata(
+        &self,
+        callless_op: Self::UO,
+        min_gas: U256,
+        max_gas: U256,
+        rounding: U256,
+        is_continuation: bool,
+    ) -> Bytes {
+        eth::call_data_of(
+            EstimateCallGasCall::selector(),
+            (EstimateCallGasArgs {
+                user_op: callless_op.pack(),
+                min_gas,
+                max_gas,
+                rounding,
+                is_continuation,
+            },),
+        )
     }
+
+    fn get_test_call_gas_calldata(&self, callless_op: Self::UO, call_gas_limit: U256) -> Bytes {
+        eth::call_data_of(
+            TestCallGasCall::selector(),
+            (callless_op.pack(), call_gas_limit),
+        )
+    }
+}
+
+/// Offset at which the proxy target address appears in the proxy bytecode. Must
+/// be updated whenever `CallGasEstimationProxy.sol` changes.
+///
+/// The easiest way to get the updated value is to run this module's tests. The
+/// failure will tell you the new value.
+const PROXY_TARGET_OFFSET: usize = 163;
+
+// Replaces the address of the proxy target where it appears in the proxy
+// bytecode so we don't need the same fixed address every time.
+fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
+    let mut vec = CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE.to_vec();
+    vec[PROXY_TARGET_OFFSET..PROXY_TARGET_OFFSET + 20].copy_from_slice(target.as_bytes());
+    vec.into()
 }
 
 #[cfg(test)]
@@ -407,19 +472,23 @@ mod tests {
         abi::AbiEncode,
         contract::EthCall,
         types::{Address, U64},
+        utils::hex,
     };
     use rundler_provider::{ExecutionResult, MockEntryPointV0_7, MockProvider, SimulateOpCallData};
     use rundler_types::{
-        contracts::{
-            utils::call_gas_estimation_proxy::TestCallGasResult,
-            v0_7::entry_point_simulations::SimulateHandleOpCall,
+        contracts::v0_7::{
+            call_gas_estimation_proxy::TestCallGasResult,
+            entry_point_simulations::SimulateHandleOpCall,
         },
         v0_7::UserOperationOptionalGas,
     };
     use rundler_utils::eth::{self, ContractRevertError};
 
     use super::*;
-    use crate::{GasEstimator as _, PriorityFeeMode};
+    use crate::{
+        estimation::estimate_call_gas::PROXY_IMPLEMENTATION_ADDRESS_MARKER, GasEstimator as _,
+        PriorityFeeMode,
+    };
 
     // Alises for complex types (which also satisfy Clippy)
     type VerificationGasEstimatorWithMocks =
@@ -728,5 +797,17 @@ mod tests {
             estimation_error,
             GasEstimationError::RevertInCallWithMessage(msg) if msg == revert_msg
         ));
+    }
+
+    #[test]
+    fn test_proxy_target_offset() {
+        let proxy_target_bytes = hex::decode(PROXY_IMPLEMENTATION_ADDRESS_MARKER).unwrap();
+        let mut offsets = Vec::<usize>::new();
+        for i in 0..CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE.len() - 20 {
+            if CALLGASESTIMATIONPROXY_DEPLOYED_BYTECODE[i..i + 20] == proxy_target_bytes {
+                offsets.push(i);
+            }
+        }
+        assert_eq!(vec![PROXY_TARGET_OFFSET], offsets);
     }
 }

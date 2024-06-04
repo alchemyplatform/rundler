@@ -44,6 +44,7 @@ fn generate_v0_6_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("v0_6", "SimpleAccount")?,
         abigen_of("v0_6", "SimpleAccountFactory")?,
         abigen_of("v0_6", "VerifyingPaymaster")?,
+        abigen_of("v0_6", "CallGasEstimationProxy")?,
     ])
     .build()?
     .write_to_module("src/contracts/v0_6", false)?;
@@ -68,6 +69,7 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
         abigen_of("v0_7", "IStakeManager")?,
         abigen_of("v0_7", "GetBalances")?,
         abigen_of("v0_7", "EntryPointSimulations")?,
+        abigen_of("v0_7", "CallGasEstimationProxy")?,
         abigen_of("v0_7", "SenderCreator")?,
     ])
     .build()?
@@ -84,7 +86,6 @@ fn generate_utils_bindings() -> Result<(), Box<dyn error::Error>> {
     )?;
 
     MultiAbigen::from_abigens([
-        abigen_of("utils", "CallGasEstimationProxy")?,
         abigen_of("utils", "GetCodeHashes")?,
         abigen_of("utils", "GetGasUsed")?,
     ])
