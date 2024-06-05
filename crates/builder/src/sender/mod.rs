@@ -54,6 +54,9 @@ pub(crate) enum TxSenderError {
     /// Replacement transaction was underpriced
     #[error("replacement transaction underpriced")]
     ReplacementUnderpriced,
+    /// Nonce too low
+    #[error("nonce too low")]
+    NonceTooLow,
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -217,6 +220,8 @@ impl From<ProviderError> for TxSenderError {
                 if let Some(e) = e.as_error_response() {
                     if e.message.contains("replacement transaction underpriced") {
                         return TxSenderError::ReplacementUnderpriced;
+                    } else if e.message.contains("nonce too low") {
+                        return TxSenderError::NonceTooLow;
                     }
                 }
                 TxSenderError::Other(value.into())

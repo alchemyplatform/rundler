@@ -150,6 +150,9 @@ where
                 .map_err(anyhow::Error::from),
             self.fee_estimator.required_bundle_fees(required_fees)
         )?;
+        if ops.is_empty() {
+            return Ok(Bundle::default());
+        }
 
         tracing::debug!("Starting bundle proposal with {} ops", ops.len());
 
@@ -177,6 +180,9 @@ where
             .collect::<Vec<_>>();
 
         tracing::debug!("Bundle proposal after fee limit had {} ops", ops.len());
+        if ops.is_empty() {
+            return Ok(Bundle::default());
+        }
 
         // (2) Limit the amount of operations for simulation
         let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
