@@ -20,19 +20,22 @@ use futures_util::StreamExt;
 use rundler_provider::{BundleHandler, EntryPoint};
 use rundler_sim::ExpectedStorage;
 use rundler_types::{
-    builder::BundlingMode, chain::ChainSpec, pool::Pool, EntityUpdate, GasFees, UserOperation,
+    builder::BundlingMode,
+    chain::ChainSpec,
+    pool::{NewHead, Pool},
+    EntityUpdate, GasFees, UserOperation,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
-    sync::{broadcast, mpsc, oneshot},
+    sync::{broadcast, mpsc, mpsc::UnboundedReceiver, oneshot},
 };
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
     bundle_proposer::BundleProposer,
     emit::{BuilderEvent, BundleTxDetails},
-    transaction_tracker::{SendResult, TrackerUpdate, TransactionTracker},
+    transaction_tracker::{TrackerUpdate, TransactionTracker, TransactionTrackerError},
 };
 
 #[async_trait]
@@ -42,14 +45,14 @@ pub(crate) trait BundleSender: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub(crate) struct Settings {
-    pub(crate) replacement_fee_percent_increase: u64,
     pub(crate) max_fee_increases: u64,
+    pub(crate) max_blocks_to_wait_for_mine: u64,
 }
 
 #[derive(Debug)]
 pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     builder_index: u64,
-    bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
+    bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
     beneficiary: Address,
     proposer: P,
@@ -77,6 +80,9 @@ pub struct SendBundleRequest {
     pub responder: oneshot::Sender<SendBundleResult>,
 }
 
+/// Response to a `SendBundleRequest` after
+/// going through a full cycle of bundling, sending,
+/// and waiting for the transaction to be mined.
 #[derive(Debug)]
 pub enum SendBundleResult {
     Success {
@@ -86,11 +92,22 @@ pub enum SendBundleResult {
     },
     NoOperationsInitially,
     NoOperationsAfterFeeIncreases {
-        initial_op_count: usize,
         attempt_number: u64,
     },
     StalledAtMaxFeeIncreases,
     Error(anyhow::Error),
+}
+
+// Internal result of attempting to send a bundle.
+enum SendBundleAttemptResult {
+    // The bundle was successfully sent
+    Success,
+    // The bundle was empty
+    NoOperations,
+    // Replacement Underpriced
+    ReplacementUnderpriced,
+    // Nonce too low
+    NonceTooLow,
 }
 
 #[async_trait]
@@ -107,139 +124,183 @@ where
     /// next one.
     #[instrument(skip_all, fields(entry_point = self.entry_point.address().to_string(), builder_index = self.builder_index))]
     async fn send_bundles_in_loop(mut self) -> anyhow::Result<()> {
-        let Ok(mut new_heads) = self.pool.subscribe_new_heads().await else {
-            error!("Failed to subscribe to new blocks");
-            bail!("failed to subscribe to new blocks");
-        };
+        // State of the sender loop
+        enum State {
+            // Building a bundle, optionally waiting for a trigger to send it
+            // (wait_for_trigger, fee_increase_count)
+            Building(bool, u64),
+            // Waiting for a bundle to be mined
+            // (wait_until_block, fee_increase_count)
+            Pending(u64, u64),
+        }
 
-        // The new_heads stream can buffer up multiple blocks, but we only want to consume the latest one.
-        // This task is used to consume the new heads and place them onto a channel that can be synchronously
-        // consumed until the latest block is reached.
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            loop {
-                match new_heads.next().await {
-                    Some(b) => {
-                        if tx.send(b).is_err() {
-                            error!("Failed to buffer new block for bundle sender");
-                            return;
-                        }
-                    }
-                    None => {
-                        error!("Block stream ended");
-                        return;
-                    }
-                }
-            }
-        });
+        // initial state
+        let mut state = State::Building(true, 0);
 
-        let mut bundling_mode = BundlingMode::Auto;
-        let mut timer = tokio::time::interval(Duration::from_millis(
-            self.chain_spec.bundle_max_send_interval_millis,
-        ));
+        // response to manual caller
+        let mut send_bundle_response = None;
+        let mut send_bundle_result = None;
+
+        // trigger for sending bundles
+        let mut sender_trigger = BundleSenderTrigger::new(
+            &self.pool,
+            self.bundle_action_receiver.take().unwrap(),
+            Duration::from_millis(self.chain_spec.bundle_max_send_interval_millis),
+        )
+        .await?;
+
         loop {
-            let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
-            let mut last_block = None;
+            match state {
+                State::Building(wait_for_trigger, fee_increase_count) => {
+                    if wait_for_trigger {
+                        send_bundle_response = sender_trigger.wait_for_trigger().await?;
 
-            // 3 triggers for loop logic:
-            // 1 - new block
-            //      - If auto mode, send next bundle
-            // 2 - timer tick
-            //      - If auto mode, send next bundle
-            // 3 - action recv
-            //      - If change mode, change and restart loop
-            //      - If send bundle and manual mode, send next bundle
-            last_block = tokio::select! {
-                b = rx.recv() => {
-                    match bundling_mode {
-                        BundlingMode::Manual => continue,
-                        BundlingMode::Auto => b
+                        // process any nonce updates, ignore result
+                        self.check_for_transaction_update().await;
                     }
-                },
-                _ = timer.tick() => {
-                    match bundling_mode {
-                        BundlingMode::Manual => continue,
-                        BundlingMode::Auto => Some(last_block.unwrap_or_default())
-                    }
-                },
-                a = self.bundle_action_receiver.recv() => {
-                    match a {
-                        Some(BundleSenderAction::ChangeMode(mode)) => {
-                            debug!("chainging bundling mode to {mode:?}");
-                            bundling_mode = mode;
-                            continue;
-                        },
-                        Some(BundleSenderAction::SendBundle(r)) => {
-                            match bundling_mode {
-                                BundlingMode::Manual => {
-                                    send_bundle_response = Some(r.responder);
-                                    Some(last_block.unwrap_or_default())
-                                },
-                                BundlingMode::Auto => {
-                                    error!("Received bundle send action while in auto mode, ignoring");
-                                    continue;
-                                }
+
+                    // send bundle
+                    debug!(
+                        "Building bundle on block {}",
+                        sender_trigger.last_block.block_number
+                    );
+                    let result = self.send_bundle(fee_increase_count).await;
+
+                    // handle result
+                    match result {
+                        Ok(SendBundleAttemptResult::Success) => {
+                            // sent the bundle
+                            info!("Bundle sent successfully");
+                            state = State::Pending(
+                                sender_trigger.last_block.block_number
+                                    + self.settings.max_blocks_to_wait_for_mine,
+                                0,
+                            );
+                        }
+                        Ok(SendBundleAttemptResult::NoOperations) => {
+                            debug!("No operations in bundle");
+
+                            if fee_increase_count > 0 {
+                                // TODO(danc): when abandoning we tend to get "stuck" where we have a pending bundle
+                                // transaction that isn't landing. We should move to a new state where we track the
+                                // pending transaction and "cancel" it if it doesn't land after a certain number of blocks.
+
+                                warn!("Abandoning bundle after fee increases {fee_increase_count}, no operations available, waiting for next trigger");
+                                BuilderMetrics::increment_bundle_txns_abandoned(
+                                    self.builder_index,
+                                    self.entry_point.address(),
+                                );
+                                self.transaction_tracker.reset().await;
+                                send_bundle_result =
+                                    Some(SendBundleResult::NoOperationsAfterFeeIncreases {
+                                        attempt_number: fee_increase_count,
+                                    })
+                            } else {
+                                debug!("No operations available, waiting for next trigger");
+                                send_bundle_result = Some(SendBundleResult::NoOperationsInitially);
                             }
-                        },
-                        None => {
-                            error!("Bundle action recv closed");
-                            bail!("Bundle action recv closed");
+
+                            state = State::Building(true, 0);
+                        }
+                        Ok(SendBundleAttemptResult::NonceTooLow) => {
+                            // reset the transaction tracker and try again
+                            self.transaction_tracker.reset().await;
+                            state = State::Building(true, 0);
+                        }
+                        Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
+                            // TODO(danc): handle replacement underpriced
+                            // move to the cancellation state
+
+                            // for now: reset the transaction tracker and try again
+                            self.transaction_tracker.reset().await;
+                            state = State::Building(true, 0);
+                        }
+                        Err(error) => {
+                            error!("Bundle send error {error:?}");
+                            BuilderMetrics::increment_bundle_txns_failed(
+                                self.builder_index,
+                                self.entry_point.address(),
+                            );
+                            self.transaction_tracker.reset().await;
+                            send_bundle_result = Some(SendBundleResult::Error(error));
+                            state = State::Building(true, 0);
                         }
                     }
                 }
-            };
+                State::Pending(until, fee_increase_count) => {
+                    sender_trigger.wait_for_block().await?;
 
-            // Consume any other blocks that may have been buffered up
-            loop {
-                match rx.try_recv() {
-                    Ok(b) => {
-                        last_block = Some(b);
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        break;
-                    }
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        error!("Block stream closed");
-                        bail!("Block stream closed");
+                    // check for transaction update
+                    if let Some(update) = self.check_for_transaction_update().await {
+                        match update {
+                            TrackerUpdate::Mined {
+                                block_number,
+                                attempt_number,
+                                tx_hash,
+                                ..
+                            } => {
+                                // mined!
+                                info!("Bundle transaction mined");
+                                send_bundle_result = Some(SendBundleResult::Success {
+                                    block_number,
+                                    attempt_number,
+                                    tx_hash,
+                                });
+                                state = State::Building(true, 0);
+                            }
+                            TrackerUpdate::LatestTxDropped { .. } => {
+                                // try again, don't wait for trigger, re-estimate fees
+                                info!("Latest transaction dropped, starting new bundle attempt");
+
+                                // force reset the transaction tracker
+                                self.transaction_tracker.reset().await;
+
+                                state = State::Building(true, 0);
+                            }
+                            TrackerUpdate::NonceUsedForOtherTx { .. } => {
+                                // try again, don't wait for trigger, re-estimate fees
+                                info!("Nonce used externally, starting new bundle attempt");
+                                state = State::Building(true, 0);
+                            }
+                        }
+                    } else if sender_trigger.last_block().block_number >= until {
+                        if fee_increase_count >= self.settings.max_fee_increases {
+                            // TODO(danc): same "stuck" issue here on abandonment
+                            // this abandon is likely to lead to "transaction underpriced" errors
+                            // Instead, move to cancellation state.
+
+                            warn!("Abandoning bundle after max fee increases {fee_increase_count}");
+                            BuilderMetrics::increment_bundle_txns_abandoned(
+                                self.builder_index,
+                                self.entry_point.address(),
+                            );
+                            self.transaction_tracker.reset().await;
+                            state = State::Building(true, 0);
+                        } else {
+                            // start replacement, don't wait for trigger
+                            info!(
+                                "Not mined after {} blocks, increasing fees, attempt: {}",
+                                self.settings.max_blocks_to_wait_for_mine,
+                                fee_increase_count + 1
+                            );
+                            BuilderMetrics::increment_bundle_txn_fee_increases(
+                                self.builder_index,
+                                self.entry_point.address(),
+                            );
+                            state = State::Building(false, fee_increase_count + 1);
+                        }
                     }
                 }
             }
 
-            // Wait for new block. Block number doesn't matter as the pool will only notify of new blocks
-            // after the pool has updated its state. The bundle will be formed using the latest pool state
-            // and can land in the next block
-            self.check_for_and_log_transaction_update().await;
-            let result = self.send_bundle_with_increasing_gas_fees().await;
-            match &result {
-                SendBundleResult::Success {
-                    block_number,
-                    attempt_number,
-                    tx_hash,
-                } =>
-                    if *attempt_number == 0 {
-                        info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
-                    } else {
-                        info!("Bundle with hash {tx_hash:?} landed in block {block_number} after increasing gas fees {attempt_number} time(s)");
+            // send result to manual caller
+            if let Some(res) = send_bundle_result.take() {
+                if let Some(r) = send_bundle_response.take() {
+                    if r.send(res).is_err() {
+                        error!("Failed to send bundle result to manual caller");
                     }
-                SendBundleResult::NoOperationsInitially => trace!("No ops to send at block {}", last_block.unwrap_or_default().block_number),
-                SendBundleResult::NoOperationsAfterFeeIncreases {
-                    initial_op_count,
-                    attempt_number,
-                } => info!("Bundle initially had {initial_op_count} operations, but after increasing gas fees {attempt_number} time(s) it was empty"),
-                SendBundleResult::StalledAtMaxFeeIncreases => warn!("Bundle failed to mine after {} fee increases", self.settings.max_fee_increases),
-                SendBundleResult::Error(error) => {
-                    BuilderMetrics::increment_bundle_txns_failed(self.builder_index, self.entry_point.address());
-                    error!("Failed to send bundle. Will retry next block: {error:#?}");
                 }
             }
-
-            if let Some(t) = send_bundle_response.take() {
-                if t.send(result).is_err() {
-                    error!("Failed to send bundle result to manual caller");
-                }
-            }
-
-            timer.reset();
         }
     }
 }
@@ -267,7 +328,7 @@ where
     ) -> Self {
         Self {
             builder_index,
-            bundle_action_receiver,
+            bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
             beneficiary,
             proposer,
@@ -280,18 +341,17 @@ where
         }
     }
 
-    async fn check_for_and_log_transaction_update(&self) {
-        let update = self.transaction_tracker.check_for_update_now().await;
+    async fn check_for_transaction_update(&mut self) -> Option<TrackerUpdate> {
+        let update = self.transaction_tracker.check_for_update().await;
         let update = match update {
-            Ok(update) => update,
+            Ok(update) => update?,
             Err(error) => {
                 error!("Failed to check for transaction updates: {error:#?}");
-                return;
+                return None;
             }
         };
-        let Some(update) = update else {
-            return;
-        };
+
+        // process update before returning
         match update {
             TrackerUpdate::Mined {
                 tx_hash,
@@ -299,6 +359,7 @@ where
                 attempt_number,
                 gas_limit,
                 gas_used,
+                nonce,
                 ..
             } => {
                 BuilderMetrics::increment_bundle_txns_success(
@@ -316,8 +377,13 @@ where
                 } else {
                     info!("Bundle with hash {tx_hash:?} landed in block {block_number} after increasing gas fees {attempt_number} time(s)");
                 }
+                self.emit(BuilderEvent::transaction_mined(
+                    self.builder_index,
+                    tx_hash,
+                    nonce.low_u64(),
+                    block_number,
+                ));
             }
-            TrackerUpdate::StillPendingAfterWait => (),
             TrackerUpdate::LatestTxDropped { nonce } => {
                 self.emit(BuilderEvent::latest_transaction_dropped(
                     self.builder_index,
@@ -338,189 +404,84 @@ where
                     self.builder_index,
                     self.entry_point.address(),
                 );
-                info!("Nonce used by external transaction")
-            }
-            TrackerUpdate::ReplacementUnderpriced => {
-                BuilderMetrics::increment_bundle_txn_replacement_underpriced(
-                    self.builder_index,
-                    self.entry_point.address(),
-                );
-                info!("Replacement transaction underpriced")
+                info!("Nonce used by external transaction");
             }
         };
+
+        Some(update)
     }
 
-    /// Constructs a bundle and sends it to the entry point as a transaction. If
-    /// the bundle fails to be mined after
-    /// `settings.max_blocks_to_wait_for_mine` blocks, increases the gas fees by
-    /// enough to send a replacement transaction, then constructs a new bundle
-    /// using the new, higher gas requirements. Continues to retry with higher
-    /// gas costs until one of the following happens:
+    /// Constructs a bundle and sends it to the entry point as a transaction.
     ///
-    /// 1. A transaction succeeds (not necessarily the most recent one)
-    /// 2. The gas fees are high enough that the bundle is empty because there
+    /// Returns empty if:
+    ///  - There are no ops available to bundle initially.
+    ///  - The gas fees are high enough that the bundle is empty because there
     ///    are no ops that meet the fee requirements.
-    /// 3. The transaction has not succeeded after `settings.max_fee_increases`
-    ///    replacements.
-    async fn send_bundle_with_increasing_gas_fees(&self) -> SendBundleResult {
-        let result = self.send_bundle_with_increasing_gas_fees_inner().await;
-        match result {
-            Ok(result) => result,
-            Err(error) => SendBundleResult::Error(error),
-        }
-    }
+    async fn send_bundle(
+        &mut self,
+        fee_increase_count: u64,
+    ) -> anyhow::Result<SendBundleAttemptResult> {
+        let (nonce, required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
 
-    /// Helper function returning `Result` to be able to use `?`.
-    async fn send_bundle_with_increasing_gas_fees_inner(&self) -> anyhow::Result<SendBundleResult> {
-        let (nonce, mut required_fees) = self.transaction_tracker.get_nonce_and_required_fees()?;
-        let mut initial_op_count: Option<usize> = None;
-        let mut is_replacement = false;
+        let Some(bundle_tx) = self
+            .get_bundle_tx(nonce, required_fees, fee_increase_count > 0)
+            .await?
+        else {
+            self.emit(BuilderEvent::formed_bundle(
+                self.builder_index,
+                None,
+                nonce.low_u64(),
+                fee_increase_count,
+                required_fees,
+            ));
+            return Ok(SendBundleAttemptResult::NoOperations);
+        };
+        let BundleTx {
+            tx,
+            expected_storage,
+            op_hashes,
+        } = bundle_tx;
 
-        for fee_increase_count in 0..=self.settings.max_fee_increases {
-            let Some(bundle_tx) = self
-                .get_bundle_tx(nonce, required_fees, is_replacement)
-                .await?
-            else {
+        BuilderMetrics::increment_bundle_txns_sent(self.builder_index, self.entry_point.address());
+
+        let send_result = self
+            .transaction_tracker
+            .send_transaction(tx.clone(), &expected_storage)
+            .await;
+
+        match send_result {
+            Ok(tx_hash) => {
                 self.emit(BuilderEvent::formed_bundle(
                     self.builder_index,
-                    None,
+                    Some(BundleTxDetails {
+                        tx_hash,
+                        tx,
+                        op_hashes: Arc::new(op_hashes),
+                    }),
                     nonce.low_u64(),
                     fee_increase_count,
                     required_fees,
                 ));
-                return Ok(match initial_op_count {
-                    Some(initial_op_count) => {
-                        BuilderMetrics::increment_bundle_txns_abandoned(
-                            self.builder_index,
-                            self.entry_point.address(),
-                        );
-                        SendBundleResult::NoOperationsAfterFeeIncreases {
-                            initial_op_count,
-                            attempt_number: fee_increase_count,
-                        }
-                    }
-                    None => SendBundleResult::NoOperationsInitially,
-                });
-            };
-            let BundleTx {
-                tx,
-                expected_storage,
-                op_hashes,
-            } = bundle_tx;
-            if initial_op_count.is_none() {
-                initial_op_count = Some(op_hashes.len());
+
+                Ok(SendBundleAttemptResult::Success)
             }
-            let current_fees = GasFees::from(&tx);
-
-            BuilderMetrics::increment_bundle_txns_sent(
-                self.builder_index,
-                self.entry_point.address(),
-            );
-
-            let send_result = self
-                .transaction_tracker
-                .send_transaction(tx.clone(), &expected_storage)
-                .await?;
-            let update = match send_result {
-                SendResult::TrackerUpdate(update) => update,
-                SendResult::TxHash(tx_hash) => {
-                    self.emit(BuilderEvent::formed_bundle(
-                        self.builder_index,
-                        Some(BundleTxDetails {
-                            tx_hash,
-                            tx,
-                            op_hashes: Arc::new(op_hashes),
-                        }),
-                        nonce.low_u64(),
-                        fee_increase_count,
-                        required_fees,
-                    ));
-                    self.transaction_tracker.wait_for_update().await?
-                }
-            };
-            match update {
-                TrackerUpdate::Mined {
-                    tx_hash,
-                    nonce,
-                    block_number,
-                    attempt_number,
-                    gas_limit,
-                    gas_used,
-                } => {
-                    self.emit(BuilderEvent::transaction_mined(
-                        self.builder_index,
-                        tx_hash,
-                        nonce.low_u64(),
-                        block_number,
-                    ));
-                    BuilderMetrics::increment_bundle_txns_success(
-                        self.builder_index,
-                        self.entry_point.address(),
-                    );
-                    BuilderMetrics::set_bundle_gas_stats(
-                        gas_limit,
-                        gas_used,
-                        self.builder_index,
-                        self.entry_point.address(),
-                    );
-                    return Ok(SendBundleResult::Success {
-                        block_number,
-                        attempt_number,
-                        tx_hash,
-                    });
-                }
-                TrackerUpdate::StillPendingAfterWait => {
-                    info!("Transaction not mined for several blocks")
-                }
-                TrackerUpdate::LatestTxDropped { nonce } => {
-                    self.emit(BuilderEvent::latest_transaction_dropped(
-                        self.builder_index,
-                        nonce.low_u64(),
-                    ));
-                    BuilderMetrics::increment_bundle_txns_dropped(
-                        self.builder_index,
-                        self.entry_point.address(),
-                    );
-                    info!("Previous transaction dropped by sender");
-                }
-                TrackerUpdate::NonceUsedForOtherTx { nonce } => {
-                    self.emit(BuilderEvent::nonce_used_for_other_transaction(
-                        self.builder_index,
-                        nonce.low_u64(),
-                    ));
-                    BuilderMetrics::increment_bundle_txns_nonce_used(
-                        self.builder_index,
-                        self.entry_point.address(),
-                    );
-                    bail!("nonce used by external transaction")
-                }
-                TrackerUpdate::ReplacementUnderpriced => {
-                    BuilderMetrics::increment_bundle_txn_replacement_underpriced(
-                        self.builder_index,
-                        self.entry_point.address(),
-                    );
-                    info!("Replacement transaction underpriced, increasing fees")
-                }
-            };
-            info!(
-                "Bundle transaction failed to mine after {fee_increase_count} fee increases (maxFeePerGas: {}, maxPriorityFeePerGas: {}).",
-                current_fees.max_fee_per_gas,
-                current_fees.max_priority_fee_per_gas,
-            );
-            BuilderMetrics::increment_bundle_txn_fee_increases(
-                self.builder_index,
-                self.entry_point.address(),
-            );
-            required_fees = Some(
-                current_fees.increase_by_percent(self.settings.replacement_fee_percent_increase),
-            );
-            is_replacement = true;
+            Err(TransactionTrackerError::NonceTooLow) => {
+                warn!("Replacement transaction underpriced");
+                Ok(SendBundleAttemptResult::NonceTooLow)
+            }
+            Err(TransactionTrackerError::ReplacementUnderpriced) => {
+                BuilderMetrics::increment_bundle_txn_replacement_underpriced(
+                    self.builder_index,
+                    self.entry_point.address(),
+                );
+                warn!("Replacement transaction underpriced");
+                Ok(SendBundleAttemptResult::ReplacementUnderpriced)
+            }
+            Err(e) => {
+                error!("Failed to send bundle with unexpected error: {e:?}");
+                Err(e.into())
+            }
         }
-        BuilderMetrics::increment_bundle_txns_abandoned(
-            self.builder_index,
-            self.entry_point.address(),
-        );
-        Ok(SendBundleResult::StalledAtMaxFeeIncreases)
     }
 
     /// Builds a bundle and returns some metadata and the transaction to send
@@ -608,6 +569,162 @@ where
 
     fn op_hash(&self, op: &UO) -> H256 {
         op.hash(self.entry_point.address(), self.chain_spec.id)
+    }
+}
+
+struct BundleSenderTrigger {
+    bundling_mode: BundlingMode,
+    block_rx: UnboundedReceiver<NewHead>,
+    bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
+    timer: tokio::time::Interval,
+    last_block: NewHead,
+}
+
+impl BundleSenderTrigger {
+    async fn new<P: Pool>(
+        pool_client: &P,
+        bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
+        timer_interval: Duration,
+    ) -> anyhow::Result<Self> {
+        let block_rx = Self::start_block_stream(pool_client).await?;
+
+        Ok(Self {
+            bundling_mode: BundlingMode::Auto,
+            block_rx,
+            bundle_action_receiver,
+            timer: tokio::time::interval(timer_interval),
+            last_block: NewHead {
+                block_hash: H256::zero(),
+                block_number: 0,
+            },
+        })
+    }
+
+    async fn start_block_stream<P: Pool>(
+        pool_client: &P,
+    ) -> anyhow::Result<UnboundedReceiver<NewHead>> {
+        let Ok(mut new_heads) = pool_client.subscribe_new_heads().await else {
+            error!("Failed to subscribe to new blocks");
+            bail!("failed to subscribe to new blocks");
+        };
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                match new_heads.next().await {
+                    Some(b) => {
+                        if tx.send(b).is_err() {
+                            error!("Failed to buffer new block for bundle sender");
+                            return;
+                        }
+                    }
+                    None => {
+                        error!("Block stream ended");
+                        return;
+                    }
+                }
+            }
+        });
+
+        Ok(rx)
+    }
+
+    async fn wait_for_trigger(
+        &mut self,
+    ) -> anyhow::Result<Option<oneshot::Sender<SendBundleResult>>> {
+        let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
+
+        loop {
+            // 3 triggers for loop logic:
+            // 1 - new block
+            //      - If auto mode, send next bundle
+            // 2 - timer tick
+            //      - If auto mode, send next bundle
+            // 3 - action recv
+            //      - If change mode, change and restart loop
+            //      - If send bundle and manual mode, send next bundle
+            tokio::select! {
+                b = self.block_rx.recv() => {
+                    let Some(b) = b else {
+                        error!("Block stream closed");
+                        bail!("Block stream closed");
+                    };
+
+                    self.last_block = b;
+
+                    match self.bundling_mode {
+                        BundlingMode::Manual => continue,
+                        BundlingMode::Auto => break,
+                    }
+                },
+                _ = self.timer.tick() => {
+                    match self.bundling_mode {
+                        BundlingMode::Manual => continue,
+                        BundlingMode::Auto => break,
+                    }
+                },
+                a = self.bundle_action_receiver.recv() => {
+                    match a {
+                        Some(BundleSenderAction::ChangeMode(mode)) => {
+                            debug!("changing bundling mode to {mode:?}");
+                            self.bundling_mode = mode;
+                            continue;
+                        },
+                        Some(BundleSenderAction::SendBundle(r)) => {
+                            match self.bundling_mode {
+                                BundlingMode::Manual => {
+                                    send_bundle_response = Some(r.responder);
+                                    break;
+                                },
+                                BundlingMode::Auto => {
+                                    error!("Received bundle send action while in auto mode, ignoring");
+                                    continue;
+                                }
+                            }
+                        },
+                        None => {
+                            error!("Bundle action recv closed");
+                            bail!("Bundle action recv closed");
+                        }
+                    }
+                }
+            };
+        }
+
+        self.consume_blocks()?;
+
+        Ok(send_bundle_response)
+    }
+
+    async fn wait_for_block(&mut self) -> anyhow::Result<NewHead> {
+        self.block_rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Block stream closed"))?;
+        self.consume_blocks()?;
+        Ok(self.last_block.clone())
+    }
+
+    fn consume_blocks(&mut self) -> anyhow::Result<()> {
+        // Consume any other blocks that may have been buffered up
+        loop {
+            match self.block_rx.try_recv() {
+                Ok(b) => {
+                    self.last_block = b;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    return Ok(());
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    error!("Block stream closed");
+                    bail!("Block stream closed");
+                }
+            }
+        }
+    }
+
+    fn last_block(&self) -> &NewHead {
+        &self.last_block
     }
 }
 

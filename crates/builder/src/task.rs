@@ -415,8 +415,6 @@ where
         )?;
 
         let tracker_settings = transaction_tracker::Settings {
-            poll_interval: self.args.eth_poll_interval,
-            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
         };
 
@@ -429,8 +427,8 @@ where
         .await?;
 
         let builder_settings = bundle_sender::Settings {
-            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
             max_fee_increases: self.args.max_fee_increases,
+            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
         let proposer = BundleProposerImpl::new(
