@@ -2,8 +2,8 @@
 # Launcher script for the rundler.
 
 export TAG=latest
-export ENTRY_POINT_V0_6_ENABLED=false
-export ENTRY_POINT_V0_7_ENABLED=false
+export DISABLE_ENTRY_POINT_V0_6=false
+export DISABLE_ENTRY_POINT_V0_7=false
 cd `dirname \`realpath $0\``
 case $1 in
 
@@ -14,10 +14,10 @@ case $1 in
  start)
 	case $2 in
 		v0_6)
-		export ENTRY_POINT_V0_6_ENABLED=true
+		export DISABLE_ENTRY_POINT_V0_7=true
 		;;
 		v0_7)
-		export ENTRY_POINT_V0_7_ENABLED=true
+		export DISABLE_ENTRY_POINT_V0_6=true
 		;;
 		*)
     cat <<EOF

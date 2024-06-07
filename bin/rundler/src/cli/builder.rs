@@ -228,7 +228,7 @@ impl BuilderArgs {
         let mut entry_points = vec![];
         let mut num_builders = 0;
 
-        if common.entry_point_v0_6_enabled {
+        if !common.disable_entry_point_v0_6 {
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_6,
                 version: EntryPointVersion::V0_6,
@@ -239,7 +239,7 @@ impl BuilderArgs {
             });
             num_builders += common.num_builders_v0_6;
         }
-        if common.entry_point_v0_7_enabled {
+        if !common.disable_entry_point_v0_7 {
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_7,
                 version: EntryPointVersion::V0_7,

@@ -65,12 +65,12 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
   - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
-- `--entry_point_v0_6_enabled`: Enable entry point v0.6 support. (default: `true`).
-  - env: *ENTRY_POINT_V0_6_ENABLED*
+- `--disable_entry_point_v0_6`: Disable entry point v0.6 support. (default: `false`).
+  - env: *DISABLE_ENTRY_POINT_V0_6*
 - `--num_builders_v0_6`: The number of bundle builders to run on entry point v0.6 (default: `1`)
   - env: *NUM_BUILDERS_V0_6*
-- `--entry_point_v0_7_enabled`: Enable entry point v0.7 support. (default: `true`).
-  - env: *ENTRY_POINT_V0_7_ENABLED*
+- `--disable_entry_point_v0_7`: Disable entry point v0.7 support. (default: `false`).
+  - env: *DISABLE_ENTRY_POINT_V0_7*
 - `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
   - env: *NUM_BUILDERS_V0_7*
 

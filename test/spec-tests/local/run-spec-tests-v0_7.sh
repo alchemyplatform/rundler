@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 cargo build
 
 ./launcher.sh stop # kill already running processes if any
-export ENTRY_POINT_V0_7_ENABLED=true
+export DISABLE_ENTRY_POINT_V0_6=true
 ./launcher.sh start v0_7
 
 echo "Running v0.7 spec tests"

@@ -111,8 +111,8 @@ impl RpcArgs {
             estimation_settings,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
-            entry_point_v0_6_enabled: common.entry_point_v0_6_enabled,
-            entry_point_v0_7_enabled: common.entry_point_v0_7_enabled,
+            entry_point_v0_6_enabled: !common.disable_entry_point_v0_6,
+            entry_point_v0_7_enabled: !common.disable_entry_point_v0_7,
         })
     }
 }

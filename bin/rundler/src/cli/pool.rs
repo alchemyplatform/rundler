@@ -206,7 +206,7 @@ impl PoolArgs {
 
         let mut pool_configs = vec![];
 
-        if common.entry_point_v0_6_enabled {
+        if !common.disable_entry_point_v0_6 {
             pool_configs.push(PoolConfig {
                 entry_point: chain_spec.entry_point_address_v0_6,
                 entry_point_version: EntryPointVersion::V0_6,
@@ -216,7 +216,7 @@ impl PoolArgs {
                 ..pool_config_base.clone()
             });
         }
-        if common.entry_point_v0_7_enabled {
+        if !common.disable_entry_point_v0_7 {
             pool_configs.push(PoolConfig {
                 entry_point: chain_spec.entry_point_address_v0_7,
                 entry_point_version: EntryPointVersion::V0_7,
