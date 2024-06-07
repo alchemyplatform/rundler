@@ -52,8 +52,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *PRIORITY_FEE_MODE_KIND*
 - `--priority_fee_mode_value`: Priority fee mode value. (default: `0`).
   - env: *PRIORITY_FEE_MODE_VALUE*
-- `--fee_accept_percent`: Percentage of the current network fees a user operation must have in order to be accepted into the mempool. (default: `100`).
-  - env: *FEE_ACCEPT_PERCENT*
+- `--base_fee_accept_percent`: Percentage of the current network fees a user operation must have in order to be accepted into the mempool. (default: `100`).
+  - env: *BASE_FEE_ACCEPT_PERCENT*
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
   - (*Only required if using other AWS features*)
