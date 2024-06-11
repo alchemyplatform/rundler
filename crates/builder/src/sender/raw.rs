@@ -18,13 +18,16 @@ use async_trait::async_trait;
 use ethers::{
     middleware::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, PendingTransaction, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, TransactionReceipt, H256},
+    types::{transaction::eip2718::TypedTransaction, Address, TransactionReceipt, H256, U256},
 };
 use ethers_signers::Signer;
 use rundler_sim::ExpectedStorage;
+use rundler_types::GasFees;
 
-use super::Result;
-use crate::sender::{fill_and_sign, SentTxInfo, TransactionSender, TxStatus};
+use super::{CancelTxInfo, Result};
+use crate::sender::{
+    create_hard_cancel_tx, fill_and_sign, SentTxInfo, TransactionSender, TxStatus,
+};
 
 #[derive(Debug)]
 pub(crate) struct RawTransactionSender<C, S>
@@ -57,6 +60,29 @@ where
             .request("eth_sendRawTransaction", (raw_tx,))
             .await?;
         Ok(SentTxInfo { nonce, tx_hash })
+    }
+
+    async fn cancel_transaction(
+        &self,
+        _tx_hash: H256,
+        nonce: U256,
+        to: Address,
+        gas_fees: GasFees,
+    ) -> Result<CancelTxInfo> {
+        let tx = create_hard_cancel_tx(self.provider.address(), to, nonce, gas_fees);
+
+        let (raw_tx, _) = fill_and_sign(&self.provider, tx).await?;
+
+        let tx_hash = self
+            .provider
+            .provider()
+            .request("eth_sendRawTransaction", (raw_tx,))
+            .await?;
+
+        Ok(CancelTxInfo {
+            tx_hash,
+            soft_cancelled: false,
+        })
     }
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {

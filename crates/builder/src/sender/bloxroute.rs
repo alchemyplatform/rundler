@@ -19,6 +19,7 @@ use ethers::{
     providers::{JsonRpcClient, Middleware, Provider},
     types::{
         transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, TxHash, H256,
+        U256,
     },
     utils::hex,
 };
@@ -28,12 +29,16 @@ use jsonrpsee::{
     http_client::{transport::HttpBackend, HeaderMap, HeaderValue, HttpClient, HttpClientBuilder},
 };
 use rundler_sim::ExpectedStorage;
+use rundler_types::GasFees;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tokio::time;
 use tonic::async_trait;
 
-use super::{fill_and_sign, Result, SentTxInfo, TransactionSender, TxStatus};
+use super::{
+    create_hard_cancel_tx, fill_and_sign, CancelTxInfo, Result, SentTxInfo, TransactionSender,
+    TxStatus,
+};
 
 pub(crate) struct PolygonBloxrouteTransactionSender<C, S>
 where
@@ -60,6 +65,29 @@ where
         let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
         let tx_hash = self.client.send_transaction(raw_tx).await?;
         Ok(SentTxInfo { nonce, tx_hash })
+    }
+
+    async fn cancel_transaction(
+        &self,
+        _tx_hash: H256,
+        nonce: U256,
+        to: Address,
+        gas_fees: GasFees,
+    ) -> Result<CancelTxInfo> {
+        let tx = create_hard_cancel_tx(self.provider.address(), to, nonce, gas_fees);
+
+        let (raw_tx, _) = fill_and_sign(&self.provider, tx).await?;
+
+        let tx_hash = self
+            .provider
+            .provider()
+            .request("eth_sendRawTransaction", (raw_tx,))
+            .await?;
+
+        Ok(CancelTxInfo {
+            tx_hash,
+            soft_cancelled: false,
+        })
     }
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
