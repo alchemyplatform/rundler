@@ -186,9 +186,6 @@ impl LocalBuilderServerRunner {
                                     SendBundleResult::NoOperationsInitially => {
                                         Err(anyhow::anyhow!("no ops to send").into())
                                     },
-                                    SendBundleResult::NoOperationsAfterFeeIncreases { .. } => {
-                                        Err(anyhow::anyhow!("bundle initially had operations, but after increasing gas fees it was empty").into())
-                                    },
                                     SendBundleResult::StalledAtMaxFeeIncreases => Err(anyhow::anyhow!("stalled at max fee increases").into()),
                                     SendBundleResult::Error(e) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),
                                 }
