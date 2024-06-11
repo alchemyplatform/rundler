@@ -26,7 +26,8 @@ use ethers::{
     prelude::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, Provider, ProviderError},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, H256, U256,
+        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest,
+        TransactionReceipt, H256, U256,
     },
 };
 use ethers_signers::{LocalWallet, Signer};
@@ -35,10 +36,20 @@ pub(crate) use flashbots::FlashbotsTransactionSender;
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
 use rundler_sim::ExpectedStorage;
+use rundler_types::GasFees;
+
 #[derive(Debug)]
 pub(crate) struct SentTxInfo {
     pub(crate) nonce: U256,
     pub(crate) tx_hash: H256,
+}
+
+#[derive(Debug)]
+pub(crate) struct CancelTxInfo {
+    pub(crate) tx_hash: H256,
+    // True if the transaction was soft-cancelled. Soft-cancellation is when the RPC endpoint
+    // accepts the cancel without an onchain transaction.
+    pub(crate) soft_cancelled: bool,
 }
 
 #[derive(Debug)]
@@ -57,6 +68,9 @@ pub(crate) enum TxSenderError {
     /// Nonce too low
     #[error("nonce too low")]
     NonceTooLow,
+    /// Soft cancellation failed
+    #[error("soft cancel failed")]
+    SoftCancelFailed,
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -73,6 +87,14 @@ pub(crate) trait TransactionSender: Send + Sync + 'static {
         tx: TypedTransaction,
         expected_storage: &ExpectedStorage,
     ) -> Result<SentTxInfo>;
+
+    async fn cancel_transaction(
+        &self,
+        tx_hash: H256,
+        nonce: U256,
+        to: Address,
+        gas_fees: GasFees,
+    ) -> Result<CancelTxInfo>;
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus>;
 
@@ -211,6 +233,22 @@ where
         .await
         .context("should sign transaction before sending")?;
     Ok((tx.rlp_signed(&signature), nonce))
+}
+
+fn create_hard_cancel_tx(
+    from: Address,
+    to: Address,
+    nonce: U256,
+    gas_fees: GasFees,
+) -> TypedTransaction {
+    Eip1559TransactionRequest::new()
+        .from(from)
+        .to(to)
+        .nonce(nonce)
+        .max_fee_per_gas(gas_fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+        .data(Bytes::new())
+        .into()
 }
 
 impl From<ProviderError> for TxSenderError {

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::types::{transaction::eip2718::TypedTransaction, H256, U256};
+use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use rundler_provider::Provider;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
@@ -46,6 +46,16 @@ pub(crate) trait TransactionTracker: Send + Sync + 'static {
         tx: TypedTransaction,
         expected_stroage: &ExpectedStorage,
     ) -> TransactionTrackerResult<H256>;
+
+    /// Cancel the latest transaction in the tracker.
+    ///
+    /// Returns: An option containing the hash of the transaction that was used to cancel. If the option
+    /// is empty, then either no transaction was cancelled or the cancellation was a "soft-cancel."
+    async fn cancel_transaction(
+        &mut self,
+        to: Address,
+        estimated_fees: GasFees,
+    ) -> TransactionTrackerResult<Option<H256>>;
 
     /// Checks:
     /// 1. One of our transactions mines (not necessarily the one just sent).
@@ -260,6 +270,54 @@ where
         Ok(sent_tx.tx_hash)
     }
 
+    async fn cancel_transaction(
+        &mut self,
+        to: Address,
+        estimated_fees: GasFees,
+    ) -> TransactionTrackerResult<Option<H256>> {
+        let (tx_hash, gas_fees) = match self.transactions.last() {
+            Some(tx) => {
+                let increased_fees = tx
+                    .gas_fees
+                    .increase_by_percent(self.settings.replacement_fee_percent_increase);
+                let gas_fees = GasFees {
+                    max_fee_per_gas: increased_fees
+                        .max_fee_per_gas
+                        .max(estimated_fees.max_fee_per_gas),
+                    max_priority_fee_per_gas: increased_fees
+                        .max_priority_fee_per_gas
+                        .max(estimated_fees.max_priority_fee_per_gas),
+                };
+                (tx.tx_hash, gas_fees)
+            }
+            None => (H256::zero(), estimated_fees),
+        };
+
+        let cancel_info = self
+            .sender
+            .cancel_transaction(tx_hash, self.nonce, to, gas_fees)
+            .await?;
+
+        if cancel_info.soft_cancelled {
+            // If the transaction was soft-cancelled. Reset internal state.
+            self.reset().await;
+            return Ok(None);
+        }
+
+        info!("Sent cancellation tx {:?}", cancel_info.tx_hash);
+
+        self.transactions.push(PendingTransaction {
+            tx_hash: cancel_info.tx_hash,
+            gas_fees,
+            attempt_number: self.attempt_count,
+        });
+
+        self.has_dropped = false;
+        self.attempt_count += 1;
+        self.update_metrics();
+        Ok(Some(cancel_info.tx_hash))
+    }
+
     async fn check_for_update(&mut self) -> TransactionTrackerResult<Option<TrackerUpdate>> {
         let external_nonce = self.get_external_nonce().await?;
         if self.nonce < external_nonce {
@@ -344,6 +402,9 @@ impl From<TxSenderError> for TransactionTrackerError {
             TxSenderError::NonceTooLow => TransactionTrackerError::NonceTooLow,
             TxSenderError::ReplacementUnderpriced => {
                 TransactionTrackerError::ReplacementUnderpriced
+            }
+            TxSenderError::SoftCancelFailed => {
+                TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }
             TxSenderError::Other(e) => TransactionTrackerError::Other(e),
         }
