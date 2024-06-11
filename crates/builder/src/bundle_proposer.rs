@@ -96,11 +96,21 @@ impl<UO: UserOperation> Bundle<UO> {
 pub(crate) trait BundleProposer: Send + Sync + 'static {
     type UO: UserOperation;
 
+    /// Constructs the next bundle
+    ///
+    /// If `min_fees` is `Some`, the proposer will ensure the bundle has
+    /// at least `min_fees`.
     async fn make_bundle(
         &self,
-        required_fees: Option<GasFees>,
+        min_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> anyhow::Result<Bundle<Self::UO>>;
+
+    /// Gets the current gas fees
+    ///
+    /// If `min_fees` is `Some`, the proposer will ensure the gas fees returned are at least `min_fees`.
+    async fn estimate_gas_fees(&self, min_fees: Option<GasFees>)
+        -> anyhow::Result<(GasFees, U256)>;
 }
 
 #[derive(Debug)]
@@ -138,6 +148,13 @@ where
 {
     type UO = UO;
 
+    async fn estimate_gas_fees(
+        &self,
+        required_fees: Option<GasFees>,
+    ) -> anyhow::Result<(GasFees, U256)> {
+        self.fee_estimator.required_bundle_fees(required_fees).await
+    }
+
     async fn make_bundle(
         &self,
         required_fees: Option<GasFees>,
@@ -148,7 +165,7 @@ where
             self.provider
                 .get_latest_block_hash_and_number()
                 .map_err(anyhow::Error::from),
-            self.fee_estimator.required_bundle_fees(required_fees)
+            self.estimate_gas_fees(required_fees)
         )?;
         if ops.is_empty() {
             return Ok(Bundle::default());
