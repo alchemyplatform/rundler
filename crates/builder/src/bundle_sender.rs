@@ -132,6 +132,12 @@ where
             // Waiting for a bundle to be mined
             // (wait_until_block, fee_increase_count)
             Pending(u64, u64),
+            // Cancelling the last transaction
+            // (fee_increase_count)
+            Cancelling(u64),
+            // Waiting for a cancellation transaction to be mined
+            // (wait_until_block, fee_increase_count)
+            CancelPending(u64, u64),
         }
 
         // initial state
@@ -181,39 +187,40 @@ where
                             debug!("No operations in bundle");
 
                             if fee_increase_count > 0 {
-                                // TODO(danc): when abandoning we tend to get "stuck" where we have a pending bundle
-                                // transaction that isn't landing. We should move to a new state where we track the
-                                // pending transaction and "cancel" it if it doesn't land after a certain number of blocks.
-
-                                warn!("Abandoning bundle after fee increases {fee_increase_count}, no operations available, waiting for next trigger");
+                                warn!("Abandoning bundle after fee increases {fee_increase_count}, no operations available");
                                 BuilderMetrics::increment_bundle_txns_abandoned(
                                     self.builder_index,
                                     self.entry_point.address(),
                                 );
-                                self.transaction_tracker.reset().await;
                                 send_bundle_result =
                                     Some(SendBundleResult::NoOperationsAfterFeeIncreases {
                                         attempt_number: fee_increase_count,
-                                    })
+                                    });
+
+                                // abandon the bundle by resetting the tracker and starting a new bundle process
+                                // If the node we are using still has the transaction in the mempool, its
+                                // possible we will get a `ReplacementUnderpriced` on the next iteration
+                                // and will start a cancellation.
+                                self.transaction_tracker.reset().await;
+                                state = State::Building(true, 0);
                             } else {
                                 debug!("No operations available, waiting for next trigger");
                                 send_bundle_result = Some(SendBundleResult::NoOperationsInitially);
+                                state = State::Building(true, 0);
                             }
-
-                            state = State::Building(true, 0);
                         }
                         Ok(SendBundleAttemptResult::NonceTooLow) => {
                             // reset the transaction tracker and try again
+                            info!("Nonce too low, starting new bundle attempt");
                             self.transaction_tracker.reset().await;
                             state = State::Building(true, 0);
                         }
                         Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
-                            // TODO(danc): handle replacement underpriced
-                            // move to the cancellation state
-
-                            // for now: reset the transaction tracker and try again
+                            info!(
+                                "Replacement transaction underpriced, entering cancellation loop"
+                            );
                             self.transaction_tracker.reset().await;
-                            state = State::Building(true, 0);
+                            state = State::Cancelling(0);
                         }
                         Err(error) => {
                             error!("Bundle send error {error:?}");
@@ -236,11 +243,26 @@ where
                             TrackerUpdate::Mined {
                                 block_number,
                                 attempt_number,
+                                gas_limit,
+                                gas_used,
                                 tx_hash,
+                                nonce,
                                 ..
                             } => {
                                 // mined!
                                 info!("Bundle transaction mined");
+                                BuilderMetrics::process_bundle_txn_success(
+                                    self.builder_index,
+                                    self.entry_point.address(),
+                                    gas_limit,
+                                    gas_used,
+                                );
+                                self.emit(BuilderEvent::transaction_mined(
+                                    self.builder_index,
+                                    tx_hash,
+                                    nonce.low_u64(),
+                                    block_number,
+                                ));
                                 send_bundle_result = Some(SendBundleResult::Success {
                                     block_number,
                                     attempt_number,
@@ -248,46 +270,156 @@ where
                                 });
                                 state = State::Building(true, 0);
                             }
-                            TrackerUpdate::LatestTxDropped { .. } => {
+                            TrackerUpdate::LatestTxDropped { nonce } => {
                                 // try again, don't wait for trigger, re-estimate fees
                                 info!("Latest transaction dropped, starting new bundle attempt");
+                                self.emit(BuilderEvent::latest_transaction_dropped(
+                                    self.builder_index,
+                                    nonce.low_u64(),
+                                ));
+                                BuilderMetrics::increment_bundle_txns_dropped(
+                                    self.builder_index,
+                                    self.entry_point.address(),
+                                );
 
                                 // force reset the transaction tracker
                                 self.transaction_tracker.reset().await;
-
                                 state = State::Building(true, 0);
                             }
-                            TrackerUpdate::NonceUsedForOtherTx { .. } => {
+                            TrackerUpdate::NonceUsedForOtherTx { nonce } => {
                                 // try again, don't wait for trigger, re-estimate fees
                                 info!("Nonce used externally, starting new bundle attempt");
+                                self.emit(BuilderEvent::nonce_used_for_other_transaction(
+                                    self.builder_index,
+                                    nonce.low_u64(),
+                                ));
+                                BuilderMetrics::increment_bundle_txns_nonce_used(
+                                    self.builder_index,
+                                    self.entry_point.address(),
+                                );
                                 state = State::Building(true, 0);
                             }
                         }
                     } else if sender_trigger.last_block().block_number >= until {
-                        if fee_increase_count >= self.settings.max_fee_increases {
-                            // TODO(danc): same "stuck" issue here on abandonment
-                            // this abandon is likely to lead to "transaction underpriced" errors
-                            // Instead, move to cancellation state.
+                        // start replacement, don't wait for trigger. Continue
+                        // to attempt until there are no longer any UOs priced high enough
+                        // to bundle.
+                        info!(
+                            "Not mined after {} blocks, increasing fees, attempt: {}",
+                            self.settings.max_blocks_to_wait_for_mine,
+                            fee_increase_count + 1
+                        );
+                        BuilderMetrics::increment_bundle_txn_fee_increases(
+                            self.builder_index,
+                            self.entry_point.address(),
+                        );
+                        state = State::Building(false, fee_increase_count + 1);
+                    }
+                }
+                State::Cancelling(fee_increase_count) => {
+                    // cancel the transaction
+                    info!("Cancelling last transaction");
 
-                            warn!("Abandoning bundle after max fee increases {fee_increase_count}");
-                            BuilderMetrics::increment_bundle_txns_abandoned(
+                    let (estimated_fees, _) = self
+                        .proposer
+                        .estimate_gas_fees(None)
+                        .await
+                        .unwrap_or_default();
+
+                    let cancel_res = self
+                        .transaction_tracker
+                        .cancel_transaction(self.entry_point.address(), estimated_fees)
+                        .await;
+
+                    match cancel_res {
+                        Ok(Some(_)) => {
+                            info!("Cancellation transaction sent, waiting for confirmation");
+                            BuilderMetrics::increment_cancellation_txns_sent(
                                 self.builder_index,
                                 self.entry_point.address(),
                             );
+
+                            state = State::CancelPending(
+                                sender_trigger.last_block.block_number
+                                    + self.settings.max_blocks_to_wait_for_mine,
+                                fee_increase_count,
+                            );
+                        }
+                        Ok(None) => {
+                            info!("Soft cancellation or no transaction to cancel, starting new bundle attempt");
+                            BuilderMetrics::increment_soft_cancellations(
+                                self.builder_index,
+                                self.entry_point.address(),
+                            );
+
+                            state = State::Building(true, 0);
+                        }
+                        Err(TransactionTrackerError::ReplacementUnderpriced) => {
+                            info!("Replacement transaction underpriced during cancellation, trying again");
+                            state = State::Cancelling(fee_increase_count + 1);
+                        }
+                        Err(TransactionTrackerError::NonceTooLow) => {
+                            // reset the transaction tracker and try again
+                            info!("Nonce too low during cancellation, starting new bundle attempt");
+                            self.transaction_tracker.reset().await;
+                            state = State::Building(true, 0);
+                        }
+                        Err(e) => {
+                            error!("Failed to cancel transaction, moving back to building state: {e:#?}");
+                            BuilderMetrics::increment_cancellation_txns_failed(
+                                self.builder_index,
+                                self.entry_point.address(),
+                            );
+                            state = State::Building(true, 0);
+                        }
+                    }
+                }
+                State::CancelPending(until, fee_increase_count) => {
+                    sender_trigger.wait_for_block().await?;
+
+                    // check for transaction update
+                    if let Some(update) = self.check_for_transaction_update().await {
+                        match update {
+                            TrackerUpdate::Mined { .. } => {
+                                // mined
+                                info!("Cancellation transaction mined");
+                                BuilderMetrics::increment_cancellation_txns_mined(
+                                    self.builder_index,
+                                    self.entry_point.address(),
+                                );
+                            }
+                            TrackerUpdate::LatestTxDropped { .. } => {
+                                // If a cancellation gets dropped, move to bundling state as there is no
+                                // longer a pending transaction
+                                info!(
+                                    "Cancellation transaction dropped, starting new bundle attempt"
+                                );
+                                // force reset the transaction tracker
+                                self.transaction_tracker.reset().await;
+                            }
+                            TrackerUpdate::NonceUsedForOtherTx { .. } => {
+                                // If a nonce is used externally, move to bundling state as there is no longer
+                                // a pending transaction
+                                info!("Nonce used externally while cancelling, starting new bundle attempt");
+                            }
+                        }
+
+                        state = State::Building(true, 0);
+                    } else if sender_trigger.last_block().block_number >= until {
+                        if fee_increase_count >= self.settings.max_fee_increases {
+                            // abandon the cancellation
+                            warn!("Abandoning cancellation after max fee increases {fee_increase_count}, starting new bundle attempt");
+                            // force reset the transaction tracker
                             self.transaction_tracker.reset().await;
                             state = State::Building(true, 0);
                         } else {
                             // start replacement, don't wait for trigger
                             info!(
-                                "Not mined after {} blocks, increasing fees, attempt: {}",
+                                "Cancellation not mined after {} blocks, increasing fees, attempt: {}",
                                 self.settings.max_blocks_to_wait_for_mine,
                                 fee_increase_count + 1
                             );
-                            BuilderMetrics::increment_bundle_txn_fee_increases(
-                                self.builder_index,
-                                self.entry_point.address(),
-                            );
-                            state = State::Building(false, fee_increase_count + 1);
+                            state = State::Cancelling(fee_increase_count + 1);
                         }
                     }
                 }
@@ -351,60 +483,25 @@ where
             }
         };
 
-        // process update before returning
         match update {
             TrackerUpdate::Mined {
                 tx_hash,
                 block_number,
                 attempt_number,
-                gas_limit,
-                gas_used,
                 nonce,
                 ..
             } => {
-                BuilderMetrics::increment_bundle_txns_success(
-                    self.builder_index,
-                    self.entry_point.address(),
-                );
-                BuilderMetrics::set_bundle_gas_stats(
-                    gas_limit,
-                    gas_used,
-                    self.builder_index,
-                    self.entry_point.address(),
-                );
                 if attempt_number == 0 {
-                    info!("Bundle with hash {tx_hash:?} landed in block {block_number}");
+                    info!("Transaction with hash {tx_hash:?}, nonce {nonce:?}, landed in block {block_number}");
                 } else {
-                    info!("Bundle with hash {tx_hash:?} landed in block {block_number} after increasing gas fees {attempt_number} time(s)");
+                    info!("Transaction with hash {tx_hash:?}, nonce {nonce:?}, landed in block {block_number} after increasing gas fees {attempt_number} time(s)");
                 }
-                self.emit(BuilderEvent::transaction_mined(
-                    self.builder_index,
-                    tx_hash,
-                    nonce.low_u64(),
-                    block_number,
-                ));
             }
             TrackerUpdate::LatestTxDropped { nonce } => {
-                self.emit(BuilderEvent::latest_transaction_dropped(
-                    self.builder_index,
-                    nonce.low_u64(),
-                ));
-                BuilderMetrics::increment_bundle_txns_dropped(
-                    self.builder_index,
-                    self.entry_point.address(),
-                );
-                info!("Previous transaction dropped by sender");
+                info!("Previous transaction dropped by sender. Nonce: {nonce:?}");
             }
             TrackerUpdate::NonceUsedForOtherTx { nonce } => {
-                self.emit(BuilderEvent::nonce_used_for_other_transaction(
-                    self.builder_index,
-                    nonce.low_u64(),
-                ));
-                BuilderMetrics::increment_bundle_txns_nonce_used(
-                    self.builder_index,
-                    self.entry_point.address(),
-                );
-                info!("Nonce used by external transaction");
+                info!("Nonce used by external transaction. Nonce: {nonce:?}");
             }
         };
 
@@ -697,7 +794,8 @@ impl BundleSenderTrigger {
     }
 
     async fn wait_for_block(&mut self) -> anyhow::Result<NewHead> {
-        self.block_rx
+        self.last_block = self
+            .block_rx
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("Block stream closed"))?;
@@ -736,8 +834,20 @@ impl BuilderMetrics {
             .increment(1);
     }
 
-    fn increment_bundle_txns_success(builder_index: u64, entry_point: Address) {
+    fn process_bundle_txn_success(
+        builder_index: u64,
+        entry_point: Address,
+        gas_limit: Option<U256>,
+        gas_used: Option<U256>,
+    ) {
         metrics::counter!("builder_bundle_txns_success", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
+
+        if let Some(limit) = gas_limit {
+            metrics::counter!("builder_bundle_gas_limit", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(limit.as_u64());
+        }
+        if let Some(used) = gas_used {
+            metrics::counter!("builder_bundle_gas_used", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(used.as_u64());
+        }
     }
 
     fn increment_bundle_txns_dropped(builder_index: u64, entry_point: Address) {
@@ -766,17 +876,19 @@ impl BuilderMetrics {
         metrics::counter!("builder_bundle_replacement_underpriced", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 
-    fn set_bundle_gas_stats(
-        gas_limit: Option<U256>,
-        gas_used: Option<U256>,
-        builder_index: u64,
-        entry_point: Address,
-    ) {
-        if let Some(limit) = gas_limit {
-            metrics::counter!("builder_bundle_gas_limit", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(limit.as_u64());
-        }
-        if let Some(used) = gas_used {
-            metrics::counter!("builder_bundle_gas_used", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(used.as_u64());
-        }
+    fn increment_cancellation_txns_sent(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_cancellation_txns_sent", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
+    }
+
+    fn increment_cancellation_txns_mined(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_cancellation_txns_mined", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
+    }
+
+    fn increment_soft_cancellations(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_soft_cancellations", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
+    }
+
+    fn increment_cancellation_txns_failed(builder_index: u64, entry_point: Address) {
+        metrics::counter!("builder_cancellation_txns_failed", "entry_point" => entry_point.to_string(), "builder_index" => builder_index.to_string()).increment(1);
     }
 }

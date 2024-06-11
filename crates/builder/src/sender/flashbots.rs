@@ -26,8 +26,7 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::{interval, JsonRpcClient, Middleware, Provider},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, TxHash, H256,
-        U256, U64,
+        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, H256, U256, U64,
     },
     utils,
 };
@@ -37,8 +36,9 @@ use futures_util::{Stream, StreamExt, TryFutureExt};
 use pin_project::pin_project;
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
-    Client,
+    Client, Response,
 };
+use rundler_types::GasFees;
 use serde::{de, Deserialize, Serialize};
 use serde_json::{json, Value};
 use tonic::async_trait;
@@ -46,6 +46,7 @@ use tonic::async_trait;
 use super::{
     fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
 };
+use crate::sender::CancelTxInfo;
 
 #[derive(Debug)]
 pub(crate) struct FlashbotsTransactionSender<C, S, FS> {
@@ -73,6 +74,28 @@ where
             .await?;
 
         Ok(SentTxInfo { nonce, tx_hash })
+    }
+
+    async fn cancel_transaction(
+        &self,
+        tx_hash: H256,
+        _nonce: U256,
+        _to: Address,
+        _gas_fees: GasFees,
+    ) -> Result<CancelTxInfo> {
+        let success = self
+            .flashbots_client
+            .cancel_private_transaction(tx_hash)
+            .await?;
+
+        if !success {
+            return Err(TxSenderError::SoftCancelFailed);
+        }
+
+        Ok(CancelTxInfo {
+            tx_hash: H256::zero(),
+            soft_cancelled: true,
+        })
     }
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
@@ -181,11 +204,29 @@ struct Refund {
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct FlashbotsPrivateTransaction {
+struct FlashbotsSendPrivateTransactionRequest {
     tx: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_block_number: Option<U256>,
     preferences: Preferences,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FlashbotsSendPrivateTransactionResponse {
+    result: H256,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FlashbotsCancelPrivateTransactionRequest {
+    tx_hash: H256,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FlashbotsCancelPrivateTransactionResponse {
+    result: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,7 +318,7 @@ where
             "jsonrpc": "2.0",
             "method": "eth_sendPrivateTransaction",
             "params": [
-                FlashbotsPrivateTransaction {
+                FlashbotsSendPrivateTransactionRequest {
                     tx: raw_tx,
                     max_block_number: None,
                     preferences,
@@ -285,6 +326,37 @@ where
             "id": 1
         });
 
+        let response = self.sign_send_request(body).await?;
+
+        let parsed_response = response
+            .json::<FlashbotsSendPrivateTransactionResponse>()
+            .await
+            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
+
+        Ok(parsed_response.result)
+    }
+
+    async fn cancel_private_transaction(&self, tx_hash: H256) -> anyhow::Result<bool> {
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "eth_cancelPrivateTransaction",
+            "params": [
+                FlashbotsCancelPrivateTransactionRequest { tx_hash }
+            ],
+            "id": 1
+        });
+
+        let response = self.sign_send_request(body).await?;
+
+        let parsed_response = response
+            .json::<FlashbotsCancelPrivateTransactionResponse>()
+            .await
+            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
+
+        Ok(parsed_response.result)
+    }
+
+    async fn sign_send_request(&self, body: Value) -> anyhow::Result<Response> {
         let signature = self
             .signer
             .sign_message(format!(
@@ -302,27 +374,14 @@ where
         headers.insert("x-flashbots-signature", header_val);
 
         // Send the request
-        let response = self
-            .http_client
+        self.http_client
             .post(&self.relay_url)
             .headers(headers)
             .body(body.to_string())
             .send()
             .await
-            .map_err(|e| anyhow!("failed to send transaction to Flashbots: {:?}", e))?;
-
-        let parsed_response = response
-            .json::<FlashbotsResponse>()
-            .await
-            .map_err(|e| anyhow!("failed to deserialize Flashbots response: {:?}", e))?;
-
-        Ok(parsed_response.result)
+            .map_err(|e| anyhow!("failed to send request to Flashbots: {:?}", e))
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct FlashbotsResponse {
-    result: TxHash,
 }
 
 type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;
