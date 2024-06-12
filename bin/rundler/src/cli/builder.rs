@@ -17,8 +17,8 @@ use anyhow::Context;
 use clap::Args;
 use rundler_builder::{
     self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs,
-    EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder, TransactionSenderArgs,
-    TransactionSenderKind,
+    EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder, RawSenderArgs,
+    TransactionSenderArgs, TransactionSenderKind,
 };
 use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
@@ -115,13 +115,47 @@ pub struct BuilderArgs {
     /// If present, the url of the ETH provider that will be used to send
     /// transactions. Defaults to the value of `node_http`.
     ///
-    /// Only used when BUILDER_SENDER is "raw" or "conditional"
+    /// Only used when BUILDER_SENDER is "raw"
     #[arg(
         long = "builder.submit_url",
         name = "builder.submit_url",
         env = "BUILDER_SUBMIT_URL"
     )]
     pub submit_url: Option<String>,
+
+    /// If present, the url of the ETH provider that will be used to check
+    /// transaction status. Else will use the node http for status.
+    ///
+    /// Only used when BUILDER_SENDER is "raw"
+    #[arg(
+        long = "builder.use_submit_for_status",
+        name = "builder.use_submit_for_status",
+        env = "BUILDER_USE_SUBMIT_FOR_STATUS",
+        default_value = "false"
+    )]
+    pub use_submit_for_status: bool,
+
+    /// Use the conditional RPC endpoint for transaction submission.
+    ///
+    /// Only used when BUILDER_SENDER is "raw"
+    #[arg(
+        long = "builder.use_conditional_rpc",
+        name = "builder.use_conditional_rpc",
+        env = "BUILDER_USE_CONDITIONAL_RPC",
+        default_value = "false"
+    )]
+    pub use_conditional_rpc: bool,
+
+    /// If the "dropped" status is unsupported by the status provider.
+    ///
+    /// Only used when BUILDER_SENDER is "raw"
+    #[arg(
+        long = "builder.dropped_status_unsupported",
+        name = "builder.dropped_status_unsupported",
+        env = "BUILDER_DROPPED_STATUS_UNSUPPORTED",
+        default_value = "false"
+    )]
+    pub dropped_status_unsupported: bool,
 
     /// A list of builders to pass into the Flashbots Relay RPC.
     ///
@@ -216,7 +250,6 @@ impl BuilderArgs {
             .node_http
             .clone()
             .context("should have a node HTTP URL")?;
-        let submit_url = self.submit_url.clone().unwrap_or_else(|| rpc_url.clone());
 
         let mempool_configs = match &common.mempool_config_path {
             Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region)
@@ -264,7 +297,7 @@ impl BuilderArgs {
             ));
         }
 
-        let sender_args = self.sender_args(&chain_spec)?;
+        let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
 
         Ok(BuilderTaskArgs {
             entry_points,
@@ -281,7 +314,6 @@ impl BuilderArgs {
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             max_bundle_size: self.max_bundle_size,
             max_bundle_gas: common.max_bundle_gas,
-            submit_url,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
             sender_args,
@@ -294,10 +326,18 @@ impl BuilderArgs {
         })
     }
 
-    fn sender_args(&self, chain_spec: &ChainSpec) -> anyhow::Result<TransactionSenderArgs> {
+    fn sender_args(
+        &self,
+        chain_spec: &ChainSpec,
+        rpc_url: &str,
+    ) -> anyhow::Result<TransactionSenderArgs> {
         match self.sender_type {
-            TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw),
-            TransactionSenderKind::Conditional => Ok(TransactionSenderArgs::Conditional),
+            TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw(RawSenderArgs {
+                submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
+                use_submit_for_status: self.use_submit_for_status,
+                dropped_status_supported: !self.dropped_status_unsupported,
+                use_conditional_rpc: self.use_conditional_rpc,
+            })),
             TransactionSenderKind::Flashbots => {
                 if !chain_spec.flashbots_enabled {
                     return Err(anyhow::anyhow!("Flashbots sender is not enabled for chain"));

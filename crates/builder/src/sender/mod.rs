@@ -12,7 +12,6 @@
 // If not, see https://www.gnu.org/licenses/.
 
 mod bloxroute;
-mod conditional;
 mod flashbots;
 mod raw;
 use std::{sync::Arc, time::Duration};
@@ -20,7 +19,6 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Context;
 use async_trait::async_trait;
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
-pub(crate) use conditional::ConditionalTransactionSender;
 use enum_dispatch::enum_dispatch;
 use ethers::{
     prelude::SignerMiddleware,
@@ -111,7 +109,6 @@ where
     FS: Signer + 'static,
 {
     Raw(RawTransactionSender<C, S>),
-    Conditional(ConditionalTransactionSender<C, S>),
     Flashbots(FlashbotsTransactionSender<C, S, FS>),
     PolygonBloxroute(PolygonBloxrouteTransactionSender<C, S>),
 }
@@ -122,8 +119,6 @@ where
 pub enum TransactionSenderKind {
     /// Raw transaction sender
     Raw,
-    /// Conditional transaction sender
-    Conditional,
     /// Flashbots transaction sender
     Flashbots,
     /// Bloxroute transaction sender
@@ -134,13 +129,24 @@ pub enum TransactionSenderKind {
 #[derive(Debug, Clone)]
 pub enum TransactionSenderArgs {
     /// Raw transaction sender
-    Raw,
-    /// Conditional transaction sender
-    Conditional,
+    Raw(RawSenderArgs),
     /// Flashbots transaction sender
     Flashbots(FlashbotsSenderArgs),
     /// Bloxroute transaction sender
     Bloxroute(BloxrouteSenderArgs),
+}
+
+/// Raw sender arguments
+#[derive(Debug, Clone)]
+pub struct RawSenderArgs {
+    /// Submit URL
+    pub submit_url: String,
+    /// Use submit for status
+    pub use_submit_for_status: bool,
+    /// If the "dropped" status is supported by the status provider
+    pub dropped_status_supported: bool,
+    /// If the sender should use the conditional endpoint
+    pub use_conditional_rpc: bool,
 }
 
 /// Bloxroute sender arguments
@@ -166,21 +172,47 @@ pub struct FlashbotsSenderArgs {
 impl TransactionSenderArgs {
     pub(crate) fn into_sender<C: JsonRpcClient + 'static, S: Signer + 'static>(
         self,
-        client: Arc<Provider<C>>,
+        rpc_provider: Arc<Provider<C>>,
+        submit_provider: Option<Arc<Provider<C>>>,
         signer: S,
         eth_poll_interval: Duration,
     ) -> std::result::Result<TransactionSenderEnum<C, S, LocalWallet>, SenderConstructorErrors>
     {
         let sender = match self {
-            Self::Raw => TransactionSenderEnum::Raw(RawTransactionSender::new(client, signer)),
-            Self::Conditional => TransactionSenderEnum::Conditional(
-                ConditionalTransactionSender::new(client, signer),
-            ),
+            Self::Raw(args) => {
+                if let Some(submit_provider) = submit_provider {
+                    if args.use_submit_for_status {
+                        TransactionSenderEnum::Raw(RawTransactionSender::new(
+                            Arc::clone(&submit_provider),
+                            submit_provider,
+                            signer,
+                            args.dropped_status_supported,
+                            args.use_conditional_rpc,
+                        ))
+                    } else {
+                        TransactionSenderEnum::Raw(RawTransactionSender::new(
+                            rpc_provider,
+                            submit_provider,
+                            signer,
+                            args.dropped_status_supported,
+                            args.use_conditional_rpc,
+                        ))
+                    }
+                } else {
+                    TransactionSenderEnum::Raw(RawTransactionSender::new(
+                        Arc::clone(&rpc_provider),
+                        rpc_provider,
+                        signer,
+                        args.dropped_status_supported,
+                        args.use_conditional_rpc,
+                    ))
+                }
+            }
             Self::Flashbots(args) => {
                 let flashbots_signer = args.auth_key.parse().context("should parse auth key")?;
 
                 TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(
-                    client,
+                    rpc_provider,
                     signer,
                     flashbots_signer,
                     args.builders,
@@ -190,7 +222,7 @@ impl TransactionSenderArgs {
             }
             Self::Bloxroute(args) => {
                 TransactionSenderEnum::PolygonBloxroute(PolygonBloxrouteTransactionSender::new(
-                    client,
+                    rpc_provider,
                     signer,
                     eth_poll_interval,
                     &args.header,
