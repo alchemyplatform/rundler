@@ -369,7 +369,7 @@ where
             .await
             .context("tracker should check for dropped transactions")?;
         Ok(match status {
-            TxStatus::Pending | TxStatus::Dropped => None,
+            TxStatus::Pending => None,
             TxStatus::Mined { block_number } => {
                 let nonce = self.nonce;
                 self.set_nonce_and_clear_state(nonce + 1);
@@ -382,11 +382,11 @@ where
                     gas_limit,
                     gas_used,
                 })
-            } // TODO(#295): dropped status is often incorrect, for now just assume its still pending
-              // TxStatus::Dropped => {
-              //     self.has_dropped = true;
-              //     Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce })
-              // }
+            }
+            TxStatus::Dropped => {
+                self.has_dropped = true;
+                Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce })
+            }
         })
     }
 
@@ -513,50 +513,44 @@ mod tests {
         );
     }
 
-    // TODO(#295): fix dropped status
-    // #[tokio::test]
-    // async fn test_nonce_and_fees_dropped() {
-    //     let (mut sender, mut provider) = create_base_config();
-    //     sender.expect_address().return_const(Address::zero());
+    #[tokio::test]
+    async fn test_nonce_and_fees_dropped() {
+        let (mut sender, mut provider) = create_base_config();
+        sender.expect_address().return_const(Address::zero());
 
-    //     sender
-    //         .expect_get_transaction_status()
-    //         .returning(move |_a| Box::pin(async { Ok(TxStatus::Dropped) }));
+        sender
+            .expect_get_transaction_status()
+            .returning(move |_a| Box::pin(async { Ok(TxStatus::Dropped) }));
 
-    //     sender.expect_send_transaction().returning(move |_a, _b| {
-    //         Box::pin(async {
-    //             Ok(SentTxInfo {
-    //                 nonce: U256::from(0),
-    //                 tx_hash: H256::zero(),
-    //             })
-    //         })
-    //     });
+        sender.expect_send_transaction().returning(move |_a, _b| {
+            Box::pin(async {
+                Ok(SentTxInfo {
+                    nonce: U256::from(0),
+                    tx_hash: H256::zero(),
+                })
+            })
+        });
 
-    //     provider
-    //         .expect_get_transaction_count()
-    //         .returning(move |_a| Ok(U256::from(0)));
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(U256::from(0)));
 
-    //     provider
-    //         .expect_get_block_number()
-    //         .returning(move || Ok(1))
-    //         .times(1);
+        let mut tracker = create_tracker(sender, provider).await;
 
-    //     let tracker = create_tracker(sender, provider).await;
+        let tx = Eip1559TransactionRequest::new()
+            .nonce(0)
+            .gas(10000)
+            .max_fee_per_gas(10000);
+        let exp = ExpectedStorage::default();
 
-    //     let tx = Eip1559TransactionRequest::new()
-    //         .nonce(0)
-    //         .gas(10000)
-    //         .max_fee_per_gas(10000);
-    //     let exp = ExpectedStorage::default();
+        // send dummy transaction
+        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let _tracker_update = tracker.check_for_update().await.unwrap();
 
-    //     // send dummy transaction
-    //     let _sent = tracker.send_transaction(tx.into(), &exp).await;
-    //     let _tracker_update = tracker.wait_for_update().await.unwrap();
+        let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
-    //     let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
-
-    //     assert_eq!((U256::from(0), None), nonce_and_fees);
-    // }
+        assert_eq!((U256::from(0), None), nonce_and_fees);
+    }
 
     #[tokio::test]
     async fn test_send_transaction_without_nonce() {
