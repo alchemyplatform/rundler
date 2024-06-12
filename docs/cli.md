@@ -178,22 +178,28 @@ List of command line options for configuring the Builder.
   - *Only required when AWS_KMS_KEY_IDS are provided* 
 - `--builder.max_bundle_size`: Maximum number of ops to include in one bundle (default: `128`)
   - env: *BUILDER_MAX_BUNDLE_SIZE*
-- `--builder.submit_url`: If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`.
-  - env: *BUILDER_SUBMIT_URL*
-- `--builder.sender`: Choice of what sender type to use for transaction submission. (default: `raw`, options: `raw`, `conditional`, `flashbots`, `polygon_bloxroute`)
-  - env: *BUILDER_SENDER*
 - `--builder.max_blocks_to_wait_for_mine`: After submitting a bundle transaction, the maximum number of blocks to wait for that transaction to mine before trying to resend with higher gas fees (default: `2`)
   - env: *BUILDER_MAX_BLOCKS_TO_WAIT_FOR_MINE*
 - `--builder.replacement_fee_percent_increase`: Percentage amount to increase gas fees when retrying a transaction after it failed to mine (default: `10`)
   - env: *BUILDER_REPLACEMENT_FEE_PERCENT_INCREASE*
 - `--builder.max_fee_increases`: Maximum number of fee increases to attempt (Seven increases of 10% is roughly 2x the initial fees) (default: `7`)
   - env: *BUILDER_MAX_FEE_INCREASES*
-- `--builder.flashbots_relay_builders`: additional builders to send bundles to through the Flashbots relay RPC (comma-separated). List of builders that the Flashbots RPC supports can be found [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#eth_sendprivatetransaction). (default: `flashbots`)
-- `--builder.flashbots_relay_auth_key`: authorization key to use with the flashbots relay. See [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#authentication) for more info. (default: None)
+- `--builder.sender`: Choice of what sender type to use for transaction submission. (default: `raw`, options: `raw`, `flashbots`, `polygon_bloxroute`)
+  - env: *BUILDER_SENDER*
+- `--builder.submit_url`: Only used if builder.sender == "raw." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`.
+  - env: *BUILDER_SUBMIT_URL*
+- `--builder.use_submit_for_status`: Only used if builder.sender == "raw." Use the submit url to get the status of the bundle transaction. (default: `false`)
+  - env: *BUILDER_USE_SUBMIT_FOR_STATUS*
+- `--builder.use_conditional_rpc`: Only used if builder.sender == "raw." Use `eth_sendRawTransactionConditional` when submitting. (default: `false`)
+  - env: *BUILDER_USE_CONDITIONAL_RPC*
+- `--builder.dropped_status_unsupported`: Only used if builder.sender == "raw." If set, the builder will not process a dropped status. Use this if the URL that is being used for status (node_http or submit_url) does not support pending transactions, only those that are mined.  (default: `false`)
+  - env: *BUILDER_DROPPED_STATUS_UNSUPPORTED*
+- `--builder.flashbots_relay_builders`: Only used if builder.sender == "flashbots." Additional builders to send bundles to through the Flashbots relay RPC (comma-separated). List of builders that the Flashbots RPC supports can be found [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#eth_sendprivatetransaction). (default: `flashbots`)
   - env: *BUILDER_FLASHBOTS_RELAY_BUILDERS*
-- `--builder.bloxroute_auth_header`: If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
+- `--builder.flashbots_relay_auth_key`: Only used/required if builder.sender == "flashbots." Authorization key to use with the flashbots relay. See [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#authentication) for more info. (default: None)
+  - env: *BUILDER_FLASHBOTS_RELAY_AUTH_KEY*
+- `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "polygon_bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
   - env: `BUILDER_BLOXROUTE_AUTH_HEADER`
-  - *Only required when `--builder.sender=polygon_bloxroute`*
 - `--builder.index_offset`: If running multiple builder processes, this is the index offset to assign unique indexes to each bundle sender. (default: 0)
   - env: `BUILDER_INDEX_OFFSET`
 - `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
@@ -214,11 +220,11 @@ Here are some example commands to use the CLI:
 
 ```sh
 # Run the Node subcommand with custom options
-$ ./rundler node --entry_points 0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789 --chain_id 1337 --max_verification_gas 10000000
+$ ./rundler node --chain_id 1337 --max_verification_gas 10000000 --disable_entry_point_v0_6
 
 # Run the RPC subcommand with custom options and enable JSON logging. The builder and pool will need to be running before this starts.
-$ ./rundler rpc --node_http http://localhost:8545 --log.json
+$ ./rundler rpc --node_http http://localhost:8545 --log.json --disable_entry_point_v0_6
 
 # Run the Pool subcommand with custom options and specify a mempool config file
-$ ./rundler pool --max_simulate_handle_ops_gas 15000000  --mempool_config_path mempool.json --node_http http://localhost:8545 --chain_id 8453
+$ ./rundler pool --max_simulate_handle_ops_gas 15000000  --mempool_config_path mempool.json --node_http http://localhost:8545 --chain_id 8453 --disable_entry_point_v0_6
 ```
