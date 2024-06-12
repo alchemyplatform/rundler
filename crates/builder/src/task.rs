@@ -77,8 +77,6 @@ pub struct Args {
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit
     pub max_bundle_gas: u64,
-    /// URL to submit bundles too
-    pub submit_url: String,
     /// Percentage to add to the network priority fee for the bundle priority fee
     pub bundle_priority_fee_overhead_percent: u64,
     /// Priority fee mode to use for operation priority fee minimums
@@ -133,6 +131,11 @@ where
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let provider =
             rundler_provider::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
+        let submit_provider = if let TransactionSenderArgs::Raw(args) = &self.args.sender_args {
+            Some(rundler_provider::new_provider(&args.submit_url, None)?)
+        } else {
+            None
+        };
 
         let ep_v0_6 = EthersEntryPointV0_6::new(
             self.args.chain_spec.entry_point_address_v0_6,
@@ -154,14 +157,24 @@ where
             match ep.version {
                 EntryPointVersion::V0_6 => {
                     let (handles, actions) = self
-                        .create_builders_v0_6(ep, Arc::clone(&provider), ep_v0_6.clone())
+                        .create_builders_v0_6(
+                            ep,
+                            Arc::clone(&provider),
+                            submit_provider.clone(),
+                            ep_v0_6.clone(),
+                        )
                         .await?;
                     sender_handles.extend(handles);
                     bundle_sender_actions.extend(actions);
                 }
                 EntryPointVersion::V0_7 => {
                     let (handles, actions) = self
-                        .create_builders_v0_7(ep, Arc::clone(&provider), ep_v0_7.clone())
+                        .create_builders_v0_7(
+                            ep,
+                            Arc::clone(&provider),
+                            submit_provider.clone(),
+                            ep_v0_7.clone(),
+                        )
                         .await?;
                     sender_handles.extend(handles);
                     bundle_sender_actions.extend(actions);
@@ -246,6 +259,7 @@ where
         &self,
         ep: &EntryPointBuilderSettings,
         provider: Arc<EthersProvider<C>>,
+        submit_provider: Option<Arc<EthersProvider<C>>>,
         ep_v0_6: E,
     ) -> anyhow::Result<(
         Vec<JoinHandle<anyhow::Result<()>>>,
@@ -263,6 +277,7 @@ where
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
                     Arc::clone(&provider),
+                    submit_provider.clone(),
                     ep_v0_6.clone(),
                     UnsafeSimulator::new(
                         Arc::clone(&provider),
@@ -275,6 +290,7 @@ where
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
                     Arc::clone(&provider),
+                    submit_provider.clone(),
                     ep_v0_6.clone(),
                     simulation::new_v0_6_simulator(
                         Arc::clone(&provider),
@@ -295,6 +311,7 @@ where
         &self,
         ep: &EntryPointBuilderSettings,
         provider: Arc<EthersProvider<C>>,
+        submit_provider: Option<Arc<EthersProvider<C>>>,
         ep_v0_7: E,
     ) -> anyhow::Result<(
         Vec<JoinHandle<anyhow::Result<()>>>,
@@ -312,6 +329,7 @@ where
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
                     Arc::clone(&provider),
+                    submit_provider.clone(),
                     ep_v0_7.clone(),
                     UnsafeSimulator::new(
                         Arc::clone(&provider),
@@ -324,6 +342,7 @@ where
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
                     Arc::clone(&provider),
+                    submit_provider.clone(),
                     ep_v0_7.clone(),
                     simulation::new_v0_7_simulator(
                         Arc::clone(&provider),
@@ -344,6 +363,7 @@ where
         &self,
         index: u64,
         provider: Arc<EthersProvider<C>>,
+        submit_provider: Option<Arc<EthersProvider<C>>>,
         entry_point: E,
         simulator: S,
     ) -> anyhow::Result<(
@@ -403,12 +423,8 @@ where
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
 
-        let submit_provider = rundler_provider::new_provider(
-            &self.args.submit_url,
-            Some(self.args.eth_poll_interval),
-        )?;
-
         let transaction_sender = self.args.sender_args.clone().into_sender(
+            Arc::clone(&provider),
             submit_provider,
             signer,
             self.args.eth_poll_interval,
