@@ -4,7 +4,7 @@ out = 'out'
 libs = ['lib']
 test = 'test'
 cache_path = 'cache'
-solc_version = '0.8.23'
+solc_version = '0.8.26'
 
 remappings = [
     'forge-std/=lib/forge-std/src',

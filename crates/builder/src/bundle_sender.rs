@@ -104,6 +104,8 @@ enum SendBundleAttemptResult {
     NoOperations,
     // Replacement Underpriced
     ReplacementUnderpriced,
+    // Condition not met
+    ConditionNotMet,
     // Nonce too low
     NonceTooLow,
 }
@@ -254,6 +256,11 @@ where
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
                 info!("Replacement transaction underpriced, entering cancellation loop");
                 state.update(InnerState::Cancelling(inner.to_cancelling()));
+            }
+            Ok(SendBundleAttemptResult::ConditionNotMet) => {
+                info!("Condition not met, notifying proposer and starting new bundle attempt");
+                self.proposer.notify_condition_not_met();
+                state.reset();
             }
             Err(error) => {
                 error!("Bundle send error {error:?}");
@@ -487,13 +494,19 @@ where
                 Ok(SendBundleAttemptResult::Success)
             }
             Err(TransactionTrackerError::NonceTooLow) => {
-                warn!("Replacement transaction underpriced");
+                self.metrics.increment_bundle_txn_nonce_too_low();
+                warn!("Bundle attempt nonce too low");
                 Ok(SendBundleAttemptResult::NonceTooLow)
             }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
                 self.metrics.increment_bundle_txn_replacement_underpriced();
-                warn!("Replacement transaction underpriced");
+                warn!("Bundle attempt replacement transaction underpriced");
                 Ok(SendBundleAttemptResult::ReplacementUnderpriced)
+            }
+            Err(TransactionTrackerError::ConditionNotMet) => {
+                self.metrics.increment_bundle_txn_condition_not_met();
+                warn!("Bundle attempt condition not met");
+                Ok(SendBundleAttemptResult::ConditionNotMet)
             }
             Err(e) => {
                 error!("Failed to send bundle with unexpected error: {e:?}");
@@ -505,7 +518,7 @@ where
     /// Builds a bundle and returns some metadata and the transaction to send
     /// it, or `None` if there are no valid operations available.
     async fn get_bundle_tx(
-        &self,
+        &mut self,
         nonce: U256,
         required_fees: Option<GasFees>,
         is_replacement: bool,
@@ -962,6 +975,14 @@ impl BuilderMetrics {
 
     fn increment_bundle_txn_replacement_underpriced(&self) {
         metrics::counter!("builder_bundle_replacement_underpriced", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
+    }
+
+    fn increment_bundle_txn_nonce_too_low(&self) {
+        metrics::counter!("builder_bundle_nonce_too_low", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
+    }
+
+    fn increment_bundle_txn_condition_not_met(&self) {
+        metrics::counter!("builder_bundle_condition_not_met", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
     }
 
     fn increment_cancellation_txns_sent(&self) {

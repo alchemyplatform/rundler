@@ -88,6 +88,7 @@ fn generate_utils_bindings() -> Result<(), Box<dyn error::Error>> {
     MultiAbigen::from_abigens([
         abigen_of("utils", "GetCodeHashes")?,
         abigen_of("utils", "GetGasUsed")?,
+        abigen_of("utils", "StorageLoader")?,
     ])
     .build()?
     .write_to_module("src/contracts/utils", false)?;
