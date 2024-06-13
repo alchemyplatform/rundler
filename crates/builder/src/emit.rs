@@ -196,6 +196,17 @@ pub enum OpRejectionReason {
     FailedRevalidation { error: SimulationError },
     /// Operation reverted during bundle formation simulation with message
     FailedInBundle { message: Arc<String> },
+    /// Operation's storage slot condition was not met
+    ConditionNotMet(ConditionNotMetReason),
+}
+
+/// Reason for a condition not being met
+#[derive(Clone, Debug)]
+pub struct ConditionNotMetReason {
+    pub address: Address,
+    pub slot: H256,
+    pub expected: H256,
+    pub actual: H256,
 }
 
 impl Display for BuilderEvent {
