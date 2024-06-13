@@ -29,8 +29,9 @@ use ethers::{
     },
 };
 use reqwest::Url;
-use rundler_types::contracts::utils::get_gas_used::{
-    GasUsedResult, GetGasUsed, GETGASUSED_DEPLOYED_BYTECODE,
+use rundler_types::contracts::utils::{
+    get_gas_used::{GasUsedResult, GetGasUsed, GETGASUSED_DEPLOYED_BYTECODE},
+    storage_loader::STORAGELOADER_DEPLOYED_BYTECODE,
 };
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -206,6 +207,47 @@ impl<C: JsonRpcClient + 'static> Provider for EthersProvider<C> {
             .state(&state_overrides)
             .await
             .context("should get gas used")?)
+    }
+
+    async fn batch_get_storage_at(
+        self: &Arc<Self>,
+        address: Address,
+        slots: Vec<H256>,
+    ) -> ProviderResult<Vec<H256>> {
+        let mut state_overrides = spoof::State::default();
+        state_overrides
+            .account(address)
+            .code(STORAGELOADER_DEPLOYED_BYTECODE.clone());
+
+        let expected_ret_size = slots.len() * 32;
+        let slot_data = slots
+            .into_iter()
+            .flat_map(|slot| slot.to_fixed_bytes())
+            .collect::<Vec<_>>();
+
+        let tx: TypedTransaction = Eip1559TransactionRequest {
+            to: Some(address.into()),
+            data: Some(slot_data.into()),
+            ..Default::default()
+        }
+        .into();
+
+        let result_bytes = self
+            .call_raw(&tx)
+            .state(&state_overrides)
+            .await
+            .context("should call storage loader")?;
+
+        if result_bytes.len() != expected_ret_size {
+            return Err(anyhow::anyhow!(
+                "expected {} bytes, got {}",
+                expected_ret_size,
+                result_bytes.len()
+            )
+            .into());
+        }
+
+        Ok(result_bytes.chunks(32).map(H256::from_slice).collect())
     }
 }
 

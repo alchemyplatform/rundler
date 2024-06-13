@@ -46,7 +46,7 @@ use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
 use tracing::{error, info, warn};
 
-use crate::emit::{BuilderEvent, OpRejectionReason, SkipReason};
+use crate::emit::{BuilderEvent, ConditionNotMetReason, OpRejectionReason, SkipReason};
 
 /// Extra buffer percent to add on the bundle transaction gas estimate to be sure it will be enough
 const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u64 = 5;
@@ -101,7 +101,7 @@ pub(crate) trait BundleProposer: Send + Sync + 'static {
     /// If `min_fees` is `Some`, the proposer will ensure the bundle has
     /// at least `min_fees`.
     async fn make_bundle(
-        &self,
+        &mut self,
         min_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> anyhow::Result<Bundle<Self::UO>>;
@@ -111,6 +111,9 @@ pub(crate) trait BundleProposer: Send + Sync + 'static {
     /// If `min_fees` is `Some`, the proposer will ensure the gas fees returned are at least `min_fees`.
     async fn estimate_gas_fees(&self, min_fees: Option<GasFees>)
         -> anyhow::Result<(GasFees, U256)>;
+
+    /// Notifies the proposer that a condition was not met during the last bundle proposal
+    fn notify_condition_not_met(&mut self);
 }
 
 #[derive(Debug)]
@@ -123,6 +126,7 @@ pub(crate) struct BundleProposerImpl<UO, S, E, P, M> {
     settings: Settings,
     fee_estimator: FeeEstimator<P>,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+    condition_not_met_notified: bool,
     _uo_type: PhantomData<UO>,
 }
 
@@ -155,8 +159,12 @@ where
         self.fee_estimator.required_bundle_fees(required_fees).await
     }
 
+    fn notify_condition_not_met(&mut self) {
+        self.condition_not_met_notified = true;
+    }
+
     async fn make_bundle(
-        &self,
+        &mut self,
         required_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> anyhow::Result<Bundle<UO>> {
@@ -238,6 +246,16 @@ where
                     gas_estimate
                 );
 
+                // If recently notified that a bundle condition was not met, check each of
+                // the conditions again to ensure if they are met, rejecting OPs if they are not.
+                if self.condition_not_met_notified {
+                    self.condition_not_met_notified = false;
+                    self.check_conditions_met(&mut context).await?;
+                    if context.is_empty() {
+                        break;
+                    }
+                }
+
                 let mut expected_storage = ExpectedStorage::default();
                 for op in context.iter_ops_with_simulations() {
                     expected_storage.merge(&op.simulation.expected_storage)?;
@@ -295,6 +313,7 @@ where
             ),
             settings,
             event_sender,
+            condition_not_met_notified: false,
             _uo_type: PhantomData,
         }
     }
@@ -547,6 +566,78 @@ where
         }
         self.compute_all_aggregator_signatures(&mut context).await;
         context
+    }
+
+    async fn check_conditions_met(&self, context: &mut ProposalContext<UO>) -> anyhow::Result<()> {
+        let futs = context
+            .iter_ops_with_simulations()
+            .enumerate()
+            .map(|(i, op)| async move {
+                self.check_op_conditions_met(&op.simulation.expected_storage)
+                    .await
+                    .map(|reason| (i, reason))
+            })
+            .collect::<Vec<_>>();
+
+        let to_reject = future::join_all(futs)
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        for (index, reason) in to_reject {
+            self.emit(BuilderEvent::rejected_op(
+                self.builder_index,
+                self.op_hash(&context.get_op_at(index)?.op),
+                OpRejectionReason::ConditionNotMet(reason),
+            ));
+            self.reject_index(context, index).await;
+        }
+
+        Ok(())
+    }
+
+    async fn check_op_conditions_met(
+        &self,
+        expected_storage: &ExpectedStorage,
+    ) -> Option<ConditionNotMetReason> {
+        let futs = expected_storage
+            .0
+            .iter()
+            .map(|(address, slots)| async move {
+                let storage = match self
+                    .provider
+                    .batch_get_storage_at(*address, slots.keys().copied().collect())
+                    .await
+                {
+                    Ok(storage) => storage,
+                    Err(e) => {
+                        error!("Error getting storage for address {address:?} failing open: {e:?}");
+                        return None;
+                    }
+                };
+
+                for ((slot, expected), actual) in slots.iter().zip(storage) {
+                    if *expected != actual {
+                        return Some(ConditionNotMetReason {
+                            address: *address,
+                            slot: *slot,
+                            expected: *expected,
+                            actual,
+                        });
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+
+        let results = future::join_all(futs).await;
+        for result in results {
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
     }
 
     async fn reject_index(&self, context: &mut ProposalContext<UO>, i: usize) {
@@ -2154,7 +2245,7 @@ mod tests {
             .expect_aggregate_signatures()
             .returning(move |address, _| Ok(signatures_by_aggregator[&address]().unwrap()));
         let (event_sender, _) = broadcast::channel(16);
-        let proposer = BundleProposerImpl::new(
+        let mut proposer = BundleProposerImpl::new(
             0,
             pool_client,
             simulator,
