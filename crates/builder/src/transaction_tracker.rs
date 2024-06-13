@@ -77,6 +77,8 @@ pub(crate) enum TransactionTrackerError {
     NonceTooLow,
     #[error("replacement transaction underpriced")]
     ReplacementUnderpriced,
+    #[error("storage slot value condition not met")]
+    ConditionNotMet,
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -403,6 +405,7 @@ impl From<TxSenderError> for TransactionTrackerError {
             TxSenderError::ReplacementUnderpriced => {
                 TransactionTrackerError::ReplacementUnderpriced
             }
+            TxSenderError::ConditionNotMet => TransactionTrackerError::ConditionNotMet,
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }
