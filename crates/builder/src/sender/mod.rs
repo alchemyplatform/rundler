@@ -66,6 +66,9 @@ pub(crate) enum TxSenderError {
     /// Nonce too low
     #[error("nonce too low")]
     NonceTooLow,
+    /// Conditional value not met
+    #[error("storage slot value condition not met")]
+    ConditionNotMet,
     /// Soft cancellation failed
     #[error("soft cancel failed")]
     SoftCancelFailed,
@@ -292,6 +295,14 @@ impl From<ProviderError> for TxSenderError {
                         return TxSenderError::ReplacementUnderpriced;
                     } else if e.message.contains("nonce too low") {
                         return TxSenderError::NonceTooLow;
+                    // Arbitrum conditional sender error message
+                    // TODO push them to use a specific error code and to return the specific slot that is not met.
+                    } else if e
+                        .message
+                        .to_lowercase()
+                        .contains("storage slot value condition not met")
+                    {
+                        return TxSenderError::ConditionNotMet;
                     }
                 }
                 TxSenderError::Other(value.into())

@@ -137,4 +137,11 @@ pub trait Provider: Send + Sync + Debug + 'static {
         data: Bytes,
         state_overrides: spoof::State,
     ) -> ProviderResult<GasUsedResult>;
+
+    /// Get the storage values at a given address and slots
+    async fn batch_get_storage_at(
+        &self,
+        address: Address,
+        slots: Vec<H256>,
+    ) -> ProviderResult<Vec<H256>>;
 }
