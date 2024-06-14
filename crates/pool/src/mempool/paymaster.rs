@@ -26,7 +26,7 @@ use rundler_types::{
 use rundler_utils::cache::LruMap;
 
 use super::MempoolResult;
-use crate::chain::{BalanceUpdate, MinedOp};
+use crate::chain::MinedOp;
 
 /// Keeps track of current and pending paymaster balances
 #[derive(Debug)]
@@ -94,28 +94,6 @@ where
         Ok(stake_status)
     }
 
-    pub(crate) fn update_paymaster_balances_after_update<'a>(
-        &self,
-        entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
-        unmined_entity_balance_updates: impl Iterator<Item = &'a BalanceUpdate>,
-    ) {
-        for balance_update in entity_balance_updates {
-            self.state.write().update_paymaster_balance_from_event(
-                balance_update.address,
-                balance_update.amount,
-                balance_update.is_addition,
-            )
-        }
-
-        for unmined_balance_update in unmined_entity_balance_updates {
-            self.state.write().update_paymaster_balance_from_event(
-                unmined_balance_update.address,
-                unmined_balance_update.amount,
-                !unmined_balance_update.is_addition,
-            )
-        }
-    }
-
     pub(crate) async fn paymaster_balance(
         &self,
         paymaster: Address,
@@ -174,7 +152,20 @@ where
         self.state.write().set_tracking(tracking_enabled);
     }
 
-    pub(crate) async fn reset_confimed_balances(&self) -> MempoolResult<()> {
+    pub(crate) async fn reset_confirmed_balances_for(
+        &self,
+        addresses: &[Address],
+    ) -> MempoolResult<()> {
+        let balances = self.entry_point.get_balances(addresses.to_vec()).await?;
+
+        self.state
+            .write()
+            .set_confimed_balances(addresses, &balances);
+
+        Ok(())
+    }
+
+    pub(crate) async fn reset_confirmed_balances(&self) -> MempoolResult<()> {
         let paymaster_addresses = self.paymaster_addresses();
 
         let balances = self
@@ -194,6 +185,7 @@ where
             .write()
             .update_paymaster_balance_from_mined_op(mined_op);
     }
+
     pub(crate) fn remove_operation(&self, id: &UserOperationId) {
         self.state.write().remove_operation(id);
     }
@@ -322,21 +314,6 @@ impl PaymasterTrackerInner {
         let keys: Vec<Address> = self.paymaster_balances.iter().map(|(k, _)| *k).collect();
 
         keys
-    }
-
-    fn update_paymaster_balance_from_event(
-        &mut self,
-        paymaster: Address,
-        amount: U256,
-        should_add: bool,
-    ) {
-        if let Some(paymaster_balance) = self.paymaster_balances.get(&paymaster) {
-            if should_add {
-                paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_add(amount);
-            } else {
-                paymaster_balance.confirmed = paymaster_balance.confirmed.saturating_sub(amount);
-            }
-        }
     }
 
     fn paymaster_metadata(&self, paymaster: Address) -> Option<PaymasterMetadata> {
@@ -530,7 +507,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{chain::BalanceUpdate, mempool::paymaster::PaymasterTracker};
+    use crate::mempool::paymaster::PaymasterTracker;
 
     fn demo_pool_op(uo: UserOperation) -> PoolOperation {
         PoolOperation {
@@ -610,55 +587,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_update_balance() {
-        let paymaster_tracker = new_paymaster_tracker();
-
-        let paymaster = Address::random();
-        let pending_op_cost = U256::from(100);
-        let confirmed_balance = U256::from(1000);
-
-        paymaster_tracker.add_new_paymaster(paymaster, confirmed_balance, pending_op_cost);
-
-        let deposit = BalanceUpdate {
-            address: paymaster,
-            entrypoint: Address::random(),
-            amount: 100.into(),
-            is_addition: true,
-        };
-
-        // deposit
-        paymaster_tracker
-            .update_paymaster_balances_after_update(vec![&deposit].into_iter(), vec![].into_iter());
-
-        let balance = paymaster_tracker
-            .paymaster_balance(paymaster)
-            .await
-            .unwrap();
-
-        assert_eq!(balance.confirmed_balance, 1100.into());
-
-        let withdrawal = BalanceUpdate {
-            address: paymaster,
-            entrypoint: Address::random(),
-            amount: 50.into(),
-            is_addition: false,
-        };
-
-        // withdrawal
-        paymaster_tracker.update_paymaster_balances_after_update(
-            vec![&withdrawal].into_iter(),
-            vec![].into_iter(),
-        );
-
-        let balance = paymaster_tracker
-            .paymaster_balance(paymaster)
-            .await
-            .unwrap();
-
-        assert_eq!(balance.confirmed_balance, 1050.into());
-    }
-
-    #[tokio::test]
     async fn new_uo_not_enough_balance_tracking_disabled() {
         let paymaster_tracker = new_paymaster_tracker();
         paymaster_tracker.set_tracking(false);
@@ -731,7 +659,35 @@ mod tests {
 
         assert_eq!(balance_0.confirmed_balance, 1000.into());
 
-        let _ = paymaster_tracker.reset_confimed_balances().await;
+        let _ = paymaster_tracker.reset_confirmed_balances().await;
+
+        let balance_0 = paymaster_tracker
+            .paymaster_balance(paymaster_0)
+            .await
+            .unwrap();
+
+        assert_eq!(balance_0.confirmed_balance, 50.into());
+    }
+
+    #[tokio::test]
+    async fn test_reset_balances_for() {
+        let paymaster_tracker = new_paymaster_tracker();
+
+        let paymaster_0 = Address::random();
+        let paymaster_0_confimed = 1000.into();
+
+        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_0_confimed, 0.into());
+
+        let balance_0 = paymaster_tracker
+            .paymaster_balance(paymaster_0)
+            .await
+            .unwrap();
+
+        assert_eq!(balance_0.confirmed_balance, 1000.into());
+
+        let _ = paymaster_tracker
+            .reset_confirmed_balances_for(&[paymaster_0])
+            .await;
 
         let balance_0 = paymaster_tracker
             .paymaster_balance(paymaster_0)
