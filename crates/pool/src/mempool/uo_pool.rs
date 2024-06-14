@@ -591,8 +591,12 @@ where
                         .div_mod(self.config.num_shards.into())
                         .1
                         == shard_index.into())) &&
-                // filter out ops from senders we've already seen
-                senders.insert(op.uo.sender())
+                // filter out ops from unstaked senders we've already seen
+                if !op.account_is_staked {
+                    senders.insert(op.uo.sender())
+                } else {
+                    true
+                }
             })
             .take(max)
             .map(Into::into)
@@ -944,13 +948,13 @@ mod tests {
     async fn test_account_reputation() {
         let address = Address::random();
         let (pool, uos) = create_pool_insert_ops(vec![
-            create_op_with_errors(address, 0, 2, None, None, true),
-            create_op_with_errors(address, 1, 2, None, None, true),
-            create_op_with_errors(address, 1, 2, None, None, true),
+            create_op_with_errors(address, 0, 2, None, None, true), // accept
+            create_op_with_errors(address, 1, 2, None, None, true), // accept
+            create_op_with_errors(address, 1, 2, None, None, true), // reject
         ])
         .await;
-        // Only return 1 op per sender
-        check_ops(pool.best_operations(3, 0).unwrap(), vec![uos[0].clone()]);
+        // staked, so include all ops
+        check_ops(pool.best_operations(3, 0).unwrap(), uos[0..2].to_vec());
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -1381,6 +1385,19 @@ mod tests {
             .add_operation(OperationOrigin::Local, ops[4].op.clone())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_best_staked() {
+        let address = Address::random();
+        let (pool, uos) = create_pool_insert_ops(vec![
+            create_op_with_errors(address, 0, 2, None, None, true),
+            create_op_with_errors(address, 1, 2, None, None, true),
+            create_op_with_errors(address, 2, 2, None, None, true),
+        ])
+        .await;
+        // staked, so include all ops
+        check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
     #[derive(Clone, Debug)]
