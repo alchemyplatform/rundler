@@ -57,12 +57,27 @@ pub struct BuilderArgs {
     host: String,
 
     /// Private key to use for signing transactions
+    /// DEPRECATED: Use `builder.private_keys` instead
+    ///
+    /// If both `builder.private_key` and `builder.private_keys` are set, `builder.private_key` is appended
+    /// to `builder.private_keys`. Keys must be unique.
     #[arg(
         long = "builder.private_key",
         name = "builder.private_key",
         env = "BUILDER_PRIVATE_KEY"
     )]
     private_key: Option<String>,
+
+    /// Private keys to use for signing transactions
+    ///
+    /// Cannot use both `builder.private_key` and `builder.aw_kms_key_ids` at the same time.
+    #[arg(
+        long = "builder.private_keys",
+        name = "builder.private_keys",
+        env = "BUILDER_PRIVATE_KEYS",
+        value_delimiter = ','
+    )]
+    private_keys: Vec<String>,
 
     /// AWS KMS key IDs to use for signing transactions
     #[arg(
@@ -284,10 +299,24 @@ impl BuilderArgs {
             num_builders += common.num_builders_v0_7;
         }
 
-        if self.private_key.is_some() {
-            if num_builders > 1 {
+        if (self.private_key.is_some() || !self.private_keys.is_empty())
+            && !self.aws_kms_key_ids.is_empty()
+        {
+            return Err(anyhow::anyhow!(
+                "Cannot use both builder.private_key(s) and builder.aws_kms_key_ids at the same time."
+            ));
+        }
+
+        let mut private_keys = self.private_keys.clone();
+        if self.private_key.is_some() || !self.private_keys.is_empty() {
+            if let Some(pk) = &self.private_key {
+                private_keys.push(pk.clone());
+            }
+
+            if num_builders > private_keys.len() as u64 {
                 return Err(anyhow::anyhow!(
-                    "Cannot use a private key with multiple builders. You may need to disable one of the entry points."
+                    "Found {} private keys, but need {} keys for the number of builders. You may need to disable one of the entry points.",
+                    private_keys.len(), num_builders
                 ));
             }
         } else if self.aws_kms_key_ids.len() < num_builders as usize {
@@ -304,7 +333,7 @@ impl BuilderArgs {
             chain_spec,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
-            private_key: self.private_key.clone(),
+            private_keys,
             aws_kms_key_ids: self.aws_kms_key_ids.clone(),
             aws_kms_region: common
                 .aws_region
