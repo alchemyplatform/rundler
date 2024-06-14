@@ -42,6 +42,7 @@ const THROTTLED_OR_BANNED_CODE: i32 = -32504;
 const STAKE_TOO_LOW_CODE: i32 = -32505;
 const UNSUPORTED_AGGREGATOR_CODE: i32 = -32506;
 const SIGNATURE_CHECK_FAILED_CODE: i32 = -32507;
+const PAYMASTER_DEPOSIT_TOO_LOW: i32 = -32508;
 const EXECUTION_REVERTED: i32 = -32521;
 
 pub(crate) type EthResult<T> = Result<T, EthRpcError>;
@@ -383,6 +384,7 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::PaymasterValidationRejected(data) => {
                 rpc_err_with_data(PAYMASTER_VALIDATION_REJECTED_CODE, msg, data)
             }
+            EthRpcError::PaymasterBalanceTooLow(_, _) => rpc_err(PAYMASTER_DEPOSIT_TOO_LOW, msg),
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::OpcodeViolationMap(_)
             | EthRpcError::OutOfGas(_)
@@ -390,7 +392,6 @@ impl From<EthRpcError> for ErrorObjectOwned {
             | EthRpcError::MultipleRolesViolation(_)
             | EthRpcError::UnstakedPaymasterContext
             | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
-            | EthRpcError::PaymasterBalanceTooLow(_, _)
             | EthRpcError::AssociatedStorageIsAlternateSender
             | EthRpcError::AssociatedStorageDuringDeploy(_, _, _)
             | EthRpcError::InvalidStorageAccess(_, _, _) => rpc_err(OPCODE_VIOLATION_CODE, msg),
