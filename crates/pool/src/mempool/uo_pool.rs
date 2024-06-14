@@ -151,15 +151,24 @@ where
                 .iter()
                 .filter(|op| op.entry_point == self.config.entry_point);
 
-            let entity_balance_updates = update
-                .entity_balance_updates
-                .iter()
-                .filter(|u| u.entrypoint == self.config.entry_point);
+            let entity_balance_updates = update.entity_balance_updates.iter().filter_map(|u| {
+                if u.entrypoint == self.config.entry_point {
+                    Some(u.address)
+                } else {
+                    None
+                }
+            });
 
             let unmined_entity_balance_updates = update
                 .unmined_entity_balance_updates
                 .iter()
-                .filter(|u| u.entrypoint == self.config.entry_point);
+                .filter_map(|u| {
+                    if u.entrypoint == self.config.entry_point {
+                        Some(u.address)
+                    } else {
+                        None
+                    }
+                });
 
             let unmined_ops = deduped_ops
                 .unmined_ops
@@ -167,15 +176,6 @@ where
                 .filter(|op| op.entry_point == self.config.entry_point);
             let mut mined_op_count = 0;
             let mut unmined_op_count = 0;
-
-            if update.reorg_larger_than_history {
-                let _ = self.reset_confirmed_paymaster_balances().await;
-            }
-
-            self.paymaster.update_paymaster_balances_after_update(
-                entity_balance_updates,
-                unmined_entity_balance_updates,
-            );
 
             for op in mined_ops {
                 if op.entry_point != self.config.entry_point {
@@ -199,6 +199,7 @@ where
                     mined_op_count += 1;
                 }
             }
+
             for op in unmined_ops {
                 if op.entry_point != self.config.entry_point {
                     continue;
@@ -220,21 +221,43 @@ where
                     let _ = self.paymaster.add_or_update_balance(&po).await;
                 }
             }
+
+            // Update paymaster balances AFTER updating the pool to reset confirmed balances if needed.
+            if update.reorg_larger_than_history {
+                if let Err(e) = self.reset_confirmed_paymaster_balances().await {
+                    tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
+                }
+            } else {
+                let addresses = entity_balance_updates
+                    .chain(unmined_entity_balance_updates)
+                    .unique()
+                    .collect::<Vec<_>>();
+                if !addresses.is_empty() {
+                    if let Err(e) = self
+                        .paymaster
+                        .reset_confirmed_balances_for(&addresses)
+                        .await
+                    {
+                        tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
+                    }
+                }
+            }
+
             if mined_op_count > 0 {
                 info!(
-                "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.config.entry_point,
-                update.latest_block_number,
-                update.latest_block_hash,
-            );
+                    "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                    self.config.entry_point,
+                    update.latest_block_number,
+                    update.latest_block_hash,
+                );
             }
             if unmined_op_count > 0 {
                 info!(
-                "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                self.config.entry_point,
-                update.latest_block_number,
-                update.latest_block_hash,
-            );
+                    "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                    self.config.entry_point,
+                    update.latest_block_number,
+                    update.latest_block_hash,
+                );
             }
             UoPoolMetrics::update_ops_seen(
                 mined_op_count as isize - unmined_op_count as isize,
@@ -323,7 +346,7 @@ where
     }
 
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
-        self.paymaster.reset_confimed_balances().await
+        self.paymaster.reset_confirmed_balances().await
     }
 
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
@@ -680,6 +703,7 @@ mod tests {
     use std::collections::HashMap;
 
     use ethers::types::{Bytes, H160};
+    use mockall::Sequence;
     use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, SimulationError,
@@ -764,11 +788,25 @@ mod tests {
     #[tokio::test]
     async fn chain_update_mine() {
         let paymaster = Address::random();
-        let (pool, uos) = create_pool_insert_ops(vec![
-            create_op(Address::random(), 0, 3, None),
-            create_op(Address::random(), 0, 2, None),
-            create_op(Address::random(), 0, 1, Some(paymaster)),
-        ])
+
+        let mut entrypoint = MockEntryPointV0_6::new();
+        // initial balance
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+        // after updates
+        entrypoint
+            .expect_get_balances()
+            .returning(|_| Ok(vec![1110.into()]));
+
+        let (pool, uos) = create_pool_with_entrypoint_insert_ops(
+            vec![
+                create_op(Address::random(), 0, 3, None),
+                create_op(Address::random(), 0, 2, None),
+                create_op(Address::random(), 0, 1, Some(paymaster)),
+            ],
+            entrypoint,
+        )
         .await;
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
@@ -819,7 +857,7 @@ mod tests {
             create_op(Address::random(), 0, 1, Some(paymaster)),
         ];
 
-        // add pending max cost of 30 for each uo
+        // add pending max cost of 50 for each uo
         for op in &mut ops {
             let uo: &mut UserOperation = op.op.as_mut();
             uo.call_gas_limit = 10.into();
@@ -828,7 +866,29 @@ mod tests {
             uo.max_fee_per_gas = 1.into();
         }
 
-        let (pool, uos) = create_pool_insert_ops(ops).await;
+        let mut entrypoint = MockEntryPointV0_6::new();
+        // initial balance, pending = 850
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+        // after updates
+        let mut seq = Sequence::new();
+        // one UO mined with actual cost of 10, unmine deposit of 10, mine deposit 100
+        // confirmed = 1000 - 10 - 10 + 100 = 1080. Pending = 1080 - 50*2 = 980
+        entrypoint
+            .expect_get_balances()
+            .once()
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(vec![1080.into()]));
+        // Unmine UO of 10, unmine deposit of 100
+        // confirmed = 1080 + 10 - 100 = 990. Pending = 990 - 50*3 = 840
+        entrypoint
+            .expect_get_balances()
+            .once()
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(vec![990.into()]));
+
+        let (pool, uos) = create_pool_with_entrypoint_insert_ops(ops, entrypoint).await;
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
 
         assert_eq!(metadata.pending_balance, 850.into());
@@ -872,7 +932,7 @@ mod tests {
         );
 
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
-        assert_eq!(metadata.pending_balance, 1000.into());
+        assert_eq!(metadata.pending_balance, 980.into());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -901,7 +961,7 @@ mod tests {
         .await;
 
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
-        assert_eq!(metadata.pending_balance, 850.into());
+        assert_eq!(metadata.pending_balance, 840.into());
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
@@ -1105,8 +1165,13 @@ mod tests {
         uo.pre_verification_gas = 1000.into();
         uo.max_fee_per_gas = 1.into();
 
+        let mut entrypoint = MockEntryPointV0_6::new();
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+
         let uo = op.op.clone();
-        let pool = create_pool(vec![op]);
+        let pool = create_pool_with_entry_point(vec![op], entrypoint);
 
         let ret = pool
             .add_operation(OperationOrigin::Local, uo.clone())
@@ -1204,7 +1269,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_stake_status_not_staked() {
-        let mut pool = create_pool(vec![]);
+        let mut entrypoint = MockEntryPointV0_6::new();
+        entrypoint.expect_get_deposit_info().returning(|_| {
+            Ok(DepositInfo {
+                deposit: 1000.into(),
+                staked: true,
+                stake: 10000,
+                unstake_delay_sec: 100,
+                withdraw_time: 10,
+            })
+        });
+        let mut pool = create_pool_with_entry_point(vec![], entrypoint);
 
         pool.config.sim_settings.min_stake_value = 10001;
         pool.config.sim_settings.min_unstake_delay = 101;
@@ -1225,7 +1300,11 @@ mod tests {
         uo.pre_verification_gas = 10.into();
         uo.max_fee_per_gas = 1.into();
 
-        let pool = create_pool(vec![op.clone()]);
+        let mut entrypoint = MockEntryPointV0_6::new();
+        entrypoint
+            .expect_balance_of()
+            .returning(|_, _| Ok(U256::from(1000)));
+        let pool = create_pool_with_entry_point(vec![op.clone()], entrypoint);
 
         let _ = pool
             .add_operation(OperationOrigin::Local, op.op.clone())
@@ -1400,6 +1479,19 @@ mod tests {
         impl Simulator<UO = UserOperation>,
         impl EntryPoint,
     > {
+        let entrypoint = MockEntryPointV0_6::new();
+        create_pool_with_entry_point(ops, entrypoint)
+    }
+
+    fn create_pool_with_entry_point(
+        ops: Vec<OpWithErrors>,
+        entrypoint: MockEntryPointV0_6,
+    ) -> UoPool<
+        UserOperation,
+        impl Prechecker<UO = UserOperation>,
+        impl Simulator<UO = UserOperation>,
+        impl EntryPoint,
+    > {
         let args = PoolConfig {
             entry_point: Address::random(),
             entry_point_version: EntryPointVersion::V0_6,
@@ -1423,20 +1515,7 @@ mod tests {
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
-        let mut entrypoint = MockEntryPointV0_6::new();
-        entrypoint.expect_get_deposit_info().returning(|_| {
-            Ok(DepositInfo {
-                deposit: 1000.into(),
-                staked: true,
-                stake: 10000,
-                unstake_delay_sec: 100,
-                withdraw_time: 10,
-            })
-        });
 
-        entrypoint
-            .expect_balance_of()
-            .returning(|_, _| Ok(U256::from(1000)));
         let paymaster = PaymasterTracker::new(
             entrypoint,
             PaymasterConfig::new(
@@ -1507,6 +1586,26 @@ mod tests {
             paymaster,
             reputation,
         )
+    }
+
+    async fn create_pool_with_entrypoint_insert_ops(
+        ops: Vec<OpWithErrors>,
+        entrypoint: MockEntryPointV0_6,
+    ) -> (
+        UoPool<
+            UserOperation,
+            impl Prechecker<UO = UserOperation>,
+            impl Simulator<UO = UserOperation>,
+            impl EntryPoint,
+        >,
+        Vec<UserOperationVariant>,
+    ) {
+        let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
+        let pool = create_pool_with_entry_point(ops, entrypoint);
+        for op in &uos {
+            let _ = pool.add_operation(OperationOrigin::Local, op.clone()).await;
+        }
+        (pool, uos)
     }
 
     async fn create_pool_insert_ops(
