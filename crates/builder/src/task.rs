@@ -62,8 +62,8 @@ pub struct Args {
     /// True if using unsafe mode
     pub unsafe_mode: bool,
     /// Private key to use for signing transactions
-    /// If not provided, AWS KMS will be used
-    pub private_key: Option<String>,
+    /// If empty, AWS KMS will be used
+    pub private_keys: Vec<String>,
     /// AWS KMS key ids to use for signing transactions
     /// Only used if private_key is not provided
     pub aws_kms_key_ids: Vec<String>,
@@ -152,6 +152,7 @@ where
 
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
+        let mut pk_iter = self.args.private_keys.clone().into_iter();
 
         for ep in &self.args.entry_points {
             match ep.version {
@@ -162,6 +163,7 @@ where
                             Arc::clone(&provider),
                             submit_provider.clone(),
                             ep_v0_6.clone(),
+                            &mut pk_iter,
                         )
                         .await?;
                     sender_handles.extend(handles);
@@ -174,6 +176,7 @@ where
                             Arc::clone(&provider),
                             submit_provider.clone(),
                             ep_v0_7.clone(),
+                            &mut pk_iter,
                         )
                         .await?;
                     sender_handles.extend(handles);
@@ -255,12 +258,13 @@ where
         Box::new(self)
     }
 
-    async fn create_builders_v0_6<C, E>(
+    async fn create_builders_v0_6<C, E, I>(
         &self,
         ep: &EntryPointBuilderSettings,
         provider: Arc<EthersProvider<C>>,
         submit_provider: Option<Arc<EthersProvider<C>>>,
         ep_v0_6: E,
+        pk_iter: &mut I,
     ) -> anyhow::Result<(
         Vec<JoinHandle<anyhow::Result<()>>>,
         Vec<mpsc::Sender<BundleSenderAction>>,
@@ -268,6 +272,7 @@ where
     where
         C: JsonRpcClient + 'static,
         E: EntryPointProvider<v0_6::UserOperation> + Clone,
+        I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
         let mut sender_handles = vec![];
@@ -284,6 +289,7 @@ where
                         ep_v0_6.clone(),
                         self.args.sim_settings.clone(),
                     ),
+                    pk_iter,
                 )
                 .await?
             } else {
@@ -298,6 +304,7 @@ where
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
+                    pk_iter,
                 )
                 .await?
             };
@@ -307,12 +314,13 @@ where
         Ok((sender_handles, bundle_sender_actions))
     }
 
-    async fn create_builders_v0_7<C, E>(
+    async fn create_builders_v0_7<C, E, I>(
         &self,
         ep: &EntryPointBuilderSettings,
         provider: Arc<EthersProvider<C>>,
         submit_provider: Option<Arc<EthersProvider<C>>>,
         ep_v0_7: E,
+        pk_iter: &mut I,
     ) -> anyhow::Result<(
         Vec<JoinHandle<anyhow::Result<()>>>,
         Vec<mpsc::Sender<BundleSenderAction>>,
@@ -320,6 +328,7 @@ where
     where
         C: JsonRpcClient + 'static,
         E: EntryPointProvider<v0_7::UserOperation> + Clone,
+        I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
         let mut sender_handles = vec![];
@@ -336,6 +345,7 @@ where
                         ep_v0_7.clone(),
                         self.args.sim_settings.clone(),
                     ),
+                    pk_iter,
                 )
                 .await?
             } else {
@@ -350,6 +360,7 @@ where
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
+                    pk_iter,
                 )
                 .await?
             };
@@ -359,13 +370,14 @@ where
         Ok((sender_handles, bundle_sender_actions))
     }
 
-    async fn create_bundle_builder<UO, E, S, C>(
+    async fn create_bundle_builder<UO, E, S, C, I>(
         &self,
         index: u64,
         provider: Arc<EthersProvider<C>>,
         submit_provider: Option<Arc<EthersProvider<C>>>,
         entry_point: E,
         simulator: S,
+        pk_iter: &mut I,
     ) -> anyhow::Result<(
         JoinHandle<anyhow::Result<()>>,
         mpsc::Sender<BundleSenderAction>,
@@ -376,10 +388,11 @@ where
         E: EntryPointProvider<UO> + Clone,
         S: Simulator<UO = UO>,
         C: JsonRpcClient + 'static,
+        I: Iterator<Item = String>,
     {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
-        let signer = if let Some(pk) = &self.args.private_key {
+        let signer = if let Some(pk) = pk_iter.next() {
             info!("Using local signer");
             BundlerSigner::Local(
                 LocalSigner::connect(

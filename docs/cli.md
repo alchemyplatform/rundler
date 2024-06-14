@@ -168,10 +168,13 @@ List of command line options for configuring the Builder.
   - *Only required when running in distributed mode* 
 - `--builder.private_key`: Private key to use for signing transactions
   - env: *BUILDER_PRIVATE_KEY*
-  - *Always used if provided. If not provided builder.aws_kms_key_ids is used*
+  - **DEPRECATED**: Use `--builder.private_keys` instead. If both used this is added to the list.
+- `--builder.private_keys`: Private keys to use for signing transactions, separated by `,`
+  - env: *BUILDER_PRIVATE_KEYS*
 - `--builder.aws_kms_key_ids`: AWS KMS key IDs to use for signing transactions (comma-separated)
   - env: *BUILDER_AWS_KMS_KEY_IDS*
   - *Only required if BUILDER_PRIVATE_KEY is not provided* 
+  - *Cannot use `builder.private_keys` and `builder.aws_kms_key_ids` at the same time*
 - `--builder.redis_uri`: Redis URI to use for KMS leasing (default: `""`)
   - env: *BUILDER_REDIS_URI*
   - *Only required when AWS_KMS_KEY_IDS are provided* 

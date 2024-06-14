@@ -183,33 +183,23 @@ impl TransactionSenderArgs {
     {
         let sender = match self {
             Self::Raw(args) => {
-                if let Some(submit_provider) = submit_provider {
+                let (provider, submitter) = if let Some(submit_provider) = submit_provider {
                     if args.use_submit_for_status {
-                        TransactionSenderEnum::Raw(RawTransactionSender::new(
-                            Arc::clone(&submit_provider),
-                            submit_provider,
-                            signer,
-                            args.dropped_status_supported,
-                            args.use_conditional_rpc,
-                        ))
+                        (Arc::clone(&submit_provider), submit_provider)
                     } else {
-                        TransactionSenderEnum::Raw(RawTransactionSender::new(
-                            rpc_provider,
-                            submit_provider,
-                            signer,
-                            args.dropped_status_supported,
-                            args.use_conditional_rpc,
-                        ))
+                        (rpc_provider, submit_provider)
                     }
                 } else {
-                    TransactionSenderEnum::Raw(RawTransactionSender::new(
-                        Arc::clone(&rpc_provider),
-                        rpc_provider,
-                        signer,
-                        args.dropped_status_supported,
-                        args.use_conditional_rpc,
-                    ))
-                }
+                    (Arc::clone(&rpc_provider), rpc_provider)
+                };
+
+                TransactionSenderEnum::Raw(RawTransactionSender::new(
+                    provider,
+                    submitter,
+                    signer,
+                    args.dropped_status_supported,
+                    args.use_conditional_rpc,
+                ))
             }
             Self::Flashbots(args) => {
                 let flashbots_signer = args.auth_key.parse().context("should parse auth key")?;
