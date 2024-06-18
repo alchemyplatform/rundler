@@ -267,7 +267,7 @@ where
                     UnsafeSimulator::new(
                         Arc::clone(&provider),
                         ep_v0_6.clone(),
-                        self.args.sim_settings,
+                        self.args.sim_settings.clone(),
                     ),
                 )
                 .await?
@@ -279,7 +279,7 @@ where
                     simulation::new_v0_6_simulator(
                         Arc::clone(&provider),
                         ep_v0_6.clone(),
-                        self.args.sim_settings,
+                        self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
                 )
@@ -316,7 +316,7 @@ where
                     UnsafeSimulator::new(
                         Arc::clone(&provider),
                         ep_v0_7.clone(),
-                        self.args.sim_settings,
+                        self.args.sim_settings.clone(),
                     ),
                 )
                 .await?
@@ -328,7 +328,7 @@ where
                     simulation::new_v0_7_simulator(
                         Arc::clone(&provider),
                         ep_v0_7.clone(),
-                        self.args.sim_settings,
+                        self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
                 )

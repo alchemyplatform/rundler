@@ -124,7 +124,7 @@ pub(crate) fn infos_from_validation_output(
     sender_address: Address,
     paymaster_address: Option<Address>,
     entry_point_out: &ValidationOutput,
-    sim_settings: Settings,
+    sim_settings: &Settings,
 ) -> EntityInfos {
     let mut ei = EntityInfos::default();
     ei.set_sender(
@@ -153,7 +153,7 @@ pub(crate) fn infos_from_validation_output(
     ei
 }
 
-pub(crate) fn is_staked(info: StakeInfo, sim_settings: Settings) -> bool {
+pub(crate) fn is_staked(info: StakeInfo, sim_settings: &Settings) -> bool {
     info.stake >= sim_settings.min_stake_value.into()
         && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
 }

@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
 mod builder;
@@ -162,6 +162,17 @@ pub struct CommonArgs {
         global = true
     )]
     min_unstake_delay: u32,
+
+    /// String representation of the timeout of a custom tracer in a format that is parsable by the
+    /// `ParseDuration` function on the ethereum node. See Docs: https://pkg.go.dev/time#ParseDuration
+    #[arg(
+        long = "tracer_timeout",
+        name = "tracer_timeout",
+        env = "TRACER_TIMEOUT",
+        default_value = "15s",
+        global = true
+    )]
+    tracer_timeout: String,
 
     /// Amount of blocks to search when calling eth_getUserOperationByHash.
     /// Defaults from 0 to latest block
@@ -357,14 +368,21 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
     }
 }
 
-impl From<&CommonArgs> for SimulationSettings {
-    fn from(value: &CommonArgs) -> Self {
-        Self::new(
+impl TryFrom<&CommonArgs> for SimulationSettings {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+        if go_parse_duration::parse_duration(&value.tracer_timeout).is_err() {
+            bail!("Invalid value for tracer_timeout, must be parsable by the ParseDuration function. See docs https://pkg.go.dev/time#ParseDuration")
+        }
+
+        Ok(Self::new(
             value.min_unstake_delay,
             value.min_stake_value,
             value.max_simulate_handle_ops_gas,
             value.max_verification_gas,
-        )
+            value.tracer_timeout.clone(),
+        ))
     }
 }
 

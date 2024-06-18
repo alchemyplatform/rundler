@@ -125,7 +125,6 @@ pub(super) trait SimulateValidationTracer: Send + Sync + 'static {
         &self,
         op: UserOperation,
         block_id: BlockId,
-        max_validation_gas: u64,
     ) -> anyhow::Result<TracerOutput>;
 }
 
@@ -134,6 +133,8 @@ pub(super) trait SimulateValidationTracer: Send + Sync + 'static {
 pub(crate) struct SimulateValidationTracerImpl<P, E> {
     provider: Arc<P>,
     entry_point: E,
+    max_validation_gas: u64,
+    tracer_timeout: String,
 }
 
 /// Runs the bundler's custom tracer on the entry point's `simulateValidation`
@@ -149,11 +150,10 @@ where
         &self,
         op: UserOperation,
         block_id: BlockId,
-        max_validation_gas: u64,
     ) -> anyhow::Result<TracerOutput> {
         let (tx, state_override) = self
             .entry_point
-            .get_tracer_simulate_validation_call(op, max_validation_gas);
+            .get_tracer_simulate_validation_call(op, self.max_validation_gas);
 
         let out = self
             .provider
@@ -165,6 +165,7 @@ where
                         tracer: Some(GethDebugTracerType::JsTracer(
                             validation_tracer_js().to_string(),
                         )),
+                        timeout: Some(self.tracer_timeout.clone()),
                         ..Default::default()
                     },
                     state_overrides: Some(state_override),
@@ -178,10 +179,17 @@ where
 
 impl<P, E> SimulateValidationTracerImpl<P, E> {
     /// Creates a new instance of the bundler's custom tracer.
-    pub(crate) fn new(provider: Arc<P>, entry_point: E) -> Self {
+    pub(crate) fn new(
+        provider: Arc<P>,
+        entry_point: E,
+        max_validation_gas: u64,
+        tracer_timeout: String,
+    ) -> Self {
         Self {
             provider,
             entry_point,
+            max_validation_gas,
+            tracer_timeout,
         }
     }
 }

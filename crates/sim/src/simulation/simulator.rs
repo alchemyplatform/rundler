@@ -63,7 +63,7 @@ where
     SimulatorImpl::new(
         provider.clone(),
         entry_point.clone(),
-        ValidationContextProviderV0_6::new(provider, entry_point, sim_settings),
+        ValidationContextProviderV0_6::new(provider, entry_point, sim_settings.clone()),
         sim_settings,
         mempool_configs,
     )
@@ -86,7 +86,7 @@ where
     SimulatorImpl::new(
         provider.clone(),
         entry_point.clone(),
-        ValidationContextProviderV0_7::new(provider, entry_point, sim_settings),
+        ValidationContextProviderV0_7::new(provider, entry_point, sim_settings.clone()),
         sim_settings,
         mempool_configs,
     )
@@ -345,7 +345,7 @@ where
         }
 
         if let Some(aggregator_info) = entry_point_out.aggregator_info {
-            if !context::is_staked(aggregator_info.stake_info, self.sim_settings) {
+            if !context::is_staked(aggregator_info.stake_info, &self.sim_settings) {
                 // [EREP-040]
                 violations.push(SimulationViolation::UnstakedAggregator)
             }
@@ -514,7 +514,7 @@ where
             sender_info,
             ..
         } = entry_point_out;
-        let account_is_staked = context::is_staked(sender_info, self.sim_settings);
+        let account_is_staked = context::is_staked(sender_info, &self.sim_settings);
         let ValidationReturnInfo {
             pre_op_gas,
             valid_after,
@@ -798,7 +798,7 @@ mod tests {
                     paymaster_info: StakeInfo::from((U256::default(), U256::default())),
                     aggregator_info: None,
                 },
-                Settings::default(),
+                &Settings::default(),
             ),
             tracer_out,
             entry_point_out: ValidationOutput {

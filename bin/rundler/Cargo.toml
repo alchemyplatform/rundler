@@ -27,6 +27,7 @@ dotenv = "0.15.0"
 ethers.workspace = true
 itertools = "0.12.1"
 metrics = "0.22.1"
+go-parse-duration = "0.1"
 metrics-exporter-prometheus = { version = "0.13.1", default-features = false, features = ["http-listener"] }
 metrics-process = "1.2.1"
 metrics-util = "0.16.2"

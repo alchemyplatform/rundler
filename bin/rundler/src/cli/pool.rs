@@ -195,7 +195,7 @@ impl PoolArgs {
             blocklist: blocklist.clone(),
             allowlist: allowlist.clone(),
             precheck_settings: common.try_into()?,
-            sim_settings: common.into(),
+            sim_settings: common.try_into()?,
             throttled_entity_mempool_count: self.throttled_entity_mempool_count,
             throttled_entity_live_blocks: self.throttled_entity_live_blocks,
             paymaster_tracking_enabled: self.paymaster_tracking_enabled,
