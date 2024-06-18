@@ -163,9 +163,8 @@ pub struct CommonArgs {
     )]
     min_unstake_delay: u32,
 
-    /// String representation of timeount in a format that is parsable by the
-    /// `ParseDuration` function on the ethereum node.
-    /// Docs: https://pkg.go.dev/time#ParseDuration
+    /// String representation of the timeout of a custom tracer in a format that is parsable by the
+    /// `ParseDuration` function on the ethereum node. See Docs: https://pkg.go.dev/time#ParseDuration
     #[arg(
         long = "tracer_timeout",
         name = "tracer_timeout",
