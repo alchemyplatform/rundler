@@ -150,7 +150,7 @@ pub trait Simulator: Send + Sync + 'static {
 }
 
 /// Simulation Settings
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Settings {
     /// The minimum amount of time that a staked entity must have configured as
     /// their unstake delay on the entry point contract in order to be considered staked.
@@ -162,6 +162,8 @@ pub struct Settings {
     pub max_simulate_handle_ops_gas: u64,
     /// The maximum amount of verification gas that can be used during the simulation call
     pub max_verification_gas: u64,
+    /// The max duration of the custom javascript tracer
+    pub tracer_timeout: String,
 }
 
 impl Settings {
@@ -171,12 +173,14 @@ impl Settings {
         min_stake_value: u128,
         max_simulate_handle_ops_gas: u64,
         max_verification_gas: u64,
+        tracer_timeout: String,
     ) -> Self {
         Self {
             min_unstake_delay,
             min_stake_value,
             max_simulate_handle_ops_gas,
             max_verification_gas,
+            tracer_timeout,
         }
     }
 }
@@ -192,6 +196,7 @@ impl Default for Settings {
             // 550 million gas: currently the defaults for Alchemy eth_call
             max_simulate_handle_ops_gas: 550_000_000,
             max_verification_gas: 5_000_000,
+            tracer_timeout: "10s".to_string(),
         }
     }
 }

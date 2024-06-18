@@ -44,6 +44,7 @@ pub(super) trait SimulateValidationTracer: Send + Sync + 'static {
         op: UserOperation,
         block_id: BlockId,
         max_validation_gas: u64,
+        tracer_timeout: String,
     ) -> anyhow::Result<TracerOutput>;
 }
 
@@ -68,6 +69,7 @@ where
         op: UserOperation,
         block_id: BlockId,
         max_validation_gas: u64,
+        tracer_timeout: String,
     ) -> anyhow::Result<TracerOutput> {
         let (tx, state_override) = self
             .entry_point
@@ -83,6 +85,7 @@ where
                             tracer: Some(GethDebugTracerType::JsTracer(
                                 validation_tracer_js().to_string(),
                             )),
+                            timeout: Some(tracer_timeout),
                             ..Default::default()
                         },
                         state_overrides: Some(state_override),

@@ -196,8 +196,11 @@ impl PoolTask {
         );
 
         if unsafe_mode {
-            let simulator =
-                UnsafeSimulator::new(Arc::clone(&provider), ep.clone(), pool_config.sim_settings);
+            let simulator = UnsafeSimulator::new(
+                Arc::clone(&provider),
+                ep.clone(),
+                pool_config.sim_settings.clone(),
+            );
             Self::create_mempool(
                 chain_spec,
                 pool_config,
@@ -210,7 +213,7 @@ impl PoolTask {
             let simulator = simulation::new_v0_6_simulator(
                 Arc::clone(&provider),
                 ep.clone(),
-                pool_config.sim_settings,
+                pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
             );
             Self::create_mempool(
@@ -239,8 +242,11 @@ impl PoolTask {
         );
 
         if unsafe_mode {
-            let simulator =
-                UnsafeSimulator::new(Arc::clone(&provider), ep.clone(), pool_config.sim_settings);
+            let simulator = UnsafeSimulator::new(
+                Arc::clone(&provider),
+                ep.clone(),
+                pool_config.sim_settings.clone(),
+            );
             Self::create_mempool(
                 chain_spec,
                 pool_config,
@@ -253,7 +259,7 @@ impl PoolTask {
             let simulator = simulation::new_v0_7_simulator(
                 Arc::clone(&provider),
                 ep.clone(),
-                pool_config.sim_settings,
+                pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
             );
             Self::create_mempool(

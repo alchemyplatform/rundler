@@ -55,7 +55,12 @@ where
         let paymaster_address = op.paymaster();
         let tracer_out = self
             .simulate_validation_tracer
-            .trace_simulate_validation(op.clone(), block_id, self.sim_settings.max_verification_gas)
+            .trace_simulate_validation(
+                op.clone(),
+                block_id,
+                self.sim_settings.max_verification_gas,
+                self.sim_settings.tracer_timeout.clone(),
+            )
             .await?;
         let num_phases = tracer_out.phases.len() as u32;
         // Check if there are too many phases here, then check too few at the
@@ -107,7 +112,7 @@ where
             sender_address,
             paymaster_address,
             &entry_point_out,
-            self.sim_settings,
+            &self.sim_settings,
         );
 
         let associated_addresses = tracer_out.associated_slots_by_address.addresses();
@@ -276,6 +281,7 @@ mod tests {
                 op: UserOperation,
                 block_id: BlockId,
                 max_validation_gas: u64,
+                tracer_timeout: String,
             ) -> anyhow::Result<TracerOutput>;
         }
     }
@@ -286,7 +292,7 @@ mod tests {
 
         tracer
             .expect_trace_simulate_validation()
-            .returning(|_, _, _| {
+            .returning(|_, _, _, _| {
                 let mut tracer_output = get_test_tracer_output();
                 tracer_output.revert_data = Some(hex::encode(
                     FailedOp {
