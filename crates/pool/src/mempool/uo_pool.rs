@@ -25,8 +25,8 @@ use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
-    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, UserOperation, UserOperationId,
-    UserOperationVariant,
+    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
+    UserOperationId, UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
@@ -62,6 +62,8 @@ struct UoPoolState {
     pool: PoolInner,
     throttled_ops: HashSet<H256>,
     block_number: u64,
+    gas_fees: GasFees,
+    base_fee: U256,
 }
 
 impl<UO, P, S, E> UoPool<UO, P, S, E>
@@ -84,6 +86,8 @@ where
                 pool: PoolInner::new(config.clone().into()),
                 throttled_ops: HashSet::new(),
                 block_number: 0,
+                gas_fees: GasFees::default(),
+                base_fee: U256::zero(),
             }),
             reputation,
             paymaster,
@@ -297,38 +301,61 @@ where
                 })
             }
 
-            // expire old UOs
-            let expired = state.pool.remove_expired(update.latest_block_timestamp);
+            // pool maintenance
+            let gas_fees = state.gas_fees;
+            let base_fee = state.base_fee;
+            let expired = state.pool.do_maintenance(
+                update.latest_block_number,
+                update.latest_block_timestamp,
+                gas_fees,
+                base_fee,
+            );
+
             for (hash, until) in expired {
                 self.emit(OpPoolEvent::RemovedOp {
                     op_hash: hash,
                     reason: OpRemovalReason::Expired { valid_until: until },
                 })
             }
-
-            state.block_number = update.latest_block_number;
         }
 
         // update required bundle fees and update metrics
-        if let Ok((bundle_fees, base_fee)) = self.prechecker.update_fees().await {
-            let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
-                Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                Err(_) => 0.0,
-            };
-            UoPoolMetrics::current_max_fee_gwei(max_fee);
+        match self.prechecker.update_fees().await {
+            Ok((bundle_fees, base_fee)) => {
+                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
+                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                    Err(_) => 0.0,
+                };
+                UoPoolMetrics::current_max_fee_gwei(max_fee);
 
-            let max_priority_fee = match format_units(bundle_fees.max_priority_fee_per_gas, "gwei")
-            {
-                Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                Err(_) => 0.0,
-            };
-            UoPoolMetrics::current_max_priority_fee_gwei(max_priority_fee);
+                let max_priority_fee =
+                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
+                        Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                        Err(_) => 0.0,
+                    };
+                UoPoolMetrics::current_max_priority_fee_gwei(max_priority_fee);
 
-            let base_fee = match format_units(base_fee, "gwei") {
-                Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                Err(_) => 0.0,
-            };
-            UoPoolMetrics::current_base_fee(base_fee);
+                let base_fee_f64 = match format_units(base_fee, "gwei") {
+                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                    Err(_) => 0.0,
+                };
+                UoPoolMetrics::current_base_fee(base_fee_f64);
+
+                // cache for the next update
+                {
+                    let mut state = self.state.write();
+                    state.block_number = update.latest_block_number;
+                    state.gas_fees = bundle_fees;
+                    state.base_fee = base_fee;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to update fees: {:?}", e);
+                {
+                    let mut state = self.state.write();
+                    state.block_number = update.latest_block_number;
+                }
+            }
         }
     }
 
