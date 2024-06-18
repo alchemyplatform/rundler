@@ -373,7 +373,7 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
     type Error = anyhow::Error;
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
-        if let Err(_) = go_parse_duration::parse_duration(&value.tracer_timeout) {
+        if go_parse_duration::parse_duration(&value.tracer_timeout).is_err() {
             bail!("Invalid value for tracer_timeout, must be parsable by the ParseDuration function. See docs https://pkg.go.dev/time#ParseDuration")
         }
 
