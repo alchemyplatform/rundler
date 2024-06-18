@@ -101,12 +101,7 @@ where
     ) -> Result<ValidationContext<Self::UO>, ViolationError<SimulationViolation>> {
         let tracer_out = self
             .simulate_validation_tracer
-            .trace_simulate_validation(
-                op.clone(),
-                block_id,
-                self.sim_settings.max_verification_gas,
-                self.sim_settings.tracer_timeout.clone(),
-            )
+            .trace_simulate_validation(op.clone(), block_id)
             .await?;
 
         let call_stack = self.parse_call_stack(tracer_out.calls.clone())?;
@@ -494,7 +489,12 @@ where
     pub(crate) fn new(provider: Arc<P>, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
             entry_point_address: entry_point.address(),
-            simulate_validation_tracer: SimulateValidationTracerImpl::new(provider, entry_point),
+            simulate_validation_tracer: SimulateValidationTracerImpl::new(
+                provider,
+                entry_point,
+                sim_settings.max_verification_gas,
+                sim_settings.tracer_timeout.clone(),
+            ),
             sim_settings,
         }
     }

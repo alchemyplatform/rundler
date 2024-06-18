@@ -55,12 +55,7 @@ where
         let paymaster_address = op.paymaster();
         let tracer_out = self
             .simulate_validation_tracer
-            .trace_simulate_validation(
-                op.clone(),
-                block_id,
-                self.sim_settings.max_verification_gas,
-                self.sim_settings.tracer_timeout.clone(),
-            )
+            .trace_simulate_validation(op.clone(), block_id)
             .await?;
         let num_phases = tracer_out.phases.len() as u32;
         // Check if there are too many phases here, then check too few at the
@@ -186,7 +181,12 @@ where
     /// Creates a new `ValidationContextProvider` for entry point v0.6 with the given provider and entry point.
     pub(crate) fn new(provider: Arc<P>, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
-            simulate_validation_tracer: SimulateValidationTracerImpl::new(provider, entry_point),
+            simulate_validation_tracer: SimulateValidationTracerImpl::new(
+                provider,
+                entry_point,
+                sim_settings.max_verification_gas,
+                sim_settings.tracer_timeout.clone(),
+            ),
             sim_settings,
         }
     }
@@ -280,8 +280,6 @@ mod tests {
                 &self,
                 op: UserOperation,
                 block_id: BlockId,
-                max_validation_gas: u64,
-                tracer_timeout: String,
             ) -> anyhow::Result<TracerOutput>;
         }
     }
@@ -290,19 +288,17 @@ mod tests {
     async fn test_create_context_two_phases_unintended_revert() {
         let mut tracer = MockTracer::new();
 
-        tracer
-            .expect_trace_simulate_validation()
-            .returning(|_, _, _, _| {
-                let mut tracer_output = get_test_tracer_output();
-                tracer_output.revert_data = Some(hex::encode(
-                    FailedOp {
-                        op_index: U256::from(100),
-                        reason: "AA23 reverted (or OOG)".to_string(),
-                    }
-                    .encode(),
-                ));
-                Ok(tracer_output)
-            });
+        tracer.expect_trace_simulate_validation().returning(|_, _| {
+            let mut tracer_output = get_test_tracer_output();
+            tracer_output.revert_data = Some(hex::encode(
+                FailedOp {
+                    op_index: U256::from(100),
+                    reason: "AA23 reverted (or OOG)".to_string(),
+                }
+                .encode(),
+            ));
+            Ok(tracer_output)
+        });
 
         let user_operation = UserOperation {
             sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),

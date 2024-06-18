@@ -162,7 +162,8 @@ pub struct Settings {
     pub max_simulate_handle_ops_gas: u64,
     /// The maximum amount of verification gas that can be used during the simulation call
     pub max_verification_gas: u64,
-    /// The max duration of the custom javascript tracer
+    /// The max duration of the custom javascript tracer. Must be in a format parseable by the
+    /// ParseDuration function on an ethereum node. See Docs: https://pkg.go.dev/time#ParseDuration
     pub tracer_timeout: String,
 }
 

@@ -286,7 +286,7 @@ impl BuilderArgs {
             priority_fee_mode,
             sender_args,
             eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
-            sim_settings: common.into(),
+            sim_settings: common.try_into()?,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
             max_fee_increases: self.max_fee_increases,

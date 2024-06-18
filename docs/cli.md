@@ -73,6 +73,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *DISABLE_ENTRY_POINT_V0_7*
 - `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
   - env: *NUM_BUILDERS_V0_7*
+- `--tracer_timeout`: The timeout used for custom javascript tracers, the string must be in a valid parseable format that can be used in the `ParseDuration` function on an ethereum node. See Docs [Here](https://pkg.go.dev/time#ParseDuration). (default: `15s`)
+  - env: *TRACER_TIMEOUT*
 
 ## Metrics Options
 
