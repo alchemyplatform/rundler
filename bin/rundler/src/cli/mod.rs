@@ -169,7 +169,7 @@ pub struct CommonArgs {
         long = "tracer_timeout",
         name = "tracer_timeout",
         env = "TRACER_TIMEOUT",
-        default_value = "15s",
+        default_value = "10s",
         global = true
     )]
     tracer_timeout: String,
