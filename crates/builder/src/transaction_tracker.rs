@@ -16,6 +16,8 @@ use std::sync::Arc;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
+#[cfg(test)]
+use mockall::automock;
 use rundler_provider::Provider;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
@@ -33,6 +35,7 @@ use crate::sender::{TransactionSender, TxSenderError, TxStatus};
 /// succeeded (potentially not the most recent one) or whether circumstances
 /// have changed so that it is worth making another attempt.
 #[async_trait]
+#[cfg_attr(test, automock)]
 pub(crate) trait TransactionTracker: Send + Sync + 'static {
     /// Returns the current nonce and the required fees for the next transaction.
     fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(U256, Option<GasFees>)>;

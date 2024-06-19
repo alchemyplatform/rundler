@@ -91,8 +91,8 @@ impl<UO: UserOperation> Bundle<UO> {
     }
 }
 
-#[cfg_attr(test, automock(type UO = rundler_types::v0_6::UserOperation;))]
 #[async_trait]
+#[cfg_attr(test, automock(type UO = rundler_types::v0_6::UserOperation;))]
 pub(crate) trait BundleProposer: Send + Sync + 'static {
     type UO: UserOperation;
 
@@ -1579,6 +1579,8 @@ mod tests {
             vec![],
             base_fee,
             max_priority_fee_per_gas,
+            false,
+            ExpectedStorage::default(),
         )
         .await;
         assert_eq!(
@@ -1613,6 +1615,8 @@ mod tests {
             vec![],
             base_fee,
             max_priority_fee_per_gas,
+            false,
+            ExpectedStorage::default(),
         )
         .await;
         assert_eq!(
@@ -1655,6 +1659,8 @@ mod tests {
             vec![],
             base_fee,
             max_priority_fee_per_gas,
+            false,
+            ExpectedStorage::default(),
         )
         .await;
         assert_eq!(
@@ -1746,6 +1752,8 @@ mod tests {
             vec![],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -1834,6 +1842,8 @@ mod tests {
             vec![deposit, deposit, deposit],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await;
 
@@ -1895,6 +1905,8 @@ mod tests {
             vec![deposit, deposit, deposit],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await;
 
@@ -2024,6 +2036,8 @@ mod tests {
             vec![],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await;
 
@@ -2056,6 +2070,8 @@ mod tests {
             vec![],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await;
 
@@ -2122,6 +2138,8 @@ mod tests {
             vec![],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await;
 
@@ -2136,6 +2154,76 @@ mod tests {
                 ..Default::default()
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn test_condition_not_met_match() {
+        let op = default_op();
+
+        let mut expected_storage = ExpectedStorage::default();
+        expected_storage.insert(address(1), U256::zero(), U256::zero());
+        let actual_storage = expected_storage.clone();
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(move || {
+                    Ok(SimulationResult {
+                        expected_storage: expected_storage.clone(),
+                        ..Default::default()
+                    })
+                }),
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            U256::zero(),
+            U256::zero(),
+            true,
+            actual_storage,
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_condition_not_met_mismatch() {
+        let op = default_op();
+
+        let mut expected_storage = ExpectedStorage::default();
+        expected_storage.insert(address(1), U256::zero(), U256::zero());
+        let mut actual_storage = ExpectedStorage::default();
+        actual_storage.insert(address(1), U256::zero(), U256::from(1));
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(move || {
+                    Ok(SimulationResult {
+                        expected_storage: expected_storage.clone(),
+                        ..Default::default()
+                    })
+                }),
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            U256::zero(),
+            U256::zero(),
+            true,
+            actual_storage,
+        )
+        .await;
+
+        assert!(bundle.ops_per_aggregator.is_empty());
+        assert_eq!(bundle.rejected_ops, vec![op]);
     }
 
     struct MockOp {
@@ -2156,10 +2244,13 @@ mod tests {
             vec![],
             U256::zero(),
             U256::zero(),
+            false,
+            ExpectedStorage::default(),
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn mock_make_bundle(
         mock_ops: Vec<MockOp>,
         mock_aggregators: Vec<MockAggregator>,
@@ -2167,6 +2258,8 @@ mod tests {
         mock_paymaster_deposits: Vec<U256>,
         base_fee: U256,
         max_priority_fee_per_gas: U256,
+        notify_condition_not_met: bool,
+        actual_storage: ExpectedStorage,
     ) -> Bundle<UserOperation> {
         let entry_point_address = address(123);
         let beneficiary = address(124);
@@ -2226,6 +2319,7 @@ mod tests {
             .into_iter()
             .map(|agg| (agg.address, agg.signature))
             .collect();
+
         let mut provider = MockProvider::new();
         provider
             .expect_get_latest_block_hash_and_number()
@@ -2236,6 +2330,16 @@ mod tests {
         provider
             .expect_get_max_priority_fee()
             .returning(move || Ok(max_priority_fee_per_gas));
+        if notify_condition_not_met {
+            for (addr, slots) in actual_storage.0.into_iter() {
+                let values = slots.values().cloned().collect::<Vec<_>>();
+                provider
+                    .expect_batch_get_storage_at()
+                    .withf(move |a, s| *a == addr && s.iter().all(|slot| slots.contains_key(slot)))
+                    .returning(move |_, _| Ok(values.clone()));
+            }
+        }
+
         entry_point
             .expect_aggregate_signatures()
             .returning(move |address, _| Ok(signatures_by_aggregator[&address]().unwrap()));
@@ -2256,6 +2360,11 @@ mod tests {
             },
             event_sender,
         );
+
+        if notify_condition_not_met {
+            proposer.notify_condition_not_met();
+        }
+
         proposer
             .make_bundle(None, false)
             .await
