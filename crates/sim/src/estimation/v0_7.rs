@@ -110,17 +110,32 @@ where
         );
         tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
 
-        let verification_gas_limit = verification_gas_limit?.into();
-        let paymaster_verification_gas_limit = paymaster_verification_gas_limit?.into();
-        let call_gas_limit = call_gas_limit?.into();
+        let verification_gas_limit = verification_gas_limit?;
+        let paymaster_verification_gas_limit = paymaster_verification_gas_limit?;
+        let call_gas_limit = call_gas_limit?;
+
+        // check the total gas limit
+        let mut op_with_gas = full_op;
+        op_with_gas.pre_verification_gas = pre_verification_gas;
+        op_with_gas.call_gas_limit = call_gas_limit;
+        op_with_gas.verification_gas_limit = verification_gas_limit;
+        op_with_gas.paymaster_verification_gas_limit = paymaster_verification_gas_limit;
+        let gas_limit =
+            gas::user_operation_execution_gas_limit(&self.chain_spec, &op_with_gas, true);
+        if gas_limit > self.settings.max_total_execution_gas.into() {
+            return Err(GasEstimationError::GasTotalTooLarge(
+                gas_limit.as_u64(),
+                self.settings.max_total_execution_gas,
+            ));
+        }
 
         Ok(GasEstimate {
             pre_verification_gas,
-            call_gas_limit,
-            verification_gas_limit,
+            call_gas_limit: call_gas_limit.into(),
+            verification_gas_limit: verification_gas_limit.into(),
             paymaster_verification_gas_limit: op
                 .paymaster
-                .map(|_| paymaster_verification_gas_limit),
+                .map(|_| paymaster_verification_gas_limit.into()),
         })
     }
 }
@@ -563,6 +578,7 @@ mod tests {
             max_call_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_verification_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
+            max_total_execution_gas: TEST_MAX_GAS_LIMITS,
             max_simulate_handle_ops_gas: TEST_MAX_GAS_LIMITS,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -796,6 +812,63 @@ mod tests {
         assert!(matches!(
             estimation_error,
             GasEstimationError::RevertInCallWithMessage(msg) if msg == revert_msg
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_total_limit() {
+        let (mut entry, mut provider) = create_base_config();
+
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(move |_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: TestCallGasResult {
+                        success: true,
+                        gas_used: TEST_MAX_GAS_LIMITS.into(),
+                        revert_data: Bytes::new(),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+        provider
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((H256::zero(), U64::zero())));
+
+        let (estimator, _) = create_estimator(entry, provider);
+
+        let optional_op = UserOperationOptionalGas {
+            sender: Address::zero(),
+            nonce: U256::zero(),
+            call_data: Bytes::new(),
+            call_gas_limit: Some(TEST_MAX_GAS_LIMITS.into()),
+            verification_gas_limit: Some(TEST_MAX_GAS_LIMITS.into()),
+            pre_verification_gas: Some(TEST_MAX_GAS_LIMITS.into()),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            signature: Bytes::new(),
+
+            paymaster: None,
+            paymaster_data: Bytes::new(),
+            paymaster_verification_gas_limit: Some(TEST_MAX_GAS_LIMITS.into()),
+            paymaster_post_op_gas_limit: Some(TEST_MAX_GAS_LIMITS.into()),
+
+            factory: None,
+            factory_data: Bytes::new(),
+        };
+
+        let estimation = estimator
+            .estimate_op_gas(optional_op, spoof::state())
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(
+            estimation,
+            GasEstimationError::GasTotalTooLarge(_, TEST_MAX_GAS_LIMITS)
         ));
     }
 
