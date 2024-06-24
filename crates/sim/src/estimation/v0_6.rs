@@ -103,6 +103,19 @@ where
         let verification_gas_limit = verification_gas_limit?;
         let call_gas_limit = call_gas_limit?;
 
+        // Verify total gas limit
+        let mut op_with_gas = full_op;
+        op_with_gas.verification_gas_limit = verification_gas_limit;
+        op_with_gas.call_gas_limit = call_gas_limit;
+        let gas_limit =
+            gas::user_operation_execution_gas_limit(&self.chain_spec, &op_with_gas, true);
+        if gas_limit > self.settings.max_total_execution_gas.into() {
+            return Err(GasEstimationError::GasTotalTooLarge(
+                gas_limit.as_u64(),
+                self.settings.max_total_execution_gas,
+            ));
+        }
+
         Ok(GasEstimate {
             pre_verification_gas,
             verification_gas_limit,
@@ -524,6 +537,7 @@ mod tests {
             max_call_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_verification_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
+            max_total_execution_gas: TEST_MAX_GAS_LIMITS,
             max_simulate_handle_ops_gas: TEST_MAX_GAS_LIMITS,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -617,6 +631,7 @@ mod tests {
             max_call_gas: 10000000000,
             max_paymaster_verification_gas: 10000000000,
             max_paymaster_post_op_gas: 10000000000,
+            max_total_execution_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -684,6 +699,7 @@ mod tests {
             max_call_gas: 10000000000,
             max_paymaster_verification_gas: 10000000000,
             max_paymaster_post_op_gas: 10000000000,
+            max_total_execution_gas: 10000000000,
             max_simulate_handle_ops_gas: 100000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -1266,6 +1282,7 @@ mod tests {
             max_call_gas: 10,
             max_paymaster_post_op_gas: 10,
             max_paymaster_verification_gas: 10,
+            max_total_execution_gas: 10,
             max_simulate_handle_ops_gas: 10,
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
@@ -1426,6 +1443,48 @@ mod tests {
             estimation_error,
             GasEstimationError::RevertInCallWithMessage(msg) if msg == revert_msg
         ));
+    }
+
+    #[tokio::test]
+    async fn test_total_limit() {
+        let (mut entry, mut provider) = create_base_config();
+
+        provider
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((H256::zero(), U64::zero())));
+
+        entry
+            .expect_call_spoofed_simulate_op()
+            .returning(move |_a, _b, _c, _d, _e, _f| {
+                Ok(Ok(ExecutionResult {
+                    target_result: TestCallGasResult {
+                        success: true,
+                        gas_used: 0.into(),
+                        revert_data: Bytes::new(),
+                    }
+                    .encode()
+                    .into(),
+                    target_success: true,
+                    ..Default::default()
+                }))
+            });
+
+        let (estimator, _) = create_estimator(entry, provider);
+
+        let mut optional_op = demo_user_op_optional_gas(Some(U256::from(10000)));
+        optional_op.call_gas_limit = Some(TEST_MAX_GAS_LIMITS.into());
+        optional_op.verification_gas_limit = Some(TEST_MAX_GAS_LIMITS.into());
+
+        let err = estimator
+            .estimate_op_gas(optional_op.clone(), spoof::state())
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(
+            err,
+            GasEstimationError::GasTotalTooLarge(_, TEST_MAX_GAS_LIMITS)
+        ))
     }
 
     #[test]

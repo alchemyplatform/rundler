@@ -54,6 +54,9 @@ pub enum GasEstimationError {
     /// Supplied gas was too large
     #[error("{0} cannot be larger than {1}")]
     GasFieldTooLarge(&'static str, u64),
+    /// The total amount of gas used by the UO is greater than allowed
+    #[error("total gas used by the user operation {0} is greater than the allowed limit: {1}")]
+    GasTotalTooLarge(u64, u64),
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -86,6 +89,8 @@ pub struct Settings {
     pub max_paymaster_verification_gas: u64,
     /// The maximum amount of gas that can be used for the paymaster post op step of a user operation
     pub max_paymaster_post_op_gas: u64,
+    /// The maximum amount of total execution gas to check after estimation
+    pub max_total_execution_gas: u64,
     /// The maximum amount of gas that can be used in a call to `simulateHandleOps`
     pub max_simulate_handle_ops_gas: u64,
     /// The gas fee to use during verification gas estimation, required to be held by the fee-payer
