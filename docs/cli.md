@@ -187,8 +187,10 @@ List of command line options for configuring the Builder.
   - env: *BUILDER_MAX_BLOCKS_TO_WAIT_FOR_MINE*
 - `--builder.replacement_fee_percent_increase`: Percentage amount to increase gas fees when retrying a transaction after it failed to mine (default: `10`)
   - env: *BUILDER_REPLACEMENT_FEE_PERCENT_INCREASE*
-- `--builder.max_fee_increases`: Maximum number of fee increases to attempt (Seven increases of 10% is roughly 2x the initial fees) (default: `7`)
-  - env: *BUILDER_MAX_FEE_INCREASES*
+- `--builder.max_cancellation_fee_increases`: Maximum number of cancellation fee increases to attempt (default: `15`)
+  - env: *BUILDER_MAX_CANCELLATION_FEE_INCREASES*
+- `--builder.max_replacement_underpriced_blocks`: The maximum number of blocks to wait in a replacement underpriced state before issuing a cancellation transaction (default: `20`)
+  - env: *BUILDER_MAX_REPLACEMENT_UNDERPRICED_BLOCKS*
 - `--builder.sender`: Choice of what sender type to use for transaction submission. (default: `raw`, options: `raw`, `flashbots`, `polygon_bloxroute`)
   - env: *BUILDER_SENDER*
 - `--builder.submit_url`: Only used if builder.sender == "raw." If present, the URL of the ETH provider that will be used to send transactions. Defaults to the value of `node_http`.
