@@ -50,7 +50,7 @@ pub(crate) trait TransactionTracker: Send + Sync + 'static {
         expected_stroage: &ExpectedStorage,
     ) -> TransactionTrackerResult<H256>;
 
-    /// Cancel the latest transaction in the tracker.
+    /// Cancel the abandoned transaction in the tracker.
     ///
     /// Returns: An option containing the hash of the transaction that was used to cancel. If the option
     /// is empty, then either no transaction was cancelled or the cancellation was a "soft-cancel."
@@ -71,6 +71,9 @@ pub(crate) trait TransactionTracker: Send + Sync + 'static {
 
     /// Resets the tracker to its initial state
     async fn reset(&mut self);
+
+    /// Abandons the current transaction
+    fn abandon(&mut self);
 }
 
 /// Errors that can occur while using a `TransactionTracker`.
@@ -99,6 +102,7 @@ pub(crate) enum TrackerUpdate {
         attempt_number: u64,
         gas_limit: Option<U256>,
         gas_used: Option<U256>,
+        gas_price: Option<U256>,
     },
     LatestTxDropped {
         nonce: U256,
@@ -121,6 +125,7 @@ where
     nonce: U256,
     transactions: Vec<PendingTransaction>,
     has_dropped: bool,
+    has_abandoned: bool,
     attempt_count: u64,
 }
 
@@ -159,6 +164,7 @@ where
             nonce,
             transactions: vec![],
             has_dropped: false,
+            has_abandoned: false,
             attempt_count: 0,
         })
     }
@@ -168,6 +174,7 @@ where
         self.transactions.clear();
         self.has_dropped = false;
         self.attempt_count = 0;
+        self.has_abandoned = false;
         self.update_metrics();
     }
 
@@ -214,7 +221,7 @@ where
     async fn get_mined_tx_gas_info(
         &self,
         tx_hash: H256,
-    ) -> anyhow::Result<(Option<U256>, Option<U256>)> {
+    ) -> anyhow::Result<(Option<U256>, Option<U256>, Option<U256>)> {
         let (tx, tx_receipt) = tokio::try_join!(
             self.provider.get_transaction(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
@@ -223,14 +230,14 @@ where
             warn!("failed to fetch transaction data for tx: {}", tx_hash);
             None
         });
-        let gas_used = match tx_receipt {
-            Some(r) => r.gas_used,
+        let (gas_used, gas_price) = match tx_receipt {
+            Some(r) => (r.gas_used, r.effective_gas_price),
             None => {
                 warn!("failed to fetch transaction receipt for tx: {}", tx_hash);
-                None
+                (None, None)
             }
         };
-        Ok((gas_limit, gas_used))
+        Ok((gas_limit, gas_used, gas_price))
     }
 }
 
@@ -241,7 +248,7 @@ where
     T: TransactionSender,
 {
     fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(U256, Option<GasFees>)> {
-        let gas_fees = if self.has_dropped {
+        let gas_fees = if self.has_dropped || self.has_abandoned {
             None
         } else {
             self.transactions.last().map(|tx| {
@@ -259,20 +266,45 @@ where
     ) -> TransactionTrackerResult<H256> {
         self.validate_transaction(&tx)?;
         let gas_fees = GasFees::from(&tx);
-        let sent_tx = self.sender.send_transaction(tx, expected_storage).await?;
         info!(
-            "Sent transaction {:?} nonce: {:?}",
-            sent_tx.tx_hash, sent_tx.nonce
+            "Sending transaction with nonce: {:?} gas fees: {:?}",
+            self.nonce, gas_fees
         );
-        self.transactions.push(PendingTransaction {
-            tx_hash: sent_tx.tx_hash,
-            gas_fees,
-            attempt_number: self.attempt_count,
-        });
-        self.has_dropped = false;
-        self.attempt_count += 1;
-        self.update_metrics();
-        Ok(sent_tx.tx_hash)
+        let sent_tx = self.sender.send_transaction(tx, expected_storage).await;
+
+        match sent_tx {
+            Ok(sent_tx) => {
+                info!(
+                    "Sent transaction {:?} nonce: {:?}",
+                    sent_tx.tx_hash, sent_tx.nonce
+                );
+                self.transactions.push(PendingTransaction {
+                    tx_hash: sent_tx.tx_hash,
+                    gas_fees,
+                    attempt_number: self.attempt_count,
+                });
+                self.has_dropped = false;
+                self.has_abandoned = false;
+                self.attempt_count += 1;
+                self.update_metrics();
+                Ok(sent_tx.tx_hash)
+            }
+            Err(e) if matches!(e, TxSenderError::ReplacementUnderpriced) => {
+                info!("Replacement underpriced: nonce: {:?}", self.nonce);
+                // still store this as a pending transaction so that we can continue to increase fees.
+                self.transactions.push(PendingTransaction {
+                    tx_hash: H256::zero(),
+                    gas_fees,
+                    attempt_number: self.attempt_count,
+                });
+                self.has_dropped = false;
+                self.has_abandoned = false;
+                self.attempt_count += 1;
+                self.update_metrics();
+                Err(e.into())
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn cancel_transaction(
@@ -309,7 +341,10 @@ where
             return Ok(None);
         }
 
-        info!("Sent cancellation tx {:?}", cancel_info.tx_hash);
+        info!(
+            "Sent cancellation tx {:?} fees: {:?}",
+            cancel_info.tx_hash, gas_fees
+        );
 
         self.transactions.push(PendingTransaction {
             tx_hash: cancel_info.tx_hash,
@@ -342,7 +377,8 @@ where
                     .context("tracker should check transaction status when the nonce changes")?;
                 info!("Status of tx {:?}: {:?}", tx.tx_hash, status);
                 if let TxStatus::Mined { block_number } = status {
-                    let (gas_limit, gas_used) = self.get_mined_tx_gas_info(tx.tx_hash).await?;
+                    let (gas_limit, gas_used, gas_price) =
+                        self.get_mined_tx_gas_info(tx.tx_hash).await?;
                     out = TrackerUpdate::Mined {
                         tx_hash: tx.tx_hash,
                         nonce: self.nonce,
@@ -350,6 +386,7 @@ where
                         attempt_number: tx.attempt_number,
                         gas_limit,
                         gas_used,
+                        gas_price,
                     };
                     break;
                 }
@@ -378,7 +415,8 @@ where
             TxStatus::Mined { block_number } => {
                 let nonce = self.nonce;
                 self.set_nonce_and_clear_state(nonce + 1);
-                let (gas_limit, gas_used) = self.get_mined_tx_gas_info(last_tx.tx_hash).await?;
+                let (gas_limit, gas_used, gas_price) =
+                    self.get_mined_tx_gas_info(last_tx.tx_hash).await?;
                 Some(TrackerUpdate::Mined {
                     tx_hash: last_tx.tx_hash,
                     nonce,
@@ -386,6 +424,7 @@ where
                     attempt_number: last_tx.attempt_number,
                     gas_limit,
                     gas_used,
+                    gas_price,
                 })
             }
             TxStatus::Dropped => {
@@ -398,6 +437,12 @@ where
     async fn reset(&mut self) {
         let nonce = self.get_external_nonce().await.unwrap_or(self.nonce);
         self.set_nonce_and_clear_state(nonce);
+    }
+
+    fn abandon(&mut self) {
+        self.has_abandoned = true;
+        self.attempt_count = 0;
+        // remember the transaction in case we need to cancel it
     }
 }
 

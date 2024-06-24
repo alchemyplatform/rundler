@@ -226,16 +226,25 @@ pub struct BuilderArgs {
     )]
     replacement_fee_percent_increase: u64,
 
-    /// Maximum number of times to increase gas fees when retrying a transaction
+    /// Maximum number of times to increase gas fees when retrying a cancellation transaction
     /// before giving up.
     #[arg(
-        long = "builder.max_fee_increases",
-        name = "builder.max_fee_increases",
-        env = "BUILDER_MAX_FEE_INCREASES",
-        // Seven increases of 10% is roughly 2x the initial fees.
-        default_value = "7"
+        long = "builder.max_cancellation_fee_increases",
+        name = "builder.max_cancellation_fee_increases",
+        env = "BUILDER_MAX_CANCELLATION_FEE_INCREASES",
+        default_value = "15"
     )]
-    max_fee_increases: u64,
+    max_cancellation_fee_increases: u64,
+
+    /// The maximum number of blocks to wait in a replacement underpriced state before issuing
+    /// a cancellation transaction.
+    #[arg(
+        long = "builder.max_replacement_underpriced_blocks",
+        name = "builder.max_replacement_underpriced_blocks",
+        env = "BUILDER_MAX_REPLACEMENT_UNDERPRICED_BLOCKS",
+        default_value = "20"
+    )]
+    max_replacement_underpriced_blocks: u64,
 
     /// The index offset to apply to the builder index
     #[arg(
@@ -350,7 +359,8 @@ impl BuilderArgs {
             sim_settings: common.try_into()?,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
-            max_fee_increases: self.max_fee_increases,
+            max_cancellation_fee_increases: self.max_cancellation_fee_increases,
+            max_replacement_underpriced_blocks: self.max_replacement_underpriced_blocks,
             remote_address,
         })
     }

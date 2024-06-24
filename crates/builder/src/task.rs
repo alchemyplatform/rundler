@@ -91,8 +91,10 @@ pub struct Args {
     pub max_blocks_to_wait_for_mine: u64,
     /// Percentage to increase the fees by when replacing a bundle transaction
     pub replacement_fee_percent_increase: u64,
-    /// Maximum number of times to increase the fees when replacing a bundle transaction
-    pub max_fee_increases: u64,
+    /// Maximum number of times to increase the fee when cancelling a transaction
+    pub max_cancellation_fee_increases: u64,
+    /// Maximum amount of blocks to spend in a replacement underpriced state before moving to cancel
+    pub max_replacement_underpriced_blocks: u64,
     /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
     /// Entry points to start builders for
@@ -456,7 +458,8 @@ where
         .await?;
 
         let builder_settings = bundle_sender::Settings {
-            max_fee_increases: self.args.max_fee_increases,
+            max_replacement_underpriced_blocks: self.args.max_replacement_underpriced_blocks,
+            max_cancellation_fee_increases: self.args.max_cancellation_fee_increases,
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
