@@ -25,7 +25,7 @@ use rundler_types::{
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{NewHead, Pool},
-    EntityUpdate, GasFees, UserOperation,
+    EntityUpdate, UserOperation,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
@@ -35,7 +35,7 @@ use tokio::{
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::{
-    bundle_proposer::BundleProposer,
+    bundle_proposer::{Bundle, BundleProposer, BundleProposerError},
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{TrackerUpdate, TransactionTracker, TransactionTrackerError},
 };
@@ -47,7 +47,8 @@ pub(crate) trait BundleSender: Send + Sync + 'static {
 
 #[derive(Debug)]
 pub(crate) struct Settings {
-    pub(crate) max_fee_increases: u64,
+    pub(crate) max_replacement_underpriced_blocks: u64,
+    pub(crate) max_cancellation_fee_increases: u64,
     pub(crate) max_blocks_to_wait_for_mine: u64,
 }
 
@@ -102,8 +103,12 @@ pub enum SendBundleResult {
 enum SendBundleAttemptResult {
     // The bundle was successfully sent
     Success,
-    // The bundle was empty
-    NoOperations,
+    // There are no operations available to bundle
+    NoOperationsInitially,
+    // There were no operations after the fee was increased
+    NoOperationsAfterFeeFilter,
+    // There were no operations after the bundle was simulated
+    NoOperationsAfterSimulation,
     // Replacement Underpriced
     ReplacementUnderpriced,
     // Condition not met
@@ -234,11 +239,31 @@ where
                     block_number + self.settings.max_blocks_to_wait_for_mine,
                 )));
             }
-            Ok(SendBundleAttemptResult::NoOperations) => {
-                debug!("No operations to bundle");
-                if inner.fee_increase_count > 0 {
+            Ok(SendBundleAttemptResult::NoOperationsInitially) => {
+                debug!("No operations available initially");
+                state.complete(Some(SendBundleResult::NoOperationsInitially));
+            }
+            Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
+                debug!("No operations available after simulation");
+                state.complete(Some(SendBundleResult::NoOperationsInitially));
+            }
+            Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter) => {
+                debug!("No operations to bundle after fee filtering");
+                if let Some(underpriced_info) = inner.underpriced_info {
+                    // If we are here, there are UOs in the pool that may be correctly priced, but are being blocked by an underpriced replacement
+                    // after a fee increase. If we repeatedly get into this state, initiate a cancellation.
+                    if block_number - underpriced_info.since_block
+                        >= self.settings.max_replacement_underpriced_blocks
+                    {
+                        warn!("No operations available, but last replacement underpriced, moving to cancelling state. Round: {}. Since block {}. Current block {}. Max underpriced blocks: {}", underpriced_info.rounds, underpriced_info.since_block, block_number, self.settings.max_replacement_underpriced_blocks);
+                        state.update(InnerState::Cancelling(inner.to_cancelling()));
+                    } else {
+                        info!("No operations available, but last replacement underpriced, starting over and waiting for next trigger. Round: {}. Since block {}. Current block {}", underpriced_info.rounds, underpriced_info.since_block, block_number);
+                        state.update_and_reset(InnerState::Building(inner.underpriced_round()));
+                    }
+                } else if inner.fee_increase_count > 0 {
                     warn!(
-                        "Abandoning bundle after fee increases {}, no operations available",
+                        "Abandoning bundle after {} fee increases, no operations available after fee increase",
                         inner.fee_increase_count
                     );
                     self.metrics.increment_bundle_txns_abandoned();
@@ -247,7 +272,7 @@ where
                     // If the node we are using still has the transaction in the mempool, its
                     // possible we will get a `ReplacementUnderpriced` on the next iteration
                     // and will start a cancellation.
-                    state.reset();
+                    state.abandon();
                 } else {
                     debug!("No operations available, waiting for next trigger");
                     state.complete(Some(SendBundleResult::NoOperationsInitially));
@@ -259,13 +284,15 @@ where
                 state.reset();
             }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
-                info!("Replacement transaction underpriced, entering cancellation loop");
-                state.update(InnerState::Cancelling(inner.to_cancelling()));
+                info!("Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}", inner.fee_increase_count);
+                state.update(InnerState::Building(
+                    inner.replacement_underpriced(block_number),
+                ));
             }
             Ok(SendBundleAttemptResult::ConditionNotMet) => {
                 info!("Condition not met, notifying proposer and starting new bundle attempt");
                 self.proposer.notify_condition_not_met();
-                state.reset();
+                state.update(InnerState::Building(inner.retry()));
             }
             Err(error) => {
                 error!("Bundle send error {error:?}");
@@ -352,7 +379,10 @@ where
         state: &mut SenderMachineState<T, TRIG>,
         inner: CancellingState,
     ) -> anyhow::Result<()> {
-        info!("Cancelling last transaction");
+        info!(
+            "Cancelling last transaction, attempt {}",
+            inner.fee_increase_count
+        );
 
         let (estimated_fees, _) = self
             .proposer
@@ -381,7 +411,19 @@ where
             }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
                 info!("Replacement transaction underpriced during cancellation, trying again");
-                state.update(InnerState::Cancelling(inner.to_self()));
+                if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
+                    // abandon the cancellation
+                    warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
+                    self.metrics.increment_cancellations_abandoned();
+                    state.reset();
+                } else {
+                    // Increase fees again
+                    info!(
+                        "Cancellation increasing fees, attempt: {}",
+                        inner.fee_increase_count + 1
+                    );
+                    state.update(InnerState::Cancelling(inner.to_self()));
+                }
             }
             Err(TransactionTrackerError::NonceTooLow) => {
                 // reset the transaction tracker and try again
@@ -407,10 +449,19 @@ where
         // check for transaction update
         if let Some(update) = tracker_update {
             match update {
-                TrackerUpdate::Mined { .. } => {
+                TrackerUpdate::Mined {
+                    gas_used,
+                    gas_price,
+                    ..
+                } => {
                     // mined
-                    info!("Cancellation transaction mined");
+                    let fee = gas_used.zip(gas_price).map(|(used, price)| used * price);
+                    info!("Cancellation transaction mined. Price (wei) {fee:?}");
                     self.metrics.increment_cancellation_txns_mined();
+                    if let Some(fee) = fee {
+                        self.metrics
+                            .increment_cancellation_txns_total_fee(fee.as_u64());
+                    };
                 }
                 TrackerUpdate::LatestTxDropped { .. } => {
                     // If a cancellation gets dropped, move to bundling state as there is no
@@ -425,9 +476,10 @@ where
             }
             state.reset();
         } else if state.block_number() >= inner.until {
-            if inner.fee_increase_count >= self.settings.max_fee_increases {
+            if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                 // abandon the cancellation
                 warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
+                self.metrics.increment_cancellations_abandoned();
                 state.reset();
             } else {
                 // start replacement, don't wait for trigger
@@ -456,10 +508,22 @@ where
     ) -> anyhow::Result<SendBundleAttemptResult> {
         let (nonce, required_fees) = state.transaction_tracker.get_nonce_and_required_fees()?;
 
-        let Some(bundle_tx) = self
-            .get_bundle_tx(nonce, required_fees, fee_increase_count > 0)
-            .await?
-        else {
+        let bundle = match self
+            .proposer
+            .make_bundle(required_fees, fee_increase_count > 0)
+            .await
+        {
+            Ok(bundle) => bundle,
+            Err(BundleProposerError::NoOperationsInitially) => {
+                return Ok(SendBundleAttemptResult::NoOperationsInitially);
+            }
+            Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
+                return Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter);
+            }
+            Err(e) => bail!("Failed to make bundle: {e:?}"),
+        };
+
+        let Some(bundle_tx) = self.get_bundle_tx(nonce, bundle).await? else {
             self.emit(BuilderEvent::formed_bundle(
                 self.builder_index,
                 None,
@@ -467,7 +531,7 @@ where
                 fee_increase_count,
                 required_fees,
             ));
-            return Ok(SendBundleAttemptResult::NoOperations);
+            return Ok(SendBundleAttemptResult::NoOperationsAfterSimulation);
         };
         let BundleTx {
             tx,
@@ -525,15 +589,8 @@ where
     async fn get_bundle_tx(
         &mut self,
         nonce: U256,
-        required_fees: Option<GasFees>,
-        is_replacement: bool,
+        bundle: Bundle<UO>,
     ) -> anyhow::Result<Option<BundleTx>> {
-        let bundle = self
-            .proposer
-            .make_bundle(required_fees, is_replacement)
-            .await
-            .context("proposer should create bundle for builder")?;
-
         let remove_ops_future = async {
             if bundle.rejected_ops.is_empty() {
                 return;
@@ -649,8 +706,19 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
         let building_state = BuildingState {
             wait_for_trigger: false,
             fee_increase_count: 0,
+            underpriced_info: None,
         };
         self.inner = InnerState::Building(building_state);
+    }
+
+    fn update_and_reset(&mut self, inner: InnerState) {
+        self.update(inner);
+        self.requires_reset = true;
+    }
+
+    fn abandon(&mut self) {
+        self.transaction_tracker.abandon();
+        self.inner = InnerState::new();
     }
 
     fn complete(&mut self, result: Option<SendBundleResult>) {
@@ -715,6 +783,7 @@ impl InnerState {
         InnerState::Building(BuildingState {
             wait_for_trigger: true,
             fee_increase_count: 0,
+            underpriced_info: None,
         })
     }
 }
@@ -723,9 +792,17 @@ impl InnerState {
 struct BuildingState {
     wait_for_trigger: bool,
     fee_increase_count: u64,
+    underpriced_info: Option<UnderpricedInfo>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnderpricedInfo {
+    since_block: u64,
+    rounds: u64,
 }
 
 impl BuildingState {
+    // Transition to pending state
     fn to_pending(self, until: u64) -> PendingState {
         PendingState {
             until,
@@ -733,9 +810,54 @@ impl BuildingState {
         }
     }
 
+    // Transition to cancelling state
     fn to_cancelling(self) -> CancellingState {
         CancellingState {
             fee_increase_count: 0,
+        }
+    }
+
+    // Retry the build
+    fn retry(mut self) -> Self {
+        self.wait_for_trigger = false;
+        self
+    }
+
+    // Mark a replacement as underpriced
+    //
+    // The next state will NOT wait for a trigger. Use this when fees should be increased and a new bundler
+    // should be attempted immediately.
+    fn replacement_underpriced(self, block_number: u64) -> Self {
+        let ui = if let Some(underpriced_info) = self.underpriced_info {
+            underpriced_info
+        } else {
+            UnderpricedInfo {
+                since_block: block_number,
+                rounds: 1,
+            }
+        };
+
+        BuildingState {
+            wait_for_trigger: false,
+            fee_increase_count: self.fee_increase_count + 1,
+            underpriced_info: Some(ui),
+        }
+    }
+
+    // Finalize an underpriced round.
+    //
+    // This will clear out the number of fee increases and increment the number of underpriced rounds.
+    // Use this when we are in an underpriced state, but there are no longer any UOs available to bundle.
+    fn underpriced_round(self) -> Self {
+        let mut underpriced_info = self
+            .underpriced_info
+            .expect("underpriced_info must be Some when calling underpriced_round");
+        underpriced_info.rounds += 1;
+
+        BuildingState {
+            wait_for_trigger: true,
+            fee_increase_count: 0,
+            underpriced_info: Some(underpriced_info),
         }
     }
 }
@@ -751,6 +873,7 @@ impl PendingState {
         BuildingState {
             wait_for_trigger: false,
             fee_increase_count: self.fee_increase_count + 1,
+            underpriced_info: None,
         }
     }
 }
@@ -1025,6 +1148,14 @@ impl BuilderMetrics {
         metrics::counter!("builder_cancellation_txns_mined", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
     }
 
+    fn increment_cancellation_txns_total_fee(&self, fee: u64) {
+        metrics::counter!("builder_cancellation_txns_total_fee", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(fee);
+    }
+
+    fn increment_cancellations_abandoned(&self) {
+        metrics::counter!("builder_cancellations_abandoned", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
+    }
+
     fn increment_soft_cancellations(&self) {
         metrics::counter!("builder_soft_cancellations", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
     }
@@ -1044,7 +1175,7 @@ mod tests {
     use mockall::Sequence;
     use rundler_provider::MockEntryPointV0_6;
     use rundler_types::{
-        chain::ChainSpec, pool::MockPool, v0_6::UserOperation, UserOpsPerAggregator,
+        chain::ChainSpec, pool::MockPool, v0_6::UserOperation, GasFees, UserOpsPerAggregator,
     };
     use tokio::sync::{broadcast, mpsc};
 
@@ -1197,6 +1328,7 @@ mod tests {
                         nonce: U256::zero(),
                         gas_limit: None,
                         gas_used: None,
+                        gas_price: None,
                         tx_hash: H256::zero(),
                         attempt_number: 0,
                     }))
@@ -1231,6 +1363,7 @@ mod tests {
             InnerState::Building(BuildingState {
                 wait_for_trigger: true,
                 fee_increase_count: 0,
+                underpriced_info: None,
             })
         ));
     }
@@ -1284,6 +1417,60 @@ mod tests {
             InnerState::Building(BuildingState {
                 wait_for_trigger: false,
                 fee_increase_count: 1,
+                underpriced_info: None,
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_transition_to_cancel() {
+        let Mocks {
+            mut mock_proposer,
+            mock_entry_point,
+            mut mock_tracker,
+            mut mock_trigger,
+        } = new_mocks();
+
+        let mut seq = Sequence::new();
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut mock_tracker, &mut seq, 3);
+
+        // zero nonce
+        mock_tracker
+            .expect_get_nonce_and_required_fees()
+            .returning(|| Ok((U256::zero(), None)));
+
+        // fee filter error
+        mock_proposer
+            .expect_make_bundle()
+            .times(1)
+            .returning(|_, _| {
+                Box::pin(async { Err(BundleProposerError::NoOperationsAfterFeeFilter) })
+            });
+
+        let mut sender = new_sender(mock_proposer, mock_entry_point);
+
+        // start in underpriced meta-state
+        let mut state = SenderMachineState {
+            trigger: mock_trigger,
+            transaction_tracker: mock_tracker,
+            send_bundle_response: None,
+            inner: InnerState::Building(BuildingState {
+                wait_for_trigger: true,
+                fee_increase_count: 0,
+                underpriced_info: Some(UnderpricedInfo {
+                    since_block: 0,
+                    rounds: 1,
+                }),
+            }),
+            requires_reset: false,
+        };
+
+        // step state, block number should trigger move to cancellation
+        sender.step_state(&mut state).await.unwrap();
+        assert!(matches!(
+            state.inner,
+            InnerState::Cancelling(CancellingState {
+                fee_increase_count: 0,
             })
         ));
     }
@@ -1432,6 +1619,7 @@ mod tests {
             inner: InnerState::Building(BuildingState {
                 wait_for_trigger: true,
                 fee_increase_count: 0,
+                underpriced_info: None,
             }),
             requires_reset: false,
         };
@@ -1446,6 +1634,7 @@ mod tests {
             InnerState::Building(BuildingState {
                 wait_for_trigger: false,
                 fee_increase_count: 0,
+                underpriced_info: None,
             })
         ));
     }
@@ -1491,8 +1680,9 @@ mod tests {
             MockTransactionTracker::new(),
             MockPool::new(),
             Settings {
-                max_fee_increases: 3,
+                max_cancellation_fee_increases: 3,
                 max_blocks_to_wait_for_mine: 3,
+                max_replacement_underpriced_blocks: 3,
             },
             broadcast::channel(1000).0,
         )

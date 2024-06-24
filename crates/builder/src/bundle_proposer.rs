@@ -104,16 +104,33 @@ pub(crate) trait BundleProposer: Send + Sync + 'static {
         &mut self,
         min_fees: Option<GasFees>,
         is_replacement: bool,
-    ) -> anyhow::Result<Bundle<Self::UO>>;
+    ) -> BundleProposerResult<Bundle<Self::UO>>;
 
     /// Gets the current gas fees
     ///
     /// If `min_fees` is `Some`, the proposer will ensure the gas fees returned are at least `min_fees`.
-    async fn estimate_gas_fees(&self, min_fees: Option<GasFees>)
-        -> anyhow::Result<(GasFees, U256)>;
+    async fn estimate_gas_fees(
+        &self,
+        min_fees: Option<GasFees>,
+    ) -> BundleProposerResult<(GasFees, U256)>;
 
     /// Notifies the proposer that a condition was not met during the last bundle proposal
     fn notify_condition_not_met(&mut self);
+}
+
+pub(crate) type BundleProposerResult<T> = std::result::Result<T, BundleProposerError>;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BundleProposerError {
+    #[error("No operations initially")]
+    NoOperationsInitially,
+    #[error("No operations after fee filtering")]
+    NoOperationsAfterFeeFilter,
+    #[error(transparent)]
+    ProviderError(#[from] rundler_provider::ProviderError),
+    /// All other errors
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 #[derive(Debug)]
@@ -155,8 +172,11 @@ where
     async fn estimate_gas_fees(
         &self,
         required_fees: Option<GasFees>,
-    ) -> anyhow::Result<(GasFees, U256)> {
-        self.fee_estimator.required_bundle_fees(required_fees).await
+    ) -> BundleProposerResult<(GasFees, U256)> {
+        Ok(self
+            .fee_estimator
+            .required_bundle_fees(required_fees)
+            .await?)
     }
 
     fn notify_condition_not_met(&mut self) {
@@ -167,16 +187,16 @@ where
         &mut self,
         required_fees: Option<GasFees>,
         is_replacement: bool,
-    ) -> anyhow::Result<Bundle<UO>> {
+    ) -> BundleProposerResult<Bundle<UO>> {
         let (ops, (block_hash, _), (bundle_fees, base_fee)) = try_join!(
             self.get_ops_from_pool(),
             self.provider
                 .get_latest_block_hash_and_number()
-                .map_err(anyhow::Error::from),
+                .map_err(BundleProposerError::from),
             self.estimate_gas_fees(required_fees)
         )?;
         if ops.is_empty() {
-            return Ok(Bundle::default());
+            return Err(BundleProposerError::NoOperationsInitially);
         }
 
         tracing::debug!("Starting bundle proposal with {} ops", ops.len());
@@ -206,7 +226,7 @@ where
 
         tracing::debug!("Bundle proposal after fee limit had {} ops", ops.len());
         if ops.is_empty() {
-            return Ok(Bundle::default());
+            return Err(BundleProposerError::NoOperationsAfterFeeFilter);
         }
 
         // (2) Limit the amount of operations for simulation
@@ -686,7 +706,7 @@ where
     async fn estimate_gas_rejecting_failed_ops(
         &self,
         context: &mut ProposalContext<UO>,
-    ) -> anyhow::Result<Option<U256>> {
+    ) -> BundleProposerResult<Option<U256>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
@@ -731,7 +751,7 @@ where
         }
     }
 
-    async fn get_ops_from_pool(&self) -> anyhow::Result<Vec<PoolOperation>> {
+    async fn get_ops_from_pool(&self) -> BundleProposerResult<Vec<PoolOperation>> {
         // Use builder's index as the shard index to ensure that two builders don't
         // attempt to bundle the same operations.
         //
@@ -754,7 +774,7 @@ where
         &self,
         addresses: impl IntoIterator<Item = Address>,
         block_hash: H256,
-    ) -> anyhow::Result<HashMap<Address, U256>> {
+    ) -> BundleProposerResult<HashMap<Address, U256>> {
         let futures = addresses.into_iter().map(|address| async move {
             let deposit = self
                 .entry_point
@@ -1294,8 +1314,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 }
                 SimulationViolation::UnintendedRevertWithMessage(entity_type, message, address) => {
                     match &message[..4] {
-                        // do not penalize an entity for invalid account nonces, which can occur without malicious intent from the sender
-                        "AA25" => {}
+                        // do not penalize an entity for invalid account nonces or already deployed senders,
+                        // which can occur without malicious intent from the sender or factory
+                        "AA10" | "AA25" => {}
                         _ => {
                             if let Some(entity_address) = address {
                                 self.add_entity_update(

@@ -28,7 +28,7 @@ use rundler_types::{
     Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
 };
 use rundler_utils::math;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{entity_tracker::EntityCounter, size::SizeTracker, MempoolResult, PoolConfig};
 use crate::chain::MinedOp;
@@ -67,6 +67,8 @@ pub(crate) struct PoolInner {
     by_id: HashMap<UserOperationId, OrderedPoolOperation>,
     /// Best operations, sorted by gas price
     best: BTreeSet<OrderedPoolOperation>,
+    /// Time to mine info
+    time_to_mine: HashMap<H256, TimeToMineInfo>,
     /// Removed operations, temporarily kept around in case their blocks are
     /// reorged away. Stored along with the block number at which it was
     /// removed.
@@ -95,6 +97,7 @@ impl PoolInner {
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
+            time_to_mine: HashMap::new(),
             mined_at_block_number_by_hash: HashMap::new(),
             mined_hashes_with_block_numbers: BTreeSet::new(),
             count_by_address: HashMap::new(),
@@ -172,6 +175,7 @@ impl PoolInner {
 
         let block_delta_time = sys_block_time - self.prev_sys_block_time;
         let block_delta_height = block_number - self.prev_block_number;
+        let candidate_gas_price = base_fee + candidate_gas_fees.max_priority_fee_per_gas;
         let mut expired = Vec::new();
         let mut num_candidates = 0;
 
@@ -180,12 +184,15 @@ impl PoolInner {
                 expired.push((*hash, op.po.valid_time_range.valid_until));
             }
 
-            num_candidates += if op.update_time_to_mine(
-                block_delta_time,
-                block_delta_height,
-                candidate_gas_fees,
-                base_fee,
-            ) {
+            let uo_gas_price = cmp::min(
+                op.uo().max_fee_per_gas(),
+                op.uo().max_priority_fee_per_gas() + base_fee,
+            );
+
+            num_candidates += if uo_gas_price >= candidate_gas_price {
+                if let Some(ttm) = self.time_to_mine.get_mut(hash) {
+                    ttm.increase(block_delta_time, block_delta_height);
+                }
                 1
             } else {
                 0
@@ -282,7 +289,11 @@ impl PoolInner {
         block_number: u64,
     ) -> Option<Arc<PoolOperation>> {
         let tx_in_pool = self.by_id.get(&mined_op.id())?;
-        PoolMetrics::record_time_to_mine(&tx_in_pool.time_to_mine, mined_op.entry_point);
+        if let Some(time_to_mine) = self.time_to_mine.remove(&mined_op.hash) {
+            PoolMetrics::record_time_to_mine(&time_to_mine, mined_op.entry_point);
+        } else {
+            warn!("Could not find time to mine for {:?}", mined_op.hash);
+        }
 
         let hash = tx_in_pool
             .uo()
@@ -420,7 +431,6 @@ impl PoolInner {
         let pool_op = OrderedPoolOperation {
             po: op,
             submission_id: submission_id.unwrap_or_else(|| self.next_submission_id()),
-            time_to_mine: TimeToMineInfo::new(),
         };
 
         // update counts
@@ -439,6 +449,7 @@ impl PoolInner {
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
         self.best.insert(pool_op);
+        self.time_to_mine.insert(hash, TimeToMineInfo::new());
 
         // TODO(danc): This silently drops UOs from the pool without reporting
         let removed = self
@@ -461,6 +472,7 @@ impl PoolInner {
         let id = &op.po.uo.id();
         self.by_id.remove(id);
         self.best.remove(&op);
+        self.time_to_mine.remove(&hash);
 
         if let Some(block_number) = block_number {
             self.cache_size += op.mem_size();
@@ -525,7 +537,6 @@ impl PoolInner {
 struct OrderedPoolOperation {
     po: Arc<PoolOperation>,
     submission_id: u64,
-    time_to_mine: TimeToMineInfo,
 }
 
 impl OrderedPoolOperation {
@@ -535,28 +546,6 @@ impl OrderedPoolOperation {
 
     fn mem_size(&self) -> usize {
         std::mem::size_of::<Self>() + self.po.mem_size()
-    }
-
-    fn update_time_to_mine(
-        &mut self,
-        block_delta_time: Duration,
-        block_delta_height: u64,
-        candidate_gas_fees: GasFees,
-        base_fee: U256,
-    ) -> bool {
-        let candidate_gas_price = base_fee + candidate_gas_fees.max_priority_fee_per_gas;
-        let uo_gas_price = cmp::min(
-            self.uo().max_fee_per_gas(),
-            self.uo().max_priority_fee_per_gas() + base_fee,
-        );
-
-        if uo_gas_price >= candidate_gas_price {
-            self.time_to_mine
-                .increase(block_delta_time, block_delta_height);
-            true
-        } else {
-            false
-        }
     }
 }
 
@@ -1012,7 +1001,6 @@ mod tests {
             OrderedPoolOperation {
                 po: Arc::new(po1),
                 submission_id: 0,
-                time_to_mine: TimeToMineInfo::new()
             }
             .mem_size()
         );
@@ -1053,7 +1041,6 @@ mod tests {
             OrderedPoolOperation {
                 po: Arc::new(po2),
                 submission_id: 0,
-                time_to_mine: TimeToMineInfo::new(),
             }
             .mem_size()
         );
@@ -1129,7 +1116,6 @@ mod tests {
         OrderedPoolOperation {
             po: Arc::new(create_op(Address::random(), 1, 1)),
             submission_id: 1,
-            time_to_mine: TimeToMineInfo::new(),
         }
         .mem_size()
     }
