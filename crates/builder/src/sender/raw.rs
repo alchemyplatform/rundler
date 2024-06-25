@@ -17,8 +17,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use ethers::{
     middleware::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, PendingTransaction, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, TransactionReceipt, H256, U256},
+    providers::{JsonRpcClient, Middleware, Provider},
+    types::{transaction::eip2718::TypedTransaction, Address, H256, U256},
 };
 use ethers_signers::Signer;
 use rundler_sim::ExpectedStorage;
@@ -120,12 +120,6 @@ where
                 },
             },
         })
-    }
-
-    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
-        Ok(PendingTransaction::new(tx_hash, self.provider.inner())
-            .await
-            .context("should wait for transaction to be mined or dropped")?)
     }
 
     fn address(&self) -> Address {

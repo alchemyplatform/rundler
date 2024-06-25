@@ -11,16 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use anyhow::Context;
 use ethers::{
     middleware::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, Provider},
-    types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, TxHash, H256,
-        U256,
-    },
+    types::{transaction::eip2718::TypedTransaction, Address, Bytes, TxHash, H256, U256},
     utils::hex,
 };
 use ethers_signers::Signer;
@@ -32,7 +29,6 @@ use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
-use tokio::time;
 use tonic::async_trait;
 
 use super::{
@@ -46,9 +42,7 @@ where
     S: Signer + 'static,
 {
     provider: SignerMiddleware<Arc<Provider<C>>, S>,
-    raw_provider: Arc<Provider<C>>,
     client: PolygonBloxrouteClient,
-    poll_interval: Duration,
 }
 
 #[async_trait]
@@ -107,15 +101,6 @@ where
             .unwrap_or(TxStatus::Pending))
     }
 
-    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
-        Ok(Self::wait_until_mined_no_drop(
-            tx_hash,
-            Arc::clone(&self.raw_provider),
-            self.poll_interval,
-        )
-        .await?)
-    }
-
     fn address(&self) -> Address {
         self.provider.address()
     }
@@ -126,44 +111,11 @@ where
     C: JsonRpcClient + 'static,
     S: Signer + 'static,
 {
-    pub(crate) fn new(
-        provider: Arc<Provider<C>>,
-        signer: S,
-        poll_interval: Duration,
-        auth_header: &str,
-    ) -> Result<Self> {
+    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S, auth_header: &str) -> Result<Self> {
         Ok(Self {
             provider: SignerMiddleware::new(Arc::clone(&provider), signer),
-            raw_provider: provider,
             client: PolygonBloxrouteClient::new(auth_header)?,
-            poll_interval,
         })
-    }
-
-    async fn wait_until_mined_no_drop(
-        tx_hash: H256,
-        provider: Arc<Provider<C>>,
-        poll_interval: Duration,
-    ) -> Result<Option<TransactionReceipt>> {
-        loop {
-            let tx = provider
-                .get_transaction(tx_hash)
-                .await
-                .context("provider should return transaction status")?;
-
-            match tx.and_then(|tx| tx.block_number) {
-                None => {}
-                Some(_) => {
-                    let receipt = provider
-                        .get_transaction_receipt(tx_hash)
-                        .await
-                        .context("provider should return transaction receipt")?;
-                    return Ok(receipt);
-                }
-            }
-
-            time::sleep(poll_interval).await;
-        }
     }
 }
 

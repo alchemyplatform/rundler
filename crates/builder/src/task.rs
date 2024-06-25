@@ -442,7 +442,6 @@ where
             Arc::clone(&provider),
             submit_provider,
             signer,
-            self.args.eth_poll_interval,
         )?;
 
         let tracker_settings = transaction_tracker::Settings {

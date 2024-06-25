@@ -13,7 +13,6 @@
 
 use std::fmt::Display;
 
-use ethers::types::Address;
 use rundler_builder::BuilderEvent;
 use rundler_pool::PoolEvent;
 
@@ -21,12 +20,6 @@ use rundler_pool::PoolEvent;
 pub enum Event {
     PoolEvent(PoolEvent),
     BuilderEvent(BuilderEvent),
-}
-
-#[derive(Clone, Debug)]
-pub struct WithEntryPoint<T> {
-    pub entry_point: Address,
-    pub event: T,
 }
 
 impl From<PoolEvent> for Event {
