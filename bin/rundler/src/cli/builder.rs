@@ -70,7 +70,7 @@ pub struct BuilderArgs {
 
     /// Private keys to use for signing transactions
     ///
-    /// Cannot use both `builder.private_key` and `builder.aws_kms_key_ids` at the same time.
+    /// Cannot use both `builder.private_keys` and `builder.aws_kms_key_ids` at the same time.
     #[arg(
         long = "builder.private_keys",
         name = "builder.private_keys",
@@ -138,8 +138,7 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// If present, the url of the ETH provider that will be used to check
-    /// transaction status. Else will use the node http for status.
+    /// If true, use the submit endpoint for transaction status checks.
     ///
     /// Only used when BUILDER_SENDER is "raw"
     #[arg(

@@ -227,11 +227,11 @@ Here are some example commands to use the CLI:
 
 ```sh
 # Run the Node subcommand with custom options
-$ ./rundler node --chain_id 1337 --max_verification_gas 10000000 --disable_entry_point_v0_6
+$ ./rundler node --network dev --disable_entry_point_v0_6 --node_http http://localhost:8545 --builder.private_keys 0x0000000000000000000000000000000000000000000000000000000000000001
 
-# Run the RPC subcommand with custom options and enable JSON logging. The builder and pool will need to be running before this starts.
-$ ./rundler rpc --node_http http://localhost:8545 --log.json --disable_entry_point_v0_6
+# Run the RPC subcommand with custom options and enable JSON logging. The builder (localhost:50052) and pool (localhost:50051) will need to be running before this starts.
+$ ./rundler rpc --network dev --node_http http://localhost:8545 --log.json --disable_entry_point_v0_6
 
 # Run the Pool subcommand with custom options and specify a mempool config file
-$ ./rundler pool --max_simulate_handle_ops_gas 15000000  --mempool_config_path mempool.json --node_http http://localhost:8545 --chain_id 8453 --disable_entry_point_v0_6
+$ ./target/debug/rundler pool --network dev --max_simulate_handle_ops_gas 15000000 --mempool_config_path mempool.json --node_http http://localhost:8545 --disable_entry_point_v0_6
 ```
