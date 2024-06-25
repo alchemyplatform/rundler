@@ -93,8 +93,8 @@ pub enum EthRpcError {
     #[error("operation is out of time range")]
     OutOfTimeRange(OutOfTimeRangeData),
     /// Max operations reached for this sender
-    #[error("Max operations ({0}) reached for sender {1:#032x} due to being unstaked")]
-    MaxOperationsReached(usize, Address),
+    #[error("Max operations ({0}) reached for {1} due to being unstaked")]
+    MaxOperationsReached(usize, Entity),
     /// Entity throttled or banned
     #[error("{} {:#032x} throttled or banned", .0.kind, .0.address)]
     ThrottledOrBanned(Entity),

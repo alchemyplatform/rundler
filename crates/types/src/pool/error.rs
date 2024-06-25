@@ -56,7 +56,7 @@ pub enum MempoolError {
     ReplacementUnderpriced(U256, U256),
     /// Max operations reached for unstaked sender [UREP-010] or unstaked non-sender entity [UREP-020]
     #[error("Max operations ({0}) reached for entity {1}")]
-    MaxOperationsReached(usize, Address),
+    MaxOperationsReached(usize, Entity),
     /// Multiple roles violation
     /// Spec rule: STO-040
     #[error("A {} at {} in this UserOperation is used as a sender entity in another UserOperation currently in mempool.", .0.kind, .0.address)]

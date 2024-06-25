@@ -477,7 +477,7 @@ where
             {
                 return Err(MempoolError::MaxOperationsReached(
                     self.config.same_sender_mempool_count,
-                    pool_op.uo.sender(),
+                    Entity::account(pool_op.uo.sender()),
                 ));
             }
 
@@ -490,7 +490,7 @@ where
                 if state.pool.address_count(&entity.address) >= ops_allowed as usize {
                     return Err(MempoolError::MaxOperationsReached(
                         ops_allowed as usize,
-                        entity.address,
+                        entity,
                     ));
                 }
             }
