@@ -13,27 +13,16 @@
 
 // Adapted from https://github.com/onbjerg/ethers-flashbots and
 // https://github.com/gakonst/ethers-rs/blob/master/ethers-providers/src/toolbox/pending_transaction.rs
-use std::{
-    future::Future,
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
-    task::{Context as TaskContext, Poll},
-};
+use std::{str::FromStr, sync::Arc};
 
 use anyhow::{anyhow, Context};
 use ethers::{
     middleware::SignerMiddleware,
-    providers::{interval, JsonRpcClient, Middleware, Provider},
-    types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, TransactionReceipt, H256, U256, U64,
-    },
+    providers::{JsonRpcClient, Middleware, Provider},
+    types::{transaction::eip2718::TypedTransaction, Address, Bytes, H256, U256, U64},
     utils,
 };
 use ethers_signers::Signer;
-use futures_timer::Delay;
-use futures_util::{Stream, StreamExt, TryFutureExt};
-use pin_project::pin_project;
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response,
@@ -129,17 +118,6 @@ where
                 TxStatus::Dropped
             }
         })
-    }
-
-    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>> {
-        Ok(
-            PendingFlashbotsTransaction::new(
-                tx_hash,
-                self.provider.inner(),
-                &self.flashbots_client,
-            )
-            .await?,
-        )
     }
 
     fn address(&self) -> Address {
@@ -381,118 +359,6 @@ where
             .send()
             .await
             .map_err(|e| anyhow!("failed to send request to Flashbots: {:?}", e))
-    }
-}
-
-type PinBoxFut<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;
-
-enum PendingFlashbotsTxState<'a> {
-    InitialDelay(Pin<Box<Delay>>),
-    PausedGettingTx,
-    GettingTx(PinBoxFut<'a, FlashbotsAPIResponse>),
-    PausedGettingReceipt,
-    GettingReceipt(PinBoxFut<'a, Option<TransactionReceipt>>),
-    Completed,
-}
-
-#[pin_project]
-struct PendingFlashbotsTransaction<'a, P, S> {
-    tx_hash: H256,
-    provider: &'a Provider<P>,
-    client: &'a FlashbotsClient<S>,
-    state: PendingFlashbotsTxState<'a>,
-    interval: Box<dyn Stream<Item = ()> + Send + Unpin>,
-}
-
-impl<'a, P: JsonRpcClient, S> PendingFlashbotsTransaction<'a, P, S> {
-    fn new(tx_hash: H256, provider: &'a Provider<P>, client: &'a FlashbotsClient<S>) -> Self {
-        let delay = Box::pin(Delay::new(provider.get_interval()));
-
-        Self {
-            tx_hash,
-            provider,
-            client,
-            state: PendingFlashbotsTxState::InitialDelay(delay),
-            interval: Box::new(interval(provider.get_interval())),
-        }
-    }
-}
-
-impl<'a, P: JsonRpcClient, S: Send + Sync> Future for PendingFlashbotsTransaction<'a, P, S> {
-    type Output = anyhow::Result<Option<TransactionReceipt>>;
-
-    fn poll(self: Pin<&mut Self>, ctx: &mut TaskContext<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-
-        match this.state {
-            PendingFlashbotsTxState::InitialDelay(fut) => {
-                futures_util::ready!(fut.as_mut().poll(ctx));
-                let status_fut = Box::pin(this.client.status(*this.tx_hash));
-                *this.state = PendingFlashbotsTxState::GettingTx(status_fut);
-                ctx.waker().wake_by_ref();
-                return Poll::Pending;
-            }
-            PendingFlashbotsTxState::PausedGettingTx => {
-                let _ready = futures_util::ready!(this.interval.poll_next_unpin(ctx));
-                let status_fut = Box::pin(this.client.status(*this.tx_hash));
-                *this.state = PendingFlashbotsTxState::GettingTx(status_fut);
-                ctx.waker().wake_by_ref();
-                return Poll::Pending;
-            }
-            PendingFlashbotsTxState::GettingTx(fut) => {
-                let status = futures_util::ready!(fut.as_mut().poll(ctx))?;
-                tracing::debug!("Transaction:status {:?}:{:?}", *this.tx_hash, status.status);
-                match status.status {
-                    FlashbotsAPITransactionStatus::Pending => {
-                        *this.state = PendingFlashbotsTxState::PausedGettingTx;
-                        ctx.waker().wake_by_ref();
-                    }
-                    FlashbotsAPITransactionStatus::Included => {
-                        let receipt_fut = Box::pin(
-                            this.provider
-                                .get_transaction_receipt(*this.tx_hash)
-                                .map_err(|e| anyhow::anyhow!("failed to get receipt: {:?}", e)),
-                        );
-                        *this.state = PendingFlashbotsTxState::GettingReceipt(receipt_fut);
-                        ctx.waker().wake_by_ref();
-                    }
-                    FlashbotsAPITransactionStatus::Cancelled => {
-                        return Poll::Ready(Ok(None));
-                    }
-                    FlashbotsAPITransactionStatus::Failed
-                    | FlashbotsAPITransactionStatus::Unknown => {
-                        return Poll::Ready(Err(anyhow::anyhow!(
-                            "transaction failed with status {:?}",
-                            status.status
-                        )));
-                    }
-                }
-            }
-            PendingFlashbotsTxState::PausedGettingReceipt => {
-                let _ready = futures_util::ready!(this.interval.poll_next_unpin(ctx));
-                let fut = Box::pin(
-                    this.provider
-                        .get_transaction_receipt(*this.tx_hash)
-                        .map_err(|e| anyhow::anyhow!("failed to get receipt: {:?}", e)),
-                );
-                *this.state = PendingFlashbotsTxState::GettingReceipt(fut);
-                ctx.waker().wake_by_ref();
-            }
-            PendingFlashbotsTxState::GettingReceipt(fut) => {
-                if let Some(receipt) = futures_util::ready!(fut.as_mut().poll(ctx))? {
-                    *this.state = PendingFlashbotsTxState::Completed;
-                    return Poll::Ready(Ok(Some(receipt)));
-                } else {
-                    *this.state = PendingFlashbotsTxState::PausedGettingReceipt;
-                    ctx.waker().wake_by_ref();
-                }
-            }
-            PendingFlashbotsTxState::Completed => {
-                panic!("polled pending flashbots transaction future after completion")
-            }
-        }
-
-        Poll::Pending
     }
 }
 
