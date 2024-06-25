@@ -91,12 +91,12 @@ where
         };
 
         let rpc = match rpc_code {
-            x if x == -32000 => RpcCode::ExecutionFailed,
-            x if x == -32700 => RpcCode::ParseError,
-            x if x == -32600 => RpcCode::InvalidRequest,
-            x if x == -32601 => RpcCode::MethodNotFound,
-            x if x == -32602 => RpcCode::InvalidParams,
-            x if x == -32603 => RpcCode::InternalError,
+            -32700 => RpcCode::ParseError,
+            -32000 => RpcCode::ExecutionFailed,
+            -32600 => RpcCode::InvalidRequest,
+            -32601 => RpcCode::MethodNotFound,
+            -32602 => RpcCode::InvalidParams,
+            -32603 => RpcCode::InternalError,
             x if (-32099..=-32000).contains(&x) => RpcCode::ServerError,
             x if x >= 0 => RpcCode::Success,
             _ => RpcCode::Other,

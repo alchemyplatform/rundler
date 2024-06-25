@@ -14,7 +14,7 @@
 mod bloxroute;
 mod flashbots;
 mod raw;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -24,8 +24,8 @@ use ethers::{
     prelude::SignerMiddleware,
     providers::{JsonRpcClient, Middleware, Provider, ProviderError},
     types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest,
-        TransactionReceipt, H256, U256,
+        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, H256,
+        U256,
     },
 };
 use ethers_signers::{LocalWallet, Signer};
@@ -98,8 +98,6 @@ pub(crate) trait TransactionSender: Send + Sync + 'static {
     ) -> Result<CancelTxInfo>;
 
     async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus>;
-
-    async fn wait_until_mined(&self, tx_hash: H256) -> Result<Option<TransactionReceipt>>;
 
     fn address(&self) -> Address;
 }
@@ -178,7 +176,6 @@ impl TransactionSenderArgs {
         rpc_provider: Arc<Provider<C>>,
         submit_provider: Option<Arc<Provider<C>>>,
         signer: S,
-        eth_poll_interval: Duration,
     ) -> std::result::Result<TransactionSenderEnum<C, S, LocalWallet>, SenderConstructorErrors>
     {
         let sender = match self {
@@ -213,14 +210,9 @@ impl TransactionSenderArgs {
                     args.status_url,
                 )?)
             }
-            Self::Bloxroute(args) => {
-                TransactionSenderEnum::PolygonBloxroute(PolygonBloxrouteTransactionSender::new(
-                    rpc_provider,
-                    signer,
-                    eth_poll_interval,
-                    &args.header,
-                )?)
-            }
+            Self::Bloxroute(args) => TransactionSenderEnum::PolygonBloxroute(
+                PolygonBloxrouteTransactionSender::new(rpc_provider, signer, &args.header)?,
+            ),
         };
         Ok(sender)
     }
