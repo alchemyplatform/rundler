@@ -83,7 +83,7 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::MaxOperationsReached(e)) => {
                 MempoolError::MaxOperationsReached(
                     e.num_ops as usize,
-                    from_bytes(&e.entity_address)?,
+                    (&e.entity.context("should have entity in error")?).try_into()?,
                 )
             }
             Some(mempool_error::Error::EntityThrottled(e)) => MempoolError::EntityThrottled(
@@ -168,11 +168,11 @@ impl From<MempoolError> for ProtoMempoolError {
                     },
                 )),
             },
-            MempoolError::MaxOperationsReached(ops, addr) => ProtoMempoolError {
+            MempoolError::MaxOperationsReached(ops, entity) => ProtoMempoolError {
                 error: Some(mempool_error::Error::MaxOperationsReached(
                     MaxOperationsReachedError {
                         num_ops: ops as u64,
-                        entity_address: addr.to_proto_bytes(),
+                        entity: Some((&entity).into()),
                     },
                 )),
             },
