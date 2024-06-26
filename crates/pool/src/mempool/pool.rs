@@ -173,8 +173,8 @@ impl PoolInner {
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch");
 
-        let block_delta_time = sys_block_time - self.prev_sys_block_time;
-        let block_delta_height = block_number - self.prev_block_number;
+        let block_delta_time = sys_block_time.saturating_sub(self.prev_sys_block_time);
+        let block_delta_height = block_number.saturating_sub(self.prev_block_number);
         let candidate_gas_price = base_fee + candidate_gas_fees.max_priority_fee_per_gas;
         let mut expired = Vec::new();
         let mut num_candidates = 0;
