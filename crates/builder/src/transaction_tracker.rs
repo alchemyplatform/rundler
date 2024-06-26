@@ -267,8 +267,10 @@ where
         self.validate_transaction(&tx)?;
         let gas_fees = GasFees::from(&tx);
         info!(
-            "Sending transaction with nonce: {:?} gas fees: {:?}",
-            self.nonce, gas_fees
+            "Sending transaction with nonce: {:?} gas fees: {:?} gas limit: {:?}",
+            self.nonce,
+            gas_fees,
+            tx.gas()
         );
         let sent_tx = self.sender.send_transaction(tx, expected_storage).await;
 
