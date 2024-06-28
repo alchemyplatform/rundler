@@ -289,8 +289,16 @@ impl PoolInner {
         block_number: u64,
     ) -> Option<Arc<PoolOperation>> {
         let tx_in_pool = self.by_id.get(&mined_op.id())?;
-        if let Some(time_to_mine) = self.time_to_mine.remove(&mined_op.hash) {
-            PoolMetrics::record_time_to_mine(&time_to_mine, mined_op.entry_point);
+
+        // TODO(danc): there is a bug here with replacements.
+        // UO1 is replaced by UO2, they both have the same ID.
+        // UO1 was bundled before UO2 replaced it, and eventually UO1 gets mined.
+        // UO2 should be removed from the pool, but since the hashes don't match, it will
+        // stay in the pool forever as `remove_operation_internal` is hash based.
+        // Time to mine will also fail because UO1's hash was removed from the pool.
+
+        if let Some(time_to_mine) = self.time_to_mine.get(&mined_op.hash) {
+            PoolMetrics::record_time_to_mine(time_to_mine, mined_op.entry_point);
         } else {
             warn!("Could not find time to mine for {:?}", mined_op.hash);
         }
@@ -385,6 +393,7 @@ impl PoolInner {
         self.by_hash.clear();
         self.by_id.clear();
         self.best.clear();
+        self.time_to_mine.clear();
         self.mined_at_block_number_by_hash.clear();
         self.mined_hashes_with_block_numbers.clear();
         self.count_by_address.clear();

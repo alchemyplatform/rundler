@@ -407,11 +407,11 @@ where
         } else {
             info!("Using AWS KMS signer");
             let signer = time::timeout(
-                // timeout must be << than the lock TTL to avoid a
+                // timeout must be < than the lock TTL to avoid a
                 // bug in the redis lock implementation that panics if connection
                 // takes longer than the TTL. Generally the TLL should be on the order of 10s of seconds
                 // so this should give ample time for the connection to establish.
-                Duration::from_millis(self.args.redis_lock_ttl_millis / 10),
+                Duration::from_millis(self.args.redis_lock_ttl_millis / 4),
                 KmsSigner::connect(
                     Arc::clone(&provider),
                     self.args.chain_spec.id,

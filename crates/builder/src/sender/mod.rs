@@ -262,6 +262,7 @@ fn create_hard_cancel_tx(
         .from(from)
         .to(to)
         .nonce(nonce)
+        .gas(U256::from(30_000))
         .max_fee_per_gas(gas_fees.max_fee_per_gas)
         .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
         .data(Bytes::new())
