@@ -69,6 +69,10 @@ pub struct ChainSpec {
     pub min_max_priority_fee_per_gas: U256,
     /// Maximum max priority fee per gas for the network
     pub max_max_priority_fee_per_gas: U256,
+    /// Usage ratio of the chain that determines "congestion"
+    /// Some chains have artificially high block gas limits but
+    /// actually cap block gas usage at a lower value.
+    pub congestion_trigger_usage_ratio_threshold: f64,
 
     /*
      * Bundle building
@@ -139,6 +143,7 @@ impl Default for ChainSpec {
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: U256::zero(),
             max_max_priority_fee_per_gas: U256::MAX,
+            congestion_trigger_usage_ratio_threshold: 0.75,
             max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: u64::MAX,
             flashbots_enabled: false,

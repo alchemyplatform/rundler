@@ -285,13 +285,13 @@ where
                             let needs_stake_entity = needs_stake.and_then(|t| entity_infos.get(t));
                             if let Some(needs_stake_entity) = needs_stake_entity {
                                 if needs_stake_entity.is_staked {
-                                    tracing::info!("Associated storage accessed by staked entity during deploy, and entity is staked");
+                                    tracing::debug!("Associated storage accessed by staked entity during deploy, and entity is staked");
                                     continue;
                                 }
                             }
                             if let Some(factory) = entity_infos.get(EntityType::Factory) {
                                 if factory.is_staked {
-                                    tracing::info!("Associated storage accessed by staked entity during deploy, and factory is staked");
+                                    tracing::debug!("Associated storage accessed by staked entity during deploy, and factory is staked");
                                     continue;
                                 }
                             }

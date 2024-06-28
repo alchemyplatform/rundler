@@ -333,6 +333,8 @@ where
             let config = UsageBasedFeeOracleConfig {
                 minimum_fee: chain_spec.min_max_priority_fee_per_gas,
                 maximum_fee: chain_spec.max_max_priority_fee_per_gas,
+                congestion_trigger_usage_ratio_threshold: chain_spec
+                    .congestion_trigger_usage_ratio_threshold,
                 ..Default::default()
             };
             Arc::new(UsageBasedFeeOracle::new(provider, config))
