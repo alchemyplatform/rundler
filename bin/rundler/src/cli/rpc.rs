@@ -154,7 +154,7 @@ pub async fn run(
     } = rpc_args;
 
     let task_args = rpc_args.to_args(
-        chain_spec,
+        chain_spec.clone(),
         &common_args,
         (&common_args).try_into()?,
         (&common_args).into(),
@@ -165,7 +165,7 @@ pub async fn run(
     let pool = connect_with_retries_shutdown(
         "op pool from rpc",
         &pool_url,
-        RemotePoolClient::connect,
+        |url| RemotePoolClient::connect(url, chain_spec.clone()),
         tokio::signal::ctrl_c(),
     )
     .await?;

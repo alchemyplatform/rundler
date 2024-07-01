@@ -15,6 +15,7 @@ use anyhow::{anyhow, Context};
 use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
+    chain::ChainSpec,
     pool::{
         NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
@@ -60,10 +61,15 @@ impl From<&v0_6::UserOperation> for UserOperation {
     }
 }
 
-impl TryFrom<UserOperationV06> for v0_6::UserOperation {
-    type Error = ConversionError;
+pub trait TryUoFromProto<T>: Sized {
+    fn try_uo_from_proto(value: T, chain_spec: &ChainSpec) -> Result<Self, ConversionError>;
+}
 
-    fn try_from(op: UserOperationV06) -> Result<Self, Self::Error> {
+impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
+    fn try_uo_from_proto(
+        op: UserOperationV06,
+        _chain_spec: &ChainSpec,
+    ) -> Result<Self, ConversionError> {
         Ok(v0_6::UserOperation {
             sender: from_bytes(&op.sender)?,
             nonce: from_bytes(&op.nonce)?,
@@ -107,13 +113,13 @@ impl From<&v0_7::UserOperation> for UserOperation {
     }
 }
 
-impl TryFrom<UserOperationV07> for v0_7::UserOperation {
-    type Error = ConversionError;
-
-    fn try_from(op: UserOperationV07) -> Result<Self, Self::Error> {
+impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
+    fn try_uo_from_proto(
+        op: UserOperationV07,
+        chain_spec: &ChainSpec,
+    ) -> Result<Self, ConversionError> {
         let mut builder = v0_7::UserOperationBuilder::new(
-            from_bytes(&op.entry_point)?,
-            op.chain_id,
+            chain_spec,
             v0_7::UserOperationRequiredFields {
                 sender: from_bytes(&op.sender)?,
                 nonce: from_bytes(&op.nonce)?,
@@ -144,17 +150,22 @@ impl TryFrom<UserOperationV07> for v0_7::UserOperation {
     }
 }
 
-impl TryFrom<UserOperation> for UserOperationVariant {
-    type Error = ConversionError;
-
-    fn try_from(op: UserOperation) -> Result<Self, Self::Error> {
+impl TryUoFromProto<UserOperation> for UserOperationVariant {
+    fn try_uo_from_proto(
+        op: UserOperation,
+        chain_spec: &ChainSpec,
+    ) -> Result<Self, ConversionError> {
         let op = op
             .uo
             .expect("User operation should contain user operation oneof");
 
         match op {
-            user_operation::Uo::V06(op) => Ok(UserOperationVariant::V0_6(op.try_into()?)),
-            user_operation::Uo::V07(op) => Ok(UserOperationVariant::V0_7(op.try_into()?)),
+            user_operation::Uo::V06(op) => Ok(UserOperationVariant::V0_6(
+                v0_6::UserOperation::try_uo_from_proto(op, chain_spec)?,
+            )),
+            user_operation::Uo::V07(op) => Ok(UserOperationVariant::V0_7(
+                v0_7::UserOperation::try_uo_from_proto(op, chain_spec)?,
+            )),
         }
     }
 }
@@ -349,11 +360,12 @@ impl From<&PoolOperation> for MempoolOp {
 }
 
 pub const MISSING_USER_OP_ERR_STR: &str = "Mempool op should contain user operation";
-impl TryFrom<MempoolOp> for PoolOperation {
-    type Error = anyhow::Error;
-
-    fn try_from(op: MempoolOp) -> Result<Self, Self::Error> {
-        let uo = op.uo.context(MISSING_USER_OP_ERR_STR)?.try_into()?;
+impl TryUoFromProto<MempoolOp> for PoolOperation {
+    fn try_uo_from_proto(op: MempoolOp, chain_spec: &ChainSpec) -> Result<Self, ConversionError> {
+        let uo = UserOperationVariant::try_uo_from_proto(
+            op.uo.context(MISSING_USER_OP_ERR_STR)?,
+            chain_spec,
+        )?;
 
         let entry_point = from_bytes(&op.entry_point)?;
 

@@ -20,14 +20,16 @@ use rand::{self, RngCore};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
-use super::{
-    GasOverheads, UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant,
-};
+use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 pub use crate::contracts::v0_6::i_entry_point::{UserOperation, UserOpsPerAggregator};
 use crate::{
+    chain::ChainSpec,
     entity::{Entity, EntityType},
     EntryPointVersion,
 };
+
+/// Gas overhead required by the entry point contract for the inner call
+pub const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([5_000, 0, 0, 0]);
 
 /// Number of bytes in the fixed size portion of an ABI encoded user operation
 /// sender = 32 bytes
@@ -136,14 +138,27 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn required_pre_execution_buffer(&self) -> U256 {
-        self.verification_gas_limit + U256::from(5_000)
+        self.verification_gas_limit + ENTRY_POINT_INNER_GAS_OVERHEAD
     }
 
-    fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256 {
-        let ov = GasOverheads::v0_6();
-        super::op_calldata_gas_cost(self.clone(), &ov)
+    fn calc_static_pre_verification_gas(
+        &self,
+        chain_spec: &ChainSpec,
+        include_fixed_gas_overhead: bool,
+    ) -> U256 {
+        super::op_calldata_gas_cost(
+            self.clone(),
+            chain_spec.calldata_zero_byte_gas,
+            chain_spec.calldata_non_zero_byte_gas,
+            chain_spec.per_user_op_word_gas,
+        ) + chain_spec.per_user_op_v0_6_gas
+            + (if self.factory().is_some() {
+                chain_spec.per_user_op_deploy_overhead_gas
+            } else {
+                U256::zero()
+            })
             + (if include_fixed_gas_overhead {
-                ov.transaction_gas_overhead
+                chain_spec.transaction_intrinsic_gas
             } else {
                 0.into()
             })
@@ -159,11 +174,6 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.call_data)
             + super::byte_array_abi_len(&self.paymaster_and_data)
             + super::byte_array_abi_len(&self.signature)
-    }
-
-    /// Return the gas overheads for this user operation type
-    fn gas_overheads() -> GasOverheads {
-        GasOverheads::v0_6()
     }
 }
 

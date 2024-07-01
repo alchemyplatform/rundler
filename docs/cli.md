@@ -57,8 +57,6 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
   - (*Only required if using other AWS features*)
-- `--eth_poll_interval_millis`: Interval at which the builder polls an RPC node for new blocks and mined transactions (default: `100`)
-  - env: *ETH_POLL_INTERVAL_MILLIS*
 - `--unsafe`: Flag for unsafe bundling mode. When set Rundler will skip checking simulation rules (and any `debug_traceCall`). (default: `false`).
   - env: *UNSAFE*
 - `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
@@ -145,6 +143,10 @@ List of command line options for configuring the Pool.
   - env: *POOL_ALLOWLIST_PATH*
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - See [here](./architecture/pool.md#allowlistblocklist) for details.
+- `--pool.chain_poll_interval_millis`: Interval at which the pool polls an Eth node for new blocks (default: `100`)
+  - env: *POOL_CHAIN_POLL_INTERVAL_MILLIS*
+- `--pool.chain_sync_max_retries`: The amount of times to retry syncing the chain before giving up and waiting for the next block (default: `5`)
+  - env: *POOL_CHAIN_SYNC_MAX_RETRIES*
 - `--pool.chain_history_size`: Size of the chain history
   - env: *POOL_CHAIN_HISTORY_SIZE*
 - `--pool.paymaster_tracking_enabled`: Boolean field that sets whether the pool server starts with paymaster tracking enabled (default: `true`)

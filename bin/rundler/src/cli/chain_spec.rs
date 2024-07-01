@@ -120,5 +120,7 @@ define_hardcoded_chain_specs!(
     arbitrum,
     arbitrum_sepolia,
     polygon,
-    polygon_amoy
+    polygon_amoy,
+    avax,
+    avax_fuji
 );

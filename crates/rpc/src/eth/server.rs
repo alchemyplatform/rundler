@@ -38,7 +38,7 @@ where
             "eth_sendUserOperation",
             EthApi::send_user_operation(
                 self,
-                UserOperationVariant::from_rpc(op, entry_point, self.chain_spec.id),
+                UserOperationVariant::from_rpc(op, &self.chain_spec),
                 entry_point,
             ),
         )
