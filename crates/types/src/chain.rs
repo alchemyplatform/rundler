@@ -43,6 +43,21 @@ pub struct ChainSpec {
     pub deposit_transfer_overhead: U256,
     /// The maximum size of a transaction in bytes
     pub max_transaction_size_bytes: usize,
+    /// Intrinsic gas cost for a transaction
+    pub transaction_intrinsic_gas: U256,
+    /// Per user operation gas cost for v0.6
+    pub per_user_op_v0_6_gas: U256,
+    /// Per user operation gas cost for v0.7
+    pub per_user_op_v0_7_gas: U256,
+    /// Per user operation deploy gas cost overhead, to capture
+    /// deploy costs that are not metered by the entry point
+    pub per_user_op_deploy_overhead_gas: U256,
+    /// Gas cost for a user operation word in a bundle transaction
+    pub per_user_op_word_gas: U256,
+    /// Gas cost for a zero byte in calldata
+    pub calldata_zero_byte_gas: U256,
+    /// Gas cost for a non-zero byte in calldata
+    pub calldata_non_zero_byte_gas: U256,
 
     /*
      * Gas estimation
@@ -134,7 +149,14 @@ impl Default for ChainSpec {
             id: 0,
             entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
             entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V7_0).unwrap(),
-            deposit_transfer_overhead: U256::from(30000),
+            deposit_transfer_overhead: U256::from(30_000),
+            transaction_intrinsic_gas: U256::from(21_000),
+            per_user_op_v0_6_gas: U256::from(18_300),
+            per_user_op_v0_7_gas: U256::from(19_500),
+            per_user_op_deploy_overhead_gas: U256::from(0),
+            per_user_op_word_gas: U256::from(4),
+            calldata_zero_byte_gas: U256::from(4),
+            calldata_non_zero_byte_gas: U256::from(16),
             eip1559_enabled: true,
             calldata_pre_verification_gas: false,
             l1_gas_oracle_contract_type: L1GasOracleContractType::default(),

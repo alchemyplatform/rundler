@@ -471,8 +471,7 @@ where
         let mut context = ProposalContext::<UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
-        let ov = UO::gas_overheads();
-        let mut gas_spent = ov.transaction_gas_overhead;
+        let mut gas_spent = self.settings.chain_spec.transaction_intrinsic_gas;
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
         for (po, simulation) in ops_with_simulations {
             let op = po.clone().uo;
@@ -1243,7 +1242,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         self.iter_ops_with_simulations()
             .map(|sim_op| gas::user_operation_gas_limit(chain_spec, &sim_op.op, false))
             .fold(U256::zero(), |acc, i| acc + i)
-            + UO::gas_overheads().transaction_gas_overhead
+            + chain_spec.transaction_intrinsic_gas
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -1423,7 +1422,7 @@ mod tests {
     use rundler_sim::MockSimulator;
     use rundler_types::{
         pool::{MockPool, SimulationViolation},
-        v0_6::UserOperation,
+        v0_6::{UserOperation, ENTRY_POINT_INNER_GAS_OVERHEAD},
         UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
@@ -1444,13 +1443,14 @@ mod tests {
         }])
         .await;
 
-        let ov = UserOperation::gas_overheads();
+        let cs = ChainSpec::default();
+
         let expected_gas = math::increase_by_percent(
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
                 + op.call_gas_limit
-                + ov.bundle_transaction_gas_buffer
-                + ov.transaction_gas_overhead,
+                + cs.transaction_intrinsic_gas
+                + ENTRY_POINT_INNER_GAS_OVERHEAD,
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 

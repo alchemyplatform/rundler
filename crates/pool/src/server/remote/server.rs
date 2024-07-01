@@ -24,8 +24,9 @@ use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use rundler_task::grpc::{metrics::GrpcMetricsLayer, protos::from_bytes};
 use rundler_types::{
+    chain::ChainSpec,
     pool::{Pool, Reputation},
-    EntityUpdate, UserOperationId,
+    EntityUpdate, UserOperationId, UserOperationVariant,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -51,7 +52,7 @@ use super::protos::{
     GetStakeStatusResponse, GetStakeStatusSuccess, GetSupportedEntryPointsRequest,
     GetSupportedEntryPointsResponse, MempoolOp, RemoveOpByIdRequest, RemoveOpByIdResponse,
     RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
-    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
 };
 use crate::server::local::LocalPoolHandle;
@@ -59,13 +60,13 @@ use crate::server::local::LocalPoolHandle;
 const MAX_REMOTE_BLOCK_SUBSCRIPTIONS: usize = 32;
 
 pub(crate) async fn spawn_remote_mempool_server(
-    chain_id: u64,
+    chain_spec: ChainSpec,
     local_pool: LocalPoolHandle,
     addr: SocketAddr,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
     // gRPC server
-    let pool_impl = OpPoolImpl::new(chain_id, local_pool);
+    let pool_impl = OpPoolImpl::new(chain_spec, local_pool);
     let op_pool_server = OpPoolServer::new(pool_impl);
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
@@ -93,15 +94,15 @@ pub(crate) async fn spawn_remote_mempool_server(
 }
 
 struct OpPoolImpl {
-    chain_id: u64,
+    chain_spec: ChainSpec,
     local_pool: LocalPoolHandle,
     num_block_subscriptions: Arc<AtomicUsize>,
 }
 
 impl OpPoolImpl {
-    pub(crate) fn new(chain_id: u64, local_pool: LocalPoolHandle) -> Self {
+    pub(crate) fn new(chain_spec: ChainSpec, local_pool: LocalPoolHandle) -> Self {
         Self {
-            chain_id,
+            chain_spec,
             local_pool,
             num_block_subscriptions: Arc::new(AtomicUsize::new(0)),
         }
@@ -125,7 +126,7 @@ impl OpPool for OpPoolImpl {
     ) -> Result<Response<GetSupportedEntryPointsResponse>> {
         let resp = match self.local_pool.get_supported_entry_points().await {
             Ok(entry_points) => GetSupportedEntryPointsResponse {
-                chain_id: self.chain_id,
+                chain_id: self.chain_spec.id,
                 entry_points: entry_points
                     .into_iter()
                     .map(|ep| ep.as_bytes().to_vec())
@@ -146,9 +147,10 @@ impl OpPool for OpPoolImpl {
         let proto_op = req
             .op
             .ok_or_else(|| Status::invalid_argument("Operation is required in AddOpRequest"))?;
-        let uo = proto_op.try_into().map_err(|e| {
-            Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
-        })?;
+        let uo =
+            UserOperationVariant::try_uo_from_proto(proto_op, &self.chain_spec).map_err(|e| {
+                Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
+            })?;
 
         let resp = match self.local_pool.add_op(ep, uo).await {
             Ok(hash) => AddOpResponse {

@@ -46,8 +46,10 @@ pub struct Args {
     pub unsafe_mode: bool,
     /// HTTP URL for the full node.
     pub http_url: String,
-    /// Poll interval for full node requests.
-    pub http_poll_interval: Duration,
+    /// Interval to poll the chain for updates.
+    pub chain_poll_interval: Duration,
+    /// Number of times to retry a block sync at the `chain_poll_interval` before abandoning
+    pub chain_max_sync_retries: u64,
     /// Pool configurations.
     pub pool_configs: Vec<PoolConfig>,
     /// Address to bind the remote mempool server to, if any.
@@ -75,7 +77,8 @@ impl Task for PoolTask {
         // create chain
         let chain_settings = chain::Settings {
             history_size: self.args.chain_spec.chain_history_size,
-            poll_interval: self.args.http_poll_interval,
+            poll_interval: self.args.chain_poll_interval,
+            max_sync_retries: self.args.chain_max_sync_retries,
             entry_point_addresses: self
                 .args
                 .pool_configs
@@ -85,7 +88,7 @@ impl Task for PoolTask {
         };
         let provider = rundler_provider::new_provider(
             &self.args.http_url,
-            Some(self.args.http_poll_interval),
+            Some(self.args.chain_poll_interval),
         )?;
         let chain = Chain::new(provider.clone(), chain_settings);
         let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
@@ -133,7 +136,7 @@ impl Task for PoolTask {
         let remote_handle = match self.args.remote_address {
             Some(addr) => {
                 spawn_remote_mempool_server(
-                    self.args.chain_spec.id,
+                    self.args.chain_spec.clone(),
                     pool_handle,
                     addr,
                     shutdown_token,

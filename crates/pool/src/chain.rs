@@ -34,9 +34,10 @@ use tokio::{
     select,
     sync::{broadcast, Semaphore},
     task::JoinHandle,
+    time,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, info, warn};
 
 const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 
@@ -110,6 +111,7 @@ pub(crate) struct Settings {
     pub(crate) history_size: u64,
     pub(crate) poll_interval: Duration,
     pub(crate) entry_point_addresses: HashMap<Address, EntryPointVersion>,
+    pub(crate) max_sync_retries: u64,
 }
 
 #[derive(Debug)]
@@ -201,13 +203,28 @@ impl<P: Provider> Chain<P> {
             )
             .await;
             block_hash = hash;
-            let update = self.sync_to_block(block).await;
-            match update {
-                Ok(update) => return update,
-                Err(error) => {
-                    error!("Failed to update chain at block {block_hash:?}. Will try again at next block. {error:?}");
+
+            for i in 0..=self.settings.max_sync_retries {
+                if i > 0 {
+                    ChainMetrics::increment_sync_retries();
                 }
+
+                let update = self.sync_to_block(block.clone()).await;
+                match update {
+                    Ok(update) => return update,
+                    Err(error) => {
+                        debug!("Failed to update chain at block {block_hash:?}: {error:?}");
+                    }
+                }
+
+                time::sleep(self.settings.poll_interval).await;
             }
+
+            warn!(
+                "Failed to update chain at block {:?} after {} retries. Abandoning sync.",
+                block_hash, self.settings.max_sync_retries
+            );
+            ChainMetrics::increment_sync_abandoned();
         }
     }
 
@@ -664,6 +681,14 @@ impl ChainMetrics {
 
     fn increment_total_reorg_depth(depth: u64) {
         metrics::counter!("op_pool_chain_total_reorg_depth").increment(depth);
+    }
+
+    fn increment_sync_retries() {
+        metrics::counter!("op_pool_chain_sync_retries").increment(1);
+    }
+
+    fn increment_sync_abandoned() {
+        metrics::counter!("op_pool_chain_sync_abandoned").increment(1);
     }
 }
 
@@ -1366,6 +1391,7 @@ mod tests {
                     (ENTRY_POINT_ADDRESS_V0_6, EntryPointVersion::V0_6),
                     (ENTRY_POINT_ADDRESS_V0_7, EntryPointVersion::V0_7),
                 ]),
+                max_sync_retries: 1,
             },
         );
         (chain, controller)

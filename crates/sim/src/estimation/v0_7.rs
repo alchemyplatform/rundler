@@ -28,7 +28,7 @@ use rundler_types::{
         },
         entry_point_simulations::ENTRYPOINTSIMULATIONS_DEPLOYED_BYTECODE,
     },
-    v0_7::{UserOperation, UserOperationOptionalGas},
+    v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate,
 };
 use rundler_utils::{eth, math};
@@ -85,8 +85,7 @@ where
         let full_op = op
             .clone()
             .into_user_operation_builder(
-                self.entry_point.address(),
-                self.chain_spec.id,
+                &self.chain_spec,
                 settings.max_call_gas.into(),
                 settings.max_verification_gas.into(),
                 settings.max_paymaster_verification_gas.into(),
@@ -175,7 +174,9 @@ where
         let call_gas_estimator = CallGasEstimatorImpl::new(
             entry_point.clone(),
             settings,
-            CallGasEstimatorSpecializationV07,
+            CallGasEstimatorSpecializationV07 {
+                chain_spec: chain_spec.clone(),
+            },
         );
         Self {
             chain_spec,
@@ -262,7 +263,7 @@ where
 
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
-            op.into_builder()
+            UserOperationBuilder::from_uo(op, &self.chain_spec)
                 .verification_gas_limit(gas)
                 .max_fee_per_gas(fee)
                 .max_priority_fee_per_gas(fee)
@@ -307,7 +308,7 @@ where
 
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
-            op.into_builder()
+            UserOperationBuilder::from_uo(op, &self.chain_spec)
                 .max_fee_per_gas(fee)
                 .max_priority_fee_per_gas(fee)
                 .paymaster_verification_gas_limit(gas)
@@ -367,8 +368,8 @@ where
         Ok(gas::estimate_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
-            &optional_op.max_fill(self.entry_point.address(), self.chain_spec.id),
-            &optional_op.random_fill(self.entry_point.address(), self.chain_spec.id),
+            &optional_op.max_fill(&self.chain_spec),
+            &optional_op.random_fill(&self.chain_spec),
             gas_price,
         )
         .await?)
@@ -409,7 +410,9 @@ where
 /// Implementation of functions that specialize the call gas estimator to the
 /// v0.7 entry point.
 #[derive(Debug)]
-pub struct CallGasEstimatorSpecializationV07;
+pub struct CallGasEstimatorSpecializationV07 {
+    chain_spec: ChainSpec,
+}
 
 impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
     type UO = UserOperation;
@@ -432,7 +435,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
     }
 
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO {
-        op.into_builder()
+        UserOperationBuilder::from_uo(op, &self.chain_spec)
             .call_gas_limit(U128::zero())
             .max_fee_per_gas(U128::zero())
             .build()

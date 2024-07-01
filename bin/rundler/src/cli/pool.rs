@@ -89,6 +89,27 @@ pub struct PoolArgs {
     )]
     pub allowlist_path: Option<String>,
 
+    /// Interval at which the pool polls an Eth node for new blocks
+    #[arg(
+        long = "pool.chain_poll_interval_millis",
+        name = "pool.chain_poll_interval_millis",
+        env = "POOL_CHAIN_POLL_INTERVAL_MILLIS",
+        default_value = "100",
+        global = true
+    )]
+    pub chain_poll_interval_millis: u64,
+
+    /// The amount of times to retry syncing the chain before giving up and
+    /// waiting for the next block.
+    #[arg(
+        long = "pool.chain_sync_max_retries",
+        name = "pool.chain_sync_max_retries",
+        env = "POOL_CHAIN_SYNC_MAX_RETRIES",
+        default_value = "5",
+        global = true
+    )]
+    pub chain_sync_max_retries: u64,
+
     #[arg(
         long = "pool.chain_history_size",
         name = "pool.chain_history_size",
@@ -234,7 +255,8 @@ impl PoolArgs {
                 .node_http
                 .clone()
                 .context("pool requires node_http arg")?,
-            http_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
+            chain_poll_interval: Duration::from_millis(self.chain_poll_interval_millis),
+            chain_max_sync_retries: self.chain_sync_max_retries,
             pool_configs,
             remote_address,
             chain_update_channel_capacity: self.chain_update_channel_capacity.unwrap_or(1024),
