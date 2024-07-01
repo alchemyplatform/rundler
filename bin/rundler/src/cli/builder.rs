@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 use anyhow::{bail, Context};
 use clap::Args;
@@ -354,7 +354,6 @@ impl BuilderArgs {
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
             sender_args,
-            eth_poll_interval: Duration::from_millis(common.eth_poll_interval_millis),
             sim_settings: common.try_into()?,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,
             replacement_fee_percent_increase: self.replacement_fee_percent_increase,
@@ -442,7 +441,7 @@ pub async fn run(
 
     let task_args = builder_args
         .to_args(
-            chain_spec,
+            chain_spec.clone(),
             &common_args,
             Some(format_socket_addr(&builder_args.host, builder_args.port).parse()?),
         )
@@ -451,7 +450,7 @@ pub async fn run(
     let pool = connect_with_retries_shutdown(
         "op pool from builder",
         &pool_url,
-        RemotePoolClient::connect,
+        |url| RemotePoolClient::connect(url, chain_spec.clone()),
         tokio::signal::ctrl_c(),
     )
     .await?;

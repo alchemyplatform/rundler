@@ -1,0 +1,7 @@
+name = "Avax"
+id = 43114
+
+# Intrinsic cost + overhead of non-reentry storage without refund
+transaction_intrinsic_gas = "0x5DC0" # 24_000
+# Extra cost of a deploy without refunds
+per_user_op_deploy_overhead_gas = "0x4E20" # 20_000

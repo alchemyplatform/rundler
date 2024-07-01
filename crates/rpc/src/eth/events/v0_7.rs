@@ -17,6 +17,7 @@ use ethers::{
     types::{Address, Bytes, Log, TransactionReceipt, H256},
 };
 use rundler_types::{
+    chain::ChainSpec,
     contracts::v0_7::i_entry_point::{
         IEntryPointCalls, UserOperationEventFilter, UserOperationRevertReasonFilter,
     },
@@ -79,11 +80,7 @@ impl EntryPointFilters for EntryPointFiltersV0_7 {
         }
     }
 
-    fn get_user_operations_from_tx_data(
-        tx_data: Bytes,
-        address: Address,
-        chain_id: u64,
-    ) -> Vec<Self::UO> {
+    fn get_user_operations_from_tx_data(tx_data: Bytes, chain_spec: &ChainSpec) -> Vec<Self::UO> {
         let entry_point_calls = match IEntryPointCalls::decode(tx_data) {
             Ok(entry_point_calls) => entry_point_calls,
             Err(_) => return vec![],
@@ -93,20 +90,20 @@ impl EntryPointFilters for EntryPointFiltersV0_7 {
             IEntryPointCalls::HandleOps(handle_ops_call) => handle_ops_call
                 .ops
                 .into_iter()
-                .map(|op| op.unpack(address, chain_id))
+                .map(|op| op.unpack(chain_spec))
                 .collect(),
             IEntryPointCalls::HandleAggregatedOps(handle_aggregated_ops_call) => {
                 handle_aggregated_ops_call
                     .ops_per_aggregator
                     .into_iter()
-                    .flat_map(|ops| {
-                        ops.user_ops
-                            .into_iter()
-                            .map(|op| op.unpack(address, chain_id))
-                    })
+                    .flat_map(|ops| ops.user_ops.into_iter().map(|op| op.unpack(chain_spec)))
                     .collect()
             }
             _ => vec![],
         }
+    }
+
+    fn address(chain_spec: &ChainSpec) -> Address {
+        chain_spec.entry_point_address_v0_7
     }
 }

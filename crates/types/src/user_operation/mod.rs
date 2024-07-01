@@ -23,7 +23,7 @@ pub mod v0_6;
 /// User Operation types for Entry Point v0.7
 pub mod v0_7;
 
-use crate::Entity;
+use crate::{chain::ChainSpec, Entity};
 
 /// A user op must be valid for at least this long into the future to be included.
 pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
@@ -138,7 +138,11 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn pre_verification_gas(&self) -> U256;
 
     /// Calculate the static portion of the pre-verification gas for this user operation
-    fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256;
+    fn calc_static_pre_verification_gas(
+        &self,
+        chain_spec: &ChainSpec,
+        include_fixed_gas_overhead: bool,
+    ) -> U256;
 
     /// Clear the signature field of the user op
     ///
@@ -147,9 +151,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
 
     /// Abi encode size of the user operation
     fn abi_encoded_size(&self) -> usize;
-
-    /// Return the gas overheads for this user operation type
-    fn gas_overheads() -> GasOverheads;
 
     /// Calculate the size of the user operation in single UO bundle in bytes
     fn single_uo_bundle_size_bytes(&self) -> usize {
@@ -278,13 +279,17 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256 {
+    fn calc_static_pre_verification_gas(
+        &self,
+        chain_spec: &ChainSpec,
+        include_fixed_gas_overhead: bool,
+    ) -> U256 {
         match self {
             UserOperationVariant::V0_6(op) => {
-                op.calc_static_pre_verification_gas(include_fixed_gas_overhead)
+                op.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
             }
             UserOperationVariant::V0_7(op) => {
-                op.calc_static_pre_verification_gas(include_fixed_gas_overhead)
+                op.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
             }
         }
     }
@@ -314,15 +319,6 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.abi_encoded_size(),
             UserOperationVariant::V0_7(op) => op.abi_encoded_size(),
-        }
-    }
-
-    /// Return the gas overheads for this user operation type
-    fn gas_overheads() -> GasOverheads {
-        match Self::entry_point_version() {
-            EntryPointVersion::V0_6 => GasOverheads::v0_6(),
-            EntryPointVersion::V0_7 => GasOverheads::v0_7(),
-            EntryPointVersion::Unspecified => unreachable!(),
         }
     }
 }
@@ -399,61 +395,27 @@ pub struct UserOpsPerAggregator<UO: UserOperation> {
     pub signature: Bytes,
 }
 
-/// Gas overheads for user operations used in calculating the pre-verification gas. See: https://github.com/eth-infinitism/bundler/blob/main/packages/sdk/src/calcPreVerificationGas.ts
-#[derive(Clone, Copy, Debug)]
-pub struct GasOverheads {
-    /// The Entrypoint requires a gas buffer for the bundle to account for the gas spent outside of the major steps in the processing of UOs
-    pub bundle_transaction_gas_buffer: U256,
-    /// The fixed gas overhead for any EVM transaction
-    pub transaction_gas_overhead: U256,
-    per_user_op: U256,
-    per_user_op_word: U256,
-    zero_byte: U256,
-    non_zero_byte: U256,
-}
-
-impl GasOverheads {
-    /// Gas overheads for entry point v0.6
-    pub fn v0_6() -> Self {
-        Self {
-            bundle_transaction_gas_buffer: 5_000.into(),
-            transaction_gas_overhead: 21_000.into(),
-            per_user_op: 18_300.into(),
-            per_user_op_word: 4.into(),
-            zero_byte: 4.into(),
-            non_zero_byte: 16.into(),
-        }
-    }
-
-    /// Gas overheads for entry point v0.7
-    pub fn v0_7() -> Self {
-        Self {
-            bundle_transaction_gas_buffer: 5_000.into(),
-            transaction_gas_overhead: 21_000.into(),
-            per_user_op: 19_500.into(),
-            per_user_op_word: 4.into(),
-            zero_byte: 4.into(),
-            non_zero_byte: 16.into(),
-        }
-    }
-}
-
-pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(uo: UO, ov: &GasOverheads) -> U256 {
+pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(
+    uo: UO,
+    zero_byte_cost: U256,
+    non_zero_byte_cost: U256,
+    per_word_cost: U256,
+) -> U256 {
     let encoded_op = uo.encode();
     let length_in_words = (encoded_op.len() + 31) >> 5; // ceil(encoded_op.len() / 32)
     let call_data_cost: U256 = encoded_op
         .iter()
         .map(|&x| {
             if x == 0 {
-                ov.zero_byte
+                zero_byte_cost
             } else {
-                ov.non_zero_byte
+                non_zero_byte_cost
             }
         })
         .reduce(|a, b| a + b)
         .unwrap_or_default();
 
-    call_data_cost + ov.per_user_op + ov.per_user_op_word * length_in_words
+    call_data_cost + per_word_cost * length_in_words
 }
 
 /// Calculates the size a byte array padded to the next largest multiple of 32

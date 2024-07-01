@@ -83,8 +83,6 @@ pub struct Args {
     pub priority_fee_mode: PriorityFeeMode,
     /// Sender to be used by the builder
     pub sender_args: TransactionSenderArgs,
-    /// RPC node poll interval
-    pub eth_poll_interval: Duration,
     /// Operation simulation settings
     pub sim_settings: SimulationSettings,
     /// Maximum number of blocks to wait for a transaction to be mined
@@ -131,8 +129,7 @@ where
     P: Pool + Clone,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let provider =
-            rundler_provider::new_provider(&self.args.rpc_url, Some(self.args.eth_poll_interval))?;
+        let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
         let submit_provider = if let TransactionSenderArgs::Raw(args) = &self.args.sender_args {
             Some(rundler_provider::new_provider(&args.submit_url, None)?)
         } else {

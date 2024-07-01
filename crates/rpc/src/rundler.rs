@@ -139,7 +139,7 @@ where
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> EthResult<Option<H256>> {
-        let uo = UserOperationVariant::from_rpc(user_op, entry_point, self.chain_spec.id);
+        let uo = UserOperationVariant::from_rpc(user_op, &self.chain_spec);
         let id = uo.id();
 
         if uo.pre_verification_gas() != U256::zero()

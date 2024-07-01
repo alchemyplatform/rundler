@@ -13,6 +13,7 @@
 
 use std::{pin::Pin, str::FromStr};
 
+use anyhow::Context;
 use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::{
@@ -20,6 +21,7 @@ use rundler_task::{
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::{
+    chain::ChainSpec,
     pool::{
         NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult, Reputation,
         ReputationStatus, StakeStatus,
@@ -48,7 +50,7 @@ use super::protos::{
     DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
     DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
     RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, UpdateEntitiesRequest,
+    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
 };
 
 /// Remote pool client
@@ -56,17 +58,19 @@ use super::protos::{
 /// Used to submit requests to a remote pool server.
 #[derive(Debug, Clone)]
 pub struct RemotePoolClient {
+    chain_spec: ChainSpec,
     op_pool_client: OpPoolClient<Channel>,
     op_pool_health: HealthClient<Channel>,
 }
 
 impl RemotePoolClient {
     /// Connect to a remote pool server, returning a client for submitting requests.
-    pub async fn connect(url: String) -> anyhow::Result<Self> {
+    pub async fn connect(url: String, chain_spec: ChainSpec) -> anyhow::Result<Self> {
         let op_pool_client = OpPoolClient::connect(url.clone()).await?;
         let op_pool_health =
             HealthClient::new(Channel::builder(Uri::from_str(&url)?).connect().await?);
         Ok(Self {
+            chain_spec,
             op_pool_client,
             op_pool_health,
         })
@@ -186,7 +190,10 @@ impl Pool for RemotePoolClient {
             Some(get_ops_response::Result::Success(s)) => s
                 .ops
                 .into_iter()
-                .map(PoolOperation::try_from)
+                .map(|proto_uo| {
+                    PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
+                        .context("should convert proto uo to pool operation")
+                })
                 .map(|res| res.map_err(PoolError::from))
                 .collect(),
             Some(get_ops_response::Result::Failure(f)) => Err(f.try_into()?),
@@ -209,9 +216,13 @@ impl Pool for RemotePoolClient {
             .result;
 
         match res {
-            Some(get_op_by_hash_response::Result::Success(s)) => {
-                Ok(s.op.map(PoolOperation::try_from).transpose()?)
-            }
+            Some(get_op_by_hash_response::Result::Success(s)) => Ok(s
+                .op
+                .map(|proto_uo| {
+                    PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
+                        .context("should convert proto uo to pool operation")
+                })
+                .transpose()?),
             Some(get_op_by_hash_response::Result::Failure(e)) => match e.error {
                 Some(_) => Err(e.try_into()?),
                 None => Err(PoolError::Other(anyhow::anyhow!(
@@ -380,7 +391,10 @@ impl Pool for RemotePoolClient {
             Some(debug_dump_mempool_response::Result::Success(s)) => s
                 .ops
                 .into_iter()
-                .map(PoolOperation::try_from)
+                .map(|proto_uo| {
+                    PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
+                        .context("should convert proto uo to pool operation")
+                })
                 .map(|res| res.map_err(PoolError::from))
                 .collect(),
             Some(debug_dump_mempool_response::Result::Failure(f)) => Err(f.try_into()?),

@@ -27,6 +27,9 @@ pub enum ConversionError {
     /// Invalid enum value, does not map to a valid enum variant
     #[error("Invalid enum value {0}")]
     InvalidEnumValue(i32),
+    /// Other error
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 /// Convert proto bytes into a type that implements `FromProtoBytes`.

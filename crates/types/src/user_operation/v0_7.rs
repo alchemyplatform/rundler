@@ -20,7 +20,7 @@ use rand::RngCore;
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{
-    contracts::v0_7::shared_types::PackedUserOperation, Entity, EntryPointVersion, GasOverheads,
+    chain::ChainSpec, contracts::v0_7::shared_types::PackedUserOperation, Entity, EntryPointVersion,
 };
 
 const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([10_000, 0, 0, 0]);
@@ -188,11 +188,20 @@ impl UserOperationTrait for UserOperation {
         U256::from(self.verification_gas_limit) + U256::from(self.paymaster_verification_gas_limit)
     }
 
-    fn calc_static_pre_verification_gas(&self, include_fixed_gas_overhead: bool) -> U256 {
-        let ov = GasOverheads::v0_7();
+    fn calc_static_pre_verification_gas(
+        &self,
+        chain_spec: &ChainSpec,
+        include_fixed_gas_overhead: bool,
+    ) -> U256 {
         self.calldata_gas_cost
+            + chain_spec.per_user_op_v0_7_gas
+            + (if self.factory.is_some() {
+                chain_spec.per_user_op_deploy_overhead_gas
+            } else {
+                0.into()
+            })
             + (if include_fixed_gas_overhead {
-                ov.transaction_gas_overhead
+                chain_spec.transaction_intrinsic_gas
             } else {
                 0.into()
             })
@@ -228,11 +237,6 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.packed.paymaster_and_data)
             + super::byte_array_abi_len(&self.packed.signature)
     }
-
-    /// Return the gas overheads for this user operation type
-    fn gas_overheads() -> GasOverheads {
-        GasOverheads::v0_7()
-    }
 }
 
 impl UserOperation {
@@ -244,34 +248,6 @@ impl UserOperation {
     /// Returns a reference to the packed user operation
     pub fn packed(&self) -> &PackedUserOperation {
         &self.packed
-    }
-
-    /// Returns a builder with the same values as this user operation. Should be
-    /// used instead of mutating this user operation directly when updating
-    /// fields.
-    pub fn into_builder(self) -> UserOperationBuilder {
-        UserOperationBuilder {
-            entry_point: self.entry_point,
-            chain_id: self.chain_id,
-            required: UserOperationRequiredFields {
-                sender: self.sender,
-                nonce: self.nonce,
-                call_data: self.call_data,
-                call_gas_limit: self.call_gas_limit,
-                verification_gas_limit: self.verification_gas_limit,
-                pre_verification_gas: self.pre_verification_gas,
-                max_priority_fee_per_gas: self.max_priority_fee_per_gas,
-                max_fee_per_gas: self.max_fee_per_gas,
-                signature: self.signature,
-            },
-            factory: self.factory,
-            factory_data: self.factory_data,
-            paymaster: self.paymaster,
-            paymaster_verification_gas_limit: self.paymaster_verification_gas_limit,
-            paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
-            paymaster_data: self.paymaster_data,
-            packed_uo: None,
-        }
     }
 }
 
@@ -363,13 +339,12 @@ pub struct UserOperationOptionalGas {
 impl UserOperationOptionalGas {
     /// Fill in the optional and dummy fields of the user operation with values
     /// that will cause the maximum possible calldata gas cost.
-    pub fn max_fill(&self, entry_point: Address, chain_id: u64) -> UserOperation {
+    pub fn max_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
         let max_4 = U128::from(u32::MAX);
         let max_8 = U128::from(u64::MAX);
 
         let mut builder = UserOperationBuilder::new(
-            entry_point,
-            chain_id,
+            chain_spec,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -410,10 +385,9 @@ impl UserOperationOptionalGas {
     //
     /// Note that this will slightly overestimate the calldata gas needed as it uses
     /// the worst case scenario for the unknown gas values and paymaster_and_data.
-    pub fn random_fill(&self, entry_point: Address, chain_id: u64) -> UserOperation {
+    pub fn random_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
         let mut builder = UserOperationBuilder::new(
-            entry_point,
-            chain_id,
+            chain_spec,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -449,12 +423,11 @@ impl UserOperationOptionalGas {
     /// Fill in the optional fields of the user operation with default values if unset
     pub fn into_user_operation_builder(
         self,
-        entry_point: Address,
-        chain_id: u64,
+        chian_spec: &ChainSpec,
         max_call_gas: U128,
         max_verification_gas: U128,
         max_paymaster_verification_gas: U128,
-    ) -> UserOperationBuilder {
+    ) -> UserOperationBuilder<'_> {
         // If unset or zero, default these to gas limits from settings
         // Cap their values to the gas limits from settings
         let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, U128::zero());
@@ -475,8 +448,7 @@ impl UserOperationOptionalGas {
         );
 
         let mut builder = UserOperationBuilder::new(
-            entry_point,
-            chain_id,
+            chian_spec,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -545,10 +517,9 @@ impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
 /// Builder for UserOperation
 ///
 /// Used to create a v0.7 while ensuring all required fields and grouped fields are present
-pub struct UserOperationBuilder {
-    // required fields for hash
-    entry_point: Address,
-    chain_id: u64,
+pub struct UserOperationBuilder<'a> {
+    // chain spec
+    chain_spec: &'a ChainSpec,
 
     // required fields
     required: UserOperationRequiredFields,
@@ -585,12 +556,11 @@ pub struct UserOperationRequiredFields {
     pub signature: Bytes,
 }
 
-impl UserOperationBuilder {
+impl<'a> UserOperationBuilder<'a> {
     /// Creates a new builder
-    pub fn new(entry_point: Address, chain_id: u64, required: UserOperationRequiredFields) -> Self {
+    pub fn new(chain_spec: &'a ChainSpec, required: UserOperationRequiredFields) -> Self {
         Self {
-            entry_point,
-            chain_id,
+            chain_spec,
             required,
             factory: None,
             factory_data: Bytes::new(),
@@ -598,6 +568,31 @@ impl UserOperationBuilder {
             paymaster_verification_gas_limit: U128::zero(),
             paymaster_post_op_gas_limit: U128::zero(),
             paymaster_data: Bytes::new(),
+            packed_uo: None,
+        }
+    }
+
+    /// Creates a builder from an existing UO
+    pub fn from_uo(uo: UserOperation, chain_spec: &'a ChainSpec) -> Self {
+        Self {
+            chain_spec,
+            required: UserOperationRequiredFields {
+                sender: uo.sender,
+                nonce: uo.nonce,
+                call_data: uo.call_data,
+                call_gas_limit: uo.call_gas_limit,
+                verification_gas_limit: uo.verification_gas_limit,
+                pre_verification_gas: uo.pre_verification_gas,
+                max_priority_fee_per_gas: uo.max_priority_fee_per_gas,
+                max_fee_per_gas: uo.max_fee_per_gas,
+                signature: uo.signature,
+            },
+            factory: uo.factory,
+            factory_data: uo.factory_data,
+            paymaster: uo.paymaster,
+            paymaster_verification_gas_limit: uo.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: uo.paymaster_post_op_gas_limit,
+            paymaster_data: uo.paymaster_data,
             packed_uo: None,
         }
     }
@@ -693,8 +688,8 @@ impl UserOperationBuilder {
             paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
             paymaster_data: self.paymaster_data,
             signature: self.required.signature,
-            entry_point: self.entry_point,
-            chain_id: self.chain_id,
+            entry_point: self.chain_spec.entry_point_address_v0_7,
+            chain_id: self.chain_spec.id,
             hash: H256::zero(),
             packed: PackedUserOperation::default(),
             calldata_gas_cost: U256::zero(),
@@ -703,8 +698,17 @@ impl UserOperationBuilder {
         let packed = self
             .packed_uo
             .unwrap_or_else(|| pack_user_operation(uo.clone()));
-        let hash = hash_packed_user_operation(&packed, self.entry_point, self.chain_id);
-        let calldata_gas_cost = super::op_calldata_gas_cost(packed.clone(), &GasOverheads::v0_7());
+        let hash = hash_packed_user_operation(
+            &packed,
+            self.chain_spec.entry_point_address_v0_7,
+            self.chain_spec.id,
+        );
+        let calldata_gas_cost = super::op_calldata_gas_cost(
+            packed.clone(),
+            self.chain_spec.calldata_zero_byte_gas,
+            self.chain_spec.calldata_non_zero_byte_gas,
+            self.chain_spec.per_user_op_word_gas,
+        );
 
         UserOperation {
             hash,
@@ -759,14 +763,9 @@ fn pack_user_operation(uo: UserOperation) -> PackedUserOperation {
     }
 }
 
-fn unpack_user_operation(
-    puo: PackedUserOperation,
-    entry_point: Address,
-    chain_id: u64,
-) -> UserOperation {
+fn unpack_user_operation(puo: PackedUserOperation, chain_spec: &ChainSpec) -> UserOperation {
     let mut builder = UserOperationBuilder::new(
-        entry_point,
-        chain_id,
+        chain_spec,
         UserOperationRequiredFields {
             sender: puo.sender,
             nonce: puo.nonce,
@@ -850,8 +849,8 @@ fn concat_128(a: [u8; 16], b: [u8; 16]) -> [u8; 32] {
 
 impl PackedUserOperation {
     /// Unpacks the user operation to its offchain representation
-    pub fn unpack(self, entry_point: Address, chain_id: u64) -> UserOperation {
-        unpack_user_operation(self.clone(), entry_point, chain_id)
+    pub fn unpack(self, chain_spec: &ChainSpec) -> UserOperation {
+        unpack_user_operation(self.clone(), chain_spec)
     }
 
     fn heap_size(&self) -> usize {
@@ -869,9 +868,9 @@ mod tests {
 
     #[test]
     fn test_pack_unpack() {
+        let cs = ChainSpec::default();
         let builder = UserOperationBuilder::new(
-            Address::zero(),
-            1,
+            &cs,
             UserOperationRequiredFields {
                 sender: Address::zero(),
                 nonce: 0.into(),
@@ -887,16 +886,16 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = packed.unpack(Address::zero(), 1);
+        let unpacked = packed.unpack(&cs);
 
         assert_eq!(uo, unpacked);
     }
 
     #[test]
     fn test_pack_unpack_2() {
+        let cs = ChainSpec::default();
         let builder = UserOperationBuilder::new(
-            Address::zero(),
-            1,
+            &cs,
             UserOperationRequiredFields {
                 sender: Address::zero(),
                 nonce: 0.into(),
@@ -920,7 +919,7 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = packed.unpack(Address::zero(), 1);
+        let unpacked = packed.unpack(&cs);
 
         assert_eq!(uo, unpacked);
     }
@@ -928,8 +927,10 @@ mod tests {
     #[test]
     fn test_hash() {
         // From https://sepolia.etherscan.io/tx/0x51c1f40ce6e997a54b39a0eb783e472c2afa4ed3f2f11f97986f7f3a347b9d50
-        let entry_point = Address::from_str("0x0000000071727De22E5E9d8BAf0edAc6f37da032").unwrap();
-        let chain_id = 11155111;
+        let cs = ChainSpec {
+            id: 11155111,
+            ..Default::default()
+        };
 
         let puo = PackedUserOperation {
             sender: Address::from_str("0xb292Cf4a8E1fF21Ac27C4f94071Cd02C022C414b").unwrap(),
@@ -952,21 +953,18 @@ mod tests {
         let hash =
             H256::from_str("0xe486401370d145766c3cf7ba089553214a1230d38662ae532c9b62eb6dadcf7e")
                 .unwrap();
-        let uo = puo.unpack(entry_point, chain_id);
-        assert_eq!(uo.hash(entry_point, chain_id), hash);
+        let uo = puo.unpack(&cs);
+        assert_eq!(uo.hash(cs.entry_point_address_v0_7, cs.id), hash);
     }
 
     #[test]
     fn test_builder() {
-        let entry_point = Address::zero();
-        let chain_id = 1;
-
         let factory_address = Address::random();
         let paymaster_address = Address::random();
+        let cs = ChainSpec::default();
 
         let uo = UserOperationBuilder::new(
-            entry_point,
-            chain_id,
+            &cs,
             UserOperationRequiredFields {
                 sender: Address::zero(),
                 nonce: 0.into(),

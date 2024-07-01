@@ -50,7 +50,7 @@ pub async fn estimate_pre_verification_gas<
     random_op: &UO,
     gas_price: U256,
 ) -> anyhow::Result<U256> {
-    let static_gas = full_op.calc_static_pre_verification_gas(true);
+    let static_gas = full_op.calc_static_pre_verification_gas(chain_spec, true);
     if !chain_spec.calldata_pre_verification_gas {
         return Ok(static_gas);
     }
@@ -74,7 +74,7 @@ pub async fn calc_required_pre_verification_gas<
     op: &UO,
     base_fee: U256,
 ) -> anyhow::Result<U256> {
-    let static_gas = op.calc_static_pre_verification_gas(true);
+    let static_gas = op.calc_static_pre_verification_gas(chain_spec, true);
     if !chain_spec.calldata_pre_verification_gas {
         return Ok(static_gas);
     }
@@ -152,7 +152,7 @@ pub fn user_operation_pre_verification_execution_gas_limit<UO: UserOperation>(
     // but this not part of the EXECUTION gas limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
     if chain_spec.calldata_pre_verification_gas {
-        uo.calc_static_pre_verification_gas(include_fixed_gas_overhead)
+        uo.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
     } else {
         uo.pre_verification_gas()
     }
@@ -170,7 +170,7 @@ pub fn user_operation_pre_verification_gas_limit<UO: UserOperation>(
     // but this not part of the execution TOTAL limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
     if chain_spec.calldata_pre_verification_gas && !chain_spec.include_l1_gas_in_gas_limit {
-        uo.calc_static_pre_verification_gas(include_fixed_gas_overhead)
+        uo.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
     } else {
         uo.pre_verification_gas()
     }

@@ -13,6 +13,7 @@
 
 use ethers::types::{Address, Bytes, H256, U128, U256};
 use rundler_types::{
+    chain::ChainSpec,
     v0_7::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
     },
@@ -88,10 +89,9 @@ impl From<UserOperation> for RpcUserOperation {
 }
 
 impl FromRpc<RpcUserOperation> for UserOperation {
-    fn from_rpc(def: RpcUserOperation, entry_point: Address, chain_id: u64) -> Self {
+    fn from_rpc(def: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
         let mut builder = UserOperationBuilder::new(
-            entry_point,
-            chain_id,
+            chain_spec,
             UserOperationRequiredFields {
                 sender: def.sender,
                 nonce: def.nonce,

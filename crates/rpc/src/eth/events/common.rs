@@ -22,7 +22,7 @@ use ethers::{
     },
 };
 use rundler_provider::Provider;
-use rundler_types::{UserOperation, UserOperationVariant};
+use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
 use rundler_utils::{eth, log::LogOnError};
 
 use super::UserOperationEventProvider;
@@ -30,8 +30,7 @@ use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
 
 #[derive(Debug)]
 pub(crate) struct UserOperationEventProviderImpl<P, F> {
-    chain_id: u64,
-    address: Address,
+    chain_spec: ChainSpec,
     provider: Arc<P>,
     event_block_distance: Option<u64>,
     _f_type: PhantomData<F>,
@@ -50,11 +49,9 @@ pub(crate) trait EntryPointFilters: Send + Sync + 'static {
         tx_receipt: TransactionReceipt,
     ) -> RpcUserOperationReceipt;
 
-    fn get_user_operations_from_tx_data(
-        tx_data: Bytes,
-        address: Address,
-        chain_id: u64,
-    ) -> Vec<Self::UO>;
+    fn get_user_operations_from_tx_data(tx_data: Bytes, chain_spec: &ChainSpec) -> Vec<Self::UO>;
+
+    fn address(chain_spec: &ChainSpec) -> Address;
 }
 
 #[async_trait::async_trait]
@@ -96,10 +93,10 @@ where
             .context("tx.to should be present on transaction containing user operation event")?;
 
         // Find first op matching the hash
-        let user_operation = if self.address == to {
-            F::get_user_operations_from_tx_data(tx.input, self.address, self.chain_id)
+        let user_operation = if F::address(&self.chain_spec) == to {
+            F::get_user_operations_from_tx_data(tx.input, &self.chain_spec)
                 .into_iter()
-                .find(|op| op.hash(to, self.chain_id) == hash)
+                .find(|op| op.hash(to, self.chain_spec.id) == hash)
                 .context("matching user operation should be found in tx data")?
         } else {
             self.trace_find_user_operation(transaction_hash, hash)
@@ -167,14 +164,12 @@ where
     F: EntryPointFilters,
 {
     pub(crate) fn new(
-        chain_id: u64,
-        address: Address,
+        chain_spec: ChainSpec,
         provider: Arc<P>,
         event_block_distance: Option<u64>,
     ) -> Self {
         Self {
-            chain_id,
-            address,
+            chain_spec,
             provider,
             event_block_distance,
             _f_type: PhantomData,
@@ -190,7 +185,7 @@ where
         };
 
         let filter = Filter::new()
-            .address(self.address)
+            .address(F::address(&self.chain_spec))
             .event(&F::UserOperationEventFilter::abi_signature())
             .from_block(from_block)
             .to_block(to_block)
@@ -240,16 +235,13 @@ where
                 .to
                 .as_ref()
                 .and_then(|to| to.as_address())
-                .filter(|to| **to == self.address)
+                .filter(|to| **to == F::address(&self.chain_spec))
             {
                 // check if the user operation is in the call frame
-                if let Some(uo) = F::get_user_operations_from_tx_data(
-                    call_frame.input,
-                    self.address,
-                    self.chain_id,
-                )
-                .into_iter()
-                .find(|op| op.hash(*to, self.chain_id) == user_op_hash)
+                if let Some(uo) =
+                    F::get_user_operations_from_tx_data(call_frame.input, &self.chain_spec)
+                        .into_iter()
+                        .find(|op| op.hash(*to, self.chain_spec.id) == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }
