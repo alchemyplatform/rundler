@@ -190,7 +190,7 @@ mod tests {
         types::{Bytes, Log, Transaction},
     };
     use mockall::predicate::eq;
-    use rundler_provider::{EntryPoint, MockEntryPointV0_6, MockProvider};
+    use rundler_provider::{MockEntryPointV0_6, MockProvider};
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
         contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
@@ -249,7 +249,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_mined() {
-        let ep = Address::random();
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
         let uo = UserOperation::default();
         let hash = uo.hash(ep, 1);
         let block_number = 1000;
@@ -347,12 +351,7 @@ mod tests {
             .v0_6(EntryPointRouteImpl::new(
                 ep.clone(),
                 gas_estimator,
-                UserOperationEventProviderV0_6::new(
-                    chain_spec.id,
-                    ep.address(),
-                    provider.clone(),
-                    None,
-                ),
+                UserOperationEventProviderV0_6::new(chain_spec.clone(), provider.clone(), None),
             ))
             .build();
 

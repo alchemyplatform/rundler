@@ -32,4 +32,5 @@ futures-util.workspace = true
 [dev-dependencies]
 mockall.workspace = true
 rundler-provider = { path = "../provider", features = ["test-utils"]}
+rundler-sim = { path = "../sim", features = ["test-utils"] }
 rundler-types= { path = "../types", features = ["test-utils"]}

@@ -13,6 +13,7 @@
 
 use ethers::types::{Address, Bytes, U256};
 use rundler_types::{
+    chain::ChainSpec,
     v0_6::{UserOperation, UserOperationOptionalGas},
     GasEstimate,
 };
@@ -56,7 +57,7 @@ impl From<UserOperation> for RpcUserOperation {
 }
 
 impl FromRpc<RpcUserOperation> for UserOperation {
-    fn from_rpc(def: RpcUserOperation, _entry_point: Address, _chain_id: u64) -> Self {
+    fn from_rpc(def: RpcUserOperation, _chain_spec: &ChainSpec) -> Self {
         UserOperation {
             sender: def.sender.into(),
             nonce: def.nonce,

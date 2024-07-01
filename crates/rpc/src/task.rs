@@ -129,8 +129,7 @@ where
                     ),
                 ),
                 UserOperationEventProviderV0_6::new(
-                    self.args.chain_spec.id,
-                    self.args.chain_spec.entry_point_address_v0_6,
+                    self.args.chain_spec.clone(),
                     provider.clone(),
                     self.args
                         .eth_api_settings
@@ -157,8 +156,7 @@ where
                     ),
                 ),
                 UserOperationEventProviderV0_7::new(
-                    self.args.chain_spec.id,
-                    self.args.chain_spec.entry_point_address_v0_7,
+                    self.args.chain_spec.clone(),
                     provider.clone(),
                     self.args
                         .eth_api_settings

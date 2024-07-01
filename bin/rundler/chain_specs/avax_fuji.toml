@@ -1,0 +1,7 @@
+base = "avax"
+
+name = "Avax-Fuji"
+id = 43113
+
+# priority_fee_oracle_type = "FIXED"
+# min_max_priority_fee_per_gas = "0x00"
