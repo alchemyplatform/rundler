@@ -225,6 +225,9 @@ pub enum SimulationViolation {
     /// Verification gas limit doesn't have the required buffer on the measured gas
     #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
     VerificationGasLimitBufferTooLow(U256, U256),
+    /// Unsupported contract type
+    #[display("accessed unsupported contract type: {0:?} at {1:?}. Address must be whitelisted")]
+    AccessedUnsupportedContractType(String, Address),
 }
 
 /// Information about a storage violation based on stake status

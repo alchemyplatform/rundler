@@ -346,10 +346,10 @@ impl<T> ValidationContextProvider<T> {
         }
 
         // Accessed contracts
-        let accessed_contract_addresses = tracer_out
+        let accessed_contracts = tracer_out
             .calls_from_entry_point
             .iter()
-            .flat_map(|call| call.contract_size.keys().cloned())
+            .flat_map(|call| call.contract_info.clone())
             .collect();
 
         // Associated slots
@@ -378,7 +378,7 @@ impl<T> ValidationContextProvider<T> {
         Ok(ContextTracerOutput {
             phases,
             revert_data: None,
-            accessed_contract_addresses,
+            accessed_contracts,
             associated_slots_by_address: AssociatedSlotsByAddress(associated_slots_by_address),
             factory_called_create2_twice,
             expected_storage: tracer_out.expected_storage,
@@ -417,8 +417,8 @@ impl<T> ValidationContextProvider<T> {
 
         let mut forbidden_precompiles_used = vec![];
         let mut undeployed_contract_accesses = vec![];
-        call.contract_size.iter().for_each(|(address, info)| {
-            if info.contract_size == 0 {
+        call.contract_info.iter().for_each(|(address, info)| {
+            if info.length == 0 {
                 if *address < MAX_PRECOMPILE_ADDRESS {
                     // [OP-062] - banned precompiles
                     // The tracer catches any allowed precompiles and does not add them to this list

@@ -85,18 +85,23 @@ export interface TopLevelCallInfo {
   topLevelTargetAddress: string
   opcodes: { [opcode: string]: number }
   access: { [address: string]: AccessInfo }
-  contractSize: { [addr: string]: ContractSizeInfo }
+  contractInfo: { [addr: string]: ContractInfo }
   extCodeAccessInfo: { [addr: string]: string }
   oog?: boolean
 }
 
 /**
+ * Contract info
+ * 
  * It is illegal to access contracts with no code in validation even if it gets deployed later.
  * This means we need to store the {@link contractSize} of accessed addresses at the time of access.
+ * 
+ * Capture the "header" of the contract code for validation.
  */
-export interface ContractSizeInfo {
+export interface ContractInfo {
   opcode: string
-  contractSize: number
+  length: number
+  header: string
 }
 
 export interface AccessInfo {
@@ -301,7 +306,7 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
             access: {},
             opcodes: {},
             extCodeAccessInfo: {},
-            contractSize: {}
+            contractInfo: {}
           }
           this.topLevelCallCounter++
         } else if (opcode === 'LOG1') {
@@ -347,10 +352,11 @@ interface BundlerCollectorTracer extends LogTracer<BundlerTracerResult>, Bundler
         const addr = toAddress(log.stack.peek(idx).toString(16))
         const addrHex = toHex(addr)
         // this.debug.push('op=' + opcode + ' last=' + this.lastOp + ' stacksize=' + log.stack.length() + ' addr=' + addrHex)
-        if (this.currentLevel.contractSize[addrHex] == null && !isAllowedPrecompiled(addr)) {
-          this.currentLevel.contractSize[addrHex] = {
-            contractSize: db.getCode(addr).length,
-            opcode
+        if (this.currentLevel.contractInfo[addrHex] == null && !isAllowedPrecompiled(addr)) {
+          this.currentLevel.contractInfo[addrHex] = {
+            length: db.getCode(addr).length,
+            opcode,
+            header: toHex(db.getCode(addr).subarray(0, 3))
           }
         }
       }

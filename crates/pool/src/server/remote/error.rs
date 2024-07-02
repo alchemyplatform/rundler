@@ -22,13 +22,13 @@ use rundler_types::{
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
-    AccessedUndeployedContract, AggregatorValidationFailed, AssociatedStorageDuringDeploy,
-    AssociatedStorageIsAlternateSender, CallGasLimitTooLow, CallHadValue,
-    CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity,
-    EntityThrottledError, EntityType, EntryPointRevert, ExistingSenderWithInitCode,
-    FactoryCalledCreate2Twice, FactoryIsNotContract, InvalidAccountSignature,
-    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, InvalidTimeRange,
-    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorValidationFailed,
+    AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender, CallGasLimitTooLow,
+    CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
+    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
+    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
+    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
+    InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
     MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
     PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
@@ -640,6 +640,18 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     ),
                 }
             }
+            SimulationViolation::AccessedUnsupportedContractType(contract_type, address) => {
+                ProtoSimulationViolationError {
+                    violation: Some(
+                        simulation_violation_error::Violation::AccessedUnsupportedContractType(
+                            AccessedUnsupportedContractType {
+                                contract_type,
+                                contract_address: address.to_proto_bytes(),
+                            },
+                        ),
+                    ),
+                }
+            }
         }
     }
 }
@@ -798,6 +810,12 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                 SimulationViolation::VerificationGasLimitBufferTooLow(
                     from_bytes(&e.limit)?,
                     from_bytes(&e.needed)?,
+                )
+            }
+            Some(simulation_violation_error::Violation::AccessedUnsupportedContractType(e)) => {
+                SimulationViolation::AccessedUnsupportedContractType(
+                    e.contract_type,
+                    from_bytes(&e.contract_address)?,
                 )
             }
             None => {

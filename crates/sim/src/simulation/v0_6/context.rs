@@ -201,18 +201,40 @@ mod tests {
         types::{Address, Bytes, U256},
         utils::hex,
     };
-    use rundler_types::{contracts::v0_6::i_entry_point::FailedOp, v0_6::UserOperation};
+    use rundler_types::{contracts::v0_6::i_entry_point::FailedOp, v0_6::UserOperation, Opcode};
+    use sim_context::ContractInfo;
 
     use super::*;
     use crate::simulation::context::{Phase, TracerOutput};
 
     fn get_test_tracer_output() -> TracerOutput {
         TracerOutput {
-            accessed_contract_addresses: vec![
-                Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
-            ],
+            accessed_contracts: HashMap::from([
+                (
+                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                    ContractInfo {
+                        header: "0x608060".to_string(),
+                        opcode: Opcode::CALL,
+                        length: 32,
+                    }
+                ),
+                (
+                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    ContractInfo {
+                        header: "0x608060".to_string(),
+                        opcode: Opcode::CALL,
+                        length: 32,
+                    }
+                ),
+                (
+                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    ContractInfo {
+                        header: "0x608060".to_string(),
+                        opcode: Opcode::CALL,
+                        length: 32,
+                    }
+                ),
+            ]),
             associated_slots_by_address: serde_json::from_str(r#"
             {
                 "0x0000000000000000000000000000000000000000": [

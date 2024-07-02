@@ -22,7 +22,7 @@ use rundler_provider::{Provider, SimulationProvider};
 use rundler_types::{v0_7::UserOperation, Opcode};
 use serde::Deserialize;
 
-use crate::ExpectedStorage;
+use crate::{simulation::context::ContractInfo, ExpectedStorage};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,7 +43,7 @@ pub(super) struct TopLevelCallInfo {
     pub(super) top_level_target_address: String,
     pub(super) opcodes: HashMap<Opcode, u64>,
     pub(super) access: HashMap<Address, AccessInfo>,
-    pub(super) contract_size: HashMap<Address, ContractSizeInfo>,
+    pub(super) contract_info: HashMap<Address, ContractInfo>,
     pub(super) ext_code_access_info: HashMap<Address, Opcode>,
     pub(super) oog: Option<bool>,
 }
@@ -53,14 +53,6 @@ pub(super) struct TopLevelCallInfo {
 pub(super) struct AccessInfo {
     pub(super) reads: HashMap<U256, U256>,
     pub(super) writes: HashMap<U256, u64>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(unused)]
-pub(super) struct ContractSizeInfo {
-    pub(super) opcode: Opcode,
-    pub(super) contract_size: u64,
 }
 
 #[derive(Clone, Debug, Deserialize)]

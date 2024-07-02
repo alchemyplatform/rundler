@@ -21,7 +21,7 @@ declare function toWord(s: string | Bytes): Bytes;
 interface Output {
   phases: Phase[];
   revertData: string | null;
-  accessedContractAddresses: string[];
+  accessedContracts: Record<string, ContractInfo>;
   associatedSlotsByAddress: Record<string, string[]>;
   factoryCalledCreate2Twice: boolean;
   expectedStorage: Record<string, Record<string, string>>;
@@ -49,6 +49,12 @@ interface AccessInfo {
 interface RelevantStepData {
   opcode: string;
   stackEnd: BigInt | null;
+}
+
+interface ContractInfo {
+  opcode: string;
+  length: number;
+  header: string;
 }
 
 type InternalPhase = Omit<
@@ -123,7 +129,7 @@ type StringSet = Record<string, boolean | undefined>;
 
   const phases: Phase[] = [];
   let revertData: string | null = null;
-  const accessedContractAddresses: StringSet = {};
+  const accessedContracts: Record<string, ContractInfo> = {};
   const associatedSlotsByAddressMap: Record<string, StringSet> = {};
   const allStorageAccesses: Record<string, Record<string, string | null>> = {};
   let factoryCreate2Count = 0;
@@ -233,7 +239,7 @@ type StringSet = Record<string, boolean | undefined>;
       return {
         phases,
         revertData,
-        accessedContractAddresses: Object.keys(accessedContractAddresses),
+        accessedContracts,
         associatedSlotsByAddress,
         factoryCalledCreate2Twice: factoryCreate2Count > 1,
         expectedStorage,
@@ -371,7 +377,7 @@ type StringSet = Record<string, boolean | undefined>;
         const addressHex = toHex(address);
         if (!isPrecompiled(address) && !PRECOMPILE_WHITELIST[addressHex]) {
           if (
-            !accessedContractAddresses[addressHex] ||
+            !accessedContracts[addressHex] ||
             currentPhase.undeployedContractAccesses[addressHex]
           ) {
             // The spec says validation must not access code of undeployed
@@ -386,7 +392,11 @@ type StringSet = Record<string, boolean | undefined>;
               delete currentPhase.undeployedContractAccesses[addressHex];
             }
           }
-          accessedContractAddresses[addressHex] = true;
+          accessedContracts[addressHex] = {
+            header: toHex(db.getCode(address).subarray(0, 3)),
+            opcode,
+            length: db.getCode(address).length,
+          };
         } else if (!PRECOMPILE_WHITELIST[addressHex]) {
           currentPhase.forbiddenPrecompilesUsed[
             getContractCombinedKey(log, addressHex)

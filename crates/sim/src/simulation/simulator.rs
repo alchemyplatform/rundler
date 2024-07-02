@@ -14,7 +14,6 @@
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
-    mem,
     ops::Deref,
     sync::Arc,
 };
@@ -351,6 +350,16 @@ where
             }
         }
 
+        for (address, contract_info) in &tracer_out.accessed_contracts {
+            if contract_info.header.as_str() == "0xEFF000" {
+                // All arbitrum stylus contracts start with 0xEFF000
+                violations.push(SimulationViolation::AccessedUnsupportedContractType(
+                    "Arbitrum Stylus".to_string(),
+                    *address,
+                ));
+            }
+        }
+
         if tracer_out.factory_called_create2_twice {
             let factory = entity_infos.get(EntityType::Factory);
             match factory {
@@ -402,7 +411,7 @@ where
         let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
         let code_hash_future = utils::get_code_hash(
             self.provider.deref(),
-            mem::take(&mut tracer_out.accessed_contract_addresses),
+            tracer_out.accessed_contracts.keys().cloned().collect(),
             Some(block_id),
         );
         let aggregator_signature_future = self.validate_aggregator_signature(
@@ -668,6 +677,7 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 mod tests {
     use std::str::FromStr;
 
+    use context::ContractInfo;
     use ethers::types::{Address, BlockId, BlockNumber, Bytes, U256, U64};
     use rundler_provider::{AggregatorOut, MockEntryPointV0_6, MockProvider};
     use rundler_types::{
@@ -709,11 +719,32 @@ mod tests {
 
     fn get_test_context() -> ValidationContext<UserOperation> {
         let tracer_out = TracerOutput {
-            accessed_contract_addresses: vec![
-                Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
-                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
-            ],
+            accessed_contracts: HashMap::from([
+                (
+                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                    ContractInfo {
+                        header: "0x608060".to_string(),
+                        opcode: Opcode::CALL,
+                        length: 32,
+                    }
+                ),
+                (
+                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    ContractInfo {
+                        header: "0x608060".to_string(),
+                        opcode: Opcode::CALL,
+                        length: 32,
+                    }
+                ),
+                (
+                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    ContractInfo {
+                        header: "0x608060".to_string(),
+                        opcode: Opcode::CALL,
+                        length: 32,
+                    }
+                ),
+            ]),
             associated_slots_by_address: serde_json::from_str(r#"
             {
                 "0x0000000000000000000000000000000000000000": [
@@ -1147,5 +1178,37 @@ mod tests {
         context.entity_infos.factory.as_mut().unwrap().is_staked = true;
         let res = simulator.gather_context_violations(&mut context);
         assert!(res.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_accessed_unsupported_contract() {
+        let (provider, mut ep, mut context_provider) = create_base_config();
+        ep.expect_address()
+            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+        context_provider
+            .expect_get_specific_violations()
+            .return_const(vec![]);
+
+        let addr = Address::random();
+        let mut context = get_test_context();
+        context.tracer_out.accessed_contracts.insert(
+            addr,
+            ContractInfo {
+                header: "0xEFF000".to_string(),
+                opcode: Opcode::CALL,
+                length: 32,
+            },
+        );
+
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator.gather_context_violations(&mut context);
+
+        assert_eq!(
+            res.unwrap(),
+            vec![SimulationViolation::AccessedUnsupportedContractType(
+                "Arbitrum Stylus".to_string(),
+                addr
+            )]
+        );
     }
 }
