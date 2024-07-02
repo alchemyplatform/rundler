@@ -259,7 +259,7 @@ where
                         state.update(InnerState::Cancelling(inner.to_cancelling()));
                     } else {
                         info!("No operations available, but last replacement underpriced, starting over and waiting for next trigger. Round: {}. Since block {}. Current block {}", underpriced_info.rounds, underpriced_info.since_block, block_number);
-                        state.update_and_reset(InnerState::Building(inner.underpriced_round()));
+                        state.update_and_abandon(InnerState::Building(inner.underpriced_round()));
                     }
                 } else if inner.fee_increase_count > 0 {
                     warn!(
@@ -285,7 +285,8 @@ where
             }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
                 info!("Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}", inner.fee_increase_count);
-                state.update(InnerState::Building(
+                // unabandon to allow fee estimation to consider any submitted transactions, wait for next trigger
+                state.update_and_unabandon(InnerState::Building(
                     inner.replacement_underpriced(block_number),
                 ));
             }
@@ -338,17 +339,16 @@ where
                     state.complete(send_bundle_result);
                 }
                 TrackerUpdate::LatestTxDropped { nonce } => {
-                    // try again, don't wait for trigger, re-estimate fees
                     info!("Latest transaction dropped, starting new bundle attempt");
                     self.emit(BuilderEvent::latest_transaction_dropped(
                         self.builder_index,
                         nonce.low_u64(),
                     ));
                     self.metrics.increment_bundle_txns_dropped();
-                    state.reset();
+                    // try again, increasing fees
+                    state.update(InnerState::Building(inner.to_building()));
                 }
                 TrackerUpdate::NonceUsedForOtherTx { nonce } => {
-                    // try again, don't wait for trigger, re-estimate fees
                     info!("Nonce used externally, starting new bundle attempt");
                     self.emit(BuilderEvent::nonce_used_for_other_transaction(
                         self.builder_index,
@@ -711,9 +711,17 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
         self.inner = InnerState::Building(building_state);
     }
 
-    fn update_and_reset(&mut self, inner: InnerState) {
+    fn update_and_abandon(&mut self, inner: InnerState) {
         self.update(inner);
-        self.requires_reset = true;
+        self.transaction_tracker.abandon();
+    }
+
+    // update the state and unabandoned the transaction tracker
+    // this will cause any "abandoned" transactions to be considered during the next
+    // fee estimation.
+    fn update_and_unabandon(&mut self, next_state: InnerState) {
+        self.transaction_tracker.unabandon();
+        self.inner = next_state;
     }
 
     fn abandon(&mut self) {
@@ -825,8 +833,7 @@ impl BuildingState {
 
     // Mark a replacement as underpriced
     //
-    // The next state will NOT wait for a trigger. Use this when fees should be increased and a new bundler
-    // should be attempted immediately.
+    // The next state will wait for a trigger to reduce bundle building loops
     fn replacement_underpriced(self, block_number: u64) -> Self {
         let ui = if let Some(underpriced_info) = self.underpriced_info {
             underpriced_info
@@ -838,7 +845,7 @@ impl BuildingState {
         };
 
         BuildingState {
-            wait_for_trigger: false,
+            wait_for_trigger: true,
             fee_increase_count: self.fee_increase_count + 1,
             underpriced_info: Some(ui),
         }

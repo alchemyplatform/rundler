@@ -72,8 +72,12 @@ pub(crate) trait TransactionTracker: Send + Sync + 'static {
     /// Resets the tracker to its initial state
     async fn reset(&mut self);
 
-    /// Abandons the current transaction
+    /// Abandons the current transaction.
+    /// The current transaction will still be tracked, but will no longer be considered during fee estimation
     fn abandon(&mut self);
+
+    /// Un-abandons the current transaction
+    fn unabandon(&mut self);
 }
 
 /// Errors that can occur while using a `TransactionTracker`.
@@ -124,7 +128,6 @@ where
     builder_index: u64,
     nonce: U256,
     transactions: Vec<PendingTransaction>,
-    has_dropped: bool,
     has_abandoned: bool,
     attempt_count: u64,
 }
@@ -163,7 +166,6 @@ where
             builder_index,
             nonce,
             transactions: vec![],
-            has_dropped: false,
             has_abandoned: false,
             attempt_count: 0,
         })
@@ -172,7 +174,6 @@ where
     fn set_nonce_and_clear_state(&mut self, nonce: U256) {
         self.nonce = nonce;
         self.transactions.clear();
-        self.has_dropped = false;
         self.attempt_count = 0;
         self.has_abandoned = false;
         self.update_metrics();
@@ -248,7 +249,7 @@ where
     T: TransactionSender,
 {
     fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(U256, Option<GasFees>)> {
-        let gas_fees = if self.has_dropped || self.has_abandoned {
+        let gas_fees = if self.has_abandoned {
             None
         } else {
             self.transactions.last().map(|tx| {
@@ -285,21 +286,29 @@ where
                     gas_fees,
                     attempt_number: self.attempt_count,
                 });
-                self.has_dropped = false;
                 self.has_abandoned = false;
                 self.attempt_count += 1;
                 self.update_metrics();
                 Ok(sent_tx.tx_hash)
             }
             Err(e) if matches!(e, TxSenderError::ReplacementUnderpriced) => {
+                // Only can get into this state if there is an unknown pending transaction causing replacement
+                // underpriced errors, or if the last transaction was abandoned.
                 info!("Replacement underpriced: nonce: {:?}", self.nonce);
-                // still store this as a pending transaction so that we can continue to increase fees.
-                self.transactions.push(PendingTransaction {
-                    tx_hash: H256::zero(),
-                    gas_fees,
-                    attempt_number: self.attempt_count,
-                });
-                self.has_dropped = false;
+
+                // Store this transaction as pending if last is empty or if it has higher gas fees than last
+                // so that we can continue to increase fees.
+                if self.transactions.last().map_or(true, |t| {
+                    gas_fees.max_fee_per_gas > t.gas_fees.max_fee_per_gas
+                        && gas_fees.max_priority_fee_per_gas > t.gas_fees.max_priority_fee_per_gas
+                }) {
+                    self.transactions.push(PendingTransaction {
+                        tx_hash: H256::zero(),
+                        gas_fees,
+                        attempt_number: self.attempt_count,
+                    });
+                };
+
                 self.has_abandoned = false;
                 self.attempt_count += 1;
                 self.update_metrics();
@@ -354,7 +363,6 @@ where
             attempt_number: self.attempt_count,
         });
 
-        self.has_dropped = false;
         self.attempt_count += 1;
         self.update_metrics();
         Ok(Some(cancel_info.tx_hash))
@@ -396,22 +404,23 @@ where
             self.set_nonce_and_clear_state(external_nonce);
             return Ok(Some(out));
         }
-        // The nonce has not changed. Check to see if the latest transaction has
-        // dropped.
-        if self.has_dropped {
-            // has_dropped being true means that no new transactions have been
-            // added since the last time we checked, hence no update.
-            return Ok(None);
-        }
+
         let Some(&last_tx) = self.transactions.last() else {
             // If there are no pending transactions, there's no update either.
             return Ok(None);
         };
+
+        if last_tx.tx_hash == H256::zero() {
+            // If the last transaction was a replacement that failed to send, we
+            // don't need to check for updates.
+            return Ok(None);
+        }
+
         let status = self
             .sender
             .get_transaction_status(last_tx.tx_hash)
             .await
-            .context("tracker should check for dropped transactions")?;
+            .context("tracker should check for transaction status")?;
         Ok(match status {
             TxStatus::Pending => None,
             TxStatus::Mined { block_number } => {
@@ -429,10 +438,7 @@ where
                     gas_price,
                 })
             }
-            TxStatus::Dropped => {
-                self.has_dropped = true;
-                Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce })
-            }
+            TxStatus::Dropped => Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce }),
         })
     }
 
@@ -445,6 +451,10 @@ where
         self.has_abandoned = true;
         self.attempt_count = 0;
         // remember the transaction in case we need to cancel it
+    }
+
+    fn unabandon(&mut self) {
+        self.has_abandoned = false;
     }
 }
 
@@ -567,13 +577,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_nonce_and_fees_dropped() {
+    async fn test_nonce_and_fees_abandoned() {
         let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::zero());
 
         sender
             .expect_get_transaction_status()
-            .returning(move |_a| Box::pin(async { Ok(TxStatus::Dropped) }));
+            .returning(move |_a| Box::pin(async { Ok(TxStatus::Pending) }));
 
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
@@ -599,6 +609,8 @@ mod tests {
         // send dummy transaction
         let _sent = tracker.send_transaction(tx.into(), &exp).await;
         let _tracker_update = tracker.check_for_update().await.unwrap();
+
+        tracker.abandon();
 
         let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
@@ -756,7 +768,7 @@ mod tests {
             Box::pin(async {
                 Ok(SentTxInfo {
                     nonce: U256::from(0),
-                    tx_hash: H256::zero(),
+                    tx_hash: H256::random(),
                 })
             })
         });
