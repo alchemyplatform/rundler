@@ -649,6 +649,7 @@ message SimulationViolationError {
     InvalidPaymasterSignature invalid_paymaster_signature = 22;
     AssociatedStorageDuringDeploy associated_storage_during_deploy = 23;
     InvalidTimeRange invalid_time_range = 24;
+    AccessedUnsupportedContractType accessed_unsupported_contract_type = 25;
   }
 }
 
@@ -763,4 +764,9 @@ message OperationRevert {
 }
 message UnknownRevert {
   bytes revert_bytes = 1;
+}
+
+message AccessedUnsupportedContractType {
+  string contract_type = 1;
+  bytes contract_address = 2;
 }

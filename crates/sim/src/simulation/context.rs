@@ -41,7 +41,7 @@ pub struct ValidationContext<UO> {
 pub(crate) struct TracerOutput {
     pub(crate) phases: Vec<Phase>,
     pub(crate) revert_data: Option<String>,
-    pub(crate) accessed_contract_addresses: Vec<Address>,
+    pub(crate) accessed_contracts: HashMap<Address, ContractInfo>,
     pub(crate) associated_slots_by_address: AssociatedSlotsByAddress,
     pub(crate) factory_called_create2_twice: bool,
     pub(crate) expected_storage: ExpectedStorage,
@@ -58,6 +58,14 @@ pub(crate) struct Phase {
     pub(crate) ran_out_of_gas: bool,
     pub(crate) undeployed_contract_accesses: Vec<Address>,
     pub(crate) ext_code_access_info: HashMap<Address, Opcode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ContractInfo {
+    pub(crate) header: String,
+    pub(crate) opcode: Opcode,
+    pub(crate) length: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

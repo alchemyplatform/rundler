@@ -340,6 +340,7 @@ impl From<SimulationViolation> for EthRpcError {
             }
             SimulationViolation::UsedForbiddenPrecompile(_, _, _)
             | SimulationViolation::AccessedUndeployedContract(_, _)
+            | SimulationViolation::AccessedUnsupportedContractType(_, _)
             | SimulationViolation::CalledBannedEntryPointMethod(_)
             | SimulationViolation::CallHadValue(_) => Self::OpcodeViolationMap(value),
             SimulationViolation::FactoryCalledCreate2Twice(_) => {
