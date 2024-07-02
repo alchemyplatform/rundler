@@ -53,10 +53,17 @@ pub fn resolve_chain_spec(network: &Option<String>, file: &Option<String>) -> Ch
     let mut config_builder =
         Config::builder().add_source(File::from_str(default.as_str(), FileFormat::Json));
     if let Some(base) = base {
-        config_builder = config_builder.add_source(File::from_str(
-            get_hardcoded_chain_spec(base.as_str()),
-            FileFormat::Toml,
-        ));
+        let base_spec = get_hardcoded_chain_spec(base.as_str());
+
+        // base config must not have a base key, recursive base is not allowed
+        Config::builder()
+            .add_source(File::from_str(base_spec, FileFormat::Toml))
+            .build()
+            .expect("should build base config")
+            .get::<String>("base")
+            .expect_err("base config must not have a base key");
+
+        config_builder = config_builder.add_source(File::from_str(base_spec, FileFormat::Toml));
     }
     if let Some(network_source) = network_source {
         config_builder = config_builder.add_source(network_source);
@@ -105,17 +112,13 @@ macro_rules! define_hardcoded_chain_specs {
 define_hardcoded_chain_specs!(
     dev,
     ethereum,
-    ethereum_goerli,
     ethereum_sepolia,
     optimism,
-    optimism_goerli,
     optimism_sepolia,
     base,
     base_sepolia,
     arbitrum,
-    arbitrum_goerli,
     arbitrum_sepolia,
     polygon,
-    polygon_mumbai,
     polygon_amoy
 );
