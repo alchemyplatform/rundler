@@ -13,7 +13,7 @@
 
 //! Utilities for emitting/collecting events from runtime components
 
-use std::fmt::Display;
+use std::fmt::{Display, Debug};
 
 use ethers::types::Address;
 use tokio::{
@@ -86,7 +86,7 @@ pub fn receive_and_log_events_with_filter<T>(
     filter: impl (Fn(&T) -> bool) + Send + 'static,
 ) -> JoinHandle<()>
 where
-    T: Clone + Display + Send + 'static,
+    T: Clone + Display + Send + Debug + 'static,
 {
     receive_events("logging", rx, move |event| {
         if filter(&event) {

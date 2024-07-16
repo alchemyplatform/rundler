@@ -15,7 +15,7 @@
 
 use ethers::{
     abi::{AbiDecode, AbiEncode, RawLog},
-    contract::ContractError,
+    contract::{ContractError, EthError},
     providers::Middleware,
     types::{Address, Bytes, Log, Selector},
 };
@@ -42,7 +42,7 @@ pub fn get_revert_bytes<M: Middleware>(error: ContractError<M>) -> Result<Bytes,
 }
 
 /// The abi for what happens when you just `revert("message")` in a contract
-#[derive(Clone, Debug, Default, Eq, PartialEq, ethers::contract::EthError)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, EthError)]
 #[etherror(name = "Error", abi = "Error(string)")]
 pub struct ContractRevertError {
     /// Revert reason
@@ -67,5 +67,5 @@ pub fn log_to_raw_log(log: Log) -> RawLog {
 
 /// Format the ethers address type to string without ellipsis
 pub fn format_address(address: Address) -> String {
-    format!("{:#x}", address).to_string()
+    format!("{:#x}", address)
 }

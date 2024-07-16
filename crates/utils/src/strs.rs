@@ -31,5 +31,5 @@ pub fn to_debug_or(x: Option<impl Debug>, default: &str) -> Cow<'_, str> {
 
 /// Converts an option to a string, returning an empty string if the option is None.
 pub fn to_string_or_empty(x: Option<impl ToString>) -> String {
-    x.map(|x| x.to_string()).unwrap_or_default()
+    x.map_or(String::new(), |x| x.to_string())
 }
