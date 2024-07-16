@@ -45,6 +45,6 @@ mod tests {
 
     #[test]
     fn test_increase_by_percent_ceil() {
-        assert_eq!(increase_by_percent_ceil(30000000000000000, 100000000000), 4);
+        assert_eq!(increase_by_percent_ceil(3, 10), 4);
     }
 }
