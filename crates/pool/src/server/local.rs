@@ -106,9 +106,14 @@ impl LocalPoolHandle {
                 response: send,
             })
             .await
-            .map_err(|_| anyhow::anyhow!("LocalPoolServer closed"))?;
-        recv.await
-            .map_err(|_| anyhow::anyhow!("LocalPoolServer closed"))?
+            .map_err(|_| {
+                error!("LocalPoolServer sender closed");
+                PoolError::UnexpectedResponse
+            })?;
+        recv.await.map_err(|_| {
+            error!("LocalPoolServer receiver closed");
+            PoolError::UnexpectedResponse
+        })?
     }
 }
 
