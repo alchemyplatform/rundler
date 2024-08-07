@@ -13,7 +13,7 @@
 
 use std::{cmp, fmt::Debug, sync::Arc};
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use ethers::types::U256;
 use rundler_provider::{EntryPoint, L1GasProvider, Provider};
 use rundler_types::{
@@ -83,6 +83,10 @@ pub async fn calc_required_pre_verification_gas<
         base_fee + op.max_priority_fee_per_gas(),
         op.max_fee_per_gas(),
     );
+
+    if gas_price.is_zero() {
+        bail!("Gas price cannot be zero")
+    }
 
     let dynamic_gas = entry_point
         .calc_l1_gas(entry_point.address(), op.clone(), gas_price)

@@ -408,7 +408,6 @@ where
     ) -> anyhow::Result<U256> {
         gas::calc_required_pre_verification_gas(&self.chain_spec, &self.entry_point, &op, base_fee)
             .await
-            .context("should calculate pre-verification gas")
     }
 }
 
