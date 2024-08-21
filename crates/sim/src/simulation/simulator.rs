@@ -282,11 +282,15 @@ where
                             slot,
                         ) => {
                             let needs_stake_entity = needs_stake.and_then(|t| entity_infos.get(t));
-                            if let Some(needs_stake_entity) = needs_stake_entity {
-                                if needs_stake_entity.is_staked {
+                            if let Some(needs_stake_entity_info) = needs_stake_entity {
+                                if needs_stake_entity_info.is_staked {
                                     tracing::debug!("Associated storage accessed by staked entity during deploy, and entity is staked");
                                     continue;
                                 }
+                                violations.push(SimulationViolation::AssociatedStorageDuringDeploy(
+                                    needs_stake_entity.map(|ei| ei.entity),
+                                    StorageSlot { address, slot },
+                                ))
                             }
                             if let Some(factory) = entity_infos.get(EntityType::Factory) {
                                 if factory.is_staked {
