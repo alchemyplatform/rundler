@@ -13,12 +13,15 @@ jobs:
       - run: pip install jq yq
       - run: sudo apt install -y libxml2-utils
 
-
       - name: Checkout Rundler
         uses: actions/checkout@v4
         with:
           path: rundler
           submodules: recursive
+
+      - uses: KengoTODA/actions-setup-docker-compose@v1
+        with:
+          version: '2.14.2'
 
       - name: Clone Test Executor
         uses: actions/checkout@v4
