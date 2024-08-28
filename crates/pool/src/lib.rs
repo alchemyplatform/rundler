@@ -28,8 +28,6 @@ mod mempool;
 pub use mempool::PoolConfig;
 
 mod server;
-#[cfg(feature = "test-utils")]
-pub use server::MockPoolServer;
 pub use server::{LocalPoolBuilder, LocalPoolHandle, RemotePoolClient};
 
 mod task;

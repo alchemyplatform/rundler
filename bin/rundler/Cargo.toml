@@ -6,8 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = """
-Rundler node implementation
+ERC-4337 bundler implementation
 """
+publish = false
 
 [dependencies]
 rundler-builder = { path = "../../crates/builder" }
@@ -22,27 +23,26 @@ rundler-utils = { path = "../../crates/utils" }
 # CLI dependencies
 anyhow.workspace = true
 config = "0.14.0"
-clap = { version = "4.4.4", features = ["derive", "env"] }
+clap = { version = "4.5.16", features = ["derive", "env"] }
 dotenv = "0.15.0"
 ethers.workspace = true
-itertools = "0.12.1"
-metrics = "0.22.1"
+itertools = "0.13.0"
+metrics = "0.23.0"
 go-parse-duration = "0.1"
-metrics-exporter-prometheus = { version = "0.13.1", default-features = false, features = ["http-listener"] }
-metrics-process = "1.2.1"
-metrics-util = "0.16.2"
+metrics-exporter-prometheus = { version = "0.15.3", default-features = false, features = ["http-listener"] }
+metrics-process = "2.1.0"
+metrics-util = "0.17.0"
 paste = "1.0"
 rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
 rusoto_s3 = { version = "0.48.0", default-features = false, features = ["rustls"] }
 serde.workspace = true
 serde_json.workspace = true
-sscanf = "0.4.0"
+sscanf = "0.4.2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-metrics = "0.3.1"
-tokio-rustls = "0.25.0"
-tokio-util = "0.7.8"
+tokio-rustls = "0.26.0"
+tokio-util = "0.7.11"
 tracing.workspace = true
-tracing-appender = "0.2.2"
+tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
-tracing-subscriber = { version = "0.3.16", features = ["env-filter", "fmt", "json"] }
-
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }

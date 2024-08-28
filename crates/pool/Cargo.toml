@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 rundler-provider = { path = "../provider" }
@@ -21,7 +22,7 @@ futures.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
 metrics.workspace = true
-parking_lot = "0.12.1"
+parking_lot = "0.12.3"
 prost.workspace = true
 serde.workspace = true
 strum.workspace = true

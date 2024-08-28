@@ -39,9 +39,8 @@ pub fn initialize<'a>(
 
     let (recorder, exporter) = builder.build()?;
     tokio::spawn(exporter);
-    Stack::new(recorder)
-        .push(PrefixLayer::new("rundler"))
-        .install()?;
+    let stack = Stack::new(recorder);
+    stack.push(PrefixLayer::new("rundler")).install()?;
 
     tokio::spawn(async move {
         let collector = Collector::default();
@@ -75,7 +74,7 @@ fn collect_tokio(
     gauge!(format!("{}num_blocking_threads", TOKIO_PREFIX))
         .set(runtime_metrics.num_blocking_threads() as f64);
     gauge!(format!("{}active_tasks_count", TOKIO_PREFIX))
-        .set(runtime_metrics.active_tasks_count() as f64);
+        .set(runtime_metrics.num_alive_tasks() as f64);
     gauge!(format!("{}num_idle_blocking_threads", TOKIO_PREFIX))
         .set(runtime_metrics.num_idle_blocking_threads() as f64);
     gauge!(format!("{}blocking_queue_depth", TOKIO_PREFIX))
