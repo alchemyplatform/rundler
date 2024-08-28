@@ -4105,15 +4105,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rundler-dev"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "ethers",
- "rundler-types",
-]
-
-[[package]]
 name = "rundler-pool"
 version = "0.3.0"
 dependencies = [
@@ -4240,23 +4231,6 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
-]
-
-[[package]]
-name = "rundler-tools"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "clap",
- "dotenv",
- "ethers",
- "ethers-signers",
- "rundler-dev",
- "rundler-rpc",
- "rusoto_core",
- "rusoto_kms",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
