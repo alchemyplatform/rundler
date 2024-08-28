@@ -36,6 +36,7 @@ skip-tree = []
 unlicensed = "deny"
 confidence-threshold = 0.9
 copyleft = "deny"
+private = { ignore = true }
 
 # List of explicitly allowed licenses
 # See https://spdx.org/licenses/ for list of possible licenses
@@ -58,6 +59,7 @@ exceptions = [
     { allow = ["CC0-1.0"], name = "tiny-keccak" },
     { allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
     { allow = ["OpenSSL"], name = "ring" },
+    { allow = ["OpenSSL"], name = "aws-lc-sys" }
 ]
 
 

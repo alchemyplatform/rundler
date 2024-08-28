@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 rundler-provider = { path = "../provider" }
@@ -12,16 +13,16 @@ rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
 anyhow.workspace = true
-arrayvec = "0.7.2"
+arrayvec = "0.7.6"
 async-trait.workspace = true
 ethers.workspace = true
 futures-util.workspace = true
-indexmap = "2.0.0"
+indexmap = "2.4.0"
 parse-display.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_with = "3.0.0"
+serde_with = "3.9.0"
 rand.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["macros"] }
