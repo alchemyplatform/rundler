@@ -92,7 +92,7 @@ impl KmsSigner {
             .collect::<Vec<_>>();
 
         for (lock_id, key_id) in lock_context.iter() {
-            if let Some(l) = try_lock(&lm, lock_id, ttl_millis as usize).await {
+            if let Some(l) = try_lock(&lm, lock_id, ttl_millis).await {
                 lock = Some(l);
                 kid = Some(key_id.clone());
                 locked_id = Some(lock_id.clone());
@@ -113,7 +113,7 @@ impl KmsSigner {
             sleep(Duration::from_millis(ttl_millis / 10)).await;
 
             if let Some(lg) = &lg_opt {
-                match lm.extend(&lg.lock, ttl_millis as usize).await {
+                match lm.extend(&lg.lock, Duration::from_millis(ttl_millis)).await {
                     Ok(_) => {
                         tracing::debug!("extended lock");
                     }
@@ -122,7 +122,7 @@ impl KmsSigner {
                         lg_opt.take();
                     }
                 }
-            } else if let Some(l) = try_lock(&lm, &lock_id, ttl_millis as usize).await {
+            } else if let Some(l) = try_lock(&lm, &lock_id, ttl_millis).await {
                 lg_opt = Some(LockGuard { lock: l });
             } else {
                 tracing::error!("could not re-lock key_id {lock_id}");
@@ -131,8 +131,11 @@ impl KmsSigner {
     }
 }
 
-async fn try_lock<'a>(lm: &'a LockManager, lock_id: &str, ttl_millis: usize) -> Option<Lock<'a>> {
-    match lm.lock(lock_id.as_bytes(), ttl_millis).await {
+async fn try_lock<'a>(lm: &'a LockManager, lock_id: &str, ttl_millis: u64) -> Option<Lock<'a>> {
+    match lm
+        .lock(lock_id.as_bytes(), Duration::from_millis(ttl_millis))
+        .await
+    {
         Ok(l) => Some(l),
         Err(e) => {
             tracing::warn!("could not lock key_id {lock_id}: {e:?}");

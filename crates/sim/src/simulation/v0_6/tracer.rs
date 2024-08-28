@@ -87,6 +87,7 @@ where
                             ..Default::default()
                         },
                         state_overrides: Some(state_override),
+                        block_overrides: None,
                     },
                 )
                 .await?,

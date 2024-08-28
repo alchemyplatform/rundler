@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 rundler-provider = { path = "../provider" }
@@ -15,11 +16,11 @@ rundler-utils = { path = "../utils" }
 
 anyhow.workspace = true
 async-trait.workspace = true
-enum_dispatch = "0.3.11"
+enum_dispatch = "0.3.13"
 ethers.workspace = true
-ethers-signers = {version = "2.0.8", features = ["aws"] }
+ethers-signers = {version = "2.0.14", features = ["aws"] }
 futures.workspace = true
-futures-timer = "3.0.2"
+futures-timer = "3.0.3"
 futures-util.workspace = true
 jsonrpsee = { workspace = true, features = [ "http-client" ]}
 linked-hash-map = "0.5.6"
@@ -28,7 +29,7 @@ pin-project.workspace = true
 prost.workspace = true
 parse-display.workspace = true
 reqwest.workspace = true
-rslock = "0.3.0"
+rslock = "0.4.0"
 rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
 rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }
 thiserror.workspace = true
@@ -52,6 +53,3 @@ rundler-sim = { path = "../sim", features = ["test-utils"] }
 
 [build-dependencies]
 tonic-build.workspace = true
-
-[features]
-test-utils = [ "mockall" ]
