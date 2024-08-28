@@ -282,23 +282,18 @@ where
                             slot,
                         ) => {
                             let needs_stake_entity = needs_stake.and_then(|t| entity_infos.get(t));
-
-                            if needs_stake.is_none() {
-                                if let Some(factory) = entity_infos.get(EntityType::Factory) {
-                                    if factory.is_staked {
-                                        tracing::debug!("Associated storage accessed by staked entity during deploy, and factory is staked");
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            if let Some(needs_stake_entity_info) = needs_stake_entity {
-                                if needs_stake_entity_info.is_staked {
+                            if let Some(needs_stake_entity) = needs_stake_entity {
+                                if needs_stake_entity.is_staked {
                                     tracing::debug!("Associated storage accessed by staked entity during deploy, and entity is staked");
                                     continue;
                                 }
                             }
-
+                            if let Some(factory) = entity_infos.get(EntityType::Factory) {
+                                if factory.is_staked {
+                                    tracing::debug!("Associated storage accessed by staked entity during deploy, and factory is staked");
+                                    continue;
+                                }
+                            }
                             // [STO-022]
                             violations.push(SimulationViolation::AssociatedStorageDuringDeploy(
                                 needs_stake_entity.map(|ei| ei.entity),
@@ -1179,7 +1174,8 @@ mod tests {
             )]
         );
 
-        context.entity_infos.paymaster.as_mut().unwrap().is_staked = true;
+        // staked causes no errors
+        context.entity_infos.factory.as_mut().unwrap().is_staked = true;
         let res = simulator.gather_context_violations(&mut context);
         assert!(res.unwrap().is_empty());
     }
