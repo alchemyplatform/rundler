@@ -80,21 +80,3 @@ cargo run node
 ```
 
 will run a full Rundler node locally.
-
-## Dev Tools
-
-Development tools can be found in [`bin/tools`](../bin/tools/). These tools are meant to help get Rundler running locally against a development network.
-
-### Deploy Dev Contracts
-
-Fund and deploy contracts. Contracts are deployed from the [account-abstraction](https://github.com/eth-infinitism/account-abstraction) repo. This does the following: 
-    * Creates an account for the bundler to use.
-    * Deploys the `EntryPoint`.
-    * Deploys a `SimpleAccountFactory`.
-    * Deploys a `VerifyingPaymaster`.
-    * Deploys a `SimpleAccount`.
-    * Funds each of the accounts.
-```
-cd bin/tools
-cargo run --bin deploy_dev_contracts
-```
