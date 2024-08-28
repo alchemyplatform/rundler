@@ -5,10 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true
-derive_more = "0.99.17"
+derive_more = "0.99.18"
 ethers.workspace = true
 futures.workspace = true
 itertools.workspace = true
