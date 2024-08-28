@@ -40,7 +40,7 @@ pub(crate) async fn spawn_remote_builder_server(
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
-        .build()?;
+        .build_v1()?;
 
     // health service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
