@@ -46,6 +46,7 @@ pub async fn run() -> anyhow::Result<()> {
         opt.metrics.sample_interval_millis,
         metrics_addr,
         &opt.metrics.tags,
+        &opt.metrics.buckets,
     )
     .context("metrics server should start")?;
 
@@ -443,6 +444,18 @@ pub struct MetricsArgs {
         global = true
     )]
     sample_interval_millis: u64,
+
+    /// Bucket for histogram metric.
+    #[arg(
+        long = "metrics.histogram_buckets", 
+        name = "metrics.histogram_buckets",
+        env = "METRICS_HISTOGRAM_BUCKETS",
+        default_values_t = vec![0.0, 1000.0, 2000.0, 3000.0, 4000.0, 5000.0, 6000.0, 7000.0,
+                                8000.0, 9000.0, 10000.0, 11000.0, 12000.0, 13000.0, 14000.0,
+                                15000.0, 16000.0, 32000.0, 64000.0, 128000.0, 256000.0, 512000.0],
+        global = true
+    )]
+    buckets: Vec<f64>,
 }
 
 /// CLI options for logging
