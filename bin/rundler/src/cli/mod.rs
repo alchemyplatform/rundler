@@ -188,7 +188,7 @@ pub struct CommonArgs {
         long = "max_simulate_handle_ops_gas",
         name = "max_simulate_handle_ops_gas",
         env = "MAX_SIMULATE_HANDLE_OPS_GAS",
-        default_value = "20000000",
+        default_value = "550000000",
         global = true
     )]
     max_simulate_handle_ops_gas: u64,
