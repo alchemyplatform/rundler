@@ -302,10 +302,10 @@ impl From<ProviderError> for TxSenderError {
     }
 }
 
-impl From<jsonrpsee::core::Error> for TxSenderError {
-    fn from(value: jsonrpsee::core::Error) -> Self {
+impl From<jsonrpsee::core::ClientError> for TxSenderError {
+    fn from(value: jsonrpsee::core::ClientError) -> Self {
         match &value {
-            jsonrpsee::core::Error::Call(e) => {
+            jsonrpsee::core::ClientError::Call(e) => {
                 if e.message().contains("replacement transaction underpriced") {
                     TxSenderError::ReplacementUnderpriced
                 } else {
