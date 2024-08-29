@@ -17,7 +17,7 @@ use anyhow::bail;
 use async_trait::async_trait;
 use ethers::providers::{JsonRpcClient, Provider};
 use jsonrpsee::{
-    server::{middleware::ProxyGetRequestLayer, ServerBuilder},
+    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
 };
 use rundler_provider::{EthersEntryPointV0_6, EthersEntryPointV0_7};
@@ -40,7 +40,7 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
-    metrics::RpcMetricsLogger,
+    metrics::RpcMetricsMiddlewareLayer,
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
@@ -177,14 +177,17 @@ where
         module.merge(health_checker.into_rpc())?;
 
         // Set up health check endpoint via GET /health registers the jsonrpc handler
-        let service_builder = tower::ServiceBuilder::new()
+        let http_middleware = tower::ServiceBuilder::new()
             // Proxy `GET /health` requests to internal `system_health` method.
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
+        let rpc_middleware =
+            RpcServiceBuilder::new().layer(RpcMetricsMiddlewareLayer::new(&module));
+
         let server = ServerBuilder::default()
-            .set_logger(RpcMetricsLogger)
-            .set_middleware(service_builder)
+            .set_http_middleware(http_middleware)
+            .set_rpc_middleware(rpc_middleware)
             .max_connections(self.args.max_connections)
             // Set max request body size to 2x the max transaction size as none of our
             // APIs should require more than that.
@@ -196,6 +199,7 @@ where
             .http_only()
             .build(addr)
             .await?;
+
         let handle = server.start(module);
 
         info!("Started RPC server");
