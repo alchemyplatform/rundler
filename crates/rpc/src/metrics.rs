@@ -11,93 +11,135 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
-use jsonrpsee::{helpers::MethodResponseResult, server::logger::Logger};
+use futures_util::{future::BoxFuture, FutureExt};
+use jsonrpsee::{server::middleware::rpc::RpcServiceT, types::Request, MethodResponse, Methods};
+use metrics::{Counter, Gauge, Histogram};
+use tower::Layer;
 
 #[derive(Clone)]
-pub(crate) struct RpcMetricsLogger;
+pub(crate) struct RpcMetricsMiddlewareLayer {
+    metrics: RpcMetrics,
+}
 
-impl Logger for RpcMetricsLogger {
-    type Instant = Instant;
-
-    fn on_connect(
-        &self,
-        _remote_addr: std::net::SocketAddr,
-        _request: &jsonrpsee::server::logger::HttpRequest,
-        _t: jsonrpsee::server::logger::TransportProtocol,
-    ) {
-    }
-
-    fn on_request(
-        &self,
-        _transport: jsonrpsee::server::logger::TransportProtocol,
-    ) -> Self::Instant {
-        Instant::now()
-    }
-
-    fn on_call(
-        &self,
-        method_name: &str,
-        _params: jsonrpsee::types::Params<'_>,
-        _kind: jsonrpsee::server::logger::MethodKind,
-        _transport: jsonrpsee::server::logger::TransportProtocol,
-    ) {
-        RpcMetrics::increment_num_requests(method_name.to_string());
-        RpcMetrics::increment_open_requests(method_name.to_string());
-    }
-
-    fn on_result(
-        &self,
-        method_name: &str,
-        result: MethodResponseResult,
-        started_at: Self::Instant,
-        _transport: jsonrpsee::server::logger::TransportProtocol,
-    ) {
-        RpcMetrics::record_request_latency(method_name.to_string(), started_at.elapsed());
-        RpcMetrics::decrement_open_requests(method_name.to_string());
-
-        if let MethodResponseResult::Failed(_) = result {
-            RpcMetrics::increment_rpc_error_count(method_name.to_string());
+impl RpcMetricsMiddlewareLayer {
+    pub(crate) fn new(methods: &Methods) -> Self {
+        Self {
+            metrics: RpcMetrics::new(methods),
         }
-    }
-
-    fn on_response(
-        &self,
-        _result: &str,
-        _started_at: Self::Instant,
-        _transport: jsonrpsee::server::logger::TransportProtocol,
-    ) {
-    }
-
-    fn on_disconnect(
-        &self,
-        _remote_addr: std::net::SocketAddr,
-        _transport: jsonrpsee::server::logger::TransportProtocol,
-    ) {
     }
 }
 
-pub(crate) struct RpcMetrics {}
+impl<S> Layer<S> for RpcMetricsMiddlewareLayer {
+    type Service = RpcMetricsMiddleware<S>;
+
+    fn layer(&self, service: S) -> Self::Service {
+        RpcMetricsMiddleware {
+            service,
+            metrics: self.metrics.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RpcMetricsMiddleware<S> {
+    service: S,
+    metrics: RpcMetrics,
+}
+
+impl<'a, S> RpcServiceT<'a> for RpcMetricsMiddleware<S>
+where
+    S: RpcServiceT<'a> + Send + Sync + Clone + 'static,
+{
+    type Future = BoxFuture<'a, MethodResponse>;
+
+    fn call(&self, req: Request<'a>) -> Self::Future {
+        let method_metrics = self
+            .metrics
+            .method_metrics
+            .get(req.method.as_ref())
+            .unwrap()
+            .clone();
+
+        method_metrics.increment_open_requests();
+        method_metrics.increment_num_requests();
+        let start = Instant::now();
+        let svc = self.service.clone();
+
+        async move {
+            let rp = svc.call(req).await;
+
+            method_metrics.record_request_latency(start.elapsed());
+            method_metrics.decrement_open_requests();
+            if rp.is_error() {
+                method_metrics.increment_error_count();
+            }
+
+            rp
+        }
+        .boxed()
+    }
+}
+
+#[derive(Clone)]
+struct RpcMetrics {
+    method_metrics: HashMap<&'static str, MethodMetrics>,
+}
 
 impl RpcMetrics {
-    fn increment_num_requests(method_name: String) {
-        metrics::counter!("rpc_num_requests", "method_name" => method_name).increment(1);
+    fn new(methods: &Methods) -> Self {
+        Self {
+            method_metrics: HashMap::from_iter(
+                methods
+                    .method_names()
+                    .map(|name| (name, MethodMetrics::new(name))),
+            ),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct MethodMetrics {
+    num_requests: Counter,
+    open_requests: Gauge,
+    error_count: Counter,
+    request_latency: Histogram,
+}
+
+impl MethodMetrics {
+    fn new(method_name: &str) -> Self {
+        Self {
+            num_requests: metrics::counter!("rpc_num_requests", "method_name" => method_name.to_string()),
+            open_requests: metrics::gauge!("rpc_open_requests", "method_name" => method_name.to_string()),
+            error_count: metrics::counter!("rpc_error_count", "method_name" => method_name.to_string()),
+            request_latency: metrics::histogram!(
+                "rpc_request_latency",
+                "method_name" => method_name.to_string()
+            ),
+        }
     }
 
-    fn increment_open_requests(method_name: String) {
-        metrics::gauge!("rpc_open_requests", "method_name" => method_name).increment(1_f64);
+    fn increment_num_requests(&self) {
+        self.num_requests.increment(1);
     }
 
-    fn decrement_open_requests(method_name: String) {
-        metrics::gauge!("rpc_open_requests", "method_name" => method_name).decrement(1_f64);
+    fn increment_open_requests(&self) {
+        self.open_requests.increment(1);
     }
 
-    fn increment_rpc_error_count(method_name: String) {
-        metrics::counter!("rpc_error_count", "method_name" => method_name).increment(1);
+    fn decrement_open_requests(&self) {
+        self.open_requests.decrement(1);
     }
 
-    fn record_request_latency(method_name: String, latency: Duration) {
-        metrics::histogram!("rpc_request_latency", "method_name" => method_name).record(latency);
+    fn increment_error_count(&self) {
+        self.error_count.increment(1);
+    }
+
+    fn record_request_latency(&self, latency: Duration) {
+        self.request_latency.record(latency);
     }
 }
