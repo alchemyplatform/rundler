@@ -150,11 +150,9 @@ struct BloxrouteRequest {
 }
 
 impl ToRpcParams for BloxrouteRequest {
-    fn to_rpc_params(self) -> std::result::Result<Option<Box<RawValue>>, jsonrpsee::core::Error> {
+    fn to_rpc_params(self) -> std::result::Result<Option<Box<RawValue>>, serde_json::Error> {
         let s = String::from_utf8(serde_json::to_vec(&self)?).expect("Valid UTF8 format");
-        RawValue::from_string(s)
-            .map(Some)
-            .map_err(jsonrpsee::core::Error::ParseError)
+        RawValue::from_string(s).map(Some)
     }
 }
 
