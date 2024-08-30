@@ -23,7 +23,7 @@ use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
-use super::CommonArgs;
+use super::{CommonArgs, RundlerProviders};
 use crate::cli::json::get_json_config;
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
@@ -251,10 +251,7 @@ impl PoolArgs {
         Ok(PoolTaskArgs {
             chain_spec,
             unsafe_mode: common.unsafe_mode,
-            http_url: common
-                .node_http
-                .clone()
-                .context("pool requires node_http arg")?,
+            http_url: common.node_http.clone().context("must provide node_http")?,
             chain_poll_interval: Duration::from_millis(self.chain_poll_interval_millis),
             chain_max_sync_retries: self.chain_sync_max_retries,
             pool_configs,
@@ -280,7 +277,7 @@ pub async fn run(
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
     let task_args = pool_args
         .to_args(
-            chain_spec,
+            chain_spec.clone(),
             &common_args,
             Some(format!("{}:{}", pool_args.host, pool_args.port).parse()?),
         )
@@ -288,11 +285,20 @@ pub async fn run(
 
     emit::receive_and_log_events_with_filter(event_rx, |_| true);
 
+    let RundlerProviders {
+        provider,
+        ep_v0_6,
+        ep_v0_7,
+    } = super::construct_providers(&common_args, &chain_spec)?;
+
     spawn_tasks_with_shutdown(
         [PoolTask::new(
             task_args,
             event_sender,
             LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
+            provider,
+            ep_v0_6,
+            ep_v0_7,
         )
         .boxed()],
         tokio::signal::ctrl_c(),

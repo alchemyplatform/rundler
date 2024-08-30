@@ -14,9 +14,9 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use ethers::providers::Middleware;
 use ethers_signers::{AwsSigner, Signer};
 use rslock::{Lock, LockGuard, LockManager};
+use rundler_provider::Provider;
 use rundler_utils::handle::SpawnGuard;
 use rusoto_core::Region;
 use rusoto_kms::KmsClient;
@@ -33,8 +33,8 @@ pub(crate) struct KmsSigner {
 }
 
 impl KmsSigner {
-    pub(crate) async fn connect<M: Middleware + 'static>(
-        provider: Arc<M>,
+    pub(crate) async fn connect<P: Provider>(
+        provider: Arc<P>,
         chain_id: u64,
         region: Region,
         key_ids: Vec<String>,

@@ -13,14 +13,13 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::providers::{JsonRpcClient, Provider};
 use jsonrpsee::{
     server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
 };
-use rundler_provider::{EthersEntryPointV0_6, EthersEntryPointV0_7};
+use rundler_provider::{EntryPointProvider, Provider};
 use rundler_sim::{
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
 };
@@ -28,7 +27,10 @@ use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     Task,
 };
-use rundler_types::{builder::Builder, chain::ChainSpec, pool::Pool};
+use rundler_types::{
+    builder::Builder, chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -80,48 +82,45 @@ pub struct Args {
 
 /// JSON-RPC server task.
 #[derive(Debug)]
-pub struct RpcTask<P, B> {
+pub struct RpcTask<P, B, PR, E06, E07> {
     args: Args,
     pool: P,
     builder: B,
+    provider: Arc<PR>,
+    ep_06: Option<E06>,
+    ep_07: Option<E07>,
 }
 
 #[async_trait]
-impl<P, B> Task for RpcTask<P, B>
+impl<P, B, PR, E06, E07> Task for RpcTask<P, B, PR, E06, E07>
 where
     P: Pool + HealthCheck + Clone,
     B: Builder + HealthCheck + Clone,
+    PR: Provider,
+    E06: EntryPointProvider<UserOperationV0_6>,
+    E07: EntryPointProvider<UserOperationV0_7>,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
 
-        let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
-        let ep_v0_6 = EthersEntryPointV0_6::new(
-            self.args.chain_spec.entry_point_address_v0_6,
-            &self.args.chain_spec,
-            self.args.estimation_settings.max_simulate_handle_ops_gas,
-            provider.clone(),
-        );
-        let ep_v0_7 = EthersEntryPointV0_7::new(
-            self.args.chain_spec.entry_point_address_v0_7,
-            &self.args.chain_spec,
-            self.args.estimation_settings.max_simulate_handle_ops_gas,
-            provider.clone(),
-        );
-
         let mut router_builder = EntryPointRouterBuilder::default();
         if self.args.entry_point_v0_6_enabled {
+            let ep = self
+                .ep_06
+                .clone()
+                .context("entry point v0.6 not supplied")?;
+
             router_builder = router_builder.v0_6(EntryPointRouteImpl::new(
-                ep_v0_6.clone(),
+                ep.clone(),
                 GasEstimatorV0_6::new(
                     self.args.chain_spec.clone(),
-                    provider.clone(),
-                    ep_v0_6.clone(),
+                    Arc::clone(&self.provider),
+                    ep.clone(),
                     self.args.estimation_settings,
                     FeeEstimator::new(
                         &self.args.chain_spec,
-                        Arc::clone(&provider),
+                        Arc::clone(&self.provider),
                         self.args.precheck_settings.priority_fee_mode,
                         self.args
                             .precheck_settings
@@ -130,7 +129,7 @@ where
                 ),
                 UserOperationEventProviderV0_6::new(
                     self.args.chain_spec.clone(),
-                    provider.clone(),
+                    Arc::clone(&self.provider),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
@@ -139,16 +138,21 @@ where
         }
 
         if self.args.entry_point_v0_7_enabled {
+            let ep = self
+                .ep_07
+                .clone()
+                .context("entry point v0.7 not supplied")?;
+
             router_builder = router_builder.v0_7(EntryPointRouteImpl::new(
-                ep_v0_7.clone(),
+                ep.clone(),
                 GasEstimatorV0_7::new(
                     self.args.chain_spec.clone(),
-                    Arc::clone(&provider),
-                    ep_v0_7.clone(),
+                    Arc::clone(&self.provider),
+                    ep.clone(),
                     self.args.estimation_settings,
                     FeeEstimator::new(
                         &self.args.chain_spec,
-                        Arc::clone(&provider),
+                        Arc::clone(&self.provider),
                         self.args.precheck_settings.priority_fee_mode,
                         self.args
                             .precheck_settings
@@ -157,7 +161,7 @@ where
                 ),
                 UserOperationEventProviderV0_7::new(
                     self.args.chain_spec.clone(),
-                    provider.clone(),
+                    Arc::clone(&self.provider),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
@@ -169,7 +173,7 @@ where
         let router = router_builder.build();
 
         let mut module = RpcModule::new(());
-        self.attach_namespaces(provider, router, &mut module)?;
+        self.attach_namespaces(router, &mut module)?;
 
         let servers: Vec<Box<dyn HealthCheck>> =
             vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];
@@ -217,34 +221,45 @@ where
     }
 }
 
-impl<P, B> RpcTask<P, B>
-where
-    P: Pool + HealthCheck + Clone,
-    B: Builder + HealthCheck + Clone,
-{
+impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07> {
     /// Creates a new RPC server task.
-    pub fn new(args: Args, pool: P, builder: B) -> Self {
+    pub fn new(
+        args: Args,
+        pool: P,
+        builder: B,
+        provider: Arc<PR>,
+        ep_06: Option<E06>,
+        ep_07: Option<E07>,
+    ) -> Self {
         Self {
             args,
             pool,
             builder,
+            provider,
+            ep_06,
+            ep_07,
         }
     }
+}
 
+impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07>
+where
+    P: Pool + HealthCheck + Clone,
+    B: Builder + HealthCheck + Clone,
+    PR: Provider,
+    E06: EntryPointProvider<UserOperationV0_6>,
+    E07: EntryPointProvider<UserOperationV0_7>,
+{
     /// Converts the task into a boxed trait object.
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
     }
 
-    fn attach_namespaces<C>(
+    fn attach_namespaces(
         &self,
-        provider: Arc<Provider<C>>,
         entry_point_router: EntryPointRouter,
         module: &mut RpcModule<()>,
-    ) -> anyhow::Result<()>
-    where
-        C: JsonRpcClient + 'static,
-    {
+    ) -> anyhow::Result<()> {
         if self.args.api_namespaces.contains(&ApiNamespace::Eth) {
             module.merge(
                 EthApi::new(
@@ -268,7 +283,7 @@ where
             module.merge(
                 RundlerApi::new(
                     &self.args.chain_spec,
-                    provider.clone(),
+                    Arc::clone(&self.provider),
                     entry_point_router,
                     self.pool.clone(),
                     self.args.rundler_api_settings,
