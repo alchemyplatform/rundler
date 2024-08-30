@@ -15,21 +15,19 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::{
-    providers::{JsonRpcClient, Provider as EthersProvider},
-    types::{Address, H256},
-};
+use ethers::types::{Address, H256};
 use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
-use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7};
+use rundler_provider::{EntryPointProvider, Provider};
 use rundler_sim::{
     simulation::{self, UnsafeSimulator},
     MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
 use rundler_task::Task;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, v0_6, v0_7, EntryPointVersion, UserOperation,
+    chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
     UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, handle};
@@ -116,39 +114,25 @@ pub struct EntryPointBuilderSettings {
 
 /// Builder task
 #[derive(Debug)]
-pub struct BuilderTask<P> {
+pub struct BuilderTask<P, PR, E06, E07> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     builder_builder: LocalBuilderBuilder,
     pool: P,
+    provider: Arc<PR>,
+    ep_06: Option<E06>,
+    ep_07: Option<E07>,
 }
 
 #[async_trait]
-impl<P> Task for BuilderTask<P>
+impl<P, PR, E06, E07> Task for BuilderTask<P, PR, E06, E07>
 where
     P: Pool + Clone,
+    PR: Provider,
+    E06: EntryPointProvider<UserOperationV0_6>,
+    E07: EntryPointProvider<UserOperationV0_7>,
 {
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let provider = rundler_provider::new_provider(&self.args.rpc_url, None)?;
-        let submit_provider = if let TransactionSenderArgs::Raw(args) = &self.args.sender_args {
-            Some(rundler_provider::new_provider(&args.submit_url, None)?)
-        } else {
-            None
-        };
-
-        let ep_v0_6 = EthersEntryPointV0_6::new(
-            self.args.chain_spec.entry_point_address_v0_6,
-            &self.args.chain_spec,
-            self.args.sim_settings.max_simulate_handle_ops_gas,
-            Arc::clone(&provider),
-        );
-        let ep_v0_7 = EthersEntryPointV0_7::new(
-            self.args.chain_spec.entry_point_address_v0_7,
-            &self.args.chain_spec,
-            self.args.sim_settings.max_simulate_handle_ops_gas,
-            Arc::clone(&provider),
-        );
-
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
         let mut pk_iter = self.args.private_keys.clone().into_iter();
@@ -156,28 +140,12 @@ where
         for ep in &self.args.entry_points {
             match ep.version {
                 EntryPointVersion::V0_6 => {
-                    let (handles, actions) = self
-                        .create_builders_v0_6(
-                            ep,
-                            Arc::clone(&provider),
-                            submit_provider.clone(),
-                            ep_v0_6.clone(),
-                            &mut pk_iter,
-                        )
-                        .await?;
+                    let (handles, actions) = self.create_builders_v0_6(ep, &mut pk_iter).await?;
                     sender_handles.extend(handles);
                     bundle_sender_actions.extend(actions);
                 }
                 EntryPointVersion::V0_7 => {
-                    let (handles, actions) = self
-                        .create_builders_v0_7(
-                            ep,
-                            Arc::clone(&provider),
-                            submit_provider.clone(),
-                            ep_v0_7.clone(),
-                            &mut pk_iter,
-                        )
-                        .await?;
+                    let (handles, actions) = self.create_builders_v0_7(ep, &mut pk_iter).await?;
                     sender_handles.extend(handles);
                     bundle_sender_actions.extend(actions);
                 }
@@ -233,58 +201,67 @@ where
     }
 }
 
-impl<P> BuilderTask<P>
-where
-    P: Pool + Clone,
-{
+impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
     /// Create a new builder task
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
         builder_builder: LocalBuilderBuilder,
         pool: P,
+        provider: Arc<PR>,
+        ep_06: Option<E06>,
+        ep_07: Option<E07>,
     ) -> Self {
         Self {
             args,
             event_sender,
             builder_builder,
             pool,
+            provider,
+            ep_06,
+            ep_07,
         }
     }
+}
 
+impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07>
+where
+    P: Pool + Clone,
+    PR: Provider,
+    E06: EntryPointProvider<UserOperationV0_6>,
+    E07: EntryPointProvider<UserOperationV0_7>,
+{
     /// Convert this task into a boxed task
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
     }
 
-    async fn create_builders_v0_6<C, E, I>(
+    async fn create_builders_v0_6<I>(
         &self,
         ep: &EntryPointBuilderSettings,
-        provider: Arc<EthersProvider<C>>,
-        submit_provider: Option<Arc<EthersProvider<C>>>,
-        ep_v0_6: E,
         pk_iter: &mut I,
     ) -> anyhow::Result<(
         Vec<JoinHandle<anyhow::Result<()>>>,
         Vec<mpsc::Sender<BundleSenderAction>>,
     )>
     where
-        C: JsonRpcClient + 'static,
-        E: EntryPointProvider<v0_6::UserOperation> + Clone,
         I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
+        let ep_v0_6 = self
+            .ep_06
+            .clone()
+            .context("entry point v0.6 not supplied")?;
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
         for i in 0..ep.num_bundle_builders {
             let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&provider),
-                    submit_provider.clone(),
+                    Arc::clone(&self.provider),
                     ep_v0_6.clone(),
                     UnsafeSimulator::new(
-                        Arc::clone(&provider),
+                        Arc::clone(&self.provider),
                         ep_v0_6.clone(),
                         self.args.sim_settings.clone(),
                     ),
@@ -294,11 +271,10 @@ where
             } else {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&provider),
-                    submit_provider.clone(),
+                    Arc::clone(&self.provider),
                     ep_v0_6.clone(),
                     simulation::new_v0_6_simulator(
-                        Arc::clone(&provider),
+                        Arc::clone(&self.provider),
                         ep_v0_6.clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
@@ -313,34 +289,32 @@ where
         Ok((sender_handles, bundle_sender_actions))
     }
 
-    async fn create_builders_v0_7<C, E, I>(
+    async fn create_builders_v0_7<I>(
         &self,
         ep: &EntryPointBuilderSettings,
-        provider: Arc<EthersProvider<C>>,
-        submit_provider: Option<Arc<EthersProvider<C>>>,
-        ep_v0_7: E,
         pk_iter: &mut I,
     ) -> anyhow::Result<(
         Vec<JoinHandle<anyhow::Result<()>>>,
         Vec<mpsc::Sender<BundleSenderAction>>,
     )>
     where
-        C: JsonRpcClient + 'static,
-        E: EntryPointProvider<v0_7::UserOperation> + Clone,
         I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
+        let ep_v0_7 = self
+            .ep_07
+            .clone()
+            .context("entry point v0.7 not supplied")?;
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
         for i in 0..ep.num_bundle_builders {
             let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&provider),
-                    submit_provider.clone(),
+                    Arc::clone(&self.provider),
                     ep_v0_7.clone(),
                     UnsafeSimulator::new(
-                        Arc::clone(&provider),
+                        Arc::clone(&self.provider),
                         ep_v0_7.clone(),
                         self.args.sim_settings.clone(),
                     ),
@@ -350,11 +324,10 @@ where
             } else {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&provider),
-                    submit_provider.clone(),
+                    Arc::clone(&self.provider),
                     ep_v0_7.clone(),
                     simulation::new_v0_7_simulator(
-                        Arc::clone(&provider),
+                        Arc::clone(&self.provider),
                         ep_v0_7.clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
@@ -369,11 +342,10 @@ where
         Ok((sender_handles, bundle_sender_actions))
     }
 
-    async fn create_bundle_builder<UO, E, S, C, I>(
+    async fn create_bundle_builder<UO, E, S, I>(
         &self,
         index: u64,
-        provider: Arc<EthersProvider<C>>,
-        submit_provider: Option<Arc<EthersProvider<C>>>,
+        provider: Arc<PR>,
         entry_point: E,
         simulator: S,
         pk_iter: &mut I,
@@ -386,7 +358,6 @@ where
         UserOperationVariant: AsRef<UO>,
         E: EntryPointProvider<UO> + Clone,
         S: Simulator<UO = UO>,
-        C: JsonRpcClient + 'static,
         I: Iterator<Item = String>,
     {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
@@ -435,11 +406,11 @@ where
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
         };
 
-        let transaction_sender = self.args.sender_args.clone().into_sender(
-            Arc::clone(&provider),
-            submit_provider,
-            signer,
-        )?;
+        let transaction_sender = self
+            .args
+            .sender_args
+            .clone()
+            .into_sender(&self.args.rpc_url, signer)?;
 
         let tracker_settings = transaction_tracker::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,

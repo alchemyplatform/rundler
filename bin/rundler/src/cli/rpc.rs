@@ -22,7 +22,7 @@ use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
 use rundler_types::chain::ChainSpec;
 
-use super::CommonArgs;
+use super::{CommonArgs, RundlerProviders};
 
 /// CLI options for the RPC server
 #[derive(Args, Debug)]
@@ -100,10 +100,7 @@ impl RpcArgs {
             unsafe_mode: common.unsafe_mode,
             port: self.port,
             host: self.host.clone(),
-            rpc_url: common
-                .node_http
-                .clone()
-                .context("rpc requires node_http arg")?,
+            rpc_url: common.node_http.clone().context("must provide node_http")?,
             api_namespaces: apis,
             precheck_settings,
             eth_api_settings,
@@ -178,8 +175,14 @@ pub async fn run(
     )
     .await?;
 
+    let RundlerProviders {
+        provider,
+        ep_v0_6,
+        ep_v0_7,
+    } = super::construct_providers(&common_args, &chain_spec)?;
+
     spawn_tasks_with_shutdown(
-        [RpcTask::new(task_args, pool, builder).boxed()],
+        [RpcTask::new(task_args, pool, builder, provider, ep_v0_6, ep_v0_7).boxed()],
         tokio::signal::ctrl_c(),
     )
     .await;
