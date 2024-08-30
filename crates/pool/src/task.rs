@@ -15,14 +15,17 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::providers::Middleware;
-use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
+use rundler_provider::{EntryPointProvider, Provider};
 use rundler_sim::{
     simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
 };
 use rundler_task::Task;
-use rundler_types::{chain::ChainSpec, EntryPointVersion, UserOperation, UserOperationVariant};
+use rundler_types::{
+    chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
+    UserOperationVariant,
+};
 use rundler_utils::{emit::WithEntryPoint, handle};
 use tokio::{sync::broadcast, try_join};
 use tokio_util::sync::CancellationToken;
@@ -61,14 +64,22 @@ pub struct Args {
 
 /// Mempool task.
 #[derive(Debug)]
-pub struct PoolTask {
+pub struct PoolTask<P, E06, E07> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     pool_builder: LocalPoolBuilder,
+    provider: Arc<P>,
+    ep_06: Option<E06>,
+    ep_07: Option<E07>,
 }
 
 #[async_trait]
-impl Task for PoolTask {
+impl<P, E06, E07> Task for PoolTask<P, E06, E07>
+where
+    P: Provider,
+    E06: EntryPointProvider<UserOperationV0_6>,
+    E07: EntryPointProvider<UserOperationV0_7>,
+{
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let chain_id = self.args.chain_spec.id;
         tracing::info!("Chain id: {chain_id}");
@@ -99,26 +110,26 @@ impl Task for PoolTask {
         for pool_config in &self.args.pool_configs {
             match pool_config.entry_point_version {
                 EntryPointVersion::V0_6 => {
-                    let pool = PoolTask::create_mempool_v0_6(
-                        self.args.chain_spec.clone(),
-                        pool_config,
-                        self.args.unsafe_mode,
-                        self.event_sender.clone(),
-                        provider.clone(),
-                    )
-                    .context("should have created mempool")?;
+                    let pool = self
+                        .create_mempool_v0_6(
+                            self.args.chain_spec.clone(),
+                            pool_config,
+                            self.args.unsafe_mode,
+                            self.event_sender.clone(),
+                        )
+                        .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
                 }
                 EntryPointVersion::V0_7 => {
-                    let pool = PoolTask::create_mempool_v0_7(
-                        self.args.chain_spec.clone(),
-                        pool_config,
-                        self.args.unsafe_mode,
-                        self.event_sender.clone(),
-                        provider.clone(),
-                    )
-                    .context("should have created mempool")?;
+                    let pool = self
+                        .create_mempool_v0_7(
+                            self.args.chain_spec.clone(),
+                            pool_config,
+                            self.args.unsafe_mode,
+                            self.event_sender.clone(),
+                        )
+                        .context("should have created mempool")?;
 
                     mempools.insert(pool_config.entry_point, pool);
                 }
@@ -165,42 +176,53 @@ impl Task for PoolTask {
     }
 }
 
-impl PoolTask {
+impl<P, E06, E07> PoolTask<P, E06, E07> {
     /// Create a new pool task.
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         pool_builder: LocalPoolBuilder,
-    ) -> PoolTask {
+        provider: Arc<P>,
+        ep_06: Option<E06>,
+        ep_07: Option<E07>,
+    ) -> Self {
         Self {
             args,
             event_sender,
             pool_builder,
+            provider,
+            ep_06,
+            ep_07,
         }
     }
+}
 
+impl<P, E06, E07> PoolTask<P, E06, E07>
+where
+    P: Provider,
+    E06: EntryPointProvider<UserOperationV0_6>,
+    E07: EntryPointProvider<UserOperationV0_7>,
+{
     /// Convert this task into a boxed task.
     pub fn boxed(self) -> Box<dyn Task> {
         Box::new(self)
     }
 
-    fn create_mempool_v0_6<P: Provider + Middleware>(
+    fn create_mempool_v0_6(
+        &self,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: Arc<P>,
     ) -> anyhow::Result<Arc<dyn Mempool>> {
-        let ep = EthersEntryPointV0_6::new(
-            pool_config.entry_point,
-            &chain_spec,
-            pool_config.sim_settings.max_simulate_handle_ops_gas,
-            Arc::clone(&provider),
-        );
+        let ep = self
+            .ep_06
+            .clone()
+            .context("entry point v0.6 not supplied")?;
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(
-                Arc::clone(&provider),
+                Arc::clone(&self.provider),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
             );
@@ -208,13 +230,13 @@ impl PoolTask {
                 chain_spec,
                 pool_config,
                 event_sender,
-                provider,
-                ep,
+                Arc::clone(&self.provider),
+                ep.clone(),
                 simulator,
             )
         } else {
             let simulator = simulation::new_v0_6_simulator(
-                Arc::clone(&provider),
+                Arc::clone(&self.provider),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
@@ -223,30 +245,28 @@ impl PoolTask {
                 chain_spec,
                 pool_config,
                 event_sender,
-                provider,
-                ep,
+                Arc::clone(&self.provider),
+                ep.clone(),
                 simulator,
             )
         }
     }
 
-    fn create_mempool_v0_7<P: Provider + Middleware>(
+    fn create_mempool_v0_7(
+        &self,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: Arc<P>,
     ) -> anyhow::Result<Arc<dyn Mempool>> {
-        let ep = EthersEntryPointV0_7::new(
-            pool_config.entry_point,
-            &chain_spec,
-            pool_config.sim_settings.max_simulate_handle_ops_gas,
-            Arc::clone(&provider),
-        );
+        let ep = self
+            .ep_07
+            .clone()
+            .context("entry point v0.7 not supplied")?;
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(
-                Arc::clone(&provider),
+                Arc::clone(&self.provider),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
             );
@@ -254,13 +274,13 @@ impl PoolTask {
                 chain_spec,
                 pool_config,
                 event_sender,
-                provider,
-                ep,
+                Arc::clone(&self.provider),
+                ep.clone(),
                 simulator,
             )
         } else {
             let simulator = simulation::new_v0_7_simulator(
-                Arc::clone(&provider),
+                Arc::clone(&self.provider),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
@@ -269,14 +289,14 @@ impl PoolTask {
                 chain_spec,
                 pool_config,
                 event_sender,
-                provider,
-                ep,
+                Arc::clone(&self.provider),
+                ep.clone(),
                 simulator,
             )
         }
     }
 
-    fn create_mempool<UO, P, E, S>(
+    fn create_mempool<UO, E, S>(
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,

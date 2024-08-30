@@ -171,38 +171,41 @@ pub struct FlashbotsSenderArgs {
 }
 
 impl TransactionSenderArgs {
-    pub(crate) fn into_sender<C: JsonRpcClient + 'static, S: Signer + 'static>(
+    pub(crate) fn into_sender<S: Signer + 'static>(
         self,
-        rpc_provider: Arc<Provider<C>>,
-        submit_provider: Option<Arc<Provider<C>>>,
+        rpc_url: &str,
         signer: S,
-    ) -> std::result::Result<TransactionSenderEnum<C, S, LocalWallet>, SenderConstructorErrors>
-    {
+    ) -> std::result::Result<
+        TransactionSenderEnum<impl JsonRpcClient + 'static, S, LocalWallet>,
+        SenderConstructorErrors,
+    > {
+        let provider = rundler_provider::new_provider(rpc_url, None)?;
         let sender = match self {
             Self::Raw(args) => {
-                let (provider, submitter) = if let Some(submit_provider) = submit_provider {
-                    if args.use_submit_for_status {
-                        (Arc::clone(&submit_provider), submit_provider)
-                    } else {
-                        (rpc_provider, submit_provider)
-                    }
+                if args.use_submit_for_status {
+                    let submitter = rundler_provider::new_provider(&args.submit_url, None)?;
+                    TransactionSenderEnum::Raw(RawTransactionSender::new(
+                        provider,
+                        submitter,
+                        signer,
+                        args.dropped_status_supported,
+                        args.use_conditional_rpc,
+                    ))
                 } else {
-                    (Arc::clone(&rpc_provider), rpc_provider)
-                };
-
-                TransactionSenderEnum::Raw(RawTransactionSender::new(
-                    provider,
-                    submitter,
-                    signer,
-                    args.dropped_status_supported,
-                    args.use_conditional_rpc,
-                ))
+                    TransactionSenderEnum::Raw(RawTransactionSender::new(
+                        Arc::clone(&provider),
+                        provider,
+                        signer,
+                        args.dropped_status_supported,
+                        args.use_conditional_rpc,
+                    ))
+                }
             }
             Self::Flashbots(args) => {
                 let flashbots_signer = args.auth_key.parse().context("should parse auth key")?;
 
                 TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(
-                    rpc_provider,
+                    provider,
                     signer,
                     flashbots_signer,
                     args.builders,
@@ -211,7 +214,7 @@ impl TransactionSenderArgs {
                 )?)
             }
             Self::Bloxroute(args) => TransactionSenderEnum::PolygonBloxroute(
-                PolygonBloxrouteTransactionSender::new(rpc_provider, signer, &args.header)?,
+                PolygonBloxrouteTransactionSender::new(provider, signer, &args.header)?,
             ),
         };
         Ok(sender)

@@ -242,5 +242,6 @@ pub trait EntryPointProvider<UO>:
     + BundleHandler<UO = UO>
     + SimulationProvider<UO = UO>
     + L1GasProvider<UO = UO>
+    + Clone
 {
 }

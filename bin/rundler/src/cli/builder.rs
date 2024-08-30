@@ -30,7 +30,7 @@ use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
-use super::{json::get_json_config, CommonArgs};
+use super::{json::get_json_config, CommonArgs, RundlerProviders};
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
 
@@ -269,10 +269,7 @@ impl BuilderArgs {
             common.priority_fee_mode_value,
         )?;
 
-        let rpc_url = common
-            .node_http
-            .clone()
-            .context("should have a node HTTP URL")?;
+        let rpc_url = common.node_http.clone().context("must provide node_http")?;
 
         let mempool_configs = match &common.mempool_config_path {
             Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region)
@@ -455,12 +452,21 @@ pub async fn run(
     )
     .await?;
 
+    let RundlerProviders {
+        provider,
+        ep_v0_6,
+        ep_v0_7,
+    } = super::construct_providers(&common_args, &chain_spec)?;
+
     spawn_tasks_with_shutdown(
         [BuilderTask::new(
             task_args,
             event_sender,
             LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY),
             pool,
+            provider,
+            ep_v0_6,
+            ep_v0_7,
         )
         .boxed()],
         tokio::signal::ctrl_c(),
