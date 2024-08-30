@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use anyhow::{bail, Context};
 use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
@@ -27,9 +29,14 @@ use builder::BuilderCliArgs;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
+use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
 use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
+};
+use rundler_types::{
+    chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
+    v0_7::UserOperation as UserOperationV0_7,
 };
 
 /// Main entry point for the CLI
@@ -507,4 +514,54 @@ pub struct Cli {
 
     #[clap(flatten)]
     logs: LogsArgs,
+}
+
+pub struct RundlerProviders<P, EP06, EP07> {
+    provider: Arc<P>,
+    ep_v0_6: Option<EP06>,
+    ep_v0_7: Option<EP07>,
+}
+
+pub fn construct_providers(
+    args: &CommonArgs,
+    chain_spec: &ChainSpec,
+) -> anyhow::Result<
+    RundlerProviders<
+        impl Provider,
+        impl EntryPointProvider<UserOperationV0_6>,
+        impl EntryPointProvider<UserOperationV0_7>,
+    >,
+> {
+    let provider = rundler_provider::new_provider(
+        args.node_http.as_ref().context("must provide node_http")?,
+        None,
+    )?;
+
+    let ep_v0_6 = if args.disable_entry_point_v0_6 {
+        None
+    } else {
+        Some(EthersEntryPointV0_6::new(
+            chain_spec.entry_point_address_v0_6,
+            chain_spec,
+            args.max_simulate_handle_ops_gas,
+            provider.clone(),
+        ))
+    };
+
+    let ep_v0_7 = if args.disable_entry_point_v0_7 {
+        None
+    } else {
+        Some(EthersEntryPointV0_7::new(
+            chain_spec.entry_point_address_v0_7,
+            chain_spec,
+            args.max_simulate_handle_ops_gas,
+            provider.clone(),
+        ))
+    };
+
+    Ok(RundlerProviders {
+        provider,
+        ep_v0_6,
+        ep_v0_7,
+    })
 }

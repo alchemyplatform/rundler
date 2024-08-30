@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
@@ -21,6 +23,7 @@ use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
 use self::events::Event;
+use super::RundlerProviders;
 use crate::cli::{
     builder::{self, BuilderArgs},
     pool::PoolArgs,
@@ -62,7 +65,7 @@ pub async fn run(
         .to_args(chain_spec.clone(), &common_args, None)
         .await?;
     let rpc_task_args = rpc_args.to_args(
-        chain_spec,
+        chain_spec.clone(),
         &common_args,
         (&common_args).try_into()?,
         (&common_args).into(),
@@ -99,17 +102,42 @@ pub async fn run(
     let builder_builder = LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY);
     let builder_handle = builder_builder.get_handle();
 
+    let RundlerProviders {
+        provider,
+        ep_v0_6,
+        ep_v0_7,
+    } = super::construct_providers(&common_args, &chain_spec)?;
+
     spawn_tasks_with_shutdown(
         [
-            PoolTask::new(pool_task_args, op_pool_event_sender, pool_builder).boxed(),
+            PoolTask::new(
+                pool_task_args,
+                op_pool_event_sender,
+                pool_builder,
+                Arc::clone(&provider),
+                ep_v0_6.clone(),
+                ep_v0_7.clone(),
+            )
+            .boxed(),
             BuilderTask::new(
                 builder_task_args,
                 builder_event_sender,
                 builder_builder,
                 pool_handle.clone(),
+                Arc::clone(&provider),
+                ep_v0_6.clone(),
+                ep_v0_7.clone(),
             )
             .boxed(),
-            RpcTask::new(rpc_task_args, pool_handle, builder_handle).boxed(),
+            RpcTask::new(
+                rpc_task_args,
+                pool_handle,
+                builder_handle,
+                provider,
+                ep_v0_6,
+                ep_v0_7,
+            )
+            .boxed(),
         ],
         tokio::signal::ctrl_c(),
     )
