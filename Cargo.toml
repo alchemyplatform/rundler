@@ -15,7 +15,10 @@ repository = "https://github.com/alchemyplatform/rundler"
 
 [workspace.dependencies]
 anyhow = "1.0.86"
+alloy-contract = "0.3.1"
 alloy-primitives = "0.8.0"
+alloy-sol-macro = "0.8.0"
+alloy-sol-types =  "0.8.0"
 async-trait = "0.1.81"
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 ethers = "2.0.14"

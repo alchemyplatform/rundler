@@ -1,0 +1,14 @@
+[profile.default]
+src = 'src'
+out = 'out'
+libs = ['lib']
+test = 'test'
+cache_path = 'cache'
+solc_version = '0.8.26'
+
+remappings = [
+    'forge-std/=lib/forge-std/src',
+    'ds-test/=lib/forge-std/lib/ds-test/src/',
+    'account-abstraction/v0_6=lib/account-abstraction-versions/v0_6/contracts/',
+    'account-abstraction/v0_7=lib/account-abstraction-versions/v0_7/contracts/',
+]
