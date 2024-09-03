@@ -23,6 +23,7 @@ pub fn initialize<'a>(
     sample_interval_millis: u64,
     listen_addr: SocketAddr,
     tags: impl IntoIterator<Item = &'a String>,
+    buckets: &[f64],
 ) -> anyhow::Result<()> {
     let mut builder = PrometheusBuilder::new().with_http_listener(listen_addr);
 
@@ -33,6 +34,8 @@ pub fn initialize<'a>(
     for (k, v) in tags {
         builder = builder.add_global_label(k, v);
     }
+
+    builder = builder.set_buckets(buckets)?;
 
     let (recorder, exporter) = builder.build()?;
     tokio::spawn(exporter);
