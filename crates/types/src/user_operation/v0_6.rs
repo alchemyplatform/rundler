@@ -11,17 +11,14 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::{
-    abi::{encode, Token},
-    types::{Address, Bytes, H256, U256},
-    utils::keccak256,
-};
+use alloy_primitives::{uint, Address, Bytes, Uint, B256, U256};
+use alloy_sol_types::{sol, SolValue};
 use rand::{self, RngCore};
+pub use rundler_contracts::v0_6::UserOperation as ContractUserOperation;
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
-pub use crate::contracts::v0_6::i_entry_point::{UserOperation, UserOpsPerAggregator};
 use crate::{
     chain::ChainSpec,
     entity::{Entity, EntityType},
@@ -29,7 +26,7 @@ use crate::{
 };
 
 /// Gas overhead required by the entry point contract for the inner call
-pub const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([5_000, 0, 0, 0]);
+pub const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = uint!(5000_U256);
 
 /// Number of bytes in the fixed size portion of an ABI encoded user operation
 /// sender = 32 bytes
@@ -47,6 +44,79 @@ pub const ENTRY_POINT_INNER_GAS_OVERHEAD: U256 = U256([5_000, 0, 0, 0]);
 /// 15 * 32 = 480
 const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 480;
 
+/// User Operation for Entry Point v0.6
+///
+/// Direct conversion to/from onchain UserOperation
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UserOperation {
+    /// Sender
+    pub sender: Address,
+    /// Semi-abstracted nonce
+    ///
+    /// The first 192 bits are the nonce key, the last 64 bits are the nonce value
+    pub nonce: U256,
+    /// Init code
+    pub init_code: Bytes,
+    /// Call data
+    pub call_data: Bytes,
+    /// Call gas limit
+    pub call_gas_limit: U256,
+    /// Verification gas limit
+    pub verification_gas_limit: U256,
+    /// Pre verification gas
+    pub pre_verification_gas: U256,
+    /// Max fee per gas
+    pub max_fee_per_gas: U256,
+    /// Max priority fee per gas
+    pub max_priority_fee_per_gas: U256,
+    /// Paymaster and data
+    pub paymaster_and_data: Bytes,
+    /// Signature
+    pub signature: Bytes,
+}
+
+sol! {
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct UserOperationHashEncoded {
+        bytes32 encodedHash;
+        address entryPoint;
+        uint256 chainId;
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct UserOperationPackedForHash {
+        address sender;
+        uint256 nonce;
+        bytes32 hashInitCode;
+        bytes32 hashCallData;
+        uint256 callGasLimit;
+        uint256 verificationGasLimit;
+        uint256 preVerificationGas;
+        uint256 maxFeePerGas;
+        uint256 maxPriorityFeePerGas;
+        bytes32 hashPaymasterAndData;
+    }
+}
+
+impl From<UserOperation> for UserOperationPackedForHash {
+    fn from(op: UserOperation) -> UserOperationPackedForHash {
+        UserOperationPackedForHash {
+            sender: op.sender,
+            nonce: op.nonce,
+            hashInitCode: alloy_primitives::keccak256(op.init_code),
+            hashCallData: alloy_primitives::keccak256(op.call_data),
+            callGasLimit: op.call_gas_limit,
+            verificationGasLimit: op.verification_gas_limit,
+            preVerificationGas: op.pre_verification_gas,
+            maxFeePerGas: op.max_fee_per_gas,
+            maxPriorityFeePerGas: op.max_priority_fee_per_gas,
+            hashPaymasterAndData: alloy_primitives::keccak256(op.paymaster_and_data),
+        }
+    }
+}
+
 impl UserOperationTrait for UserOperation {
     type OptionalGas = UserOperationOptionalGas;
 
@@ -54,13 +124,15 @@ impl UserOperationTrait for UserOperation {
         EntryPointVersion::V0_6
     }
 
-    fn hash(&self, entry_point: Address, chain_id: u64) -> H256 {
-        keccak256(encode(&[
-            Token::FixedBytes(keccak256(self.pack_for_hash()).to_vec()),
-            Token::Address(entry_point),
-            Token::Uint(chain_id.into()),
-        ]))
-        .into()
+    fn hash(&self, entry_point: Address, chain_id: u64) -> B256 {
+        let packed = UserOperationPackedForHash::from(self.clone());
+        let encoded = UserOperationHashEncoded {
+            encodedHash: alloy_primitives::keccak256(packed.abi_encode()),
+            entryPoint: entry_point,
+            chainId: U256::from(chain_id),
+        };
+
+        alloy_primitives::keccak256(encoded.abi_encode())
     }
 
     fn id(&self) -> UserOperationId {
@@ -91,9 +163,11 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn max_gas_cost(&self) -> U256 {
-        let mul = if self.paymaster().is_some() { 3 } else { 1 };
+        let mul: u8 = if self.paymaster().is_some() { 3 } else { 1 };
         self.max_fee_per_gas
-            * (self.pre_verification_gas + self.call_gas_limit + self.verification_gas_limit * mul)
+            * (self.pre_verification_gas
+                + self.call_gas_limit
+                + self.verification_gas_limit * Uint::from(mul))
     }
 
     fn heap_size(&self) -> usize {
@@ -133,8 +207,8 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn total_verification_gas_limit(&self) -> U256 {
-        let mul = if self.paymaster().is_some() { 2 } else { 1 };
-        self.verification_gas_limit * mul
+        let mul: u8 = if self.paymaster().is_some() { 2 } else { 1 };
+        self.verification_gas_limit * Uint::from(mul)
     }
 
     fn required_pre_execution_buffer(&self) -> U256 {
@@ -146,21 +220,21 @@ impl UserOperationTrait for UserOperation {
         chain_spec: &ChainSpec,
         include_fixed_gas_overhead: bool,
     ) -> U256 {
-        super::op_calldata_gas_cost(
-            self.clone(),
+        U256::from(super::op_calldata_gas_cost(
+            ContractUserOperation::from(self.clone()),
             chain_spec.calldata_zero_byte_gas,
             chain_spec.calldata_non_zero_byte_gas,
             chain_spec.per_user_op_word_gas,
-        ) + chain_spec.per_user_op_v0_6_gas
+        )) + chain_spec.per_user_op_v0_6_gas
             + (if self.factory().is_some() {
                 chain_spec.per_user_op_deploy_overhead_gas
             } else {
-                U256::zero()
+                U256::ZERO
             })
             + (if include_fixed_gas_overhead {
                 chain_spec.transaction_intrinsic_gas
             } else {
-                0.into()
+                U256::ZERO
             })
     }
 
@@ -177,6 +251,42 @@ impl UserOperationTrait for UserOperation {
     }
 }
 
+impl From<UserOperation> for ContractUserOperation {
+    fn from(op: UserOperation) -> Self {
+        ContractUserOperation {
+            sender: op.sender,
+            nonce: op.nonce,
+            initCode: op.init_code,
+            callData: op.call_data,
+            callGasLimit: op.call_gas_limit,
+            verificationGasLimit: op.verification_gas_limit,
+            preVerificationGas: op.pre_verification_gas,
+            maxFeePerGas: op.max_fee_per_gas,
+            maxPriorityFeePerGas: op.max_priority_fee_per_gas,
+            paymasterAndData: op.paymaster_and_data,
+            signature: op.signature,
+        }
+    }
+}
+
+impl From<ContractUserOperation> for UserOperation {
+    fn from(op: ContractUserOperation) -> Self {
+        UserOperation {
+            sender: op.sender,
+            nonce: op.nonce,
+            init_code: op.initCode,
+            call_data: op.callData,
+            call_gas_limit: op.callGasLimit,
+            verification_gas_limit: op.verificationGasLimit,
+            pre_verification_gas: op.preVerificationGas,
+            max_fee_per_gas: op.maxFeePerGas,
+            max_priority_fee_per_gas: op.maxPriorityFeePerGas,
+            paymaster_and_data: op.paymasterAndData,
+            signature: op.signature,
+        }
+    }
+}
+
 impl UserOperation {
     fn get_address_from_field(data: &Bytes) -> Option<Address> {
         if data.len() < 20 {
@@ -184,26 +294,6 @@ impl UserOperation {
         } else {
             Some(Address::from_slice(&data[..20]))
         }
-    }
-
-    fn pack_for_hash(&self) -> Bytes {
-        let hash_init_code = keccak256(self.init_code.clone());
-        let hash_call_data = keccak256(self.call_data.clone());
-        let hash_paymaster_and_data = keccak256(self.paymaster_and_data.clone());
-
-        encode(&[
-            Token::Address(self.sender),
-            Token::Uint(self.nonce),
-            Token::FixedBytes(hash_init_code.to_vec()),
-            Token::FixedBytes(hash_call_data.to_vec()),
-            Token::Uint(self.call_gas_limit),
-            Token::Uint(self.verification_gas_limit),
-            Token::Uint(self.pre_verification_gas),
-            Token::Uint(self.max_fee_per_gas),
-            Token::Uint(self.max_priority_fee_per_gas),
-            Token::FixedBytes(hash_paymaster_and_data.to_vec()),
-        ])
-        .into()
     }
 
     fn entity_address(&self, entity: EntityType) -> Option<Address> {
@@ -317,11 +407,11 @@ impl UserOperationOptionalGas {
     /// the worst case scenario for the unknown gas values and paymaster_and_data.
     pub fn random_fill(&self, max_call_gas: U256, max_verification_gas: U256) -> UserOperation {
         UserOperation {
-            call_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
-            verification_gas_limit: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
-            pre_verification_gas: U256::from_big_endian(&Self::random_bytes(4)), // 30M max
-            max_fee_per_gas: U256::from_big_endian(&Self::random_bytes(8)), // 2^64 max
-            max_priority_fee_per_gas: U256::from_big_endian(&Self::random_bytes(8)), // 2^64 max
+            call_gas_limit: U256::from_be_slice(&Self::random_bytes(4)), // 30M max
+            verification_gas_limit: U256::from_be_slice(&Self::random_bytes(4)), // 30M max
+            pre_verification_gas: U256::from_be_slice(&Self::random_bytes(4)), // 30M max
+            max_fee_per_gas: U256::from_be_slice(&Self::random_bytes(8)), // 2^64 max
+            max_priority_fee_per_gas: U256::from_be_slice(&Self::random_bytes(8)), // 2^64 max
             signature: Self::random_bytes(self.signature.len()),
             paymaster_and_data: Self::random_bytes(self.paymaster_and_data.len()),
             ..self
@@ -339,14 +429,14 @@ impl UserOperationOptionalGas {
     ) -> UserOperation {
         // If unset or zero, default these to gas limits from settings
         // Cap their values to the gas limits from settings
-        let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, U256::zero());
+        let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, U256::ZERO);
         let vgl = super::default_if_none_or_equal(
             self.verification_gas_limit,
             max_verification_gas,
-            U256::zero(),
+            U256::ZERO,
         );
         let pvg =
-            super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, U256::zero());
+            super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, U256::ZERO);
 
         UserOperation {
             sender: self.sender,
@@ -396,7 +486,7 @@ impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
 #[cfg(test)]
 mod tests {
 
-    use ethers::types::{Bytes, U256};
+    use alloy_primitives::{address, b256};
 
     use super::*;
 
@@ -425,14 +515,14 @@ mod tests {
             sender: "0x0000000000000000000000000000000000000000"
                 .parse()
                 .unwrap(),
-            nonce: U256::zero(),
+            nonce: U256::ZERO,
             init_code: Bytes::default(),
             call_data: Bytes::default(),
-            call_gas_limit: U256::zero(),
-            verification_gas_limit: U256::zero(),
-            pre_verification_gas: U256::zero(),
-            max_fee_per_gas: U256::zero(),
-            max_priority_fee_per_gas: U256::zero(),
+            call_gas_limit: U256::ZERO,
+            verification_gas_limit: U256::ZERO,
+            pre_verification_gas: U256::ZERO,
+            max_fee_per_gas: U256::ZERO,
+            max_priority_fee_per_gas: U256::ZERO,
             paymaster_and_data: Bytes::default(),
             signature: Bytes::default(),
         };
@@ -443,9 +533,7 @@ mod tests {
         let hash = operation.hash(entry_point, chain_id);
         assert_eq!(
             hash,
-            "0xdca97c3b49558ab360659f6ead939773be8bf26631e61bb17045bb70dc983b2d"
-                .parse()
-                .unwrap()
+            b256!("dca97c3b49558ab360659f6ead939773be8bf26631e61bb17045bb70dc983b2d")
         );
     }
 
@@ -476,18 +564,18 @@ mod tests {
             sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
                 .parse()
                 .unwrap(),
-            nonce: 8942.into(),
+            nonce: U256::from(8942),
             init_code: "0x6942069420694206942069420694206942069420"
                 .parse()
                 .unwrap(),
             call_data: "0x0000000000000000000000000000000000000000080085"
                 .parse()
                 .unwrap(),
-            call_gas_limit: 10000.into(),
-            verification_gas_limit: 100000.into(),
-            pre_verification_gas: 100.into(),
-            max_fee_per_gas: 99999.into(),
-            max_priority_fee_per_gas: 9999999.into(),
+            call_gas_limit: U256::from(10000),
+            verification_gas_limit: U256::from(100000),
+            pre_verification_gas: U256::from(100),
+            max_fee_per_gas: U256::from(99999),
+            max_priority_fee_per_gas: U256::from(9999999),
             paymaster_and_data:
                 "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
                     .parse()
@@ -503,9 +591,7 @@ mod tests {
         let hash = operation.hash(entry_point, chain_id);
         assert_eq!(
             hash,
-            "0x484add9e4d8c3172d11b5feb6a3cc712280e176d278027cfa02ee396eb28afa1"
-                .parse()
-                .unwrap()
+            b256!("484add9e4d8c3172d11b5feb6a3cc712280e176d278027cfa02ee396eb28afa1")
         );
     }
 
@@ -518,9 +604,7 @@ mod tests {
         let address = UserOperation::get_address_from_field(&paymaster_and_data).unwrap();
         assert_eq!(
             address,
-            "0x0123456789abcdef0123456789abcdef01234567"
-                .parse()
-                .unwrap()
+            address!("0123456789abcdef0123456789abcdef01234567")
         );
     }
 }

@@ -15,7 +15,7 @@
 
 use std::str::FromStr;
 
-use ethers::types::{Address, U256};
+use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
@@ -160,10 +160,10 @@ impl Default for ChainSpec {
             eip1559_enabled: true,
             calldata_pre_verification_gas: false,
             l1_gas_oracle_contract_type: L1GasOracleContractType::default(),
-            l1_gas_oracle_contract_address: Address::zero(),
+            l1_gas_oracle_contract_address: Address::ZERO,
             include_l1_gas_in_gas_limit: true,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
-            min_max_priority_fee_per_gas: U256::zero(),
+            min_max_priority_fee_per_gas: U256::ZERO,
             max_max_priority_fee_per_gas: U256::MAX,
             congestion_trigger_usage_ratio_threshold: 0.75,
             max_transaction_size_bytes: 131072, // 128 KiB

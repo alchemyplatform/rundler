@@ -13,38 +13,45 @@
 
 //! Math utilities
 
-use std::ops::{Add, Div, Mul};
+use alloy_primitives::Uint;
 
-/// Increases a number by a percentage
-pub fn increase_by_percent<T>(n: T, percent: u64) -> T
-where
-    T: Mul<u64, Output = T> + Div<u64, Output = T>,
-{
-    n * (100 + percent) / 100
+/// Increases a uint by a percentage
+pub fn uint_increase_by_percent<const BITS: usize, const LIMBS: usize>(
+    n: Uint<BITS, LIMBS>,
+    percent: u32,
+) -> Uint<BITS, LIMBS> {
+    (n * Uint::from(Uint::<BITS, LIMBS>::from(100) + Uint::<BITS, LIMBS>::from(percent)))
+        / Uint::<BITS, LIMBS>::from(100)
 }
 
-/// Increases a number by a percentage, rounding up
-pub fn increase_by_percent_ceil<T>(n: T, percent: u64) -> T
-where
-    T: Add<u64, Output = T> + Mul<u64, Output = T> + Div<u64, Output = T>,
-{
-    (n * (100 + percent) + 99) / 100
+/// Increases a uint by a percentage, rounding up
+pub fn uint_increase_by_percent_ceil<const BITS: usize, const LIMBS: usize>(
+    n: Uint<BITS, LIMBS>,
+    percent: u32,
+) -> Uint<BITS, LIMBS> {
+    (n * (Uint::<BITS, LIMBS>::from(100) + Uint::<BITS, LIMBS>::from(percent)))
+        + Uint::<BITS, LIMBS>::from(99) / Uint::<BITS, LIMBS>::from(100)
 }
 
 /// Take a percentage of a number
-pub fn percent<T>(n: T, percent: u64) -> T
-where
-    T: Mul<u64, Output = T> + Div<u64, Output = T>,
-{
-    n * percent / 100
+pub fn uint_percent<const BITS: usize, const LIMBS: usize>(
+    n: Uint<BITS, LIMBS>,
+    percent: u32,
+) -> Uint<BITS, LIMBS> {
+    n * Uint::<BITS, LIMBS>::from(percent) / Uint::<BITS, LIMBS>::from(100)
 }
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::U256;
+
     use super::*;
 
     #[test]
     fn test_increase_by_percent_ceil() {
-        assert_eq!(increase_by_percent_ceil(3, 10), 4);
+        assert_eq!(
+            uint_increase_by_percent_ceil(U256::from(3), 10),
+            U256::from(4)
+        );
     }
 }

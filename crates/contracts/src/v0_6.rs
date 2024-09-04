@@ -41,9 +41,43 @@ sol! {
     }
 
     #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct ReturnInfo {
+        uint256 preOpGas;
+        uint256 prefund;
+        bool sigFailed;
+        uint48 validAfter;
+        uint48 validUntil;
+        bytes paymasterContext;
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct StakeInfo {
+        uint256 stake;
+        uint256 unstakeDelaySec;
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct AggregatorStakeInfo {
+        address aggregator;
+        StakeInfo stakeInfo;
+    }
+
+    #[allow(missing_docs)]
     #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
     interface IEntryPoint {
+        error FailedOp(uint256 opIndex, string reason);
+
+        error ValidationResult(ReturnInfo returnInfo,
+            StakeInfo senderInfo, StakeInfo factoryInfo, StakeInfo paymasterInfo);
+
+        error ValidationResultWithAggregation(ReturnInfo returnInfo,
+                StakeInfo senderInfo, StakeInfo factoryInfo, StakeInfo paymasterInfo,
+                AggregatorStakeInfo aggregatorInfo);
+
         function handleOps(UserOperation[] calldata ops, address payable beneficiary);
         function handleAggregatedOps(
             UserOpsPerAggregator[] calldata opsPerAggregator,

@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{transaction::eip2718::TypedTransaction, U256};
+use alloy_primitives::U256;
 use rundler_utils::math;
 
 /// Gas fees for a user operation or transaction
@@ -23,24 +23,12 @@ pub struct GasFees {
     pub max_priority_fee_per_gas: U256,
 }
 
-impl From<&TypedTransaction> for GasFees {
-    fn from(tx: &TypedTransaction) -> Self {
-        match tx {
-            TypedTransaction::Eip1559(tx) => Self {
-                max_fee_per_gas: tx.max_fee_per_gas.unwrap_or_default(),
-                max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or_default(),
-            },
-            _ => Self::default(),
-        }
-    }
-}
-
 impl GasFees {
     /// Increase the gas fees by a percentage
-    pub fn increase_by_percent(self, percent: u64) -> Self {
+    pub fn increase_by_percent(self, percent: u32) -> Self {
         Self {
-            max_fee_per_gas: math::increase_by_percent_ceil(self.max_fee_per_gas, percent),
-            max_priority_fee_per_gas: math::increase_by_percent_ceil(
+            max_fee_per_gas: math::uint_increase_by_percent_ceil(self.max_fee_per_gas, percent),
+            max_priority_fee_per_gas: math::uint_increase_by_percent_ceil(
                 self.max_priority_fee_per_gas,
                 percent,
             ),

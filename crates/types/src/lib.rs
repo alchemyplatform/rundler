@@ -24,9 +24,6 @@ pub mod builder;
 
 pub mod chain;
 
-#[rustfmt::skip]
-pub mod contracts;
-
 mod entity;
 pub use entity::{Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType};
 

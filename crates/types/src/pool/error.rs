@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Address, U256};
+use alloy_primitives::{Address, U256};
 
 use crate::{
     validation_results::ValidationRevert, Entity, EntityType, StorageSlot, Timestamp,

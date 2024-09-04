@@ -55,9 +55,23 @@ sol!(
     }
 
     #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct ValidationResult {
+        ReturnInfo returnInfo;
+        StakeInfo senderInfo;
+        StakeInfo factoryInfo;
+        StakeInfo paymasterInfo;
+        AggregatorStakeInfo aggregatorInfo;
+    }
+
+    #[allow(missing_docs)]
     #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
     interface IEntryPoint {
+        error FailedOp(uint256 opIndex, string reason);
+
+        error FailedOpWithRevert(uint256 opIndex, string reason, bytes inner);
+
         function handleOps(
             PackedUserOperation[] calldata ops,
             address payable beneficiary

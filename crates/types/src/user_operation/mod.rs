@@ -13,10 +13,8 @@
 
 use std::{fmt::Debug, time::Duration};
 
-use ethers::{
-    abi::AbiEncode,
-    types::{Address, Bytes, H256, U256},
-};
+use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_sol_types::SolValue;
 
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;
@@ -113,7 +111,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// The hash is used to uniquely identify a user operation in the entry point.
     /// It does not include the signature field.
-    fn hash(&self, entry_point: Address, chain_id: u64) -> H256;
+    fn hash(&self, entry_point: Address, chain_id: u64) -> B256;
 
     /// Get the user operation id
     fn id(&self) -> UserOperationId;
@@ -174,7 +172,7 @@ impl UserOperation for UserOperationVariant {
         EntryPointVersion::Unspecified
     }
 
-    fn hash(&self, entry_point: Address, chain_id: u64) -> H256 {
+    fn hash(&self, entry_point: Address, chain_id: u64) -> B256 {
         match self {
             UserOperationVariant::V0_6(op) => op.hash(entry_point, chain_id),
             UserOperationVariant::V0_7(op) => op.hash(entry_point, chain_id),
@@ -395,15 +393,15 @@ pub struct UserOpsPerAggregator<UO: UserOperation> {
     pub signature: Bytes,
 }
 
-pub(crate) fn op_calldata_gas_cost<UO: AbiEncode>(
+pub(crate) fn op_calldata_gas_cost<UO: SolValue>(
     uo: UO,
     zero_byte_cost: U256,
     non_zero_byte_cost: U256,
     per_word_cost: U256,
 ) -> U256 {
-    let encoded_op = uo.encode();
-    let length_in_words = (encoded_op.len() + 31) >> 5; // ceil(encoded_op.len() / 32)
-    let call_data_cost: U256 = encoded_op
+    let encoded_op = uo.abi_encode();
+    let length_in_words = U256::from((encoded_op.len() + 31) >> 5); // ceil(encoded_op.len() / 32)
+    let call_data_cost = encoded_op
         .iter()
         .map(|&x| {
             if x == 0 {
