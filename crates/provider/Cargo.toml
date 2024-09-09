@@ -8,13 +8,25 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+rundler-contracts = { path = "../contracts" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
+
+alloy-consensus.workspace = true
+alloy-contract.workspace = true
+alloy-json-rpc.workspace = true
+alloy-primitives = { workspace = true, features = ["rand"] }
+alloy-provider = { workspace = true, features = ["debug-api", "hyper"] }
+alloy-rlp.workspace = true
+alloy-rpc-client.workspace = true
+alloy-rpc-types-eth.workspace = true
+alloy-rpc-types-trace.workspace = true
+alloy-sol-types.workspace = true
+alloy-transport.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
 auto_impl = "1.2.0"
-ethers.workspace = true
 metrics.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -22,6 +34,7 @@ tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 parse-display.workspace = true
+url.workspace = true
 
 mockall = {workspace = true, optional = true }
 

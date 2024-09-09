@@ -11,7 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{error, io::ErrorKind, process::Command};
+use std::{error, fs, io::ErrorKind, process::Command};
+
+use serde_json::Value;
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     println!("cargo:rerun-if-changed=contracts/lib");
@@ -42,6 +44,22 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
             .arg("@openzeppelin/=lib/openzeppelin-contracts-versions/v5_0"),
         "https://getfoundry.sh/",
         "generate ABIs",
+    )?;
+
+    // Extract the deployed bytecode from the JSON file for the EntryPointSimulations contract
+    let json =
+        include_str!("contracts/out/v0_7/EntryPointSimulations.sol/EntryPointSimulations.json");
+    let val: Value = serde_json::from_str(json)?;
+    let bytecode = val
+        .get("deployedBytecode")
+        .unwrap()
+        .get("object")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    fs::write(
+        "contracts/out/v0_7/EntryPointSimulations.sol/EntryPointSimulations_deployedBytecode.txt",
+        bytecode,
     )?;
 
     Ok(())

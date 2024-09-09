@@ -11,10 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{borrow::Cow, ops::Add};
+use std::{borrow::Cow, cmp::Ordering, ops::Add};
 
-use alloy_primitives::{address, Address, Bytes, U256};
-use alloy_sol_types::{Error as AbiError, Revert, SolError, SolType};
+use alloy_primitives::{address, ruint::UintTryTo, Address, Bytes, U256};
+use alloy_sol_types::{Error as AbiError, Panic, Revert, SolError, SolType};
 use rundler_contracts::{
     v0_6::{
         AggregatorStakeInfo as AggregatorStakeInfoV0_6,
@@ -39,7 +39,7 @@ use crate::{Timestamp, ValidTimeRange, TIME_RANGE_BUFFER};
 const SIG_VALIDATION_FAILED: Address = address!("0000000000000000000000000000000000000001");
 
 /// Error during validation simulation
-#[derive(Clone, Debug, thiserror::Error, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Clone, Debug, thiserror::Error, Eq, PartialEq)]
 pub enum ValidationRevert {
     /// The entry point reverted
     #[error("{0}")]
@@ -55,9 +55,25 @@ pub enum ValidationRevert {
         /// `revert` or `require` Solidity keywords
         inner_revert_reason: Option<String>,
     },
-    /// Validation everted with an unknown signature
+    /// Validation reverted with an unknown signature
     #[error("revert with bytes: {0:?}")]
     Unknown(Bytes),
+    /// Validation reverted with a panic
+    #[error("panic: {0}")]
+    Panic(Panic),
+}
+
+impl PartialOrd for ValidationRevert {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ValidationRevert {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // choose any deterministic order
+        self.to_string().cmp(&other.to_string())
+    }
 }
 
 impl ValidationRevert {
@@ -70,7 +86,7 @@ impl ValidationRevert {
                 entry_point_reason: entry_point_message,
                 ..
             } => Some(entry_point_message),
-            Self::Unknown(_) => None,
+            Self::Unknown(_) | Self::Panic(_) => None,
         };
         message
             .filter(|m| m.len() >= 4 && m.starts_with("AA"))
@@ -91,6 +107,12 @@ impl ValidationRevert {
 impl From<Revert> for ValidationRevert {
     fn from(value: Revert) -> Self {
         ValidationRevert::EntryPoint(value.reason)
+    }
+}
+
+impl From<Panic> for ValidationRevert {
+    fn from(value: Panic) -> Self {
+        ValidationRevert::Panic(value)
     }
 }
 
@@ -117,17 +139,6 @@ impl From<FailedOpWithRevertV0_7> for ValidationRevert {
             inner_revert_reason: inner_message,
         }
     }
-}
-
-/// Error during validation simulation
-#[derive(Debug, thiserror::Error)]
-pub enum ValidationError {
-    /// The validation reverted
-    #[error(transparent)]
-    Revert(#[from] ValidationRevert),
-    /// Other error
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
 }
 
 /// Equivalent to the generated `ValidationResult` or
@@ -281,8 +292,8 @@ impl From<ReturnInfoV0_6> for ValidationReturnInfo {
             pre_op_gas: preOpGas,
             account_sig_failed: sigFailed,
             paymaster_sig_failed: sigFailed,
-            valid_after: validAfter.into(),
-            valid_until: validUntil.into(),
+            valid_after: UintTryTo::<u64>::uint_try_to(&validAfter).unwrap().into(),
+            valid_until: UintTryTo::<u64>::uint_try_to(&validUntil).unwrap().into(),
             paymaster_context: paymasterContext,
         }
     }

@@ -120,7 +120,7 @@ impl<'de> Deserialize<'de> for Timestamp {
         D: Deserializer<'de>,
     {
         let n = <U64>::deserialize(deserializer)?;
-        Ok(Self(n.into_limbs()[0]))
+        Ok(Self(n.to()))
     }
 }
 

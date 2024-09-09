@@ -13,6 +13,7 @@
 
 // Contracts from https://github.com/eth-infinitism/account-abstraction/tree/releases/v0.6/contracts
 
+use alloy_primitives::Bytes;
 use alloy_sol_macro::sol;
 
 sol! {
@@ -66,6 +67,16 @@ sol! {
     }
 
     #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct DepositInfo {
+        uint112 deposit;
+        bool staked;
+        uint112 stake;
+        uint32 unstakeDelaySec;
+        uint48 withdrawTime;
+    }
+
+    #[allow(missing_docs)]
     #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
     interface IEntryPoint {
@@ -78,11 +89,28 @@ sol! {
                 StakeInfo senderInfo, StakeInfo factoryInfo, StakeInfo paymasterInfo,
                 AggregatorStakeInfo aggregatorInfo);
 
+        error SignatureValidationFailed(address aggregator);
+
+        error ExecutionResult(uint256 preOpGas, uint256 paid, uint48 validAfter, uint48 validUntil, bool targetSuccess, bytes targetResult);
+
         function handleOps(UserOperation[] calldata ops, address payable beneficiary);
+
         function handleAggregatedOps(
             UserOpsPerAggregator[] calldata opsPerAggregator,
             address payable beneficiary
         );
+
+        // From IStakeManager
+        function getDepositInfo(
+            address account
+        ) external view returns (DepositInfo memory info);
+
+        // From IStakeManager
+        function balanceOf(address account) external view returns (uint256);
+
+        function simulateValidation(UserOperation calldata userOp) external;
+
+        function simulateHandleOp(UserOperation calldata op, address target, bytes calldata targetCallData) external;
     }
 
     #[allow(missing_docs)]
@@ -90,16 +118,16 @@ sol! {
     #[derive(Default, Debug, PartialEq, Eq)]
     interface IAggregator {
         function validateSignatures(UserOperation[] calldata userOps, bytes calldata signature);
+
+        function validateUserOpSignature(UserOperation calldata userOp)
+        external view returns (bytes memory sigForUserOp);
+
+        function aggregateSignatures(UserOperation[] calldata userOps) external view returns (bytes memory aggregatedSignature);
     }
 
     #[allow(missing_docs)]
     #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
-    contract GetBalances {
-        error GetBalancesResult(uint256[] balances);
-        constructor(address stakeManager, address[] memory addresses);
-    }
-
     contract CallGasEstimationProxy {
         struct EstimateCallGasArgs {
             address sender;
@@ -121,3 +149,23 @@ sol! {
         function estimateCallGas(EstimateCallGasArgs calldata args);
     }
 }
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    GetBalances,
+    "contracts/out/v0_6/GetBalances.sol/GetBalances.json"
+);
+
+// https://etherscan.io/address/0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789#code
+const __ENTRY_POINT_V0_6_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+    "../contracts/bytecode/entrypoint/0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789_deployed.txt"
+);
+const __ENTRY_POINT_V0_6_DEPLOYED_BYTECODE: [u8; 23689] = {
+    match const_hex::const_decode_to_array(__ENTRY_POINT_V0_6_DEPLOYED_BYTECODE_HEX) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode entrypoint hex"),
+    }
+};
+pub static ENTRY_POINT_V0_6_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__ENTRY_POINT_V0_6_DEPLOYED_BYTECODE);

@@ -13,6 +13,7 @@
 
 // Contracts from https://github.com/eth-infinitism/account-abstraction/tree/releases/v0.7/contracts
 
+use alloy_primitives::Bytes;
 use alloy_sol_macro::sol;
 
 sol!(
@@ -27,6 +28,14 @@ sol!(
         uint256 preVerificationGas;
         bytes32 gasFees;
         bytes paymasterAndData;
+        bytes signature;
+    }
+
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct UserOpsPerAggregator {
+        PackedUserOperation[] userOps;
+        address aggregator;
         bytes signature;
     }
 
@@ -65,6 +74,16 @@ sol!(
     }
 
     #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    struct DepositInfo {
+        uint256 deposit;
+        bool staked;
+        uint112 stake;
+        uint32 unstakeDelaySec;
+        uint48 withdrawTime;
+    }
+
+    #[allow(missing_docs)]
     #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
     interface IEntryPoint {
@@ -72,10 +91,25 @@ sol!(
 
         error FailedOpWithRevert(uint256 opIndex, string reason, bytes inner);
 
+        error SignatureValidationFailed(address aggregator);
+
         function handleOps(
             PackedUserOperation[] calldata ops,
             address payable beneficiary
         ) external;
+
+        function handleAggregatedOps(
+            UserOpsPerAggregator[] calldata opsPerAggregator,
+            address payable beneficiary
+        ) external;
+
+        // From IStakeManager
+        function getDepositInfo(
+            address account
+        ) external view returns (DepositInfo memory info);
+
+        // From IStakeManager
+        function balanceOf(address account) external view returns (uint256);
     }
 
     #[allow(missing_docs)]
@@ -137,16 +171,6 @@ sol!(
     }
 
     #[allow(missing_docs)]
-    #[sol(rpc)]
-    #[derive(Default, Debug, PartialEq, Eq)]
-    contract GetBalances {
-        error GetBalancesResult(uint256[] balances);
-
-        constructor(address stakeManager, address[] memory addresses);
-    }
-
-    #[allow(missing_docs)]
-    #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
     contract CallGasEstimationProxy {
         error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
@@ -170,3 +194,24 @@ sol!(
         function testCallGas(PackedUserOperation calldata userOp, uint256 callGasLimit);
     }
 );
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    GetBalances,
+    "contracts/out/v0_7/GetBalances.sol/GetBalances.json"
+);
+
+const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+    "../contracts/out/v0_7/EntryPointSimulations.sol/EntryPointSimulations_deployedBytecode.txt"
+);
+
+const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: [u8; 16893] = {
+    match const_hex::const_decode_to_array(__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode entrypoint hex"),
+    }
+};
+
+pub static ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE);

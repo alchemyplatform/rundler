@@ -11,16 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{
-    spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
-};
+use alloy_primitives::{Address, Bytes, U256};
+use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use rundler_types::{
-    v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationError, ValidationOutput, ValidationRevert,
+    v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
 use crate::{
     AggregatorOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult, HandleOpsOut,
-    L1GasProvider, SignatureAggregator, SimulateOpCallData, SimulationProvider,
+    L1GasProvider, ProviderResult, SignatureAggregator, SimulationProvider,
 };
 
 mockall::mock! {
@@ -28,11 +27,11 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl EntryPoint for EntryPointV0_6 {
-        fn address(&self) -> Address;
+        fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
-            -> anyhow::Result<U256>;
-        async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
-        async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
+            -> ProviderResult<U256>;
+        async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+        async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
     }
 
     #[async_trait::async_trait]
@@ -42,13 +41,13 @@ mockall::mock! {
             &self,
             aggregator_address: Address,
             ops: Vec<v0_6::UserOperation>,
-        ) -> anyhow::Result<Option<Bytes>>;
+        ) -> ProviderResult<Option<Bytes>>;
         async fn validate_user_op_signature(
             &self,
             aggregator_address: Address,
             user_op: v0_6::UserOperation,
-            gas_cap: u64,
-        ) -> anyhow::Result<AggregatorOut>;
+            gas_cap: u128,
+        ) -> ProviderResult<AggregatorOut>;
     }
 
     #[async_trait::async_trait]
@@ -57,31 +56,30 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_6::UserOperation,
-            max_validation_gas: u64,
-        ) -> (TypedTransaction, spoof::State);
-        async fn call_simulate_validation(
+            max_validation_gas: u128,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        async fn simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
-            max_validation_gas: u64,
-            block_hash: Option<H256>
-        ) -> Result<ValidationOutput, ValidationError>;
-        fn get_simulate_op_call_data(
+            max_validation_gas: u128,
+            block_id: Option<BlockId>
+        ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
+        fn get_simulate_handle_op_call(
             &self,
             op: v0_6::UserOperation,
-            spoofed_state: &spoof::State,
-        ) -> SimulateOpCallData;
-        async fn call_spoofed_simulate_op(
+            state_override: StateOverride,
+        ) -> crate::EvmCall;
+        async fn simulate_handle_op(
             &self,
             op: v0_6::UserOperation,
             target: Address,
             target_call_data: Bytes,
-            block_hash: H256,
-            gas: U256,
-            spoofed_state: &spoof::State,
-        ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>>;
+            block_id: BlockId,
+            gas: u128,
+            state_override: StateOverride,
+        ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
-            &self,
-            revert_data: Bytes,
+            revert_data: alloy_json_rpc::ErrorPayload,
         ) -> Result<ExecutionResult, ValidationRevert>;
         fn simulation_should_revert(&self) -> bool;
     }
@@ -93,8 +91,8 @@ mockall::mock! {
             &self,
             entry_point_address: Address,
             op: v0_6::UserOperation,
-            gas_price: U256,
-        ) -> anyhow::Result<U256>;
+            gas_price: u128,
+        ) -> ProviderResult<u128>;
     }
 
     #[async_trait::async_trait]
@@ -104,15 +102,15 @@ mockall::mock! {
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_6::UserOperation>>,
             beneficiary: Address,
-            gas: U256,
-        ) -> anyhow::Result<HandleOpsOut>;
+            gas: u128,
+        ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_6::UserOperation>>,
             beneficiary: Address,
-            gas: U256,
+            gas: u128,
             gas_fees: GasFees,
-        ) -> TypedTransaction;
+        ) -> TransactionRequest;
     }
 }
 
@@ -121,11 +119,11 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl EntryPoint for EntryPointV0_7 {
-        fn address(&self) -> Address;
+        fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
-            -> anyhow::Result<U256>;
-        async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
-        async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
+            -> ProviderResult<U256>;
+        async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
+        async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
     }
 
     #[async_trait::async_trait]
@@ -135,13 +133,13 @@ mockall::mock! {
             &self,
             aggregator_address: Address,
             ops: Vec<v0_7::UserOperation>,
-        ) -> anyhow::Result<Option<Bytes>>;
+        ) -> ProviderResult<Option<Bytes>>;
         async fn validate_user_op_signature(
             &self,
             aggregator_address: Address,
             user_op: v0_7::UserOperation,
-            gas_cap: u64,
-        ) -> anyhow::Result<AggregatorOut>;
+            gas_cap: u128,
+        ) -> ProviderResult<AggregatorOut>;
     }
 
     #[async_trait::async_trait]
@@ -150,31 +148,30 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_7::UserOperation,
-            max_validation_gas: u64,
-        ) -> (TypedTransaction, spoof::State);
-        async fn call_simulate_validation(
+            max_validation_gas: u128,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        async fn simulate_validation(
             &self,
             user_op: v0_7::UserOperation,
-            max_validation_gas: u64,
-            block_hash: Option<H256>
-        ) -> Result<ValidationOutput, ValidationError>;
-        fn get_simulate_op_call_data(
+            max_validation_gas: u128,
+            block_id: Option<BlockId>
+        ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
+        fn get_simulate_handle_op_call(
             &self,
             op: v0_7::UserOperation,
-            spoofed_state: &spoof::State,
-        ) -> SimulateOpCallData;
-        async fn call_spoofed_simulate_op(
+            state_override: StateOverride,
+        ) -> crate::EvmCall;
+        async fn simulate_handle_op(
             &self,
             op: v0_7::UserOperation,
             target: Address,
             target_call_data: Bytes,
-            block_hash: H256,
-            gas: U256,
-            spoofed_state: &spoof::State,
-        ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>>;
+            block_id: BlockId,
+            gas: u128,
+            state_override: StateOverride,
+        ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
-            &self,
-            revert_data: Bytes,
+            revert_data: alloy_json_rpc::ErrorPayload,
         ) -> Result<ExecutionResult, ValidationRevert>;
         fn simulation_should_revert(&self) -> bool;
     }
@@ -186,8 +183,8 @@ mockall::mock! {
             &self,
             entry_point_address: Address,
             op: v0_7::UserOperation,
-            gas_price: U256,
-        ) -> anyhow::Result<U256>;
+            gas_price: u128,
+        ) -> ProviderResult<u128>;
     }
 
     #[async_trait::async_trait]
@@ -197,14 +194,14 @@ mockall::mock! {
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_7::UserOperation>>,
             beneficiary: Address,
-            gas: U256,
-        ) -> anyhow::Result<HandleOpsOut>;
+            gas: u128,
+        ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_7::UserOperation>>,
             beneficiary: Address,
-            gas: U256,
+            gas: u128,
             gas_fees: GasFees,
-        ) -> TypedTransaction;
+        ) -> TransactionRequest;
     }
 }

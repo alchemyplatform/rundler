@@ -14,11 +14,25 @@ license = "LGPL-3.0-only"
 repository = "https://github.com/alchemyplatform/rundler"
 
 [workspace.dependencies]
+# alloy core
+alloy-primitives = "0.8.3"
+alloy-sol-macro = "0.8.3"
+alloy-sol-types =  "0.8.3"
+
+# alloy
+alloy-consensus = "0.3.3"
+alloy-contract = "0.3.3"
+alloy-json-rpc = "0.3.3"
+alloy-provider = "0.3.3"
+alloy-rpc-client = "0.3.3"
+alloy-rpc-types-eth = "0.3.3"
+alloy-rpc-types-trace = "0.3.3"
+alloy-transport = "0.3.3"
+
+# alloy other
+alloy-rlp = "0.3.8"
+
 anyhow = "1.0.86"
-alloy-contract = "0.2.1"
-alloy-primitives = "0.7.7"
-alloy-sol-macro = "0.7.7"
-alloy-sol-types =  "0.7.7"
 async-trait = "0.1.81"
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 ethers = "2.0.14"
@@ -34,7 +48,7 @@ prost = "0.13.1"
 serde = "1.0.209"
 serde_json = "1.0.127"
 rand = "0.8.5"
-reqwest = { version = "0.11.27", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12.7", default-features = false, features = ["rustls-tls"] }
 rustls = "0.23.12"
 thiserror = "1.0.63"
 tokio = { version = "1.39.3", default-features = false }

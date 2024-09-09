@@ -11,17 +11,4 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Traits for the provider module.
-
-mod error;
-pub use error::{ProviderError, ProviderResult};
-
-mod entry_point;
-pub use entry_point::*;
-
-mod evm;
-#[cfg(feature = "test-utils")]
-pub use evm::MockEvmProvider;
-pub use evm::{EvmCall, EvmProvider};
-#[cfg(feature = "test-utils")]
-pub(crate) mod test_utils;
+// TODO(danc): implement metrics for alloy provider

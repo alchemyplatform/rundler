@@ -9,5 +9,11 @@ publish = false
 
 [dependencies]
 alloy-contract.workspace = true
+alloy-primitives.workspace = true
 alloy-sol-macro = { workspace = true, features = ["json"] }
 alloy-sol-types.workspace = true
+const-hex = "1.11.3"
+
+[build-dependencies]
+serde_json.workspace = true
+
