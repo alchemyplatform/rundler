@@ -15,7 +15,7 @@
 
 use std::str::FromStr;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
@@ -40,24 +40,24 @@ pub struct ChainSpec {
     ///
     /// NOTE: This must take into account when the storage slot was originally 0
     /// and is now non-zero, making the overhead slightly higher for most operations.
-    pub deposit_transfer_overhead: U256,
+    pub deposit_transfer_overhead: u128,
     /// The maximum size of a transaction in bytes
     pub max_transaction_size_bytes: usize,
     /// Intrinsic gas cost for a transaction
-    pub transaction_intrinsic_gas: U256,
+    pub transaction_intrinsic_gas: u128,
     /// Per user operation gas cost for v0.6
-    pub per_user_op_v0_6_gas: U256,
+    pub per_user_op_v0_6_gas: u128,
     /// Per user operation gas cost for v0.7
-    pub per_user_op_v0_7_gas: U256,
+    pub per_user_op_v0_7_gas: u128,
     /// Per user operation deploy gas cost overhead, to capture
     /// deploy costs that are not metered by the entry point
-    pub per_user_op_deploy_overhead_gas: U256,
+    pub per_user_op_deploy_overhead_gas: u128,
     /// Gas cost for a user operation word in a bundle transaction
-    pub per_user_op_word_gas: U256,
+    pub per_user_op_word_gas: u128,
     /// Gas cost for a zero byte in calldata
-    pub calldata_zero_byte_gas: U256,
+    pub calldata_zero_byte_gas: u128,
     /// Gas cost for a non-zero byte in calldata
-    pub calldata_non_zero_byte_gas: U256,
+    pub calldata_non_zero_byte_gas: u128,
 
     /*
      * Gas estimation
@@ -81,9 +81,9 @@ pub struct ChainSpec {
     /// Type of oracle for estimating priority fees
     pub priority_fee_oracle_type: PriorityFeeOracleType,
     /// Minimum max priority fee per gas for the network
-    pub min_max_priority_fee_per_gas: U256,
+    pub min_max_priority_fee_per_gas: u128,
     /// Maximum max priority fee per gas for the network
-    pub max_max_priority_fee_per_gas: U256,
+    pub max_max_priority_fee_per_gas: u128,
     /// Usage ratio of the chain that determines "congestion"
     /// Some chains have artificially high block gas limits but
     /// actually cap block gas usage at a lower value.
@@ -149,22 +149,22 @@ impl Default for ChainSpec {
             id: 0,
             entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
             entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V7_0).unwrap(),
-            deposit_transfer_overhead: U256::from(30_000),
-            transaction_intrinsic_gas: U256::from(21_000),
-            per_user_op_v0_6_gas: U256::from(18_300),
-            per_user_op_v0_7_gas: U256::from(19_500),
-            per_user_op_deploy_overhead_gas: U256::from(0),
-            per_user_op_word_gas: U256::from(4),
-            calldata_zero_byte_gas: U256::from(4),
-            calldata_non_zero_byte_gas: U256::from(16),
+            deposit_transfer_overhead: 30_000,
+            transaction_intrinsic_gas: 21_000,
+            per_user_op_v0_6_gas: 18_300,
+            per_user_op_v0_7_gas: 19_500,
+            per_user_op_deploy_overhead_gas: 0,
+            per_user_op_word_gas: 4,
+            calldata_zero_byte_gas: 4,
+            calldata_non_zero_byte_gas: 16,
             eip1559_enabled: true,
             calldata_pre_verification_gas: false,
             l1_gas_oracle_contract_type: L1GasOracleContractType::default(),
             l1_gas_oracle_contract_address: Address::ZERO,
             include_l1_gas_in_gas_limit: true,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
-            min_max_priority_fee_per_gas: U256::ZERO,
-            max_max_priority_fee_per_gas: U256::MAX,
+            min_max_priority_fee_per_gas: 0,
+            max_max_priority_fee_per_gas: u128::MAX,
             congestion_trigger_usage_ratio_threshold: 0.75,
             max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: u64::MAX,

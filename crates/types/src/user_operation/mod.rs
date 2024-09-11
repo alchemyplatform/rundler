@@ -15,6 +15,7 @@ use std::{fmt::Debug, time::Duration};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
+use rand::{self, RngCore};
 
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;
@@ -89,19 +90,19 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn call_data(&self) -> &Bytes;
 
     /// Returns the call gas limit
-    fn call_gas_limit(&self) -> U256;
+    fn call_gas_limit(&self) -> u128;
 
     /// Returns the verification gas limit
-    fn verification_gas_limit(&self) -> U256;
+    fn verification_gas_limit(&self) -> u128;
 
     /// Returns the max fee per gas
-    fn max_fee_per_gas(&self) -> U256;
+    fn max_fee_per_gas(&self) -> u128;
 
     /// Returns the max priority fee per gas
-    fn max_priority_fee_per_gas(&self) -> U256;
+    fn max_priority_fee_per_gas(&self) -> u128;
 
     /// Returns the maximum cost, in wei, of this user operation
-    fn max_gas_cost(&self) -> U256;
+    fn max_gas_cost(&self) -> u128;
 
     /*
      * Enhanced functions
@@ -123,24 +124,24 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn heap_size(&self) -> usize;
 
     /// Returns the total verification gas limit
-    fn total_verification_gas_limit(&self) -> U256;
+    fn total_verification_gas_limit(&self) -> u128;
 
     /// Returns the required pre-execution buffer
     ///
     /// This should capture all of the gas that is needed to execute the user operation,
     /// minus the call gas limit. The entry point will check for this buffer before
     /// executing the user operation.
-    fn required_pre_execution_buffer(&self) -> U256;
+    fn required_pre_execution_buffer(&self) -> u128;
 
     /// Returns the pre-verification gas
-    fn pre_verification_gas(&self) -> U256;
+    fn pre_verification_gas(&self) -> u128;
 
     /// Calculate the static portion of the pre-verification gas for this user operation
     fn calc_static_pre_verification_gas(
         &self,
         chain_spec: &ChainSpec,
         include_fixed_gas_overhead: bool,
-    ) -> U256;
+    ) -> u128;
 
     /// Clear the signature field of the user op
     ///
@@ -221,7 +222,7 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn max_gas_cost(&self) -> U256 {
+    fn max_gas_cost(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.max_gas_cost(),
             UserOperationVariant::V0_7(op) => op.max_gas_cost(),
@@ -242,35 +243,35 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn call_gas_limit(&self) -> U256 {
+    fn call_gas_limit(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.call_gas_limit(),
             UserOperationVariant::V0_7(op) => op.call_gas_limit(),
         }
     }
 
-    fn verification_gas_limit(&self) -> U256 {
+    fn verification_gas_limit(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.verification_gas_limit(),
             UserOperationVariant::V0_7(op) => op.verification_gas_limit(),
         }
     }
 
-    fn total_verification_gas_limit(&self) -> U256 {
+    fn total_verification_gas_limit(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.total_verification_gas_limit(),
             UserOperationVariant::V0_7(op) => op.total_verification_gas_limit(),
         }
     }
 
-    fn required_pre_execution_buffer(&self) -> U256 {
+    fn required_pre_execution_buffer(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.required_pre_execution_buffer(),
             UserOperationVariant::V0_7(op) => op.required_pre_execution_buffer(),
         }
     }
 
-    fn pre_verification_gas(&self) -> U256 {
+    fn pre_verification_gas(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.pre_verification_gas(),
             UserOperationVariant::V0_7(op) => op.pre_verification_gas(),
@@ -281,7 +282,7 @@ impl UserOperation for UserOperationVariant {
         &self,
         chain_spec: &ChainSpec,
         include_fixed_gas_overhead: bool,
-    ) -> U256 {
+    ) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => {
                 op.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
@@ -292,14 +293,14 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn max_fee_per_gas(&self) -> U256 {
+    fn max_fee_per_gas(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.max_fee_per_gas(),
             UserOperationVariant::V0_7(op) => op.max_fee_per_gas(),
         }
     }
 
-    fn max_priority_fee_per_gas(&self) -> U256 {
+    fn max_priority_fee_per_gas(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.max_priority_fee_per_gas(),
             UserOperationVariant::V0_7(op) => op.max_priority_fee_per_gas(),
@@ -395,12 +396,12 @@ pub struct UserOpsPerAggregator<UO: UserOperation> {
 
 pub(crate) fn op_calldata_gas_cost<UO: SolValue>(
     uo: UO,
-    zero_byte_cost: U256,
-    non_zero_byte_cost: U256,
-    per_word_cost: U256,
-) -> U256 {
+    zero_byte_cost: u128,
+    non_zero_byte_cost: u128,
+    per_word_cost: u128,
+) -> u128 {
     let encoded_op = uo.abi_encode();
-    let length_in_words = U256::from((encoded_op.len() + 31) >> 5); // ceil(encoded_op.len() / 32)
+    let length_in_words: u128 = (encoded_op.len() as u128 + 31) >> 5; // ceil(encoded_op.len() / 32)
     let call_data_cost = encoded_op
         .iter()
         .map(|&x| {
@@ -428,6 +429,21 @@ pub(crate) fn default_if_none_or_equal<V: Copy + PartialEq>(
     equal: V,
 ) -> V {
     v.filter(|v| v != &equal).unwrap_or(default)
+}
+
+/// Fills a bytes array of size ARR_SIZE with FILL_SIZE random bytes starting
+/// at the beginning
+fn random_bytes_array<const ARR_SIZE: usize, const FILL_SIZE: usize>() -> [u8; ARR_SIZE] {
+    let mut bytes = [0_u8; ARR_SIZE];
+    rand::thread_rng().fill_bytes(&mut bytes[..FILL_SIZE]);
+    bytes
+}
+
+/// Fills a bytes object with fill_size random bytes
+fn random_bytes(fill_size: usize) -> Bytes {
+    let mut bytes = vec![0_u8; fill_size];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.into()
 }
 
 #[cfg(test)]

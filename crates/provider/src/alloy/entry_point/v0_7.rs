@@ -306,10 +306,7 @@ where
         max_validation_gas: u128,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
-        let pvg: u128 = user_op
-            .pre_verification_gas
-            .uint_try_to()
-            .context("pre verification gas out of bounds")?;
+        let pvg = user_op.pre_verification_gas;
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
 

@@ -314,10 +314,7 @@ where
         user_op: UserOperation,
         max_validation_gas: u128,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
-        let pvg: u128 = user_op
-            .pre_verification_gas
-            .uint_try_to()
-            .context("pre verification gas out of bounds")?;
+        let pvg: u128 = user_op.pre_verification_gas;
         let call = self
             .i_entry_point
             .simulateValidation(user_op.into())
@@ -332,10 +329,7 @@ where
         max_validation_gas: u128,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let pvg: u128 = user_op
-            .pre_verification_gas
-            .uint_try_to()
-            .context("pre verification gas out of bounds")?;
+        let pvg: u128 = user_op.pre_verification_gas;
         let blockless = self
             .i_entry_point
             .simulateValidation(user_op.into())
