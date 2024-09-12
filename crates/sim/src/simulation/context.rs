@@ -13,8 +13,9 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
+use alloy_primitives::{Address, U256};
 use anyhow::Context;
-use ethers::types::{Address, BlockId, U256};
+use rundler_provider::BlockId;
 use rundler_types::{
     pool::SimulationViolation, EntityInfos, EntityType, Opcode, StakeInfo, UserOperation,
     ValidationOutput,
@@ -81,16 +82,18 @@ pub(crate) struct AssociatedSlotsByAddress(pub(crate) HashMap<Address, BTreeSet<
 
 impl AssociatedSlotsByAddress {
     pub(crate) fn is_associated_slot(&self, address: Address, slot: U256) -> bool {
-        if slot == address.as_bytes().into() {
+        if slot == U256::from_be_bytes(address.into_word().into()) {
             return true;
         }
         let Some(associated_slots) = self.0.get(&address) else {
             return false;
         };
-        let Some(&next_smallest_slot) = associated_slots.range(..(slot + 1)).next_back() else {
+        let Some(&next_smallest_slot) =
+            associated_slots.range(..(slot + U256::from(1))).next_back()
+        else {
             return false;
         };
-        slot - next_smallest_slot < 128.into()
+        (slot - next_smallest_slot) < U256::from(128)
     }
 
     pub(crate) fn addresses(&self) -> HashSet<Address> {
@@ -100,7 +103,7 @@ impl AssociatedSlotsByAddress {
 
 /// Trait for providing the validation context for a user operation.
 #[async_trait::async_trait]
-pub trait ValidationContextProvider: Send + Sync + 'static {
+pub trait ValidationContextProvider: Send + Sync {
     /// The user operation type this provider targets.
     type UO: UserOperation;
 
@@ -115,7 +118,7 @@ pub trait ValidationContextProvider: Send + Sync + 'static {
     fn get_specific_violations(
         &self,
         _context: &ValidationContext<Self::UO>,
-    ) -> Vec<SimulationViolation>;
+    ) -> anyhow::Result<Vec<SimulationViolation>>;
 }
 
 pub(crate) fn entity_type_from_simulation_phase(i: usize) -> Option<EntityType> {
@@ -162,8 +165,8 @@ pub(crate) fn infos_from_validation_output(
 }
 
 pub(crate) fn is_staked(info: StakeInfo, sim_settings: &Settings) -> bool {
-    info.stake >= sim_settings.min_stake_value.into()
-        && info.unstake_delay_sec >= sim_settings.min_unstake_delay.into()
+    info.stake >= sim_settings.min_stake_value
+        && info.unstake_delay_sec >= U256::from(sim_settings.min_unstake_delay)
 }
 
 pub(crate) fn parse_combined_context_str<A, B>(combined: &str) -> anyhow::Result<(A, B)>

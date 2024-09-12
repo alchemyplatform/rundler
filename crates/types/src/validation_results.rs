@@ -252,7 +252,7 @@ impl From<ValidationResultV0_7> for ValidationOutput {
 }
 
 /// ValidationReturnInfo from EntryPoint contract
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ValidationReturnInfo {
     /// The amount of gas used before the op was executed (pre verification gas and validation gas)
     pub pre_op_gas: U256,
@@ -378,7 +378,7 @@ pub fn parse_validation_data(data: U256) -> ValidationData {
 }
 
 /// StakeInfo from EntryPoint contract
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct StakeInfo {
     /// The amount of stake
     pub stake: U256,

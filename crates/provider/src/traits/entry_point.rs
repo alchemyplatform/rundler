@@ -11,7 +11,6 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_json_rpc::ErrorPayload;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use rundler_types::{
@@ -88,7 +87,7 @@ pub struct ExecutionResult {
 
 /// Trait for interacting with an entry point contract.
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait EntryPoint: Send + Sync {
     /// Get the address of the entry point contract
     fn address(&self) -> &Address;
@@ -106,7 +105,7 @@ pub trait EntryPoint: Send + Sync {
 
 /// Trait for handling signature aggregators
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait SignatureAggregator: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
@@ -129,7 +128,7 @@ pub trait SignatureAggregator: Send + Sync {
 
 /// Trait for submitting bundles of operations to an entry point contract
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait BundleHandler: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
@@ -156,7 +155,7 @@ pub trait BundleHandler: Send + Sync {
 ///
 /// Used for L2 gas estimation
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait L1GasProvider: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
@@ -174,7 +173,7 @@ pub trait L1GasProvider: Send + Sync {
 
 /// Trait for simulating user operations on an entry point contract
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait SimulationProvider: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
@@ -184,7 +183,7 @@ pub trait SimulationProvider: Send + Sync {
         &self,
         user_op: Self::UO,
         max_validation_gas: u128,
-    ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+    ) -> (TransactionRequest, StateOverride);
 
     /// Call the entry point contract's `simulateValidation` function.
     async fn simulate_validation(
@@ -211,7 +210,7 @@ pub trait SimulationProvider: Send + Sync {
 
     /// Decode the revert data from a call to `simulateHandleOps`
     fn decode_simulate_handle_ops_revert(
-        revert_data: ErrorPayload,
+        revert_data: &Bytes,
     ) -> Result<ExecutionResult, ValidationRevert>;
 
     /// Returns true if this entry point uses reverts to communicate simulation
@@ -220,6 +219,7 @@ pub trait SimulationProvider: Send + Sync {
 }
 
 /// Trait for a provider that provides all entry point functionality
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait EntryPointProvider<UO>:
     EntryPoint
     + SignatureAggregator<UO = UO>

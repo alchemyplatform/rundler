@@ -11,16 +11,104 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, U256};
-use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
+use alloy_json_rpc::{RpcParam, RpcReturn};
+use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
+use alloy_rpc_types_eth::{
+    state::StateOverride, Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, Log, Transaction,
+    TransactionReceipt, TransactionRequest,
+};
+use alloy_rpc_types_trace::geth::{
+    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
+};
+use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
     v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
+use super::error::ProviderResult;
 use crate::{
-    AggregatorOut, BundleHandler, DepositInfo, EntryPoint, ExecutionResult, HandleOpsOut,
-    L1GasProvider, ProviderResult, SignatureAggregator, SimulationProvider,
+    AggregatorOut, BundleHandler, DepositInfo, EntryPoint, EvmCall,
+    EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, L1GasProvider,
+    SignatureAggregator, SimulationProvider,
 };
+
+mockall::mock! {
+    pub EvmProvider {}
+
+    #[async_trait::async_trait]
+    impl EvmProviderTrait for EvmProvider {
+        async fn request<P, R>(&self, method: &'static str, params: P) -> ProviderResult<R>
+        where
+            P: RpcParam + 'static,
+            R: RpcReturn;
+
+        async fn fee_history(
+            &self,
+            block_count: u64,
+            block_number: BlockNumberOrTag,
+            reward_percentiles: &[f64],
+        ) -> ProviderResult<FeeHistory>;
+
+        async fn call(
+            &self,
+            tx: &TransactionRequest,
+            block: Option<BlockId>,
+            state_overrides: &StateOverride,
+        ) -> ProviderResult<Bytes>;
+
+        async fn get_block_number(&self) -> ProviderResult<u64>;
+
+        async fn get_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>>;
+
+        async fn get_balance(&self, address: Address, block: Option<BlockId>) -> ProviderResult<U256>;
+
+        async fn get_transaction_by_hash(&self, tx: TxHash) -> ProviderResult<Option<Transaction>>;
+
+        async fn get_transaction_receipt(
+            &self,
+            tx: TxHash,
+        ) -> ProviderResult<Option<TransactionReceipt>>;
+
+        async fn debug_trace_transaction(
+            &self,
+            tx_hash: TxHash,
+            trace_options: GethDebugTracingOptions,
+        ) -> ProviderResult<GethTrace>;
+
+        async fn debug_trace_call(
+            &self,
+            tx: TransactionRequest,
+            block_id: Option<BlockId>,
+            trace_options: GethDebugTracingCallOptions,
+        ) -> ProviderResult<GethTrace>;
+
+        async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)>;
+
+        async fn get_pending_base_fee(&self) -> ProviderResult<u128>;
+
+        async fn get_max_priority_fee(&self) -> ProviderResult<u128>;
+
+        async fn get_code(&self, address: Address, block: Option<BlockId>) -> ProviderResult<Bytes>;
+
+        async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64>;
+
+        async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>>;
+
+        async fn get_gas_used(&self, call: EvmCall) -> ProviderResult<GasUsedResult>;
+
+        async fn batch_get_storage_at(
+            &self,
+            address: Address,
+            slots: Vec<B256>,
+        ) -> ProviderResult<Vec<B256>>;
+
+        async fn get_code_hash(
+            &self,
+            addresses: Vec<Address>,
+            block: Option<BlockId>,
+        ) -> ProviderResult<B256>;
+    }
+}
 
 mockall::mock! {
     pub EntryPointV0_6 {}
@@ -57,7 +145,7 @@ mockall::mock! {
             &self,
             user_op: v0_6::UserOperation,
             max_validation_gas: u128,
-        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        ) -> (TransactionRequest, StateOverride);
         async fn simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
@@ -79,7 +167,7 @@ mockall::mock! {
             state_override: StateOverride,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
-            revert_data: alloy_json_rpc::ErrorPayload,
+            revert_data: &Bytes,
         ) -> Result<ExecutionResult, ValidationRevert>;
         fn simulation_should_revert(&self) -> bool;
     }
@@ -149,7 +237,7 @@ mockall::mock! {
             &self,
             user_op: v0_7::UserOperation,
             max_validation_gas: u128,
-        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
+        ) -> (TransactionRequest, StateOverride);
         async fn simulate_validation(
             &self,
             user_op: v0_7::UserOperation,
@@ -171,7 +259,7 @@ mockall::mock! {
             state_override: StateOverride,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
-            revert_data: alloy_json_rpc::ErrorPayload,
+            revert_data: &Bytes,
         ) -> Result<ExecutionResult, ValidationRevert>;
         fn simulation_should_revert(&self) -> bool;
     }

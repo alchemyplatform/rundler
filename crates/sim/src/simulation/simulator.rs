@@ -14,14 +14,15 @@
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
-    ops::Deref,
-    sync::Arc,
 };
 
+use alloy_primitives::{Address, B256, U256};
+use anyhow::Context;
 use async_trait::async_trait;
-use ethers::types::{Address, H256, U256};
+use futures_util::TryFutureExt;
 use rundler_provider::{
-    AggregatorOut, AggregatorSimOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
+    AggregatorOut, AggregatorSimOut, EntryPoint, EvmProvider, SignatureAggregator,
+    SimulationProvider,
 };
 use rundler_types::{
     pool::{NeedsStakeInformation, SimulationViolation},
@@ -42,18 +43,18 @@ use crate::{
         Settings, Simulator,
     },
     types::ViolationError,
-    utils, SimulationError, SimulationResult,
+    SimulationError, SimulationResult,
 };
 
 /// Create a new simulator for v0.6 entry point contracts
 pub fn new_v0_6_simulator<P, E>(
-    provider: Arc<P>,
+    provider: P,
     entry_point: E,
     sim_settings: Settings,
-    mempool_configs: HashMap<H256, MempoolConfig>,
+    mempool_configs: HashMap<B256, MempoolConfig>,
 ) -> impl Simulator<UO = UserOperationV0_6>
 where
-    P: Provider,
+    P: EvmProvider + Clone,
     E: EntryPoint
         + SignatureAggregator<UO = UserOperationV0_6>
         + SimulationProvider<UO = UserOperationV0_6>
@@ -70,13 +71,13 @@ where
 
 /// Create a new simulator for v0.6 entry point contracts
 pub fn new_v0_7_simulator<P, E>(
-    provider: Arc<P>,
+    provider: P,
     entry_point: E,
     sim_settings: Settings,
-    mempool_configs: HashMap<H256, MempoolConfig>,
+    mempool_configs: HashMap<B256, MempoolConfig>,
 ) -> impl Simulator<UO = UserOperationV0_7>
 where
-    P: Provider,
+    P: EvmProvider + Clone,
     E: EntryPoint
         + SignatureAggregator<UO = UserOperationV0_7>
         + SimulationProvider<UO = UserOperationV0_7>
@@ -104,11 +105,11 @@ where
 /// the violations.
 #[derive(Debug)]
 pub struct SimulatorImpl<UO, P, E, V> {
-    provider: Arc<P>,
+    provider: P,
     entry_point: E,
     validation_context_provider: V,
     sim_settings: Settings,
-    mempool_configs: HashMap<H256, MempoolConfig>,
+    mempool_configs: HashMap<B256, MempoolConfig>,
     allow_unstaked_addresses: HashSet<Address>,
     _uo_type: PhantomData<UO>,
 }
@@ -116,8 +117,8 @@ pub struct SimulatorImpl<UO, P, E, V> {
 impl<UO, P, E, V> SimulatorImpl<UO, P, E, V>
 where
     UO: UserOperation,
-    P: Provider,
-    E: EntryPoint + SignatureAggregator<UO = UO> + Clone,
+    P: EvmProvider,
+    E: EntryPoint + SignatureAggregator<UO = UO>,
     V: ValidationContextProvider<UO = UO>,
 {
     /// Create a new simulator
@@ -126,11 +127,11 @@ where
     /// It is used during simulation to determine which mempools support
     /// the violations found during simulation.
     pub fn new(
-        provider: Arc<P>,
+        provider: P,
         entry_point: E,
         validation_context_provider: V,
         sim_settings: Settings,
-        mempool_configs: HashMap<H256, MempoolConfig>,
+        mempool_configs: HashMap<B256, MempoolConfig>,
     ) -> Self {
         // Get a list of entities that are allowed to act as staked entities despite being unstaked
         let mut allow_unstaked_addresses = HashSet::new();
@@ -159,16 +160,17 @@ where
         &self,
         op: UO,
         aggregator_address: Option<Address>,
-        gas_cap: u64,
-    ) -> anyhow::Result<AggregatorOut> {
+        gas_cap: u128,
+    ) -> Result<AggregatorOut, SimulationError> {
         let Some(aggregator_address) = aggregator_address else {
             return Ok(AggregatorOut::NotNeeded);
         };
 
-        self.entry_point
-            .clone()
+        Ok(self
+            .entry_point
             .validate_user_op_signature(aggregator_address, op, gas_cap)
             .await
+            .context("should call validate user op signature")?)
     }
 
     // Parse the output from tracing and return a list of violations.
@@ -177,7 +179,7 @@ where
     fn gather_context_violations(
         &self,
         context: &mut ValidationContext<UO>,
-    ) -> anyhow::Result<Vec<SimulationViolation>> {
+    ) -> Result<Vec<SimulationViolation>, SimulationError> {
         let &mut ValidationContext {
             ref entity_infos,
             ref tracer_out,
@@ -212,7 +214,7 @@ where
             }
 
             for (addr, opcode) in &phase.ext_code_access_info {
-                if *addr == self.entry_point.address() {
+                if addr == self.entry_point.address() {
                     // [OP-054]
                     // [OP-051] - If calling `EXTCODESIZE ISZERO` the tracer won't add to this list
                     violations.push(SimulationViolation::UsedForbiddenOpcode(
@@ -240,7 +242,7 @@ where
                     slots_by_address: &tracer_out.associated_slots_by_address,
                     address,
                     sender: sender_address,
-                    entrypoint: self.entry_point.address(),
+                    entrypoint: *self.entry_point.address(),
                     has_factory,
                     entity: &ei.entity,
                 });
@@ -267,11 +269,8 @@ where
                                         accessed_entity,
                                         accessed_address,
                                         slot,
-                                        min_stake: self.sim_settings.min_stake_value.into(),
-                                        min_unstake_delay: self
-                                            .sim_settings
-                                            .min_unstake_delay
-                                            .into(),
+                                        min_stake: self.sim_settings.min_stake_value,
+                                        min_unstake_delay: self.sim_settings.min_unstake_delay,
                                     },
                                 )));
                             }
@@ -379,7 +378,7 @@ where
                     // weird case where CREATE2 is called > 1, but there isn't a factory
                     // defined. This should never happen, blame the violation on the entry point.
                     violations.push(SimulationViolation::FactoryCalledCreate2Twice(
-                        self.entry_point.address(),
+                        *self.entry_point.address(),
                     ));
                 }
             }
@@ -388,7 +387,7 @@ where
         // Get violations specific to the implemented entry point from the context provider
         violations.extend(
             self.validation_context_provider
-                .get_specific_violations(context),
+                .get_specific_violations(context)?,
         );
 
         Ok(violations)
@@ -401,8 +400,8 @@ where
         &self,
         op: UO,
         context: &mut ValidationContext<UO>,
-        expected_code_hash: Option<H256>,
-    ) -> Result<(H256, Option<AggregatorSimOut>), SimulationError> {
+        expected_code_hash: Option<B256>,
+    ) -> Result<(B256, Option<AggregatorSimOut>), SimulationError> {
         let &mut ValidationContext {
             block_id,
             ref mut tracer_out,
@@ -414,11 +413,13 @@ where
         let mut violations = vec![];
 
         let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
-        let code_hash_future = utils::get_code_hash(
-            self.provider.deref(),
-            tracer_out.accessed_contracts.keys().cloned().collect(),
-            Some(block_id),
-        );
+        let code_hash_future = self
+            .provider
+            .get_code_hash(
+                tracer_out.accessed_contracts.keys().cloned().collect(),
+                Some(block_id),
+            )
+            .map_err(|e| SimulationError::from(anyhow::anyhow!("should call get_code_hash {e:?}")));
         let aggregator_signature_future = self.validate_aggregator_signature(
             op,
             aggregator_address,
@@ -458,8 +459,8 @@ where
 impl<UO, P, E, V> Simulator for SimulatorImpl<UO, P, E, V>
 where
     UO: UserOperation,
-    P: Provider,
-    E: EntryPoint + SignatureAggregator<UO = UO> + Clone,
+    P: EvmProvider,
+    E: EntryPoint + SignatureAggregator<UO = UO>,
     V: ValidationContextProvider<UO = UO>,
 {
     type UO = UO;
@@ -467,8 +468,8 @@ where
     async fn simulate_validation(
         &self,
         op: UO,
-        block_hash: Option<H256>,
-        expected_code_hash: Option<H256>,
+        block_hash: Option<B256>,
+        expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {
         let (block_hash, block_number) = match block_hash {
             // If we are given a block_hash, we return a None block number, avoiding an extra call
@@ -479,7 +480,7 @@ where
                     .get_latest_block_hash_and_number()
                     .await
                     .map_err(anyhow::Error::from)?;
-                (hash_and_num.0, Some(hash_and_num.1.as_u64()))
+                (hash_and_num.0, Some(hash_and_num.1))
             }
         };
         let block_id = block_hash.into();
@@ -680,14 +681,12 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
+    use alloy_primitives::{address, b256, bytes, uint, Bytes};
     use context::ContractInfo;
-    use ethers::types::{Address, BlockId, BlockNumber, Bytes, U256, U64};
-    use rundler_provider::{AggregatorOut, MockEntryPointV0_6, MockProvider};
-    use rundler_types::{
-        contracts::utils::get_code_hashes::CodeHashesResult, v0_6::UserOperation, Opcode, StakeInfo,
+    use rundler_provider::{
+        AggregatorOut, BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider,
     };
+    use rundler_types::{v0_6::UserOperation, Opcode, StakeInfo};
 
     use self::context::{Phase, TracerOutput};
     use super::*;
@@ -701,22 +700,22 @@ mod tests {
             async fn get_context(
                 &self,
                 op: UserOperationV0_6,
-                block_id: ethers::types::BlockId,
+                block_id: rundler_provider::BlockId,
             ) -> Result<ValidationContext<UserOperationV0_6>, ViolationError<SimulationViolation>>;
             fn get_specific_violations(
                 &self,
                 context: &ValidationContext<UserOperationV0_6>,
-            ) -> Vec<SimulationViolation>;
+            ) -> anyhow::Result<Vec<SimulationViolation>>;
         }
     }
 
     fn create_base_config() -> (
-        MockProvider,
+        MockEvmProvider,
         MockEntryPointV0_6,
         MockValidationContextProviderV0_6,
     ) {
         (
-            MockProvider::new(),
+            MockEvmProvider::new(),
             MockEntryPointV0_6::new(),
             MockValidationContextProviderV0_6::new(),
         )
@@ -726,7 +725,7 @@ mod tests {
         let tracer_out = TracerOutput {
             accessed_contracts: HashMap::from([
                 (
-                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                    address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"),
                     ContractInfo {
                         header: "0x608060".to_string(),
                         opcode: Opcode::CALL,
@@ -734,7 +733,7 @@ mod tests {
                     }
                 ),
                 (
-                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
                     ContractInfo {
                         header: "0x608060".to_string(),
                         opcode: Opcode::CALL,
@@ -742,7 +741,7 @@ mod tests {
                     }
                 ),
                 (
-                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    address!("8abb13360b87be5eeb1b98647a016add927a136c"),
                     ContractInfo {
                         header: "0x608060".to_string(),
                         opcode: Opcode::CALL,
@@ -809,46 +808,37 @@ mod tests {
 
         ValidationContext {
             op: UserOperation {
-                verification_gas_limit: U256::from(2000),
-                pre_verification_gas: U256::from(1000),
+                verification_gas_limit: 2000,
+                pre_verification_gas: 1000,
                 ..Default::default()
             },
             has_factory: true,
             associated_addresses: HashSet::new(),
-            block_id: BlockId::Number(BlockNumber::Latest),
+            block_id: BlockId::Number(BlockNumberOrTag::Latest),
             entity_infos: context::infos_from_validation_output(
-                Some(Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap()),
-                Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                Some(Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap()),
+                Some(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789")),
+                address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
+                Some(address!("8abb13360b87be5eeb1b98647a016add927a136c")),
                 &ValidationOutput {
-                    return_info: ValidationReturnInfo::from((
-                        U256::default(),
-                        U256::default(),
-                        false,
-                        0,
-                        0,
-                        Bytes::default(),
-                    )),
-                    sender_info: StakeInfo::from((U256::default(), U256::default())),
-                    factory_info: StakeInfo::from((U256::default(), U256::default())),
-                    paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                    return_info: ValidationReturnInfo::default(),
+                    sender_info: StakeInfo::default(),
+                    factory_info: StakeInfo::default(),
+                    paymaster_info: StakeInfo::default(),
                     aggregator_info: None,
                 },
                 &Settings::default(),
             ),
             tracer_out,
             entry_point_out: ValidationOutput {
-                return_info: ValidationReturnInfo::from((
-                    3000.into(),
-                    U256::default(),
-                    true,
-                    0,
-                    0,
-                    Bytes::default(),
-                )),
-                sender_info: StakeInfo::from((U256::default(), U256::default())),
-                factory_info: StakeInfo::from((U256::default(), U256::default())),
-                paymaster_info: StakeInfo::from((U256::default(), U256::default())),
+                return_info: ValidationReturnInfo {
+                    pre_op_gas: U256::from(3000),
+                    account_sig_failed: true,
+                    paymaster_sig_failed: true,
+                    ..Default::default()
+                },
+                sender_info: StakeInfo::default(),
+                factory_info: StakeInfo::default(),
+                paymaster_info: StakeInfo::default(),
                 aggregator_info: None,
             },
             accessed_addresses: HashSet::new(),
@@ -856,29 +846,21 @@ mod tests {
     }
 
     fn create_simulator(
-        provider: MockProvider,
+        provider: MockEvmProvider,
         entry_point: MockEntryPointV0_6,
         context: MockValidationContextProviderV0_6,
     ) -> SimulatorImpl<
         UserOperation,
-        MockProvider,
-        Arc<MockEntryPointV0_6>,
+        MockEvmProvider,
+        MockEntryPointV0_6,
         MockValidationContextProviderV0_6,
     > {
         let settings = Settings::default();
 
         let mut mempool_configs = HashMap::new();
-        mempool_configs.insert(H256::zero(), MempoolConfig::default());
+        mempool_configs.insert(B256::ZERO, MempoolConfig::default());
 
-        let provider = Arc::new(provider);
-
-        SimulatorImpl::new(
-            Arc::clone(&provider),
-            Arc::new(entry_point),
-            context,
-            settings,
-            mempool_configs,
-        )
+        SimulatorImpl::new(provider, entry_point, context, settings, mempool_configs)
     }
 
     #[tokio::test]
@@ -889,50 +871,40 @@ mod tests {
             .expect_get_latest_block_hash_and_number()
             .returning(|| {
                 Ok((
-                    H256::from_str(
-                        "0x38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d",
-                    )
-                    .unwrap(),
-                    U64::zero(),
+                    b256!("38138f1cb4653ab6ab1c89ae3a6acc8705b54bd16a997d880c4421014ed66c3d"),
+                    0,
                 ))
             });
+
+        provider.expect_get_code_hash().returning(|_, _| {
+            Ok(b256!(
+                "091cd005abf68e7b82c951a8619f065986132f67a0945153533cfcdd93b6895f"
+            ))
+        });
 
         context
             .expect_get_context()
             .returning(move |_, _| Ok(get_test_context()));
         context
             .expect_get_specific_violations()
-            .return_const(vec![]);
-
-        // The underlying call constructor when getting the code hash in check_contracts
-        provider
-            .expect_call_constructor()
-            .returning(|_, _: Vec<Address>, _, _| {
-                Ok(CodeHashesResult {
-                    hash: H256::from_str(
-                        "0x091cd005abf68e7b82c951a8619f065986132f67a0945153533cfcdd93b6895f",
-                    )
-                    .unwrap()
-                    .into(),
-                })
-            });
+            .returning(|_| Ok(vec![]));
 
         entry_point
             .expect_validate_user_op_signature()
             .returning(|_, _, _| Ok(AggregatorOut::NotNeeded));
 
         let user_operation = UserOperation {
-            sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+            sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
             nonce: U256::from(264),
-            init_code: Bytes::from_str("0x").unwrap(),
-            call_data: Bytes::from_str("0xb61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000").unwrap(),
-            call_gas_limit: U256::from(9100),
-            verification_gas_limit: U256::from(64805),
-            pre_verification_gas: U256::from(46128),
-            max_fee_per_gas: U256::from(105000100),
-            max_priority_fee_per_gas: U256::from(105000000),
-            paymaster_and_data: Bytes::from_str("0x").unwrap(),
-            signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
+            init_code: Bytes::default(),
+            call_data: bytes!("b61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
+            call_gas_limit: 9100,
+            verification_gas_limit: 64805,
+            pre_verification_gas: 46128,
+            max_fee_per_gas: 105000100,
+            max_priority_fee_per_gas: 105000000,
+            paymaster_and_data: Bytes::default(),
+            signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
         };
 
         let simulator = create_simulator(provider, entry_point, context);
@@ -947,10 +919,10 @@ mod tests {
         let (provider, mut entry_point, mut context_provider) = create_base_config();
         entry_point
             .expect_address()
-            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
         context_provider
             .expect_get_specific_violations()
-            .return_const(vec![]);
+            .returning(|_| Ok(vec![]));
 
         let mut context = get_test_context();
 
@@ -964,18 +936,15 @@ mod tests {
         )];
 
         // add a storage access for a random unrelated address
-        let mut writes = HashMap::new();
+        let mut writes: HashMap<U256, u64> = HashMap::new();
 
         writes.insert(
-            H256::from_str("0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b")
-                .unwrap()
-                .to_fixed_bytes()
-                .into(),
+            uint!(0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b_U256),
             1,
         );
 
         context.tracer_out.phases[1].storage_accesses.insert(
-            Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6").unwrap(),
+            address!("1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6"),
             AccessInfo {
                 reads: HashMap::new(),
                 writes,
@@ -991,43 +960,37 @@ mod tests {
                 SimulationViolation::UsedForbiddenOpcode(
                     Entity {
                         kind: EntityType::Account,
-                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
-                            .unwrap()
+                        address: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
                     },
-                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
                     ViolationOpCode(Opcode::GASPRICE),
                 ),
                 SimulationViolation::UsedForbiddenOpcode(
                     Entity {
                         kind: EntityType::Account,
-                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
-                            .unwrap()
+                        address: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
                     },
-                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
                     ViolationOpCode(Opcode::COINBASE),
                 ),
                 SimulationViolation::UsedForbiddenPrecompile(
                     Entity {
                         kind: EntityType::Account,
-                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
-                            .unwrap()
+                        address: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
                     },
-                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
-                    Address::from_str("0x0000000000000000000000000000000000000019").unwrap(),
+                    address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
+                    address!("0000000000000000000000000000000000000019"),
                 ),
                 SimulationViolation::InvalidStorageAccess(
                     Entity {
                         kind: EntityType::Account,
-                        address: Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
-                            .unwrap()
+                        address: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4")
                     },
                     StorageSlot {
-                        address: Address::from_str("0x1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6")
-                            .unwrap(),
-                        slot: U256::from_str(
-                            "0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b"
+                        address: address!("1c0e100fcf093c64cdaa545b425ad7ed8e8a0db6"),
+                        slot: uint!(
+                            0xa3f946b7ed2f016739c6be6031c5579a53d3784a471c3b5f9c2a1f8706c65a4b_U256
                         )
-                        .unwrap()
                     }
                 ),
             ]
@@ -1039,7 +1002,7 @@ mod tests {
         let (provider, ep, mut context_provider) = create_base_config();
         context_provider
             .expect_get_specific_violations()
-            .return_const(vec![]);
+            .returning(|_| Ok(vec![]));
 
         let mut context = get_test_context();
 
@@ -1059,19 +1022,17 @@ mod tests {
                 SimulationViolation::UsedForbiddenOpcode(
                     Entity {
                         kind: EntityType::Paymaster,
-                        address: Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c")
-                            .unwrap()
+                        address: address!("8abb13360b87be5eeb1b98647a016add927a136c"),
                     },
-                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    address!("8abb13360b87be5eeb1b98647a016add927a136c"),
                     ViolationOpCode(Opcode::SELFBALANCE)
                 ),
                 SimulationViolation::UsedForbiddenOpcode(
                     Entity {
                         kind: EntityType::Paymaster,
-                        address: Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c")
-                            .unwrap()
+                        address: address!("8abb13360b87be5eeb1b98647a016add927a136c"),
                     },
-                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    address!("8abb13360b87be5eeb1b98647a016add927a136c"),
                     ViolationOpCode(Opcode::BALANCE)
                 )
             ]
@@ -1087,19 +1048,18 @@ mod tests {
     async fn test_factory_staking() {
         let (provider, mut ep, mut context_provider) = create_base_config();
         ep.expect_address()
-            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
         context_provider
             .expect_get_specific_violations()
-            .return_const(vec![]);
+            .returning(|_| Ok(vec![]));
 
         let mut writes: HashMap<U256, u64> = HashMap::new();
 
-        let sender_address =
-            Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap();
+        let sender_address = address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4");
 
         let external_access_address = Address::random();
 
-        let sender_bytes = sender_address.as_bytes().into();
+        let sender_bytes = U256::from_be_bytes(sender_address.into_word().into());
 
         writes.insert(sender_bytes, 1);
 
@@ -1115,6 +1075,7 @@ mod tests {
         // Create the simulator using the provider and tracer
         let simulator = create_simulator(provider, ep, context_provider);
         let res = simulator.gather_context_violations(&mut context);
+        let sender_as_slot = U256::from_be_bytes(sender_address.into_word().into());
 
         assert_eq!(
             res.unwrap(),
@@ -1122,7 +1083,7 @@ mod tests {
                 None,
                 StorageSlot {
                     address: external_access_address,
-                    slot: sender_address.as_bytes().into()
+                    slot: sender_as_slot
                 }
             )]
         );
@@ -1137,21 +1098,19 @@ mod tests {
     async fn test_paymaster_access_during_deploy() {
         let (provider, mut ep, mut context_provider) = create_base_config();
         ep.expect_address()
-            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
         context_provider
             .expect_get_specific_violations()
-            .return_const(vec![]);
+            .returning(|_| Ok(vec![]));
 
         let mut writes: HashMap<U256, u64> = HashMap::new();
 
-        let sender_address =
-            Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap();
-        let paymaster_address =
-            Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap();
+        let sender_address = address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4");
+        let paymaster_address = address!("8abb13360b87be5eeb1b98647a016add927a136c");
 
         let external_access_address = Address::random();
 
-        let sender_bytes = sender_address.as_bytes().into();
+        let sender_bytes = U256::from_be_bytes(sender_address.into_word().into());
 
         writes.insert(sender_bytes, 1);
 
@@ -1174,7 +1133,7 @@ mod tests {
                 Some(Entity::paymaster(paymaster_address)),
                 StorageSlot {
                     address: external_access_address,
-                    slot: sender_address.as_bytes().into()
+                    slot: sender_bytes
                 }
             )]
         );
@@ -1188,10 +1147,10 @@ mod tests {
     async fn test_accessed_unsupported_contract() {
         let (provider, mut ep, mut context_provider) = create_base_config();
         ep.expect_address()
-            .returning(|| Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap());
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
         context_provider
             .expect_get_specific_violations()
-            .return_const(vec![]);
+            .returning(|_| Ok(vec![]));
 
         let addr = Address::random();
         let mut context = get_test_context();

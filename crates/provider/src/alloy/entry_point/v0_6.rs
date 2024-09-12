@@ -12,11 +12,10 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
-use alloy_json_rpc::ErrorPayload;
 use alloy_primitives::{ruint::UintTryTo, Address, Bytes, U256};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
-use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError};
+use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
 use alloy_transport::{Transport, TransportError};
 use anyhow::Context;
 use rundler_contracts::v0_6::{
@@ -313,14 +312,14 @@ where
         &self,
         user_op: UserOperation,
         max_validation_gas: u128,
-    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+    ) -> (TransactionRequest, StateOverride) {
         let pvg: u128 = user_op.pre_verification_gas;
         let call = self
             .i_entry_point
             .simulateValidation(user_op.into())
             .gas(max_validation_gas + pvg)
             .into_transaction_request();
-        Ok((call, StateOverride::default()))
+        (call, StateOverride::default())
     }
 
     async fn simulate_validation(
@@ -408,16 +407,19 @@ where
 
         match contract_error {
             ContractError::TransportError(TransportError::ErrorResp(resp)) => {
-                Ok(Self::decode_simulate_handle_ops_revert(resp))
+                match resp.as_revert_data() {
+                    Some(err_bytes) => Ok(Self::decode_simulate_handle_ops_revert(&err_bytes)),
+                    None => Ok(Err(ValidationRevert::Unknown(Bytes::default()))),
+                }
             }
             _ => Err(contract_error.into()),
         }
     }
 
     fn decode_simulate_handle_ops_revert(
-        payload: ErrorPayload,
+        payload: &Bytes,
     ) -> Result<ExecutionResult, ValidationRevert> {
-        if let Some(err) = payload.as_decoded_error::<SolContractError<IEntryPointErrors>>(false) {
+        if let Ok(err) = SolContractError::<IEntryPointErrors>::abi_decode(payload, false) {
             match err {
                 // success case
                 SolContractError::CustomError(IEntryPointErrors::ExecutionResult(e)) => {
@@ -442,9 +444,7 @@ where
                 SolContractError::Panic(p) => Err(p.into()),
             }
         } else {
-            Err(ValidationRevert::Unknown(
-                payload.as_revert_data().unwrap_or_default(),
-            ))
+            Err(ValidationRevert::Unknown(payload.clone()))
         }
     }
 

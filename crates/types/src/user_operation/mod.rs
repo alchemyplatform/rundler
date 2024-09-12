@@ -102,7 +102,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     fn max_priority_fee_per_gas(&self) -> u128;
 
     /// Returns the maximum cost, in wei, of this user operation
-    fn max_gas_cost(&self) -> u128;
+    fn max_gas_cost(&self) -> U256;
 
     /*
      * Enhanced functions
@@ -222,7 +222,7 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn max_gas_cost(&self) -> u128 {
+    fn max_gas_cost(&self) -> U256 {
         match self {
             UserOperationVariant::V0_6(op) => op.max_gas_cost(),
             UserOperationVariant::V0_7(op) => op.max_gas_cost(),
@@ -370,17 +370,17 @@ impl UserOperationOptionalGas {
 #[derive(Debug, Clone)]
 pub struct GasEstimate {
     /// Pre verification gas
-    pub pre_verification_gas: U256,
+    pub pre_verification_gas: u128,
     /// Call gas limit
-    pub call_gas_limit: U256,
+    pub call_gas_limit: u128,
     /// Verification gas limit
-    pub verification_gas_limit: U256,
+    pub verification_gas_limit: u128,
     /// Paymaster verification gas limit
     ///
     /// v0.6: unused
     ///
     /// v0.7: populated only if the user operation has a paymaster
-    pub paymaster_verification_gas_limit: Option<U256>,
+    pub paymaster_verification_gas_limit: Option<u128>,
 }
 
 /// User operations per aggregator

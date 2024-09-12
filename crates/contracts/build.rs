@@ -62,6 +62,21 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
         bytecode,
     )?;
 
+    let json =
+        include_str!("contracts/out/v0_7/CallGasEstimationProxy.sol/CallGasEstimationProxy.json");
+    let val: Value = serde_json::from_str(json)?;
+    let bytecode = val
+        .get("deployedBytecode")
+        .unwrap()
+        .get("object")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    fs::write(
+        "contracts/out/v0_7/CallGasEstimationProxy.sol/CallGasEstimationProxy_deployedBytecode.txt",
+        bytecode,
+    )?;
+
     Ok(())
 }
 

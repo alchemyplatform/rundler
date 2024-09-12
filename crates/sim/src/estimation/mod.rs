@@ -11,9 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Bytes, U128};
+use alloy_primitives::Bytes;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
+use rundler_provider::{ProviderError, StateOverride};
 use rundler_types::{GasEstimate, ValidationRevert};
 
 use crate::precheck::MIN_CALL_GAS_LIMIT;
@@ -32,9 +33,9 @@ mod v0_7;
 pub use v0_7::GasEstimator as GasEstimatorV0_7;
 
 /// Percentage by which to increase the verification gas limit after binary search
-const VERIFICATION_GAS_BUFFER_PERCENT: u64 = 10;
+const VERIFICATION_GAS_BUFFER_PERCENT: u32 = 10;
 /// Absolute value by which to increase the call gas limit after binary search
-const CALL_GAS_BUFFER_VALUE: U128 = U128([3000, 0]);
+const CALL_GAS_BUFFER_VALUE: u128 = 3000;
 
 /// Error type for gas estimation
 #[derive(Debug, thiserror::Error)]
@@ -53,19 +54,25 @@ pub enum GasEstimationError {
     GasUsedTooLarge,
     /// Supplied gas was too large
     #[error("{0} cannot be larger than {1}")]
-    GasFieldTooLarge(&'static str, u64),
+    GasFieldTooLarge(&'static str, u128),
     /// The total amount of gas used by the UO is greater than allowed
     #[error("total gas used by the user operation {0} is greater than the allowed limit: {1}")]
-    GasTotalTooLarge(u64, u64),
+    GasTotalTooLarge(u128, u128),
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
+impl From<ProviderError> for GasEstimationError {
+    fn from(error: ProviderError) -> Self {
+        GasEstimationError::Other(anyhow::anyhow!("provider error: {error:?}"))
+    }
+}
+
 /// Gas estimator trait
 #[cfg_attr(feature = "test-utils", automock(type UserOperationOptionalGas = rundler_types::v0_6::UserOperationOptionalGas;))]
 #[async_trait::async_trait]
-pub trait GasEstimator: Send + Sync + 'static {
+pub trait GasEstimator: Send + Sync {
     /// The user operation type estimated by this gas estimator
     type UserOperationOptionalGas;
 
@@ -74,7 +81,7 @@ pub trait GasEstimator: Send + Sync + 'static {
     async fn estimate_op_gas(
         &self,
         op: Self::UserOperationOptionalGas,
-        state_override: ethers::types::spoof::State,
+        state_override: StateOverride,
     ) -> Result<GasEstimate, GasEstimationError>;
 }
 
@@ -82,32 +89,29 @@ pub trait GasEstimator: Send + Sync + 'static {
 #[derive(Clone, Copy, Debug)]
 pub struct Settings {
     /// The maximum amount of gas that can be used for the verification step of a user operation
-    pub max_verification_gas: u64,
+    pub max_verification_gas: u128,
     /// The maximum amount of gas that can be used for the call step of a user operation
-    pub max_call_gas: u64,
+    pub max_call_gas: u128,
     /// The maximum amount of gas that can be used for the paymaster verification step of a user operation
-    pub max_paymaster_verification_gas: u64,
+    pub max_paymaster_verification_gas: u128,
     /// The maximum amount of gas that can be used for the paymaster post op step of a user operation
-    pub max_paymaster_post_op_gas: u64,
+    pub max_paymaster_post_op_gas: u128,
     /// The maximum amount of total execution gas to check after estimation
-    pub max_total_execution_gas: u64,
+    pub max_total_execution_gas: u128,
     /// The maximum amount of gas that can be used in a call to `simulateHandleOps`
-    pub max_simulate_handle_ops_gas: u64,
+    pub max_simulate_handle_ops_gas: u128,
     /// The gas fee to use during verification gas estimation, required to be held by the fee-payer
     /// during estimation. If using a paymaster, the fee-payer must have 3x this value.
     /// As the gas limit is varied during estimation, the fee is held constant by varying the
     /// gas price.
     /// Clients can use state overrides to set the balance of the fee-payer to at least this value.
-    pub verification_estimation_gas_fee: u64,
+    pub verification_estimation_gas_fee: u128,
 }
 
 impl Settings {
     /// Check if the settings are valid
     pub fn validate(&self) -> Option<String> {
-        if U128::from(self.max_call_gas)
-            .cmp(&MIN_CALL_GAS_LIMIT)
-            .is_lt()
-        {
+        if self.max_call_gas.cmp(&MIN_CALL_GAS_LIMIT).is_lt() {
             return Some("max_call_gas field cannot be lower than MIN_CALL_GAS_LIMIT".to_string());
         }
         None

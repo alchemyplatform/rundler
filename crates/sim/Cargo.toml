@@ -8,14 +8,18 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+rundler-contracts = { path = "../contracts" }
 rundler-provider = { path = "../provider" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+
 anyhow.workspace = true
 arrayvec = "0.7.6"
 async-trait.workspace = true
-ethers.workspace = true
+auto_impl.workspace = true
 futures-util.workspace = true
 indexmap = "2.4.0"
 parse-display.workspace = true
@@ -35,6 +39,7 @@ mockall = {workspace = true, optional = true }
 [dev-dependencies]
 mockall.workspace = true
 rundler-provider = { path = "../provider", features = ["test-utils"] }
+alloy-primitives = { workspace = true, features = ["rand"]}
 
 [features]
 test-utils = [ "mockall" ]

@@ -124,30 +124,13 @@ sol! {
 
         function aggregateSignatures(UserOperation[] calldata userOps) external view returns (bytes memory aggregatedSignature);
     }
+}
 
+sol! {
     #[allow(missing_docs)]
     #[sol(rpc)]
-    #[derive(Default, Debug, PartialEq, Eq)]
-    contract CallGasEstimationProxy {
-        struct EstimateCallGasArgs {
-            address sender;
-            bytes callData;
-            uint256 minGas;
-            uint256 maxGas;
-            uint256 rounding;
-            bool isContinuation;
-        }
-
-        error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
-
-        error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
-
-        error EstimateCallGasRevertAtMax(bytes revertData);
-
-        error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
-
-        function estimateCallGas(EstimateCallGasArgs calldata args);
-    }
+    CallGasEstimationProxy,
+    "contracts/out/v0_6/CallGasEstimationProxy.sol/CallGasEstimationProxy.json"
 }
 
 sol!(

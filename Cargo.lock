@@ -5324,16 +5324,19 @@ dependencies = [
 name = "rundler-sim"
 version = "0.3.0"
 dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
  "anyhow",
  "arrayvec",
  "async-trait",
- "ethers",
+ "auto_impl",
  "futures-util",
  "indexmap 2.5.0",
  "mockall",
  "parse-display",
  "rand",
  "reqwest 0.12.7",
+ "rundler-contracts",
  "rundler-provider",
  "rundler-types",
  "rundler-utils",

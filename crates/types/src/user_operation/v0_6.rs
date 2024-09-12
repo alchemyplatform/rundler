@@ -43,13 +43,15 @@ pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 5000;
 /// paymaster_and_data = 32 bytes + 32 bytes num elems + var 32
 /// signature = 32 bytes + 32 bytes num elems + var 32
 ///
-/// 15 * 32 = 480
-const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 480;
+/// +1 for good luck? (aka this is what I got when I was testing)
+///
+/// 16 * 32 = 480
+const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 512;
 
 /// User Operation for Entry Point v0.6
 ///
 /// Direct conversion to/from onchain UserOperation
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct UserOperation {
     /// Sender
     pub sender: Address,
@@ -164,10 +166,14 @@ impl UserOperationTrait for UserOperation {
         &self.call_data
     }
 
-    fn max_gas_cost(&self) -> u128 {
+    fn max_gas_cost(&self) -> U256 {
         let mul: u128 = if self.paymaster().is_some() { 3 } else { 1 };
-        self.max_fee_per_gas
-            * (self.pre_verification_gas + self.call_gas_limit + self.verification_gas_limit * mul)
+        U256::from(
+            self.max_fee_per_gas
+                * (self.pre_verification_gas
+                    + self.call_gas_limit
+                    + self.verification_gas_limit * mul),
+        )
     }
 
     fn heap_size(&self) -> usize {
@@ -589,5 +595,84 @@ mod tests {
             address,
             address!("0123456789abcdef0123456789abcdef01234567")
         );
+    }
+
+    #[test]
+    fn test_abi_encoded_size() {
+        let operation = UserOperation {
+            sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
+                .parse()
+                .unwrap(),
+            nonce: U256::from(8942),
+            init_code: "0x6942069420694206942069420694206942069420"
+                .parse()
+                .unwrap(),
+            call_data: "0x0000000000000000000000000000000000000000080085"
+                .parse()
+                .unwrap(),
+            call_gas_limit: 10_000,
+            verification_gas_limit: 100_000,
+            pre_verification_gas: 100,
+            max_fee_per_gas: 99_999,
+            max_priority_fee_per_gas: 9_999_999,
+            paymaster_and_data: bytes!(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
+        };
+
+        let size = operation.abi_encoded_size();
+        let cuo = ContractUserOperation::from(operation).abi_encode();
+        assert_eq!(size, cuo.len());
+    }
+
+    #[test]
+    fn test_abi_encoded_size_min() {
+        let operation = UserOperation {
+            sender: address!("0000000000000000000000000000000000000000"),
+            nonce: U256::ZERO,
+            init_code: Bytes::default(),
+            call_data: Bytes::default(),
+            call_gas_limit: 0,
+            verification_gas_limit: 0,
+            pre_verification_gas: 0,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            paymaster_and_data: Bytes::default(),
+            signature: Bytes::default(),
+        };
+        let size = operation.abi_encoded_size();
+        let cuo = ContractUserOperation::from(operation).abi_encode();
+        assert_eq!(size, cuo.len());
+    }
+
+    #[test]
+    fn test_abi_encoded_size_max() {
+        let max_op = UserOperationOptionalGas {
+            sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
+                .parse()
+                .unwrap(),
+            nonce: U256::MAX,
+            init_code: "0x6942069420694206942069420694206942069420"
+                .parse()
+                .unwrap(),
+            call_data: "0x0000000000000000000000000000000000000000080085"
+                .parse()
+                .unwrap(),
+            paymaster_and_data: bytes!(
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
+            call_gas_limit: None,
+            verification_gas_limit: None,
+            pre_verification_gas: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        }
+        .max_fill(u128::MAX, u128::MAX);
+
+        let size = max_op.abi_encoded_size();
+        let cuo = ContractUserOperation::from(max_op).abi_encode();
+        assert_eq!(size, cuo.len());
     }
 }

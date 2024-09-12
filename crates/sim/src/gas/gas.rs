@@ -11,21 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, fmt::Debug, sync::Arc};
+use std::{cmp, fmt::Debug};
 
 use anyhow::{bail, Context};
-use ethers::types::U256;
-use rundler_provider::{EntryPoint, L1GasProvider, Provider};
-use rundler_types::{
-    chain::{self, ChainSpec},
-    GasFees, UserOperation,
-};
+use rundler_provider::{EntryPoint, EvmProvider, L1GasProvider};
+use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
 
-use super::oracle::{
-    ConstantOracle, FeeOracle, ProviderOracle, UsageBasedFeeOracle, UsageBasedFeeOracleConfig,
-};
+use super::oracle::FeeOracle;
 
 /// Returns the required pre_verification_gas for the given user operation
 ///
@@ -48,15 +42,15 @@ pub async fn estimate_pre_verification_gas<
     entry_point: &E,
     full_op: &UO,
     random_op: &UO,
-    gas_price: U256,
-) -> anyhow::Result<U256> {
+    gas_price: u128,
+) -> anyhow::Result<u128> {
     let static_gas = full_op.calc_static_pre_verification_gas(chain_spec, true);
     if !chain_spec.calldata_pre_verification_gas {
         return Ok(static_gas);
     }
 
     let dynamic_gas = entry_point
-        .calc_l1_gas(entry_point.address(), random_op.clone(), gas_price)
+        .calc_l1_gas(*entry_point.address(), random_op.clone(), gas_price)
         .await?;
 
     Ok(static_gas.saturating_add(dynamic_gas))
@@ -72,8 +66,8 @@ pub async fn calc_required_pre_verification_gas<
     chain_spec: &ChainSpec,
     entry_point: &E,
     op: &UO,
-    base_fee: U256,
-) -> anyhow::Result<U256> {
+    base_fee: u128,
+) -> anyhow::Result<u128> {
     let static_gas = op.calc_static_pre_verification_gas(chain_spec, true);
     if !chain_spec.calldata_pre_verification_gas {
         return Ok(static_gas);
@@ -84,12 +78,12 @@ pub async fn calc_required_pre_verification_gas<
         op.max_fee_per_gas(),
     );
 
-    if gas_price.is_zero() {
+    if gas_price == 0 {
         bail!("Gas price cannot be zero")
     }
 
     let dynamic_gas = entry_point
-        .calc_l1_gas(entry_point.address(), op.clone(), gas_price)
+        .calc_l1_gas(*entry_point.address(), op.clone(), gas_price)
         .await?;
 
     Ok(static_gas + dynamic_gas)
@@ -121,7 +115,7 @@ pub fn user_operation_gas_limit<UO: UserOperation>(
     chain_spec: &ChainSpec,
     uo: &UO,
     assume_single_op_bundle: bool,
-) -> U256 {
+) -> u128 {
     user_operation_pre_verification_gas_limit(chain_spec, uo, assume_single_op_bundle)
         + uo.total_verification_gas_limit()
         + uo.required_pre_execution_buffer()
@@ -137,7 +131,7 @@ pub fn user_operation_execution_gas_limit<UO: UserOperation>(
     chain_spec: &ChainSpec,
     uo: &UO,
     assume_single_op_bundle: bool,
-) -> U256 {
+) -> u128 {
     user_operation_pre_verification_execution_gas_limit(chain_spec, uo, assume_single_op_bundle)
         + uo.total_verification_gas_limit()
         + uo.required_pre_execution_buffer()
@@ -151,7 +145,7 @@ pub fn user_operation_pre_verification_execution_gas_limit<UO: UserOperation>(
     chain_spec: &ChainSpec,
     uo: &UO,
     include_fixed_gas_overhead: bool,
-) -> U256 {
+) -> u128 {
     // On some chains (OP bedrock, Arbitrum) the L1 gas fee is charged via pre_verification_gas
     // but this not part of the EXECUTION gas limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
@@ -169,7 +163,7 @@ pub fn user_operation_pre_verification_gas_limit<UO: UserOperation>(
     chain_spec: &ChainSpec,
     uo: &UO,
     include_fixed_gas_overhead: bool,
-) -> U256 {
+) -> u128 {
     // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
     // but this not part of the execution TOTAL limit of the transaction.
     // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
@@ -185,14 +179,14 @@ pub fn user_operation_pre_verification_gas_limit<UO: UserOperation>(
 #[derive(Debug, Clone, Copy)]
 pub enum PriorityFeeMode {
     /// The priority fee is required to be a percentage of the bundle base fee.
-    BaseFeePercent(u64),
+    BaseFeePercent(u32),
     /// The priority fee is required to be a percentage above the bundle priority fee.
-    PriorityFeeIncreasePercent(u64),
+    PriorityFeeIncreasePercent(u32),
 }
 
 impl PriorityFeeMode {
     /// Try to create a priority fee mode from a string and value.
-    pub fn try_from(kind: &str, value: u64) -> anyhow::Result<Self> {
+    pub fn try_from(kind: &str, value: u32) -> anyhow::Result<Self> {
         match kind {
             "base_fee_percent" => Ok(Self::BaseFeePercent(value)),
             "priority_fee_increase_percent" => Ok(Self::PriorityFeeIncreasePercent(value)),
@@ -223,10 +217,10 @@ impl PriorityFeeMode {
     /// settings
     pub fn minimum_priority_fee(
         &self,
-        base_fee: U256,
-        base_fee_accept_percent: u64,
-        min_max_priority_fee_per_gas: U256,
-    ) -> U256 {
+        base_fee: u128,
+        base_fee_accept_percent: u32,
+        min_max_priority_fee_per_gas: u128,
+    ) -> u128 {
         match *self {
             PriorityFeeMode::BaseFeePercent(percent) => {
                 math::percent(math::percent(base_fee, base_fee_accept_percent), percent)
@@ -239,15 +233,15 @@ impl PriorityFeeMode {
 }
 
 /// Gas fee estimator for a 4337 user operation.
-#[derive(Debug, Clone)]
-pub struct FeeEstimator<P> {
-    provider: Arc<P>,
+#[derive(Clone)]
+pub struct FeeEstimator<P, O> {
+    provider: P,
     priority_fee_mode: PriorityFeeMode,
-    bundle_priority_fee_overhead_percent: u64,
-    fee_oracle: Arc<dyn FeeOracle>,
+    bundle_priority_fee_overhead_percent: u32,
+    fee_oracle: O,
 }
 
-impl<P: Provider> FeeEstimator<P> {
+impl<P: EvmProvider, O: FeeOracle> FeeEstimator<P, O> {
     /// Create a new fee estimator.
     ///
     /// `priority_fee_mode` is used to determine how the required priority fee is calculated.
@@ -255,16 +249,16 @@ impl<P: Provider> FeeEstimator<P> {
     /// `bundle_priority_fee_overhead_percent` is used to determine the overhead percentage to add
     /// to the network returned priority fee to ensure the bundle priority fee is high enough.
     pub fn new(
-        chain_spec: &ChainSpec,
-        provider: Arc<P>,
+        provider: P,
+        fee_oracle: O,
         priority_fee_mode: PriorityFeeMode,
-        bundle_priority_fee_overhead_percent: u64,
+        bundle_priority_fee_overhead_percent: u32,
     ) -> Self {
         Self {
-            provider: provider.clone(),
+            provider,
+            fee_oracle,
             priority_fee_mode,
             bundle_priority_fee_overhead_percent,
-            fee_oracle: get_fee_oracle(chain_spec, provider),
         }
     }
 
@@ -278,8 +272,9 @@ impl<P: Provider> FeeEstimator<P> {
     pub async fn required_bundle_fees(
         &self,
         min_fees: Option<GasFees>,
-    ) -> anyhow::Result<(GasFees, U256)> {
-        let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
+    ) -> anyhow::Result<(GasFees, u128)> {
+        let (base_fee, priority_fee) =
+            try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
 
         let required_fees = min_fees.unwrap_or_default();
 
@@ -308,40 +303,14 @@ impl<P: Provider> FeeEstimator<P> {
         self.priority_fee_mode.required_fees(bundle_fees)
     }
 
-    async fn get_base_fee(&self) -> anyhow::Result<U256> {
-        Ok(self.provider.get_base_fee().await?)
+    async fn get_pending_base_fee(&self) -> anyhow::Result<u128> {
+        Ok(self.provider.get_pending_base_fee().await?)
     }
 
-    async fn get_priority_fee(&self) -> anyhow::Result<U256> {
+    async fn get_priority_fee(&self) -> anyhow::Result<u128> {
         self.fee_oracle
             .estimate_priority_fee()
             .await
             .context("should get priority fee")
-    }
-}
-
-fn get_fee_oracle<P>(chain_spec: &ChainSpec, provider: Arc<P>) -> Arc<dyn FeeOracle>
-where
-    P: Provider + Debug,
-{
-    if !chain_spec.eip1559_enabled {
-        return Arc::new(ConstantOracle::new(U256::zero()));
-    }
-
-    match chain_spec.priority_fee_oracle_type {
-        chain::PriorityFeeOracleType::Provider => Arc::new(ProviderOracle::new(
-            provider,
-            chain_spec.min_max_priority_fee_per_gas,
-        )),
-        chain::PriorityFeeOracleType::UsageBased => {
-            let config = UsageBasedFeeOracleConfig {
-                minimum_fee: chain_spec.min_max_priority_fee_per_gas,
-                maximum_fee: chain_spec.max_max_priority_fee_per_gas,
-                congestion_trigger_usage_ratio_threshold: chain_spec
-                    .congestion_trigger_usage_ratio_threshold,
-                ..Default::default()
-            };
-            Arc::new(UsageBasedFeeOracle::new(provider, config))
-        }
     }
 }

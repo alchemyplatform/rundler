@@ -22,8 +22,6 @@ use alloy_rpc_types_eth::{
 use alloy_rpc_types_trace::geth::{
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
-#[cfg(feature = "test-utils")]
-use mockall::automock;
 use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 
 use super::error::ProviderResult;
@@ -42,8 +40,8 @@ pub struct EvmCall {
 }
 
 /// Trait for interacting with chain data and contracts.
-#[cfg_attr(feature = "test-utils", automock)]
 #[async_trait::async_trait]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait EvmProvider: Send + Sync {
     /// Make an arbitrary JSON RPC request to the provider
     async fn request<P, R>(&self, method: &'static str, params: P) -> ProviderResult<R>
@@ -127,4 +125,12 @@ pub trait EvmProvider: Send + Sync {
         address: Address,
         slots: Vec<B256>,
     ) -> ProviderResult<Vec<B256>>;
+
+    /// Hashes together the code from all the provided addresses. The order of the input addresses does
+    /// not matter
+    async fn get_code_hash(
+        &self,
+        addresses: Vec<Address>,
+        block: Option<BlockId>,
+    ) -> ProviderResult<B256>;
 }

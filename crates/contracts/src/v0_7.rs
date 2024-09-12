@@ -143,14 +143,6 @@ sol!(
             bytes targetResult;
         }
 
-        struct ValidationResult {
-            ReturnInfo returnInfo;
-            StakeInfo senderInfo;
-            StakeInfo factoryInfo;
-            StakeInfo paymasterInfo;
-            AggregatorStakeInfo aggregatorInfo;
-        }
-
         function simulateValidation(
             PackedUserOperation calldata userOp
         )
@@ -171,16 +163,9 @@ sol!(
     }
 
     #[allow(missing_docs)]
+    #[sol(rpc)]
     #[derive(Default, Debug, PartialEq, Eq)]
     contract CallGasEstimationProxy {
-        error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
-
-        error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
-
-        error EstimateCallGasRevertAtMax(bytes revertData);
-
-        error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
-
         struct EstimateCallGasArgs {
             PackedUserOperation userOp;
             uint256 minGas;
@@ -189,9 +174,17 @@ sol!(
             bool isContinuation;
         }
 
-        function estimateCallGas(EstimateCallGasArgs calldata args);
+        error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
 
-        function testCallGas(PackedUserOperation calldata userOp, uint256 callGasLimit);
+        error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+
+        error EstimateCallGasRevertAtMax(bytes revertData);
+
+        error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
+
+        function estimateCallGas(EstimateCallGasArgs calldata args) external;
+
+        function testCallGas(PackedUserOperation calldata userOp, uint256 callGasLimit) external;
     }
 );
 
@@ -202,6 +195,7 @@ sol!(
     "contracts/out/v0_7/GetBalances.sol/GetBalances.json"
 );
 
+// EntryPointSimulations deployed bytecode
 const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
     "../contracts/out/v0_7/EntryPointSimulations.sol/EntryPointSimulations_deployedBytecode.txt"
 );
@@ -209,9 +203,24 @@ const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_byte
 const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: [u8; 16893] = {
     match const_hex::const_decode_to_array(__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX) {
         Ok(a) => a,
-        Err(_) => panic!("Failed to decode entrypoint hex"),
+        Err(_) => panic!("Failed to decode entry point simulations hex"),
     }
 };
 
 pub static ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: Bytes =
     Bytes::from_static(&__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE);
+
+// CallGasEstimationProxy deployed bytecode
+const __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+    "../contracts/out/v0_7/CallGasEstimationProxy.sol/CallGasEstimationProxy_deployedBytecode.txt"
+);
+
+const __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: [u8; 3558] = {
+    match const_hex::const_decode_to_array(__CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode call gas estimation proxy hex"),
+    }
+};
+
+pub static CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE);

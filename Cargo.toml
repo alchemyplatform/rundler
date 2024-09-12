@@ -34,6 +34,7 @@ alloy-rlp = "0.3.8"
 
 anyhow = "1.0.86"
 async-trait = "0.1.81"
+auto_impl = "1.2.0"
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 ethers = "2.0.14"
 futures = "0.3.30"

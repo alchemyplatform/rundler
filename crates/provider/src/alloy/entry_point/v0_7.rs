@@ -19,7 +19,9 @@ use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
     BlockId, TransactionRequest,
 };
-use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolValue};
+use alloy_sol_types::{
+    ContractError as SolContractError, SolCall, SolError, SolInterface, SolValue,
+};
 use alloy_transport::{Transport, TransportError};
 use anyhow::Context;
 use rundler_contracts::v0_7::{
@@ -304,7 +306,7 @@ where
         &self,
         user_op: Self::UO,
         max_validation_gas: u128,
-    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
+    ) -> (TransactionRequest, StateOverride) {
         let addr = *self.i_entry_point.address();
         let pvg = user_op.pre_verification_gas;
         let mut override_ep = StateOverride::default();
@@ -318,7 +320,7 @@ where
             .gas(max_validation_gas + pvg)
             .into_transaction_request();
 
-        Ok((call, override_ep))
+        (call, override_ep)
     }
 
     async fn simulate_validation(
@@ -327,8 +329,7 @@ where
         max_validation_gas: u128,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let (tx, overrides) =
-            self.get_tracer_simulate_validation_call(user_op, max_validation_gas)?;
+        let (tx, overrides) = self.get_tracer_simulate_validation_call(user_op, max_validation_gas);
         let mut call = self.i_entry_point.provider().call(&tx);
         if let Some(block_id) = block_id {
             call = call.block(block_id);
@@ -342,7 +343,7 @@ where
                     .context("failed to decode validation result")?;
                 Ok(Ok(out.into()))
             }
-            Err(TransportError::ErrorResp(resp)) => Ok(Err(decode_validation_revert(resp))),
+            Err(TransportError::ErrorResp(resp)) => Ok(Err(decode_validation_revert_payload(resp))),
             Err(error) => Err(error.into()),
         }
     }
@@ -395,14 +396,14 @@ where
         match res {
             Ok(output) => Ok(Ok(output._0.into())),
             Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
-                Ok(Err(decode_validation_revert(resp)))
+                Ok(Err(decode_validation_revert_payload(resp)))
             }
             Err(error) => Err(error.into()),
         }
     }
 
     fn decode_simulate_handle_ops_revert(
-        revert_data: ErrorPayload,
+        revert_data: &Bytes,
     ) -> Result<ExecutionResult, ValidationRevert> {
         // v0.7 doesn't encode execution results in the revert data
         // so we can just decode as validation revert
@@ -458,8 +459,16 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     }
 }
 
-fn decode_validation_revert(err: ErrorPayload) -> ValidationRevert {
-    if let Some(rev) = err.as_decoded_error::<SolContractError<IEntryPointErrors>>(false) {
+fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {
+    match err.as_revert_data() {
+        Some(err_bytes) => decode_validation_revert(&err_bytes),
+        None => ValidationRevert::Unknown(Bytes::default()),
+    }
+}
+
+/// Decodes raw validation revert bytes from a v0.7 entry point
+pub fn decode_validation_revert(err_bytes: &Bytes) -> ValidationRevert {
+    if let Ok(rev) = SolContractError::<IEntryPointErrors>::abi_decode(err_bytes, false) {
         match rev {
             SolContractError::CustomError(IEntryPointErrors::FailedOp(f)) => f.into(),
             SolContractError::CustomError(IEntryPointErrors::FailedOpWithRevert(f)) => f.into(),
@@ -473,7 +482,7 @@ fn decode_validation_revert(err: ErrorPayload) -> ValidationRevert {
             SolContractError::Panic(p) => p.into(),
         }
     } else {
-        ValidationRevert::Unknown(err.as_revert_data().unwrap_or_default())
+        ValidationRevert::Unknown(err_bytes.clone())
     }
 }
 

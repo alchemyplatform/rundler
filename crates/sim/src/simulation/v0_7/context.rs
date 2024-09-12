@@ -11,29 +11,21 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
+use alloy_primitives::{
+    address,
+    hex::{self, FromHex},
+    keccak256, Address, Bytes, U256,
+};
+use alloy_sol_types::SolType;
 use anyhow::{bail, Context};
-use ethers::{
-    abi::AbiDecode,
-    types::{Address, BlockId, Bytes, H160, U256},
-    utils::{hex::FromHex, keccak256},
-};
-use rundler_provider::{EntryPoint, Provider, SimulationProvider};
+use rundler_contracts::v0_7::ValidationResult;
+use rundler_provider::{BlockId, EntryPoint, EvmProvider, SimulationProvider};
 use rundler_types::{
-    contracts::v0_7::{
-        entry_point_simulations::{FailedOpWithRevert, SimulateValidationReturn},
-        i_entry_point::FailedOp,
-    },
-    pool::SimulationViolation,
-    v0_7::UserOperation,
-    EntityInfos, EntityType, Opcode, UserOperation as UserOperationTrait, ValidationOutput,
-    ValidationRevert,
+    pool::SimulationViolation, v0_7::UserOperation, EntityInfos, EntityType, Opcode,
+    UserOperation as UserOperationTrait, ValidationOutput, ValidationRevert,
 };
-use rundler_utils::eth::ContractRevertError;
 
 use super::tracer::{
     CallInfo, ExitType, MethodInfo, SimulateValidationTracer, SimulateValidationTracerImpl,
@@ -77,8 +69,7 @@ const VALIDATE_USER_OP_METHOD: &str = "0x19822f7c";
 const VALIDATE_PAYMASTER_USER_OP_METHOD: &str = "0x52b7512c";
 const DEPOSIT_TO_METHOD: &str = "0xb760faf9";
 // Max precompile address 0x10000
-const MAX_PRECOMPILE_ADDRESS: Address =
-    H160([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]);
+const MAX_PRECOMPILE_ADDRESS: Address = address!("0000000000000000000000000000000000010000");
 
 /// A provider for creating `ValidationContext` for entry point v0.7.
 pub(crate) struct ValidationContextProvider<T> {
@@ -141,7 +132,7 @@ where
         // Check the call stack for calls with value or to the entry point
         for (i, call) in call_stack.iter().enumerate() {
             if call.to == self.entry_point_address
-                && (call.from != self.entry_point_address && call.from != Address::zero())
+                && (call.from != self.entry_point_address && call.from != Address::ZERO)
             {
                 // [OP-053] - can only call fallback from sender
                 if call.method == "0x" && call.from == op.sender() {
@@ -160,7 +151,7 @@ where
             }
 
             // [OP-061] calls with value are banned, except for the calls above
-            if call.value.is_some_and(|v| v != U256::zero()) {
+            if call.value.is_some_and(|v| v != U256::ZERO) {
                 let phase = Self::get_nearest_entity_phase(&call_stack[i..], &entity_infos);
                 tracer_out.phases[phase].called_non_entry_point_with_value = true;
             }
@@ -182,7 +173,7 @@ where
     fn get_specific_violations(
         &self,
         context: &ValidationContext<Self::UO>,
-    ) -> Vec<SimulationViolation> {
+    ) -> anyhow::Result<Vec<SimulationViolation>> {
         let mut violations = vec![];
 
         let &ValidationContext {
@@ -196,7 +187,7 @@ where
             violations.push(SimulationViolation::InvalidPaymasterSignature);
         }
 
-        violations
+        Ok(violations)
     }
 }
 
@@ -250,7 +241,7 @@ impl<T> ValidationContextProvider<T> {
                     call_type: Opcode::CALL,
                     method: SIMULATE_VALIDATION_METHOD.to_string(),
                     to: self.entry_point_address,
-                    from: Address::zero(),
+                    from: Address::ZERO,
                     value: None,
                     gas: 0,
                     gas_used: exit_info.gas_used,
@@ -272,31 +263,16 @@ impl<T> ValidationContextProvider<T> {
     ) -> anyhow::Result<Result<ValidationOutput, ValidationRevert>> {
         match top.exit_type {
             ExitType::Revert => {
-                if let Ok(result) = FailedOpWithRevert::decode_hex(top.exit_data.clone()) {
-                    let inner_revert_reason = ContractRevertError::decode(&result.inner)
-                        .ok()
-                        .map(|inner_result| inner_result.reason);
-                    Ok(Err(ValidationRevert::Operation {
-                        entry_point_reason: result.reason,
-                        inner_revert_data: result.inner,
-                        inner_revert_reason,
-                    }))
-                } else if let Ok(failed_op) = FailedOp::decode_hex(top.exit_data.clone()) {
-                    Ok(Err(ValidationRevert::EntryPoint(failed_op.reason)))
-                } else if let Ok(err) = ContractRevertError::decode_hex(top.exit_data.clone()) {
-                    Ok(Err(ValidationRevert::EntryPoint(err.reason)))
-                } else {
-                    Ok(Err(ValidationRevert::Unknown(
-                        Bytes::from_hex(top.exit_data.clone())
-                            .context("failed to parse exit data has hex")?,
-                    )))
-                }
+                let bytes: Bytes = hex::decode(top.exit_data.clone())
+                    .context("should decode hex exit data")?
+                    .into();
+                Ok(Err(rundler_provider::decode_v0_7_validation_revert(&bytes)))
             }
             ExitType::Return => {
                 let b = Bytes::from_hex(top.exit_data.clone())
                     .context("faled to parse exit data as hex")?;
-                if let Ok(res) = SimulateValidationReturn::decode(&b) {
-                    Ok(Ok(res.0.into()))
+                if let Ok(res) = ValidationResult::abi_decode(&b, false) {
+                    Ok(Ok(res.into()))
                 } else {
                     bail!("Failed to decode validation output {}", top.exit_data);
                 }
@@ -482,13 +458,13 @@ fn entity_type_to_phase(entity_type: EntityType) -> usize {
 
 impl<P, E> ValidationContextProvider<SimulateValidationTracerImpl<P, E>>
 where
-    P: Provider,
+    P: EvmProvider,
     E: EntryPoint + SimulationProvider<UO = UserOperation>,
 {
     /// Creates a new `ValidationContextProvider` for entry point v0.7 with the given provider and entry point.
-    pub(crate) fn new(provider: Arc<P>, entry_point: E, sim_settings: SimulationSettings) -> Self {
+    pub(crate) fn new(provider: P, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
-            entry_point_address: entry_point.address(),
+            entry_point_address: *entry_point.address(),
             simulate_validation_tracer: SimulateValidationTracerImpl::new(
                 provider,
                 entry_point,

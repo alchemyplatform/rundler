@@ -11,13 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, sync::Arc};
+use std::collections::HashSet;
 
-use ethers::{abi::AbiDecode, types::BlockId};
-use rundler_provider::{Provider, SimulationProvider};
+use alloy_primitives::hex;
+use alloy_sol_types::SolError;
+use anyhow::Context;
+use rundler_contracts::v0_6::IEntryPoint::FailedOp;
+use rundler_provider::{BlockId, EvmProvider, SimulationProvider};
 use rundler_types::{
-    contracts::v0_6::i_entry_point::FailedOp, pool::SimulationViolation, v0_6::UserOperation,
-    EntityType, UserOperation as UserOperationTrait, ValidationOutput,
+    pool::SimulationViolation, v0_6::UserOperation, EntityType,
+    UserOperation as UserOperationTrait, ValidationOutput,
 };
 
 use super::{
@@ -75,8 +78,9 @@ where
         };
         let last_entity_type =
             sim_context::entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
+        let revert_data_bytes = hex::decode(revert_data).context("should decode revert data")?;
 
-        if let Ok(failed_op) = FailedOp::decode_hex(revert_data) {
+        if let Ok(failed_op) = FailedOp::abi_decode(&revert_data_bytes, false) {
             let entity_addr = match last_entity_type {
                 EntityType::Factory => factory_address,
                 EntityType::Paymaster => paymaster_address,
@@ -91,7 +95,7 @@ where
                 ),
             ]))?
         }
-        let Ok(entry_point_out) = ValidationOutput::decode_v0_6_hex(revert_data) else {
+        let Ok(entry_point_out) = ValidationOutput::decode_v0_6(revert_data_bytes) else {
             let entity_addr = match last_entity_type {
                 EntityType::Factory => factory_address,
                 EntityType::Paymaster => paymaster_address,
@@ -127,7 +131,7 @@ where
     fn get_specific_violations(
         &self,
         context: &ValidationContext<Self::UO>,
-    ) -> Vec<SimulationViolation> {
+    ) -> anyhow::Result<Vec<SimulationViolation>> {
         let mut violations = vec![];
 
         let &ValidationContext {
@@ -155,9 +159,8 @@ where
         // This is a special case to cover a bug in the 0.6 entrypoint contract where a specially
         // crafted UO can use extra verification gas that isn't caught during simulation, but when
         // it runs on chain causes the transaction to revert.
-        let verification_gas_used = entry_point_out
-            .return_info
-            .pre_op_gas
+        let verification_gas_used = u128::try_from(entry_point_out.return_info.pre_op_gas)
+            .context("entry point output pre op gas overflow")?
             .saturating_sub(op.pre_verification_gas());
         let verification_buffer = op
             .total_verification_gas_limit()
@@ -169,17 +172,17 @@ where
             ));
         }
 
-        violations
+        Ok(violations)
     }
 }
 
 impl<P, E> ValidationContextProvider<SimulateValidationTracerImpl<P, E>>
 where
-    P: Provider,
+    P: EvmProvider,
     E: SimulationProvider<UO = UserOperation>,
 {
     /// Creates a new `ValidationContextProvider` for entry point v0.6 with the given provider and entry point.
-    pub(crate) fn new(provider: Arc<P>, entry_point: E, sim_settings: SimulationSettings) -> Self {
+    pub(crate) fn new(provider: P, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
             simulate_validation_tracer: SimulateValidationTracerImpl::new(
                 provider,
@@ -194,14 +197,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, str::FromStr};
+    use std::collections::HashMap;
 
-    use ethers::{
-        abi::AbiEncode,
-        types::{Address, Bytes, U256},
-        utils::hex,
-    };
-    use rundler_types::{contracts::v0_6::i_entry_point::FailedOp, v0_6::UserOperation, Opcode};
+    use alloy_primitives::{address, bytes, hex, Bytes, U256};
+    use alloy_sol_types::SolError;
+    use rundler_contracts::v0_6::IEntryPoint::FailedOp;
+    use rundler_types::{v0_6::UserOperation, Opcode};
     use sim_context::ContractInfo;
 
     use super::*;
@@ -211,7 +212,7 @@ mod tests {
         TracerOutput {
             accessed_contracts: HashMap::from([
                 (
-                    Address::from_str("0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789").unwrap(),
+                    address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"),
                     ContractInfo {
                         header: "0x608060".to_string(),
                         opcode: Opcode::CALL,
@@ -219,7 +220,7 @@ mod tests {
                     }
                 ),
                 (
-                    Address::from_str("0xb856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+                    address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
                     ContractInfo {
                         header: "0x608060".to_string(),
                         opcode: Opcode::CALL,
@@ -227,7 +228,7 @@ mod tests {
                     }
                 ),
                 (
-                    Address::from_str("0x8abb13360b87be5eeb1b98647a016add927a136c").unwrap(),
+                    address!("8abb13360b87be5eeb1b98647a016add927a136c"),
                     ContractInfo {
                         header: "0x608060".to_string(),
                         opcode: Opcode::CALL,
@@ -314,26 +315,26 @@ mod tests {
             let mut tracer_output = get_test_tracer_output();
             tracer_output.revert_data = Some(hex::encode(
                 FailedOp {
-                    op_index: U256::from(100),
+                    opIndex: U256::from(100),
                     reason: "AA23 reverted (or OOG)".to_string(),
                 }
-                .encode(),
+                .abi_encode(),
             ));
             Ok(tracer_output)
         });
 
         let user_operation = UserOperation {
-            sender: Address::from_str("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4").unwrap(),
+            sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
             nonce: U256::from(264),
-            init_code: Bytes::from_str("0x").unwrap(),
-            call_data: Bytes::from_str("0xb61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000").unwrap(),
-            call_gas_limit: U256::from(9100),
-            verification_gas_limit: U256::from(64805),
-            pre_verification_gas: U256::from(46128),
-            max_fee_per_gas: U256::from(105000100),
-            max_priority_fee_per_gas: U256::from(105000000),
-            paymaster_and_data: Bytes::from_str("0x").unwrap(),
-            signature: Bytes::from_str("0x98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c").unwrap(),
+            init_code: Bytes::default(),
+            call_data: bytes!("b61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
+            call_gas_limit: 9100,
+            verification_gas_limit: 64805,
+            pre_verification_gas: 46128,
+            max_fee_per_gas: 105000100,
+            max_priority_fee_per_gas: 105000000,
+            paymaster_and_data: Bytes::default(),
+            signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
         };
 
         let context = ValidationContextProvider {

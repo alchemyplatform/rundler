@@ -135,13 +135,15 @@ impl UserOperationTrait for UserOperation {
         &self.call_data
     }
 
-    fn max_gas_cost(&self) -> u128 {
-        self.max_fee_per_gas
-            * (self.pre_verification_gas
-                + self.call_gas_limit
-                + self.verification_gas_limit
-                + self.paymaster_verification_gas_limit
-                + self.paymaster_post_op_gas_limit)
+    fn max_gas_cost(&self) -> U256 {
+        U256::from(
+            self.max_fee_per_gas
+                * (self.pre_verification_gas
+                    + self.call_gas_limit
+                    + self.verification_gas_limit
+                    + self.paymaster_verification_gas_limit
+                    + self.paymaster_post_op_gas_limit),
+        )
     }
 
     fn entities(&self) -> Vec<Entity> {

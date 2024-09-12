@@ -27,6 +27,7 @@ use alloy_rpc_types_trace::geth::{
 use alloy_transport::Transport;
 use anyhow::Context;
 use rundler_contracts::utils::{
+    GetCodeHashes::{self, GetCodeHashesInstance},
     GetGasUsed::{self, GasUsedResult},
     StorageLoader,
 };
@@ -276,5 +277,29 @@ where
             .map(B256::try_from)
             .collect::<Result<Vec<_>, _>>()
             .unwrap())
+    }
+
+    async fn get_code_hash(
+        &self,
+        addresses: Vec<Address>,
+        block: Option<BlockId>,
+    ) -> ProviderResult<B256> {
+        let helper_addr = Address::random();
+        let helper = GetCodeHashesInstance::new(helper_addr, &self.inner);
+
+        let mut state_override = StateOverride::default();
+        let account = AccountOverride {
+            code: Some(GetCodeHashes::DEPLOYED_BYTECODE.clone()),
+            ..Default::default()
+        };
+        state_override.insert(helper_addr, account);
+
+        let mut call = helper.getCodeHashes(addresses).state(state_override);
+        if let Some(block) = block {
+            call = call.block(block);
+        }
+
+        let ret = call.call().await?;
+        Ok(ret.hash)
     }
 }
