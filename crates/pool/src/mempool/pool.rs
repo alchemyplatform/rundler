@@ -631,7 +631,7 @@ impl PoolMetrics {
             "op_pool_time_to_mine",
             "entry_point" => entry_point.to_string()
         )
-        .record(time_to_mine.candidate_for_time.as_secs_f64() as f64);
+        .record(time_to_mine.candidate_for_time.as_secs_f64());
         metrics::histogram!(
             "op_pool_blocks_to_mine",
             "entry_point" => entry_point.to_string()
