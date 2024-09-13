@@ -114,7 +114,8 @@ where
         )
         .increment(1);
 
-        histogram!("internal_rpc_method_response_time", "method" => method_str).record(duration);
+        histogram!("internal_rpc_method_response_time", "method" => method_str)
+            .record(duration.as_millis() as f64);
     }
 }
 
