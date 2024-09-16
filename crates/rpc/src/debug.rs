@@ -13,7 +13,9 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
+use ethers::{
+    types::{Address, H256},
+};
 use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::{
