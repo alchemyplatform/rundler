@@ -8,9 +8,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+alloy-primitives.workspace = true
 anyhow.workspace = true
 derive_more = "0.99.18"
-ethers.workspace = true
 futures.workspace = true
 itertools.workspace = true
 rand.workspace = true

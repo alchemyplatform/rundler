@@ -15,7 +15,7 @@
 
 use std::fmt::Display;
 
-use ethers::types::Address;
+use alloy_primitives::Address;
 use tokio::{
     sync::broadcast::{self, error::RecvError},
     task::JoinHandle,
