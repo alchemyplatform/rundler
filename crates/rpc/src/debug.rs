@@ -83,6 +83,10 @@ pub trait DebugApi {
         &self,
         entry_point: Address,
     ) -> RpcResult<Vec<RpcDebugPaymasterBalance>>;
+
+    /// Clear the reputations of pool.
+    #[method(name = "bundler_clearReputation")]
+    async fn bundler_clear_reputation(&self) -> RpcResult<String>;
 }
 
 pub(crate) struct DebugApi<P, B> {
@@ -181,6 +185,14 @@ where
         utils::safe_call_rpc_handler(
             "bundler_dumpPaymasterBalances",
             DebugApi::bundler_dump_paymaster_balances(self, entry_point),
+        )
+        .await
+    }
+
+    async fn bundler_clear_reputation(&self) -> RpcResult<String> {
+        utils::safe_call_rpc_handler(
+            "bundler_clearReputation",
+            DebugApi::bundler_clear_reputation(self),
         )
         .await
     }
@@ -360,5 +372,14 @@ where
         }
 
         Ok(results)
+    }
+
+    async fn bundler_clear_reputation(&self) -> InternalRpcResult<String> {
+        self.pool
+            .debug_clear_state(false, false, true)
+            .await
+            .context("should clear reputation")?;
+
+        Ok("ok".to_string())
     }
 }
