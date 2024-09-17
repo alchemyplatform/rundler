@@ -191,7 +191,7 @@ where
 
     async fn bundler_clear_reputation(&self) -> RpcResult<String> {
         utils::safe_call_rpc_handler(
-            "bundler_clearState",
+            "bundler_clearReputation",
             DebugApi::bundler_clear_reputation(self),
         )
         .await
@@ -378,7 +378,7 @@ where
         self.pool
             .debug_clear_state(false, false, true)
             .await
-            .context("should clear state")?;
+            .context("should clear reputation")?;
 
         Ok("ok".to_string())
     }
