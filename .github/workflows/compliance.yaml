@@ -29,6 +29,7 @@ jobs:
           path: bundler-test-executors
           repository: alchemyplatform/bundler-test-executor
           ref: master
+          submodules: recursive
 
       - name: Build rundler image locally
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
