@@ -19,6 +19,9 @@ jobs:
           path: rundler
           submodules: recursive
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
       - uses: KengoTODA/actions-setup-docker-compose@v1
         with:
           version: '2.14.2'
