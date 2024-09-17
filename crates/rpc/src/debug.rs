@@ -13,10 +13,7 @@
 
 use anyhow::Context;
 use async_trait::async_trait;
-use ethers::{
-    core::k256::elliptic_curve::consts::True,
-    types::{Address, H256},
-};
+use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::{
@@ -87,6 +84,7 @@ pub trait DebugApi {
         entry_point: Address,
     ) -> RpcResult<Vec<RpcDebugPaymasterBalance>>;
 
+    /// Clear the reputations of pool.
     #[method(name = "bundler_clearReputation")]
     async fn bundler_clear_reputation(&self) -> RpcResult<String>;
 }
@@ -192,8 +190,11 @@ where
     }
 
     async fn bundler_clear_reputation(&self) -> RpcResult<String> {
-        utils::safe_call_rpc_handler("bundler_clearState", DebugApi::bundler_clear_state(self))
-            .await
+        utils::safe_call_rpc_handler(
+            "bundler_clearState",
+            DebugApi::bundler_clear_reputation(self),
+        )
+        .await
     }
 }
 
@@ -371,5 +372,14 @@ where
         }
 
         Ok(results)
+    }
+
+    async fn bundler_clear_reputation(&self) -> InternalRpcResult<String> {
+        self.pool
+            .debug_clear_state(false, false, true)
+            .await
+            .context("should clear state")?;
+
+        Ok("ok".to_string())
     }
 }
