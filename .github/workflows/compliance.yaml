@@ -19,6 +19,9 @@ jobs:
           path: rundler
           submodules: recursive
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
       - uses: KengoTODA/actions-setup-docker-compose@v1
         with:
           version: '2.14.2'
@@ -28,7 +31,8 @@ jobs:
         with:
           path: bundler-test-executors
           repository: alchemyplatform/bundler-test-executor
-          ref: releases/v0.6
+          ref: master
+          submodules: recursive
 
       - name: Build rundler image locally
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
