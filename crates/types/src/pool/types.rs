@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Address, H256, U256};
+use alloy_primitives::{Address, B256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -22,7 +22,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 pub struct NewHead {
     /// The hash of the new head
-    pub block_hash: H256,
+    pub block_hash: B256,
     /// The number of the new head
     pub block_number: u64,
 }
@@ -92,10 +92,10 @@ pub struct PaymasterMetadata {
     /// Paymaster address
     pub address: Address,
     /// The on-chain balance of the paymaster
-    pub confirmed_balance: U256,
+    pub confirmed_balance: u128,
     /// The pending balance is the confirm balance subtracted by
     /// the max cost of all the pending user operations that use the paymaster  
-    pub pending_balance: U256,
+    pub pending_balance: u128,
 }
 
 /// A user operation with additional metadata from validation.
@@ -110,9 +110,9 @@ pub struct PoolOperation {
     /// The valid time range for this operation.
     pub valid_time_range: ValidTimeRange,
     /// The expected code hash for all contracts accessed during validation for this operation.
-    pub expected_code_hash: H256,
+    pub expected_code_hash: B256,
     /// The block hash simulation was completed at
-    pub sim_block_hash: H256,
+    pub sim_block_hash: B256,
     /// The block number simulation was completed at
     pub sim_block_number: u64,
     /// Whether the account is staked.
