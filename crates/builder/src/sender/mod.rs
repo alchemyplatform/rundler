@@ -274,8 +274,15 @@ impl From<ProviderError> for TxSenderError {
         match &value {
             ProviderError::JsonRpcClientError(e) => {
                 if let Some(e) = e.as_error_response() {
-                    if e.message.contains("replacement transaction underpriced") {
+                    // geth
+                    if e.message.contains("replacement transaction underpriced")
+                    // erigon
+                        || e.message.contains("could not replace existing tx")
+                    // reth
+                        || e.message.contains("insufficient gas price to replace existing transaction")
+                    {
                         return TxSenderError::ReplacementUnderpriced;
+                    // geth, erigon, reth
                     } else if e.message.contains("nonce too low") {
                         return TxSenderError::NonceTooLow;
                     // Arbitrum conditional sender error message
