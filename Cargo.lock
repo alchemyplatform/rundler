@@ -243,6 +243,7 @@ dependencies = [
  "cfg-if",
  "const-hex",
  "derive_more 1.0.0",
+ "getrandom",
  "hex-literal",
  "itoa",
  "k256",
@@ -5240,6 +5241,8 @@ dependencies = [
 name = "rundler-types"
 version = "0.3.0"
 dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
  "anyhow",
  "async-trait",
  "chrono",
@@ -5251,6 +5254,7 @@ dependencies = [
  "num_enum",
  "parse-display",
  "rand",
+ "rundler-contracts",
  "rundler-types",
  "rundler-utils",
  "serde",
