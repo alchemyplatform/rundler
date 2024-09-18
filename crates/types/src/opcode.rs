@@ -37,7 +37,6 @@ impl Ord for ViolationOpCode {
 
 // Credit for this section goes to ethers-rs
 // https://github.com/gakonst/ethers-rs/blob/51fe937f6515689b17a3a83b74a05984ad3a7f11/ethers-core/src/types/opcode.rs
-// TODO(danc): remove this once the PR is merged and released
 
 /// An [EVM Opcode](https://evm.codes).
 #[derive(
