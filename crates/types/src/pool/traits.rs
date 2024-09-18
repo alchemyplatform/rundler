@@ -13,7 +13,7 @@
 
 use std::pin::Pin;
 
-use ethers::types::{Address, H256};
+use alloy_primitives::{Address, B256};
 use futures_util::Stream;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -30,12 +30,12 @@ pub type PoolResult<T> = std::result::Result<T, PoolError>;
 /// Pool server trait
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait::async_trait]
-pub trait Pool: Send + Sync + 'static {
+pub trait Pool: Send + Sync {
     /// Get the supported entry points of the pool
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>>;
 
     /// Add an operation to the pool
-    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<H256>;
+    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<B256>;
 
     /// Get operations from the pool
     async fn get_ops(
@@ -48,17 +48,17 @@ pub trait Pool: Send + Sync + 'static {
     /// Get an operation from the pool by hash
     /// Checks each entry point in order until the operation is found
     /// Returns None if the operation is not found
-    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>>;
+    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
 
     /// Remove operations from the pool by hash
-    async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()>;
+    async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
 
     /// Remove an operation from the pool by id
     async fn remove_op_by_id(
         &self,
         entry_point: Address,
         id: UserOperationId,
-    ) -> PoolResult<Option<H256>>;
+    ) -> PoolResult<Option<B256>>;
 
     /// Update operations associated with entities from the pool
     async fn update_entities(
