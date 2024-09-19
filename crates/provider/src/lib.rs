@@ -21,15 +21,32 @@
 //! Rundler providers
 //! A provider is a type that provides access to blockchain data and functions
 
-mod ethers;
-pub use ethers::{
-    provider::new_provider, EntryPointV0_6 as EthersEntryPointV0_6,
-    EntryPointV0_7 as EthersEntryPointV0_7,
+mod alloy;
+pub use alloy::{
+    entry_point::{
+        v0_6::EntryPointProvider as AlloyEntryPointV0_6,
+        v0_7::{
+            decode_validation_revert as decode_v0_7_validation_revert,
+            EntryPointProvider as AlloyEntryPointV0_7,
+        },
+    },
+    evm::AlloyEvmProvider,
 };
 
 mod traits;
+// re-export alloy RPC types
+pub use alloy_json_rpc::{RpcParam, RpcReturn};
+pub use alloy_rpc_types_eth::{
+    state::{AccountOverride, StateOverride},
+    Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, Log, Transaction, TransactionReceipt,
+    TransactionRequest,
+};
+pub use alloy_rpc_types_trace::geth::{
+    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
+    GethDebugTracingOptions, GethTrace,
+};
+// re-export contract types
+pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::test_utils::*;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::MockProvider;
 pub use traits::*;

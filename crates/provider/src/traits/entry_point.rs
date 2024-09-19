@@ -11,13 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{
-    spoof, transaction::eip2718::TypedTransaction, Address, BlockId, Bytes, H256, U256,
-};
+use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
-    GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationError, ValidationOutput,
-    ValidationRevert,
+    GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
+
+use crate::{BlockId, EvmCall, ProviderResult, StateOverride, TransactionRequest};
 
 /// Output of a successful signature aggregator simulation call
 #[derive(Clone, Debug, Default)]
@@ -72,7 +71,7 @@ pub struct DepositInfo {
 #[derive(Clone, Debug, Default)]
 pub struct ExecutionResult {
     /// Gas used before the operation execution
-    pub pre_op_gas: U256,
+    pub pre_op_gas: u128,
     /// Amount paid by the operation
     pub paid: U256,
     /// Time which the operation is valid after
@@ -87,26 +86,26 @@ pub struct ExecutionResult {
 
 /// Trait for interacting with an entry point contract.
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
-pub trait EntryPoint: Send + Sync + 'static {
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
+pub trait EntryPoint: Send + Sync {
     /// Get the address of the entry point contract
-    fn address(&self) -> Address;
+    fn address(&self) -> &Address;
 
     /// Get the balance of an address
     async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
-        -> anyhow::Result<U256>;
+        -> ProviderResult<U256>;
 
     /// Get the deposit info for an address
-    async fn get_deposit_info(&self, address: Address) -> anyhow::Result<DepositInfo>;
+    async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo>;
 
     /// Get the balances of a list of addresses in order
-    async fn get_balances(&self, addresses: Vec<Address>) -> anyhow::Result<Vec<U256>>;
+    async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
 }
 
 /// Trait for handling signature aggregators
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
-pub trait SignatureAggregator: Send + Sync + 'static {
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
+pub trait SignatureAggregator: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
 
@@ -115,21 +114,21 @@ pub trait SignatureAggregator: Send + Sync + 'static {
         &self,
         aggregator_address: Address,
         ops: Vec<Self::UO>,
-    ) -> anyhow::Result<Option<Bytes>>;
+    ) -> ProviderResult<Option<Bytes>>;
 
     /// Validate a user operation signature using an aggregator
     async fn validate_user_op_signature(
         &self,
         aggregator_address: Address,
         user_op: Self::UO,
-        gas_cap: u64,
-    ) -> anyhow::Result<AggregatorOut>;
+        gas_cap: u128,
+    ) -> ProviderResult<AggregatorOut>;
 }
 
 /// Trait for submitting bundles of operations to an entry point contract
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
-pub trait BundleHandler: Send + Sync + 'static {
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
+pub trait BundleHandler: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
 
@@ -138,25 +137,25 @@ pub trait BundleHandler: Send + Sync + 'static {
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<Self::UO>>,
         beneficiary: Address,
-        gas: U256,
-    ) -> anyhow::Result<HandleOpsOut>;
+        gas: u128,
+    ) -> ProviderResult<HandleOpsOut>;
 
     /// Construct the transaction to send a bundle of operations to the entry point contract
     fn get_send_bundle_transaction(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<Self::UO>>,
         beneficiary: Address,
-        gas: U256,
+        gas: u128,
         gas_fees: GasFees,
-    ) -> TypedTransaction;
+    ) -> TransactionRequest;
 }
 
 /// Trait for calculating L1 gas costs for user operations
 ///
 /// Used for L2 gas estimation
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
-pub trait L1GasProvider: Send + Sync + 'static {
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
+pub trait L1GasProvider: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
 
@@ -167,26 +166,14 @@ pub trait L1GasProvider: Send + Sync + 'static {
         &self,
         entry_point_address: Address,
         op: Self::UO,
-        gas_price: U256,
-    ) -> anyhow::Result<U256>;
-}
-
-/// Call data along with necessary state overrides for calling the entry
-/// point's `simulateHandleOp` function.
-#[derive(Debug)]
-pub struct SimulateOpCallData {
-    /// Call data representing a call to `simulateHandleOp`
-    pub call_data: Bytes,
-    /// Required state override. Necessary with the v0.7 entry point, where the
-    /// simulation methods aren't deployed on-chain but instead must be added
-    /// via state overrides
-    pub spoofed_state: spoof::State,
+        gas_price: u128,
+    ) -> ProviderResult<u128>;
 }
 
 /// Trait for simulating user operations on an entry point contract
 #[async_trait::async_trait]
-#[auto_impl::auto_impl(&, Arc)]
-pub trait SimulationProvider: Send + Sync + 'static {
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
+pub trait SimulationProvider: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
 
@@ -194,41 +181,36 @@ pub trait SimulationProvider: Send + Sync + 'static {
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u64,
-    ) -> (TypedTransaction, spoof::State);
+        max_validation_gas: u128,
+    ) -> (TransactionRequest, StateOverride);
 
     /// Call the entry point contract's `simulateValidation` function.
-    async fn call_simulate_validation(
+    async fn simulate_validation(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u64,
-        block_hash: Option<H256>,
-    ) -> Result<ValidationOutput, ValidationError>;
+        max_validation_gas: u128,
+        block_id: Option<BlockId>,
+    ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
 
     /// Get call data and state overrides needed to call `simulateHandleOp`
-    fn get_simulate_op_call_data(
-        &self,
-        op: Self::UO,
-        spoofed_state: &spoof::State,
-    ) -> SimulateOpCallData;
+    fn get_simulate_handle_op_call(&self, op: Self::UO, state_override: StateOverride) -> EvmCall;
 
     /// Call the entry point contract's `simulateHandleOp` function
     /// with a spoofed state
-    async fn call_spoofed_simulate_op(
+    async fn simulate_handle_op(
         &self,
         op: Self::UO,
         target: Address,
         target_call_data: Bytes,
-        block_hash: H256,
-        gas: U256,
-        spoofed_state: &spoof::State,
-    ) -> anyhow::Result<Result<ExecutionResult, ValidationRevert>>;
+        block_hash: BlockId,
+        gas: u128,
+        state_override: StateOverride,
+    ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
 
     /// Decode the revert data from a call to `simulateHandleOps`
     fn decode_simulate_handle_ops_revert(
-        &self,
-        revert_data: Bytes,
-    ) -> Result<ExecutionResult, ValidationRevert>;
+        revert_data: &Bytes,
+    ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
 
     /// Returns true if this entry point uses reverts to communicate simulation
     /// results.
@@ -236,12 +218,12 @@ pub trait SimulationProvider: Send + Sync + 'static {
 }
 
 /// Trait for a provider that provides all entry point functionality
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait EntryPointProvider<UO>:
     EntryPoint
     + SignatureAggregator<UO = UO>
     + BundleHandler<UO = UO>
     + SimulationProvider<UO = UO>
     + L1GasProvider<UO = UO>
-    + Clone
 {
 }
