@@ -14,14 +14,13 @@
 //! Traits for the provider module.
 
 mod error;
-pub use error::ProviderError;
+pub use error::*;
 
 mod entry_point;
 pub use entry_point::*;
 
-mod provider;
-#[cfg(feature = "test-utils")]
-pub use provider::MockProvider;
-pub use provider::{Provider, ProviderResult};
+mod evm;
+pub use evm::*;
+
 #[cfg(feature = "test-utils")]
 pub(crate) mod test_utils;

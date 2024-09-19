@@ -270,7 +270,9 @@ dependencies = [
  "alloy-primitives",
  "alloy-rpc-client",
  "alloy-rpc-types-eth",
+ "alloy-rpc-types-trace",
  "alloy-transport",
+ "alloy-transport-http",
  "async-stream",
  "async-trait",
  "auto_impl",
@@ -284,6 +286,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -318,6 +321,7 @@ dependencies = [
  "alloy-transport",
  "alloy-transport-http",
  "futures",
+ "hyper-util",
  "pin-project",
  "serde",
  "serde_json",
@@ -325,6 +329,7 @@ dependencies = [
  "tokio-stream",
  "tower 0.5.1",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -341,6 +346,20 @@ dependencies = [
  "alloy-serde",
  "alloy-sol-types",
  "itertools 0.13.0",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "alloy-rpc-types-trace"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c54375e5a34ec5a2cf607f9ce98c0ece30dc76ad623afeb25d3953a8d7d30f20"
+dependencies = [
+ "alloy-primitives",
+ "alloy-rpc-types-eth",
+ "alloy-serde",
  "serde",
  "serde_json",
  "thiserror",
@@ -469,7 +488,14 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1742b94bb814f1ca6b322a6f9dd38a0252ff45a3119e40e888fb7029afa500ce"
 dependencies = [
+ "alloy-json-rpc",
  "alloy-transport",
+ "http-body-util",
+ "hyper 1.4.1",
+ "hyper-util",
+ "serde_json",
+ "tower 0.5.1",
+ "tracing",
  "url",
 ]
 
@@ -5146,20 +5172,25 @@ dependencies = [
 name = "rundler-provider"
 version = "0.3.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-contract",
+ "alloy-json-rpc",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rlp",
+ "alloy-rpc-types-eth",
+ "alloy-rpc-types-trace",
+ "alloy-sol-types",
+ "alloy-transport",
  "anyhow",
  "async-trait",
  "auto_impl",
- "ethers",
- "metrics",
  "mockall",
- "parse-display",
- "reqwest 0.12.7",
+ "rundler-contracts",
  "rundler-provider",
  "rundler-types",
  "rundler-utils",
- "serde",
  "thiserror",
- "tokio",
  "tracing",
 ]
 
@@ -5273,7 +5304,6 @@ dependencies = [
  "futures",
  "itertools 0.13.0",
  "rand",
- "reqwest 0.12.7",
  "schnellru",
  "tokio",
  "tracing",
