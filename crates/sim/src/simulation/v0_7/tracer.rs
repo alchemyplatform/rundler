@@ -10,15 +10,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, convert::TryFrom, fmt::Debug, sync::Arc};
+use std::{collections::HashMap, convert::TryFrom, fmt::Debug};
 
+use alloy_primitives::{Address, U256};
 use anyhow::bail;
 use async_trait::async_trait;
-use ethers::types::{
-    Address, BlockId, GethDebugTracerType, GethDebugTracingCallOptions, GethDebugTracingOptions,
-    GethTrace, U256,
+use rundler_provider::{
+    BlockId, EvmProvider, GethDebugTracerType, GethDebugTracingCallOptions,
+    GethDebugTracingOptions, GethTrace, SimulationProvider,
 };
-use rundler_provider::{Provider, SimulationProvider};
 use rundler_types::{v0_7::UserOperation, Opcode};
 use serde::Deserialize;
 
@@ -101,8 +101,8 @@ impl TryFrom<GethTrace> for TracerOutput {
     type Error = anyhow::Error;
     fn try_from(trace: GethTrace) -> Result<Self, Self::Error> {
         match trace {
-            GethTrace::Unknown(value) => Ok(TracerOutput::deserialize(&value)?),
-            GethTrace::Known(_) => {
+            GethTrace::JS(value) => Ok(TracerOutput::deserialize(&value)?),
+            _ => {
                 bail!("Failed to deserialize simulation trace")
             }
         }
@@ -111,7 +111,7 @@ impl TryFrom<GethTrace> for TracerOutput {
 
 /// Trait for tracing the simulation of a user operation.
 #[async_trait]
-pub(super) trait SimulateValidationTracer: Send + Sync + 'static {
+pub(super) trait SimulateValidationTracer: Send + Sync {
     /// Traces the simulation of a user operation.
     async fn trace_simulate_validation(
         &self,
@@ -123,9 +123,9 @@ pub(super) trait SimulateValidationTracer: Send + Sync + 'static {
 /// Tracer implementation for the bundler's custom tracer.
 #[derive(Debug)]
 pub(crate) struct SimulateValidationTracerImpl<P, E> {
-    provider: Arc<P>,
+    provider: P,
     entry_point: E,
-    max_validation_gas: u64,
+    max_validation_gas: u128,
     tracer_timeout: String,
 }
 
@@ -135,7 +135,7 @@ pub(crate) struct SimulateValidationTracerImpl<P, E> {
 #[async_trait]
 impl<P, E> SimulateValidationTracer for SimulateValidationTracerImpl<P, E>
 where
-    P: Provider,
+    P: EvmProvider,
     E: SimulationProvider<UO = UserOperation>,
 {
     async fn trace_simulate_validation(
@@ -173,9 +173,9 @@ where
 impl<P, E> SimulateValidationTracerImpl<P, E> {
     /// Creates a new instance of the bundler's custom tracer.
     pub(crate) fn new(
-        provider: Arc<P>,
+        provider: P,
         entry_point: E,
-        max_validation_gas: u64,
+        max_validation_gas: u128,
         tracer_timeout: String,
     ) -> Self {
         Self {

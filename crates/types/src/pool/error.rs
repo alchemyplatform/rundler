@@ -78,7 +78,7 @@ pub enum MempoolError {
     /// Paymaster balance too low
     /// Spec rule: EREP-010
     #[error("Paymaster balance too low. Required balance: {0}. Current balance {1}")]
-    PaymasterBalanceTooLow(u128, u128),
+    PaymasterBalanceTooLow(U256, U256),
     /// Operation was rejected due to a precheck violation
     #[error("Operation violation during precheck {0}")]
     PrecheckViolation(PrecheckViolation),
@@ -125,7 +125,7 @@ pub enum PrecheckViolation {
     PaymasterIsNotContract(Address),
     /// The paymaster deposit is too low to pay for the user operation's maximum cost.
     #[display("paymaster deposit is {0} but must be at least {1} to pay for this operation")]
-    PaymasterDepositTooLow(u128, u128),
+    PaymasterDepositTooLow(U256, U256),
     /// The sender balance is too low to pay for the user operation's maximum cost.
     /// (when not using a paymaster)
     #[display("sender balance and deposit together is {0} but must be at least {1} to pay for this operation")]
@@ -244,7 +244,7 @@ pub struct NeedsStakeInformation {
     /// The accessed slot number
     pub slot: U256,
     /// Minumum stake
-    pub min_stake: u128,
+    pub min_stake: U256,
     /// Minumum delay after an unstake event
     pub min_unstake_delay: u32,
 }
