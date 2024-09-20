@@ -60,7 +60,7 @@ pub struct DepositInfo {
     /// Whether the address has staked
     pub staked: bool,
     /// Amount staked on the entry point
-    pub stake: u128,
+    pub stake: U256,
     /// The amount of time in sections that must pass before the stake can be withdrawn
     pub unstake_delay_sec: u32,
     /// The time at which the stake can be withdrawn
