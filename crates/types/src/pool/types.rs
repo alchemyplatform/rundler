@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -92,10 +92,10 @@ pub struct PaymasterMetadata {
     /// Paymaster address
     pub address: Address,
     /// The on-chain balance of the paymaster
-    pub confirmed_balance: u128,
+    pub confirmed_balance: U256,
     /// The pending balance is the confirm balance subtracted by
     /// the max cost of all the pending user operations that use the paymaster  
-    pub pending_balance: u128,
+    pub pending_balance: U256,
 }
 
 /// A user operation with additional metadata from validation.

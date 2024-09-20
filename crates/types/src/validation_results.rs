@@ -376,7 +376,7 @@ pub fn parse_validation_data(data: U256) -> ValidationData {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct StakeInfo {
     /// The amount of stake
-    pub stake: u128,
+    pub stake: U256,
     /// The delay for unstaking
     pub unstake_delay_sec: u32,
 }
@@ -390,7 +390,7 @@ impl TryFrom<StakeInfoV0_6> for StakeInfo {
             unstakeDelaySec,
         } = value;
         Ok(Self {
-            stake: stake.try_into().map_err(|_| "stake is larger than u128")?,
+            stake,
             unstake_delay_sec: unstakeDelaySec
                 .try_into()
                 .map_err(|_| "unstake delay is larger than u32")?,
@@ -407,7 +407,7 @@ impl TryFrom<StakeInfoV0_7> for StakeInfo {
             unstakeDelaySec,
         } = value;
         Ok(Self {
-            stake: stake.try_into().map_err(|_| "stake is larger than u128")?,
+            stake,
             unstake_delay_sec: unstakeDelaySec
                 .try_into()
                 .map_err(|_| "unstake delay is larger than u32")?,

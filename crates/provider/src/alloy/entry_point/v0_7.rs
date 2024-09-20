@@ -493,7 +493,7 @@ impl From<DepositInfoV0_7> for DepositInfo {
         Self {
             deposit: deposit_info.deposit,
             staked: deposit_info.staked,
-            stake: UintTryTo::<u128>::uint_try_to(&deposit_info.stake).unwrap(),
+            stake: U256::from(deposit_info.stake),
             unstake_delay_sec: deposit_info.unstakeDelaySec,
             withdraw_time: UintTryTo::<u64>::uint_try_to(&deposit_info.withdrawTime).unwrap(),
         }
