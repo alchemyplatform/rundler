@@ -5252,9 +5252,9 @@ dependencies = [
 name = "rundler-task"
 version = "0.3.0"
 dependencies = [
+ "alloy-primitives",
  "anyhow",
  "async-trait",
- "ethers",
  "futures",
  "metrics",
  "pin-project",
