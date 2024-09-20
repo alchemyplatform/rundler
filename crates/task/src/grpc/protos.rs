@@ -13,7 +13,7 @@
 
 //! Protobuf utilities
 
-use ethers::types::{Address, Bytes, H256, U128, U256};
+use alloy_primitives::{Address, Bytes, B256, U128, U256};
 
 /// Error type for conversions from protobuf types to Ethers/local types.
 #[derive(Debug, thiserror::Error)]
@@ -79,7 +79,7 @@ impl FromFixedLengthProtoBytes for U128 {
     const LEN: usize = 16;
 
     fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
-        Self::from_little_endian(bytes)
+        Self::from_le_slice(bytes)
     }
 }
 
@@ -87,15 +87,24 @@ impl FromFixedLengthProtoBytes for U256 {
     const LEN: usize = 32;
 
     fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
-        Self::from_little_endian(bytes)
+        Self::from_le_slice(bytes)
     }
 }
 
-impl FromFixedLengthProtoBytes for H256 {
+impl FromFixedLengthProtoBytes for B256 {
     const LEN: usize = 32;
 
     fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
         Self::from_slice(bytes)
+    }
+}
+
+impl FromFixedLengthProtoBytes for u128 {
+    const LEN: usize = 16;
+
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        let (int_bytes, _) = bytes.split_at(std::mem::size_of::<u128>());
+        u128::from_le_bytes(int_bytes.try_into().unwrap())
     }
 }
 
@@ -107,34 +116,36 @@ pub trait ToProtoBytes {
 
 impl ToProtoBytes for Address {
     fn to_proto_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
+        self.to_vec()
     }
 }
 
 impl ToProtoBytes for U128 {
     fn to_proto_bytes(&self) -> Vec<u8> {
-        let mut vec = vec![0_u8; 16];
-        self.to_little_endian(&mut vec);
-        vec
+        self.to_le_bytes::<16>().into()
     }
 }
 
 impl ToProtoBytes for U256 {
     fn to_proto_bytes(&self) -> Vec<u8> {
-        let mut vec = vec![0_u8; 32];
-        self.to_little_endian(&mut vec);
-        vec
+        self.to_le_bytes::<32>().into()
     }
 }
 
-impl ToProtoBytes for H256 {
+impl ToProtoBytes for B256 {
     fn to_proto_bytes(&self) -> Vec<u8> {
-        self.as_bytes().to_vec()
+        self.to_vec()
     }
 }
 
 impl ToProtoBytes for Bytes {
     fn to_proto_bytes(&self) -> Vec<u8> {
         self.to_vec()
+    }
+}
+
+impl ToProtoBytes for u128 {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        self.to_le_bytes().into()
     }
 }
