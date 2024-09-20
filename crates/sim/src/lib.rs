@@ -61,5 +61,3 @@ pub use simulation::{
 
 mod types;
 pub use types::{ExpectedStorage, ViolationError};
-
-mod utils;

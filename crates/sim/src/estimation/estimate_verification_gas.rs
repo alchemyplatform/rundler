@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
+use alloy_primitives::{Address, Bytes, B256, U256};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use ethers::types::{spoof, Address, Bytes, H256, U128, U256};
-use rundler_provider::{EntryPoint, Provider, SimulateOpCallData, SimulationProvider};
+use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider, StateOverride};
 use rundler_types::{chain::ChainSpec, UserOperation};
 
 use super::Settings;
@@ -22,7 +20,7 @@ const OUT_OF_GAS_ERROR_CODES: &[&str] = &[
 /// estimate both verification gas and, in the v0.7 case, paymaster verification
 /// gas.
 #[async_trait]
-pub trait VerificationGasEstimator: Send + Sync + 'static {
+pub trait VerificationGasEstimator: Send + Sync {
     /// The user operation type estimated by this estimator
     type UO: UserOperation;
 
@@ -37,24 +35,23 @@ pub trait VerificationGasEstimator: Send + Sync + 'static {
     >(
         &self,
         op: &Self::UO,
-        block_hash: H256,
-        state_override: &spoof::State,
-        max_guess: U128,
+        block_hash: B256,
+        state_override: StateOverride,
+        max_guess: u128,
         get_op_with_limit: F,
-    ) -> Result<U128, GasEstimationError>;
+    ) -> Result<u128, GasEstimationError>;
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct GetOpWithLimitArgs {
-    pub gas: U128,
-    pub fee: U128,
+    pub gas: u128,
+    pub fee: u128,
 }
 
 /// Implementation of a verification gas estimator
-#[derive(Debug)]
 pub struct VerificationGasEstimatorImpl<P, E> {
     chain_spec: ChainSpec,
-    provider: Arc<P>,
+    provider: P,
     entry_point: E,
     settings: Settings,
 }
@@ -63,7 +60,7 @@ pub struct VerificationGasEstimatorImpl<P, E> {
 impl<UO, P, E> VerificationGasEstimator for VerificationGasEstimatorImpl<P, E>
 where
     UO: UserOperation,
-    P: Provider,
+    P: EvmProvider,
     E: EntryPoint + SimulationProvider<UO = UO>,
 {
     type UO = UO;
@@ -71,13 +68,13 @@ where
     async fn estimate_verification_gas<F: Send + Sync + Fn(UO, GetOpWithLimitArgs) -> UO>(
         &self,
         op: &UO,
-        block_hash: H256,
-        state_override: &spoof::State,
-        max_guess: U128,
+        block_hash: B256,
+        state_override: StateOverride,
+        max_guess: u128,
         get_op_with_limit: F,
-    ) -> Result<U128, GasEstimationError> {
+    ) -> Result<u128, GasEstimationError> {
         let timer = std::time::Instant::now();
-        let paymaster_gas_fee = U128::from(self.settings.verification_estimation_gas_fee);
+        let paymaster_gas_fee = self.settings.verification_estimation_gas_fee;
 
         // Fee logic for gas estimation:
         //
@@ -88,16 +85,13 @@ where
         // If using a paymaster, the total cost is kept constant, and the fee is adjusted
         // based on the gas used in the simulation. The total cost is set by a configuration
         // setting.
-        let get_op = |gas: U128| -> UO {
+        let get_op = |gas: u128| -> UO {
             let fee = if op.paymaster().is_none() {
-                U128::zero()
+                0
             } else {
-                U128::try_from(
-                    U256::from(paymaster_gas_fee)
-                        .checked_div(U256::from(gas) + op.pre_verification_gas())
-                        .unwrap_or(U256::MAX),
-                )
-                .unwrap_or(U128::MAX)
+                paymaster_gas_fee
+                    .checked_div(gas + op.pre_verification_gas())
+                    .unwrap_or(u128::MAX)
             };
             get_op_with_limit(op.clone(), GetOpWithLimitArgs { gas, fee })
         };
@@ -105,20 +99,12 @@ where
         // Make one attempt at max gas, to see if success is possible.
         // Capture the gas usage of this attempt and use as the initial guess in the binary search
         let initial_op = get_op(max_guess);
-        let SimulateOpCallData {
-            call_data,
-            spoofed_state,
-        } = self
+        let call = self
             .entry_point
-            .get_simulate_op_call_data(initial_op, state_override);
+            .get_simulate_handle_op_call(initial_op, state_override.clone());
         let gas_used = self
             .provider
-            .get_gas_used(
-                self.entry_point.address(),
-                U256::zero(),
-                call_data,
-                spoofed_state.clone(),
-            )
+            .get_gas_used(call)
             .await
             .context("failed to run initial guess")?;
 
@@ -128,24 +114,20 @@ where
                     "simulateHandleOp succeeded but should always revert. Make sure the entry point contract is deployed and the address is correct"
                 ))?;
             }
-        } else if let Some(revert) = self
-            .entry_point
-            .decode_simulate_handle_ops_revert(gas_used.result)
-            .err()
-        {
+        } else if let Some(revert) = E::decode_simulate_handle_ops_revert(&gas_used.result)?.err() {
             return Err(GasEstimationError::RevertInValidation(revert));
         }
 
-        let run_attempt_returning_error = |gas: u64| async move {
-            let op = get_op(gas.into());
+        let run_attempt_returning_error = |gas: u128, state_override: StateOverride| async move {
+            let op = get_op(gas);
             let revert = self
                 .entry_point
-                .call_spoofed_simulate_op(
+                .simulate_handle_op(
                     op,
-                    Address::zero(),
+                    Address::ZERO,
                     Bytes::new(),
-                    block_hash,
-                    self.settings.max_simulate_handle_ops_gas.into(),
+                    block_hash.into(),
+                    self.settings.max_simulate_handle_ops_gas,
                     state_override,
                 )
                 .await?
@@ -169,16 +151,18 @@ where
         let mut max_failure_gas = 1;
         let mut min_success_gas = self.settings.max_verification_gas;
 
-        if gas_used.gas_used.gt(&U256::from(u64::MAX)) {
+        if gas_used.gasUsed.gt(&U256::from(u128::MAX)) {
             return Err(GasEstimationError::GasUsedTooLarge);
         }
-        let mut guess = gas_used.gas_used.as_u64().saturating_mul(2);
+
+        let ret_gas_used: u128 = gas_used.gasUsed.try_into().unwrap();
+        let mut guess = ret_gas_used.saturating_mul(2);
         let mut num_rounds = 0;
         while (min_success_gas as f64) / (max_failure_gas as f64)
             > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
         {
             num_rounds += 1;
-            if run_attempt_returning_error(guess).await? {
+            if run_attempt_returning_error(guess, state_override.clone()).await? {
                 min_success_gas = guess;
             } else {
                 max_failure_gas = guess;
@@ -191,8 +175,6 @@ where
             timer.elapsed().as_millis()
         );
 
-        let mut min_success_gas = U256::from(min_success_gas);
-
         // If not using a paymaster, always add the cost of a native transfer to the verification gas.
         // This may cause an over estimation when the account does have enough deposit to pay for the
         // max cost, but it is better to overestimate than underestimate.
@@ -200,25 +182,18 @@ where
             min_success_gas += self.chain_spec.deposit_transfer_overhead;
         }
 
-        Ok(U128::try_from(min_success_gas)
-            .ok()
-            .context("min success gas should fit in 128-bit int")?)
+        Ok(min_success_gas)
     }
 }
 
 impl<UO, P, E> VerificationGasEstimatorImpl<P, E>
 where
     UO: UserOperation,
-    P: Provider,
+    P: EvmProvider,
     E: EntryPoint + SimulationProvider<UO = UO>,
 {
     /// Create a new instance
-    pub fn new(
-        chain_spec: ChainSpec,
-        provider: Arc<P>,
-        entry_point: E,
-        settings: Settings,
-    ) -> Self {
+    pub fn new(chain_spec: ChainSpec, provider: P, entry_point: E, settings: Settings) -> Self {
         Self {
             chain_spec,
             provider,
