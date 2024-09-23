@@ -11,11 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use rundler_task::metriclayer::RequestInfo;
-use jsonrpsee::types::Request;
 
-impl RequestInfo for Request {
+use tonic::codegen::http;
+use crate::metrics::RequestMethoedNameInfo;
+
+impl<Body> RequestMethoedNameInfo for http::Request<Body>{
     fn get_method_name(&self) -> String {
-        self.method_name().to_string()
+        let method_name = self.uri().path().split('/').last().unwrap_or("unknown");
+        method_name.to_string()
     }
 }

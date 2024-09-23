@@ -22,7 +22,7 @@ use futures::{future::BoxFuture, FutureExt};
 use tower::{Layer, Service};
 
 /// Trait to expose request method name.
-pub trait RequestInfo {
+pub trait RequestMethoedNameInfo {
     /// Get method name.
     fn get_method_name(&self) -> String;
 }
@@ -76,7 +76,7 @@ impl<S, Request> Service<Request> for MetricsMiddleware<S>
 where
     S: Service<Request> + Send + Sync + Clone + 'static,
     S::Future : Send + Sync + 'static,
-    Request: RequestInfo + Send + Sync + 'static,
+    Request: RequestMethoedNameInfo + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;

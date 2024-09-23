@@ -11,18 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-#![warn(missing_docs, unreachable_pub)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
-//! Interfaces and utilities for building core Rundler tasks.
+use rundler_task::metrics::RequestMethoedNameInfo;
+use jsonrpsee::types::Request;
 
-pub mod block_watcher;
-pub mod grpc;
-pub mod server;
-pub mod metrics;
-
-mod task;
-pub use task::*;
+impl RequestMethoedNameInfo for Request {
+    fn get_method_name(&self) -> String {
+        self.method_name().to_string()
+    }
+}
