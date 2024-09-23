@@ -22,6 +22,9 @@ use tracing::{error, info};
 /// Core task trait implemented by top level Rundler tasks.
 #[async_trait]
 pub trait Task: Sync + Send + 'static {
+    /// Convert into a boxed task.
+    fn boxed(self) -> Box<dyn Task>;
+
     /// Run the task.
     async fn run(self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()>;
 }
