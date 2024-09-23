@@ -24,8 +24,7 @@ use rundler_sim::{
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
 };
 use rundler_task::{
-    server::{format_socket_addr, HealthCheck},
-    Task,
+    metriclayer::MetricsLayer, server::{format_socket_addr, HealthCheck}, Task
 };
 use rundler_types::{
     builder::Builder, chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
@@ -186,12 +185,11 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-        let rpc_middleware =
-            RpcServiceBuilder::new().layer(RpcMetricsMiddlewareLayer::new(&module));
+        let rpc_metric_middleware = MetricsLayer::new("rpc".to_string(), "rpc".to_string());
 
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)
-            .set_rpc_middleware(rpc_middleware)
+            .set_rpc_middleware(rpc_metric_middleware)
             .max_connections(self.args.max_connections)
             // Set max request body size to 2x the max transaction size as none of our
             // APIs should require more than that.

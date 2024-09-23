@@ -13,145 +13,151 @@
 
 //! Middleware for recording metrics for gRPC requests.
 
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-    time::{Duration, Instant},
-};
+// use std::{
+//     future::Future,
+//     pin::Pin,
+//     task::{Context, Poll},
+//     time::{Duration, Instant},
+// };
 
-use pin_project::pin_project;
+// use pin_project::pin_project;
 use tonic::codegen::http;
-use tower::{Layer, Service};
+use crate::metriclayer::RequestInfo;
 
-/// A layer for recording metrics for gRPC requests.
-#[derive(Debug, Clone)]
-pub struct GrpcMetricsLayer {
-    scope: String,
-}
-
-impl GrpcMetricsLayer {
-    /// Create a new `GrpcMetricsLayer` middleware layer
-    pub fn new(scope: String) -> Self {
-        GrpcMetricsLayer { scope }
+impl<Body> RequestInfo for http::Request<Body>{
+    fn get_method_name(&self) -> String {
+        let method_name = self.uri().path().split('/').last().unwrap_or("unknown");
+        method_name.to_string()
     }
 }
+// /// A layer for recording metrics for gRPC requests.
+// #[derive(Debug, Clone)]
+// pub struct GrpcMetricsLayer {
+//     scope: String,
+// }
 
-impl<S> Layer<S> for GrpcMetricsLayer {
-    type Service = GrpcMetrics<S>;
+// impl GrpcMetricsLayer {
+//     /// Create a new `GrpcMetricsLayer` middleware layer
+//     pub fn new(scope: String) -> Self {
+//         GrpcMetricsLayer { scope }
+//     }
+// }
 
-    fn layer(&self, service: S) -> Self::Service {
-        GrpcMetrics::new(service, self.scope.clone())
-    }
-}
+// impl<S> Layer<S> for GrpcMetricsLayer {
+//     type Service = GrpcMetrics<S>;
 
-/// Service for recording metrics for gRPC requests.
-#[derive(Clone, Debug)]
-pub struct GrpcMetrics<S> {
-    inner: S,
-    scope: String,
-}
+//     fn layer(&self, service: S) -> Self::Service {
+//         GrpcMetrics::new(service, self.scope.clone())
+//     }
+// }
 
-impl<S> GrpcMetrics<S> {
-    /// Create a new `GrpcMetrics` middleware service.
-    pub fn new(inner: S, scope: String) -> Self {
-        Self { inner, scope }
-    }
-}
+// /// Service for recording metrics for gRPC requests.
+// #[derive(Clone, Debug)]
+// pub struct GrpcMetrics<S> {
+//     inner: S,
+//     scope: String,
+// }
 
-impl<S, Body> Service<http::Request<Body>> for GrpcMetrics<S>
-where
-    S: Service<http::Request<Body>>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = ResponseFuture<S::Future>;
+// impl<S> GrpcMetrics<S> {
+//     /// Create a new `GrpcMetrics` middleware service.
+//     pub fn new(inner: S, scope: String) -> Self {
+//         Self { inner, scope }
+//     }
+// }
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // Our middleware doesn't care about backpressure so its ready as long
-        // as the inner service is ready.
-        self.inner.poll_ready(cx)
-    }
+// impl<S, Body> Service<http::Request<Body>> for GrpcMetrics<S>
+// where
+//     S: Service<http::Request<Body>>,
+// {
+//     type Response = S::Response;
+//     type Error = S::Error;
+//     type Future = ResponseFuture<S::Future>;
 
-    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-        let uri = request.uri().clone();
-        let method_name = uri.path().split('/').last().unwrap_or("unknown");
-        GrpcMetricsRecorder::increment_num_requests(method_name, &self.scope);
-        GrpcMetricsRecorder::increment_open_requests(method_name, &self.scope);
+//     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+//         // Our middleware doesn't care about backpressure so its ready as long
+//         // as the inner service is ready.
+//         self.inner.poll_ready(cx)
+//     }
 
-        ResponseFuture {
-            response_future: self.inner.call(request),
-            start_time: Instant::now(),
-            scope: self.scope.clone(),
-            method_name: method_name.to_string(),
-        }
-    }
-}
+//     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+//         let uri = request.uri().clone();
+//         let method_name = uri.path().split('/').last().unwrap_or("unknown");
+//         GrpcMetricsRecorder::increment_num_requests(method_name, &self.scope);
+//         GrpcMetricsRecorder::increment_open_requests(method_name, &self.scope);
 
-/// Future returned by the middleware.
-// checkout: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
-// for details on the use of Pin here
-#[pin_project]
-pub struct ResponseFuture<F> {
-    #[pin]
-    response_future: F,
+//         ResponseFuture {
+//             response_future: self.inner.call(request),
+//             start_time: Instant::now(),
+//             scope: self.scope.clone(),
+//             method_name: method_name.to_string(),
+//         }
+//     }
+// }
 
-    start_time: Instant,
-    method_name: String,
-    scope: String,
-}
+// /// Future returned by the middleware.
+// // checkout: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
+// // for details on the use of Pin here
+// #[pin_project]
+// pub struct ResponseFuture<F> {
+//     #[pin]
+//     response_future: F,
 
-impl<F, Response, Error> Future for ResponseFuture<F>
-where
-    F: Future<Output = Result<Response, Error>>,
-{
-    type Output = Result<Response, Error>;
+//     start_time: Instant,
+//     method_name: String,
+//     scope: String,
+// }
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let res = this.response_future.poll(cx);
-        if res.is_ready() {
-            GrpcMetricsRecorder::decrement_open_requests(this.method_name, this.scope);
-            GrpcMetricsRecorder::record_request_latency(
-                this.method_name,
-                this.scope,
-                this.start_time.elapsed(),
-            );
-        }
+// impl<F, Response, Error> Future for ResponseFuture<F>
+// where
+//     F: Future<Output = Result<Response, Error>>,
+// {
+//     type Output = Result<Response, Error>;
 
-        if let Poll::Ready(Err(_)) = res {
-            GrpcMetricsRecorder::increment_rpc_error_count(this.method_name, this.scope);
-        }
+//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+//         let this = self.project();
+//         let res = this.response_future.poll(cx);
+//         if res.is_ready() {
+//             GrpcMetricsRecorder::decrement_open_requests(this.method_name, this.scope);
+//             GrpcMetricsRecorder::record_request_latency(
+//                 this.method_name,
+//                 this.scope,
+//                 this.start_time.elapsed(),
+//             );
+//         }
 
-        res
-    }
-}
+//         if let Poll::Ready(Err(_)) = res {
+//             GrpcMetricsRecorder::increment_rpc_error_count(this.method_name, this.scope);
+//         }
 
-struct GrpcMetricsRecorder;
+//         res
+//     }
+// }
 
-impl GrpcMetricsRecorder {
-    // Increment the number of requests for a given method and service.
-    fn increment_num_requests(method_name: &str, scope: &str) {
-        metrics::counter!("grpc_num_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1)
-    }
+// struct GrpcMetricsRecorder;
 
-    // Increment the number of open requests for a given method and service.
-    fn increment_open_requests(method_name: &str, scope: &str) {
-        metrics::gauge!("grpc_open_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1_f64)
-    }
+// impl GrpcMetricsRecorder {
+//     // Increment the number of requests for a given method and service.
+//     fn increment_num_requests(method_name: &str, scope: &str) {
+//         metrics::counter!("grpc_num_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1)
+//     }
 
-    // Decrement the number of open requests for a given method and service.
-    fn decrement_open_requests(method_name: &str, scope: &str) {
-        metrics::gauge!("grpc_open_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).decrement(1_f64)
-    }
+//     // Increment the number of open requests for a given method and service.
+//     fn increment_open_requests(method_name: &str, scope: &str) {
+//         metrics::gauge!("grpc_open_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1_f64)
+//     }
 
-    // Increment the number of gRPC errors for a given method and service.
-    fn increment_rpc_error_count(method_name: &str, scope: &str) {
-        metrics::counter!("grpc_error_count", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1)
-    }
+//     // Decrement the number of open requests for a given method and service.
+//     fn decrement_open_requests(method_name: &str, scope: &str) {
+//         metrics::gauge!("grpc_open_requests", "method_name" => method_name.to_string(), "service" => scope.to_string()).decrement(1_f64)
+//     }
 
-    // Record the latency of a request for a given method and service.
-    fn record_request_latency(method_name: &str, scope: &str, latency: Duration) {
-        metrics::histogram!("grpc_request_latency", "method_name" => method_name.to_string(), "service" => scope.to_string()).record(latency)
-    }
-}
+//     // Increment the number of gRPC errors for a given method and service.
+//     fn increment_rpc_error_count(method_name: &str, scope: &str) {
+//         metrics::counter!("grpc_error_count", "method_name" => method_name.to_string(), "service" => scope.to_string()).increment(1)
+//     }
+
+//     // Record the latency of a request for a given method and service.
+//     fn record_request_latency(method_name: &str, scope: &str, latency: Duration) {
+//         metrics::histogram!("grpc_request_latency", "method_name" => method_name.to_string(), "service" => scope.to_string()).record(latency)
+//     }
+// }

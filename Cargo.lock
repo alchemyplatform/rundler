@@ -5257,7 +5257,6 @@ dependencies = [
  "async-trait",
  "futures",
  "metrics",
- "pin-project",
  "rundler-provider",
  "rundler-utils",
  "thiserror",

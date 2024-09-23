@@ -22,6 +22,7 @@
 pub mod block_watcher;
 pub mod grpc;
 pub mod server;
+pub mod metriclayer;
 
 mod task;
 pub use task::*;

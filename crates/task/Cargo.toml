@@ -16,7 +16,6 @@ alloy-primitives.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
-pin-project.workspace = true
 metrics.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
