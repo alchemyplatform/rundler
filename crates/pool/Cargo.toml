@@ -8,16 +8,19 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+rundler-contracts = { path = "../contracts" }
 rundler-provider = { path = "../provider" }
 rundler-sim = { path = "../sim" }
 rundler-task = { path = "../task" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+
 anyhow.workspace = true
 async-stream = "0.3.5"
 async-trait.workspace = true
-ethers.workspace = true
 futures.workspace = true
 futures-util.workspace = true
 itertools.workspace = true

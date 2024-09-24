@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 
-use ethers::types::Address;
+use alloy_primitives::Address;
 use parking_lot::RwLock;
 use rundler_types::pool::{Reputation, ReputationStatus};
 use tokio::time::interval;

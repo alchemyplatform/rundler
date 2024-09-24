@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
-use alloy_primitives::{ruint::UintTryTo, Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
@@ -224,7 +224,7 @@ where
                                 }
                                 _ => Ok(HandleOpsOut::FailedOp(
                                     opIndex
-                                        .uint_try_to()
+                                        .try_into()
                                         .context("returned opIndex out of bounds")?,
                                     reason,
                                 )),
@@ -497,15 +497,13 @@ impl TryFrom<ExecutionResultV0_6> for ExecutionResult {
 
     fn try_from(result: ExecutionResultV0_6) -> Result<Self, Self::Error> {
         Ok(ExecutionResult {
-            pre_op_gas: UintTryTo::<u128>::uint_try_to(&result.preOpGas)
+            pre_op_gas: result
+                .preOpGas
+                .try_into()
                 .context("preOpGas should fit in u128")?,
             paid: result.paid,
-            valid_after: UintTryTo::<u64>::uint_try_to(&result.validAfter)
-                .unwrap()
-                .into(),
-            valid_until: UintTryTo::<u64>::uint_try_to(&result.validUntil)
-                .unwrap()
-                .into(),
+            valid_after: result.validAfter.to::<u64>().into(),
+            valid_until: result.validUntil.to::<u64>().into(),
             target_success: result.targetSuccess,
             target_result: result.targetResult,
         })
@@ -519,7 +517,7 @@ impl From<DepositInfoV0_6> for DepositInfo {
             staked: deposit_info.staked,
             stake: U256::from(deposit_info.stake),
             unstake_delay_sec: deposit_info.unstakeDelaySec,
-            withdraw_time: UintTryTo::<u64>::uint_try_to(&deposit_info.withdrawTime).unwrap(),
+            withdraw_time: deposit_info.withdrawTime.to(),
         }
     }
 }
