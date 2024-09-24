@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-
 use tonic::codegen::http;
-use crate::metrics::RequestMethoedNameInfo;
 
-impl<Body> RequestMethoedNameInfo for http::Request<Body>{
+use crate::metrics::RequestMethodNameInfo;
+
+impl<Body> RequestMethodNameInfo for http::Request<Body> {
     fn get_method_name(&self) -> String {
         let method_name = self.uri().path().split('/').last().unwrap_or("unknown");
         method_name.to_string()

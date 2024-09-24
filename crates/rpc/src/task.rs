@@ -24,7 +24,9 @@ use rundler_sim::{
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
 };
 use rundler_task::{
-    metrics::MetricsLayer, server::{format_socket_addr, HealthCheck}, Task
+    metrics::MetricsLayer,
+    server::{format_socket_addr, HealthCheck},
+    Task,
 };
 use rundler_types::{
     builder::Builder, chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
@@ -185,7 +187,7 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-        let rpc_metric_middleware = MetricsLayer::new("rundler-eth".to_string(), "rpc".to_string());
+        let rpc_metric_middleware = MetricsLayer::new("rundler-eth-service".to_string(), "rpc".to_string());
 
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)

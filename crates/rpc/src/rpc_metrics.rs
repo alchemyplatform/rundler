@@ -11,10 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use rundler_task::metrics::RequestMethoedNameInfo;
 use jsonrpsee::types::Request;
+use rundler_task::metrics::RequestMethodNameInfo;
 
-impl RequestMethoedNameInfo for Request {
+impl RequestMethodNameInfo for Request {
     fn get_method_name(&self) -> String {
         self.method_name().to_string()
     }
