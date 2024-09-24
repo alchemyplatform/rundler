@@ -5258,6 +5258,7 @@ dependencies = [
  "futures",
  "metrics",
  "rundler-provider",
+ "rundler-types",
  "rundler-utils",
  "thiserror",
  "tokio",

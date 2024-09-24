@@ -11,13 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use rundler_types::task::traits::RequestExtractor;
 use tonic::codegen::http;
 
-use crate::metrics::RequestMethodNameInfo;
+/// http request method extractor. 
+#[derive(Copy, Clone)]
+struct HttpMethodExtractor;
 
-impl<Body> RequestMethodNameInfo for http::Request<Body> {
-    fn get_method_name(&self) -> String {
-        let method_name = self.uri().path().split('/').last().unwrap_or("unknown");
+impl<Body> RequestExtractor<http::Request<Body>> for HttpMethodExtractor {
+    fn get_method_name(req: &http::Request<Body>) -> String {
+        let method_name = req.uri().path().split('/').last().unwrap_or("unknown");
         method_name.to_string()
     }
 }

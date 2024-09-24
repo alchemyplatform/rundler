@@ -14,66 +14,80 @@
 //! Middleware for recording metrics for requests.
 
 use std::{
+    marker::PhantomData,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use futures::{future::BoxFuture, FutureExt};
+use rundler_types::task::traits::RequestExtractor;
 use tower::{Layer, Service};
-
-/// Trait to expose request method name.
-pub trait RequestMethodNameInfo {
-    /// Get method name.
-    fn get_method_name(&self) -> String;
-}
 
 /// tower network layer: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
 #[derive(Debug, Clone)]
-pub struct MetricsLayer {
+pub struct MetricsLayer<T, R> {
     service_name: String,
     protocal: String,
+    _request_extractor_: PhantomData<T>,
+    _request_type_: PhantomData<R>,
 }
 
-impl MetricsLayer {
+impl<T, R> MetricsLayer<T, R>
+where
+    T: RequestExtractor<R>,
+{
     /// Initialize a network layer wrappers the metric middleware.
     pub fn new(service_name: String, protocal: String) -> Self {
         MetricsLayer {
             service_name,
             protocal,
+            _request_extractor_: PhantomData,
+            _request_type_: PhantomData,
         }
     }
 }
 
-impl<S> Layer<S> for MetricsLayer {
-    type Service = MetricsMiddleware<S>;
+impl<S, T, R> Layer<S> for MetricsLayer<T, R>
+where
+    T: RequestExtractor<R>,
+{
+    type Service = MetricsMiddleware<S, T, R>;
     fn layer(&self, service: S) -> Self::Service {
-        MetricsMiddleware::new(service, self.service_name.clone(), self.protocal.clone())
+        MetricsMiddleware::<S, T, R>::new(service, self.service_name.clone(), self.protocal.clone())
     }
 }
 
 /// Middleware implementation.
-pub struct MetricsMiddleware<S> {
+pub struct MetricsMiddleware<S, T, R> {
     inner: S,
     service_name: String,
     protocal: String,
+    _request_extractor_: PhantomData<T>,
+    _request_type_: PhantomData<R>,
 }
 
-impl<S> MetricsMiddleware<S> {
+impl<S, T, R> MetricsMiddleware<S, T, R>
+where
+    T: RequestExtractor<R>,
+{
     /// Initialize a middleware.
     pub fn new(inner: S, service_name: String, protocal: String) -> Self {
         Self {
             inner: inner,
             service_name: service_name.clone(),
             protocal: protocal,
+            _request_extractor_: PhantomData,
+            _request_type_: PhantomData,
         }
     }
 }
 
-impl<S, Request> Service<Request> for MetricsMiddleware<S>
+impl<S, T, Request> Service<Request> for MetricsMiddleware<S, T, Request>
 where
     S: Service<Request> + Send + Sync + Clone + 'static,
     S::Future: Send + Sync + 'static,
-    Request: RequestMethodNameInfo + Send + Sync + 'static,
+    T: RequestExtractor<Request> + 'static,
+    Request: Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -84,7 +98,8 @@ where
     }
 
     fn call(&mut self, request: Request) -> Self::Future {
-        let method_name = request.get_method_name();
+        let method_name = T::get_method_name(&request);
+
         MethodMetrics::increment_num_requests(
             self.service_name.as_str(),
             method_name.as_str(),

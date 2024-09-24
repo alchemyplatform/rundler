@@ -16,8 +16,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use jsonrpsee::{
-    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
-    RpcModule,
+    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder}, types::Request, RpcModule
 };
 use rundler_provider::{EntryPointProvider, Provider};
 use rundler_sim::{
@@ -46,6 +45,7 @@ use crate::{
     rpc_metrics,
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
+    rpc_metrics::RPCMethodExtractor,
 };
 
 /// RPC server arguments.
@@ -187,7 +187,8 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-        let rpc_metric_middleware = MetricsLayer::new("rundler-eth-service".to_string(), "rpc".to_string());
+        let rpc_metric_middleware =
+            MetricsLayer::<RPCMethodExtractor, Request>::new("rundler-eth-service".to_string(), "rpc".to_string());
 
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)

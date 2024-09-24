@@ -12,10 +12,13 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use jsonrpsee::types::Request;
-use rundler_task::metrics::RequestMethodNameInfo;
+use rundler_types::task::traits::RequestExtractor;
 
-impl RequestMethodNameInfo for Request {
-    fn get_method_name(&self) -> String {
-        self.method_name().to_string()
+#[derive(Copy)]
+struct RPCMethodExtractor;
+
+impl RequestExtractor<Request> for RPCMethodExtractor {
+    fn get_method_name(req: &Request) -> String {
+        req.method_name().to_string()
     }
 }

@@ -11,13 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Rundler pool types
+/// Trait to expose request method name.
 
-mod error;
-pub use error::*;
-
-mod traits;
-pub use traits::*;
-
-mod types;
-pub use types::*;
+pub trait RequestExtractor<R>: Copy + Sync + Send {
+    /// Get method name.
+    fn get_method_name(request: &R) -> String;
+}

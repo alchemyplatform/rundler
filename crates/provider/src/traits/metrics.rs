@@ -11,13 +11,23 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Rundler pool types
+/// Method extractor
+use rundler_types::task::traits::RequestExtractor;
+use alloy_json_rpc::RequestPacket;
 
-mod error;
-pub use error::*;
+#[derive(Clone, Copy)]
+struct AlloyMethodExtractor;
 
-mod traits;
-pub use traits::*;
-
-mod types;
-pub use types::*;
+impl RequestExtractor<RequestPacket> for RPCMethodExtractor {
+    fn get_method_name(req: &RequestPacket) -> String {
+        match req {
+            RequestPacket::Single(request) => {
+                request.method().to_string()
+            }
+            _ => {
+                // can't extract method name for batch.
+                "unknown".to_string()
+            }
+        }
+    }
+}
