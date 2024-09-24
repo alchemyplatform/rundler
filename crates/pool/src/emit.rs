@@ -13,7 +13,7 @@
 
 use std::fmt::Display;
 
-use ethers::types::{Address, H256};
+use alloy_primitives::{Address, B256};
 use rundler_types::{Entity, EntityType, Timestamp, UserOperation, UserOperationVariant};
 use rundler_utils::strs;
 
@@ -25,7 +25,7 @@ pub enum OpPoolEvent {
     /// An operation was received and added to the pool
     ReceivedOp {
         /// Operation hash
-        op_hash: H256,
+        op_hash: B256,
         /// The full operation
         op: UserOperationVariant,
         /// Block number the operation was added to the pool
@@ -42,7 +42,7 @@ pub enum OpPoolEvent {
     /// An operation was removed from the pool
     RemovedOp {
         /// Operation hash
-        op_hash: H256,
+        op_hash: B256,
         /// Removal reason
         reason: OpRemovalReason,
     },
@@ -100,9 +100,9 @@ pub enum OpRemovalReason {
         /// Mined at block number
         block_number: u64,
         /// Mined at block hash
-        block_hash: H256,
+        block_hash: B256,
         /// Mined in transaction hash
-        tx_hash: H256,
+        tx_hash: B256,
     },
     /// Op was associated with a throttled entity and was removed
     /// because it was too old

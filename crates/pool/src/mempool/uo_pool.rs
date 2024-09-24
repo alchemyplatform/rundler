@@ -13,10 +13,7 @@
 
 use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
-use ethers::{
-    types::{Address, H256, U256},
-    utils::format_units,
-};
+use alloy_primitives::{utils::format_units, Address, B256, U256};
 use itertools::Itertools;
 use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
@@ -60,10 +57,10 @@ pub(crate) struct UoPool<UO: UserOperation, P: Prechecker, S: Simulator, E: Entr
 
 struct UoPoolState {
     pool: PoolInner,
-    throttled_ops: HashSet<H256>,
+    throttled_ops: HashSet<B256>,
     block_number: u64,
     gas_fees: GasFees,
-    base_fee: U256,
+    base_fee: u128,
 }
 
 impl<UO, P, S, E> UoPool<UO, P, S, E>
@@ -87,7 +84,7 @@ where
                 throttled_ops: HashSet::new(),
                 block_number: 0,
                 gas_fees: GasFees::default(),
-                base_fee: U256::zero(),
+                base_fee: 0,
             }),
             reputation,
             paymaster,
@@ -384,7 +381,7 @@ where
         &self,
         origin: OperationOrigin,
         op: UserOperationVariant,
-    ) -> MempoolResult<H256> {
+    ) -> MempoolResult<B256> {
         // TODO(danc) aggregator reputation is not implemented
         // TODO(danc) catch ops with aggregators prior to simulation and reject
 
@@ -540,7 +537,7 @@ where
         Ok(hash)
     }
 
-    fn remove_operations(&self, hashes: &[H256]) {
+    fn remove_operations(&self, hashes: &[B256]) {
         let mut count = 0;
         let mut removed_hashes = vec![];
         {
@@ -563,7 +560,7 @@ where
         UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
     }
 
-    fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<H256>> {
+    fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<B256>> {
         // Check for the operation in the pool and its age
         let po = {
             let state = self.state.read();
@@ -635,12 +632,13 @@ where
         Ok(ordered_ops
             .into_iter()
             .filter(|op| {
+                let sender_num = U256::from_be_bytes(op.uo.sender().into_word().into());
+
                 // short-circuit the mod if there is only 1 shard
                 ((self.config.num_shards == 1) ||
-                (U256::from_little_endian(op.uo.sender().as_bytes())
-                        .div_mod(self.config.num_shards.into())
-                        .1
-                        == shard_index.into())) &&
+                (sender_num
+                        % U256::from(self.config.num_shards)
+                        == U256::from(shard_index))) &&
                 // filter out ops from unstaked senders we've already seen
                 if !op.account_is_staked {
                     senders.insert(op.uo.sender())
@@ -657,7 +655,7 @@ where
         self.state.read().pool.best_operations().take(max).collect()
     }
 
-    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
+    fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>> {
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
@@ -733,7 +731,7 @@ impl UoPoolMetrics {
 mod tests {
     use std::collections::HashMap;
 
-    use ethers::types::{Bytes, H160};
+    use alloy_primitives::Bytes;
     use mockall::Sequence;
     use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_sim::{
@@ -828,7 +826,7 @@ mod tests {
         // after updates
         entrypoint
             .expect_get_balances()
-            .returning(|_| Ok(vec![1110.into()]));
+            .returning(|_| Ok(vec![U256::from(1110)]));
 
         let (pool, uos) = create_pool_with_entrypoint_insert_ops(
             vec![
@@ -843,7 +841,7 @@ mod tests {
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
-            latest_block_hash: H256::random(),
+            latest_block_hash: B256::random(),
             latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
@@ -852,19 +850,19 @@ mod tests {
                 hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
-                actual_gas_cost: U256::zero(),
+                actual_gas_cost: U256::ZERO,
                 paymaster: None,
             }],
             unmined_ops: vec![],
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
-                amount: 100.into(),
+                amount: U256::from(100),
                 entrypoint: pool.config.entry_point,
                 is_addition: true,
             }],
             unmined_entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
-                amount: 10.into(),
+                amount: U256::from(10),
                 entrypoint: pool.config.entry_point,
                 is_addition: false,
             }],
@@ -875,7 +873,7 @@ mod tests {
         check_ops(pool.best_operations(3, 0).unwrap(), uos[1..].to_vec());
 
         let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
-        assert_eq!(paymaster_balance.confirmed_balance, 1110.into());
+        assert_eq!(paymaster_balance.confirmed_balance, U256::from(1110));
     }
 
     #[tokio::test]
@@ -891,10 +889,10 @@ mod tests {
         // add pending max cost of 50 for each uo
         for op in &mut ops {
             let uo: &mut UserOperation = op.op.as_mut();
-            uo.call_gas_limit = 10.into();
-            uo.verification_gas_limit = 10.into();
-            uo.pre_verification_gas = 10.into();
-            uo.max_fee_per_gas = 1.into();
+            uo.call_gas_limit = 10;
+            uo.verification_gas_limit = 10;
+            uo.pre_verification_gas = 10;
+            uo.max_fee_per_gas = 1;
         }
 
         let mut entrypoint = MockEntryPointV0_6::new();
@@ -910,25 +908,25 @@ mod tests {
             .expect_get_balances()
             .once()
             .in_sequence(&mut seq)
-            .returning(|_| Ok(vec![1080.into()]));
+            .returning(|_| Ok(vec![U256::from(1080)]));
         // Unmine UO of 10, unmine deposit of 100
         // confirmed = 1080 + 10 - 100 = 990. Pending = 990 - 50*3 = 840
         entrypoint
             .expect_get_balances()
             .once()
             .in_sequence(&mut seq)
-            .returning(|_| Ok(vec![990.into()]));
+            .returning(|_| Ok(vec![U256::from(990)]));
 
         let (pool, uos) = create_pool_with_entrypoint_insert_ops(ops, entrypoint).await;
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
 
-        assert_eq!(metadata.pending_balance, 850.into());
+        assert_eq!(metadata.pending_balance, U256::from(850));
         check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
 
         // mine the first op with actual gas cost of 10
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
-            latest_block_hash: H256::random(),
+            latest_block_hash: B256::random(),
             latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
@@ -937,19 +935,19 @@ mod tests {
                 hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
-                actual_gas_cost: 10.into(),
+                actual_gas_cost: U256::from(10),
                 paymaster: Some(paymaster),
             }],
             unmined_ops: vec![],
             entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
-                amount: 100.into(),
+                amount: U256::from(100),
                 entrypoint: pool.config.entry_point,
                 is_addition: true,
             }],
             unmined_entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
-                amount: 10.into(),
+                amount: U256::from(10),
                 entrypoint: pool.config.entry_point,
                 is_addition: false,
             }],
@@ -963,11 +961,11 @@ mod tests {
         );
 
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
-        assert_eq!(metadata.pending_balance, 980.into());
+        assert_eq!(metadata.pending_balance, U256::from(980));
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
-            latest_block_hash: H256::random(),
+            latest_block_hash: B256::random(),
             latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
@@ -977,13 +975,13 @@ mod tests {
                 hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
-                actual_gas_cost: 10.into(),
+                actual_gas_cost: U256::from(10),
                 paymaster: None,
             }],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![BalanceUpdate {
                 address: paymaster,
-                amount: 100.into(),
+                amount: U256::from(100),
                 entrypoint: pool.config.entry_point,
                 is_addition: true,
             }],
@@ -992,7 +990,7 @@ mod tests {
         .await;
 
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
-        assert_eq!(metadata.pending_balance, 840.into());
+        assert_eq!(metadata.pending_balance, U256::from(840));
 
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
@@ -1009,7 +1007,7 @@ mod tests {
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
-            latest_block_hash: H256::random(),
+            latest_block_hash: B256::random(),
             latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
@@ -1018,7 +1016,7 @@ mod tests {
                 hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
-                actual_gas_cost: U256::zero(),
+                actual_gas_cost: U256::ZERO,
                 paymaster: None,
             }],
             unmined_ops: vec![],
@@ -1051,7 +1049,7 @@ mod tests {
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
-            latest_block_hash: H256::random(),
+            latest_block_hash: B256::random(),
             latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
@@ -1060,7 +1058,7 @@ mod tests {
                 hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
-                actual_gas_cost: U256::zero(),
+                actual_gas_cost: U256::ZERO,
                 paymaster: None,
             }],
             unmined_ops: vec![],
@@ -1127,7 +1125,7 @@ mod tests {
         // Mine first op
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
-            latest_block_hash: H256::random(),
+            latest_block_hash: B256::random(),
             latest_block_timestamp: 0.into(),
             earliest_remembered_block_number: 0,
             reorg_depth: 0,
@@ -1136,7 +1134,7 @@ mod tests {
                 hash: uos[0].hash(pool.config.entry_point, 1),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
-                actual_gas_cost: U256::zero(),
+                actual_gas_cost: U256::ZERO,
                 paymaster: None,
             }],
             entity_balance_updates: vec![],
@@ -1191,10 +1189,10 @@ mod tests {
         let paymaster = Address::random();
         let mut op = create_op(Address::random(), 0, 0, Some(paymaster));
         let uo: &mut UserOperation = op.op.as_mut();
-        uo.call_gas_limit = 1000.into();
-        uo.verification_gas_limit = 1000.into();
-        uo.pre_verification_gas = 1000.into();
-        uo.max_fee_per_gas = 1.into();
+        uo.call_gas_limit = 1000;
+        uo.verification_gas_limit = 1000;
+        uo.pre_verification_gas = 1000;
+        uo.max_fee_per_gas = 1;
 
         let mut entrypoint = MockEntryPointV0_6::new();
         entrypoint
@@ -1286,7 +1284,7 @@ mod tests {
 
         let mut replacement = op.op.clone();
         let r: &mut UserOperation = replacement.as_mut();
-        r.max_fee_per_gas = r.max_fee_per_gas + 1;
+        r.max_fee_per_gas += 1;
 
         let err = pool
             .add_operation(OperationOrigin::Local, replacement)
@@ -1303,16 +1301,16 @@ mod tests {
         let mut entrypoint = MockEntryPointV0_6::new();
         entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
-                deposit: 1000.into(),
+                deposit: U256::from(1000),
                 staked: true,
-                stake: 10000,
+                stake: U256::from(10000),
                 unstake_delay_sec: 100,
                 withdraw_time: 10,
             })
         });
         let mut pool = create_pool_with_entry_point(vec![], entrypoint);
 
-        pool.config.sim_settings.min_stake_value = 10001;
+        pool.config.sim_settings.min_stake_value = U256::from(10001);
         pool.config.sim_settings.min_unstake_delay = 101;
 
         let status = pool.get_stake_status(Address::random()).await.unwrap();
@@ -1326,10 +1324,10 @@ mod tests {
 
         let mut op = create_op(Address::random(), 0, 5, Some(paymaster));
         let uo: &mut UserOperation = op.op.as_mut();
-        uo.call_gas_limit = 10.into();
-        uo.verification_gas_limit = 10.into();
-        uo.pre_verification_gas = 10.into();
-        uo.max_fee_per_gas = 1.into();
+        uo.call_gas_limit = 10;
+        uo.verification_gas_limit = 10;
+        uo.pre_verification_gas = 10;
+        uo.max_fee_per_gas = 1;
 
         let mut entrypoint = MockEntryPointV0_6::new();
         entrypoint
@@ -1344,7 +1342,7 @@ mod tests {
 
         let mut replacement = op.op.clone();
         let r: &mut UserOperation = replacement.as_mut();
-        r.max_fee_per_gas = r.max_fee_per_gas + 1;
+        r.max_fee_per_gas += 1;
 
         let _ = pool
             .add_operation(OperationOrigin::Local, replacement.clone())
@@ -1431,7 +1429,7 @@ mod tests {
         assert!(matches!(
             pool.remove_op_by_id(&UserOperationId {
                 sender: Address::random(),
-                nonce: 0.into()
+                nonce: U256::ZERO
             }),
             Ok(None)
         ));
@@ -1469,14 +1467,14 @@ mod tests {
             .await
             .unwrap();
 
-        let pool_op = pool.get_user_operation_by_hash(H256::random());
+        let pool_op = pool.get_user_operation_by_hash(B256::random());
         assert_eq!(pool_op, None);
     }
 
     #[tokio::test]
     async fn too_many_ops_for_unstaked_sender() {
         let mut ops = vec![];
-        let addr = H160::random();
+        let addr = Address::random();
         for i in 0..5 {
             ops.push(create_op(addr, i, 1, None))
         }
@@ -1579,10 +1577,10 @@ mod tests {
         prechecker.expect_update_fees().returning(|| {
             Ok((
                 GasFees {
-                    max_fee_per_gas: 0.into(),
-                    max_priority_fee_per_gas: 0.into(),
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
                 },
-                0.into(),
+                0,
             ))
         });
 
@@ -1674,20 +1672,20 @@ mod tests {
     fn create_op(
         sender: Address,
         nonce: usize,
-        max_fee_per_gas: usize,
+        max_fee_per_gas: u128,
         paymaster: Option<Address>,
     ) -> OpWithErrors {
         let mut paymaster_and_data = Bytes::new();
 
         if let Some(paymaster) = paymaster {
-            paymaster_and_data = paymaster.to_fixed_bytes().into();
+            paymaster_and_data = paymaster.to_vec().into();
         }
 
         OpWithErrors {
             op: UserOperation {
                 sender,
-                nonce: nonce.into(),
-                max_fee_per_gas: max_fee_per_gas.into(),
+                nonce: U256::from(nonce),
+                max_fee_per_gas,
                 paymaster_and_data,
                 ..UserOperation::default()
             }
@@ -1702,7 +1700,7 @@ mod tests {
     fn create_op_with_errors(
         sender: Address,
         nonce: usize,
-        max_fee_per_gas: usize,
+        max_fee_per_gas: u128,
         precheck_error: Option<PrecheckViolation>,
         simulation_error: Option<SimulationViolation>,
         staked: bool,
@@ -1710,8 +1708,8 @@ mod tests {
         OpWithErrors {
             op: UserOperation {
                 sender,
-                nonce: nonce.into(),
-                max_fee_per_gas: max_fee_per_gas.into(),
+                nonce: U256::from(nonce),
+                max_fee_per_gas,
                 ..UserOperation::default()
             }
             .into(),

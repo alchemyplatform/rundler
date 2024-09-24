@@ -15,8 +15,8 @@
 //! Tracks a size value.
 use std::collections::HashMap;
 
+use alloy_primitives::{Address, U256};
 use anyhow::Context;
-use ethers::{abi::Address, types::U256};
 use parking_lot::RwLock;
 use rundler_provider::EntryPoint;
 use rundler_types::{
@@ -38,7 +38,7 @@ pub(crate) struct PaymasterTracker<E> {
 
 #[derive(Debug)]
 pub(crate) struct PaymasterConfig {
-    min_stake_value: u128,
+    min_stake_value: U256,
     min_unstake_delay: u32,
     tracker_enabled: bool,
     cache_length: u32,
@@ -46,7 +46,7 @@ pub(crate) struct PaymasterConfig {
 
 impl PaymasterConfig {
     pub(crate) fn new(
-        min_stake_value: u128,
+        min_stake_value: U256,
         min_unstake_delay: u32,
         tracker_enabled: bool,
         cache_length: u32,
@@ -76,7 +76,11 @@ where
     }
 
     pub(crate) async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
-        let deposit_info = self.entry_point.get_deposit_info(address).await?;
+        let deposit_info = self
+            .entry_point
+            .get_deposit_info(address)
+            .await
+            .context("provider error")?;
 
         let is_staked = deposit_info.stake.ge(&self.config.min_stake_value)
             && deposit_info
@@ -85,8 +89,8 @@ where
 
         let stake_status = StakeStatus {
             stake_info: StakeInfo {
-                stake: deposit_info.stake.into(),
-                unstake_delay_sec: deposit_info.unstake_delay_sec.into(),
+                stake: deposit_info.stake,
+                unstake_delay_sec: deposit_info.unstake_delay_sec,
             },
             is_staked,
         };
@@ -123,7 +127,7 @@ where
         // Save paymaster balance after first lookup
         self.state
             .write()
-            .add_new_paymaster(paymaster, balance, 0.into());
+            .add_new_paymaster(paymaster, balance, U256::ZERO);
 
         Ok(paymaster_meta)
     }
@@ -156,7 +160,11 @@ where
         &self,
         addresses: &[Address],
     ) -> MempoolResult<()> {
-        let balances = self.entry_point.get_balances(addresses.to_vec()).await?;
+        let balances = self
+            .entry_point
+            .get_balances(addresses.to_vec())
+            .await
+            .context("provider error")?;
 
         self.state
             .write()
@@ -171,7 +179,8 @@ where
         let balances = self
             .entry_point
             .get_balances(paymaster_addresses.clone())
-            .await?;
+            .await
+            .context("provider error")?;
 
         self.state
             .write()
@@ -498,7 +507,7 @@ impl PaymasterBalance {
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::{Address, H256, U256};
+    use alloy_primitives::{Address, B256, U256};
     use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_types::{
         pool::{PaymasterMetadata, PoolOperation},
@@ -515,8 +524,8 @@ mod tests {
             entry_point: Address::random(),
             aggregator: None,
             valid_time_range: ValidTimeRange::all_time(),
-            expected_code_hash: H256::random(),
-            sim_block_hash: H256::random(),
+            expected_code_hash: B256::random(),
+            sim_block_hash: B256::random(),
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
             sim_block_number: 0,
@@ -531,11 +540,11 @@ mod tests {
         let sender = Address::random();
         let uo = UserOperation {
             sender,
-            call_gas_limit: 10.into(),
-            pre_verification_gas: 10.into(),
-            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
-            verification_gas_limit: 10.into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 10,
+            pre_verification_gas: 10,
+            paymaster_and_data: paymaster.to_vec().into(),
+            verification_gas_limit: 10,
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
@@ -550,7 +559,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(balance.confirmed_balance, 1000.into(),);
+        assert_eq!(balance.confirmed_balance, U256::from(1000));
 
         assert_eq!(
             balance.pending_balance,
@@ -571,11 +580,11 @@ mod tests {
 
         let uo = UserOperation {
             sender,
-            call_gas_limit: 10.into(),
-            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
-            pre_verification_gas: 10.into(),
-            verification_gas_limit: 10.into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 10,
+            paymaster_and_data: paymaster.to_vec().into(),
+            pre_verification_gas: 10,
+            verification_gas_limit: 10,
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
@@ -597,10 +606,10 @@ mod tests {
         let confirmed_balance = U256::from(5);
         let uo = UserOperation {
             sender,
-            call_gas_limit: 10.into(),
-            pre_verification_gas: 10.into(),
-            verification_gas_limit: 10.into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 10,
+            pre_verification_gas: 10,
+            verification_gas_limit: 10,
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
@@ -629,11 +638,11 @@ mod tests {
 
         let uo = UserOperation {
             sender,
-            call_gas_limit: 100.into(),
-            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
-            pre_verification_gas: 100.into(),
-            verification_gas_limit: 100.into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 100,
+            paymaster_and_data: paymaster.to_vec().into(),
+            pre_verification_gas: 100,
+            verification_gas_limit: 100,
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
@@ -648,16 +657,16 @@ mod tests {
         let paymaster_tracker = new_paymaster_tracker();
 
         let paymaster_0 = Address::random();
-        let paymaster_0_confimed = 1000.into();
+        let paymaster_0_confimed = U256::from(1000);
 
-        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_0_confimed, 0.into());
+        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_0_confimed, U256::ZERO);
 
         let balance_0 = paymaster_tracker
             .paymaster_balance(paymaster_0)
             .await
             .unwrap();
 
-        assert_eq!(balance_0.confirmed_balance, 1000.into());
+        assert_eq!(balance_0.confirmed_balance, U256::from(1000));
 
         let _ = paymaster_tracker.reset_confirmed_balances().await;
 
@@ -666,7 +675,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(balance_0.confirmed_balance, 50.into());
+        assert_eq!(balance_0.confirmed_balance, U256::from(50));
     }
 
     #[tokio::test]
@@ -674,16 +683,16 @@ mod tests {
         let paymaster_tracker = new_paymaster_tracker();
 
         let paymaster_0 = Address::random();
-        let paymaster_0_confimed = 1000.into();
+        let paymaster_0_confimed = U256::from(1000);
 
-        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_0_confimed, 0.into());
+        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_0_confimed, U256::ZERO);
 
         let balance_0 = paymaster_tracker
             .paymaster_balance(paymaster_0)
             .await
             .unwrap();
 
-        assert_eq!(balance_0.confirmed_balance, 1000.into());
+        assert_eq!(balance_0.confirmed_balance, U256::from(1000));
 
         let _ = paymaster_tracker
             .reset_confirmed_balances_for(&[paymaster_0])
@@ -694,7 +703,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(balance_0.confirmed_balance, 50.into());
+        assert_eq!(balance_0.confirmed_balance, U256::from(50));
     }
 
     #[tokio::test]
@@ -713,11 +722,11 @@ mod tests {
         let sender = Address::random();
         let uo = UserOperation {
             sender,
-            call_gas_limit: 10.into(),
-            pre_verification_gas: 10.into(),
-            verification_gas_limit: 10.into(),
-            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 10,
+            pre_verification_gas: 10,
+            verification_gas_limit: 10,
+            paymaster_and_data: paymaster.to_vec().into(),
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
@@ -754,23 +763,23 @@ mod tests {
         let sender = Address::random();
         let uo = UserOperation {
             sender,
-            call_gas_limit: 10.into(),
-            pre_verification_gas: 10.into(),
-            paymaster_and_data: paymaster_0.as_bytes().to_vec().into(),
-            verification_gas_limit: 10.into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 10,
+            pre_verification_gas: 10,
+            paymaster_and_data: paymaster_0.to_vec().into(),
+            verification_gas_limit: 10,
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
         let mut uo_1 = uo.clone();
-        uo_1.max_fee_per_gas = 2.into();
-        uo_1.paymaster_and_data = paymaster_1.as_bytes().to_vec().into();
+        uo_1.max_fee_per_gas = 2;
+        uo_1.paymaster_and_data = paymaster_1.to_vec().into();
 
         let max_op_cost_0 = uo.max_gas_cost();
         let max_op_cost_1 = uo_1.max_gas_cost();
 
-        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_balance_0, 0.into());
-        paymaster_tracker.add_new_paymaster(paymaster_1, paymaster_balance_1, 0.into());
+        paymaster_tracker.add_new_paymaster(paymaster_0, paymaster_balance_0, U256::ZERO);
+        paymaster_tracker.add_new_paymaster(paymaster_1, paymaster_balance_1, U256::ZERO);
 
         let po_0 = demo_pool_op(uo);
 
@@ -849,17 +858,17 @@ mod tests {
             .await
             .unwrap();
 
-        paymaster_tracker.add_new_user_op(&existing_id, &meta, 30.into());
+        paymaster_tracker.add_new_user_op(&existing_id, &meta, U256::from(30));
 
         // replacement_uo
         let uo = UserOperation {
             sender,
             nonce,
-            call_gas_limit: 100.into(),
-            pre_verification_gas: 100.into(),
-            verification_gas_limit: 100.into(),
-            paymaster_and_data: paymaster.as_bytes().to_vec().into(),
-            max_fee_per_gas: 1.into(),
+            call_gas_limit: 100,
+            pre_verification_gas: 100,
+            verification_gas_limit: 100,
+            paymaster_and_data: paymaster.to_vec().into(),
+            max_fee_per_gas: 1,
             ..Default::default()
         };
 
@@ -924,9 +933,9 @@ mod tests {
 
         entrypoint.expect_get_deposit_info().returning(|_| {
             Ok(DepositInfo {
-                deposit: 1000.into(),
+                deposit: U256::from(1000),
                 staked: true,
-                stake: 10000,
+                stake: U256::from(10000),
                 unstake_delay_sec: 100,
                 withdraw_time: 10,
             })
@@ -934,13 +943,13 @@ mod tests {
 
         entrypoint
             .expect_get_balances()
-            .returning(|_| Ok(vec![50.into()]));
+            .returning(|_| Ok(vec![U256::from(50)]));
 
         entrypoint
             .expect_balance_of()
             .returning(|_, _| Ok(U256::from(1000)));
 
-        let config = PaymasterConfig::new(1001, 99, true, u32::MAX);
+        let config = PaymasterConfig::new(U256::from(1001), 99, true, u32::MAX);
 
         PaymasterTracker::new(entrypoint, config)
     }

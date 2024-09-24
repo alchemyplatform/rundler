@@ -15,8 +15,9 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use rundler_provider::{EntryPointProvider, Provider};
+use rundler_provider::{EntryPointProvider, EvmProvider};
 use rundler_sim::{
+    gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
 };
@@ -68,7 +69,7 @@ pub struct PoolTask<P, E06, E07> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     pool_builder: LocalPoolBuilder,
-    provider: Arc<P>,
+    provider: P,
     ep_06: Option<E06>,
     ep_07: Option<E07>,
 }
@@ -76,10 +77,14 @@ pub struct PoolTask<P, E06, E07> {
 #[async_trait]
 impl<P, E06, E07> Task for PoolTask<P, E06, E07>
 where
-    P: Provider,
-    E06: EntryPointProvider<UserOperationV0_6>,
-    E07: EntryPointProvider<UserOperationV0_7>,
+    P: EvmProvider + Clone + 'static,
+    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
+    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
+    fn boxed(self) -> Box<dyn Task> {
+        Box::new(self)
+    }
+
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let chain_id = self.args.chain_spec.id;
         tracing::info!("Chain id: {chain_id}");
@@ -97,13 +102,14 @@ where
                 .map(|config| (config.entry_point, config.entry_point_version))
                 .collect(),
         };
-        let provider = rundler_provider::new_provider(
-            &self.args.http_url,
-            Some(self.args.chain_poll_interval),
-        )?;
-        let chain = Chain::new(provider.clone(), chain_settings);
+
+        let chain = Chain::new(self.provider.clone(), chain_settings);
         let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
-        let chain_handle = chain.spawn_watcher(update_sender.clone(), shutdown_token.clone());
+        let chain_handle = tokio::spawn({
+            let update_sender = update_sender.clone();
+            let shutdown_token = shutdown_token.clone();
+            async move { chain.watch(update_sender, shutdown_token).await }
+        });
 
         // create mempools
         let mut mempools = HashMap::new();
@@ -182,7 +188,7 @@ impl<P, E06, E07> PoolTask<P, E06, E07> {
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         pool_builder: LocalPoolBuilder,
-        provider: Arc<P>,
+        provider: P,
         ep_06: Option<E06>,
         ep_07: Option<E07>,
     ) -> Self {
@@ -197,24 +203,19 @@ impl<P, E06, E07> PoolTask<P, E06, E07> {
     }
 }
 
-impl<P, E06, E07> PoolTask<P, E06, E07>
+impl<'a, P, E06, E07> PoolTask<P, E06, E07>
 where
-    P: Provider,
-    E06: EntryPointProvider<UserOperationV0_6>,
-    E07: EntryPointProvider<UserOperationV0_7>,
+    P: EvmProvider + Clone + 'a,
+    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'a,
+    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'a,
 {
-    /// Convert this task into a boxed task.
-    pub fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
-    }
-
     fn create_mempool_v0_6(
         &self,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    ) -> anyhow::Result<Arc<dyn Mempool>> {
+    ) -> anyhow::Result<Arc<dyn Mempool + 'a>> {
         let ep = self
             .ep_06
             .clone()
@@ -222,7 +223,7 @@ where
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
             );
@@ -230,13 +231,13 @@ where
                 chain_spec,
                 pool_config,
                 event_sender,
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
         } else {
             let simulator = simulation::new_v0_6_simulator(
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
@@ -245,7 +246,7 @@ where
                 chain_spec,
                 pool_config,
                 event_sender,
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
@@ -258,7 +259,7 @@ where
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    ) -> anyhow::Result<Arc<dyn Mempool>> {
+    ) -> anyhow::Result<Arc<dyn Mempool + 'a>> {
         let ep = self
             .ep_07
             .clone()
@@ -266,7 +267,7 @@ where
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
             );
@@ -274,13 +275,13 @@ where
                 chain_spec,
                 pool_config,
                 event_sender,
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
         } else {
             let simulator = simulation::new_v0_7_simulator(
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
@@ -289,7 +290,7 @@ where
                 chain_spec,
                 pool_config,
                 event_sender,
-                Arc::clone(&self.provider),
+                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
@@ -300,21 +301,31 @@ where
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: Arc<P>,
+        provider: P,
         ep: E,
         simulator: S,
-    ) -> anyhow::Result<Arc<dyn Mempool>>
+    ) -> anyhow::Result<Arc<dyn Mempool + 'a>>
     where
         UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
         UserOperationVariant: From<UO>,
-        P: Provider,
-        E: EntryPointProvider<UO> + Clone,
-        S: Simulator<UO = UO>,
+        E: EntryPointProvider<UO> + Clone + 'a,
+        S: Simulator<UO = UO> + 'a,
     {
+        let fee_oracle = gas::get_fee_oracle(&chain_spec, provider.clone());
+        let fee_estimator = FeeEstimatorImpl::new(
+            provider.clone(),
+            fee_oracle,
+            pool_config.precheck_settings.priority_fee_mode,
+            pool_config
+                .precheck_settings
+                .bundle_priority_fee_overhead_percent,
+        );
+
         let prechecker = PrecheckerImpl::new(
             chain_spec,
-            Arc::clone(&provider),
+            provider.clone(),
             ep.clone(),
+            fee_estimator,
             pool_config.precheck_settings,
         );
 

@@ -13,7 +13,7 @@
 
 use std::{cmp::Ordering, ops::Add};
 
-use alloy_primitives::{address, ruint::UintTryTo, Address, Bytes, U256};
+use alloy_primitives::{address, Address, Bytes, U256};
 use alloy_sol_types::{Panic, Revert, SolError};
 use rundler_contracts::{
     v0_6::{
@@ -279,13 +279,14 @@ impl TryFrom<ReturnInfoV0_6> for ValidationReturnInfo {
             paymasterContext,
         } = value;
         Ok(Self {
-            pre_op_gas: UintTryTo::<u128>::uint_try_to(&preOpGas)
+            pre_op_gas: preOpGas
+                .try_into()
                 .map_err(|_| "preOpGas is larger than u128")?,
             // In v0.6 if one signature fails both do
             account_sig_failed: sigFailed,
             paymaster_sig_failed: sigFailed,
-            valid_after: UintTryTo::<u64>::uint_try_to(&validAfter).unwrap().into(),
-            valid_until: UintTryTo::<u64>::uint_try_to(&validUntil).unwrap().into(),
+            valid_after: validAfter.to::<u64>().into(),
+            valid_until: validUntil.to::<u64>().into(),
             paymaster_context: paymasterContext,
         })
     }
@@ -311,7 +312,8 @@ impl TryFrom<ReturnInfoV0_7> for ValidationReturnInfo {
             .intersect(paymaster.valid_time_range());
 
         Ok(Self {
-            pre_op_gas: UintTryTo::<u128>::uint_try_to(&preOpGas)
+            pre_op_gas: preOpGas
+                .try_into()
                 .map_err(|_| "preOpGas is larger than u128")?,
             account_sig_failed: !account.signature_valid(),
             paymaster_sig_failed: !paymaster.signature_valid(),

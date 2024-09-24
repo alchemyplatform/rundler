@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Context};
-use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
     chain::ChainSpec,
@@ -322,8 +322,8 @@ impl TryFrom<StakeStatus> for RundlerStakeStatus {
             return Ok(RundlerStakeStatus {
                 is_staked: stake_status.is_staked,
                 stake_info: RundlerStakeInfo {
-                    stake: stake_info.stake.into(),
-                    unstake_delay_sec: stake_info.unstake_delay_sec.into(),
+                    stake: from_bytes(&stake_info.stake)?,
+                    unstake_delay_sec: stake_info.unstake_delay_sec,
                 },
             });
         }
@@ -337,8 +337,8 @@ impl From<RundlerStakeStatus> for StakeStatus {
         StakeStatus {
             is_staked: stake_status.is_staked,
             stake_info: Some(StakeInfo {
-                stake: stake_status.stake_info.stake.as_u64(),
-                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec.as_u32(),
+                stake: stake_status.stake_info.stake.to_proto_bytes(),
+                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec,
             }),
         }
     }
@@ -377,8 +377,8 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
 
         let valid_time_range = ValidTimeRange::new(op.valid_after.into(), op.valid_until.into());
 
-        let expected_code_hash = H256::from_slice(&op.expected_code_hash);
-        let sim_block_hash = H256::from_slice(&op.sim_block_hash);
+        let expected_code_hash = B256::from_slice(&op.expected_code_hash);
+        let sim_block_hash = B256::from_slice(&op.sim_block_hash);
 
         Ok(PoolOperation {
             uo,
@@ -429,7 +429,7 @@ impl TryFrom<PaymasterBalance> for PoolPaymasterMetadata {
 impl From<PoolPaymasterMetadata> for PaymasterBalance {
     fn from(paymaster_metadata: PoolPaymasterMetadata) -> Self {
         Self {
-            address: paymaster_metadata.address.as_bytes().to_vec(),
+            address: paymaster_metadata.address.to_vec(),
             confirmed_balance: paymaster_metadata.confirmed_balance.to_proto_bytes(),
             pending_balance: paymaster_metadata.pending_balance.to_proto_bytes(),
         }
