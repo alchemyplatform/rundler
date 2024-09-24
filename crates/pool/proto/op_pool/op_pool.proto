@@ -302,7 +302,7 @@ message GetStakeStatusSuccess {
 }
 
 message StakeInfo { 
-  uint64 stake = 1;
+  bytes stake = 1;
   uint32 unstake_delay_sec= 2;
 }
 
@@ -708,7 +708,7 @@ message NotStaked {
   bytes accessed_address = 4;
   bytes slot = 5;
   bytes min_stake = 6;
-  bytes min_unstake_delay = 7;
+  uint32 min_unstake_delay = 7;
 }
 
 message UnintendedRevert {
@@ -752,6 +752,7 @@ message ValidationRevert {
     EntryPointRevert entry_point = 1;
     OperationRevert operation = 2;
     UnknownRevert unknown = 3;
+    PanicRevert panic = 4;
   }
 }
 message EntryPointRevert {
@@ -764,6 +765,9 @@ message OperationRevert {
 }
 message UnknownRevert {
   bytes revert_bytes = 1;
+}
+message PanicRevert {
+  bytes code = 1;
 }
 
 message AccessedUnsupportedContractType {

@@ -5138,10 +5138,11 @@ dependencies = [
 name = "rundler-pool"
 version = "0.3.0"
 dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
  "anyhow",
  "async-stream",
  "async-trait",
- "ethers",
  "futures",
  "futures-util",
  "itertools 0.13.0",
@@ -5149,6 +5150,7 @@ dependencies = [
  "mockall",
  "parking_lot",
  "prost",
+ "rundler-contracts",
  "rundler-provider",
  "rundler-sim",
  "rundler-task",

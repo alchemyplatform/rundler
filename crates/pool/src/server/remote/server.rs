@@ -19,8 +19,8 @@ use std::{
     },
 };
 
+use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use rundler_task::grpc::{metrics::GrpcMetricsLayer, protos::from_bytes};
 use rundler_types::{
@@ -127,10 +127,7 @@ impl OpPool for OpPoolImpl {
         let resp = match self.local_pool.get_supported_entry_points().await {
             Ok(entry_points) => GetSupportedEntryPointsResponse {
                 chain_id: self.chain_spec.id,
-                entry_points: entry_points
-                    .into_iter()
-                    .map(|ep| ep.as_bytes().to_vec())
-                    .collect(),
+                entry_points: entry_points.into_iter().map(|ep| ep.to_vec()).collect(),
             },
             Err(e) => {
                 return Err(Status::internal(format!("Failed to get entry points: {e}")));
@@ -155,7 +152,7 @@ impl OpPool for OpPoolImpl {
         let resp = match self.local_pool.add_op(ep, uo).await {
             Ok(hash) => AddOpResponse {
                 result: Some(add_op_response::Result::Success(AddOpSuccess {
-                    hash: hash.as_bytes().to_vec(),
+                    hash: hash.to_vec(),
                 })),
             },
             Err(error) => AddOpResponse {
@@ -221,14 +218,14 @@ impl OpPool for OpPoolImpl {
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
-        let hashes: Vec<H256> = req
+        let hashes: Vec<B256> = req
             .hashes
             .into_iter()
             .map(|h| {
                 if h.len() != 32 {
                     return Err(Status::invalid_argument("Hash must be 32 bytes long"));
                 }
-                Ok(H256::from_slice(&h))
+                Ok(B256::from_slice(&h))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -267,7 +264,7 @@ impl OpPool for OpPoolImpl {
             Ok(hash) => RemoveOpByIdResponse {
                 result: Some(remove_op_by_id_response::Result::Success(
                     RemoveOpByIdSuccess {
-                        hash: hash.map_or(vec![], |h| h.as_bytes().to_vec()),
+                        hash: hash.map_or(vec![], |h| h.to_vec()),
                     },
                 )),
             },

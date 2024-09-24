@@ -18,11 +18,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use ethers::{
-    abi::Address,
-    types::{H256, U256},
-};
 use rundler_types::{
     pool::{MempoolError, PoolOperation},
     Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
@@ -38,7 +35,7 @@ pub(crate) struct PoolInnerConfig {
     entry_point: Address,
     chain_id: u64,
     max_size_of_pool_bytes: usize,
-    min_replacement_fee_increase_percentage: u64,
+    min_replacement_fee_increase_percentage: u32,
     throttled_entity_mempool_count: u64,
     throttled_entity_live_blocks: u64,
 }
@@ -62,20 +59,20 @@ pub(crate) struct PoolInner {
     /// Pool settings
     config: PoolInnerConfig,
     /// Operations by hash
-    by_hash: HashMap<H256, OrderedPoolOperation>,
+    by_hash: HashMap<B256, OrderedPoolOperation>,
     /// Operations by operation ID
     by_id: HashMap<UserOperationId, OrderedPoolOperation>,
     /// Best operations, sorted by gas price
     best: BTreeSet<OrderedPoolOperation>,
     /// Time to mine info
-    time_to_mine: HashMap<H256, TimeToMineInfo>,
+    time_to_mine: HashMap<B256, TimeToMineInfo>,
     /// Removed operations, temporarily kept around in case their blocks are
     /// reorged away. Stored along with the block number at which it was
     /// removed.
-    mined_at_block_number_by_hash: HashMap<H256, (OrderedPoolOperation, u64)>,
+    mined_at_block_number_by_hash: HashMap<B256, (OrderedPoolOperation, u64)>,
     /// Removed operation hashes sorted by block number, so we can forget them
     /// when enough new blocks have passed.
-    mined_hashes_with_block_numbers: BTreeSet<(u64, H256)>,
+    mined_hashes_with_block_numbers: BTreeSet<(u64, B256)>,
     /// Count of operations by entity address
     count_by_address: HashMap<Address, EntityCounter>,
     /// Submission ID counter
@@ -113,7 +110,7 @@ impl PoolInner {
     pub(crate) fn check_replacement(
         &self,
         op: &UserOperationVariant,
-    ) -> MempoolResult<Option<H256>> {
+    ) -> MempoolResult<Option<B256>> {
         // Check if operation already known
         if self
             .by_hash
@@ -145,7 +142,7 @@ impl PoolInner {
         }
     }
 
-    pub(crate) fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<H256> {
+    pub(crate) fn add_operation(&mut self, op: PoolOperation) -> MempoolResult<B256> {
         let ret = self.add_operation_internal(Arc::new(op), None);
         self.update_metrics();
         ret
@@ -167,8 +164,8 @@ impl PoolInner {
         block_number: u64,
         block_timestamp: Timestamp,
         candidate_gas_fees: GasFees,
-        base_fee: U256,
-    ) -> Vec<(H256, Timestamp)> {
+        base_fee: u128,
+    ) -> Vec<(B256, Timestamp)> {
         let sys_block_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should be after epoch");
@@ -218,7 +215,7 @@ impl PoolInner {
         0
     }
 
-    pub(crate) fn get_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn get_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>> {
         self.by_hash.get(&hash).map(|o| o.po.clone())
     }
 
@@ -226,7 +223,7 @@ impl PoolInner {
         self.by_id.get(id).map(|o| o.po.clone())
     }
 
-    pub(crate) fn remove_operation_by_hash(&mut self, hash: H256) -> Option<Arc<PoolOperation>> {
+    pub(crate) fn remove_operation_by_hash(&mut self, hash: B256) -> Option<Arc<PoolOperation>> {
         let ret = self.remove_operation_internal(hash, None);
         self.update_metrics();
         ret
@@ -332,7 +329,7 @@ impl PoolInner {
         &mut self,
         entity: Entity,
         current_block_number: u64,
-    ) -> Vec<H256> {
+    ) -> Vec<B256> {
         let mut uos_kept = self.config.throttled_entity_mempool_count;
         let to_remove = self
             .best
@@ -361,7 +358,7 @@ impl PoolInner {
 
     /// Removes all operations using the given entity, returning the hashes of
     /// the removed operations.
-    pub(crate) fn remove_entity(&mut self, entity: Entity) -> Vec<H256> {
+    pub(crate) fn remove_entity(&mut self, entity: Entity) -> Vec<B256> {
         let to_remove = self
             .by_hash
             .iter()
@@ -402,7 +399,7 @@ impl PoolInner {
         self.update_metrics();
     }
 
-    fn enforce_size(&mut self) -> anyhow::Result<Vec<H256>> {
+    fn enforce_size(&mut self) -> anyhow::Result<Vec<B256>> {
         let mut removed = Vec::new();
 
         while self.pool_size > self.config.max_size_of_pool_bytes {
@@ -422,7 +419,7 @@ impl PoolInner {
         Ok(removed)
     }
 
-    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<H256> {
+    fn put_back_unmined_operation(&mut self, op: OrderedPoolOperation) -> MempoolResult<B256> {
         self.add_operation_internal(op.po, Some(op.submission_id))
     }
 
@@ -430,7 +427,7 @@ impl PoolInner {
         &mut self,
         op: Arc<PoolOperation>,
         submission_id: Option<u64>,
-    ) -> MempoolResult<H256> {
+    ) -> MempoolResult<B256> {
         // Check if operation already known or replacing an existing operation
         // if replacing, remove the existing operation
         if let Some(hash) = self.check_replacement(&op.uo)? {
@@ -474,7 +471,7 @@ impl PoolInner {
 
     fn remove_operation_internal(
         &mut self,
-        hash: H256,
+        hash: B256,
         block_number: Option<u64>,
     ) -> Option<Arc<PoolOperation>> {
         let op = self.by_hash.remove(&hash)?;
@@ -514,7 +511,7 @@ impl PoolInner {
         id
     }
 
-    fn get_min_replacement_fees(&self, op: &UserOperationVariant) -> (U256, U256) {
+    fn get_min_replacement_fees(&self, op: &UserOperationVariant) -> (u128, u128) {
         let replacement_priority_fee = math::increase_by_percent(
             op.max_priority_fee_per_gas(),
             self.config.min_replacement_fee_increase_percentage,
@@ -642,6 +639,7 @@ impl PoolMetrics {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::U256;
     use rundler_types::{
         v0_6::UserOperation, EntityInfo, EntityInfos, UserOperation as UserOperationTrait,
         ValidTimeRange,
@@ -669,7 +667,7 @@ mod tests {
         let get_op = pool.get_operation_by_hash(hash).unwrap();
         assert_eq!(op, *get_op);
 
-        assert_eq!(pool.get_operation_by_hash(H256::random()), None);
+        assert_eq!(pool.get_operation_by_hash(B256::random()), None);
     }
 
     #[test]
@@ -684,7 +682,7 @@ mod tests {
 
         let bad_id = UserOperationId {
             sender: Address::random(),
-            nonce: 0.into(),
+            nonce: U256::ZERO,
         };
 
         assert_eq!(pool.get_operation_by_id(&bad_id), None);
@@ -803,7 +801,7 @@ mod tests {
 
         let mined_op = MinedOp {
             paymaster: None,
-            actual_gas_cost: U256::zero(),
+            actual_gas_cost: U256::ZERO,
             hash,
             entry_point: pool.config.entry_point,
             sender,
@@ -833,7 +831,7 @@ mod tests {
 
         let mined_op = MinedOp {
             paymaster: None,
-            actual_gas_cost: U256::zero(),
+            actual_gas_cost: U256::ZERO,
             hash,
             entry_point: pool.config.entry_point,
             sender,
@@ -884,7 +882,7 @@ mod tests {
         for mut op in ops.into_iter() {
             let uo: &mut UserOperation = op.uo.as_mut();
 
-            uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+            uo.paymaster_and_data = paymaster.to_vec().into();
             op.entity_infos.paymaster = Some(EntityInfo {
                 entity: Entity::paymaster(paymaster),
                 is_staked: false,
@@ -909,12 +907,12 @@ mod tests {
 
         let mut op = create_op(sender, 0, 1);
         let uo: &mut UserOperation = op.uo.as_mut();
-        uo.paymaster_and_data = paymaster.as_bytes().to_vec().into();
+        uo.paymaster_and_data = paymaster.to_vec().into();
         op.entity_infos.paymaster = Some(EntityInfo {
             entity: Entity::paymaster(paymaster),
             is_staked: false,
         });
-        uo.init_code = factory.as_bytes().to_vec().into();
+        uo.init_code = factory.to_vec().into();
         op.entity_infos.factory = Some(EntityInfo {
             entity: Entity::factory(factory),
             is_staked: false,
@@ -930,7 +928,7 @@ mod tests {
         for i in 0..count {
             let mut op = op.clone();
             let uo: &mut UserOperation = op.uo.as_mut();
-            uo.nonce = i.into();
+            uo.nonce = U256::from(i);
             hashes.push(pool.add_operation(op).unwrap());
         }
 
@@ -954,7 +952,7 @@ mod tests {
         let args = conf();
         let mut pool = PoolInner::new(args.clone());
         for i in 0..20 {
-            let op = create_op(Address::random(), i, i + 1);
+            let op = create_op(Address::random(), i, (i + 1) as u128);
             pool.add_operation(op).unwrap();
         }
 
@@ -969,7 +967,7 @@ mod tests {
         let args = conf();
         let mut pool = PoolInner::new(args.clone());
         for i in 0..20 {
-            let op = create_op(Address::random(), i, i + 1);
+            let op = create_op(Address::random(), i, (i + 1) as u128);
             pool.add_operation(op).unwrap();
         }
 
@@ -988,18 +986,18 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 100);
         let uo1: &mut UserOperation = po1.uo.as_mut();
-        uo1.max_priority_fee_per_gas = 100.into();
+        uo1.max_priority_fee_per_gas = 100;
         let _ = pool.add_operation(po1.clone()).unwrap();
 
         let mut po2 = create_op(sender, 0, 101);
         let uo2: &mut UserOperation = po2.uo.as_mut();
-        uo2.max_priority_fee_per_gas = 101.into();
+        uo2.max_priority_fee_per_gas = 101;
         let res = pool.add_operation(po2);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::ReplacementUnderpriced(a, b) => {
-                assert_eq!(a, 100.into());
-                assert_eq!(b, 100.into());
+                assert_eq!(a, 100);
+                assert_eq!(b, 100);
             }
             _ => panic!("wrong error"),
         }
@@ -1022,8 +1020,8 @@ mod tests {
         let paymaster1 = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         let uo1: &mut UserOperation = po1.uo.as_mut();
-        uo1.max_priority_fee_per_gas = 10.into();
-        uo1.paymaster_and_data = paymaster1.as_bytes().to_vec().into();
+        uo1.max_priority_fee_per_gas = 10;
+        uo1.paymaster_and_data = paymaster1.to_vec().into();
         po1.entity_infos.paymaster = Some(EntityInfo {
             entity: Entity::paymaster(paymaster1),
             is_staked: false,
@@ -1034,8 +1032,8 @@ mod tests {
         let paymaster2 = Address::random();
         let mut po2 = create_op(sender, 0, 11);
         let uo2: &mut UserOperation = po2.uo.as_mut();
-        uo2.max_priority_fee_per_gas = 11.into();
-        uo2.paymaster_and_data = paymaster2.as_bytes().to_vec().into();
+        uo2.max_priority_fee_per_gas = 11;
+        uo2.paymaster_and_data = paymaster2.to_vec().into();
         po2.entity_infos.paymaster = Some(EntityInfo {
             entity: Entity::paymaster(paymaster2),
             is_staked: false,
@@ -1061,7 +1059,7 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         let uo1: &mut UserOperation = po1.uo.as_mut();
-        uo1.max_priority_fee_per_gas = 10.into();
+        uo1.max_priority_fee_per_gas = 10;
         let _ = pool.add_operation(po1.clone()).unwrap();
 
         let res = pool.add_operation(po1);
@@ -1081,7 +1079,7 @@ mod tests {
         po1.valid_time_range.valid_until = Timestamp::from(1);
         let _ = pool.add_operation(po1.clone()).unwrap();
 
-        let res = pool.do_maintenance(0, Timestamp::from(2), GasFees::default(), 0.into());
+        let res = pool.do_maintenance(0, Timestamp::from(2), GasFees::default(), 0);
         assert_eq!(res.len(), 1);
         assert_eq!(res[0].0, po1.uo.hash(conf.entry_point, conf.chain_id));
         assert_eq!(res[0].1, Timestamp::from(1));
@@ -1103,7 +1101,7 @@ mod tests {
         po3.valid_time_range.valid_until = 9.into();
         let _ = pool.add_operation(po3.clone()).unwrap();
 
-        let res = pool.do_maintenance(0, Timestamp::from(10), GasFees::default(), 0.into());
+        let res = pool.do_maintenance(0, Timestamp::from(10), GasFees::default(), 0);
 
         assert_eq!(res.len(), 2);
         assert!(res.contains(&(po1.uo.hash(conf.entry_point, conf.chain_id), 5.into())));
@@ -1129,12 +1127,12 @@ mod tests {
         .mem_size()
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: usize) -> PoolOperation {
+    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: u128) -> PoolOperation {
         PoolOperation {
             uo: UserOperation {
                 sender,
-                nonce: nonce.into(),
-                max_fee_per_gas: max_fee_per_gas.into(),
+                nonce: U256::from(nonce),
+                max_fee_per_gas,
                 ..UserOperation::default()
             }
             .into(),
@@ -1150,8 +1148,8 @@ mod tests {
             entry_point: Address::random(),
             valid_time_range: ValidTimeRange::default(),
             aggregator: None,
-            expected_code_hash: H256::random(),
-            sim_block_hash: H256::random(),
+            expected_code_hash: B256::random(),
+            sim_block_hash: B256::random(),
             sim_block_number: 0,
             account_is_staked: false,
         }

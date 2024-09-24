@@ -13,9 +13,9 @@
 
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
+use alloy_primitives::{Address, B256};
 use async_stream::stream;
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
 use futures::future;
 use futures_util::Stream;
 use rundler_task::server::{HealthCheck, ServerStatus};
@@ -128,7 +128,7 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<H256> {
+    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<B256> {
         let req = ServerRequestKind::AddOp {
             entry_point,
             op,
@@ -159,7 +159,7 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
         let req = ServerRequestKind::GetOpByHash { hash };
         let resp = self.send(req).await?;
         match resp {
@@ -168,7 +168,7 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()> {
+    async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()> {
         let req = ServerRequestKind::RemoveOps { entry_point, ops };
         let resp = self.send(req).await?;
         match resp {
@@ -181,7 +181,7 @@ impl Pool for LocalPoolHandle {
         &self,
         entry_point: Address,
         id: UserOperationId,
-    ) -> PoolResult<Option<H256>> {
+    ) -> PoolResult<Option<B256>> {
         let req = ServerRequestKind::RemoveOpById { entry_point, id };
         let resp = self.send(req).await?;
         match resp {
@@ -393,7 +393,7 @@ impl LocalPoolServerRunner {
             .collect())
     }
 
-    fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+    fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
         for mempool in self.mempools.values() {
             if let Some(op) = mempool.get_user_operation_by_hash(hash) {
                 return Ok(Some((*op).clone()));
@@ -402,7 +402,7 @@ impl LocalPoolServerRunner {
         Ok(None)
     }
 
-    fn remove_ops(&self, entry_point: Address, ops: &[H256]) -> PoolResult<()> {
+    fn remove_ops(&self, entry_point: Address, ops: &[B256]) -> PoolResult<()> {
         let mempool = self.get_pool(entry_point)?;
         mempool.remove_operations(ops);
         Ok(())
@@ -412,7 +412,7 @@ impl LocalPoolServerRunner {
         &self,
         entry_point: Address,
         id: &UserOperationId,
-    ) -> PoolResult<Option<H256>> {
+    ) -> PoolResult<Option<B256>> {
         let mempool = self.get_pool(entry_point)?;
         mempool.remove_op_by_id(id).map_err(|e| e.into())
     }
@@ -711,11 +711,11 @@ enum ServerRequestKind {
         shard_index: u64,
     },
     GetOpByHash {
-        hash: H256,
+        hash: B256,
     },
     RemoveOps {
         entry_point: Address,
-        ops: Vec<H256>,
+        ops: Vec<B256>,
     },
     RemoveOpById {
         entry_point: Address,
@@ -765,7 +765,7 @@ enum ServerResponse {
         entry_points: Vec<Address>,
     },
     AddOp {
-        hash: H256,
+        hash: B256,
     },
     GetOps {
         ops: Vec<PoolOperation>,
@@ -775,7 +775,7 @@ enum ServerResponse {
     },
     RemoveOps,
     RemoveOpById {
-        hash: Option<H256>,
+        hash: Option<B256>,
     },
     UpdateEntities,
     DebugClearState,
@@ -814,7 +814,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_op() {
         let mut mock_pool = MockMempool::new();
-        let hash0 = H256::random();
+        let hash0 = B256::random();
         mock_pool
             .expect_entry_point_version()
             .returning(|| EntryPointVersion::V0_6);
@@ -841,7 +841,7 @@ mod tests {
 
         let mut sub = state.handle.subscribe_new_heads().await.unwrap();
 
-        let hash = H256::random();
+        let hash = B256::random();
         let number = 1234;
         state
             .chain_update_tx
@@ -881,9 +881,9 @@ mod tests {
     async fn test_multiple_entry_points() {
         let eps = [Address::random(), Address::random(), Address::random()];
         let mut pools = [MockMempool::new(), MockMempool::new(), MockMempool::new()];
-        let h0 = H256::random();
-        let h1 = H256::random();
-        let h2 = H256::random();
+        let h0 = B256::random();
+        let h1 = B256::random();
+        let h2 = B256::random();
         let hashes = [h0, h1, h2];
         pools[0]
             .expect_entry_point_version()

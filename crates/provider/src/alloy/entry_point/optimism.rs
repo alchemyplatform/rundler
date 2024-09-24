@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{ruint::UintTryTo, Address, Bytes};
+use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_sol_types::sol;
 use alloy_transport::Transport;
@@ -40,7 +40,7 @@ pub(crate) async fn estimate_l1_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
         .call()
         .await?
         ._0
-        .uint_try_to()
+        .try_into()
         .context("failed to convert L1 fee to u128")?;
 
     Ok(l1_fee.checked_div(gas_price).unwrap_or(u128::MAX))
