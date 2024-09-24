@@ -159,7 +159,8 @@ where
         // This is a special case to cover a bug in the 0.6 entrypoint contract where a specially
         // crafted UO can use extra verification gas that isn't caught during simulation, but when
         // it runs on chain causes the transaction to revert.
-        let verification_gas_used = entry_point_out.return_info.pre_op_gas - op.pre_verification_gas();
+        let verification_gas_used =
+            entry_point_out.return_info.pre_op_gas - op.pre_verification_gas();
         let verification_buffer = op
             .total_verification_gas_limit()
             .saturating_sub(verification_gas_used);

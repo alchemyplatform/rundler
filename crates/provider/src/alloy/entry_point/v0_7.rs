@@ -13,7 +13,7 @@
 
 use alloy_contract::Error as ContractError;
 use alloy_json_rpc::ErrorPayload;
-use alloy_primitives::{ruint::UintTryTo, Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
@@ -229,7 +229,7 @@ where
                                 }
                                 _ => Ok(HandleOpsOut::FailedOp(
                                     opIndex
-                                        .uint_try_to()
+                                        .try_into()
                                         .context("returned opIndex out of bounds")?,
                                     reason,
                                 )),
@@ -495,7 +495,7 @@ impl From<DepositInfoV0_7> for DepositInfo {
             staked: deposit_info.staked,
             stake: U256::from(deposit_info.stake),
             unstake_delay_sec: deposit_info.unstakeDelaySec,
-            withdraw_time: UintTryTo::<u64>::uint_try_to(&deposit_info.withdrawTime).unwrap(),
+            withdraw_time: deposit_info.withdrawTime.to(),
         }
     }
 }
@@ -511,7 +511,9 @@ impl TryFrom<ExecutionResultV0_7> for ExecutionResult {
             .intersect(paymaster.valid_time_range());
 
         Ok(ExecutionResult {
-            pre_op_gas: UintTryTo::<u128>::uint_try_to(&result.preOpGas)
+            pre_op_gas: result
+                .preOpGas
+                .try_into()
                 .context("preOpGas should fit in u128")?,
             paid: result.paid,
             valid_after: intersect_range.valid_after,

@@ -28,7 +28,7 @@ use std::{
     sync::Arc,
 };
 
-use ethers::types::{Address, H256};
+use alloy_primitives::{Address, B256};
 #[cfg(test)]
 use mockall::automock;
 use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
@@ -48,7 +48,7 @@ pub(crate) type MempoolResult<T> = std::result::Result<T, MempoolError>;
 #[cfg_attr(test, automock)]
 #[async_trait]
 /// In-memory operation pool
-pub trait Mempool: Send + Sync + 'static {
+pub trait Mempool: Send + Sync {
     /// Call to update the mempool with a new chain update
     async fn on_chain_update(&self, update: &ChainUpdate);
 
@@ -63,13 +63,13 @@ pub trait Mempool: Send + Sync + 'static {
         &self,
         origin: OperationOrigin,
         op: UserOperationVariant,
-    ) -> MempoolResult<H256>;
+    ) -> MempoolResult<B256>;
 
     /// Removes a set of operations from the pool.
-    fn remove_operations(&self, hashes: &[H256]);
+    fn remove_operations(&self, hashes: &[B256]);
 
     /// Removes an operation from the pool by its ID.
-    fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<H256>>;
+    fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<B256>>;
 
     /// Updates the reputation of an entity.
     fn update_entity(&self, entity_update: EntityUpdate);
@@ -92,7 +92,7 @@ pub trait Mempool: Send + Sync + 'static {
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>>;
 
     /// Looks up a user operation by hash, returns None if not found
-    fn get_user_operation_by_hash(&self, hash: H256) -> Option<Arc<PoolOperation>>;
+    fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>>;
 
     /// Debug methods
 
@@ -134,7 +134,7 @@ pub struct PoolConfig {
     pub same_sender_mempool_count: usize,
     /// The minimum fee bump required to replace an operation in the mempool
     /// Applies to both priority fee and fee. Expressed as an integer percentage value
-    pub min_replacement_fee_increase_percentage: u64,
+    pub min_replacement_fee_increase_percentage: u32,
     /// After this threshold is met, we will start to drop the worst userops from the mempool
     pub max_size_of_pool_bytes: usize,
     /// Operations that are always banned from the mempool
@@ -146,7 +146,7 @@ pub struct PoolConfig {
     /// Settings for simulation validation
     pub sim_settings: SimulationSettings,
     /// Configuration for the mempool channels, by channel ID
-    pub mempool_channel_configs: HashMap<H256, MempoolConfig>,
+    pub mempool_channel_configs: HashMap<B256, MempoolConfig>,
     /// Number of mempool shards to use. A mempool shard is a disjoint subset of the mempool
     /// that is used to ensure that two bundle builders don't attempt to but bundle the same
     /// operations. The mempool is divided into shards by taking the hash of the operation
@@ -197,16 +197,16 @@ mod tests {
         let po = PoolOperation {
             uo: UserOperation {
                 sender,
-                paymaster_and_data: paymaster.as_fixed_bytes().into(),
-                init_code: factory.as_fixed_bytes().into(),
+                paymaster_and_data: paymaster.to_vec().into(),
+                init_code: factory.to_vec().into(),
                 ..Default::default()
             }
             .into(),
             entry_point: Address::random(),
             aggregator: Some(aggregator),
             valid_time_range: ValidTimeRange::all_time(),
-            expected_code_hash: H256::random(),
-            sim_block_hash: H256::random(),
+            expected_code_hash: B256::random(),
+            sim_block_hash: B256::random(),
             sim_block_number: 0,
             account_is_staked: true,
             entity_infos: EntityInfos {

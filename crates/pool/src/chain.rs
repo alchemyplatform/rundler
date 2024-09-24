@@ -17,23 +17,26 @@ use std::{
     time::Duration,
 };
 
+use alloy_primitives::{Address, B256, U256};
+use alloy_sol_types::SolEvent;
 use anyhow::{ensure, Context};
-use ethers::{
-    contract::EthLogDecode,
-    prelude::EthEvent,
-    types::{Address, Block, Filter, Log, H256, U256},
-};
 use futures::future;
-use rundler_provider::Provider;
-use rundler_task::block_watcher;
-use rundler_types::{
-    contracts::{v0_6::i_entry_point as entry_point_v0_6, v0_7::i_entry_point as entry_point_v0_7},
-    EntryPointVersion, Timestamp, UserOperationId,
+use rundler_contracts::{
+    v0_6::IEntryPoint::{
+        Deposited as DepositedV06, UserOperationEvent as UserOperationEventV06,
+        Withdrawn as WithdrawnV06,
+    },
+    v0_7::IEntryPoint::{
+        Deposited as DepositedV07, UserOperationEvent as UserOperationEventV07,
+        Withdrawn as WithdrawnV07,
+    },
 };
+use rundler_provider::{Block, EvmProvider, Filter, Log};
+use rundler_task::block_watcher;
+use rundler_types::{EntryPointVersion, Timestamp, UserOperationId};
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
-    task::JoinHandle,
     time,
 };
 use tokio_util::sync::CancellationToken;
@@ -47,8 +50,8 @@ const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 /// Will update itself when `.sync_to_block_number` is called, at which point it
 /// will query a node to determine the new state of the chain.
 #[derive(Debug)]
-pub(crate) struct Chain<P: Provider> {
-    provider: Arc<P>,
+pub(crate) struct Chain<P: EvmProvider> {
+    provider: P,
     settings: Settings,
     /// Blocks are stored from earliest to latest, so the oldest block is at the
     /// front of this deque and the newest at the back.
@@ -62,7 +65,7 @@ pub(crate) struct Chain<P: Provider> {
 #[derive(Default, Debug, Eq, PartialEq)]
 pub struct ChainUpdate {
     pub latest_block_number: u64,
-    pub latest_block_hash: H256,
+    pub latest_block_hash: B256,
     pub latest_block_timestamp: Timestamp,
     /// Blocks before this number are no longer tracked in this `Chain`, so no
     /// further updates related to them will be sent.
@@ -81,7 +84,7 @@ pub struct ChainUpdate {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MinedOp {
-    pub hash: H256,
+    pub hash: B256,
     pub entry_point: Address,
     pub sender: Address,
     pub nonce: U256,
@@ -117,15 +120,15 @@ pub(crate) struct Settings {
 #[derive(Debug)]
 struct BlockSummary {
     number: u64,
-    hash: H256,
+    hash: B256,
     timestamp: Timestamp,
-    parent_hash: H256,
+    parent_hash: B256,
     ops: Vec<MinedOp>,
     entity_balance_updates: Vec<BalanceUpdate>,
 }
 
-impl<P: Provider> Chain<P> {
-    pub(crate) fn new(provider: Arc<P>, settings: Settings) -> Self {
+impl<P: EvmProvider> Chain<P> {
+    pub(crate) fn new(provider: P, settings: Settings) -> Self {
         let history_size = settings.history_size as usize;
         assert!(history_size > 0, "history size should be positive");
 
@@ -136,18 +139,18 @@ impl<P: Provider> Chain<P> {
             .values()
             .any(|v| *v == EntryPointVersion::V0_6)
         {
-            events.push(entry_point_v0_6::UserOperationEventFilter::abi_signature());
-            events.push(entry_point_v0_6::DepositedFilter::abi_signature());
-            events.push(entry_point_v0_6::WithdrawnFilter::abi_signature());
+            events.push(UserOperationEventV06::SIGNATURE_HASH);
+            events.push(DepositedV06::SIGNATURE_HASH);
+            events.push(WithdrawnV06::SIGNATURE_HASH);
         }
         if settings
             .entry_point_addresses
             .values()
             .any(|v| *v == EntryPointVersion::V0_7)
         {
-            events.push(entry_point_v0_7::UserOperationEventFilter::abi_signature());
-            events.push(entry_point_v0_7::DepositedFilter::abi_signature());
-            events.push(entry_point_v0_7::WithdrawnFilter::abi_signature());
+            events.push(UserOperationEventV07::SIGNATURE_HASH);
+            events.push(DepositedV07::SIGNATURE_HASH);
+            events.push(WithdrawnV07::SIGNATURE_HASH);
         }
 
         let filter_template = Filter::new()
@@ -158,7 +161,7 @@ impl<P: Provider> Chain<P> {
                     .cloned()
                     .collect::<Vec<_>>(),
             )
-            .events(events.iter().map(|e| e.as_ref()));
+            .events(events.iter());
 
         Self {
             provider,
@@ -169,24 +172,22 @@ impl<P: Provider> Chain<P> {
         }
     }
 
-    pub(crate) fn spawn_watcher(
+    pub(crate) async fn watch(
         mut self,
         sender: broadcast::Sender<Arc<ChainUpdate>>,
         shutdown_token: CancellationToken,
-    ) -> JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                select! {
-                    update = self.wait_for_update() => {
-                        let _ = sender.send(Arc::new(update));
-                    }
-                    _ = shutdown_token.cancelled() => {
-                        info!("Shutting down chain watcher");
-                        break;
-                    }
+    ) {
+        loop {
+            select! {
+                update = self.wait_for_update() => {
+                    let _ = sender.send(Arc::new(update));
+                }
+                _ = shutdown_token.cancelled() => {
+                    info!("Shutting down chain watcher");
+                    break;
                 }
             }
-        })
+        }
     }
 
     async fn wait_for_update(&mut self) -> ChainUpdate {
@@ -197,7 +198,7 @@ impl<P: Provider> Chain<P> {
             .unwrap_or_default();
         loop {
             let (hash, block) = block_watcher::wait_for_new_block(
-                &*self.provider,
+                &self.provider,
                 block_hash,
                 self.settings.poll_interval,
             )
@@ -228,10 +229,7 @@ impl<P: Provider> Chain<P> {
         }
     }
 
-    pub(crate) async fn sync_to_block(
-        &mut self,
-        new_head: Block<H256>,
-    ) -> anyhow::Result<ChainUpdate> {
+    pub(crate) async fn sync_to_block(&mut self, new_head: Block) -> anyhow::Result<ChainUpdate> {
         let new_head = BlockSummary::try_from_block_without_ops(new_head, None)?;
         let Some(current_block) = self.blocks.back() else {
             return self.reset_and_initialize(new_head).await;
@@ -381,7 +379,7 @@ impl<P: Provider> Chain<P> {
             // chain, until it does.
             let block = self
                 .provider
-                .get_block(earliest_new_block.parent_hash)
+                .get_block(earliest_new_block.parent_hash.into())
                 .await
                 .context("should load parent block when handling reorg")?
                 .context("block with parent hash of known block should exist")?;
@@ -408,7 +406,7 @@ impl<P: Provider> Chain<P> {
             let parent_hash = blocks[0].parent_hash;
             let parent = self
                 .provider
-                .get_block(parent_hash)
+                .get_block(parent_hash.into())
                 .await
                 .context("should load parent block by hash")?
                 .context("block with parent hash of known block should exist")?;
@@ -443,7 +441,7 @@ impl<P: Provider> Chain<P> {
 
     async fn load_ops_in_block_with_hash(
         &self,
-        block_hash: H256,
+        block_hash: B256,
     ) -> anyhow::Result<(Vec<MinedOp>, Vec<BalanceUpdate>)> {
         let _permit = self
             .load_ops_semaphore
@@ -461,7 +459,7 @@ impl<P: Provider> Chain<P> {
         let mut mined_ops = vec![];
         let mut entity_balance_updates = vec![];
         for log in logs {
-            match self.settings.entry_point_addresses.get(&log.address) {
+            match self.settings.entry_point_addresses.get(&log.address()) {
                 Some(EntryPointVersion::V0_6) => {
                     Self::load_v0_6(log, &mut mined_ops, &mut entity_balance_updates)
                 }
@@ -471,7 +469,7 @@ impl<P: Provider> Chain<P> {
                 Some(EntryPointVersion::Unspecified) | None => {
                     warn!(
                         "Log with unknown entry point address: {:?}. Ignoring.",
-                        log.address
+                        log.address()
                     );
                 }
             }
@@ -481,87 +479,125 @@ impl<P: Provider> Chain<P> {
     }
 
     fn load_v0_6(log: Log, mined_ops: &mut Vec<MinedOp>, balance_updates: &mut Vec<BalanceUpdate>) {
-        let address = log.address;
-        if let Ok(event) = entry_point_v0_6::IEntryPointEvents::decode_log(&log.into()) {
-            match event {
-                entry_point_v0_6::IEntryPointEvents::UserOperationEventFilter(event) => {
-                    let paymaster = if event.paymaster.is_zero() {
-                        None
-                    } else {
-                        Some(event.paymaster)
-                    };
-                    let mined = MinedOp {
-                        hash: event.user_op_hash.into(),
-                        entry_point: address,
-                        sender: event.sender,
-                        nonce: event.nonce,
-                        actual_gas_cost: event.actual_gas_cost,
-                        paymaster,
-                    };
-                    mined_ops.push(mined);
-                }
-                entry_point_v0_6::IEntryPointEvents::DepositedFilter(event) => {
-                    let info = BalanceUpdate {
-                        entrypoint: address,
-                        address: event.account,
-                        amount: event.total_deposit,
-                        is_addition: true,
-                    };
-                    balance_updates.push(info);
-                }
-                entry_point_v0_6::IEntryPointEvents::WithdrawnFilter(event) => {
-                    let info = BalanceUpdate {
-                        entrypoint: address,
-                        address: event.account,
-                        amount: event.amount,
-                        is_addition: false,
-                    };
-                    balance_updates.push(info);
-                }
-                _ => {}
+        let address = log.address();
+
+        match log.topic0() {
+            Some(&UserOperationEventV06::SIGNATURE_HASH) => {
+                let Ok(decoded) = log.log_decode::<UserOperationEventV06>() else {
+                    warn!("Failed to decode v0.6 UserOperationEvent: {:?}", log);
+                    return;
+                };
+                let event = decoded.data();
+
+                let paymaster = if event.paymaster.is_zero() {
+                    None
+                } else {
+                    Some(event.paymaster)
+                };
+                let mined = MinedOp {
+                    hash: event.userOpHash,
+                    entry_point: address,
+                    sender: event.sender,
+                    nonce: event.nonce,
+                    actual_gas_cost: event.actualGasCost,
+                    paymaster,
+                };
+                mined_ops.push(mined);
+            }
+            Some(&DepositedV06::SIGNATURE_HASH) => {
+                let Ok(decoded) = log.log_decode::<DepositedV06>() else {
+                    warn!("Failed to decode v0.6 Deposited: {:?}", log);
+                    return;
+                };
+                let event = decoded.data();
+
+                let info = BalanceUpdate {
+                    entrypoint: address,
+                    address: event.account,
+                    amount: event.totalDeposit,
+                    is_addition: true,
+                };
+                balance_updates.push(info);
+            }
+            Some(&WithdrawnV06::SIGNATURE_HASH) => {
+                let Ok(decoded) = log.log_decode::<WithdrawnV06>() else {
+                    warn!("Failed to decode v0.6 Withdrawn: {:?}", log);
+                    return;
+                };
+                let event = decoded.data();
+
+                let info = BalanceUpdate {
+                    entrypoint: address,
+                    address: event.account,
+                    amount: event.amount,
+                    is_addition: false,
+                };
+                balance_updates.push(info);
+            }
+            _ => {
+                warn!("Unknown event signature: {:?}", log.topic0());
             }
         }
     }
 
     fn load_v0_7(log: Log, mined_ops: &mut Vec<MinedOp>, balance_updates: &mut Vec<BalanceUpdate>) {
-        let address = log.address;
-        if let Ok(event) = entry_point_v0_7::IEntryPointEvents::decode_log(&log.into()) {
-            match event {
-                entry_point_v0_7::IEntryPointEvents::UserOperationEventFilter(event) => {
-                    let paymaster = if event.paymaster.is_zero() {
-                        None
-                    } else {
-                        Some(event.paymaster)
-                    };
-                    let mined = MinedOp {
-                        hash: event.user_op_hash.into(),
-                        entry_point: address,
-                        sender: event.sender,
-                        nonce: event.nonce,
-                        actual_gas_cost: event.actual_gas_cost,
-                        paymaster,
-                    };
-                    mined_ops.push(mined);
-                }
-                entry_point_v0_7::IEntryPointEvents::DepositedFilter(event) => {
-                    let info = BalanceUpdate {
-                        entrypoint: address,
-                        address: event.account,
-                        amount: event.total_deposit,
-                        is_addition: true,
-                    };
-                    balance_updates.push(info);
-                }
-                entry_point_v0_7::IEntryPointEvents::WithdrawnFilter(event) => {
-                    let info = BalanceUpdate {
-                        entrypoint: address,
-                        address: event.account,
-                        amount: event.amount,
-                        is_addition: false,
-                    };
-                    balance_updates.push(info);
-                }
-                _ => {}
+        let address = log.address();
+
+        match log.topic0() {
+            Some(&UserOperationEventV07::SIGNATURE_HASH) => {
+                let Ok(decoded) = log.log_decode::<UserOperationEventV07>() else {
+                    warn!("Failed to decode v0.7 UserOperationEvent: {:?}", log);
+                    return;
+                };
+                let event = decoded.data();
+
+                let paymaster = if event.paymaster.is_zero() {
+                    None
+                } else {
+                    Some(event.paymaster)
+                };
+                let mined = MinedOp {
+                    hash: event.userOpHash,
+                    entry_point: address,
+                    sender: event.sender,
+                    nonce: event.nonce,
+                    actual_gas_cost: event.actualGasCost,
+                    paymaster,
+                };
+                mined_ops.push(mined);
+            }
+            Some(&DepositedV07::SIGNATURE_HASH) => {
+                let Ok(decoded) = log.log_decode::<DepositedV07>() else {
+                    warn!("Failed to decode v0.7 Deposited: {:?}", log);
+                    return;
+                };
+                let event = decoded.data();
+
+                let info = BalanceUpdate {
+                    entrypoint: address,
+                    address: event.account,
+                    amount: event.totalDeposit,
+                    is_addition: true,
+                };
+                balance_updates.push(info);
+            }
+            Some(&WithdrawnV07::SIGNATURE_HASH) => {
+                let Ok(decoded) = log.log_decode::<WithdrawnV07>() else {
+                    warn!("Failed to decode v0.7 Withdrawn: {:?}", log);
+                    return;
+                };
+                let event = decoded.data();
+
+                let info = BalanceUpdate {
+                    entrypoint: address,
+                    address: event.account,
+                    amount: event.amount,
+                    is_addition: false,
+                };
+                balance_updates.push(info);
+            }
+            _ => {
+                warn!("Unknown event signature: {:?}", log.topic0());
             }
         }
     }
@@ -611,27 +647,22 @@ impl BlockSummary {
     /// it's better to catch it now than run into panics from bad indexing math
     /// later.
     fn try_from_block_without_ops(
-        block: Block<H256>,
+        block: Block,
         expected_block_number: Option<u64>,
     ) -> anyhow::Result<Self> {
-        let number = block
-            .number
-            .context("block number should be present")?
-            .as_u64();
         if let Some(expected_block_number) = expected_block_number {
             ensure!(
-                number == expected_block_number,
-                "block number {number} should match expected {expected_block_number}"
+                block.header.number == expected_block_number,
+                "block number {} should match expected {}",
+                block.header.number,
+                expected_block_number
             );
         }
         Ok(Self {
-            number: block
-                .number
-                .context("block number should be present")?
-                .as_u64(),
-            hash: block.hash.context("block hash should exist")?,
-            timestamp: block.timestamp.as_u64().into(),
-            parent_hash: block.parent_hash,
+            number: block.header.number,
+            hash: block.header.hash,
+            timestamp: block.header.timestamp.into(),
+            parent_hash: block.header.parent_hash,
             ops: Vec::new(),
             entity_balance_updates: Vec::new(),
         })
@@ -696,37 +727,34 @@ impl ChainMetrics {
 mod tests {
     use std::ops::DerefMut;
 
-    use ethers::{
-        abi::AbiEncode,
-        prelude::EthEvent,
-        types::{FilterBlockOption, Log, H160},
-        utils,
-    };
+    use alloy_primitives::{address, Log as PrimitiveLog, LogData};
     use parking_lot::RwLock;
-    use rundler_provider::MockProvider;
+    use rundler_provider::{
+        BlockHeader, BlockId, FilterBlockOption, MockEvmProvider, RpcBlockHash,
+    };
 
     use super::*;
 
     const HISTORY_SIZE: u64 = 3;
-    const ENTRY_POINT_ADDRESS_V0_6: Address = H160(*b"01234567890123456789");
-    const ENTRY_POINT_ADDRESS_V0_7: Address = H160(*b"98765432109876543210");
+    const ENTRY_POINT_ADDRESS_V0_6: Address = address!("0123456789012345678901234567890123456789");
+    const ENTRY_POINT_ADDRESS_V0_7: Address = address!("9876543210987654321098765432109876543210");
 
     #[derive(Clone, Debug)]
     struct MockBlock {
-        hash: H256,
+        hash: B256,
         events: Vec<MockEntryPointEvents>,
     }
 
     #[derive(Clone, Debug, Default)]
     struct MockEntryPointEvents {
         address: Address,
-        op_hashes: Vec<H256>,
+        op_hashes: Vec<B256>,
         deposit_addresses: Vec<Address>,
         withdrawal_addresses: Vec<Address>,
     }
 
     impl MockBlock {
-        fn new(hash: H256) -> Self {
+        fn new(hash: B256) -> Self {
             Self {
                 hash,
                 events: vec![],
@@ -736,7 +764,7 @@ mod tests {
         fn add_ep(
             mut self,
             address: Address,
-            op_hashes: Vec<H256>,
+            op_hashes: Vec<B256>,
             deposit_addresses: Vec<Address>,
             withdrawal_addresses: Vec<Address>,
         ) -> Self {
@@ -764,28 +792,39 @@ mod tests {
             self.blocks.write()
         }
 
-        fn get_head(&self) -> Block<H256> {
+        fn get_head(&self) -> Block {
             let hash = self.blocks.read().last().unwrap().hash;
-            self.get_block_by_hash(hash).unwrap()
+            self.get_block(hash.into()).unwrap()
         }
 
-        fn get_block_by_hash(&self, hash: H256) -> Option<Block<H256>> {
+        fn get_block(&self, id: BlockId) -> Option<Block> {
+            let BlockId::Hash(RpcBlockHash {
+                block_hash: hash,
+                require_canonical: _,
+            }) = id
+            else {
+                panic!("get_block only supports hash ids");
+            };
+
             let blocks = self.blocks.read();
             let number = blocks.iter().position(|block| block.hash == hash)?;
             let parent_hash = if number > 0 {
                 blocks[number - 1].hash
             } else {
-                H256::zero()
+                B256::ZERO
             };
             Some(Block {
-                hash: Some(hash),
-                parent_hash,
-                number: Some(number.into()),
+                header: BlockHeader {
+                    hash,
+                    parent_hash,
+                    number: number as u64,
+                    ..Default::default()
+                },
                 ..Default::default()
             })
         }
 
-        fn get_logs_by_block_hash(&self, block_hash: H256) -> Vec<Log> {
+        fn get_logs_by_block_hash(&self, block_hash: B256) -> Vec<Log> {
             let blocks = self.blocks.read();
             let block = blocks.iter().find(|block| block.hash == block_hash);
             let Some(block) = block else {
@@ -953,7 +992,7 @@ mod tests {
             MockBlock::new(hash(2)).add_ep(
                 ENTRY_POINT_ADDRESS_V0_6,
                 vec![hash(102)],
-                vec![Address::zero()],
+                vec![Address::ZERO],
                 vec![addr(1)],
             ),
         ]);
@@ -1000,13 +1039,13 @@ mod tests {
                 unmined_ops: vec![fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)],
                 entity_balance_updates: vec![fake_mined_balance_update(
                     addr(3),
-                    0.into(),
+                    0,
                     false,
                     ENTRY_POINT_ADDRESS_V0_6
                 )],
                 unmined_entity_balance_updates: vec![
-                    fake_mined_balance_update(addr(0), 0.into(), true, ENTRY_POINT_ADDRESS_V0_6),
-                    fake_mined_balance_update(addr(1), 0.into(), false, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(0), 0, true, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(1), 0, false, ENTRY_POINT_ADDRESS_V0_6),
                 ],
                 reorg_larger_than_history: false,
             }
@@ -1063,7 +1102,7 @@ mod tests {
             ChainUpdate {
                 entity_balance_updates: vec![fake_mined_balance_update(
                     addr(2),
-                    0.into(),
+                    0,
                     true,
                     ENTRY_POINT_ADDRESS_V0_6
                 )],
@@ -1081,8 +1120,8 @@ mod tests {
                     fake_mined_op(102, ENTRY_POINT_ADDRESS_V0_6)
                 ],
                 unmined_entity_balance_updates: vec![
-                    fake_mined_balance_update(addr(1), 0.into(), true, ENTRY_POINT_ADDRESS_V0_6),
-                    fake_mined_balance_update(addr(9), 0.into(), false, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(9), 0, false, ENTRY_POINT_ADDRESS_V0_6),
                 ],
                 reorg_larger_than_history: false,
             }
@@ -1132,7 +1171,7 @@ mod tests {
                 latest_block_number: 1,
                 entity_balance_updates: vec![fake_mined_balance_update(
                     addr(1),
-                    0.into(),
+                    0,
                     true,
                     ENTRY_POINT_ADDRESS_V0_6
                 )],
@@ -1365,14 +1404,14 @@ mod tests {
                 ],
                 unmined_ops: vec![],
                 entity_balance_updates: vec![
-                    fake_mined_balance_update(addr(1), 0.into(), true, ENTRY_POINT_ADDRESS_V0_6),
-                    fake_mined_balance_update(addr(2), 0.into(), true, ENTRY_POINT_ADDRESS_V0_6),
-                    fake_mined_balance_update(addr(3), 0.into(), false, ENTRY_POINT_ADDRESS_V0_6),
-                    fake_mined_balance_update(addr(4), 0.into(), false, ENTRY_POINT_ADDRESS_V0_6),
-                    fake_mined_balance_update(addr(5), 0.into(), true, ENTRY_POINT_ADDRESS_V0_7),
-                    fake_mined_balance_update(addr(6), 0.into(), true, ENTRY_POINT_ADDRESS_V0_7),
-                    fake_mined_balance_update(addr(7), 0.into(), false, ENTRY_POINT_ADDRESS_V0_7),
-                    fake_mined_balance_update(addr(8), 0.into(), false, ENTRY_POINT_ADDRESS_V0_7),
+                    fake_mined_balance_update(addr(1), 0, true, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(2), 0, true, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(3), 0, false, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(4), 0, false, ENTRY_POINT_ADDRESS_V0_6),
+                    fake_mined_balance_update(addr(5), 0, true, ENTRY_POINT_ADDRESS_V0_7),
+                    fake_mined_balance_update(addr(6), 0, true, ENTRY_POINT_ADDRESS_V0_7),
+                    fake_mined_balance_update(addr(7), 0, false, ENTRY_POINT_ADDRESS_V0_7),
+                    fake_mined_balance_update(addr(8), 0, false, ENTRY_POINT_ADDRESS_V0_7),
                 ],
                 unmined_entity_balance_updates: vec![],
                 reorg_larger_than_history: false,
@@ -1380,7 +1419,7 @@ mod tests {
         );
     }
 
-    fn new_chain() -> (Chain<impl Provider>, ProviderController) {
+    fn new_chain() -> (Chain<impl EvmProvider>, ProviderController) {
         let (provider, controller) = new_mock_provider();
         let chain = Chain::new(
             Arc::new(provider),
@@ -1397,15 +1436,15 @@ mod tests {
         (chain, controller)
     }
 
-    fn new_mock_provider() -> (impl Provider, ProviderController) {
+    fn new_mock_provider() -> (impl EvmProvider, ProviderController) {
         let controller = ProviderController {
             blocks: Arc::new(RwLock::new(vec![])),
         };
-        let mut provider = MockProvider::new();
+        let mut provider = MockEvmProvider::new();
 
-        provider.expect_get_block::<H256>().returning({
+        provider.expect_get_block().returning({
             let controller = controller.clone();
-            move |hash| Ok(controller.get_block_by_hash(hash))
+            move |id| Ok(controller.get_block(id))
         });
 
         provider.expect_get_logs().returning({
@@ -1421,116 +1460,150 @@ mod tests {
         (provider, controller)
     }
 
-    fn fake_mined_log_v0_6(op_hash: H256) -> Log {
+    fn fake_mined_log_v0_6(op_hash: B256) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            UserOperationEventV06::SIGNATURE_HASH,
+            op_hash,
+            B256::ZERO, // sender
+            B256::ZERO, // paymaster
+        ]);
+        log_data.data = UserOperationEventV06 {
+            userOpHash: op_hash,
+            sender: Address::ZERO,
+            paymaster: Address::ZERO,
+            nonce: U256::ZERO,
+            success: true,
+            actualGasCost: U256::ZERO,
+            actualGasUsed: U256::ZERO,
+        }
+        .encode_data()
+        .into();
+
         Log {
-            address: ENTRY_POINT_ADDRESS_V0_6,
-            topics: vec![
-                H256::from(utils::keccak256(
-                    entry_point_v0_6::UserOperationEventFilter::abi_signature().as_bytes(),
-                )),
-                op_hash,
-                H256::zero(), // sender
-                H256::zero(), // paymaster
-            ],
-            data: AbiEncode::encode((
-                U256::zero(), // nonce
-                true,         // success
-                U256::zero(), // actual_gas_cost
-                U256::zero(), // actual_gas_used
-            ))
-            .into(),
+            inner: PrimitiveLog {
+                address: ENTRY_POINT_ADDRESS_V0_6,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
 
     fn fake_deposit_log_v0_6(deposit_address: Address) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            DepositedV06::SIGNATURE_HASH,
+            deposit_address.into_word(),
+        ]);
+        log_data.data = DepositedV06 {
+            totalDeposit: U256::ZERO,
+            account: deposit_address,
+        }
+        .encode_data()
+        .into();
+
         Log {
-            address: ENTRY_POINT_ADDRESS_V0_6,
-            topics: vec![
-                H256::from(utils::keccak256(
-                    entry_point_v0_6::DepositedFilter::abi_signature().as_bytes(),
-                )),
-                H256::from(deposit_address),
-            ],
-            data: AbiEncode::encode((
-                U256::zero(), // totalDeposits
-            ))
-            .into(),
+            inner: PrimitiveLog {
+                address: ENTRY_POINT_ADDRESS_V0_6,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
 
     fn fake_withdrawal_log_v0_6(withdrawal_address: Address) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            WithdrawnV06::SIGNATURE_HASH,
+            withdrawal_address.into_word(),
+        ]);
+        log_data.data = WithdrawnV06 {
+            amount: U256::ZERO,
+            account: withdrawal_address,
+            withdrawAddress: Address::ZERO,
+        }
+        .encode_data()
+        .into();
+
         Log {
-            address: ENTRY_POINT_ADDRESS_V0_6,
-            topics: vec![
-                H256::from(utils::keccak256(
-                    entry_point_v0_6::WithdrawnFilter::abi_signature().as_bytes(),
-                )),
-                H256::from(withdrawal_address),
-            ],
-            data: AbiEncode::encode((
-                Address::zero(), // withdrawAddress
-                U256::zero(),    // amount
-            ))
-            .into(),
+            inner: PrimitiveLog {
+                address: ENTRY_POINT_ADDRESS_V0_6,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
 
-    fn fake_mined_log_v0_7(op_hash: H256) -> Log {
+    fn fake_mined_log_v0_7(op_hash: B256) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            UserOperationEventV07::SIGNATURE_HASH,
+            op_hash,
+            B256::ZERO, // sender
+            B256::ZERO, // paymaster
+        ]);
+        log_data.data = UserOperationEventV07 {
+            userOpHash: op_hash,
+            sender: Address::ZERO,
+            paymaster: Address::ZERO,
+            nonce: U256::ZERO,
+            success: true,
+            actualGasCost: U256::ZERO,
+            actualGasUsed: U256::ZERO,
+        }
+        .encode_data()
+        .into();
+
         Log {
-            address: ENTRY_POINT_ADDRESS_V0_7,
-            topics: vec![
-                H256::from(utils::keccak256(
-                    entry_point_v0_7::UserOperationEventFilter::abi_signature().as_bytes(),
-                )),
-                op_hash,
-                H256::zero(), // sender
-                H256::zero(), // paymaster
-            ],
-            data: AbiEncode::encode((
-                U256::zero(), // nonce
-                true,         // success
-                U256::zero(), // actual_gas_cost
-                U256::zero(), // actual_gas_used
-            ))
-            .into(),
+            inner: PrimitiveLog {
+                address: ENTRY_POINT_ADDRESS_V0_7,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
 
     fn fake_deposit_log_v0_7(deposit_address: Address) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            DepositedV07::SIGNATURE_HASH,
+            deposit_address.into_word(),
+        ]);
+        log_data.data = DepositedV07 {
+            totalDeposit: U256::ZERO,
+            account: deposit_address,
+        }
+        .encode_data()
+        .into();
+
         Log {
-            address: ENTRY_POINT_ADDRESS_V0_7,
-            topics: vec![
-                H256::from(utils::keccak256(
-                    entry_point_v0_7::DepositedFilter::abi_signature().as_bytes(),
-                )),
-                H256::from(deposit_address),
-            ],
-            data: AbiEncode::encode((
-                U256::zero(), // totalDeposits
-            ))
-            .into(),
+            inner: PrimitiveLog {
+                address: ENTRY_POINT_ADDRESS_V0_7,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
 
     fn fake_withdrawal_log_v0_7(withdrawal_address: Address) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            WithdrawnV07::SIGNATURE_HASH,
+            withdrawal_address.into_word(),
+        ]);
+        log_data.data = WithdrawnV06 {
+            amount: U256::ZERO,
+            account: withdrawal_address,
+            withdrawAddress: Address::ZERO,
+        }
+        .encode_data()
+        .into();
+
         Log {
-            address: ENTRY_POINT_ADDRESS_V0_7,
-            topics: vec![
-                H256::from(utils::keccak256(
-                    entry_point_v0_7::WithdrawnFilter::abi_signature().as_bytes(),
-                )),
-                H256::from(withdrawal_address),
-            ],
-            data: AbiEncode::encode((
-                Address::zero(), // withdrawAddress
-                U256::zero(),    // amount
-            ))
-            .into(),
+            inner: PrimitiveLog {
+                address: ENTRY_POINT_ADDRESS_V0_7,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
@@ -1539,37 +1612,37 @@ mod tests {
         MinedOp {
             hash: hash(n),
             entry_point: ep,
-            sender: Address::zero(),
-            nonce: U256::zero(),
-            actual_gas_cost: U256::zero(),
+            sender: Address::ZERO,
+            nonce: U256::ZERO,
+            actual_gas_cost: U256::ZERO,
             paymaster: None,
         }
     }
 
     fn fake_mined_balance_update(
         address: Address,
-        amount: U256,
+        amount: u128,
         is_addition: bool,
         ep: Address,
     ) -> BalanceUpdate {
         BalanceUpdate {
             address,
             entrypoint: ep,
-            amount,
+            amount: U256::from(amount),
             is_addition,
         }
     }
 
     // Helper that makes fake hashes.
-    fn hash(n: u8) -> H256 {
-        let mut hash = H256::zero();
+    fn hash(n: u8) -> B256 {
+        let mut hash = B256::ZERO;
         hash.0[0] = n;
         hash
     }
 
     // Helper that makes fake addresses.
     fn addr(n: u8) -> Address {
-        let mut address = Address::zero();
+        let mut address = Address::ZERO;
         address.0[0] = n;
         address
     }
