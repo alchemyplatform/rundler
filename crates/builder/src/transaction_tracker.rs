@@ -21,7 +21,7 @@ use mockall::automock;
 use rundler_provider::Provider;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::sender::{TransactionSender, TxSenderError, TxStatus};
 
@@ -373,7 +373,7 @@ where
         if self.nonce < external_nonce {
             // The nonce has changed. Check to see which of our transactions has
             // mined, if any.
-            debug!(
+            info!(
                 "Nonce has changed from {:?} to {:?}",
                 self.nonce, external_nonce
             );
