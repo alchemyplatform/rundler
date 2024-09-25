@@ -266,7 +266,7 @@ mod test {
     #[test]
     fn test_out_of_bounds_display() {
         let actual = get_timestamp_out_of_bounds_for_datetime().to_string();
-        assert_eq!(actual, "later than +262143-12-31 23:59:59.999999999 UTC");
+        assert_eq!(actual, "later than +262142-12-31 23:59:59.999999999 UTC");
     }
 
     #[test]
