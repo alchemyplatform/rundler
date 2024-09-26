@@ -14,9 +14,8 @@
 use rundler_types::task::traits::RequestExtractor;
 use tonic::codegen::http;
 
-/// http request method extractor. 
-#[derive(Copy, Clone)]
-struct HttpMethodExtractor;
+/// http request method extractor.
+pub struct HttpMethodExtractor;
 
 impl<Body> RequestExtractor<http::Request<Body>> for HttpMethodExtractor {
     fn get_method_name(req: &http::Request<Body>) -> String {

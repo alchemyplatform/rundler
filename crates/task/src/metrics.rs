@@ -24,12 +24,12 @@ use rundler_types::task::traits::RequestExtractor;
 use tower::{Layer, Service};
 
 /// tower network layer: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MetricsLayer<T, R> {
     service_name: String,
     protocal: String,
-    _request_extractor_: PhantomData<T>,
-    _request_type_: PhantomData<R>,
+    _request_extractor: PhantomData<T>,
+    _request_type: PhantomData<R>,
 }
 
 impl<T, R> MetricsLayer<T, R>
@@ -41,8 +41,22 @@ where
         MetricsLayer {
             service_name,
             protocal,
-            _request_extractor_: PhantomData,
-            _request_type_: PhantomData,
+            _request_extractor: PhantomData,
+            _request_type: PhantomData,
+        }
+    }
+}
+
+impl<T, R> Clone for MetricsLayer<T, R>
+where
+    T: RequestExtractor<R>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            service_name: self.service_name.clone(),
+            protocal: self.protocal.clone(),
+            _request_extractor: PhantomData,
+            _request_type: PhantomData,
         }
     }
 }
@@ -52,8 +66,9 @@ where
     T: RequestExtractor<R>,
 {
     type Service = MetricsMiddleware<S, T, R>;
+
     fn layer(&self, service: S) -> Self::Service {
-        MetricsMiddleware::<S, T, R>::new(service, self.service_name.clone(), self.protocal.clone())
+        Self::Service::new(service, self.service_name.clone(), self.protocal.clone())
     }
 }
 
@@ -61,9 +76,24 @@ where
 pub struct MetricsMiddleware<S, T, R> {
     inner: S,
     service_name: String,
-    protocal: String,
-    _request_extractor_: PhantomData<T>,
-    _request_type_: PhantomData<R>,
+    protocol: String,
+    _request_extractor: PhantomData<T>,
+    _request_type: PhantomData<R>,
+}
+
+impl<S, T, R> Clone for MetricsMiddleware<S, T, R>
+where
+    S: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            service_name: self.service_name.clone(),
+            protocol: self.protocol.clone(),
+            _request_extractor: PhantomData,
+            _request_type: PhantomData,
+        }
+    }
 }
 
 impl<S, T, R> MetricsMiddleware<S, T, R>
@@ -71,23 +101,23 @@ where
     T: RequestExtractor<R>,
 {
     /// Initialize a middleware.
-    pub fn new(inner: S, service_name: String, protocal: String) -> Self {
+    pub fn new(inner: S, service_name: String, protocol: String) -> Self {
         Self {
-            inner: inner,
+            inner,
             service_name: service_name.clone(),
-            protocal: protocal,
-            _request_extractor_: PhantomData,
-            _request_type_: PhantomData,
+            protocol,
+            _request_extractor: PhantomData,
+            _request_type: PhantomData,
         }
     }
 }
 
-impl<S, T, Request> Service<Request> for MetricsMiddleware<S, T, Request>
+impl<S, T, R> Service<R> for MetricsMiddleware<S, T, R>
 where
-    S: Service<Request> + Send + Sync + Clone + 'static,
-    S::Future: Send + Sync + 'static,
-    T: RequestExtractor<Request> + 'static,
-    Request: Send + Sync + 'static,
+    S: Service<R> + Send + Clone + 'static,
+    S::Future: Send + 'static,
+    T: RequestExtractor<R> + 'static,
+    R: Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -97,51 +127,37 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, request: Request) -> Self::Future {
+    fn call(&mut self, request: R) -> Self::Future {
         let method_name = T::get_method_name(&request);
 
-        MethodMetrics::increment_num_requests(
-            self.service_name.as_str(),
-            method_name.as_str(),
-            self.protocal.as_str(),
-        );
+        MethodMetrics::increment_num_requests(&self.service_name, &method_name, &self.protocol);
         MethodMetrics::increment_open_requests(
             self.service_name.as_str(),
             method_name.as_str(),
-            self.protocal.as_str(),
+            self.protocol.as_str(),
         );
 
         let start = Instant::now();
         let mut svc = self.inner.clone();
         let service_name = self.service_name.clone();
-        let protocal = self.protocal.clone();
+        let protocal = self.protocol.clone();
         async move {
             let rsp = svc.call(request).await;
             MethodMetrics::record_request_latency(
-                method_name.as_str(),
-                service_name.as_str(),
-                protocal.as_str(),
+                &method_name,
+                &service_name,
+                &protocal,
                 start.elapsed(),
             );
-            MethodMetrics::decrement_open_requests(
-                method_name.as_str(),
-                service_name.as_str(),
-                protocal.as_str(),
-            );
+            MethodMetrics::decrement_open_requests(&method_name, &service_name, &protocal);
             if rsp.is_err() {
-                MethodMetrics::increment_error_count(
-                    method_name.as_str(),
-                    service_name.as_str(),
-                    protocal.as_str(),
-                );
+                MethodMetrics::increment_error_count(&method_name, &service_name, &protocal);
             }
             rsp
         }
         .boxed()
     }
 }
-
-#[derive(Clone)]
 struct MethodMetrics {}
 
 impl MethodMetrics {
