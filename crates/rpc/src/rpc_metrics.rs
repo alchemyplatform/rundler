@@ -11,13 +11,14 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Rundler pool types
+use jsonrpsee::types::Request;
+use rundler_types::task::traits::RequestExtractor;
 
-mod error;
-pub use error::*;
+#[derive(Copy, Clone)]
+struct RPCMethodExtractor;
 
-mod traits;
-pub use traits::*;
-
-mod types;
-pub use types::*;
+impl RequestExtractor<Request<'static>> for RPCMethodExtractor {
+    fn get_method_name(req: & Request<'static>) -> String {
+        req.method_name().to_string()
+    }
+}
