@@ -14,11 +14,11 @@
 use jsonrpsee::types::Request;
 use rundler_types::task::traits::RequestExtractor;
 
-#[derive(Copy)]
+#[derive(Copy, Clone)]
 struct RPCMethodExtractor;
 
-impl RequestExtractor<Request> for RPCMethodExtractor {
-    fn get_method_name(req: &Request) -> String {
+impl RequestExtractor<Request<'static>> for RPCMethodExtractor {
+    fn get_method_name(req: & Request<'static>) -> String {
         req.method_name().to_string()
     }
 }

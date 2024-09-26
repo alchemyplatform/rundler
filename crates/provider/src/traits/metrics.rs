@@ -26,7 +26,7 @@ impl RequestExtractor<RequestPacket> for RPCMethodExtractor {
             }
             _ => {
                 // can't extract method name for batch.
-                "unknown".to_string()
+                "batch".to_string()
             }
         }
     }
