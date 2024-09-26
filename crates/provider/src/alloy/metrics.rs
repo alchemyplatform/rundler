@@ -11,10 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_json_rpc::RequestPacket;
+use alloy_json_rpc::{RequestPacket, ResponsePacket};
 /// Method extractor
 use rundler_types::task::traits::RequestExtractor;
+use alloy_json_rpc::RequestPacket;
 
+#[allow(dead_code)]
 /// Method extractor for Alloy providers
 #[derive(Clone, Copy)]
 pub struct AlloyMethodExtractor;
@@ -27,6 +29,20 @@ impl RequestExtractor<RequestPacket> for AlloyMethodExtractor {
                 // can't extract method name for batch.
                 "batch".to_string()
             }
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+pub struct AlloyResponseCodeExtractor;
+
+impl ResponseExtractor<ResponsePacket> for AlloyMethodExtractor {
+    fn get_response_code(response: &ResponsePacket) -> String {
+        if response.is_error() {
+            response.as_error().unwrap().code.to_string()
+        } else {
+            "200".to_string()
         }
     }
 }

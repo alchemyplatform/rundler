@@ -20,19 +20,21 @@ use std::{
 };
 
 use futures::{future::BoxFuture, FutureExt};
-use rundler_types::task::traits::RequestExtractor;
+use rundler_types::task::traits::{RequestExtractor, ResponseExtractor};
 use tower::{Layer, Service};
 
 /// tower network layer: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
 #[derive(Debug)]
-pub struct MetricsLayer<T, R> {
+pub struct MetricsLayer<T, R, RE> {
     service_name: String,
-    protocol: String,
+    protocal: String,
     _request_extractor: PhantomData<T>,
     _request_type: PhantomData<R>,
+    _response_extractor: PhantomData<RE>,
+
 }
 
-impl<T, R> MetricsLayer<T, R>
+impl<T, R, RE> MetricsLayer<T, R, RE>
 where
     T: RequestExtractor<R>,
 {
@@ -43,6 +45,7 @@ where
             protocol,
             _request_extractor: PhantomData,
             _request_type: PhantomData,
+            _response_extractor: PhantomData,
         }
     }
 }
@@ -57,28 +60,29 @@ where
             protocol: self.protocol.clone(),
             _request_extractor: PhantomData,
             _request_type: PhantomData,
+            _response_extractor: PhantomData,
         }
     }
 }
 
-impl<S, T, R> Layer<S> for MetricsLayer<T, R>
+impl<S, T, R, RE> Layer<S> for MetricsLayer<T, R, RE>
 where
     T: RequestExtractor<R>,
 {
-    type Service = MetricsMiddleware<S, T, R>;
-
+    type Service = MetricsMiddleware<S, T, R, RE>;
     fn layer(&self, service: S) -> Self::Service {
         Self::Service::new(service, self.service_name.clone(), self.protocol.clone())
     }
 }
 
 /// Middleware implementation.
-pub struct MetricsMiddleware<S, T, R> {
+pub struct MetricsMiddleware<S, T, R, RE> {
     inner: S,
     service_name: String,
     protocol: String,
     _request_extractor: PhantomData<T>,
     _request_type: PhantomData<R>,
+    _response_extractor: PhantomData<RE>,
 }
 
 impl<S, T, R> Clone for MetricsMiddleware<S, T, R>
@@ -92,11 +96,12 @@ where
             protocol: self.protocol.clone(),
             _request_extractor: PhantomData,
             _request_type: PhantomData,
+            _response_extractor: PhantomData
         }
     }
 }
 
-impl<S, T, R> MetricsMiddleware<S, T, R>
+impl<S, T, R, RE> MetricsMiddleware<S, T, R, RE>
 where
     T: RequestExtractor<R>,
 {
@@ -105,19 +110,21 @@ where
         Self {
             inner,
             service_name: service_name.clone(),
-            protocol,
+            protocal: protocal,
             _request_extractor: PhantomData,
-            _request_type: PhantomData,
+            _request_type_: PhantomData,
+            _response_extractor: PhantomData,
         }
     }
 }
 
 impl<S, T, R> Service<R> for MetricsMiddleware<S, T, R>
 where
-    S: Service<R> + Send + Clone + 'static,
-    S::Future: Send + 'static,
-    T: RequestExtractor<R> + 'static,
-    R: Send + 'static,
+    S: Service<Request> + Send + Sync + Clone + 'static,
+    S::Future: Send + Sync + 'static,
+    T: RequestExtractor<Request> + 'static,
+    R: Send + Sync + 'static,
+    RE: ResponseExtractor<S::Response> + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -175,6 +182,24 @@ impl MethodMetrics {
 
     fn increment_error_count(method_name: &str, service_name: &str, protocol: &str) {
         metrics::counter!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1)
+
+
+    fn increment_response_code(
+        method_name: &str,
+        service_name: &str,
+        protocal: &str,
+        response_code: &str,
+    ) {
+        metrics::counter!("response_stats", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string(), "response_code" => response_code.to_string()).increment(1)
+    }
+
+    fn increment_response_code(
+        method_name: &str,
+        service_name: &str,
+        protocal: &str,
+        response_code: &str,
+    ) {
+        metrics::counter!("response_stats", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string(), "response_code" => response_code.to_string()).increment(1)
     }
 
     fn record_request_latency(

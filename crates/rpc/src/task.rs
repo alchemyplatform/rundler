@@ -42,6 +42,7 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
+    rpc_metrics::RPCMethodExtractor,
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
@@ -205,7 +206,11 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
+
+        let metric_middleware = MetricsLayer::new("rundler-eth-service".to_string(), "rpc".to_string());
+
         let server = ServerBuilder::default()
+            .set_rpc_middleware(metric_middleware)
             .set_http_middleware(http_middleware)
             .max_connections(self.args.max_connections)
             // Set max request body size to 2x the max transaction size as none of our

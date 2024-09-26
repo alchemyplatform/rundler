@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use rundler_types::task::traits::RequestExtractor;
+use rundler_types::task::traits::{RequestExtractor, ResponseExtractor};
 use tonic::codegen::http;
 
 /// http request method extractor.
@@ -21,5 +21,15 @@ impl<Body> RequestExtractor<http::Request<Body>> for HttpMethodExtractor {
     fn get_method_name(req: &http::Request<Body>) -> String {
         let method_name = req.uri().path().split('/').last().unwrap_or("unknown");
         method_name.to_string()
+    }
+}
+
+/// http response extractor.
+#[derive(Copy, Clone)]
+pub struct HttpResponseCodeExtractor;
+
+impl<B> ResponseExtractor<http::Response<B>> for HttpResponseCodeExtractor {
+    fn get_response_code(response: &http::Response<B>) -> String {
+        response.status().to_string()
     }
 }

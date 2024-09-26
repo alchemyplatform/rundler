@@ -14,6 +14,7 @@
 //! Traits for the provider module.
 
 mod error;
+mod metrics;
 pub use error::*;
 
 mod entry_point;
