@@ -22,7 +22,10 @@ use std::{
 use async_trait::async_trait;
 use ethers::types::{Address, H256};
 use futures_util::StreamExt;
-use rundler_task::grpc::{metrics::GrpcMetricsLayer, protos::from_bytes};
+use rundler_task::{
+    grpc::{grpc_metrics::HttpMethodExtractor, protos::from_bytes},
+    metrics::{MetricsLayer, RequestMethodNameInfo},
+};
 use rundler_types::{
     chain::ChainSpec,
     pool::{Pool, Reputation},
@@ -78,7 +81,7 @@ pub(crate) async fn spawn_remote_mempool_server(
         .set_serving::<OpPoolServer<OpPoolImpl>>()
         .await;
 
-    let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
+    let metrics_layer = MetricsLayer::<HttpMethodExtractor, http::Request>::new("op_pool_service".to_string(), "http-grpc".to_string());
     let handle = tokio::spawn(async move {
         Server::builder()
             .layer(metrics_layer)

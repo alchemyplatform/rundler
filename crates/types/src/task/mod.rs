@@ -11,13 +11,5 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-//! Rundler pool types
-
-mod error;
-pub use error::*;
-
-mod traits;
-pub use traits::*;
-
-mod types;
-pub use types::*;
+//! Rundler task traits.
+pub mod traits;
