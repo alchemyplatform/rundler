@@ -10,13 +10,13 @@ publish = false
 [dependencies]
 rundler-provider = { path = "../provider" }
 rundler-utils = { path = "../utils" }
+rundler-types = { path = "../types" }
 
 alloy-primitives.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
 futures.workspace = true
-pin-project.workspace = true
 metrics.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
