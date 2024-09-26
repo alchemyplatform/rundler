@@ -17,3 +17,9 @@ pub trait RequestExtractor<R>: Sync + Send {
     /// Get method name.
     fn get_method_name(request: &R) -> String;
 }
+
+/// Trait to extract response code.
+pub trait ResponseExtractor<R>: Copy + Sync + Send {
+    /// Get response code.
+    fn get_response_code(response: &R) -> String;
+}

@@ -44,7 +44,11 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
+<<<<<<< HEAD
     rpc_metrics::RPCMethodExtractor,
+=======
+    rpc_metrics::{RPCMethodExtractor, RPCResponseCodeExtractor},
+>>>>>>> ba1f0c6 (feat(middleware): add response extractor.)
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
@@ -188,10 +192,18 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
+<<<<<<< HEAD
         let rpc_metric_middleware = MetricsLayer::<RPCMethodExtractor, Request<'static>>::new(
             "rundler-eth-service".to_string(),
             "rpc".to_string(),
         );
+=======
+        let rpc_metric_middleware =
+            MetricsLayer::<RPCMethodExtractor, Request<'static>, RPCResponseCodeExtractor>::new(
+                "rundler-eth-service".to_string(),
+                "rpc".to_string(),
+            );
+>>>>>>> ba1f0c6 (feat(middleware): add response extractor.)
 
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)
