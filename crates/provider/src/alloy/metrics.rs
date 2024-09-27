@@ -11,14 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use jsonrpsee::types::Request;
+use alloy_json_rpc::RequestPacket;
+/// Method extractor
 use rundler_types::task::traits::RequestExtractor;
 
-#[derive(Copy, Clone)]
-struct RPCMethodExtractor;
+/// Method extractor for Alloy providers
+#[derive(Clone, Copy)]
+pub struct AlloyMethodExtractor;
 
-impl RequestExtractor<Request<'static>> for RPCMethodExtractor {
-    fn get_method_name(req: & Request<'static>) -> String {
-        req.method_name().to_string()
+impl RequestExtractor<RequestPacket> for AlloyMethodExtractor {
+    fn get_method_name(req: &RequestPacket) -> String {
+        match req {
+            RequestPacket::Single(request) => request.method().to_string(),
+            _ => {
+                // can't extract method name for batch.
+                "batch".to_string()
+            }
+        }
     }
 }

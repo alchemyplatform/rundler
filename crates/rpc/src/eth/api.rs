@@ -13,11 +13,9 @@
 
 use std::{future::Future, pin::Pin};
 
-use ethers::{
-    types::{spoof, Address, H256, U64},
-    utils::to_checksum,
-};
+use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
+use rundler_provider::StateOverride;
 use rundler_types::{
     chain::ChainSpec, pool::Pool, UserOperation, UserOperationOptionalGas, UserOperationVariant,
 };
@@ -68,7 +66,7 @@ where
         &self,
         op: UserOperationVariant,
         entry_point: Address,
-    ) -> EthResult<H256> {
+    ) -> EthResult<B256> {
         let bundle_size = op.single_uo_bundle_size_bytes();
         if bundle_size > self.chain_spec.max_transaction_size_bytes {
             return Err(EthRpcError::InvalidParams(format!(
@@ -90,7 +88,7 @@ where
         &self,
         op: UserOperationOptionalGas,
         entry_point: Address,
-        state_override: Option<spoof::State>,
+        state_override: Option<StateOverride>,
     ) -> EthResult<RpcGasEstimate> {
         let bundle_size = op.single_uo_bundle_size_bytes();
         if bundle_size > self.chain_spec.max_transaction_size_bytes {
@@ -107,9 +105,9 @@ where
 
     pub(crate) async fn get_user_operation_by_hash(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
-        if hash == H256::zero() {
+        if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
                 "Missing/invalid userOpHash".to_string(),
             ));
@@ -132,9 +130,9 @@ where
 
     pub(crate) async fn get_user_operation_receipt(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
-        if hash == H256::zero() {
+        if hash == B256::ZERO {
             return Err(EthRpcError::InvalidParams(
                 "Missing/invalid userOpHash".to_string(),
             ));
@@ -153,17 +151,17 @@ where
         Ok(self
             .router
             .entry_points()
-            .map(|ep| to_checksum(ep, None))
+            .map(|ep| ep.to_checksum(None))
             .collect())
     }
 
     pub(crate) async fn chain_id(&self) -> EthResult<U64> {
-        Ok(self.chain_spec.id.into())
+        Ok(U64::from(self.chain_spec.id))
     }
 
     async fn get_pending_user_operation_by_hash(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
         let res = self
             .pool
@@ -185,15 +183,13 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use ethers::{
-        abi::AbiEncode,
-        types::{Bytes, Log, Transaction},
-    };
+    use alloy_primitives::{Log as PrimitiveLog, LogData, U256};
+    use alloy_sol_types::SolInterface;
     use mockall::predicate::eq;
-    use rundler_provider::{MockEntryPointV0_6, MockProvider};
+    use rundler_contracts::v0_6::IEntryPoint::{handleOpsCall, IEntryPointCalls};
+    use rundler_provider::{Log, MockEntryPointV0_6, MockEvmProvider, Transaction};
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
-        contracts::v0_6::i_entry_point::{HandleOpsCall, IEntryPointCalls},
         pool::{MockPool, PoolOperation},
         v0_6::UserOperation,
         EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
@@ -215,8 +211,8 @@ mod tests {
             entry_point: ep,
             aggregator: None,
             valid_time_range: ValidTimeRange::default(),
-            expected_code_hash: H256::random(),
-            sim_block_hash: H256::random(),
+            expected_code_hash: B256::random(),
+            sim_block_hash: B256::random(),
             sim_block_number: 1000,
             account_is_staked: false,
             entity_infos: EntityInfos::default(),
@@ -228,12 +224,12 @@ mod tests {
             .times(1)
             .returning(move |_| Ok(Some(po.clone())));
 
-        let mut provider = MockProvider::default();
+        let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
         provider.expect_get_block_number().returning(|| Ok(1000));
 
         let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().returning(move || ep);
+        entry_point.expect_address().return_const(ep);
 
         let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
@@ -257,33 +253,36 @@ mod tests {
         let uo = UserOperation::default();
         let hash = uo.hash(ep, 1);
         let block_number = 1000;
-        let block_hash = H256::random();
+        let block_hash = B256::random();
 
         let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
             .with(eq(hash))
             .returning(move |_| Ok(None));
 
-        let mut provider = MockProvider::default();
+        let mut provider = MockEvmProvider::default();
         provider.expect_get_block_number().returning(|| Ok(1000));
 
-        let tx_data: Bytes = IEntryPointCalls::HandleOps(HandleOpsCall {
-            beneficiary: Address::zero(),
-            ops: vec![uo.clone()],
+        let tx_data = IEntryPointCalls::handleOps(handleOpsCall {
+            ops: vec![uo.clone().into()],
+            beneficiary: Address::ZERO,
         })
-        .encode()
-        .into();
+        .abi_encode();
+
         let tx = Transaction {
             to: Some(ep),
-            input: tx_data,
-            block_number: Some(block_number.into()),
+            input: tx_data.into(),
+            block_number: Some(block_number),
             block_hash: Some(block_hash),
             ..Default::default()
         };
-        let tx_hash = tx.hash();
+        let tx_hash = tx.hash;
         let log = Log {
-            address: ep,
-            transaction_hash: Some(tx_hash),
+            inner: PrimitiveLog {
+                address: ep,
+                data: LogData::default(),
+            },
+            transaction_hash: Some(tx.hash),
             ..Default::default()
         };
 
@@ -291,19 +290,19 @@ mod tests {
             .expect_get_logs()
             .returning(move |_| Ok(vec![log.clone()]));
         provider
-            .expect_get_transaction()
+            .expect_get_transaction_by_hash()
             .with(eq(tx_hash))
             .returning(move |_| Ok(Some(tx.clone())));
 
         let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().returning(move || ep);
+        entry_point.expect_address().return_const(ep);
 
         let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
             entry_point: ep.into(),
-            block_number: Some(block_number.into()),
+            block_number: Some(U256::from(block_number)),
             block_hash: Some(block_hash),
             transaction_hash: Some(tx_hash),
         };
@@ -322,12 +321,12 @@ mod tests {
             .times(1)
             .returning(move |_| Ok(None));
 
-        let mut provider = MockProvider::default();
+        let mut provider = MockEvmProvider::default();
         provider.expect_get_logs().returning(move |_| Ok(vec![]));
         provider.expect_get_block_number().returning(|| Ok(1000));
 
         let mut entry_point = MockEntryPointV0_6::default();
-        entry_point.expect_address().returning(move || ep);
+        entry_point.expect_address().return_const(ep);
 
         let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
@@ -335,7 +334,7 @@ mod tests {
     }
 
     fn create_api(
-        provider: MockProvider,
+        provider: MockEvmProvider,
         ep: MockEntryPointV0_6,
         pool: MockPool,
         gas_estimator: MockGasEstimator,

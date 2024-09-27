@@ -14,11 +14,10 @@
 use rundler_types::task::traits::RequestExtractor;
 use tonic::codegen::http;
 
-/// http request method extractor. 
-#[derive(Copy, Clone)]
-struct HttpMethodExtractor;
+/// http request method extractor.
+pub struct GrpcMethodExtractor;
 
-impl<Body> RequestExtractor<http::Request<Body>> for HttpMethodExtractor {
+impl<Body> RequestExtractor<http::Request<Body>> for GrpcMethodExtractor {
     fn get_method_name(req: &http::Request<Body>) -> String {
         let method_name = req.uri().path().split('/').last().unwrap_or("unknown");
         method_name.to_string()
