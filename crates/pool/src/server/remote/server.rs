@@ -81,10 +81,11 @@ pub(crate) async fn spawn_remote_mempool_server(
         .set_serving::<OpPoolServer<OpPoolImpl>>()
         .await;
 
-    let metrics_layer = MetricsLayer::<HttpMethodExtractor, http::Request>::new(
+    let metrics_layer = MetricsLayer::<HttpMethodExtractor, _>::new(
         "op_pool_service".to_string(),
         "http-grpc".to_string(),
     );
+
     let handle = tokio::spawn(async move {
         Server::builder()
             .layer(metrics_layer)

@@ -13,7 +13,7 @@
 
 /// Trait to expose request method name.
 
-pub trait RequestExtractor<R>: Copy + Sync + Send {
+pub trait RequestExtractor<R>: Sync + Send {
     /// Get method name.
     fn get_method_name(request: &R) -> String;
 }
