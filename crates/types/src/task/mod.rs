@@ -12,4 +12,8 @@
 // If not, see https://www.gnu.org/licenses/.
 
 //! Rundler task traits.
+//!
+//! This module contains traits related to Rundler tasks.
+
+/// method extractor trait.
 pub mod traits;

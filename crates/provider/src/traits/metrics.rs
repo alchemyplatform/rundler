@@ -16,7 +16,7 @@ use rundler_types::task::traits::RequestExtractor;
 use alloy_json_rpc::RequestPacket;
 
 #[derive(Clone, Copy)]
-struct AlloyMethodExtractor;
+pub struct AlloyMethodExtractor;
 
 impl RequestExtractor<RequestPacket> for RPCMethodExtractor {
     fn get_method_name(req: &RequestPacket) -> String {
