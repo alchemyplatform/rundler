@@ -27,7 +27,7 @@ use tower::{Layer, Service};
 #[derive(Debug)]
 pub struct MetricsLayer<T, R> {
     service_name: String,
-    protocal: String,
+    protocol: String,
     _request_extractor: PhantomData<T>,
     _request_type: PhantomData<R>,
 }
@@ -37,10 +37,10 @@ where
     T: RequestExtractor<R>,
 {
     /// Initialize a network layer wrappers the metric middleware.
-    pub fn new(service_name: String, protocal: String) -> Self {
+    pub fn new(service_name: String, protocol: String) -> Self {
         MetricsLayer {
             service_name,
-            protocal,
+            protocol,
             _request_extractor: PhantomData,
             _request_type: PhantomData,
         }
@@ -54,7 +54,7 @@ where
     fn clone(&self) -> Self {
         Self {
             service_name: self.service_name.clone(),
-            protocal: self.protocal.clone(),
+            protocol: self.protocol.clone(),
             _request_extractor: PhantomData,
             _request_type: PhantomData,
         }
@@ -68,7 +68,7 @@ where
     type Service = MetricsMiddleware<S, T, R>;
 
     fn layer(&self, service: S) -> Self::Service {
-        Self::Service::new(service, self.service_name.clone(), self.protocal.clone())
+        Self::Service::new(service, self.service_name.clone(), self.protocol.clone())
     }
 }
 
@@ -140,18 +140,18 @@ where
         let start = Instant::now();
         let mut svc = self.inner.clone();
         let service_name = self.service_name.clone();
-        let protocal = self.protocol.clone();
+        let protocol = self.protocol.clone();
         async move {
             let rsp = svc.call(request).await;
             MethodMetrics::record_request_latency(
                 &method_name,
                 &service_name,
-                &protocal,
+                &protocol,
                 start.elapsed(),
             );
-            MethodMetrics::decrement_open_requests(&method_name, &service_name, &protocal);
+            MethodMetrics::decrement_open_requests(&method_name, &service_name, &protocol);
             if rsp.is_err() {
-                MethodMetrics::increment_error_count(&method_name, &service_name, &protocal);
+                MethodMetrics::increment_error_count(&method_name, &service_name, &protocol);
             }
             rsp
         }
@@ -161,28 +161,28 @@ where
 struct MethodMetrics {}
 
 impl MethodMetrics {
-    fn increment_num_requests(method_name: &str, service_name: &str, protocal: &str) {
-        metrics::counter!("num_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string()).increment(1)
+    fn increment_num_requests(method_name: &str, service_name: &str, protocol: &str) {
+        metrics::counter!("num_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1)
     }
 
-    fn increment_open_requests(method_name: &str, service_name: &str, protocal: &str) {
-        metrics::gauge!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string()).increment(1_f64)
+    fn increment_open_requests(method_name: &str, service_name: &str, protocol: &str) {
+        metrics::gauge!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1_f64)
     }
 
-    fn decrement_open_requests(method_name: &str, service_name: &str, protocal: &str) {
-        metrics::gauge!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string()).decrement(1_f64)
+    fn decrement_open_requests(method_name: &str, service_name: &str, protocol: &str) {
+        metrics::gauge!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).decrement(1_f64)
     }
 
-    fn increment_error_count(method_name: &str, service_name: &str, protocal: &str) {
-        metrics::counter!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string()).increment(1)
+    fn increment_error_count(method_name: &str, service_name: &str, protocol: &str) {
+        metrics::counter!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1)
     }
 
     fn record_request_latency(
         method_name: &str,
         service_name: &str,
-        protocal: &str,
+        protocol: &str,
         latency: Duration,
     ) {
-        metrics::histogram!("request_latency", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string()).record(latency)
+        metrics::histogram!("request_latency", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).record(latency)
     }
 }
