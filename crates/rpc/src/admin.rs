@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::Address;
 use anyhow::Context;
 use async_trait::async_trait;
-use ethers::types::Address;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::pool::Pool;
 
@@ -51,7 +51,7 @@ impl<P> AdminApi<P> {
 #[async_trait]
 impl<P> AdminApiServer for AdminApi<P>
 where
-    P: Pool,
+    P: Pool + 'static,
 {
     async fn clear_state(&self, clear_params: RpcAdminClearState) -> RpcResult<String> {
         utils::safe_call_rpc_handler(

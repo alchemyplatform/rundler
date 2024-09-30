@@ -13,3 +13,4 @@
 
 pub(crate) mod entry_point;
 pub(crate) mod evm;
+pub(crate) mod metrics;

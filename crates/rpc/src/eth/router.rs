@@ -13,8 +13,8 @@
 
 use std::{fmt::Debug, marker::PhantomData, sync::Arc};
 
-use ethers::types::{spoof, Address, H256};
-use rundler_provider::{EntryPoint, SimulationProvider};
+use alloy_primitives::{Address, B256};
+use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
 use rundler_sim::{GasEstimationError, GasEstimator};
 use rundler_types::{
     EntryPointVersion, GasEstimate, UserOperation, UserOperationOptionalGas, UserOperationVariant,
@@ -39,7 +39,7 @@ pub(crate) struct EntryPointRouterBuilder {
 impl EntryPointRouterBuilder {
     pub(crate) fn v0_6<R>(mut self, route: R) -> Self
     where
-        R: EntryPointRoute,
+        R: EntryPointRoute + 'static,
     {
         if route.version() != EntryPointVersion::V0_6 {
             panic!(
@@ -55,7 +55,7 @@ impl EntryPointRouterBuilder {
 
     pub(crate) fn v0_7<R>(mut self, route: R) -> Self
     where
-        R: EntryPointRoute,
+        R: EntryPointRoute + 'static,
     {
         if route.version() != EntryPointVersion::V0_7 {
             panic!(
@@ -121,7 +121,7 @@ impl EntryPointRouter {
     pub(crate) async fn get_mined_by_hash(
         &self,
         entry_point: &Address,
-        hash: H256,
+        hash: B256,
     ) -> EthResult<Option<RpcUserOperationByHash>> {
         self.get_route(entry_point)?
             .get_mined_by_hash(hash)
@@ -132,7 +132,7 @@ impl EntryPointRouter {
     pub(crate) async fn get_receipt(
         &self,
         entry_point: &Address,
-        hash: H256,
+        hash: B256,
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         self.get_route(entry_point)?
             .get_receipt(hash)
@@ -144,7 +144,7 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         uo: UserOperationOptionalGas,
-        state_override: Option<spoof::State>,
+        state_override: Option<StateOverride>,
     ) -> EthResult<RpcGasEstimate> {
         match self.get_ep_version(entry_point)? {
             EntryPointVersion::V0_6 => {
@@ -191,7 +191,7 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         uo: UserOperationVariant,
-        max_verification_gas: u64,
+        max_verification_gas: u128,
     ) -> EthResult<bool> {
         self.check_and_get_route(entry_point, &uo)?
             .check_signature(uo, max_verification_gas)
@@ -229,26 +229,26 @@ impl EntryPointRouter {
 }
 
 #[async_trait::async_trait]
-pub(crate) trait EntryPointRoute: Send + Sync + 'static {
+pub(crate) trait EntryPointRoute: Send + Sync {
     fn version(&self) -> EntryPointVersion;
 
     fn address(&self) -> Address;
 
-    async fn get_mined_by_hash(&self, hash: H256)
+    async fn get_mined_by_hash(&self, hash: B256)
         -> anyhow::Result<Option<RpcUserOperationByHash>>;
 
-    async fn get_receipt(&self, hash: H256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
 
     async fn estimate_gas(
         &self,
         uo: UserOperationOptionalGas,
-        state_override: Option<spoof::State>,
+        state_override: Option<StateOverride>,
     ) -> Result<GasEstimate, GasEstimationError>;
 
     async fn check_signature(
         &self,
         uo: UserOperationVariant,
-        max_verification_gas: u64,
+        max_verification_gas: u128,
     ) -> anyhow::Result<bool>;
 }
 
@@ -274,24 +274,24 @@ where
     }
 
     fn address(&self) -> Address {
-        self.entry_point.address()
+        *self.entry_point.address()
     }
 
     async fn get_mined_by_hash(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
         self.event_provider.get_mined_by_hash(hash).await
     }
 
-    async fn get_receipt(&self, hash: H256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
         self.event_provider.get_receipt(hash).await
     }
 
     async fn estimate_gas(
         &self,
         uo: UserOperationOptionalGas,
-        state_override: Option<spoof::State>,
+        state_override: Option<StateOverride>,
     ) -> Result<GasEstimate, GasEstimationError> {
         self.gas_estimator
             .estimate_op_gas(uo.into(), state_override.unwrap_or_default())
@@ -301,12 +301,12 @@ where
     async fn check_signature(
         &self,
         uo: UserOperationVariant,
-        max_verification_gas: u64,
+        max_verification_gas: u128,
     ) -> anyhow::Result<bool> {
         let output = self
             .entry_point
-            .call_simulate_validation(uo.into(), max_verification_gas, None)
-            .await?;
+            .simulate_validation(uo.into(), max_verification_gas, None)
+            .await??;
 
         Ok(!output.return_info.account_sig_failed)
     }

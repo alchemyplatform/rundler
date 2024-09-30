@@ -11,19 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::VecDeque, marker::PhantomData, sync::Arc};
+use std::{collections::VecDeque, marker::PhantomData};
 
+use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_sol_types::SolEvent;
 use anyhow::Context;
-use ethers::{
-    prelude::EthEvent,
-    types::{
-        Address, Bytes, Filter, GethDebugBuiltInTracerType, GethDebugTracerType,
-        GethDebugTracingOptions, GethTrace, GethTraceFrame, Log, TransactionReceipt, H256, U256,
-    },
+use rundler_provider::{
+    EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
+    GethTrace, Log, TransactionReceipt,
 };
-use rundler_provider::Provider;
 use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
-use rundler_utils::{eth, log::LogOnError};
+use rundler_utils::log::LogOnError;
 
 use super::UserOperationEventProvider;
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
@@ -31,19 +29,19 @@ use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
 #[derive(Debug)]
 pub(crate) struct UserOperationEventProviderImpl<P, F> {
     chain_spec: ChainSpec,
-    provider: Arc<P>,
+    provider: P,
     event_block_distance: Option<u64>,
     _f_type: PhantomData<F>,
 }
 
-pub(crate) trait EntryPointFilters: Send + Sync + 'static {
+pub(crate) trait EntryPointEvents: Send + Sync {
     type UO: UserOperation + Into<UserOperationVariant>;
-    type UserOperationEventFilter: EthEvent;
-    type UserOperationRevertReasonFilter: EthEvent;
+    type UserOperationEvent: SolEvent;
+    type UserOperationRevertReason: SolEvent;
 
     fn construct_receipt(
-        event: Self::UserOperationEventFilter,
-        hash: H256,
+        event: Self::UserOperationEvent,
+        hash: B256,
         entry_point: Address,
         logs: Vec<Log>,
         tx_receipt: TransactionReceipt,
@@ -55,14 +53,14 @@ pub(crate) trait EntryPointFilters: Send + Sync + 'static {
 }
 
 #[async_trait::async_trait]
-impl<P, F> UserOperationEventProvider for UserOperationEventProviderImpl<P, F>
+impl<P, E> UserOperationEventProvider for UserOperationEventProviderImpl<P, E>
 where
-    P: Provider,
-    F: EntryPointFilters,
+    P: EvmProvider,
+    E: EntryPointEvents,
 {
     async fn get_mined_by_hash(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
         // Get event associated with hash (need to check all entry point addresses associated with this API)
         let event = self
@@ -79,7 +77,7 @@ where
 
         let tx = self
             .provider
-            .get_transaction(transaction_hash)
+            .get_transaction_by_hash(transaction_hash)
             .await
             .context("should have fetched tx from provider")?
             .context("should have found tx")?;
@@ -93,8 +91,8 @@ where
             .context("tx.to should be present on transaction containing user operation event")?;
 
         // Find first op matching the hash
-        let user_operation = if F::address(&self.chain_spec) == to {
-            F::get_user_operations_from_tx_data(tx.input, &self.chain_spec)
+        let user_operation = if E::address(&self.chain_spec) == to {
+            E::get_user_operations_from_tx_data(tx.input, &self.chain_spec)
                 .into_iter()
                 .find(|op| op.hash(to, self.chain_spec.id) == hash)
                 .context("matching user operation should be found in tx data")?
@@ -107,25 +105,21 @@ where
 
         Ok(Some(RpcUserOperationByHash {
             user_operation: user_operation.into().into(),
-            entry_point: event.address.into(),
-            block_number: Some(
-                tx.block_number
-                    .map(|n| U256::from(n.as_u64()))
-                    .unwrap_or_default(),
-            ),
+            entry_point: event.address().into(),
+            block_number: Some(tx.block_number.map(|n| U256::from(n)).unwrap_or_default()),
             block_hash: Some(tx.block_hash.unwrap_or_default()),
             transaction_hash: Some(transaction_hash),
         }))
     }
 
-    async fn get_receipt(&self, hash: H256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
         let event = self
             .get_event_by_hash(hash)
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
         let Some(event) = event else { return Ok(None) };
 
-        let entry_point = event.address;
+        let entry_point = event.address();
 
         let tx_hash = event
             .transaction_hash
@@ -148,7 +142,7 @@ where
             .decode_user_operation_event(event)
             .context("should have decoded user operation event")?;
 
-        Ok(Some(F::construct_receipt(
+        Ok(Some(E::construct_receipt(
             uo_event,
             hash,
             entry_point,
@@ -158,14 +152,14 @@ where
     }
 }
 
-impl<P, F> UserOperationEventProviderImpl<P, F>
+impl<P, E> UserOperationEventProviderImpl<P, E>
 where
-    P: Provider,
-    F: EntryPointFilters,
+    P: EvmProvider,
+    E: EntryPointEvents,
 {
     pub(crate) fn new(
         chain_spec: ChainSpec,
-        provider: Arc<P>,
+        provider: P,
         event_block_distance: Option<u64>,
     ) -> Self {
         Self {
@@ -176,7 +170,7 @@ where
         }
     }
 
-    async fn get_event_by_hash(&self, hash: H256) -> anyhow::Result<Option<Log>> {
+    async fn get_event_by_hash(&self, hash: B256) -> anyhow::Result<Option<Log>> {
         let to_block = self.provider.get_block_number().await?;
 
         let from_block = match self.event_block_distance {
@@ -185,8 +179,8 @@ where
         };
 
         let filter = Filter::new()
-            .address(F::address(&self.chain_spec))
-            .event(&F::UserOperationEventFilter::abi_signature())
+            .address(E::address(&self.chain_spec))
+            .event_signature(E::UserOperationEvent::SIGNATURE_HASH)
             .from_block(from_block)
             .to_block(to_block)
             .topic1(hash);
@@ -195,8 +189,9 @@ where
         Ok(logs.into_iter().next())
     }
 
-    fn decode_user_operation_event(&self, log: Log) -> anyhow::Result<F::UserOperationEventFilter> {
-        F::UserOperationEventFilter::decode_log(&eth::log_to_raw_log(log))
+    fn decode_user_operation_event(&self, log: Log) -> anyhow::Result<E::UserOperationEvent> {
+        log.log_decode::<E::UserOperationEvent>()
+            .map(|l| l.inner.data)
             .context("log should be a user operation event")
     }
 
@@ -206,9 +201,9 @@ where
     /// and returning the user operation that matches the hash.
     async fn trace_find_user_operation(
         &self,
-        tx_hash: H256,
-        user_op_hash: H256,
-    ) -> anyhow::Result<Option<F::UO>> {
+        tx_hash: B256,
+        user_op_hash: B256,
+    ) -> anyhow::Result<Option<E::UO>> {
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
             tracer: Some(GethDebugTracerType::BuiltInTracer(
@@ -225,7 +220,7 @@ where
         // breadth first search for the user operation in the trace
         let mut frame_queue = VecDeque::new();
 
-        if let GethTrace::Known(GethTraceFrame::CallTracer(call_frame)) = trace {
+        if let GethTrace::CallTracer(call_frame) = trace {
             frame_queue.push_back(call_frame);
         }
 
@@ -233,20 +228,18 @@ where
             // check if the call is to an entrypoint, if not enqueue the child calls if any
             if let Some(to) = call_frame
                 .to
-                .as_ref()
-                .and_then(|to| to.as_address())
-                .filter(|to| **to == F::address(&self.chain_spec))
+                .filter(|to| *to == E::address(&self.chain_spec))
             {
                 // check if the user operation is in the call frame
                 if let Some(uo) =
-                    F::get_user_operations_from_tx_data(call_frame.input, &self.chain_spec)
+                    E::get_user_operations_from_tx_data(call_frame.input, &self.chain_spec)
                         .into_iter()
-                        .find(|op| op.hash(*to, self.chain_spec.id) == user_op_hash)
+                        .find(|op| op.hash(to, self.chain_spec.id) == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }
-            } else if let Some(calls) = call_frame.calls {
-                frame_queue.extend(calls)
+            } else {
+                frame_queue.extend(call_frame.calls)
             }
         }
 
