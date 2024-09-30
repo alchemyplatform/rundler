@@ -8,15 +8,18 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+rundler-contracts = { path = "../contracts" }
 rundler-provider = { path = "../provider" }
 rundler-sim = { path = "../sim" }
 rundler-task = { path = "../task" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
+
 anyhow.workspace = true
 async-trait.workspace = true
-ethers.workspace = true
 jsonrpsee = { workspace = true , features = ["client", "macros", "server"] }
 metrics.workspace = true
 thiserror.workspace = true
@@ -32,6 +35,7 @@ futures-util.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
+alloy-consensus.workspace = true
 rundler-provider = { path = "../provider", features = ["test-utils"]}
 rundler-sim = { path = "../sim", features = ["test-utils"] }
 rundler-types= { path = "../types", features = ["test-utils"]}

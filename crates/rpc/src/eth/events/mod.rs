@@ -11,8 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::B256;
 use anyhow::bail;
-use ethers::types::{Log, TransactionReceipt, H256};
+use rundler_provider::{Log, TransactionReceipt};
 
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
 
@@ -24,11 +25,11 @@ mod v0_7;
 pub(crate) use v0_7::UserOperationEventProviderV0_7;
 
 #[async_trait::async_trait]
-pub(crate) trait UserOperationEventProvider: Send + Sync + 'static {
-    async fn get_mined_by_hash(&self, hash: H256)
+pub(crate) trait UserOperationEventProvider: Send + Sync {
+    async fn get_mined_by_hash(&self, hash: B256)
         -> anyhow::Result<Option<RpcUserOperationByHash>>;
 
-    async fn get_receipt(&self, hash: H256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+    async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
 }
 
 // This method takes a user operation event and a transaction receipt and filters out all the logs
@@ -47,17 +48,20 @@ fn filter_receipt_logs_matching_user_op(
     reference_log: &Log,
     tx_receipt: &TransactionReceipt,
 ) -> anyhow::Result<Vec<Log>> {
+    let logs = tx_receipt.inner.logs();
+
     let mut start_idx = 0;
-    let mut end_idx = tx_receipt.logs.len() - 1;
-    let logs = &tx_receipt.logs;
+    let mut end_idx = logs.len() - 1;
+
+    // TODO protect against topic of zero size
 
     let is_ref_user_op = |log: &Log| {
-        log.topics[0] == reference_log.topics[0]
-            && log.topics[1] == reference_log.topics[1]
-            && log.address == reference_log.address
+        log.topics()[0] == reference_log.topics()[0]
+            && log.topics()[1] == reference_log.topics()[1]
+            && log.address() == reference_log.address()
     };
 
-    let is_user_op_event = |log: &Log| log.topics[0] == reference_log.topics[0];
+    let is_user_op_event = |log: &Log| log.topics()[0] == reference_log.topics()[0];
 
     let mut i = 0;
     while i < logs.len() {
@@ -81,7 +85,8 @@ fn filter_receipt_logs_matching_user_op(
 #[cfg(test)]
 mod tests {
 
-    use ethers::{types::Address, utils::keccak256};
+    use alloy_primitives::{address, utils::keccak256, Address, Log as PrimitiveLog, LogData};
+    use rundler_provider::{TransactionReceiptEnvelope, TransactionReceiptWithBloom};
 
     use super::*;
 
@@ -101,7 +106,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.logs[0..=1]);
+        assert_eq!(result, receipt.inner.logs()[0..=1]);
     }
 
     #[test]
@@ -120,7 +125,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.logs[2..=4]);
+        assert_eq!(result, receipt.inner.logs()[2..=4]);
     }
 
     #[test]
@@ -139,14 +144,15 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.logs[3..=5]);
+        assert_eq!(result, receipt.inner.logs()[3..=5]);
     }
 
     #[test]
     fn test_filter_receipt_logs_skips_event_from_different_address() {
         let reference_log = given_log(UO_OP_TOPIC, "moldy-hash");
         let mut reference_log_w_different_address = reference_log.clone();
-        reference_log_w_different_address.address = Address::from_low_u64_be(0x1234);
+        reference_log_w_different_address.inner.address =
+            address!("0000000000000000000000000000000000001234");
 
         let receipt = given_receipt(vec![
             given_log("other-topic", "some-hash"),
@@ -162,7 +168,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.logs[4..=6]);
+        assert_eq!(result, receipt.inner.logs()[4..=6]);
     }
 
     #[test]
@@ -184,7 +190,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.logs[2..=6]);
+        assert_eq!(result, receipt.inner.logs()[2..=6]);
     }
 
     #[test]
@@ -204,19 +210,44 @@ mod tests {
     }
 
     fn given_log(topic_0: &str, topic_1: &str) -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![
+            keccak256(topic_0.as_bytes()),
+            keccak256(topic_1.as_bytes()),
+        ]);
+
         Log {
-            topics: vec![
-                keccak256(topic_0.as_bytes()).into(),
-                keccak256(topic_1.as_bytes()).into(),
-            ],
+            inner: PrimitiveLog {
+                address: Address::ZERO,
+                data: log_data,
+            },
             ..Default::default()
         }
     }
 
     fn given_receipt(logs: Vec<Log>) -> TransactionReceipt {
-        TransactionReceipt {
+        let receipt = alloy_consensus::Receipt {
             logs,
             ..Default::default()
+        };
+        TransactionReceipt {
+            inner: TransactionReceiptEnvelope::Legacy(TransactionReceiptWithBloom {
+                receipt,
+                ..Default::default()
+            }),
+            transaction_hash: B256::ZERO,
+            transaction_index: None,
+            block_hash: None,
+            block_number: None,
+            gas_used: 0,
+            effective_gas_price: 0,
+            blob_gas_used: None,
+            blob_gas_price: None,
+            from: Address::ZERO,
+            to: None,
+            contract_address: None,
+            state_root: None,
+            authorization_list: None,
         }
     }
 }

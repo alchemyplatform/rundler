@@ -16,16 +16,15 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use jsonrpsee::{
-    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
-    types::Request,
+    server::{middleware::http::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
 };
-use rundler_provider::{EntryPointProvider, Provider};
+use rundler_provider::{EntryPointProvider, EvmProvider};
 use rundler_sim::{
+    gas::{self, FeeEstimatorImpl, FeeOracle},
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
 };
 use rundler_task::{
-    metrics::MetricsLayer,
     server::{format_socket_addr, HealthCheck},
     Task,
 };
@@ -44,7 +43,6 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
-    rpc_metrics::RPCMethodExtractor,
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
@@ -88,7 +86,7 @@ pub struct RpcTask<P, B, PR, E06, E07> {
     args: Args,
     pool: P,
     builder: B,
-    provider: Arc<PR>,
+    provider: PR,
     ep_06: Option<E06>,
     ep_07: Option<E07>,
 }
@@ -96,17 +94,34 @@ pub struct RpcTask<P, B, PR, E06, E07> {
 #[async_trait]
 impl<P, B, PR, E06, E07> Task for RpcTask<P, B, PR, E06, E07>
 where
-    P: Pool + HealthCheck + Clone,
-    B: Builder + HealthCheck + Clone,
-    PR: Provider,
-    E06: EntryPointProvider<UserOperationV0_6>,
-    E07: EntryPointProvider<UserOperationV0_7>,
+    P: Pool + HealthCheck + Clone + 'static,
+    B: Builder + HealthCheck + Clone + 'static,
+    PR: EvmProvider + Clone + 'static,
+    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
+    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
+    fn boxed(self) -> Box<dyn Task> {
+        Box::new(self)
+    }
+
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
 
         let mut router_builder = EntryPointRouterBuilder::default();
+        let fee_oracle = Arc::<dyn FeeOracle>::from(gas::get_fee_oracle(
+            &self.args.chain_spec,
+            self.provider.clone(),
+        ));
+        let fee_estimator = FeeEstimatorImpl::new(
+            self.provider.clone(),
+            fee_oracle,
+            self.args.precheck_settings.priority_fee_mode,
+            self.args
+                .precheck_settings
+                .bundle_priority_fee_overhead_percent,
+        );
+
         if self.args.entry_point_v0_6_enabled {
             let ep = self
                 .ep_06
@@ -117,21 +132,14 @@ where
                 ep.clone(),
                 GasEstimatorV0_6::new(
                     self.args.chain_spec.clone(),
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     ep.clone(),
                     self.args.estimation_settings,
-                    FeeEstimator::new(
-                        &self.args.chain_spec,
-                        Arc::clone(&self.provider),
-                        self.args.precheck_settings.priority_fee_mode,
-                        self.args
-                            .precheck_settings
-                            .bundle_priority_fee_overhead_percent,
-                    ),
+                    fee_estimator.clone(),
                 ),
                 UserOperationEventProviderV0_6::new(
                     self.args.chain_spec.clone(),
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
@@ -149,21 +157,14 @@ where
                 ep.clone(),
                 GasEstimatorV0_7::new(
                     self.args.chain_spec.clone(),
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     ep.clone(),
                     self.args.estimation_settings,
-                    FeeEstimator::new(
-                        &self.args.chain_spec,
-                        Arc::clone(&self.provider),
-                        self.args.precheck_settings.priority_fee_mode,
-                        self.args
-                            .precheck_settings
-                            .bundle_priority_fee_overhead_percent,
-                    ),
+                    fee_estimator.clone(),
                 ),
                 UserOperationEventProviderV0_7::new(
                     self.args.chain_spec.clone(),
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
@@ -175,7 +176,7 @@ where
         let router = router_builder.build();
 
         let mut module = RpcModule::new(());
-        self.attach_namespaces(router, &mut module)?;
+        self.attach_namespaces(router, fee_estimator, &mut module)?;
 
         let servers: Vec<Box<dyn HealthCheck>> =
             vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];
@@ -188,14 +189,14 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-        let rpc_metric_middleware = MetricsLayer::<RPCMethodExtractor, Request<'static>>::new(
-            "rundler-eth-service".to_string(),
-            "rpc".to_string(),
-        );
+        // TODO: add metrics
+        // let rpc_metric_middleware = MetricsLayer::<RPCMethodExtractor, Request<'static>>::new(
+        //     "rundler-eth-service".to_string(),
+        //     "rpc".to_string(),
+        // );
 
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)
-            .set_rpc_middleware(rpc_metric_middleware)
             .max_connections(self.args.max_connections)
             // Set max request body size to 2x the max transaction size as none of our
             // APIs should require more than that.
@@ -231,7 +232,7 @@ impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07> {
         args: Args,
         pool: P,
         builder: B,
-        provider: Arc<PR>,
+        provider: PR,
         ep_06: Option<E06>,
         ep_07: Option<E07>,
     ) -> Self {
@@ -250,18 +251,14 @@ impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07>
 where
     P: Pool + HealthCheck + Clone,
     B: Builder + HealthCheck + Clone,
-    PR: Provider,
+    PR: EvmProvider,
     E06: EntryPointProvider<UserOperationV0_6>,
     E07: EntryPointProvider<UserOperationV0_7>,
 {
-    /// Converts the task into a boxed trait object.
-    pub fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
-    }
-
-    fn attach_namespaces(
+    fn attach_namespaces<F: FeeEstimator + 'static>(
         &self,
         entry_point_router: EntryPointRouter,
+        fee_estimator: F,
         module: &mut RpcModule<()>,
     ) -> anyhow::Result<()> {
         if self.args.api_namespaces.contains(&ApiNamespace::Eth) {
@@ -287,9 +284,9 @@ where
             module.merge(
                 RundlerApi::new(
                     &self.args.chain_spec,
-                    Arc::clone(&self.provider),
                     entry_point_router,
                     self.pool.clone(),
+                    fee_estimator,
                     self.args.rundler_api_settings,
                 )
                 .into_rpc(),
