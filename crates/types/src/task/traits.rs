@@ -20,6 +20,8 @@ pub trait RequestExtractor<R>: Sync + Send {
 
 /// Trait to extract response code.
 pub trait ResponseExtractor<R>: Copy + Sync + Send {
-    /// Get response code.
-    fn get_response_code(response: &R) -> String;
+    /// Get http status code.
+    fn get_http_status_code(result: &R) -> String;
+    /// Get rpc status code
+    fn get_rpc_status_code(result: &R) -> String;
 }

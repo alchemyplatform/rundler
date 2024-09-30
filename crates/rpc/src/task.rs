@@ -206,7 +206,6 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-
         let metric_middleware = MetricsLayer::new("rundler-eth-service".to_string(), "rpc".to_string());
 
         let server = ServerBuilder::default()
