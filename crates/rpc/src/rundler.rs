@@ -11,13 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
-
+use alloy_primitives::{Address, B256, U128};
 use anyhow::Context;
 use async_trait::async_trait;
-use ethers::types::{Address, H256, U256};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_provider::Provider;
 use rundler_sim::{gas, FeeEstimator};
 use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
 
@@ -34,16 +31,16 @@ pub struct Settings {
     pub priority_fee_mode: gas::PriorityFeeMode,
     /// If using a bundle priority fee, the percentage to add to the network/oracle
     /// provided value as a safety margin for fast inclusion.
-    pub bundle_priority_fee_overhead_percent: u64,
+    pub bundle_priority_fee_overhead_percent: u32,
     /// Max verification gas
-    pub max_verification_gas: u64,
+    pub max_verification_gas: u128,
 }
 
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
     /// Returns the maximum priority fee per gas required by Rundler
     #[method(name = "maxPriorityFeePerGas")]
-    async fn max_priority_fee_per_gas(&self) -> RpcResult<U256>;
+    async fn max_priority_fee_per_gas(&self) -> RpcResult<U128>;
 
     /// Drops a user operation from the local mempool.
     ///
@@ -58,24 +55,24 @@ pub trait RundlerApi {
         &self,
         uo: RpcUserOperation,
         entry_point: Address,
-    ) -> RpcResult<Option<H256>>;
+    ) -> RpcResult<Option<B256>>;
 }
 
-pub(crate) struct RundlerApi<P, PL> {
+pub(crate) struct RundlerApi<P, F> {
     chain_spec: ChainSpec,
     settings: Settings,
-    fee_estimator: FeeEstimator<P>,
-    pool_server: PL,
+    fee_estimator: F,
+    pool_server: P,
     entry_point_router: EntryPointRouter,
 }
 
 #[async_trait]
-impl<P, PL> RundlerApiServer for RundlerApi<P, PL>
+impl<P, F> RundlerApiServer for RundlerApi<P, F>
 where
-    P: Provider,
-    PL: Pool,
+    P: Pool + 'static,
+    F: FeeEstimator + 'static,
 {
-    async fn max_priority_fee_per_gas(&self) -> RpcResult<U256> {
+    async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
             RundlerApi::max_priority_fee_per_gas(self),
@@ -87,7 +84,7 @@ where
         &self,
         user_op: RpcUserOperation,
         entry_point: Address,
-    ) -> RpcResult<Option<H256>> {
+    ) -> RpcResult<Option<B256>> {
         utils::safe_call_rpc_handler(
             "rundler_dropLocalUserOperation",
             RundlerApi::drop_local_user_operation(self, user_op, entry_point),
@@ -96,56 +93,52 @@ where
     }
 }
 
-impl<P, PL> RundlerApi<P, PL>
+impl<P, F> RundlerApi<P, F>
 where
-    P: Provider,
-    PL: Pool,
+    P: Pool,
+    F: FeeEstimator,
 {
     pub(crate) fn new(
         chain_spec: &ChainSpec,
-        provider: Arc<P>,
         entry_point_router: EntryPointRouter,
-        pool_server: PL,
+        pool_server: P,
+        fee_estimator: F,
         settings: Settings,
     ) -> Self {
         Self {
             chain_spec: chain_spec.clone(),
             settings,
-            fee_estimator: FeeEstimator::new(
-                chain_spec,
-                provider,
-                settings.priority_fee_mode,
-                settings.bundle_priority_fee_overhead_percent,
-            ),
             entry_point_router,
             pool_server,
+            fee_estimator,
         }
     }
 
-    async fn max_priority_fee_per_gas(&self) -> EthResult<U256> {
+    async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator
             .required_bundle_fees(None)
             .await
             .context("should get required fees")?;
-        Ok(self
-            .fee_estimator
-            .required_op_fees(bundle_fees)
-            .max_priority_fee_per_gas)
+        Ok(U128::from(
+            self.fee_estimator
+                .required_op_fees(bundle_fees)
+                .max_priority_fee_per_gas,
+        ))
     }
 
     async fn drop_local_user_operation(
         &self,
         user_op: RpcUserOperation,
         entry_point: Address,
-    ) -> EthResult<Option<H256>> {
+    ) -> EthResult<Option<B256>> {
         let uo = UserOperationVariant::from_rpc(user_op, &self.chain_spec);
         let id = uo.id();
 
-        if uo.pre_verification_gas() != U256::zero()
-            || uo.call_gas_limit() != U256::zero()
+        if uo.pre_verification_gas() != 0
+            || uo.call_gas_limit() != 0
             || uo.call_data().len() != 0
-            || uo.max_fee_per_gas() != U256::zero()
+            || uo.max_fee_per_gas() != 0
         {
             Err(EthRpcError::InvalidParams("Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero".to_string()))?;
         }
