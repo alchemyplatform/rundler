@@ -199,7 +199,7 @@ where
         );
 =======
         let rpc_metric_middleware =
-            MetricsLayer::<RPCMethodExtractor, Request<'static>, RPCResponseCodeExtractor>::new(
+            MetricsLayer::<RPCMethodExtractor, _, RPCResponseCodeExtractor<_>>::new(
                 "rundler-eth-service".to_string(),
                 "rpc".to_string(),
             );

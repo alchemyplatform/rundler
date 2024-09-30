@@ -124,7 +124,7 @@ where
     S::Future: Send + Sync + 'static,
     T: RequestExtractor<Request> + 'static,
     R: Send + Sync + 'static,
-    RE: ResponseExtractor<S::Response> + Send + Sync + 'static,
+    RE: ResponseExtractor<Result<S::Response, S::Error>> + Send + Sync + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -157,9 +157,19 @@ where
                 start.elapsed(),
             );
             MethodMetrics::decrement_open_requests(&method_name, &service_name, &protocol);
-            if rsp.is_err() {
-                MethodMetrics::increment_error_count(&method_name, &service_name, &protocol);
-            }
+            let http_status_code = RE::get_http_status_code(&rsp);
+            let rpc_status_code = RE::get_rpc_status_code(&rsp);
+            MethodMetrics::increment_http_response_code(
+                &method_name,
+                &service_name,
+                &http_status_code,
+            );
+            MethodMetrics::increment_rpc_response_code(
+                &method_name,
+                &service_name,
+                &rpc_status_code,
+            );
+
             rsp
         }
         .boxed()
@@ -183,23 +193,12 @@ impl MethodMetrics {
     fn increment_error_count(method_name: &str, service_name: &str, protocol: &str) {
         metrics::counter!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1)
 
-
-    fn increment_response_code(
-        method_name: &str,
-        service_name: &str,
-        protocal: &str,
-        response_code: &str,
-    ) {
-        metrics::counter!("response_stats", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string(), "response_code" => response_code.to_string()).increment(1)
+    fn increment_http_response_code(method_name: &str, service_name: &str, http_status_code: &str) {
+        metrics::counter!("http_response_status", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => "http", "response_code" => http_status_code.to_string()).increment(1)
     }
 
-    fn increment_response_code(
-        method_name: &str,
-        service_name: &str,
-        protocal: &str,
-        response_code: &str,
-    ) {
-        metrics::counter!("response_stats", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => protocal.to_string(), "response_code" => response_code.to_string()).increment(1)
+    fn increment_rpc_response_code(method_name: &str, service_name: &str, rpc_status_code: &str) {
+        metrics::counter!("rpc_response_status", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocal" => "rpc", "response_code" => rpc_status_code.to_string()).increment(1)
     }
 
     fn record_request_latency(
