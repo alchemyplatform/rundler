@@ -5200,13 +5200,16 @@ dependencies = [
 name = "rundler-rpc"
 version = "0.3.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-primitives",
+ "alloy-sol-types",
  "anyhow",
  "async-trait",
- "ethers",
  "futures-util",
  "jsonrpsee",
  "metrics",
  "mockall",
+ "rundler-contracts",
  "rundler-provider",
  "rundler-sim",
  "rundler-task",

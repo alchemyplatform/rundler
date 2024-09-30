@@ -11,10 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::{
-    types::{Address, Log, TransactionReceipt, H160, H256, U256},
-    utils::to_checksum,
-};
+use alloy_primitives::{Address, B256, U128, U256, U64};
+use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
     chain::ChainSpec,
     pool::{Reputation, ReputationStatus},
@@ -51,14 +49,14 @@ pub(crate) trait FromRpc<R> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RpcAddress(H160);
+pub struct RpcAddress(Address);
 
 impl Serialize for RpcAddress {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_str(&to_checksum(&self.0, None))
+        serializer.serialize_str(&self.0.to_checksum(None))
     }
 }
 
@@ -140,9 +138,9 @@ pub(crate) struct RpcUserOperationByHash {
     /// The number of the block this operation was included in
     pub(crate) block_number: Option<U256>,
     /// The hash of the block this operation was included in
-    pub(crate) block_hash: Option<H256>,
+    pub(crate) block_hash: Option<B256>,
     /// The hash of the transaction this operation was included in
-    pub(crate) transaction_hash: Option<H256>,
+    pub(crate) transaction_hash: Option<B256>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -185,7 +183,7 @@ impl From<RpcGasEstimateV0_7> for RpcGasEstimate {
 #[serde(rename_all = "camelCase")]
 pub struct RpcUserOperationReceipt {
     /// The hash of the user operation
-    pub user_op_hash: H256,
+    pub user_op_hash: B256,
     /// The entry point address this operation was sent to
     pub entry_point: RpcAddress,
     /// The sender of this user operation
@@ -197,7 +195,7 @@ pub struct RpcUserOperationReceipt {
     /// The gas cost of this operation
     pub actual_gas_cost: U256,
     /// The gas used by this operation
-    pub actual_gas_used: U256,
+    pub actual_gas_used: U128,
     /// Whether this operation's execution was successful
     pub success: bool,
     /// If not successful, the revert reason string
@@ -215,9 +213,9 @@ pub struct RpcReputationInput {
     /// Entity address
     pub address: Address,
     /// Number of operations seen in this interval
-    pub ops_seen: U256,
+    pub ops_seen: U64,
     /// Number of operations included in this interval
-    pub ops_included: U256,
+    pub ops_included: U64,
 }
 
 /// Reputation of an entity
@@ -227,9 +225,9 @@ pub struct RpcReputationOutput {
     /// Entity address
     pub address: Address,
     /// Number of operations seen in this interval
-    pub ops_seen: U256,
+    pub ops_seen: U64,
     /// Number of operations included in this interval
-    pub ops_included: U256,
+    pub ops_included: U64,
     /// Reputation status
     pub status: ReputationStatus,
 }
@@ -238,8 +236,8 @@ impl From<RpcReputationInput> for Reputation {
     fn from(rpc_reputation: RpcReputationInput) -> Self {
         Reputation {
             address: rpc_reputation.address,
-            ops_seen: rpc_reputation.ops_seen.as_u64(),
-            ops_included: rpc_reputation.ops_included.as_u64(),
+            ops_seen: rpc_reputation.ops_seen.to(),
+            ops_included: rpc_reputation.ops_included.to(),
         }
     }
 }
@@ -250,8 +248,8 @@ impl TryFrom<Reputation> for RpcReputationInput {
     fn try_from(reputation: Reputation) -> Result<Self, Self::Error> {
         Ok(RpcReputationInput {
             address: reputation.address,
-            ops_seen: reputation.ops_seen.into(),
-            ops_included: reputation.ops_included.into(),
+            ops_seen: U64::from(reputation.ops_seen),
+            ops_included: U64::from(reputation.ops_included),
         })
     }
 }

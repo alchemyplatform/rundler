@@ -24,8 +24,9 @@ mod events;
 pub(crate) use events::{UserOperationEventProviderV0_6, UserOperationEventProviderV0_7};
 mod server;
 
-use ethers::types::{spoof, Address, H256, U64};
+use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use rundler_provider::StateOverride;
 
 use crate::types::{
     RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
@@ -42,7 +43,7 @@ pub trait EthApi {
         &self,
         op: RpcUserOperation,
         entry_point: Address,
-    ) -> RpcResult<H256>;
+    ) -> RpcResult<B256>;
 
     /// Estimates the gas fields for a user operation.
     #[method(name = "estimateUserOperationGas")]
@@ -50,21 +51,21 @@ pub trait EthApi {
         &self,
         op: RpcUserOperationOptionalGas,
         entry_point: Address,
-        state_override: Option<spoof::State>,
+        state_override: Option<StateOverride>,
     ) -> RpcResult<RpcGasEstimate>;
 
     /// Returns the user operation with the given hash.
     #[method(name = "getUserOperationByHash")]
     async fn get_user_operation_by_hash(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> RpcResult<Option<RpcUserOperationByHash>>;
 
     /// Returns the user operation receipt with the given hash.
     #[method(name = "getUserOperationReceipt")]
     async fn get_user_operation_receipt(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> RpcResult<Option<RpcUserOperationReceipt>>;
 
     /// Returns the supported entry points addresses
