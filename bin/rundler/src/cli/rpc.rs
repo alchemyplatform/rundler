@@ -19,7 +19,7 @@ use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
-use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
+use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown, Task};
 use rundler_types::chain::ChainSpec;
 
 use super::{CommonArgs, RundlerProviders};

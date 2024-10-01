@@ -211,7 +211,7 @@ where
             .specialization
             .get_test_call_gas_calldata(callless_op.clone(), call_gas_limit);
 
-        let target_revert_data = self
+        let target_res = self
             .entry_point
             .simulate_handle_op(
                 callless_op,
@@ -221,10 +221,15 @@ where
                 self.settings.max_simulate_handle_ops_gas,
                 state_override.clone(),
             )
-            .await?
+            .await?;
+
+        tracing::info!("target_res: {:?}", target_res);
+
+        let target_revert_data = target_res
             .map_err(GasEstimationError::RevertInValidation)?
             .target_result;
 
+        tracing::info!("target_revert_data: {:?}", target_revert_data);
         let result = TestCallGasResult::abi_decode(&target_revert_data, false)
             .context("should decode revert data as TestCallGasResult")?;
 

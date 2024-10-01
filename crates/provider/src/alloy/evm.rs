@@ -152,12 +152,10 @@ where
     }
 
     async fn get_pending_base_fee(&self) -> ProviderResult<u128> {
-        Ok(Self::get_block(self, BlockId::pending())
-            .await?
-            .context("pending block should exist")?
-            .header
-            .base_fee_per_gas
-            .context("pending block should have a nonempty base fee")?)
+        let fee_history = self.fee_history(1, BlockNumberOrTag::Pending, &[]).await?;
+        Ok(fee_history
+            .next_block_base_fee()
+            .context("should have a next block base fee")?)
     }
 
     async fn get_max_priority_fee(&self) -> ProviderResult<u128> {
@@ -277,7 +275,7 @@ where
 
     async fn get_code_hash(
         &self,
-        addresses: Vec<Address>,
+        mut addresses: Vec<Address>,
         block: Option<BlockId>,
     ) -> ProviderResult<B256> {
         let helper_addr = Address::random();
@@ -290,6 +288,7 @@ where
         };
         overrides.insert(helper_addr, account);
 
+        addresses.sort();
         let mut call = helper.getCodeHashes(addresses).state(overrides);
         if let Some(block) = block {
             call = call.block(block);

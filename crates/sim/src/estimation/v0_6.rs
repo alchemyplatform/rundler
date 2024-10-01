@@ -826,7 +826,7 @@ mod tests {
             .unwrap();
 
         // the estimation should be the same as the gas usage plus the buffer
-        let expected = gas_usage + ChainSpec::default().deposit_transfer_overhead;
+        let expected = gas_usage + ChainSpec::default().deposit_transfer_overhead as u128;
         let expected_with_buffer =
             math::increase_by_percent(expected, VERIFICATION_GAS_BUFFER_PERCENT);
 
@@ -1273,7 +1273,7 @@ mod tests {
         assert_eq!(estimation.pre_verification_gas, 10000);
 
         // gas used increased by 10%
-        let expected = gas_usage + ChainSpec::default().deposit_transfer_overhead;
+        let expected = gas_usage + ChainSpec::default().deposit_transfer_overhead as u128;
         assert_eq!(
             estimation.verification_gas_limit,
             cmp::max(

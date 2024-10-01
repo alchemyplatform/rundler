@@ -161,7 +161,7 @@ impl<P: EvmProvider> Chain<P> {
                     .cloned()
                     .collect::<Vec<_>>(),
             )
-            .events(events.iter());
+            .event_signature(events);
 
         Self {
             provider,
@@ -180,6 +180,7 @@ impl<P: EvmProvider> Chain<P> {
         loop {
             select! {
                 update = self.wait_for_update() => {
+                    tracing::info!("Block update: {update:?}");
                     let _ = sender.send(Arc::new(update));
                 }
                 _ = shutdown_token.cancelled() => {
@@ -450,6 +451,7 @@ impl<P: EvmProvider> Chain<P> {
             .expect("semaphore should not be closed");
 
         let filter = self.filter_template.clone().at_block_hash(block_hash);
+        tracing::info!("Filter: {:?}", filter);
         let logs = self
             .provider
             .get_logs(&filter)
@@ -458,6 +460,7 @@ impl<P: EvmProvider> Chain<P> {
 
         let mut mined_ops = vec![];
         let mut entity_balance_updates = vec![];
+        tracing::info!("Loading logs: {:?}", logs);
         for log in logs {
             match self.settings.entry_point_addresses.get(&log.address()) {
                 Some(EntryPointVersion::V0_6) => {

@@ -11,13 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
-
 use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
 use rundler_rpc::RpcTask;
-use rundler_task::spawn_tasks_with_shutdown;
+use rundler_task::{spawn_tasks_with_shutdown, Task};
 use rundler_types::chain::ChainSpec;
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
@@ -114,7 +112,7 @@ pub async fn run(
                 pool_task_args,
                 op_pool_event_sender,
                 pool_builder,
-                Arc::clone(&provider),
+                provider.clone(),
                 ep_v0_6.clone(),
                 ep_v0_7.clone(),
             )
@@ -124,7 +122,7 @@ pub async fn run(
                 builder_event_sender,
                 builder_builder,
                 pool_handle.clone(),
-                Arc::clone(&provider),
+                provider.clone(),
                 ep_v0_6.clone(),
                 ep_v0_7.clone(),
             )

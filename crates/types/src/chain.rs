@@ -40,24 +40,24 @@ pub struct ChainSpec {
     ///
     /// NOTE: This must take into account when the storage slot was originally 0
     /// and is now non-zero, making the overhead slightly higher for most operations.
-    pub deposit_transfer_overhead: u128,
+    pub deposit_transfer_overhead: u64,
     /// The maximum size of a transaction in bytes
     pub max_transaction_size_bytes: usize,
     /// Intrinsic gas cost for a transaction
-    pub transaction_intrinsic_gas: u128,
+    pub transaction_intrinsic_gas: u64,
     /// Per user operation gas cost for v0.6
-    pub per_user_op_v0_6_gas: u128,
+    pub per_user_op_v0_6_gas: u64,
     /// Per user operation gas cost for v0.7
-    pub per_user_op_v0_7_gas: u128,
+    pub per_user_op_v0_7_gas: u64,
     /// Per user operation deploy gas cost overhead, to capture
     /// deploy costs that are not metered by the entry point
-    pub per_user_op_deploy_overhead_gas: u128,
+    pub per_user_op_deploy_overhead_gas: u64,
     /// Gas cost for a user operation word in a bundle transaction
-    pub per_user_op_word_gas: u128,
+    pub per_user_op_word_gas: u64,
     /// Gas cost for a zero byte in calldata
-    pub calldata_zero_byte_gas: u128,
+    pub calldata_zero_byte_gas: u64,
     /// Gas cost for a non-zero byte in calldata
-    pub calldata_non_zero_byte_gas: u128,
+    pub calldata_non_zero_byte_gas: u64,
 
     /*
      * Gas estimation
@@ -81,9 +81,9 @@ pub struct ChainSpec {
     /// Type of oracle for estimating priority fees
     pub priority_fee_oracle_type: PriorityFeeOracleType,
     /// Minimum max priority fee per gas for the network
-    pub min_max_priority_fee_per_gas: u128,
+    pub min_max_priority_fee_per_gas: u64,
     /// Maximum max priority fee per gas for the network
-    pub max_max_priority_fee_per_gas: u128,
+    pub max_max_priority_fee_per_gas: u64,
     /// Usage ratio of the chain that determines "congestion"
     /// Some chains have artificially high block gas limits but
     /// actually cap block gas usage at a lower value.
@@ -164,7 +164,7 @@ impl Default for ChainSpec {
             include_l1_gas_in_gas_limit: true,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: 0,
-            max_max_priority_fee_per_gas: u128::MAX,
+            max_max_priority_fee_per_gas: u64::MAX,
             congestion_trigger_usage_ratio_threshold: 0.75,
             max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: u64::MAX,

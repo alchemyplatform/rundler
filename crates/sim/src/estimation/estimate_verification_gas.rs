@@ -179,7 +179,7 @@ where
         // This may cause an over estimation when the account does have enough deposit to pay for the
         // max cost, but it is better to overestimate than underestimate.
         if op.paymaster().is_none() {
-            min_success_gas += self.chain_spec.deposit_transfer_overhead;
+            min_success_gas += self.chain_spec.deposit_transfer_overhead as u128;
         }
 
         Ok(min_success_gas)

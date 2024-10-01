@@ -390,6 +390,7 @@ where
             .state(state_override)
             .call()
             .await;
+        tracing::info!("simulateHandleOp result: {:?}", res);
 
         match res {
             Ok(output) => Ok(Ok(output._0.try_into()?)),
@@ -421,13 +422,16 @@ where
 }
 
 fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
-    state_override.insert(
-        addr,
-        AccountOverride {
+    // Do nothing if the caller has already overridden the entry point code.
+    // We'll trust they know what they're doing and not replace their code.
+    // This is needed for call gas estimation, where the entry point is
+    // replaced with a proxy and the simulations bytecode is elsewhere.
+    state_override
+        .entry(addr)
+        .or_insert_with(|| AccountOverride {
             code: Some(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone()),
             ..Default::default()
-        },
-    );
+        });
 }
 
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
@@ -466,10 +470,15 @@ fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {
 
 /// Decodes raw validation revert bytes from a v0.7 entry point
 pub fn decode_validation_revert(err_bytes: &Bytes) -> ValidationRevert {
+    tracing::info!("decoding validation revert: {:?}", err_bytes);
+
     if let Ok(rev) = SolContractError::<IEntryPointErrors>::abi_decode(err_bytes, false) {
         match rev {
             SolContractError::CustomError(IEntryPointErrors::FailedOp(f)) => f.into(),
-            SolContractError::CustomError(IEntryPointErrors::FailedOpWithRevert(f)) => f.into(),
+            SolContractError::CustomError(IEntryPointErrors::FailedOpWithRevert(f)) => {
+                tracing::info!("Matched FailedOpWithRevert: {:?}", f);
+                f.into()
+            }
             SolContractError::CustomError(IEntryPointErrors::SignatureValidationFailed(f)) => {
                 ValidationRevert::EntryPoint(format!(
                     "Aggregator signature validation failed: {}",

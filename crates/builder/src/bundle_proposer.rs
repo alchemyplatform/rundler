@@ -470,7 +470,7 @@ where
         let mut context = ProposalContext::<UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
-        let mut gas_spent = self.settings.chain_spec.transaction_intrinsic_gas;
+        let mut gas_spent = self.settings.chain_spec.transaction_intrinsic_gas as u128;
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
         for (po, simulation) in ops_with_simulations {
             let op = po.clone().uo;
@@ -1239,7 +1239,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         self.iter_ops_with_simulations()
             .map(|sim_op| gas::user_operation_gas_limit(chain_spec, &sim_op.op, false))
             .sum::<u128>()
-            + chain_spec.transaction_intrinsic_gas
+            + chain_spec.transaction_intrinsic_gas as u128
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -1443,7 +1443,7 @@ mod tests {
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
                 + op.call_gas_limit
-                + cs.transaction_intrinsic_gas
+                + cs.transaction_intrinsic_gas as u128
                 + ENTRY_POINT_INNER_GAS_OVERHEAD,
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );

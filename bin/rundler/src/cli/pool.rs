@@ -13,12 +13,12 @@
 
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
+use alloy_primitives::Address;
 use anyhow::Context;
 use clap::Args;
-use ethers::types::Address;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfigs;
-use rundler_task::spawn_tasks_with_shutdown;
+use rundler_task::{spawn_tasks_with_shutdown, Task};
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
@@ -73,7 +73,7 @@ pub struct PoolArgs {
         env = "POOL_MIN_REPLACEMENT_FEE_INCREASE_PERCENTAGE",
         default_value = "10"
     )]
-    pub min_replacement_fee_increase_percentage: u64,
+    pub min_replacement_fee_increase_percentage: u32,
 
     #[arg(
         long = "pool.blocklist_path",
@@ -204,7 +204,7 @@ impl PoolArgs {
         let chain_id = chain_spec.id;
         let pool_config_base = PoolConfig {
             // update per entry point
-            entry_point: Address::default(),
+            entry_point: Address::ZERO,
             entry_point_version: EntryPointVersion::Unspecified,
             num_shards: 0,
             mempool_channel_configs: HashMap::new(),
