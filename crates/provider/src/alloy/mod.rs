@@ -11,6 +11,31 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_provider::{Provider as AlloyProvider, ProviderBuilder};
+use alloy_rpc_client::ClientBuilder;
+use alloy_transport_http::Http;
+use anyhow::Context;
+use evm::AlloyEvmProvider;
+use reqwest::Client;
+use url::Url;
+
+use crate::EvmProvider;
+
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
+
+/// Create a new alloy evm provider from a given RPC URL
+pub fn new_alloy_evm_provider(rpc_url: &str) -> anyhow::Result<impl EvmProvider + Clone> {
+    let provider = new_alloy_provider(rpc_url)?;
+    Ok(AlloyEvmProvider::new(provider))
+}
+
+/// Create a new alloy provider from a given RPC URL
+pub fn new_alloy_provider(
+    rpc_url: &str,
+) -> anyhow::Result<impl AlloyProvider<Http<Client>> + Clone> {
+    let url = Url::parse(rpc_url).context("invalid rpc url")?;
+    let client = ClientBuilder::default().http(url);
+    Ok(ProviderBuilder::new().on_client(client))
+}

@@ -13,49 +13,43 @@
 
 // Adapted from https://github.com/onbjerg/ethers-flashbots and
 // https://github.com/gakonst/ethers-rs/blob/master/ethers-providers/src/toolbox/pending_transaction.rs
-use std::{str::FromStr, sync::Arc};
+use std::str::FromStr;
 
+use alloy_primitives::{hex, utils, Address, Bytes, B256, U256, U64};
+use alloy_signer::SignerSync;
+use alloy_signer_local::PrivateKeySigner;
 use anyhow::{anyhow, Context};
-use ethers::{
-    middleware::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, Bytes, H256, U256, U64},
-    utils,
-};
-use ethers_signers::Signer;
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response,
 };
+use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_types::GasFees;
 use serde::{de, Deserialize, Serialize};
 use serde_json::{json, Value};
-use tonic::async_trait;
 
-use super::{
-    fill_and_sign, ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus,
-};
-use crate::sender::CancelTxInfo;
+use super::{ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError, TxStatus};
+use crate::{sender::CancelTxInfo, signer::Signer};
 
 #[derive(Debug)]
-pub(crate) struct FlashbotsTransactionSender<C, S, FS> {
-    provider: SignerMiddleware<Arc<Provider<C>>, S>,
-    flashbots_client: FlashbotsClient<FS>,
+pub(crate) struct FlashbotsTransactionSender<P, S> {
+    provider: P,
+    signer: S,
+    flashbots_client: FlashbotsClient,
 }
 
-#[async_trait]
-impl<C, S, FS> TransactionSender for FlashbotsTransactionSender<C, S, FS>
+#[async_trait::async_trait]
+impl<P, S> TransactionSender for FlashbotsTransactionSender<P, S>
 where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-    FS: Signer + 'static,
+    P: EvmProvider,
+    S: Signer,
 {
     async fn send_transaction(
         &self,
-        tx: TypedTransaction,
+        tx: TransactionRequest,
         _expected_storage: &ExpectedStorage,
     ) -> Result<SentTxInfo> {
-        let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
+        let (raw_tx, nonce) = self.signer.fill_and_sign(tx).await?;
 
         let tx_hash = self
             .flashbots_client
@@ -67,8 +61,8 @@ where
 
     async fn cancel_transaction(
         &self,
-        tx_hash: H256,
-        _nonce: U256,
+        tx_hash: B256,
+        _nonce: u64,
         _to: Address,
         _gas_fees: GasFees,
     ) -> Result<CancelTxInfo> {
@@ -82,12 +76,12 @@ where
         }
 
         Ok(CancelTxInfo {
-            tx_hash: H256::zero(),
+            tx_hash: B256::ZERO,
             soft_cancelled: true,
         })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus> {
         let status = self.flashbots_client.status(tx_hash).await?;
         Ok(match status.status {
             FlashbotsAPITransactionStatus::Pending => TxStatus::Pending,
@@ -97,14 +91,12 @@ where
                 // still pending.
                 let tx = self
                     .provider
-                    .get_transaction(tx_hash)
+                    .get_transaction_by_hash(tx_hash)
                     .await
                     .context("provider should look up transaction included by Flashbots")?;
                 if let Some(tx) = tx {
                     if let Some(block_number) = tx.block_number {
-                        return Ok(TxStatus::Mined {
-                            block_number: block_number.as_u64(),
-                        });
+                        return Ok(TxStatus::Mined { block_number });
                     }
                 }
                 TxStatus::Pending
@@ -121,28 +113,28 @@ where
     }
 
     fn address(&self) -> Address {
-        self.provider.address()
+        self.signer.address()
     }
 }
 
-impl<C, S, FS> FlashbotsTransactionSender<C, S, FS>
+impl<P, S> FlashbotsTransactionSender<P, S>
 where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-    FS: Signer + 'static,
+    P: EvmProvider,
+    S: Signer,
 {
     pub(crate) fn new(
-        provider: Arc<Provider<C>>,
-        tx_signer: S,
-        flashbots_signer: FS,
+        provider: P,
+        signer: S,
+        flashbots_auth_key: String,
         builders: Vec<String>,
         relay_url: String,
         status_url: String,
     ) -> Result<Self> {
         Ok(Self {
-            provider: SignerMiddleware::new(provider, tx_signer),
+            provider,
+            signer,
             flashbots_client: FlashbotsClient::new(
-                flashbots_signer,
+                flashbots_auth_key,
                 builders,
                 relay_url,
                 status_url,
@@ -192,13 +184,13 @@ struct FlashbotsSendPrivateTransactionRequest {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct FlashbotsSendPrivateTransactionResponse {
-    result: H256,
+    result: B256,
 }
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct FlashbotsCancelPrivateTransactionRequest {
-    tx_hash: H256,
+    tx_hash: B256,
 }
 
 #[derive(Deserialize, Debug)]
@@ -242,7 +234,7 @@ enum FlashbotsAPITransactionStatus {
 #[allow(dead_code)]
 struct FlashbotsAPIResponse {
     status: FlashbotsAPITransactionStatus,
-    hash: H256,
+    hash: B256,
     #[serde(deserialize_with = "deserialize_u64")]
     max_block_number: U64,
     transaction: FlashbotsAPITransaction,
@@ -250,26 +242,26 @@ struct FlashbotsAPIResponse {
 }
 
 #[derive(Debug)]
-struct FlashbotsClient<S> {
+struct FlashbotsClient {
     http_client: Client,
-    signer: S,
+    signer: PrivateKeySigner,
     builders: Vec<String>,
     relay_url: String,
     status_url: String,
 }
 
-impl<S> FlashbotsClient<S> {
-    fn new(signer: S, builders: Vec<String>, relay_url: String, status_url: String) -> Self {
+impl FlashbotsClient {
+    fn new(auth_key: String, builders: Vec<String>, relay_url: String, status_url: String) -> Self {
         Self {
             http_client: Client::new(),
-            signer,
+            signer: auth_key.parse().expect("should parse auth key"),
             builders,
             relay_url,
             status_url,
         }
     }
 
-    async fn status(&self, tx_hash: H256) -> anyhow::Result<FlashbotsAPIResponse> {
+    async fn status(&self, tx_hash: B256) -> anyhow::Result<FlashbotsAPIResponse> {
         let url = format!("{}{:?}", self.status_url, tx_hash);
         let resp = self.http_client.get(&url).send().await?;
         resp.json::<FlashbotsAPIResponse>()
@@ -278,11 +270,8 @@ impl<S> FlashbotsClient<S> {
     }
 }
 
-impl<S> FlashbotsClient<S>
-where
-    S: Signer,
-{
-    async fn send_private_transaction(&self, raw_tx: Bytes) -> anyhow::Result<H256> {
+impl FlashbotsClient {
+    async fn send_private_transaction(&self, raw_tx: Bytes) -> anyhow::Result<B256> {
         let preferences = Preferences {
             fast: false,
             privacy: Some(Privacy {
@@ -314,7 +303,7 @@ where
         Ok(parsed_response.result)
     }
 
-    async fn cancel_private_transaction(&self, tx_hash: H256) -> anyhow::Result<bool> {
+    async fn cancel_private_transaction(&self, tx_hash: B256) -> anyhow::Result<bool> {
         let body = json!({
             "jsonrpc": "2.0",
             "method": "eth_cancelPrivateTransaction",
@@ -337,15 +326,14 @@ where
     async fn sign_send_request(&self, body: Value) -> anyhow::Result<Response> {
         let signature = self
             .signer
-            .sign_message(format!(
-                "0x{:x}",
-                H256::from(utils::keccak256(body.to_string()))
-            ))
-            .await
+            .sign_hash_sync(&utils::keccak256(body.to_string()))
             .expect("Signature failed");
-        let header_val =
-            HeaderValue::from_str(&format!("{:?}:0x{}", self.signer.address(), signature))
-                .expect("Header contains invalid characters");
+        let header_val = HeaderValue::from_str(&format!(
+            "{:?}:0x{}",
+            self.signer.address(),
+            hex::encode(signature.as_bytes())
+        ))
+        .expect("Header contains invalid characters");
 
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
@@ -369,11 +357,11 @@ where
     Ok(match Value::deserialize(deserializer)? {
         Value::String(s) => {
             if s.as_str() == "0x" {
-                U64::zero()
+                U64::ZERO
             } else if s.as_str().starts_with("0x") {
-                U64::from_str_radix(s.as_str(), 16).map_err(de::Error::custom)?
+                U64::from_str_radix(&s[2..], 16).map_err(de::Error::custom)?
             } else {
-                U64::from_dec_str(s.as_str()).map_err(de::Error::custom)?
+                U64::from_str(s.as_str()).map_err(de::Error::custom)?
             }
         }
         Value::Number(num) => U64::from(
@@ -393,11 +381,11 @@ where
             if s.is_empty() {
                 None
             } else if s.as_str() == "0x" {
-                Some(U256::zero())
+                Some(U256::ZERO)
             } else if s.as_str().starts_with("0x") {
-                Some(U256::from_str_radix(s.as_str(), 16).map_err(de::Error::custom)?)
+                Some(U256::from_str_radix(&s[2..], 16).map_err(de::Error::custom)?)
             } else {
-                Some(U256::from_dec_str(s.as_str()).map_err(de::Error::custom)?)
+                Some(U256::from_str(s.as_str()).map_err(de::Error::custom)?)
             }
         }
         Value::Number(num) => Some(U256::from(

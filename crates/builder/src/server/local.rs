@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
 use rundler_task::server::{HealthCheck, ServerStatus};
 use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
 use tokio::{
@@ -100,7 +100,7 @@ impl Builder for LocalBuilderHandle {
         }
     }
 
-    async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)> {
+    async fn debug_send_bundle_now(&self) -> BuilderResult<(B256, u64)> {
         let req = ServerRequestKind::DebugSendBundleNow;
         let resp = self.send(req).await?;
         match resp {
@@ -230,6 +230,6 @@ struct ServerRequest {
 #[derive(Clone, Debug)]
 enum ServerResponse {
     GetSupportedEntryPoints { entry_points: Vec<Address> },
-    DebugSendBundleNow { hash: H256, block_number: u64 },
+    DebugSendBundleNow { hash: B256, block_number: u64 },
     DebugSetBundlingMode,
 }

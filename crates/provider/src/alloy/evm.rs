@@ -50,6 +50,18 @@ impl<AP, T> AlloyEvmProvider<AP, T> {
     }
 }
 
+impl<AP, T> Clone for AlloyEvmProvider<AP, T>
+where
+    AP: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<AP, T> From<AP> for AlloyEvmProvider<AP, T>
 where
     T: Transport + Clone,

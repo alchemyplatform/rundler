@@ -13,13 +13,13 @@
 
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
 use futures_util::StreamExt;
 #[cfg(test)]
 use mockall::automock;
-use rundler_provider::{BundleHandler, EntryPoint};
+use rundler_provider::{BundleHandler, EntryPoint, TransactionRequest};
 use rundler_sim::ExpectedStorage;
 use rundler_types::{
     builder::BundlingMode,
@@ -41,7 +41,7 @@ use crate::{
 };
 
 #[async_trait]
-pub(crate) trait BundleSender: Send + Sync + 'static {
+pub(crate) trait BundleSender: Send + Sync {
     async fn send_bundles_in_loop(self) -> anyhow::Result<()>;
 }
 
@@ -70,9 +70,9 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
 
 #[derive(Debug)]
 struct BundleTx {
-    tx: TypedTransaction,
+    tx: TransactionRequest,
     expected_storage: ExpectedStorage,
-    op_hashes: Vec<H256>,
+    op_hashes: Vec<B256>,
 }
 
 pub enum BundleSenderAction {
@@ -92,7 +92,7 @@ pub enum SendBundleResult {
     Success {
         block_number: u64,
         attempt_number: u64,
-        tx_hash: H256,
+        tx_hash: B256,
     },
     NoOperationsInitially,
     StalledAtMaxFeeIncreases,
@@ -186,7 +186,7 @@ where
             event_sender,
             metrics: BuilderMetrics {
                 builder_index,
-                entry_point: entry_point.address(),
+                entry_point: *entry_point.address(),
             },
             entry_point,
             _uo_type: PhantomData,
@@ -328,7 +328,7 @@ where
                     self.emit(BuilderEvent::transaction_mined(
                         self.builder_index,
                         tx_hash,
-                        nonce.low_u64(),
+                        nonce,
                         block_number,
                     ));
                     let send_bundle_result = Some(SendBundleResult::Success {
@@ -342,7 +342,7 @@ where
                     info!("Latest transaction dropped, starting new bundle attempt");
                     self.emit(BuilderEvent::latest_transaction_dropped(
                         self.builder_index,
-                        nonce.low_u64(),
+                        nonce,
                     ));
                     self.metrics.increment_bundle_txns_dropped();
                     // try again, increasing fees
@@ -352,7 +352,7 @@ where
                     info!("Nonce used externally, starting new bundle attempt");
                     self.emit(BuilderEvent::nonce_used_for_other_transaction(
                         self.builder_index,
-                        nonce.low_u64(),
+                        nonce,
                     ));
                     self.metrics.increment_bundle_txns_nonce_used();
                     state.reset();
@@ -392,7 +392,7 @@ where
 
         let cancel_res = state
             .transaction_tracker
-            .cancel_transaction(self.entry_point.address(), estimated_fees)
+            .cancel_transaction(*self.entry_point.address(), estimated_fees)
             .await;
 
         match cancel_res {
@@ -459,8 +459,7 @@ where
                     info!("Cancellation transaction mined. Price (wei) {fee:?}");
                     self.metrics.increment_cancellation_txns_mined();
                     if let Some(fee) = fee {
-                        self.metrics
-                            .increment_cancellation_txns_total_fee(fee.as_u64());
+                        self.metrics.increment_cancellation_txns_total_fee(fee);
                     };
                 }
                 TrackerUpdate::LatestTxDropped { .. } => {
@@ -527,7 +526,7 @@ where
             self.emit(BuilderEvent::formed_bundle(
                 self.builder_index,
                 None,
-                nonce.low_u64(),
+                nonce,
                 fee_increase_count,
                 required_fees,
             ));
@@ -555,7 +554,7 @@ where
                         tx,
                         op_hashes: Arc::new(op_hashes),
                     }),
-                    nonce.low_u64(),
+                    nonce,
                     fee_increase_count,
                     required_fees,
                 ));
@@ -588,7 +587,7 @@ where
     /// it, or `None` if there are no valid operations available.
     async fn get_bundle_tx(
         &mut self,
-        nonce: U256,
+        nonce: u64,
         bundle: Bundle<UO>,
     ) -> anyhow::Result<Option<BundleTx>> {
         let remove_ops_future = async {
@@ -638,7 +637,7 @@ where
             bundle.gas_estimate,
             bundle.gas_fees,
         );
-        tx.set_nonce(nonce);
+        tx = tx.nonce(nonce);
         Ok(Some(BundleTx {
             tx,
             expected_storage: bundle.expected_storage,
@@ -649,9 +648,9 @@ where
     async fn remove_ops_from_pool(&self, ops: &[UO]) -> anyhow::Result<()> {
         self.pool
             .remove_ops(
-                self.entry_point.address(),
+                *self.entry_point.address(),
                 ops.iter()
-                    .map(|op| op.hash(self.entry_point.address(), self.chain_spec.id))
+                    .map(|op| op.hash(*self.entry_point.address(), self.chain_spec.id))
                     .collect(),
             )
             .await
@@ -660,20 +659,20 @@ where
 
     async fn update_entities_in_pool(&self, entity_updates: &[EntityUpdate]) -> anyhow::Result<()> {
         self.pool
-            .update_entities(self.entry_point.address(), entity_updates.to_vec())
+            .update_entities(*self.entry_point.address(), entity_updates.to_vec())
             .await
             .context("builder should remove update entities in the pool")
     }
 
     fn emit(&self, event: BuilderEvent) {
         let _ = self.event_sender.send(WithEntryPoint {
-            entry_point: self.entry_point.address(),
+            entry_point: *self.entry_point.address(),
             event,
         });
     }
 
-    fn op_hash(&self, op: &UO) -> H256 {
-        op.hash(self.entry_point.address(), self.chain_spec.id)
+    fn op_hash(&self, op: &UO) -> B256 {
+        op.hash(*self.entry_point.address(), self.chain_spec.id)
     }
 }
 
@@ -1036,7 +1035,7 @@ impl BundleSenderTrigger {
             bundle_action_receiver,
             timer: tokio::time::interval(timer_interval),
             last_block: NewHead {
-                block_hash: H256::zero(),
+                block_hash: B256::ZERO,
                 block_number: 0,
             },
         })
@@ -1102,14 +1101,14 @@ impl BuilderMetrics {
             .increment(1);
     }
 
-    fn process_bundle_txn_success(&self, gas_limit: Option<U256>, gas_used: Option<U256>) {
+    fn process_bundle_txn_success(&self, gas_limit: Option<u128>, gas_used: Option<u128>) {
         metrics::counter!("builder_bundle_txns_success", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
 
         if let Some(limit) = gas_limit {
-            metrics::counter!("builder_bundle_gas_limit", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(limit.as_u64());
+            metrics::counter!("builder_bundle_gas_limit", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(limit.try_into().unwrap_or(u64::MAX));
         }
         if let Some(used) = gas_used {
-            metrics::counter!("builder_bundle_gas_used", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(used.as_u64());
+            metrics::counter!("builder_bundle_gas_used", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(used.try_into().unwrap_or(u64::MAX));
         }
     }
 
@@ -1155,8 +1154,8 @@ impl BuilderMetrics {
         metrics::counter!("builder_cancellation_txns_mined", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
     }
 
-    fn increment_cancellation_txns_total_fee(&self, fee: u64) {
-        metrics::counter!("builder_cancellation_txns_total_fee", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(fee);
+    fn increment_cancellation_txns_total_fee(&self, fee: u128) {
+        metrics::counter!("builder_cancellation_txns_total_fee", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(fee.try_into().unwrap_or(u64::MAX));
     }
 
     fn increment_cancellations_abandoned(&self) {
@@ -1178,7 +1177,7 @@ impl BuilderMetrics {
 
 #[cfg(test)]
 mod tests {
-    use ethers::types::Bytes;
+    use alloy_primitives::Bytes;
     use mockall::Sequence;
     use rundler_provider::MockEntryPointV0_6;
     use rundler_types::{
@@ -1213,7 +1212,7 @@ mod tests {
         // zero nonce
         mock_tracker
             .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((U256::zero(), None)));
+            .returning(|| Ok((0, None)));
 
         // empty bundle
         mock_proposer
@@ -1258,7 +1257,7 @@ mod tests {
         // zero nonce
         mock_tracker
             .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((U256::zero(), None)));
+            .returning(|| Ok((0, None)));
 
         // bundle with one op
         mock_proposer
@@ -1269,12 +1268,12 @@ mod tests {
         // should create the bundle txn
         mock_entry_point
             .expect_get_send_bundle_transaction()
-            .returning(|_, _, _, _| TypedTransaction::default());
+            .returning(|_, _, _, _| TransactionRequest::default());
 
         // should send the bundle txn
         mock_tracker
             .expect_send_transaction()
-            .returning(|_, _| Box::pin(async { Ok(H256::zero()) }));
+            .returning(|_, _| Box::pin(async { Ok(B256::ZERO) }));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point);
 
@@ -1312,7 +1311,7 @@ mod tests {
                 Box::pin(async {
                     Ok(NewHead {
                         block_number: 2,
-                        block_hash: H256::zero(),
+                        block_hash: B256::ZERO,
                     })
                 })
             });
@@ -1332,11 +1331,11 @@ mod tests {
                 Box::pin(async {
                     Ok(Some(TrackerUpdate::Mined {
                         block_number: 2,
-                        nonce: U256::zero(),
+                        nonce: 0,
                         gas_limit: None,
                         gas_used: None,
                         gas_price: None,
-                        tx_hash: H256::zero(),
+                        tx_hash: B256::ZERO,
                         attempt_number: 0,
                     }))
                 })
@@ -1444,7 +1443,7 @@ mod tests {
         // zero nonce
         mock_tracker
             .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((U256::zero(), None)));
+            .returning(|| Ok((0, None)));
 
         // fee filter error
         mock_proposer
@@ -1494,16 +1493,16 @@ mod tests {
         mock_proposer
             .expect_estimate_gas_fees()
             .once()
-            .returning(|_| Box::pin(async { Ok((GasFees::default(), U256::zero())) }));
+            .returning(|_| Box::pin(async { Ok((GasFees::default(), 0)) }));
 
         mock_tracker
             .expect_cancel_transaction()
             .once()
-            .returning(|_, _| Box::pin(async { Ok(Some(H256::zero())) }));
+            .returning(|_, _| Box::pin(async { Ok(Some(B256::ZERO)) }));
 
         mock_trigger.expect_last_block().return_const(NewHead {
             block_number: 0,
-            block_hash: H256::zero(),
+            block_hash: B256::ZERO,
         });
 
         let mut state = SenderMachineState {
@@ -1595,7 +1594,7 @@ mod tests {
         // zero nonce
         mock_tracker
             .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((U256::zero(), None)));
+            .returning(|| Ok((0, None)));
 
         // bundle with one op
         mock_proposer
@@ -1606,7 +1605,7 @@ mod tests {
         // should create the bundle txn
         mock_entry_point
             .expect_get_send_bundle_transaction()
-            .returning(|_, _, _, _| TypedTransaction::default());
+            .returning(|_, _, _, _| TransactionRequest::default());
 
         // should send the bundle txn, returns condition not met
         mock_tracker
@@ -1715,7 +1714,7 @@ mod tests {
             .in_sequence(seq)
             .return_const(NewHead {
                 block_number,
-                block_hash: H256::zero(),
+                block_hash: B256::ZERO,
             });
     }
 
@@ -1732,7 +1731,7 @@ mod tests {
                 Box::pin(async move {
                     Ok(NewHead {
                         block_number,
-                        block_hash: H256::zero(),
+                        block_hash: B256::ZERO,
                     })
                 })
             });
@@ -1742,19 +1741,19 @@ mod tests {
             .in_sequence(seq)
             .return_const(NewHead {
                 block_number,
-                block_hash: H256::zero(),
+                block_hash: B256::ZERO,
             });
     }
 
     fn bundle() -> Bundle<UserOperation> {
         Bundle {
-            gas_estimate: U256::from(100_000),
+            gas_estimate: 100_000,
             gas_fees: GasFees::default(),
             expected_storage: Default::default(),
             rejected_ops: vec![],
             entity_updates: vec![],
             ops_per_aggregator: vec![UserOpsPerAggregator {
-                aggregator: Address::zero(),
+                aggregator: Address::ZERO,
                 signature: Bytes::new(),
                 user_ops: vec![UserOperation::default()],
             }],
