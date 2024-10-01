@@ -12,12 +12,9 @@
 // If not, see https://www.gnu.org/licenses/.
 
 //! Rundler task traits.
-<<<<<<< HEAD
 //!
 //! This module contains traits related to Rundler tasks.
 
+pub mod metrics;
 /// method extractor trait.
-=======
 pub mod status_code;
->>>>>>> 9c40b91 (feat(middleware): add response extractor)
-pub mod traits;

@@ -11,70 +11,104 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-<<<<<<< HEAD
-use jsonrpsee::{types::Request, MethodResponse};
-use rundler_types::task::traits::{RequestExtractor, ResponseExtractor};
-
-pub struct RPCMethodExtractor;
-=======
+use futures_util::{future::BoxFuture, FutureExt};
 use jsonrpsee::{
-    core::RpcResult,
+    server::middleware::rpc::RpcServiceT,
     types::{ErrorCode, Request},
+    MethodResponse, Methods,
 };
 use rundler_types::task::{
+    metrics::MethodSessionLogger,
     status_code::{HttpCode, RpcCode},
-    traits::{RequestExtractor, ResponseExtractor},
 };
-#[derive(Copy, Clone)]
-struct RPCMethodExtractor;
->>>>>>> 9c40b91 (feat(middleware): add response extractor)
+use tower::Layer;
 
-impl RequestExtractor<Request<'static>> for RPCMethodExtractor {
-    fn get_method_name(req: &Request<'static>) -> String {
-        req.method_name().to_string()
+#[derive(Clone)]
+pub(crate) struct RpcMetricsMiddlewareLayer {
+    service_name: String,
+}
+
+impl RpcMetricsMiddlewareLayer {
+    pub(crate) fn new(service_name: String) -> Self {
+        Self {
+            service_name: service_name,
+        }
     }
 }
 
-/// http response extractor.
-#[derive(Copy, Clone)]
-pub struct RPCResponseCodeExtractor;
+impl<S> Layer<S> for RpcMetricsMiddlewareLayer {
+    type Service = RpcMetricsMiddleware<S>;
 
-impl<T> ResponseExtractor<RpcResult<T>> for RPCResponseCodeExtractor {
-    fn get_http_status_code(response: &RpcResult<T>) -> String {
-        let response_code = match response {
-            Ok(_) => 200,
-            Err(error) => error.code(),
-        };
-        let http = match Response {
-            200 => HttpCode::TwoHundreds,
-            ErrorCode::ParseError => HttpCode::FourHundreds,
-            ErrorCode::OversizedRequest => HttpCode::FourHundreds,
-            ErrorCode::InvalidRequest => HttpCode::FourHundreds,
-            ErrorCode::MethodNotFound => HttpCode::FourHundreds,
-            ErrorCode::ServerIsBusy => HttpCode::FourHundreds,
-            ErrorCode::InvalidParams => HttpCode::FourHundreds,
-            ErrorCode::InternalError => HttpCode::FiveHundreds,
-            ErrorCode::ServerError(_) => HttpCode::FiveHundreds,
-        };
-        http.to_string()
+    fn layer(&self, service: S) -> Self::Service {
+        RpcMetricsMiddleware {
+            service: service,
+            service_name: self.service_name.clone(),
+        }
     }
+}
 
-    fn get_rpc_status_code(response: &RpcResult<T>) -> String {
-        let response_code = match response {
-            Ok(_) => 0,
-            Err(error) => error.code(),
-        };
-        let rpc = match response {
-            ErrorCode::ParseError => RpcCode::ParseError,
-            ErrorCode::OversizedRequest => RpcCode::InvalidParams,
-            ErrorCode::InvalidRequest => RpcCode::InvalidParams,
-            ErrorCode::MethodNotFound => RpcCode::MethodNotFound,
-            ErrorCode::ServerIsBusy => RpcCode::ResourceExhaused,
-            ErrorCode::InvalidParams => RpcCode::InvalidParams,
-            ErrorCode::InternalError => RpcCode::InternalError,
-            ErrorCode::ServerError(_) => RpcCode::InternalError,
-            _ => RpcCode::Other,
-        };
-        rpc.to_string()
+#[derive(Clone)]
+pub(crate) struct RpcMetricsMiddleware<S> {
+    service: S,
+    service_name: String,
+}
+
+impl<'a, S> RpcServiceT<'a> for RpcMetricsMiddleware<S>
+where
+    S: RpcServiceT<'a> + Send + Sync + Clone + 'static,
+{
+    type Future = BoxFuture<'a, MethodResponse>;
+
+    fn call(&self, req: Request<'a>) -> Self::Future {
+        let method_logger = MethodSessionLogger::new(
+            self.service_name.clone(),
+            req.method_name().to_string(),
+            "rpc".to_string(),
+        );
+
+        method_logger.start();
+        let svc = self.service.clone();
+
+        async move {
+            let rp = svc.call(req).await;
+            method_logger.done();
+
+            if rp.is_success() {
+                method_logger.record_http(HttpCode::TwoHundreds);
+                method_logger.record_rpc(RpcCode::Success);
+            } else {
+                if let Some(error) = rp.as_error_code() {
+                    let error_code: ErrorCode = error.into();
+                    let (http_code, rpc_code) = match error_code {
+                        ErrorCode::ParseError => (HttpCode::FourHundreds, RpcCode::ParseError),
+                        ErrorCode::OversizedRequest => {
+                            (HttpCode::FourHundreds, RpcCode::InvalidRequest)
+                        }
+                        ErrorCode::InvalidRequest => {
+                            (HttpCode::FourHundreds, RpcCode::InvalidRequest)
+                        }
+                        ErrorCode::MethodNotFound => {
+                            (HttpCode::FourHundreds, RpcCode::MethodNotFound)
+                        }
+                        ErrorCode::ServerIsBusy => (HttpCode::FiveHundreds, RpcCode::ServerIsBusy),
+                        ErrorCode::InvalidParams => {
+                            (HttpCode::FourHundreds, RpcCode::InvalidParams)
+                        }
+                        ErrorCode::InternalError => {
+                            (HttpCode::FiveHundreds, RpcCode::InternalError)
+                        }
+                        ErrorCode::ServerError(_) => (HttpCode::FiveHundreds, RpcCode::ServerError),
+                    };
+                    method_logger.record_http(http_code);
+                    method_logger.record_rpc(rpc_code);
+                } else {
+                    method_logger.record_http(HttpCode::FiveHundreds);
+                    method_logger.record_rpc(RpcCode::Other);
+                }
+            }
+
+            rp
+        }
+        .boxed()
     }
 }

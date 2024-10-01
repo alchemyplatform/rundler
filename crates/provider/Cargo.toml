@@ -26,12 +26,16 @@ alloy-transport.workspace = true
 alloy-transport-http.workspace = true
 reqwest.workspace = true
 
+tower.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
+futures-util.workspace = true
+pin-project.workspace = true
+
 mockall = {workspace = true, optional = true }
 
 [features]
