@@ -41,6 +41,7 @@ use crate::{
 };
 
 /// Entry point provider for v0.6
+#[derive(Clone)]
 pub struct EntryPointProvider<AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
     l1_gas_oracle: L1GasOracle,
@@ -53,14 +54,9 @@ where
     AP: AlloyProvider<T>,
 {
     /// Create a new `EntryPoint` instance for v0.6
-    pub fn new(
-        entry_point_address: Address,
-        chain_spec: &ChainSpec,
-        max_aggregation_gas: u128,
-        provider: AP,
-    ) -> Self {
+    pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u128, provider: AP) -> Self {
         Self {
-            i_entry_point: IEntryPointInstance::new(entry_point_address, provider),
+            i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_6, provider),
             l1_gas_oracle: L1GasOracle::new(chain_spec),
             max_aggregation_gas,
         }
@@ -261,8 +257,8 @@ where
         gas: u128,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
-        tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
+        get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas)
+            .max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
 }

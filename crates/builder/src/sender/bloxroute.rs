@@ -11,20 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
-
+use alloy_primitives::{hex, Address, Bytes, B256};
 use anyhow::Context;
-use ethers::{
-    middleware::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, Bytes, TxHash, H256, U256},
-    utils::hex,
-};
-use ethers_signers::Signer;
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
     http_client::{transport::HttpBackend, HeaderMap, HeaderValue, HttpClient, HttpClientBuilder},
 };
+use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use serde::{Deserialize, Serialize};
@@ -32,49 +25,49 @@ use serde_json::value::RawValue;
 use tonic::async_trait;
 
 use super::{
-    create_hard_cancel_tx, fill_and_sign, CancelTxInfo, Result, SentTxInfo, TransactionSender,
+    create_hard_cancel_tx, CancelTxInfo, Result, SentTxInfo, TransactionSender, TxSenderError,
     TxStatus,
 };
+use crate::signer::Signer;
 
-pub(crate) struct PolygonBloxrouteTransactionSender<C, S>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-{
-    provider: SignerMiddleware<Arc<Provider<C>>, S>,
+pub(crate) struct PolygonBloxrouteTransactionSender<P, S> {
+    provider: P,
+    signer: S,
     client: PolygonBloxrouteClient,
 }
 
 #[async_trait]
-impl<C, S> TransactionSender for PolygonBloxrouteTransactionSender<C, S>
+impl<P, S> TransactionSender for PolygonBloxrouteTransactionSender<P, S>
 where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
+    P: EvmProvider,
+    S: Signer,
 {
     async fn send_transaction(
         &self,
-        tx: TypedTransaction,
+        tx: TransactionRequest,
         _expected_storage: &ExpectedStorage,
     ) -> Result<SentTxInfo> {
-        let (raw_tx, nonce) = fill_and_sign(&self.provider, tx).await?;
+        let (raw_tx, nonce) = self.signer.fill_and_sign(tx).await?;
         let tx_hash = self.client.send_transaction(raw_tx).await?;
         Ok(SentTxInfo { nonce, tx_hash })
     }
 
     async fn cancel_transaction(
         &self,
-        _tx_hash: H256,
-        nonce: U256,
+        _tx_hash: B256,
+        nonce: u64,
         to: Address,
         gas_fees: GasFees,
     ) -> Result<CancelTxInfo> {
-        let tx = create_hard_cancel_tx(self.provider.address(), to, nonce, gas_fees);
+        // Cannot cancel transactions on polygon bloxroute private, however, the transaction may have been
+        // propagated to the public network, and can be cancelled via a public transaction.
 
-        let (raw_tx, _) = fill_and_sign(&self.provider, tx).await?;
+        let tx = create_hard_cancel_tx(to, nonce, gas_fees);
+
+        let (raw_tx, _) = self.signer.fill_and_sign(tx).await?;
 
         let tx_hash = self
             .provider
-            .provider()
             .request("eth_sendRawTransaction", (raw_tx,))
             .await?;
 
@@ -84,10 +77,10 @@ where
         })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus> {
         let tx = self
             .provider
-            .get_transaction(tx_hash)
+            .get_transaction_by_hash(tx_hash)
             .await
             .context("provider should return transaction status")?;
         // BDN transactions will not always show up in the node's transaction pool
@@ -95,25 +88,24 @@ where
         // Thus, always return pending.
         Ok(tx
             .and_then(|tx| tx.block_number)
-            .map(|block_number| TxStatus::Mined {
-                block_number: block_number.as_u64(),
-            })
+            .map(|block_number| TxStatus::Mined { block_number })
             .unwrap_or(TxStatus::Pending))
     }
 
     fn address(&self) -> Address {
-        self.provider.address()
+        self.signer.address()
     }
 }
 
-impl<C, S> PolygonBloxrouteTransactionSender<C, S>
+impl<P, S> PolygonBloxrouteTransactionSender<P, S>
 where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
+    P: EvmProvider,
+    S: Signer,
 {
-    pub(crate) fn new(provider: Arc<Provider<C>>, signer: S, auth_header: &str) -> Result<Self> {
+    pub(crate) fn new(provider: P, signer: S, auth_header: &str) -> Result<Self> {
         Ok(Self {
-            provider: SignerMiddleware::new(Arc::clone(&provider), signer),
+            provider,
+            signer,
             client: PolygonBloxrouteClient::new(auth_header)?,
         })
     }
@@ -133,7 +125,7 @@ impl PolygonBloxrouteClient {
         Ok(Self { client })
     }
 
-    async fn send_transaction(&self, raw_tx: Bytes) -> Result<TxHash> {
+    async fn send_transaction(&self, raw_tx: Bytes) -> Result<B256> {
         let request = BloxrouteRequest {
             transaction: hex::encode(raw_tx),
         };
@@ -159,5 +151,20 @@ impl ToRpcParams for BloxrouteRequest {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct BloxrouteResponse {
-    tx_hash: TxHash,
+    tx_hash: B256,
+}
+
+impl From<jsonrpsee::core::ClientError> for TxSenderError {
+    fn from(value: jsonrpsee::core::ClientError) -> Self {
+        match &value {
+            jsonrpsee::core::ClientError::Call(e) => {
+                if super::is_replacement_underpriced(e.message()) {
+                    TxSenderError::ReplacementUnderpriced
+                } else {
+                    TxSenderError::Other(value.into())
+                }
+            }
+            _ => TxSenderError::Other(value.into()),
+        }
+    }
 }

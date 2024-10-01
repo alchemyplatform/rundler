@@ -11,15 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
+use alloy_signer::Signer as _;
+use alloy_signer_aws::AwsSigner;
 use anyhow::Context;
-use ethers_signers::{AwsSigner, Signer};
+use aws_config::BehaviorVersion;
 use rslock::{Lock, LockGuard, LockManager};
-use rundler_provider::Provider;
+use rundler_provider::EvmProvider;
 use rundler_utils::handle::SpawnGuard;
-use rusoto_core::Region;
-use rusoto_kms::KmsClient;
 use tokio::{sync::oneshot, time::sleep};
 
 use super::monitor_account_balance;
@@ -33,15 +33,16 @@ pub(crate) struct KmsSigner {
 }
 
 impl KmsSigner {
-    pub(crate) async fn connect<P: Provider>(
-        provider: Arc<P>,
+    pub(crate) async fn connect<P: EvmProvider + Clone + 'static>(
+        provider: P,
         chain_id: u64,
-        region: Region,
         key_ids: Vec<String>,
         redis_uri: String,
         ttl_millis: u64,
     ) -> anyhow::Result<Self> {
-        let client = KmsClient::new(region);
+        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let client = aws_sdk_kms::Client::new(&config);
+
         let mut kms_guard = None;
         let key_id;
 
@@ -58,7 +59,7 @@ impl KmsSigner {
                 .to_owned();
         };
 
-        let signer = AwsSigner::new(client, key_id, chain_id)
+        let signer = AwsSigner::new(client, key_id, Some(chain_id))
             .await
             .context("should create signer")?;
 

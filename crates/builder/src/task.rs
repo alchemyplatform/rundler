@@ -11,16 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
-use ethers_signers::Signer;
 use futures::future;
 use futures_util::TryFutureExt;
-use rundler_provider::{EntryPointProvider, Provider};
+use rundler_provider::{EntryPointProvider, EvmProvider};
 use rundler_sim::{
+    gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
     MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
@@ -31,7 +31,6 @@ use rundler_types::{
     UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, handle};
-use rusoto_core::Region;
 use tokio::{
     sync::{broadcast, mpsc},
     task::JoinHandle,
@@ -46,7 +45,7 @@ use crate::{
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
     server::{spawn_remote_builder_server, LocalBuilderBuilder},
-    signer::{BundlerSigner, KmsSigner, LocalSigner},
+    signer::{BundlerSigner, KmsSigner, LocalSigner, Signer},
     transaction_tracker::{self, TransactionTrackerImpl},
 };
 
@@ -65,8 +64,6 @@ pub struct Args {
     /// AWS KMS key ids to use for signing transactions
     /// Only used if private_key is not provided
     pub aws_kms_key_ids: Vec<String>,
-    /// AWS KMS region
-    pub aws_kms_region: Region,
     /// Redis URI for key leasing
     pub redis_uri: String,
     /// Redis lease TTL in milliseconds
@@ -74,9 +71,9 @@ pub struct Args {
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit
-    pub max_bundle_gas: u64,
+    pub max_bundle_gas: u128,
     /// Percentage to add to the network priority fee for the bundle priority fee
-    pub bundle_priority_fee_overhead_percent: u64,
+    pub bundle_priority_fee_overhead_percent: u32,
     /// Priority fee mode to use for operation priority fee minimums
     pub priority_fee_mode: PriorityFeeMode,
     /// Sender to be used by the builder
@@ -86,7 +83,7 @@ pub struct Args {
     /// Maximum number of blocks to wait for a transaction to be mined
     pub max_blocks_to_wait_for_mine: u64,
     /// Percentage to increase the fees by when replacing a bundle transaction
-    pub replacement_fee_percent_increase: u64,
+    pub replacement_fee_percent_increase: u32,
     /// Maximum number of times to increase the fee when cancelling a transaction
     pub max_cancellation_fee_increases: u64,
     /// Maximum amount of blocks to spend in a replacement underpriced state before moving to cancel
@@ -109,7 +106,7 @@ pub struct EntryPointBuilderSettings {
     /// Index offset for bundle builders
     pub bundle_builder_index_offset: u64,
     /// Mempool configs
-    pub mempool_configs: HashMap<H256, MempoolConfig>,
+    pub mempool_configs: HashMap<B256, MempoolConfig>,
 }
 
 /// Builder task
@@ -119,7 +116,7 @@ pub struct BuilderTask<P, PR, E06, E07> {
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     builder_builder: LocalBuilderBuilder,
     pool: P,
-    provider: Arc<PR>,
+    provider: PR,
     ep_06: Option<E06>,
     ep_07: Option<E07>,
 }
@@ -127,11 +124,15 @@ pub struct BuilderTask<P, PR, E06, E07> {
 #[async_trait]
 impl<P, PR, E06, E07> Task for BuilderTask<P, PR, E06, E07>
 where
-    P: Pool + Clone,
-    PR: Provider,
-    E06: EntryPointProvider<UserOperationV0_6>,
-    E07: EntryPointProvider<UserOperationV0_7>,
+    P: Pool + Clone + 'static,
+    PR: EvmProvider + Clone + 'static,
+    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
+    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
+    fn boxed(self) -> Box<dyn Task> {
+        Box::new(self)
+    }
+
     async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
         let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
@@ -208,7 +209,7 @@ impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
         builder_builder: LocalBuilderBuilder,
         pool: P,
-        provider: Arc<PR>,
+        provider: PR,
         ep_06: Option<E06>,
         ep_07: Option<E07>,
     ) -> Self {
@@ -226,16 +227,11 @@ impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
 
 impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07>
 where
-    P: Pool + Clone,
-    PR: Provider,
-    E06: EntryPointProvider<UserOperationV0_6>,
-    E07: EntryPointProvider<UserOperationV0_7>,
+    P: Pool + Clone + 'static,
+    PR: EvmProvider + Clone + 'static,
+    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
+    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
-    /// Convert this task into a boxed task
-    pub fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
-    }
-
     async fn create_builders_v0_6<I>(
         &self,
         ep: &EntryPointBuilderSettings,
@@ -258,10 +254,10 @@ where
             let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     ep_v0_6.clone(),
                     UnsafeSimulator::new(
-                        Arc::clone(&self.provider),
+                        self.provider.clone(),
                         ep_v0_6.clone(),
                         self.args.sim_settings.clone(),
                     ),
@@ -271,10 +267,10 @@ where
             } else {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     ep_v0_6.clone(),
                     simulation::new_v0_6_simulator(
-                        Arc::clone(&self.provider),
+                        self.provider.clone(),
                         ep_v0_6.clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
@@ -311,10 +307,10 @@ where
             let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     ep_v0_7.clone(),
                     UnsafeSimulator::new(
-                        Arc::clone(&self.provider),
+                        self.provider.clone(),
                         ep_v0_7.clone(),
                         self.args.sim_settings.clone(),
                     ),
@@ -324,10 +320,10 @@ where
             } else {
                 self.create_bundle_builder(
                     i + ep.bundle_builder_index_offset,
-                    Arc::clone(&self.provider),
+                    self.provider.clone(),
                     ep_v0_7.clone(),
                     simulation::new_v0_7_simulator(
-                        Arc::clone(&self.provider),
+                        self.provider.clone(),
                         ep_v0_7.clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
@@ -345,7 +341,7 @@ where
     async fn create_bundle_builder<UO, E, S, I>(
         &self,
         index: u64,
-        provider: Arc<PR>,
+        provider: PR,
         entry_point: E,
         simulator: S,
         pk_iter: &mut I,
@@ -356,8 +352,8 @@ where
     where
         UO: UserOperation + From<UserOperationVariant>,
         UserOperationVariant: AsRef<UO>,
-        E: EntryPointProvider<UO> + Clone,
-        S: Simulator<UO = UO>,
+        E: EntryPointProvider<UO> + Clone + 'static,
+        S: Simulator<UO = UO> + 'static,
         I: Iterator<Item = String>,
     {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
@@ -365,12 +361,8 @@ where
         let signer = if let Some(pk) = pk_iter.next() {
             info!("Using local signer");
             BundlerSigner::Local(
-                LocalSigner::connect(
-                    Arc::clone(&provider),
-                    self.args.chain_spec.id,
-                    pk.to_owned(),
-                )
-                .await?,
+                LocalSigner::connect(provider.clone(), self.args.chain_spec.id, pk.to_owned())
+                    .await?,
             )
         } else {
             info!("Using AWS KMS signer");
@@ -381,9 +373,8 @@ where
                 // so this should give ample time for the connection to establish.
                 Duration::from_millis(self.args.redis_lock_ttl_millis / 4),
                 KmsSigner::connect(
-                    Arc::clone(&provider),
+                    provider.clone(),
                     self.args.chain_spec.id,
-                    self.args.aws_kms_region.clone(),
                     self.args.aws_kms_key_ids.clone(),
                     self.args.redis_uri.clone(),
                     self.args.redis_lock_ttl_millis,
@@ -417,7 +408,7 @@ where
         };
 
         let transaction_tracker = TransactionTrackerImpl::new(
-            Arc::clone(&provider),
+            provider.clone(),
             transaction_sender,
             tracker_settings,
             index,
@@ -430,15 +421,25 @@ where
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
+        let fee_oracle = gas::get_fee_oracle(&self.args.chain_spec, provider.clone());
+        let fee_estimator = FeeEstimatorImpl::new(
+            provider.clone(),
+            fee_oracle,
+            proposer_settings.priority_fee_mode,
+            proposer_settings.bundle_priority_fee_overhead_percent,
+        );
+
         let proposer = BundleProposerImpl::new(
             index,
             self.pool.clone(),
             simulator,
             entry_point.clone(),
-            Arc::clone(&provider),
+            provider.clone(),
+            fee_estimator,
             proposer_settings,
             self.event_sender.clone(),
         );
+
         let builder = BundleSenderImpl::new(
             index,
             send_bundle_rx,
