@@ -23,11 +23,13 @@ alloy-rpc-types-trace.workspace = true
 alloy-sol-types.workspace = true
 alloy-transport.workspace = true
 
+tower.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+futures-util.workspace = true
 
 mockall = {workspace = true, optional = true }
 

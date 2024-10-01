@@ -25,7 +25,6 @@ use rundler_sim::{
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
 };
 use rundler_task::{
-    metrics::MetricsLayer,
     server::{format_socket_addr, HealthCheck},
     Task,
 };
@@ -44,11 +43,7 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
-<<<<<<< HEAD
-    rpc_metrics::RPCMethodExtractor,
-=======
-    rpc_metrics::{RPCMethodExtractor, RPCResponseCodeExtractor},
->>>>>>> ba1f0c6 (feat(middleware): add response extractor.)
+    rpc_metrics::RpcMetricsMiddlewareLayer,
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
@@ -192,18 +187,8 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-<<<<<<< HEAD
-        let rpc_metric_middleware = MetricsLayer::<RPCMethodExtractor, Request<'static>>::new(
-            "rundler-eth-service".to_string(),
-            "rpc".to_string(),
-        );
-=======
         let rpc_metric_middleware =
-            MetricsLayer::<RPCMethodExtractor, _, RPCResponseCodeExtractor<_>>::new(
-                "rundler-eth-service".to_string(),
-                "rpc".to_string(),
-            );
->>>>>>> ba1f0c6 (feat(middleware): add response extractor.)
+            RpcMetricsMiddlewareLayer::new("rundler-eth-service".to_string());
 
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)

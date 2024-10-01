@@ -27,7 +27,7 @@ pub enum RpcCode {
     MethodNotFound,
     AlreadyExist,
     PermissionDenied,
-    ResourceExhaused,
+    ResourceExhausted,
     FailedPrecondition,
     Aborted,
     OutOfRange,
@@ -39,6 +39,7 @@ pub enum RpcCode {
     ParseError,
     InvalidRequest,
     ServerError,
+    InvalidArgument,
 }
 
 /// HTTP status code.

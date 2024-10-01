@@ -21,7 +21,6 @@
 
 pub mod block_watcher;
 pub mod grpc;
-pub mod metrics;
 pub mod server;
 
 mod task;

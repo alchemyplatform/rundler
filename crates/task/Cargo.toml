@@ -20,6 +20,7 @@ futures.workspace = true
 metrics.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+pin-project.workspace = true
 tonic.workspace = true
 tower.workspace = true
 thiserror.workspace = true

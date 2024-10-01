@@ -11,96 +11,120 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use rundler_types::task::{
-    status_code::{HttpCode, RpcCode},
-    traits::{RequestExtractor, ResponseExtractor},
+//! Middleware for recording metrics for gRPC requests.
+
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
 };
-use tonic::{codegen::http, transport::Error, Result};
 
-/// http request method extractor.
-pub struct HttpMethodExtractor;
+use pin_project::pin_project;
+use rundler_types::task::{metrics::MethodSessionLogger, status_code::HttpCode};
+use tonic::{codegen::http, Code};
+use tower::{Layer, Service};
 
-impl<Body> RequestExtractor<http::Request<Body>> for HttpMethodExtractor {
-    fn get_method_name(req: &http::Request<Body>) -> String {
-        let method_name = req.uri().path().split('/').last().unwrap_or("unknown");
-        method_name.to_string()
+/// A layer for recording metrics for gRPC requests.
+#[derive(Debug, Clone)]
+pub struct GrpcMetricsLayer {
+    scope: String,
+}
+
+impl GrpcMetricsLayer {
+    /// Create a new `GrpcMetricsLayer` middleware layer
+    pub fn new(scope: String) -> Self {
+        GrpcMetricsLayer { scope }
     }
 }
 
-/// http response extractor.
-#[derive(Copy, Clone)]
-pub struct HttpResponseCodeExtractor;
+impl<S> Layer<S> for GrpcMetricsLayer {
+    type Service = GrpcMetrics<S>;
 
-impl<B> ResponseExtractor<Result<http::Response<B>>> for HttpResponseCodeExtractor {
-    fn get_http_status_code(response: &Result<http::Response<B>>) -> String {
-        let http_code = match response {
-            Ok(resp) => resp.status().as_u16(),
-            Err(_) => 500,
-        };
-        let http = match http_code {
-            x if (200..=299).contains(&x) => HttpCode::TwoHundreds,
-            x if (400..=499).contains(&x) => HttpCode::FourHundreds,
-            x if (500..=599).contains(&x) => HttpCode::FiveHundreds,
-            _ => HttpCode::Other,
-        };
-        http.to_string()
+    fn layer(&self, service: S) -> Self::Service {
+        GrpcMetrics::new(service, self.scope.clone())
+    }
+}
+
+/// Service for recording metrics for gRPC requests.
+#[derive(Clone, Debug)]
+pub struct GrpcMetrics<S> {
+    inner: S,
+    scope: String,
+}
+
+impl<S> GrpcMetrics<S> {
+    /// Create a new `GrpcMetrics` middleware service.
+    pub fn new(inner: S, scope: String) -> Self {
+        Self { inner, scope }
+    }
+}
+
+impl<S, Body> Service<http::Request<Body>> for GrpcMetrics<S>
+where
+    S: Service<http::Request<Body>> + Sync,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = ResponseFuture<S::Future>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // Our middleware doesn't care about backpressure so its ready as long
+        // as the inner service is ready.
+        self.inner.poll_ready(cx)
     }
 
-    fn get_rpc_status_code(response: &Result<http::Response<B>>) -> String {
-        let rpc_status = match response {
-            Ok(resp) => {
-                let rpc_code = resp
-                    .headers()
-                    .get("grpc-status")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("0")
-                    .to_string()
-                    .parse::<i32>()
-                    .unwrap_or(0);
+    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        let uri = request.uri().clone();
+        let method_name = uri.path().split('/').last().unwrap_or("unknown");
+        let mut method_logger = MethodSessionLogger::new(
+            self.scope.clone(),
+            method_name.to_string(),
+            "grpc".to_string(),
+        );
+        method_logger.start();
+        ResponseFuture {
+            response_future: self.inner.call(request),
+            method_logger: method_logger,
+        }
+    }
+}
 
-                let rpc = match rpc_code {
-                    0 => RpcCode::Success,
-                    1 => RpcCode::Cancelled,
-                    2 => RpcCode::Other,
-                    3 => RpcCode::InvalidParams,
-                    4 => RpcCode::DeadlineExceed,
-                    5 => RpcCode::MethodNotFound,
-                    6 => RpcCode::AlreadyExist,
-                    7 => RpcCode::PermissionDenied,
-                    8 => RpcCode::ResourceExhaused,
-                    9 => RpcCode::FailedPrecondition,
-                    10 => RpcCode::Aborted,
-                    11 => RpcCode::OutOfRange,
-                    12 => RpcCode::Unimplemented,
-                    13 => RpcCode::InternalError,
-                    14 => RpcCode::Unavailable,
-                    15 => RpcCode::DataLoss,
-                    16 => RpcCode::Unauthenticated,
-                    _ => RpcCode::Other,
-                };
-                rpc
+/// Future returned by the middleware.
+// checkout: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
+// for details on the use of Pin here
+#[pin_project]
+pub struct ResponseFuture<F> {
+    #[pin]
+    response_future: F,
+
+    method_logger: MethodSessionLogger,
+}
+
+impl<F, Response, E> Future for ResponseFuture<F>
+where
+    F: Future<Output = Result<Response, E>>,
+{
+    type Output = Result<Response, E>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let res = this.response_future.poll(cx);
+        match &res {
+            Poll::Ready(response) => {
+                this.method_logger.done();
+                match response {
+                    Ok(_) => {
+                        this.method_logger.record_http(HttpCode::TwoHundreds);
+                    }
+                    Err(_) => {
+                        // extract the error message form the error trait
+                        this.method_logger.record_http(HttpCode::FiveHundreds);
+                    }
+                }
             }
-            Err(e) => match e.code() {
-                tonic::Code::Ok => RpcCode::Success,
-                tonic::Code::Cancelled => RpcCode::Cancelled,
-                tonic::Code::Unknown => RpcCode::Cancelled,
-                tonic::Code::InvalidArgument => RpcCode::InvalidParams,
-                tonic::Code::DeadlineExceeded => RpcCode::DeadlineExceed,
-                tonic::Code::NotFound => RpcCode::MethodNotFound,
-                tonic::Code::AlreadyExists => RpcCode::AlreadyExist,
-                tonic::Code::PermissionDenied => RpcCode::PermissionDenied,
-                tonic::Code::ResourceExhausted => RpcCode::ResourceExhaused,
-                tonic::Code::FailedPrecondition => RpcCode::FailedPrecondition,
-                tonic::Code::Aborted => RpcCode::Aborted,
-                tonic::Code::OutOfRange => RpcCode::OutOfRange,
-                tonic::Code::Unimplemented => RpcCode::Unimplemented,
-                tonic::Code::Internal => RpcCode::InternalError,
-                tonic::Code::Unavailable => RpcCode::Unavailable,
-                tonic::Code::DataLoss => RpcCode::DataLoss,
-                tonic::Code::Unauthenticated => RpcCode::Unauthenticated,
-            },
+            Poll::Pending => {}
         };
 
-        rpc_status.to_string()
+        res
     }
 }
