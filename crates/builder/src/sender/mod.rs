@@ -14,37 +14,29 @@
 mod bloxroute;
 mod flashbots;
 mod raw;
-use std::sync::Arc;
 
-use anyhow::Context;
-use async_trait::async_trait;
+use alloy_primitives::{Address, B256};
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 use enum_dispatch::enum_dispatch;
-use ethers::{
-    prelude::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider, ProviderError},
-    types::{
-        transaction::eip2718::TypedTransaction, Address, Bytes, Eip1559TransactionRequest, H256,
-        U256,
-    },
-};
-use ethers_signers::{LocalWallet, Signer};
 pub(crate) use flashbots::FlashbotsTransactionSender;
 #[cfg(test)]
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
+use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 
+use crate::signer::Signer;
+
 #[derive(Debug)]
 pub(crate) struct SentTxInfo {
-    pub(crate) nonce: U256,
-    pub(crate) tx_hash: H256,
+    pub(crate) nonce: u64,
+    pub(crate) tx_hash: B256,
 }
 
 #[derive(Debug)]
 pub(crate) struct CancelTxInfo {
-    pub(crate) tx_hash: H256,
+    pub(crate) tx_hash: B256,
     // True if the transaction was soft-cancelled. Soft-cancellation is when the RPC endpoint
     // accepts the cancel without an onchain transaction.
     pub(crate) soft_cancelled: bool,
@@ -79,39 +71,34 @@ pub(crate) enum TxSenderError {
 
 pub(crate) type Result<T> = std::result::Result<T, TxSenderError>;
 
-#[async_trait]
-#[enum_dispatch(TransactionSenderEnum<_C,_S,_FS>)]
+#[async_trait::async_trait]
+#[enum_dispatch(TransactionSenderEnum<_P,_S>)]
 #[cfg_attr(test, automock)]
-pub(crate) trait TransactionSender: Send + Sync + 'static {
+pub(crate) trait TransactionSender: Send + Sync {
     async fn send_transaction(
         &self,
-        tx: TypedTransaction,
+        tx: TransactionRequest,
         expected_storage: &ExpectedStorage,
     ) -> Result<SentTxInfo>;
 
     async fn cancel_transaction(
         &self,
-        tx_hash: H256,
-        nonce: U256,
+        tx_hash: B256,
+        nonce: u64,
         to: Address,
         gas_fees: GasFees,
     ) -> Result<CancelTxInfo>;
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus>;
+    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus>;
 
     fn address(&self) -> Address;
 }
 
 #[enum_dispatch]
-pub(crate) enum TransactionSenderEnum<C, S, FS>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-    FS: Signer + 'static,
-{
-    Raw(RawTransactionSender<C, S>),
-    Flashbots(FlashbotsTransactionSender<C, S, FS>),
-    PolygonBloxroute(PolygonBloxrouteTransactionSender<C, S>),
+pub(crate) enum TransactionSenderEnum<P: EvmProvider, S: Signer> {
+    Raw(RawTransactionSender<P, S>),
+    Flashbots(FlashbotsTransactionSender<P, S>),
+    PolygonBloxroute(PolygonBloxrouteTransactionSender<P, S>),
 }
 
 /// Transaction sender types
@@ -171,19 +158,17 @@ pub struct FlashbotsSenderArgs {
 }
 
 impl TransactionSenderArgs {
-    pub(crate) fn into_sender<S: Signer + 'static>(
+    pub(crate) fn into_sender<S: Signer>(
         self,
         rpc_url: &str,
         signer: S,
-    ) -> std::result::Result<
-        TransactionSenderEnum<impl JsonRpcClient + 'static, S, LocalWallet>,
-        SenderConstructorErrors,
-    > {
-        let provider = rundler_provider::new_provider(rpc_url, None)?;
+    ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider, S>, SenderConstructorErrors>
+    {
+        let provider = rundler_provider::new_alloy_evm_provider(rpc_url)?;
         let sender = match self {
             Self::Raw(args) => {
                 if args.use_submit_for_status {
-                    let submitter = rundler_provider::new_provider(&args.submit_url, None)?;
+                    let submitter = rundler_provider::new_alloy_evm_provider(&args.submit_url)?;
                     TransactionSenderEnum::Raw(RawTransactionSender::new(
                         provider,
                         submitter,
@@ -193,7 +178,7 @@ impl TransactionSenderArgs {
                     ))
                 } else {
                     TransactionSenderEnum::Raw(RawTransactionSender::new(
-                        Arc::clone(&provider),
+                        provider.clone(),
                         provider,
                         signer,
                         args.dropped_status_supported,
@@ -202,12 +187,10 @@ impl TransactionSenderArgs {
                 }
             }
             Self::Flashbots(args) => {
-                let flashbots_signer = args.auth_key.parse().context("should parse auth key")?;
-
                 TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(
                     provider,
                     signer,
-                    flashbots_signer,
+                    args.auth_key,
                     args.builders,
                     args.relay_url,
                     args.status_url,
@@ -232,58 +215,21 @@ pub(crate) enum SenderConstructorErrors {
     Other(#[from] anyhow::Error),
 }
 
-async fn fill_and_sign<C, S>(
-    provider: &SignerMiddleware<Arc<Provider<C>>, S>,
-    mut tx: TypedTransaction,
-) -> anyhow::Result<(Bytes, U256)>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-{
-    provider
-        .fill_transaction(&mut tx, None)
-        .await
-        .context("should fill transaction before signing it")?;
-    let nonce = *tx
-        .nonce()
-        .context("nonce should be set when transaction is filled")?;
-    let signature = provider
-        .signer()
-        .sign_transaction(&tx)
-        .await
-        .context("should sign transaction before sending")?;
-    Ok((tx.rlp_signed(&signature), nonce))
-}
-
-fn create_hard_cancel_tx(
-    from: Address,
-    to: Address,
-    nonce: U256,
-    gas_fees: GasFees,
-) -> TypedTransaction {
-    Eip1559TransactionRequest::new()
-        .from(from)
+fn create_hard_cancel_tx(to: Address, nonce: u64, gas_fees: GasFees) -> TransactionRequest {
+    TransactionRequest::default()
         .to(to)
         .nonce(nonce)
-        .gas(U256::from(30_000))
+        .gas_limit(30_000)
         .max_fee_per_gas(gas_fees.max_fee_per_gas)
         .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
-        .data(Bytes::new())
-        .into()
 }
 
 impl From<ProviderError> for TxSenderError {
     fn from(value: ProviderError) -> Self {
         match &value {
-            ProviderError::JsonRpcClientError(e) => {
-                if let Some(e) = e.as_error_response() {
-                    // geth
-                    if e.message.contains("replacement transaction underpriced")
-                    // erigon
-                        || e.message.contains("could not replace existing tx")
-                    // reth
-                        || e.message.contains("insufficient gas price to replace existing transaction")
-                    {
+            ProviderError::RPC(e) => {
+                if let Some(e) = e.as_error_resp() {
+                    if is_replacement_underpriced(&e.message) {
                         return TxSenderError::ReplacementUnderpriced;
                     // geth, erigon, reth
                     } else if e.message.contains("nonce too low") {
@@ -305,17 +251,11 @@ impl From<ProviderError> for TxSenderError {
     }
 }
 
-impl From<jsonrpsee::core::ClientError> for TxSenderError {
-    fn from(value: jsonrpsee::core::ClientError) -> Self {
-        match &value {
-            jsonrpsee::core::ClientError::Call(e) => {
-                if e.message().contains("replacement transaction underpriced") {
-                    TxSenderError::ReplacementUnderpriced
-                } else {
-                    TxSenderError::Other(value.into())
-                }
-            }
-            _ => TxSenderError::Other(value.into()),
-        }
-    }
+fn is_replacement_underpriced(e: &str) -> bool {
+    // geth
+    e.to_lowercase().contains("replacement transaction underpriced") ||
+    // erigon
+    e.to_lowercase().contains("could not replace existing tx") ||
+    // reth
+    e.to_lowercase().contains("insufficient gas price to replace existing transaction")
 }

@@ -32,6 +32,7 @@ pub use alloy::{
     },
     evm::AlloyEvmProvider,
     metrics::AlloyMethodExtractor,
+    new_alloy_evm_provider, new_alloy_provider,
 };
 
 mod traits;
