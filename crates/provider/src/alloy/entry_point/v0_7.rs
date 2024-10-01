@@ -48,6 +48,7 @@ use crate::{
 };
 
 /// Entry point provider for v0.7
+#[derive(Clone)]
 pub struct EntryPointProvider<AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
     l1_gas_oracle: L1GasOracle,
@@ -60,14 +61,9 @@ where
     AP: AlloyProvider<T>,
 {
     /// Create a new `EntryPoint` instance for v0.7
-    pub fn new(
-        entry_point_address: Address,
-        chain_spec: &ChainSpec,
-        max_aggregation_gas: u128,
-        provider: AP,
-    ) -> Self {
+    pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u128, provider: AP) -> Self {
         Self {
-            i_entry_point: IEntryPointInstance::new(entry_point_address, provider),
+            i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_7, provider),
             l1_gas_oracle: L1GasOracle::new(chain_spec),
             max_aggregation_gas,
         }

@@ -27,7 +27,7 @@ pub(crate) mod v0_7;
 mod arbitrum;
 mod optimism;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 enum L1GasOracle {
     ArbitrumNitro(Address),
     OptimismBedrock(Address),

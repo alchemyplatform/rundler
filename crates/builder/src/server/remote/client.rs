@@ -13,16 +13,14 @@
 
 use std::str::FromStr;
 
-use ethers::types::{Address, H256};
+use alloy_primitives::{Address, B256};
+use async_trait::async_trait;
 use rundler_task::{
     grpc::protos::{from_bytes, ConversionError},
     server::{HealthCheck, ServerStatus},
 };
 use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
-use tonic::{
-    async_trait,
-    transport::{Channel, Uri},
-};
+use tonic::transport::{Channel, Uri};
 use tonic_health::{
     pb::{health_client::HealthClient, HealthCheckRequest},
     ServingStatus,
@@ -71,7 +69,7 @@ impl Builder for RemoteBuilderClient {
             .map_err(anyhow::Error::from)?)
     }
 
-    async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)> {
+    async fn debug_send_bundle_now(&self) -> BuilderResult<(B256, u64)> {
         let res = self
             .grpc_client
             .clone()
@@ -83,7 +81,7 @@ impl Builder for RemoteBuilderClient {
 
         match res {
             Some(debug_send_bundle_now_response::Result::Success(s)) => {
-                Ok((H256::from_slice(&s.transaction_hash), s.block_number))
+                Ok((B256::from_slice(&s.transaction_hash), s.block_number))
             }
             Some(debug_send_bundle_now_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(BuilderError::Other(anyhow::anyhow!(

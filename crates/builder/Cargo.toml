@@ -14,24 +14,31 @@ rundler-task = { path = "../task" }
 rundler-types = { path = "../types" }
 rundler-utils = { path = "../utils" }
 
+alloy-consensus.workspace = true
+alloy-eips = "0.3.3"
+alloy-primitives.workspace = true
+alloy-signer = "0.3.3"
+alloy-signer-aws = "0.3.3"
+alloy-signer-local = "0.3.3"
+
 anyhow.workspace = true
 async-trait.workspace = true
+aws-config = { version = "1.5.6", default-features = false }
+aws-sdk-kms = { version = "1.44", default-features = false }
 enum_dispatch = "0.3.13"
-ethers.workspace = true
-ethers-signers = {version = "2.0.14", features = ["aws"] }
 futures.workspace = true
 futures-timer = "3.0.3"
 futures-util.workspace = true
 jsonrpsee = { workspace = true, features = [ "http-client" ]}
 linked-hash-map = "0.5.6"
 metrics.workspace = true
+num-traits = "0.2.19"
 pin-project.workspace = true
 prost.workspace = true
 parse-display.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, default-features = false, features = ["json"] }
 rslock = "0.4.0"
-rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
-rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }
+ruint = { version = "1.12.3", features = ["num-traits"]}
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

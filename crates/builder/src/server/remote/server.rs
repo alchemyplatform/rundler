@@ -83,10 +83,7 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
         let resp = match self.local_builder.get_supported_entry_points().await {
             Ok(entry_points) => GetSupportedEntryPointsResponse {
                 chain_id: self.chain_id,
-                entry_points: entry_points
-                    .into_iter()
-                    .map(|ep| ep.as_bytes().to_vec())
-                    .collect(),
+                entry_points: entry_points.into_iter().map(|ep| ep.to_vec()).collect(),
             },
             Err(e) => {
                 return Err(Status::internal(format!("Failed to get entry points: {e}")));
@@ -104,7 +101,7 @@ impl GrpcBuilder for GrpcBuilderServerImpl {
             Ok((hash, block_number)) => DebugSendBundleNowResponse {
                 result: Some(debug_send_bundle_now_response::Result::Success(
                     DebugSendBundleNowSuccess {
-                        transaction_hash: hash.as_bytes().to_vec(),
+                        transaction_hash: hash.to_vec(),
                         block_number,
                     },
                 )),
