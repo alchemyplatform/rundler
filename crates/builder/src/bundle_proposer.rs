@@ -54,7 +54,7 @@ const BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT: u32 = 5;
 #[derive(Debug)]
 pub(crate) struct Bundle<UO: UserOperation> {
     pub(crate) ops_per_aggregator: Vec<UserOpsPerAggregator<UO>>,
-    pub(crate) gas_estimate: u128,
+    pub(crate) gas_estimate: u64,
     pub(crate) gas_fees: GasFees,
     pub(crate) expected_storage: ExpectedStorage,
     pub(crate) rejected_ops: Vec<UO>,
@@ -470,7 +470,7 @@ where
         let mut context = ProposalContext::<UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
-        let mut gas_spent = self.settings.chain_spec.transaction_intrinsic_gas as u128;
+        let mut gas_spent = self.settings.chain_spec.transaction_intrinsic_gas();
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
         for (po, simulation) in ops_with_simulations {
             let op = po.clone().uo;
@@ -704,13 +704,17 @@ where
     async fn estimate_gas_rejecting_failed_ops(
         &self,
         context: &mut ProposalContext<UO>,
-    ) -> BundleProposerResult<Option<u128>> {
+    ) -> BundleProposerResult<Option<u64>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
         let gas = math::increase_by_percent(
             context.get_bundle_gas_limit(&self.settings.chain_spec),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
+
+        let gas: u64 = gas
+            .try_into()
+            .context("estimated bundle gas limit is larger than u64::MAX")?;
 
         // call handle ops with the bundle to filter any rejected ops before sending
         let handle_ops_out = self
@@ -867,7 +871,7 @@ where
     async fn process_post_op_revert(
         &self,
         context: &mut ProposalContext<UO>,
-        gas: u128,
+        gas: u64,
     ) -> anyhow::Result<()> {
         let agg_groups = context.to_ops_per_aggregator();
         let mut op_index = 0;
@@ -920,7 +924,7 @@ where
     async fn check_for_post_op_revert_single_op(
         &self,
         op: UO,
-        gas: u128,
+        gas: u64,
         op_index: usize,
     ) -> Vec<usize> {
         let op_hash = self.op_hash(&op);
@@ -956,7 +960,7 @@ where
     async fn check_for_post_op_revert_agg_ops(
         &self,
         group: UserOpsPerAggregator<UO>,
-        gas: u128,
+        gas: u64,
         start_index: usize,
     ) -> Vec<usize> {
         let len = group.user_ops.len();
@@ -1239,7 +1243,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         self.iter_ops_with_simulations()
             .map(|sim_op| gas::user_operation_gas_limit(chain_spec, &sim_op.op, false))
             .sum::<u128>()
-            + chain_spec.transaction_intrinsic_gas as u128
+            + chain_spec.transaction_intrinsic_gas()
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -1439,14 +1443,16 @@ mod tests {
 
         let cs = ChainSpec::default();
 
-        let expected_gas = math::increase_by_percent(
+        let expected_gas: u64 = math::increase_by_percent(
             op.pre_verification_gas
                 + op.verification_gas_limit * 2
                 + op.call_gas_limit
-                + cs.transaction_intrinsic_gas as u128
+                + cs.transaction_intrinsic_gas()
                 + ENTRY_POINT_INNER_GAS_OVERHEAD,
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
-        );
+        )
+        .try_into()
+        .unwrap();
 
         assert_eq!(
             bundle.ops_per_aggregator,

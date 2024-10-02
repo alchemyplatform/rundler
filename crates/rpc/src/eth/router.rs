@@ -191,7 +191,7 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         uo: UserOperationVariant,
-        max_verification_gas: u128,
+        max_verification_gas: u64,
     ) -> EthResult<bool> {
         self.check_and_get_route(entry_point, &uo)?
             .check_signature(uo, max_verification_gas)
@@ -248,7 +248,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
     async fn check_signature(
         &self,
         uo: UserOperationVariant,
-        max_verification_gas: u128,
+        max_verification_gas: u64,
     ) -> anyhow::Result<bool>;
 }
 
@@ -301,7 +301,7 @@ where
     async fn check_signature(
         &self,
         uo: UserOperationVariant,
-        max_verification_gas: u128,
+        max_verification_gas: u64,
     ) -> anyhow::Result<bool> {
         let output = self
             .entry_point

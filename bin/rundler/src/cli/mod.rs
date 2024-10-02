@@ -145,7 +145,7 @@ pub struct CommonArgs {
         env = "MAX_VERIFICATION_GAS",
         global = true
     )]
-    max_verification_gas: u128,
+    max_verification_gas: u64,
 
     #[arg(
         long = "max_bundle_gas",
@@ -202,7 +202,7 @@ pub struct CommonArgs {
         default_value = "20000000",
         global = true
     )]
-    max_simulate_handle_ops_gas: u128,
+    max_simulate_handle_ops_gas: u64,
 
     #[arg(
         long = "verification_estimation_gas_fee",
@@ -306,7 +306,7 @@ pub struct CommonArgs {
     pub num_builders_v0_7: u64,
 }
 
-const SIMULATION_GAS_OVERHEAD: u128 = 100_000;
+const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
 
 impl TryFrom<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
@@ -322,7 +322,8 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
                 SIMULATION_GAS_OVERHEAD
             );
         }
-        let max_call_gas = value.max_simulate_handle_ops_gas - value.max_verification_gas;
+        let max_call_gas: u128 =
+            (value.max_simulate_handle_ops_gas - value.max_verification_gas) as u128;
         if max_call_gas < MIN_CALL_GAS_LIMIT {
             anyhow::bail!(
                 "max_simulate_handle_ops_gas ({}) must be greater than max_verification_gas ({}) by at least {MIN_CALL_GAS_LIMIT}",
@@ -331,9 +332,9 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
             );
         }
         Ok(Self {
-            max_verification_gas: value.max_verification_gas,
+            max_verification_gas: value.max_verification_gas as u128,
             max_call_gas,
-            max_paymaster_verification_gas: value.max_verification_gas,
+            max_paymaster_verification_gas: value.max_verification_gas as u128,
             max_paymaster_post_op_gas: max_call_gas,
             max_total_execution_gas: value.max_bundle_gas,
             max_simulate_handle_ops_gas: value.max_simulate_handle_ops_gas,
@@ -347,7 +348,7 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
         Ok(Self {
-            max_verification_gas: value.max_verification_gas,
+            max_verification_gas: value.max_verification_gas as u128,
             max_total_execution_gas: value.max_bundle_gas,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(

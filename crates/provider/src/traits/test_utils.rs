@@ -134,7 +134,7 @@ mockall::mock! {
             &self,
             aggregator_address: Address,
             user_op: v0_6::UserOperation,
-            gas_cap: u128,
+            gas_cap: u64,
         ) -> ProviderResult<AggregatorOut>;
     }
 
@@ -144,12 +144,12 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_6::UserOperation,
-            max_validation_gas: u128,
-        ) -> (TransactionRequest, StateOverride);
+            max_validation_gas: u64,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_6::UserOperation,
-            max_validation_gas: u128,
+            max_validation_gas: u64,
             block_id: Option<BlockId>
         ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
         fn get_simulate_handle_op_call(
@@ -163,7 +163,7 @@ mockall::mock! {
             target: Address,
             target_call_data: Bytes,
             block_id: BlockId,
-            gas: u128,
+            gas: u64,
             state_override: StateOverride,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
@@ -190,13 +190,13 @@ mockall::mock! {
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_6::UserOperation>>,
             beneficiary: Address,
-            gas: u128,
+            gas: u64,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_6::UserOperation>>,
             beneficiary: Address,
-            gas: u128,
+            gas: u64,
             gas_fees: GasFees,
         ) -> TransactionRequest;
     }
@@ -226,7 +226,7 @@ mockall::mock! {
             &self,
             aggregator_address: Address,
             user_op: v0_7::UserOperation,
-            gas_cap: u128,
+            gas_cap: u64,
         ) -> ProviderResult<AggregatorOut>;
     }
 
@@ -236,12 +236,12 @@ mockall::mock! {
         fn get_tracer_simulate_validation_call(
             &self,
             user_op: v0_7::UserOperation,
-            max_validation_gas: u128,
-        ) -> (TransactionRequest, StateOverride);
+            max_validation_gas: u64,
+        ) -> ProviderResult<(TransactionRequest, StateOverride)>;
         async fn simulate_validation(
             &self,
             user_op: v0_7::UserOperation,
-            max_validation_gas: u128,
+            max_validation_gas: u64,
             block_id: Option<BlockId>
         ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
         fn get_simulate_handle_op_call(
@@ -255,7 +255,7 @@ mockall::mock! {
             target: Address,
             target_call_data: Bytes,
             block_id: BlockId,
-            gas: u128,
+            gas: u64,
             state_override: StateOverride,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
         fn decode_simulate_handle_ops_revert(
@@ -282,13 +282,13 @@ mockall::mock! {
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_7::UserOperation>>,
             beneficiary: Address,
-            gas: u128,
+            gas: u64,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_7::UserOperation>>,
             beneficiary: Address,
-            gas: u128,
+            gas: u64,
             gas_fees: GasFees,
         ) -> TransactionRequest;
     }
