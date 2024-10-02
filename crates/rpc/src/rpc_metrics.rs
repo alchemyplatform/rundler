@@ -90,7 +90,9 @@ where
                         ErrorCode::MethodNotFound => {
                             (HttpCode::FourHundreds, RpcCode::MethodNotFound)
                         }
-                        ErrorCode::ServerIsBusy => (HttpCode::FiveHundreds, RpcCode::ResourceExhausted),
+                        ErrorCode::ServerIsBusy => {
+                            (HttpCode::FiveHundreds, RpcCode::ResourceExhausted)
+                        }
                         ErrorCode::InvalidParams => {
                             (HttpCode::FourHundreds, RpcCode::InvalidParams)
                         }

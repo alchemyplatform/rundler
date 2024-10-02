@@ -21,7 +21,7 @@ use std::{
 
 use pin_project::pin_project;
 use rundler_types::task::{metric_recorder::MethodSessionLogger, status_code::HttpCode};
-use tonic::{codegen::http, Code};
+use tonic::codegen::http;
 use tower::{Layer, Service};
 
 /// A layer for recording metrics for gRPC requests.

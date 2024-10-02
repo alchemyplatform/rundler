@@ -29,11 +29,12 @@ impl MethodSessionLogger {
     pub fn new(service_name: String, method_name: String, protocol: String) -> Self {
         Self {
             start_time: Instant::now(),
-            method_name: method_name.clone(),
-            service_name: service_name.clone(),
-            protocol: protocol.clone(),
+            method_name: method_name,
+            service_name: service_name,
+            protocol: protocol,
         }
     }
+    
     /// start the session. time will be initialized.
     pub fn start(&mut self) {
         self.start_time = Instant::now();

@@ -31,6 +31,7 @@ pub use alloy::{
         },
     },
     evm::AlloyEvmProvider,
+    new_alloy_evm_provider, new_alloy_provider,
 };
 
 mod traits;

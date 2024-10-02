@@ -11,31 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::task::{Context, Poll};
 
 use alloy_json_rpc::{RequestPacket, ResponsePacket};
-use alloy_transport::TransportError;
-use pin_project::pin_project;
+use alloy_transport::{BoxFuture, TransportError};
+use futures_util::FutureExt;
 use rundler_types::task::{
     metric_recorder::MethodSessionLogger,
     status_code::{HttpCode, RpcCode},
 };
 use tower::{Layer, Service};
 
-#[allow(dead_code)]
 /// Alloy provider metric layer.
+#[derive(Default)]
 pub(crate) struct AlloyMetricLayer {}
 
-impl AlloyMetricLayer {
-    #[allow(dead_code)]
-    pub(crate) fn new() -> Self {
-        Self {}
-    }
-}
+impl AlloyMetricLayer {}
 
 impl<S> Layer<S> for AlloyMetricLayer
 where
@@ -49,7 +40,7 @@ where
     }
 }
 
-pub(crate) struct AlloyMetricMiddleware<S> {
+pub struct AlloyMetricMiddleware<S> {
     service: S,
 }
 
@@ -58,18 +49,34 @@ where
     S: Service<RequestPacket, Response = ResponsePacket, Error = TransportError> + Sync,
 {
     /// carete an alloy provider metric layer.
-    pub(crate) fn new(service: S) -> Self {
+    pub fn new(service: S) -> Self {
         Self { service }
+    }
+}
+
+impl<S> Clone for AlloyMetricMiddleware<S>
+where
+    S: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+        }
     }
 }
 
 impl<S> Service<RequestPacket> for AlloyMetricMiddleware<S>
 where
-    S: Service<RequestPacket, Response = ResponsePacket, Error = TransportError> + Sync + Send,
+    S: Service<RequestPacket, Response = ResponsePacket, Error = TransportError>
+        + Sync
+        + Send
+        + Clone
+        + 'static,
+    S::Future: Send,
 {
     type Response = ResponsePacket;
     type Error = TransportError;
-    type Future = ResponseFuture<S::Future>;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
@@ -82,73 +89,49 @@ where
             "rpc".to_string(),
         );
         method_logger.start();
-        let call_future = self.service.call(request);
-
-        ResponseFuture {
-            response_future: call_future,
-            method_logger,
-        }
-    }
-}
-#[pin_project]
-pub struct ResponseFuture<F> {
-    #[pin]
-    response_future: F,
-    method_logger: MethodSessionLogger,
-}
-
-impl<F> Future for ResponseFuture<F>
-where
-    F: Future<Output = Result<ResponsePacket, TransportError>>,
-{
-    type Output = Result<ResponsePacket, TransportError>;
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = self.project();
-        let res = this.response_future.poll(cx);
-        match &res {
-            Poll::Ready(response) => {
-                this.method_logger.done();
-                match response {
-                    Ok(ref resp) => {
-                        this.method_logger.record_http(HttpCode::TwoHundreds);
-                        this.method_logger.record_rpc(get_rpc_status_code(resp));
-                    }
-                    Err(ref e) => match e {
-                        alloy_json_rpc::RpcError::ErrorResp(_) => {
-                            this.method_logger.record_http(HttpCode::FiveHundreds);
-                            this.method_logger.record_rpc(RpcCode::ServerError);
-                        }
-                        alloy_json_rpc::RpcError::NullResp => {
-                            this.method_logger.record_http(HttpCode::FiveHundreds);
-                            this.method_logger.record_rpc(RpcCode::InternalError);
-                        }
-                        alloy_json_rpc::RpcError::UnsupportedFeature(_) => {
-                            this.method_logger.record_http(HttpCode::FourHundreds);
-                            this.method_logger.record_rpc(RpcCode::MethodNotFound);
-                        }
-                        alloy_json_rpc::RpcError::LocalUsageError(_) => {
-                            this.method_logger.record_http(HttpCode::FourHundreds);
-                            this.method_logger.record_rpc(RpcCode::InvalidRequest);
-                        }
-                        alloy_json_rpc::RpcError::SerError(_) => {
-                            this.method_logger.record_http(HttpCode::FiveHundreds);
-                            this.method_logger.record_rpc(RpcCode::InternalError);
-                        }
-                        alloy_json_rpc::RpcError::DeserError { .. } => {
-                            this.method_logger.record_http(HttpCode::FourHundreds);
-                            this.method_logger.record_rpc(RpcCode::ParseError);
-                        }
-                        alloy_json_rpc::RpcError::Transport(_) => {
-                            this.method_logger.record_http(HttpCode::FiveHundreds);
-                            this.method_logger.record_rpc(RpcCode::ServerError);
-                        }
-                    },
+        let mut svc = self.service.clone();
+        async move {
+            let response = svc.call(request).await;
+            method_logger.done();
+            match &response {
+                Ok(resp) => {
+                    method_logger.record_http(HttpCode::TwoHundreds);
+                    method_logger.record_rpc(get_rpc_status_code(resp));
                 }
+                Err(e) => match e {
+                    alloy_json_rpc::RpcError::ErrorResp(_) => {
+                        method_logger.record_http(HttpCode::FiveHundreds);
+                        method_logger.record_rpc(RpcCode::ServerError);
+                    }
+                    alloy_json_rpc::RpcError::NullResp => {
+                        method_logger.record_http(HttpCode::FiveHundreds);
+                        method_logger.record_rpc(RpcCode::InternalError);
+                    }
+                    alloy_json_rpc::RpcError::UnsupportedFeature(_) => {
+                        method_logger.record_http(HttpCode::FourHundreds);
+                        method_logger.record_rpc(RpcCode::MethodNotFound);
+                    }
+                    alloy_json_rpc::RpcError::LocalUsageError(_) => {
+                        method_logger.record_http(HttpCode::FourHundreds);
+                        method_logger.record_rpc(RpcCode::InvalidRequest);
+                    }
+                    alloy_json_rpc::RpcError::SerError(_) => {
+                        method_logger.record_http(HttpCode::FiveHundreds);
+                        method_logger.record_rpc(RpcCode::InternalError);
+                    }
+                    alloy_json_rpc::RpcError::DeserError { .. } => {
+                        method_logger.record_http(HttpCode::FourHundreds);
+                        method_logger.record_rpc(RpcCode::ParseError);
+                    }
+                    alloy_json_rpc::RpcError::Transport(transport_error) => {
+                        method_logger.record_http(HttpCode::FiveHundreds);
+                        method_logger.record_rpc(RpcCode::ServerError);
+                    }
+                },
             }
-            Poll::Pending => {}
-        };
-        res
+            response
+        }
+        .boxed()
     }
 }
 

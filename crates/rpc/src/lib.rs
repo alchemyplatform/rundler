@@ -38,6 +38,6 @@ pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
 mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};
 
+mod rpc_metrics;
 mod types;
 mod utils;
-mod rpc_metrics;
