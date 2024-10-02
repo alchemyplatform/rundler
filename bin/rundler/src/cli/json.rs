@@ -11,24 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{fs::File, io::BufReader, pin::Pin};
+use std::{fs::File, io::BufReader};
 
 use anyhow::Context;
-use rusoto_core::Region;
-use rusoto_s3::{GetObjectRequest, S3Client, S3};
+use aws_config::BehaviorVersion;
 use serde::de::DeserializeOwned;
-use tokio::io::AsyncReadExt;
 
 /// Reads and deserializes a JSON config file from a local path or an S3 bucket.
 ///
 /// If the path starts with `s3://`, the file is read from S3 using the given region.
 /// T must implement `serde::Deserialize`.
-pub async fn get_json_config<T>(path: &str, aws_s3_region: &str) -> anyhow::Result<T>
+pub async fn get_json_config<T>(path: &str) -> anyhow::Result<T>
 where
     T: DeserializeOwned,
 {
     if path.starts_with("s3://") {
-        get_s3_json_config(path, aws_s3_region).await
+        get_s3_json_config(path).await
     } else {
         get_local_json_config(path)
     }
@@ -43,24 +41,30 @@ where
     Ok(serde_json::from_reader(reader)?)
 }
 
-async fn get_s3_json_config<T>(path: &str, aws_s3_region: &str) -> anyhow::Result<T>
+async fn get_s3_json_config<T>(path: &str) -> anyhow::Result<T>
 where
     T: DeserializeOwned,
 {
-    let aws_s3_region: Region = aws_s3_region.parse().context("invalid AWS region")?;
+    let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+    let client = aws_sdk_s3::Client::new(&config);
+
     let (bucket, key) = sscanf::sscanf!(path, "s3://{}/{}", String, String)
         .map_err(|e| anyhow::anyhow!("invalid s3 uri: {e:?}"))?;
-    let request = GetObjectRequest {
-        bucket,
-        key,
-        ..Default::default()
-    };
-    let client = S3Client::new(aws_s3_region.clone());
-    let resp = client.get_object(request).await?;
-    let body = resp.body.context("object should have body")?;
-    let mut buf = String::new();
-    Pin::new(&mut body.into_async_read())
-        .read_to_string(&mut buf)
-        .await?;
-    Ok(serde_json::from_str(&buf)?)
+
+    let object = client
+        .get_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .context("should get s3 object")?;
+
+    let body = object
+        .body
+        .collect()
+        .await
+        .context("should read s3 object body")?
+        .to_vec();
+
+    Ok(serde_json::from_slice(&body)?)
 }

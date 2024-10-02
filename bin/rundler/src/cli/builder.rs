@@ -24,7 +24,7 @@ use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
-    spawn_tasks_with_shutdown,
+    spawn_tasks_with_shutdown, Task,
 };
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
@@ -223,7 +223,7 @@ pub struct BuilderArgs {
         env = "BUILDER_REPLACEMENT_FEE_PERCENT_INCREASE",
         default_value = "10"
     )]
-    replacement_fee_percent_increase: u64,
+    replacement_fee_percent_increase: u32,
 
     /// Maximum number of times to increase gas fees when retrying a cancellation transaction
     /// before giving up.
@@ -272,7 +272,7 @@ impl BuilderArgs {
         let rpc_url = common.node_http.clone().context("must provide node_http")?;
 
         let mempool_configs = match &common.mempool_config_path {
-            Some(path) => get_json_config::<MempoolConfigs>(path, &common.aws_region)
+            Some(path) => get_json_config::<MempoolConfigs>(path)
                 .await
                 .with_context(|| format!("should load mempool configurations from {path}"))?,
             None => MempoolConfigs::default(),
@@ -340,10 +340,6 @@ impl BuilderArgs {
             rpc_url,
             private_keys,
             aws_kms_key_ids: self.aws_kms_key_ids.clone(),
-            aws_kms_region: common
-                .aws_region
-                .parse()
-                .context("should be a valid aws region")?,
             redis_uri: self.redis_uri.clone(),
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             max_bundle_size: self.max_bundle_size,

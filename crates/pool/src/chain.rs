@@ -161,7 +161,7 @@ impl<P: EvmProvider> Chain<P> {
                     .cloned()
                     .collect::<Vec<_>>(),
             )
-            .events(events.iter());
+            .event_signature(events);
 
         Self {
             provider,
@@ -824,7 +824,7 @@ mod tests {
             })
         }
 
-        fn get_logs_by_block_hash(&self, block_hash: B256) -> Vec<Log> {
+        fn get_logs_by_block_hash(&self, filter: &Filter, block_hash: B256) -> Vec<Log> {
             let blocks = self.blocks.read();
             let block = blocks.iter().find(|block| block.hash == block_hash);
             let Some(block) = block else {
@@ -835,37 +835,51 @@ mod tests {
 
             for events in &block.events {
                 if events.address == ENTRY_POINT_ADDRESS_V0_6 {
-                    joined_logs.extend(events.op_hashes.iter().copied().map(fake_mined_log_v0_6));
-                    joined_logs.extend(
-                        events
-                            .deposit_addresses
-                            .iter()
-                            .copied()
-                            .map(fake_deposit_log_v0_6),
-                    );
-                    joined_logs.extend(
-                        events
-                            .withdrawal_addresses
-                            .iter()
-                            .copied()
-                            .map(fake_withdrawal_log_v0_6),
-                    );
+                    if filter.topics[0].matches(&UserOperationEventV06::SIGNATURE_HASH) {
+                        joined_logs
+                            .extend(events.op_hashes.iter().copied().map(fake_mined_log_v0_6));
+                    }
+                    if filter.topics[0].matches(&DepositedV06::SIGNATURE_HASH) {
+                        joined_logs.extend(
+                            events
+                                .deposit_addresses
+                                .iter()
+                                .copied()
+                                .map(fake_deposit_log_v0_6),
+                        );
+                    }
+                    if filter.topics[0].matches(&WithdrawnV06::SIGNATURE_HASH) {
+                        joined_logs.extend(
+                            events
+                                .withdrawal_addresses
+                                .iter()
+                                .copied()
+                                .map(fake_withdrawal_log_v0_6),
+                        );
+                    }
                 } else if events.address == ENTRY_POINT_ADDRESS_V0_7 {
-                    joined_logs.extend(events.op_hashes.iter().copied().map(fake_mined_log_v0_7));
-                    joined_logs.extend(
-                        events
-                            .deposit_addresses
-                            .iter()
-                            .copied()
-                            .map(fake_deposit_log_v0_7),
-                    );
-                    joined_logs.extend(
-                        events
-                            .withdrawal_addresses
-                            .iter()
-                            .copied()
-                            .map(fake_withdrawal_log_v0_7),
-                    );
+                    if filter.topics[0].matches(&UserOperationEventV07::SIGNATURE_HASH) {
+                        joined_logs
+                            .extend(events.op_hashes.iter().copied().map(fake_mined_log_v0_7));
+                    }
+                    if filter.topics[0].matches(&DepositedV07::SIGNATURE_HASH) {
+                        joined_logs.extend(
+                            events
+                                .deposit_addresses
+                                .iter()
+                                .copied()
+                                .map(fake_deposit_log_v0_7),
+                        );
+                    }
+                    if filter.topics[0].matches(&WithdrawnV07::SIGNATURE_HASH) {
+                        joined_logs.extend(
+                            events
+                                .withdrawal_addresses
+                                .iter()
+                                .copied()
+                                .map(fake_withdrawal_log_v0_7),
+                        );
+                    }
                 } else {
                     panic!("Unknown entry point address: {:?}", events.address);
                 }
@@ -1453,7 +1467,7 @@ mod tests {
                 let FilterBlockOption::AtBlockHash(block_hash) = filter.block_option else {
                     panic!("mock provider only supports getLogs at specific block hashes");
                 };
-                Ok(controller.get_logs_by_block_hash(block_hash))
+                Ok(controller.get_logs_by_block_hash(filter, block_hash))
             }
         });
 
