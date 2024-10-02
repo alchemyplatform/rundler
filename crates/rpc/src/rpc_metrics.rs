@@ -15,10 +15,10 @@ use futures_util::{future::BoxFuture, FutureExt};
 use jsonrpsee::{
     server::middleware::rpc::RpcServiceT,
     types::{ErrorCode, Request},
-    MethodResponse, Methods,
+    MethodResponse,
 };
 use rundler_types::task::{
-    metrics::MethodSessionLogger,
+    metric_recorder::MethodSessionLogger,
     status_code::{HttpCode, RpcCode},
 };
 use tower::Layer;
@@ -60,7 +60,7 @@ where
     type Future = BoxFuture<'a, MethodResponse>;
 
     fn call(&self, req: Request<'a>) -> Self::Future {
-        let method_logger = MethodSessionLogger::new(
+        let mut method_logger = MethodSessionLogger::new(
             self.service_name.clone(),
             req.method_name().to_string(),
             "rpc".to_string(),
@@ -90,7 +90,7 @@ where
                         ErrorCode::MethodNotFound => {
                             (HttpCode::FourHundreds, RpcCode::MethodNotFound)
                         }
-                        ErrorCode::ServerIsBusy => (HttpCode::FiveHundreds, RpcCode::ServerIsBusy),
+                        ErrorCode::ServerIsBusy => (HttpCode::FiveHundreds, RpcCode::ResourceExhausted),
                         ErrorCode::InvalidParams => {
                             (HttpCode::FourHundreds, RpcCode::InvalidParams)
                         }

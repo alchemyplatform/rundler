@@ -16,7 +16,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::Context;
 use futures_util::FutureExt;
 use jsonrpsee::{
-    server::{middleware::http::ProxyGetRequestLayer, ServerBuilder},
+    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
 };
 use rundler_provider::{EntryPointProvider, EvmProvider};
@@ -207,10 +207,10 @@ where
             .timeout(self.args.rpc_timeout);
 
         let rpc_metric_middleware =
-            RpcMetricsMiddlewareLayer::new("rundler-eth-service".to_string());
+            RpcServiceBuilder::new().layer(RpcMetricsMiddlewareLayer::new("rundler-eth-service".to_string()));
 
         let server = ServerBuilder::default()
-            .set_rpc_middleware(metric_middleware)
+            .set_rpc_middleware(rpc_metric_middleware)
             .set_http_middleware(http_middleware)
             .max_connections(self.args.max_connections)
             // Set max request body size to 2x the max transaction size as none of our

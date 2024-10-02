@@ -20,7 +20,7 @@ use std::{
 };
 
 use pin_project::pin_project;
-use rundler_types::task::{metrics::MethodSessionLogger, status_code::HttpCode};
+use rundler_types::task::{metric_recorder::MethodSessionLogger, status_code::HttpCode};
 use tonic::{codegen::http, Code};
 use tower::{Layer, Service};
 

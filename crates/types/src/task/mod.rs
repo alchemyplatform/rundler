@@ -15,6 +15,7 @@
 //!
 //! This module contains traits related to Rundler tasks.
 
-pub mod metrics;
+/// recorder for metrics. 
+pub mod metric_recorder;
 /// method extractor trait.
 pub mod status_code;

@@ -21,7 +21,7 @@ use alloy_json_rpc::{RequestPacket, ResponsePacket};
 use alloy_transport::TransportError;
 use pin_project::pin_project;
 use rundler_types::task::{
-    metrics::MethodSessionLogger,
+    metric_recorder::MethodSessionLogger,
     status_code::{HttpCode, RpcCode},
 };
 use tower::{Layer, Service};
