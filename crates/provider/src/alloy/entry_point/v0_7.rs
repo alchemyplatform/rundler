@@ -421,13 +421,16 @@ where
 }
 
 fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
-    state_override.insert(
-        addr,
-        AccountOverride {
+    // Do nothing if the caller has already overridden the entry point code.
+    // We'll trust they know what they're doing and not replace their code.
+    // This is needed for call gas estimation, where the entry point is
+    // replaced with a proxy and the simulations bytecode is elsewhere.
+    state_override
+        .entry(addr)
+        .or_insert_with(|| AccountOverride {
             code: Some(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone()),
             ..Default::default()
-        },
-    );
+        });
 }
 
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
