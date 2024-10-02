@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use alloy_primitives::U256;
 use anyhow::{bail, Context};
 use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
@@ -29,7 +30,9 @@ use builder::BuilderCliArgs;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use rpc::RpcCliArgs;
-use rundler_provider::{EntryPointProvider, EthersEntryPointV0_6, EthersEntryPointV0_7, Provider};
+use rundler_provider::{
+    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, EntryPointProvider, EvmProvider,
+};
 use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
@@ -142,7 +145,7 @@ pub struct CommonArgs {
         env = "MAX_VERIFICATION_GAS",
         global = true
     )]
-    max_verification_gas: u64,
+    max_verification_gas: u128,
 
     #[arg(
         long = "max_bundle_gas",
@@ -151,7 +154,7 @@ pub struct CommonArgs {
         env = "MAX_BUNDLE_GAS",
         global = true
     )]
-    max_bundle_gas: u64,
+    max_bundle_gas: u128,
 
     #[arg(
         long = "min_stake_value",
@@ -199,7 +202,7 @@ pub struct CommonArgs {
         default_value = "20000000",
         global = true
     )]
-    max_simulate_handle_ops_gas: u64,
+    max_simulate_handle_ops_gas: u128,
 
     #[arg(
         long = "verification_estimation_gas_fee",
@@ -208,7 +211,7 @@ pub struct CommonArgs {
         default_value = "1000000000000", // 10K gwei
         global = true
     )]
-    verification_estimation_gas_fee: u64,
+    verification_estimation_gas_fee: u128,
 
     #[arg(
         long = "bundle_priority_fee_overhead_percent",
@@ -217,7 +220,7 @@ pub struct CommonArgs {
         default_value = "0",
         global = true
     )]
-    bundle_priority_fee_overhead_percent: u64,
+    bundle_priority_fee_overhead_percent: u32,
 
     #[arg(
         long = "priority_fee_mode_kind",
@@ -236,7 +239,7 @@ pub struct CommonArgs {
         default_value = "0",
         global = true
     )]
-    priority_fee_mode_value: u64,
+    priority_fee_mode_value: u32,
 
     #[arg(
         long = "base_fee_accept_percent",
@@ -245,7 +248,7 @@ pub struct CommonArgs {
         default_value = "50",
         global = true
     )]
-    base_fee_accept_percent: u64,
+    base_fee_accept_percent: u32,
 
     #[arg(
         long = "pre_verification_gas_accept_percent",
@@ -254,16 +257,7 @@ pub struct CommonArgs {
         default_value = "50",
         global = true
     )]
-    pre_verification_gas_accept_percent: u64,
-
-    #[arg(
-        long = "aws_region",
-        name = "aws_region",
-        env = "AWS_REGION",
-        default_value = "us-east-1",
-        global = true
-    )]
-    aws_region: String,
+    pre_verification_gas_accept_percent: u32,
 
     #[arg(
         long = "mempool_config_path",
@@ -312,7 +306,7 @@ pub struct CommonArgs {
     pub num_builders_v0_7: u64,
 }
 
-const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
+const SIMULATION_GAS_OVERHEAD: u128 = 100_000;
 
 impl TryFrom<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
@@ -329,7 +323,7 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
             );
         }
         let max_call_gas = value.max_simulate_handle_ops_gas - value.max_verification_gas;
-        if max_call_gas < MIN_CALL_GAS_LIMIT.as_u64() {
+        if max_call_gas < MIN_CALL_GAS_LIMIT {
             anyhow::bail!(
                 "max_simulate_handle_ops_gas ({}) must be greater than max_verification_gas ({}) by at least {MIN_CALL_GAS_LIMIT}",
                 value.max_verification_gas,
@@ -353,8 +347,8 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
 
     fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
         Ok(Self {
-            max_verification_gas: value.max_verification_gas.into(),
-            max_total_execution_gas: value.max_bundle_gas.into(),
+            max_verification_gas: value.max_verification_gas,
+            max_total_execution_gas: value.max_bundle_gas,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),
@@ -376,7 +370,7 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
 
         Ok(Self::new(
             value.min_unstake_delay,
-            value.min_stake_value,
+            U256::from(value.min_stake_value),
             value.max_simulate_handle_ops_gas,
             value.max_verification_gas,
             value.tracer_timeout.clone(),
@@ -517,7 +511,7 @@ pub struct Cli {
 }
 
 pub struct RundlerProviders<P, EP06, EP07> {
-    provider: Arc<P>,
+    provider: P,
     ep_v0_6: Option<EP06>,
     ep_v0_7: Option<EP07>,
 }
@@ -527,21 +521,19 @@ pub fn construct_providers(
     chain_spec: &ChainSpec,
 ) -> anyhow::Result<
     RundlerProviders<
-        impl Provider,
-        impl EntryPointProvider<UserOperationV0_6>,
-        impl EntryPointProvider<UserOperationV0_7>,
+        impl EvmProvider + Clone + 'static,
+        impl EntryPointProvider<UserOperationV0_6> + Clone + 'static,
+        impl EntryPointProvider<UserOperationV0_7> + Clone + 'static,
     >,
 > {
-    let provider = rundler_provider::new_provider(
+    let provider = Arc::new(rundler_provider::new_alloy_provider(
         args.node_http.as_ref().context("must provide node_http")?,
-        None,
-    )?;
+    )?);
 
     let ep_v0_6 = if args.disable_entry_point_v0_6 {
         None
     } else {
-        Some(EthersEntryPointV0_6::new(
-            chain_spec.entry_point_address_v0_6,
+        Some(AlloyEntryPointV0_6::new(
             chain_spec,
             args.max_simulate_handle_ops_gas,
             provider.clone(),
@@ -551,8 +543,7 @@ pub fn construct_providers(
     let ep_v0_7 = if args.disable_entry_point_v0_7 {
         None
     } else {
-        Some(EthersEntryPointV0_7::new(
-            chain_spec.entry_point_address_v0_7,
+        Some(AlloyEntryPointV0_7::new(
             chain_spec,
             args.max_simulate_handle_ops_gas,
             provider.clone(),
@@ -560,7 +551,7 @@ pub fn construct_providers(
     };
 
     Ok(RundlerProviders {
-        provider,
+        provider: AlloyEvmProvider::new(provider),
         ep_v0_6,
         ep_v0_7,
     })
