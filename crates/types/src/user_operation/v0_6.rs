@@ -228,17 +228,17 @@ impl UserOperationTrait for UserOperation {
     ) -> u128 {
         super::op_calldata_gas_cost(
             ContractUserOperation::from(self.clone()),
-            chain_spec.calldata_zero_byte_gas,
-            chain_spec.calldata_non_zero_byte_gas,
-            chain_spec.per_user_op_word_gas,
-        ) + chain_spec.per_user_op_v0_6_gas
+            chain_spec.calldata_zero_byte_gas as u128,
+            chain_spec.calldata_non_zero_byte_gas as u128,
+            chain_spec.per_user_op_word_gas as u128,
+        ) + chain_spec.per_user_op_v0_6_gas as u128
             + (if self.factory().is_some() {
-                chain_spec.per_user_op_deploy_overhead_gas
+                chain_spec.per_user_op_deploy_overhead_gas as u128
             } else {
                 0
             })
             + (if include_fixed_gas_overhead {
-                chain_spec.transaction_intrinsic_gas
+                chain_spec.transaction_intrinsic_gas as u128
             } else {
                 0
             })

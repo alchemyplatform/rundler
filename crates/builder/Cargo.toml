@@ -23,7 +23,7 @@ alloy-signer-local = "0.3.3"
 
 anyhow.workspace = true
 async-trait.workspace = true
-aws-config = { version = "1.5.6", default-features = false }
+aws-config.workspace = true
 aws-sdk-kms = { version = "1.44", default-features = false }
 enum_dispatch = "0.3.13"
 futures.workspace = true

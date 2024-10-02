@@ -7,4 +7,4 @@ flashbots_status_url = "https://protect.flashbots.net/tx/"
 
 max_bundle_size_bytes = 131072
 
-min_max_priority_fee_per_gas = "0x2FAF080" # 0.05 GWEI
+min_max_priority_fee_per_gas = 50000000

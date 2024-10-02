@@ -20,12 +20,14 @@ rundler-task = { path = "../../crates/task" }
 rundler-types = { path = "../../crates/types" }
 rundler-utils = { path = "../../crates/utils" }
 
-# CLI dependencies
+alloy-primitives.workspace = true
+
 anyhow.workspace = true
+aws-config.workspace = true
+aws-sdk-s3= { version = "1.52", default-features = false }
 config = "0.14.0"
 clap = { version = "4.5.16", features = ["derive", "env"] }
 dotenv = "0.15.0"
-ethers.workspace = true
 itertools = "0.13.0"
 metrics = "0.23.0"
 go-parse-duration = "0.1"
@@ -33,8 +35,6 @@ metrics-exporter-prometheus = { version = "0.15.3", default-features = false, fe
 metrics-process = "2.1.0"
 metrics-util = "0.17.0"
 paste = "1.0"
-rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
-rusoto_s3 = { version = "0.48.0", default-features = false, features = ["rustls"] }
 serde.workspace = true
 serde_json.workspace = true
 sscanf = "0.4.2"
