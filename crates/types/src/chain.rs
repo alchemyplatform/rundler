@@ -176,3 +176,55 @@ impl Default for ChainSpec {
         }
     }
 }
+
+impl ChainSpec {
+    /// Get the deposit transfer overhead
+    pub fn deposit_transfer_overhead(&self) -> u128 {
+        self.deposit_transfer_overhead as u128
+    }
+
+    /// Get the transaction intrinsic gas
+    pub fn transaction_intrinsic_gas(&self) -> u128 {
+        self.transaction_intrinsic_gas as u128
+    }
+
+    /// Get the minimum max priority fee per gas
+    pub fn min_max_priority_fee_per_gas(&self) -> u128 {
+        self.min_max_priority_fee_per_gas as u128
+    }
+
+    /// Get the maximum max priority fee per gas
+    pub fn max_max_priority_fee_per_gas(&self) -> u128 {
+        self.max_max_priority_fee_per_gas as u128
+    }
+
+    /// Get the per user operation word gas
+    pub fn per_user_op_word_gas(&self) -> u128 {
+        self.per_user_op_word_gas as u128
+    }
+
+    /// Get the per user operation v0_6 gas
+    pub fn per_user_op_v0_6_gas(&self) -> u128 {
+        self.per_user_op_v0_6_gas as u128
+    }
+
+    /// Get the per user operation v0_7 gas
+    pub fn per_user_op_v0_7_gas(&self) -> u128 {
+        self.per_user_op_v0_7_gas as u128
+    }
+
+    /// Get the calldata zero byte gas
+    pub fn calldata_zero_byte_gas(&self) -> u128 {
+        self.calldata_zero_byte_gas as u128
+    }
+
+    /// Get the calldata non zero byte gas
+    pub fn calldata_non_zero_byte_gas(&self) -> u128 {
+        self.calldata_non_zero_byte_gas as u128
+    }
+
+    /// Get the per user operation deploy overhead gas
+    pub fn per_user_op_deploy_overhead_gas(&self) -> u128 {
+        self.per_user_op_deploy_overhead_gas as u128
+    }
+}

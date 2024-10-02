@@ -268,7 +268,7 @@ where
         let min_priority_fee = self.settings.priority_fee_mode.minimum_priority_fee(
             base_fee,
             self.settings.base_fee_accept_percent,
-            self.chain_spec.min_max_priority_fee_per_gas as u128,
+            self.chain_spec.min_max_priority_fee_per_gas(),
         );
         let min_max_fee = min_base_fee + min_priority_fee;
 
@@ -568,7 +568,7 @@ mod tests {
 
         let (mut cs, provider, entry_point, fee_estimator) = create_base_config();
         cs.id = 10;
-        let mintip = cs.min_max_priority_fee_per_gas as u128;
+        let mintip = cs.min_max_priority_fee_per_gas();
 
         let provider = Arc::new(provider);
         let prechecker = PrecheckerImpl::new(cs, provider, entry_point, fee_estimator, settings);
@@ -637,7 +637,7 @@ mod tests {
         let (mut cs, provider, entry_point, fee_estimator) = create_base_config();
         cs.id = 10;
         cs.min_max_priority_fee_per_gas = 100_000;
-        let mintip = cs.min_max_priority_fee_per_gas as u128;
+        let mintip = cs.min_max_priority_fee_per_gas();
 
         let provider = Arc::new(provider);
         let prechecker = PrecheckerImpl::new(cs, provider, entry_point, fee_estimator, settings);

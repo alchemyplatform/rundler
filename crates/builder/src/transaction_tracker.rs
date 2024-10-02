@@ -102,7 +102,7 @@ pub(crate) enum TrackerUpdate {
         nonce: u64,
         block_number: u64,
         attempt_number: u64,
-        gas_limit: Option<u128>,
+        gas_limit: Option<u64>,
         gas_used: Option<u128>,
         gas_price: Option<u128>,
     },
@@ -219,7 +219,7 @@ where
     async fn get_mined_tx_gas_info(
         &self,
         tx_hash: B256,
-    ) -> anyhow::Result<(Option<u128>, Option<u128>, Option<u128>)> {
+    ) -> anyhow::Result<(Option<u64>, Option<u128>, Option<u128>)> {
         let (tx, tx_receipt) = tokio::try_join!(
             self.provider.get_transaction_by_hash(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),

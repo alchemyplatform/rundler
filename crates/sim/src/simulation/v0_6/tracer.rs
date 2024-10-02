@@ -12,7 +12,7 @@
 
 use std::{convert::TryFrom, fmt::Debug};
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use async_trait::async_trait;
 use rundler_provider::{
     BlockId, EvmProvider, GethDebugTracerType, GethDebugTracingCallOptions,
@@ -51,7 +51,7 @@ pub(super) trait SimulateValidationTracer: Send + Sync {
 pub(crate) struct SimulateValidationTracerImpl<P, E> {
     provider: P,
     entry_point: E,
-    max_validation_gas: u128,
+    max_validation_gas: u64,
     tracer_timeout: String,
 }
 
@@ -71,7 +71,8 @@ where
     ) -> anyhow::Result<TracerOutput> {
         let (tx, state_override) = self
             .entry_point
-            .get_tracer_simulate_validation_call(op, self.max_validation_gas);
+            .get_tracer_simulate_validation_call(op, self.max_validation_gas)
+            .context("should get simulate validation call")?;
 
         TracerOutput::try_from(
             self.provider
@@ -100,7 +101,7 @@ impl<P, E> SimulateValidationTracerImpl<P, E> {
     pub(crate) fn new(
         provider: P,
         entry_point: E,
-        max_validation_gas: u128,
+        max_validation_gas: u64,
         tracer_timeout: String,
     ) -> Self {
         Self {

@@ -197,14 +197,14 @@ impl UserOperationTrait for UserOperation {
         include_fixed_gas_overhead: bool,
     ) -> u128 {
         self.calldata_gas_cost
-            + chain_spec.per_user_op_v0_7_gas as u128
+            + chain_spec.per_user_op_v0_7_gas()
             + (if self.factory.is_some() {
-                chain_spec.per_user_op_deploy_overhead_gas as u128
+                chain_spec.per_user_op_deploy_overhead_gas()
             } else {
                 0
             })
             + (if include_fixed_gas_overhead {
-                chain_spec.transaction_intrinsic_gas as u128
+                chain_spec.transaction_intrinsic_gas()
             } else {
                 0
             })
@@ -692,9 +692,9 @@ impl<'a> UserOperationBuilder<'a> {
         );
         let calldata_gas_cost = super::op_calldata_gas_cost(
             packed.clone(),
-            self.chain_spec.calldata_zero_byte_gas as u128,
-            self.chain_spec.calldata_non_zero_byte_gas as u128,
-            self.chain_spec.per_user_op_word_gas as u128,
+            self.chain_spec.calldata_zero_byte_gas(),
+            self.chain_spec.calldata_non_zero_byte_gas(),
+            self.chain_spec.per_user_op_word_gas(),
         );
 
         UserOperation {

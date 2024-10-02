@@ -593,7 +593,7 @@ mod tests {
             max_paymaster_verification_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
             max_total_execution_gas: TEST_MAX_GAS_LIMITS,
-            max_simulate_handle_ops_gas: TEST_MAX_GAS_LIMITS,
+            max_simulate_handle_ops_gas: TEST_MAX_GAS_LIMITS.try_into().unwrap(),
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
         let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);

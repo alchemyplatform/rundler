@@ -8,9 +8,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-provider = { path = "../provider" }
-rundler-utils = { path = "../utils" }
-rundler-types = { path = "../types" }
+rundler-provider.workspace = true
+rundler-utils.workspace = true
+rundler-types.workspace = true
 
 alloy-primitives.workspace = true
 

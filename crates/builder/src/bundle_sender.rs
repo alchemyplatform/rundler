@@ -1101,11 +1101,11 @@ impl BuilderMetrics {
             .increment(1);
     }
 
-    fn process_bundle_txn_success(&self, gas_limit: Option<u128>, gas_used: Option<u128>) {
+    fn process_bundle_txn_success(&self, gas_limit: Option<u64>, gas_used: Option<u128>) {
         metrics::counter!("builder_bundle_txns_success", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
 
         if let Some(limit) = gas_limit {
-            metrics::counter!("builder_bundle_gas_limit", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(limit.try_into().unwrap_or(u64::MAX));
+            metrics::counter!("builder_bundle_gas_limit", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(limit);
         }
         if let Some(used) = gas_used {
             metrics::counter!("builder_bundle_gas_used", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(used.try_into().unwrap_or(u64::MAX));

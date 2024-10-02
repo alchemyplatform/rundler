@@ -8,18 +8,18 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-provider = { path = "../provider" }
-rundler-sim = { path = "../sim" }
-rundler-task = { path = "../task" }
-rundler-types = { path = "../types" }
-rundler-utils = { path = "../utils" }
+rundler-provider.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 
 alloy-consensus.workspace = true
-alloy-eips = "0.3.3"
+alloy-eips.workspace = true
 alloy-primitives.workspace = true
-alloy-signer = "0.3.3"
-alloy-signer-aws = "0.3.3"
-alloy-signer-local = "0.3.3"
+alloy-signer.workspace = true
+alloy-signer-aws.workspace = true
+alloy-signer-local.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
