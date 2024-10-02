@@ -17,14 +17,14 @@ use serde_json::Value;
 
 macro_rules! write_deployed_bytecode {
     ($contract_name:ident) => {
-        let json = include_str!(concat!(
+        let json_file = fs::File::open(concat!(
             "contracts/out/v0_7/",
             stringify!($contract_name),
             ".sol/",
             stringify!($contract_name),
             ".json"
-        ));
-        let val: Value = serde_json::from_str(json)?;
+        ))?;
+        let val: Value = serde_json::from_reader(json_file)?;
         let bytecode = val
             .get("deployedBytecode")
             .unwrap()
