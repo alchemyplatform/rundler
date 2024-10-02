@@ -8,12 +8,12 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-contracts = { path = "../contracts" }
-rundler-provider = { path = "../provider" }
-rundler-sim = { path = "../sim" }
-rundler-task = { path = "../task" }
-rundler-types = { path = "../types" }
-rundler-utils = { path = "../utils" }
+rundler-contracts.workspace = true
+rundler-provider.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true

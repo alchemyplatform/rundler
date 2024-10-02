@@ -8,8 +8,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-utils = { path = "../utils" }
-rundler-contracts = { path = "../contracts" }
+rundler-utils.workspace = true
+rundler-contracts.workspace = true
 
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true

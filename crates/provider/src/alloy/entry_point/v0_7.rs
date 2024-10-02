@@ -52,7 +52,7 @@ use crate::{
 pub struct EntryPointProvider<AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
     l1_gas_oracle: L1GasOracle,
-    max_aggregation_gas: u128,
+    max_aggregation_gas: u64,
 }
 
 impl<AP, T> EntryPointProvider<AP, T>
@@ -61,7 +61,7 @@ where
     AP: AlloyProvider<T>,
 {
     /// Create a new `EntryPoint` instance for v0.7
-    pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u128, provider: AP) -> Self {
+    pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u64, provider: AP) -> Self {
         Self {
             i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_7, provider),
             l1_gas_oracle: L1GasOracle::new(chain_spec),
@@ -167,7 +167,7 @@ where
         &self,
         aggregator_address: Address,
         user_op: Self::UO,
-        gas_cap: u128,
+        gas_cap: u64,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
 
@@ -206,7 +206,7 @@ where
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
         beneficiary: Address,
-        gas: u128,
+        gas: u64,
     ) -> ProviderResult<HandleOpsOut> {
         let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
         let res = self.i_entry_point.provider().call(&tx).await;
@@ -248,7 +248,7 @@ where
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
         beneficiary: Address,
-        gas: u128,
+        gas: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
         let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
@@ -303,10 +303,13 @@ where
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u128,
-    ) -> (TransactionRequest, StateOverride) {
+        max_validation_gas: u64,
+    ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
-        let pvg = user_op.pre_verification_gas;
+        let pvg: u64 = user_op
+            .pre_verification_gas
+            .try_into()
+            .context("pre verification gas larger than u64")?;
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
 
@@ -318,16 +321,17 @@ where
             .gas(max_validation_gas + pvg)
             .into_transaction_request();
 
-        (call, override_ep)
+        Ok((call, override_ep))
     }
 
     async fn simulate_validation(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u128,
+        max_validation_gas: u64,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let (tx, overrides) = self.get_tracer_simulate_validation_call(user_op, max_validation_gas);
+        let (tx, overrides) =
+            self.get_tracer_simulate_validation_call(user_op, max_validation_gas)?;
         let mut call = self.i_entry_point.provider().call(&tx);
         if let Some(block_id) = block_id {
             call = call.block(block_id);
@@ -375,7 +379,7 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        gas: u128,
+        gas: u64,
         mut state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
@@ -437,7 +441,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     entry_point: &IEntryPointInstance<T, AP>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     beneficiary: Address,
-    gas: u128,
+    gas: u64,
 ) -> TransactionRequest {
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
         .into_iter()

@@ -99,7 +99,7 @@ pub struct Settings {
     /// The maximum amount of total execution gas to check after estimation
     pub max_total_execution_gas: u128,
     /// The maximum amount of gas that can be used in a call to `simulateHandleOps`
-    pub max_simulate_handle_ops_gas: u128,
+    pub max_simulate_handle_ops_gas: u64,
     /// The gas fee to use during verification gas estimation, required to be held by the fee-payer
     /// during estimation. If using a paymaster, the fee-payer must have 3x this value.
     /// As the gas limit is varied during estimation, the fee is held constant by varying the
@@ -111,7 +111,7 @@ pub struct Settings {
 impl Settings {
     /// Check if the settings are valid
     pub fn validate(&self) -> Option<String> {
-        if self.max_call_gas.cmp(&MIN_CALL_GAS_LIMIT).is_lt() {
+        if self.max_call_gas < MIN_CALL_GAS_LIMIT {
             return Some("max_call_gas field cannot be lower than MIN_CALL_GAS_LIMIT".to_string());
         }
         None

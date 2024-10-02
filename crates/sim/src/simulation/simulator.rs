@@ -160,7 +160,7 @@ where
         &self,
         op: UO,
         aggregator_address: Option<Address>,
-        gas_cap: u128,
+        gas_cap: u64,
     ) -> Result<AggregatorOut, SimulationError> {
         let Some(aggregator_address) = aggregator_address else {
             return Ok(AggregatorOut::NotNeeded);

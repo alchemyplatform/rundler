@@ -33,7 +33,7 @@ pub struct Settings {
     /// provided value as a safety margin for fast inclusion.
     pub bundle_priority_fee_overhead_percent: u32,
     /// Max verification gas
-    pub max_verification_gas: u128,
+    pub max_verification_gas: u64,
 }
 
 #[rpc(client, server, namespace = "rundler")]
