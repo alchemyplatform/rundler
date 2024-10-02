@@ -51,12 +51,12 @@ where
     match chain_spec.priority_fee_oracle_type {
         PriorityFeeOracleType::Provider => Box::new(ProviderOracle::new(
             provider,
-            chain_spec.min_max_priority_fee_per_gas as u128,
+            chain_spec.min_max_priority_fee_per_gas(),
         )),
         PriorityFeeOracleType::UsageBased => {
             let config = UsageBasedFeeOracleConfig {
-                minimum_fee: chain_spec.min_max_priority_fee_per_gas as u128,
-                maximum_fee: chain_spec.max_max_priority_fee_per_gas as u128,
+                minimum_fee: chain_spec.min_max_priority_fee_per_gas(),
+                maximum_fee: chain_spec.max_max_priority_fee_per_gas(),
                 congestion_trigger_usage_ratio_threshold: chain_spec
                     .congestion_trigger_usage_ratio_threshold,
                 ..Default::default()

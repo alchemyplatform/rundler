@@ -8,9 +8,9 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-contracts = { path = "../contracts" }
-rundler-types = { path = "../types" }
-rundler-utils = { path = "../utils" }
+rundler-contracts.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 
 alloy-consensus.workspace = true
 alloy-contract.workspace = true

@@ -169,9 +169,9 @@ pub struct Settings {
     /// contract in order to be considered staked.
     pub min_stake_value: U256,
     /// The maximum amount of gas that can be used during the simulation call
-    pub max_simulate_handle_ops_gas: u128,
+    pub max_simulate_handle_ops_gas: u64,
     /// The maximum amount of verification gas that can be used during the simulation call
-    pub max_verification_gas: u128,
+    pub max_verification_gas: u64,
     /// The max duration of the custom javascript tracer. Must be in a format parseable by the
     /// ParseDuration function on an ethereum node. See Docs: https://pkg.go.dev/time#ParseDuration
     pub tracer_timeout: String,
@@ -182,8 +182,8 @@ impl Settings {
     pub fn new(
         min_unstake_delay: u32,
         min_stake_value: U256,
-        max_simulate_handle_ops_gas: u128,
-        max_verification_gas: u128,
+        max_simulate_handle_ops_gas: u64,
+        max_verification_gas: u64,
         tracer_timeout: String,
     ) -> Self {
         Self {
