@@ -39,3 +39,5 @@ test-utils = [ "mockall" ]
 
 [dev-dependencies]
 rundler-provider = { path = ".", features = ["test-utils"] }
+alloy-node-bindings = "0.4.2"
+tokio.workspace = true

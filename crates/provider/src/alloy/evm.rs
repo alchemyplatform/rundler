@@ -298,3 +298,38 @@ where
         Ok(ret.hash)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy_node_bindings::Anvil;
+    use alloy_primitives::{address, Address};
+    use alloy_provider::ProviderBuilder;
+    use alloy_rpc_client::ClientBuilder;
+
+    use crate::{AlloyEvmProvider, EvmProvider};
+
+    #[tokio::test]
+    async fn test_get_code_hash_unorder() {
+        let anvil = Anvil::new().spawn();
+        let url = anvil.endpoint();
+        let client = ClientBuilder::default().http(url.parse().unwrap());
+        let alloy_provider = ProviderBuilder::new().on_client(client);
+        let emv_provider = AlloyEvmProvider::new(alloy_provider);
+
+        let address_1: Vec<Address> = vec![
+            address!("d8da6bf26964af9d7eed9e03e53415d37aa96045"),
+            address!("4838B106FCe9647Bdf1E7877BF73cE8B0BAD5f97"),
+        ];
+
+        let result_1 = emv_provider.get_code_hash(address_1, None).await;
+        let hash_1 = result_1.ok();
+
+        let address_2: Vec<Address> = vec![
+            address!("DeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAd0001"),
+            address!("d8da6bf26964af9d7eed9e03e53415d37aa96045"),
+        ];
+        let result_2 = emv_provider.get_code_hash(address_2, None).await;
+        let hash_2 = result_2.ok();
+        assert_eq!(hash_1, hash_2);
+    }
+}
