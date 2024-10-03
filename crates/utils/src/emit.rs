@@ -16,10 +16,7 @@
 use std::fmt::Display;
 
 use alloy_primitives::Address;
-use tokio::{
-    sync::broadcast::{self, error::RecvError},
-    task::JoinHandle,
-};
+use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{info, warn};
 
 /// Capacity of the event channels.
@@ -56,36 +53,32 @@ impl<T: Display> Display for WithEntryPoint<T> {
 
 /// Receive events from a event broadcast channel and call
 /// the given handler function for each event.
-pub fn receive_events<T>(
+pub async fn receive_events<T>(
     description: &'static str,
     mut rx: broadcast::Receiver<T>,
     handler: impl Fn(T) + Send + 'static,
-) -> JoinHandle<()>
-where
+) where
     T: Clone + Send + 'static,
 {
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => handler(event),
-                Err(RecvError::Closed) => {
-                    info!("Event stream for {description} closed. Logging complete");
-                    break;
-                }
-                Err(RecvError::Lagged(count)) => {
-                    warn!("Event stream for {description} lagged. Missed {count} messages.")
-                }
+    loop {
+        match rx.recv().await {
+            Ok(event) => handler(event),
+            Err(RecvError::Closed) => {
+                info!("Event stream for {description} closed. Logging complete");
+                break;
+            }
+            Err(RecvError::Lagged(count)) => {
+                warn!("Event stream for {description} lagged. Missed {count} messages.")
             }
         }
-    })
+    }
 }
 
 /// An event handler that simply logs the event at an INFO level.
-pub fn receive_and_log_events_with_filter<T>(
+pub async fn receive_and_log_events_with_filter<T>(
     rx: broadcast::Receiver<T>,
     filter: impl (Fn(&T) -> bool) + Send + 'static,
-) -> JoinHandle<()>
-where
+) where
     T: Clone + Display + Send + 'static,
 {
     receive_events("logging", rx, move |event| {
@@ -93,4 +86,5 @@ where
             info!("{}", event);
         }
     })
+    .await
 }

@@ -13,9 +13,8 @@
 
 use std::net::SocketAddr;
 
+use rundler_task::GracefulShutdown;
 use rundler_types::builder::Builder;
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 use tonic::{async_trait, transport::Server, Request, Response, Status};
 
 use super::protos::{
@@ -28,19 +27,20 @@ use super::protos::{
 use crate::server::{local::LocalBuilderHandle, remote::protos::DebugSendBundleNowSuccess};
 
 /// Spawn a remote builder server
-pub(crate) async fn spawn_remote_builder_server(
+pub(crate) async fn remote_builder_server_task(
     addr: SocketAddr,
     chain_id: u64,
     local_builder: LocalBuilderHandle,
-    shutdown_token: CancellationToken,
-) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
+    shutdown: GracefulShutdown,
+) {
     // gRPC server
     let builder_server = GrpcBuilderServerImpl::new(chain_id, local_builder);
     let builder_server = GrpcBuilderServer::new(builder_server);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(BUILDER_FILE_DESCRIPTOR_SET)
-        .build_v1()?;
+        .build_v1()
+        .expect("should build builder reflection service");
 
     // health service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -48,15 +48,17 @@ pub(crate) async fn spawn_remote_builder_server(
         .set_serving::<GrpcBuilderServer<GrpcBuilderServerImpl>>()
         .await;
 
-    Ok(tokio::spawn(async move {
-        Server::builder()
-            .add_service(builder_server)
-            .add_service(reflection_service)
-            .add_service(health_service)
-            .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await })
-            .await
-            .map_err(|e| anyhow::anyhow!(format!("builder server failed: {e:?}")))
-    }))
+    if let Err(e) = Server::builder()
+        .add_service(builder_server)
+        .add_service(reflection_service)
+        .add_service(health_service)
+        .serve_with_shutdown(addr, async move {
+            let _ = shutdown.await;
+        })
+        .await
+    {
+        tracing::error!("builder server failed: {e:?}");
+    }
 }
 
 #[derive(Debug)]

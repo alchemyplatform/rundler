@@ -25,15 +25,15 @@ use futures_util::StreamExt;
 use rundler_task::{
     grpc::{grpc_metrics::HttpMethodExtractor, protos::from_bytes},
     metrics::MetricsLayer,
+    GracefulShutdown, TaskSpawner,
 };
 use rundler_types::{
     chain::ChainSpec,
     pool::{Pool, Reputation},
     EntityUpdate, UserOperationId, UserOperationVariant,
 };
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Result, Status};
 
 use super::protos::{
@@ -62,18 +62,20 @@ use crate::server::local::LocalPoolHandle;
 
 const MAX_REMOTE_BLOCK_SUBSCRIPTIONS: usize = 32;
 
-pub(crate) async fn spawn_remote_mempool_server(
+pub(crate) async fn remote_mempool_server_task(
+    task_spawner: Box<dyn TaskSpawner>,
     chain_spec: ChainSpec,
     local_pool: LocalPoolHandle,
     addr: SocketAddr,
-    shutdown_token: CancellationToken,
-) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {
+    shutdown: GracefulShutdown,
+) {
     // gRPC server
-    let pool_impl = OpPoolImpl::new(chain_spec, local_pool);
+    let pool_impl = OpPoolImpl::new(chain_spec, local_pool, task_spawner);
     let op_pool_server = OpPoolServer::new(pool_impl);
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(OP_POOL_FILE_DESCRIPTOR_SET)
-        .build_v1()?;
+        .build_v1()
+        .expect("failed to build reflection service");
 
     // health service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -86,32 +88,38 @@ pub(crate) async fn spawn_remote_mempool_server(
         "http-grpc".to_string(),
     );
 
-    let handle = tokio::spawn(async move {
-        Server::builder()
-            .layer(metrics_layer)
-            .add_service(op_pool_server)
-            .add_service(reflection_service)
-            .add_service(health_service)
-            .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await })
-            .await
-            .map_err(|e| anyhow::anyhow!(format!("pool server failed: {e:?}")))
-    });
-
-    Ok(handle)
+    if let Err(e) = Server::builder()
+        .layer(metrics_layer)
+        .add_service(op_pool_server)
+        .add_service(reflection_service)
+        .add_service(health_service)
+        .serve_with_shutdown(addr, async move {
+            let _ = shutdown.await;
+        })
+        .await
+    {
+        tracing::error!("pool server failed: {e:?}");
+    }
 }
 
 struct OpPoolImpl {
     chain_spec: ChainSpec,
     local_pool: LocalPoolHandle,
     num_block_subscriptions: Arc<AtomicUsize>,
+    task_spawner: Box<dyn TaskSpawner>,
 }
 
 impl OpPoolImpl {
-    pub(crate) fn new(chain_spec: ChainSpec, local_pool: LocalPoolHandle) -> Self {
+    pub(crate) fn new(
+        chain_spec: ChainSpec,
+        local_pool: LocalPoolHandle,
+        task_spawner: Box<dyn TaskSpawner>,
+    ) -> Self {
         Self {
             chain_spec,
             local_pool,
             num_block_subscriptions: Arc::new(AtomicUsize::new(0)),
+            task_spawner,
         }
     }
 
@@ -551,7 +559,7 @@ impl OpPool for OpPoolImpl {
             }
         };
 
-        tokio::spawn(async move {
+        self.task_spawner.spawn(Box::pin(async move {
             loop {
                 match new_heads.next().await {
                     Some(new_head) => {
@@ -571,7 +579,7 @@ impl OpPool for OpPoolImpl {
                 }
             }
             num_block_subscriptions.fetch_sub(1, Ordering::Relaxed);
-        });
+        }));
 
         Ok(Response::new(UnboundedReceiverStream::new(rx)))
     }

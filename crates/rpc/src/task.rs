@@ -13,8 +13,8 @@
 
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::{bail, Context};
-use async_trait::async_trait;
+use anyhow::Context;
+use futures_util::FutureExt;
 use jsonrpsee::{
     server::{middleware::http::ProxyGetRequestLayer, ServerBuilder},
     RpcModule,
@@ -26,13 +26,12 @@ use rundler_sim::{
 };
 use rundler_task::{
     server::{format_socket_addr, HealthCheck},
-    Task,
+    TaskSpawner,
 };
 use rundler_types::{
     builder::Builder, chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
@@ -91,8 +90,28 @@ pub struct RpcTask<P, B, PR, E06, E07> {
     ep_07: Option<E07>,
 }
 
-#[async_trait]
-impl<P, B, PR, E06, E07> Task for RpcTask<P, B, PR, E06, E07>
+impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07> {
+    /// Creates a new RPC server task.
+    pub fn new(
+        args: Args,
+        pool: P,
+        builder: B,
+        provider: PR,
+        ep_06: Option<E06>,
+        ep_07: Option<E07>,
+    ) -> Self {
+        Self {
+            args,
+            pool,
+            builder,
+            provider,
+            ep_06,
+            ep_07,
+        }
+    }
+}
+
+impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07>
 where
     P: Pool + HealthCheck + Clone + 'static,
     B: Builder + HealthCheck + Clone + 'static,
@@ -100,11 +119,8 @@ where
     E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
     E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
-    fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
-    }
-
-    async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    /// Spawns the RPC server task on the given task spawner.
+    pub async fn spawn<T: TaskSpawner>(self, task_spawner: T) -> anyhow::Result<()> {
         let addr: SocketAddr = format_socket_addr(&self.args.host, self.args.port).parse()?;
         tracing::info!("Starting rpc server on {}", addr);
 
@@ -189,12 +205,6 @@ where
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout);
 
-        // TODO: add metrics
-        // let rpc_metric_middleware = MetricsLayer::<RPCMethodExtractor, Request<'static>>::new(
-        //     "rundler-eth-service".to_string(),
-        //     "rpc".to_string(),
-        // );
-
         let server = ServerBuilder::default()
             .set_http_middleware(http_middleware)
             .max_connections(self.args.max_connections)
@@ -211,50 +221,20 @@ where
 
         let handle = server.start(module);
 
+        task_spawner.spawn_critical(
+            "rpc server",
+            async move {
+                handle.stopped().await;
+                tracing::error!("RPC server stopped");
+            }
+            .boxed(),
+        );
+
         info!("Started RPC server");
 
-        tokio::select! {
-            _ = handle.stopped() => {
-                tracing::error!("RPC server stopped unexpectedly");
-                bail!("RPC server stopped unexpectedly")
-            }
-            _ = shutdown_token.cancelled() => {
-                tracing::info!("Server shutdown");
-                Ok(())
-            }
-        }
+        Ok(())
     }
-}
 
-impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07> {
-    /// Creates a new RPC server task.
-    pub fn new(
-        args: Args,
-        pool: P,
-        builder: B,
-        provider: PR,
-        ep_06: Option<E06>,
-        ep_07: Option<E07>,
-    ) -> Self {
-        Self {
-            args,
-            pool,
-            builder,
-            provider,
-            ep_06,
-            ep_07,
-        }
-    }
-}
-
-impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07>
-where
-    P: Pool + HealthCheck + Clone,
-    B: Builder + HealthCheck + Clone,
-    PR: EvmProvider,
-    E06: EntryPointProvider<UserOperationV0_6>,
-    E07: EntryPointProvider<UserOperationV0_7>,
-{
     fn attach_namespaces<F: FeeEstimator + 'static>(
         &self,
         entry_point_router: EntryPointRouter,
