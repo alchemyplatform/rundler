@@ -152,7 +152,7 @@ where
     }
 
     async fn get_pending_base_fee(&self) -> ProviderResult<u128> {
-        let fee_history = self.fee_history(1, BlockNumberOrTag::Pending, &[]).await?;
+        let fee_history = self.fee_history(1, BlockNumberOrTag::Latest, &[]).await?;
         Ok(fee_history
             .next_block_base_fee()
             .context("should have a next block base fee")?)
