@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::U256;
 use anyhow::{bail, Context};
@@ -29,6 +29,7 @@ mod tracing;
 use builder::BuilderCliArgs;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
+use reth_tasks::TaskManager;
 use rpc::RpcCliArgs;
 use rundler_provider::{
     AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, EntryPointProvider, EvmProvider,
@@ -51,8 +52,12 @@ pub async fn run() -> anyhow::Result<()> {
     let _guard = tracing::configure_logging(&opt.logs)?;
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
+    let mut task_manager = TaskManager::current();
+    let task_spawner = task_manager.executor();
+
     let metrics_addr = format!("{}:{}", opt.metrics.host, opt.metrics.port).parse()?;
     metrics::initialize(
+        &task_spawner,
         opt.metrics.sample_interval_millis,
         metrics_addr,
         &opt.metrics.tags,
@@ -64,11 +69,30 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("Chain spec: {:#?}", cs);
 
     match opt.command {
-        Command::Node(args) => node::run(cs, *args, opt.common).await?,
-        Command::Pool(args) => pool::run(cs, args, opt.common).await?,
-        Command::Rpc(args) => rpc::run(cs, args, opt.common).await?,
-        Command::Builder(args) => builder::run(cs, args, opt.common).await?,
+        Command::Node(args) => {
+            node::spawn_tasks(task_spawner.clone(), cs, *args, opt.common).await?
+        }
+        Command::Pool(args) => {
+            pool::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?
+        }
+        Command::Rpc(args) => rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?,
+        Command::Builder(args) => {
+            builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?
+        }
     }
+
+    // wait for ctrl-c or the task manager to panic
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received ctrl-c, shutting down");
+        },
+        e = &mut task_manager => {
+            tracing::error!("Task manager panicked, shutting down: {e}");
+        },
+    }
+
+    // wait for the task manager to shutdown
+    task_manager.graceful_shutdown_with_timeout(Duration::from_secs(10));
 
     tracing::info!("Shutdown, goodbye");
     Ok(())

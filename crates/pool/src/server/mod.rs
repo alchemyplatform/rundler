@@ -15,5 +15,5 @@ mod local;
 pub use local::{LocalPoolBuilder, LocalPoolHandle};
 
 mod remote;
-pub(crate) use remote::spawn_remote_mempool_server;
+pub(crate) use remote::remote_mempool_server_task;
 pub use remote::RemotePoolClient;

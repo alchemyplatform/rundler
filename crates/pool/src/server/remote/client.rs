@@ -19,6 +19,7 @@ use futures_util::Stream;
 use rundler_task::{
     grpc::protos::{from_bytes, ConversionError, ToProtoBytes},
     server::{HealthCheck, ServerStatus},
+    TaskSpawner,
 };
 use rundler_types::{
     chain::ChainSpec,
@@ -61,11 +62,16 @@ pub struct RemotePoolClient {
     chain_spec: ChainSpec,
     op_pool_client: OpPoolClient<Channel>,
     op_pool_health: HealthClient<Channel>,
+    task_spawner: Box<dyn TaskSpawner>,
 }
 
 impl RemotePoolClient {
     /// Connect to a remote pool server, returning a client for submitting requests.
-    pub async fn connect(url: String, chain_spec: ChainSpec) -> anyhow::Result<Self> {
+    pub async fn connect(
+        url: String,
+        chain_spec: ChainSpec,
+        task_spawner: Box<dyn TaskSpawner>,
+    ) -> anyhow::Result<Self> {
         let op_pool_client = OpPoolClient::connect(url.clone()).await?;
         let op_pool_health =
             HealthClient::new(Channel::builder(Uri::from_str(&url)?).connect().await?);
@@ -73,6 +79,7 @@ impl RemotePoolClient {
             chain_spec,
             op_pool_client,
             op_pool_health,
+            task_spawner,
         })
     }
 
@@ -551,7 +558,8 @@ impl Pool for RemotePoolClient {
         let (tx, rx) = mpsc::unbounded_channel();
         let client = self.op_pool_client.clone();
 
-        tokio::spawn(Self::new_heads_subscription_handler(client, tx));
+        self.task_spawner
+            .spawn(Box::pin(Self::new_heads_subscription_handler(client, tx)));
         Ok(Box::pin(UnboundedReceiverStream::new(rx)))
     }
 }

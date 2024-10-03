@@ -18,8 +18,10 @@ use metrics::gauge;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_process::Collector;
 use metrics_util::layers::{PrefixLayer, Stack};
+use rundler_task::TaskSpawner;
 
-pub fn initialize<'a>(
+pub fn initialize<'a, T: TaskSpawner>(
+    task_spawner: &T,
     sample_interval_millis: u64,
     listen_addr: SocketAddr,
     tags: impl IntoIterator<Item = &'a String>,
@@ -38,28 +40,41 @@ pub fn initialize<'a>(
     builder = builder.set_buckets(buckets)?;
 
     let (recorder, exporter) = builder.build()?;
-    tokio::spawn(exporter);
+    task_spawner.spawn_critical(
+        "metrics exporter",
+        Box::pin(async move {
+            if exporter.await.is_err() {
+                tracing::error!("metrics exporter failed");
+            }
+        }),
+    );
     let stack = Stack::new(recorder);
     stack.push(PrefixLayer::new("rundler")).install()?;
 
-    tokio::spawn(async move {
-        let collector = Collector::default();
-        loop {
-            collector.collect();
-            tokio::time::sleep(Duration::from_millis(sample_interval_millis)).await;
-        }
-    });
+    task_spawner.spawn_critical(
+        "metrics collector",
+        Box::pin(async move {
+            let collector = Collector::default();
+            loop {
+                collector.collect();
+                tokio::time::sleep(Duration::from_millis(sample_interval_millis)).await;
+            }
+        }),
+    );
 
     let handle = tokio::runtime::Handle::current();
     let frequency = std::time::Duration::from_millis(sample_interval_millis);
     let runtime_metrics = handle.metrics();
     let runtime_monitor = tokio_metrics::RuntimeMonitor::new(&handle);
-    tokio::spawn(async move {
-        for metrics in runtime_monitor.intervals() {
-            collect_tokio(&runtime_metrics, metrics);
-            tokio::time::sleep(frequency).await;
-        }
-    });
+    task_spawner.spawn_critical(
+        "tokio metrics collector",
+        Box::pin(async move {
+            for metrics in runtime_monitor.intervals() {
+                collect_tokio(&runtime_metrics, metrics);
+                tokio::time::sleep(frequency).await;
+            }
+        }),
+    );
 
     Ok(())
 }

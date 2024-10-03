@@ -14,29 +14,24 @@
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use alloy_primitives::{Address, B256};
-use anyhow::{bail, Context};
-use async_trait::async_trait;
-use futures::future;
-use futures_util::TryFutureExt;
+use anyhow::Context;
 use rundler_provider::{EntryPointProvider, EvmProvider};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
     MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
 };
-use rundler_task::Task;
+use rundler_task::TaskSpawnerExt;
 use rundler_types::{
     chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
     UserOperationVariant,
 };
-use rundler_utils::{emit::WithEntryPoint, handle};
+use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     sync::{broadcast, mpsc},
-    task::JoinHandle,
-    time, try_join,
+    time,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
@@ -44,7 +39,7 @@ use crate::{
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
-    server::{spawn_remote_builder_server, LocalBuilderBuilder},
+    server::{self, LocalBuilderBuilder},
     signer::{BundlerSigner, KmsSigner, LocalSigner, Signer},
     transaction_tracker::{self, TransactionTrackerImpl},
 };
@@ -121,87 +116,6 @@ pub struct BuilderTask<P, PR, E06, E07> {
     ep_07: Option<E07>,
 }
 
-#[async_trait]
-impl<P, PR, E06, E07> Task for BuilderTask<P, PR, E06, E07>
-where
-    P: Pool + Clone + 'static,
-    PR: EvmProvider + Clone + 'static,
-    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
-{
-    fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
-    }
-
-    async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let mut sender_handles = vec![];
-        let mut bundle_sender_actions = vec![];
-        let mut pk_iter = self.args.private_keys.clone().into_iter();
-
-        for ep in &self.args.entry_points {
-            match ep.version {
-                EntryPointVersion::V0_6 => {
-                    let (handles, actions) = self.create_builders_v0_6(ep, &mut pk_iter).await?;
-                    sender_handles.extend(handles);
-                    bundle_sender_actions.extend(actions);
-                }
-                EntryPointVersion::V0_7 => {
-                    let (handles, actions) = self.create_builders_v0_7(ep, &mut pk_iter).await?;
-                    sender_handles.extend(handles);
-                    bundle_sender_actions.extend(actions);
-                }
-                EntryPointVersion::Unspecified => {
-                    panic!("Unspecified entry point version")
-                }
-            }
-        }
-
-        // flatten the senders handles to one handle, short-circuit on errors
-        let sender_handle = tokio::spawn(
-            future::try_join_all(sender_handles)
-                .map_ok(|_| ())
-                .map_err(|e| anyhow::anyhow!(e)),
-        );
-
-        let builder_handle = self.builder_builder.get_handle();
-        let builder_runnder_handle = self.builder_builder.run(
-            bundle_sender_actions,
-            vec![self.args.chain_spec.entry_point_address_v0_6],
-            shutdown_token.clone(),
-        );
-
-        let remote_handle = match self.args.remote_address {
-            Some(addr) => {
-                spawn_remote_builder_server(
-                    addr,
-                    self.args.chain_spec.id,
-                    builder_handle,
-                    shutdown_token,
-                )
-                .await?
-            }
-            None => tokio::spawn(async { Ok(()) }),
-        };
-
-        info!("Started bundle builder");
-
-        match try_join!(
-            handle::flatten_handle(sender_handle),
-            handle::flatten_handle(builder_runnder_handle),
-            handle::flatten_handle(remote_handle),
-        ) {
-            Ok(_) => {
-                info!("Builder server shutdown");
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Builder server error: {e:?}");
-                bail!("Builder server error: {e:?}")
-            }
-        }
-    }
-}
-
 impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
     /// Create a new builder task
     pub fn new(
@@ -232,15 +146,70 @@ where
     E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
     E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
-    async fn create_builders_v0_6<I>(
+    /// Spawn the builder task on the given task spawner
+    pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
+        let mut bundle_sender_actions = vec![];
+        let mut pk_iter = self.args.private_keys.clone().into_iter();
+
+        for ep in &self.args.entry_points {
+            match ep.version {
+                EntryPointVersion::V0_6 => {
+                    let actions = self
+                        .create_builders_v0_6(&task_spawner, ep, &mut pk_iter)
+                        .await?;
+                    bundle_sender_actions.extend(actions);
+                }
+                EntryPointVersion::V0_7 => {
+                    let actions = self
+                        .create_builders_v0_7(&task_spawner, ep, &mut pk_iter)
+                        .await?;
+                    bundle_sender_actions.extend(actions);
+                }
+                EntryPointVersion::Unspecified => {
+                    panic!("Unspecified entry point version")
+                }
+            }
+        }
+
+        let builder_handle = self.builder_builder.get_handle();
+
+        task_spawner.spawn_critical_with_graceful_shutdown_signal(
+            "local builder server",
+            |shutdown| {
+                self.builder_builder.run(
+                    bundle_sender_actions,
+                    vec![self.args.chain_spec.entry_point_address_v0_6],
+                    shutdown,
+                )
+            },
+        );
+
+        if let Some(addr) = self.args.remote_address {
+            task_spawner.spawn_critical_with_graceful_shutdown_signal(
+                "remote builder server",
+                |shutdown| {
+                    server::remote_builder_server_task(
+                        addr,
+                        self.args.chain_spec.id,
+                        builder_handle,
+                        shutdown,
+                    )
+                },
+            );
+        }
+
+        info!("Started bundle builder");
+        Ok(())
+    }
+
+    async fn create_builders_v0_6<T, I>(
         &self,
+        task_spawner: &T,
         ep: &EntryPointBuilderSettings,
         pk_iter: &mut I,
-    ) -> anyhow::Result<(
-        Vec<JoinHandle<anyhow::Result<()>>>,
-        Vec<mpsc::Sender<BundleSenderAction>>,
-    )>
+    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
+        T: TaskSpawnerExt,
         I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
@@ -248,11 +217,11 @@ where
             .ep_06
             .clone()
             .context("entry point v0.6 not supplied")?;
-        let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
         for i in 0..ep.num_bundle_builders {
-            let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
+            let bundle_sender_action = if self.args.unsafe_mode {
                 self.create_bundle_builder(
+                    task_spawner,
                     i + ep.bundle_builder_index_offset,
                     self.provider.clone(),
                     ep_v0_6.clone(),
@@ -266,6 +235,7 @@ where
                 .await?
             } else {
                 self.create_bundle_builder(
+                    task_spawner,
                     i + ep.bundle_builder_index_offset,
                     self.provider.clone(),
                     ep_v0_6.clone(),
@@ -279,21 +249,19 @@ where
                 )
                 .await?
             };
-            sender_handles.push(spawn_guard);
             bundle_sender_actions.push(bundle_sender_action);
         }
-        Ok((sender_handles, bundle_sender_actions))
+        Ok(bundle_sender_actions)
     }
 
-    async fn create_builders_v0_7<I>(
+    async fn create_builders_v0_7<T, I>(
         &self,
+        task_spawner: &T,
         ep: &EntryPointBuilderSettings,
         pk_iter: &mut I,
-    ) -> anyhow::Result<(
-        Vec<JoinHandle<anyhow::Result<()>>>,
-        Vec<mpsc::Sender<BundleSenderAction>>,
-    )>
+    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
+        T: TaskSpawnerExt,
         I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
@@ -301,11 +269,11 @@ where
             .ep_07
             .clone()
             .context("entry point v0.7 not supplied")?;
-        let mut sender_handles = vec![];
         let mut bundle_sender_actions = vec![];
         for i in 0..ep.num_bundle_builders {
-            let (spawn_guard, bundle_sender_action) = if self.args.unsafe_mode {
+            let bundle_sender_action = if self.args.unsafe_mode {
                 self.create_bundle_builder(
+                    task_spawner,
                     i + ep.bundle_builder_index_offset,
                     self.provider.clone(),
                     ep_v0_7.clone(),
@@ -319,6 +287,7 @@ where
                 .await?
             } else {
                 self.create_bundle_builder(
+                    task_spawner,
                     i + ep.bundle_builder_index_offset,
                     self.provider.clone(),
                     ep_v0_7.clone(),
@@ -332,24 +301,22 @@ where
                 )
                 .await?
             };
-            sender_handles.push(spawn_guard);
             bundle_sender_actions.push(bundle_sender_action);
         }
-        Ok((sender_handles, bundle_sender_actions))
+        Ok(bundle_sender_actions)
     }
 
-    async fn create_bundle_builder<UO, E, S, I>(
+    async fn create_bundle_builder<T, UO, E, S, I>(
         &self,
+        task_spawner: &T,
         index: u64,
         provider: PR,
         entry_point: E,
         simulator: S,
         pk_iter: &mut I,
-    ) -> anyhow::Result<(
-        JoinHandle<anyhow::Result<()>>,
-        mpsc::Sender<BundleSenderAction>,
-    )>
+    ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
+        T: TaskSpawnerExt,
         UO: UserOperation + From<UserOperationVariant>,
         UserOperationVariant: AsRef<UO>,
         E: EntryPointProvider<UO> + Clone + 'static,
@@ -361,8 +328,13 @@ where
         let signer = if let Some(pk) = pk_iter.next() {
             info!("Using local signer");
             BundlerSigner::Local(
-                LocalSigner::connect(provider.clone(), self.args.chain_spec.id, pk.to_owned())
-                    .await?,
+                LocalSigner::connect(
+                    &task_spawner,
+                    provider.clone(),
+                    self.args.chain_spec.id,
+                    pk.to_owned(),
+                )
+                .await?,
             )
         } else {
             info!("Using AWS KMS signer");
@@ -373,6 +345,7 @@ where
                 // so this should give ample time for the connection to establish.
                 Duration::from_millis(self.args.redis_lock_ttl_millis / 4),
                 KmsSigner::connect(
+                    &task_spawner,
                     provider.clone(),
                     self.args.chain_spec.id,
                     self.args.aws_kms_key_ids.clone(),
@@ -454,6 +427,9 @@ where
         );
 
         // Spawn each sender as its own independent task
-        Ok((tokio::spawn(builder.send_bundles_in_loop()), send_bundle_tx))
+        let ts = task_spawner.clone();
+        task_spawner.spawn_critical("bundle sender", builder.send_bundles_in_loop(ts));
+
+        Ok(send_bundle_tx)
     }
 }

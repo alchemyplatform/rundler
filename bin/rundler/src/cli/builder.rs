@@ -24,7 +24,7 @@ use rundler_pool::RemotePoolClient;
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
-    spawn_tasks_with_shutdown, Task,
+    TaskSpawnerExt,
 };
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
@@ -419,7 +419,8 @@ pub struct BuilderCliArgs {
     pool_url: String,
 }
 
-pub async fn run(
+pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
+    task_spawner: T,
     chain_spec: ChainSpec,
     builder_args: BuilderCliArgs,
     common_args: CommonArgs,
@@ -430,7 +431,13 @@ pub async fn run(
     } = builder_args;
 
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
-    emit::receive_and_log_events_with_filter(event_rx, is_nonspammy_event);
+    task_spawner.spawn_critical(
+        "recv and log events",
+        Box::pin(emit::receive_and_log_events_with_filter(
+            event_rx,
+            is_nonspammy_event,
+        )),
+    );
 
     let task_args = builder_args
         .to_args(
@@ -443,7 +450,7 @@ pub async fn run(
     let pool = connect_with_retries_shutdown(
         "op pool from builder",
         &pool_url,
-        |url| RemotePoolClient::connect(url, chain_spec.clone()),
+        |url| RemotePoolClient::connect(url, chain_spec.clone(), Box::new(task_spawner.clone())),
         tokio::signal::ctrl_c(),
     )
     .await?;
@@ -454,20 +461,18 @@ pub async fn run(
         ep_v0_7,
     } = super::construct_providers(&common_args, &chain_spec)?;
 
-    spawn_tasks_with_shutdown(
-        [BuilderTask::new(
-            task_args,
-            event_sender,
-            LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY),
-            pool,
-            provider,
-            ep_v0_6,
-            ep_v0_7,
-        )
-        .boxed()],
-        tokio::signal::ctrl_c(),
+    BuilderTask::new(
+        task_args,
+        event_sender,
+        LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY),
+        pool,
+        provider,
+        ep_v0_6,
+        ep_v0_7,
     )
-    .await;
+    .spawn(task_spawner)
+    .await?;
+
     Ok(())
 }
 

@@ -45,6 +45,7 @@ mockall = {workspace = true, optional = true }
 mockall.workspace = true
 rundler-sim = { path = "../sim", features = ["test-utils"] }
 rundler-provider = { path = "../provider", features = ["test-utils"] }
+reth-tasks.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
