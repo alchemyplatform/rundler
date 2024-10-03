@@ -19,7 +19,7 @@ use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
-use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown, Task};
+use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
 use rundler_types::chain::ChainSpec;
 
 use super::{CommonArgs, RundlerProviders};
@@ -139,7 +139,8 @@ pub struct RpcCliArgs {
     builder_url: String,
 }
 
-pub async fn run(
+pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
+    task_spawner: T,
     chain_spec: ChainSpec,
     rpc_args: RpcCliArgs,
     common_args: CommonArgs,
@@ -162,7 +163,7 @@ pub async fn run(
     let pool = connect_with_retries_shutdown(
         "op pool from rpc",
         &pool_url,
-        |url| RemotePoolClient::connect(url, chain_spec.clone()),
+        |url| RemotePoolClient::connect(url, chain_spec.clone(), Box::new(task_spawner.clone())),
         tokio::signal::ctrl_c(),
     )
     .await?;
@@ -181,10 +182,9 @@ pub async fn run(
         ep_v0_7,
     } = super::construct_providers(&common_args, &chain_spec)?;
 
-    spawn_tasks_with_shutdown(
-        [RpcTask::new(task_args, pool, builder, provider, ep_v0_6, ep_v0_7).boxed()],
-        tokio::signal::ctrl_c(),
-    )
-    .await;
+    RpcTask::new(task_args, pool, builder, provider, ep_v0_6, ep_v0_7)
+        .spawn(task_spawner)
+        .await?;
+
     Ok(())
 }

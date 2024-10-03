@@ -18,7 +18,7 @@ use anyhow::Context;
 use clap::Args;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_sim::MempoolConfigs;
-use rundler_task::{spawn_tasks_with_shutdown, Task};
+use rundler_task::TaskSpawnerExt;
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
@@ -268,7 +268,8 @@ pub struct PoolCliArgs {
     pool: PoolArgs,
 }
 
-pub async fn run(
+pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
+    task_spawner: T,
     chain_spec: ChainSpec,
     pool_args: PoolCliArgs,
     common_args: CommonArgs,
@@ -283,7 +284,10 @@ pub async fn run(
         )
         .await?;
 
-    emit::receive_and_log_events_with_filter(event_rx, |_| true);
+    task_spawner.spawn_critical(
+        "recv and log events",
+        Box::pin(emit::receive_and_log_events_with_filter(event_rx, |_| true)),
+    );
 
     let RundlerProviders {
         provider,
@@ -291,18 +295,16 @@ pub async fn run(
         ep_v0_7,
     } = super::construct_providers(&common_args, &chain_spec)?;
 
-    spawn_tasks_with_shutdown(
-        [PoolTask::new(
-            task_args,
-            event_sender,
-            LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
-            provider,
-            ep_v0_6,
-            ep_v0_7,
-        )
-        .boxed()],
-        tokio::signal::ctrl_c(),
+    PoolTask::new(
+        task_args,
+        event_sender,
+        LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
+        provider,
+        ep_v0_6,
+        ep_v0_7,
     )
-    .await;
+    .spawn(task_spawner)
+    .await?;
+
     Ok(())
 }
