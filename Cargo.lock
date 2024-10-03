@@ -140,7 +140,7 @@ dependencies = [
  "alloy-eip7702",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde 0.3.3",
+ "alloy-serde",
  "c-kzg",
  "derive_more 1.0.0",
  "once_cell",
@@ -155,7 +155,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8429cf4554eed9b40feec7f4451113e76596086447550275e3def933faf47ce3"
 dependencies = [
  "alloy-primitives",
- "alloy-serde 0.4.2",
+ "alloy-serde",
  "serde",
 ]
 
@@ -197,7 +197,7 @@ dependencies = [
  "alloy-network-primitives",
  "alloy-primitives",
  "alloy-rpc-types-eth",
- "alloy-serde 0.3.3",
+ "alloy-serde",
  "alloy-signer",
  "alloy-sol-types",
  "async-trait",
@@ -215,7 +215,7 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
- "alloy-serde 0.3.3",
+ "alloy-serde",
  "serde",
 ]
 
@@ -276,10 +276,13 @@ dependencies = [
  "alloy-json-rpc",
  "alloy-network",
  "alloy-network-primitives",
+ "alloy-node-bindings",
  "alloy-primitives",
  "alloy-rpc-client",
+ "alloy-rpc-types-anvil",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
+ "alloy-signer-local",
  "alloy-transport",
  "alloy-transport-http",
  "async-stream",
@@ -344,6 +347,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-rpc-types-anvil"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d780adaa5d95b07ad92006b2feb68ecfa7e2015f7d5976ceaac4c906c73ebd07"
+dependencies = [
+ "alloy-primitives",
+ "alloy-serde",
+ "serde",
+]
+
+[[package]]
 name = "alloy-rpc-types-eth"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -354,7 +368,7 @@ dependencies = [
  "alloy-network-primitives",
  "alloy-primitives",
  "alloy-rlp",
- "alloy-serde 0.3.3",
+ "alloy-serde",
  "alloy-sol-types",
  "derive_more 1.0.0",
  "itertools 0.13.0",
@@ -370,7 +384,7 @@ checksum = "017cad3e5793c5613588c1f9732bcbad77e820ba7d0feaba3527749f856fdbc5"
 dependencies = [
  "alloy-primitives",
  "alloy-rpc-types-eth",
- "alloy-serde 0.3.3",
+ "alloy-serde",
  "serde",
  "serde_json",
  "thiserror",
@@ -4518,6 +4532,7 @@ dependencies = [
  "alloy-rpc-client",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
+ "alloy-sol-macro",
  "alloy-sol-types",
  "alloy-transport",
  "alloy-transport-http",
