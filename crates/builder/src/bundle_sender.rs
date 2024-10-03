@@ -11,16 +11,18 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{marker::PhantomData, sync::Arc, time::Duration};
+use std::{marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use futures::Stream;
 use futures_util::StreamExt;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{BundleHandler, EntryPoint, TransactionRequest};
 use rundler_sim::ExpectedStorage;
+use rundler_task::TaskSpawner;
 use rundler_types::{
     builder::BundlingMode,
     chain::ChainSpec,
@@ -30,7 +32,11 @@ use rundler_types::{
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
-    sync::{broadcast, mpsc, mpsc::UnboundedReceiver, oneshot},
+    sync::{
+        broadcast, mpsc,
+        mpsc::{UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
 };
 use tracing::{debug, error, info, instrument, warn};
 
@@ -42,7 +48,7 @@ use crate::{
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync {
-    async fn send_bundles_in_loop(self) -> anyhow::Result<()>;
+    async fn send_bundles_in_loop<T: TaskSpawner>(self, task_spawner: T);
 }
 
 #[derive(Debug)]
@@ -130,14 +136,16 @@ where
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
     #[instrument(skip_all, fields(entry_point = self.entry_point.address().to_string(), builder_index = self.builder_index))]
-    async fn send_bundles_in_loop(mut self) -> anyhow::Result<()> {
+    async fn send_bundles_in_loop<TS: TaskSpawner>(mut self, task_spawner: TS) {
         // trigger for sending bundles
         let sender_trigger = BundleSenderTrigger::new(
+            &task_spawner,
             &self.pool,
             self.bundle_action_receiver.take().unwrap(),
             Duration::from_millis(self.chain_spec.bundle_max_send_interval_millis),
         )
-        .await?;
+        .await
+        .expect("Failed to create bundle sender trigger");
 
         // initial state
         let mut state =
@@ -1022,12 +1030,22 @@ impl Trigger for BundleSenderTrigger {
 }
 
 impl BundleSenderTrigger {
-    async fn new<P: Pool>(
+    async fn new<P: Pool, T: TaskSpawner>(
+        task_spawner: &T,
         pool_client: &P,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         timer_interval: Duration,
     ) -> anyhow::Result<Self> {
-        let block_rx = Self::start_block_stream(pool_client).await?;
+        let Ok(new_heads) = pool_client.subscribe_new_heads().await else {
+            error!("Failed to subscribe to new blocks");
+            bail!("failed to subscribe to new blocks");
+        };
+        let (block_tx, block_rx) = mpsc::unbounded_channel();
+
+        task_spawner.spawn_critical(
+            "block stream",
+            Box::pin(Self::block_stream_task(new_heads, block_tx)),
+        );
 
         Ok(Self {
             bundling_mode: BundlingMode::Auto,
@@ -1041,33 +1059,24 @@ impl BundleSenderTrigger {
         })
     }
 
-    async fn start_block_stream<P: Pool>(
-        pool_client: &P,
-    ) -> anyhow::Result<UnboundedReceiver<NewHead>> {
-        let Ok(mut new_heads) = pool_client.subscribe_new_heads().await else {
-            error!("Failed to subscribe to new blocks");
-            bail!("failed to subscribe to new blocks");
-        };
-
-        let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            loop {
-                match new_heads.next().await {
-                    Some(b) => {
-                        if tx.send(b).is_err() {
-                            error!("Failed to buffer new block for bundle sender");
-                            return;
-                        }
-                    }
-                    None => {
-                        error!("Block stream ended");
+    async fn block_stream_task(
+        mut new_heads: Pin<Box<dyn Stream<Item = NewHead> + Send>>,
+        block_tx: UnboundedSender<NewHead>,
+    ) {
+        loop {
+            match new_heads.next().await {
+                Some(b) => {
+                    if block_tx.send(b).is_err() {
+                        error!("Failed to buffer new block for bundle sender");
                         return;
                     }
                 }
+                None => {
+                    error!("Block stream ended");
+                    return;
+                }
             }
-        });
-
-        Ok(rx)
+        }
     }
 
     fn consume_blocks(&mut self) -> anyhow::Result<()> {

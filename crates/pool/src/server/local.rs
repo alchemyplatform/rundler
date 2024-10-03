@@ -16,9 +16,12 @@ use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 use alloy_primitives::{Address, B256};
 use async_stream::stream;
 use async_trait::async_trait;
-use futures::future;
+use futures::future::{self, BoxFuture};
 use futures_util::Stream;
-use rundler_task::server::{HealthCheck, ServerStatus};
+use rundler_task::{
+    server::{HealthCheck, ServerStatus},
+    GracefulShutdown, TaskSpawner,
+};
 use rundler_types::{
     pool::{
         MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult,
@@ -26,12 +29,8 @@ use rundler_types::{
     },
     EntityUpdate, EntryPointVersion, UserOperationId, UserOperationVariant,
 };
-use tokio::{
-    sync::{broadcast, mpsc, oneshot},
-    task::JoinHandle,
-};
-use tokio_util::sync::CancellationToken;
-use tracing::error;
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::{error, info};
 
 use crate::{
     chain::ChainUpdate,
@@ -68,17 +67,19 @@ impl LocalPoolBuilder {
     /// Run the local pool server, consumes the builder
     pub fn run(
         self,
+        task_spawner: Box<dyn TaskSpawner>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
         chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
-        shutdown_token: CancellationToken,
-    ) -> JoinHandle<anyhow::Result<()>> {
-        let mut runner = LocalPoolServerRunner::new(
+        shutdown: GracefulShutdown,
+    ) -> BoxFuture<'static, ()> {
+        let runner = LocalPoolServerRunner::new(
             self.req_receiver,
             self.block_sender,
             mempools,
             chain_updates,
+            task_spawner,
         );
-        tokio::spawn(async move { runner.run(shutdown_token).await })
+        Box::pin(runner.run(shutdown))
     }
 }
 
@@ -95,6 +96,7 @@ struct LocalPoolServerRunner {
     block_sender: broadcast::Sender<NewHead>,
     mempools: HashMap<Address, Arc<dyn Mempool>>,
     chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
+    task_spawner: Box<dyn TaskSpawner>,
 }
 
 impl LocalPoolHandle {
@@ -332,7 +334,7 @@ impl Pool for LocalPoolHandle {
                             error!("new_heads_receiver lagged {c} blocks");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            error!("new_heads_receiver closed");
+                            info!("new_heads_receiver closed, ending subscription");
                             break;
                         }
                     }
@@ -364,12 +366,14 @@ impl LocalPoolServerRunner {
         block_sender: broadcast::Sender<NewHead>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
         chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
+        task_spawner: Box<dyn TaskSpawner>,
     ) -> Self {
         Self {
             req_receiver,
             block_sender,
             mempools,
             chain_updates,
+            task_spawner,
         }
     }
 
@@ -507,7 +511,7 @@ impl LocalPoolServerRunner {
         match self.get_pool(entry_point) {
             Ok(mempool) => {
                 let mempool = Arc::clone(mempool);
-                tokio::spawn(f(mempool, response));
+                self.task_spawner.spawn(Box::pin(f(mempool, response)));
             }
             Err(e) => {
                 if let Err(e) = response.send(Err(e)) {
@@ -517,10 +521,10 @@ impl LocalPoolServerRunner {
         }
     }
 
-    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    async fn run(mut self, shutdown: GracefulShutdown) {
         loop {
             tokio::select! {
-                _ = shutdown_token.cancelled() => {
+                _ = shutdown.clone() => {
                     break;
                 }
                 chain_update = self.chain_updates.recv() => {
@@ -537,13 +541,13 @@ impl LocalPoolServerRunner {
                             let cu = Arc::clone(&chain_update);
                             async move { m.on_chain_update(&cu).await }
                         }).collect();
-                        tokio::spawn(async move {
+                        self.task_spawner.spawn(Box::pin(async move {
                             future::join_all(update_futures).await;
                             let _ = block_sender.send(NewHead {
                                 block_hash: chain_update.latest_block_hash,
                                 block_number: chain_update.latest_block_number,
                             });
-                        });
+                        }));
                     }
                 }
                 Some(req) = self.req_receiver.recv() => {
@@ -686,8 +690,6 @@ impl LocalPoolServerRunner {
                 }
             }
         }
-
-        Ok(())
     }
 }
 
@@ -806,6 +808,7 @@ mod tests {
     use std::{iter::zip, sync::Arc};
 
     use futures_util::StreamExt;
+    use reth_tasks::TaskManager;
     use rundler_types::v0_6::UserOperation;
 
     use super::*;
@@ -921,18 +924,25 @@ mod tests {
     struct State {
         handle: LocalPoolHandle,
         chain_update_tx: broadcast::Sender<Arc<ChainUpdate>>,
-        _run_handle: JoinHandle<anyhow::Result<()>>,
+        _task_manager: TaskManager,
     }
 
     fn setup(pools: HashMap<Address, Arc<dyn Mempool>>) -> State {
         let builder = LocalPoolBuilder::new(10, 10);
         let handle = builder.get_handle();
         let (tx, rx) = broadcast::channel(10);
-        let run_handle = builder.run(pools, rx, CancellationToken::new());
+        let tm = TaskManager::current();
+        let ts = tm.executor();
+        let ts_box = Box::new(ts.clone());
+
+        ts.spawn_critical_with_graceful_shutdown_signal("test pool", |shutdown| {
+            builder.run(ts_box, pools, rx, shutdown)
+        });
+
         State {
             handle,
             chain_update_tx: tx,
-            _run_handle: run_handle,
+            _task_manager: tm,
         }
     }
 

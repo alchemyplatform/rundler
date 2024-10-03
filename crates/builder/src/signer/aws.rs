@@ -19,7 +19,7 @@ use anyhow::Context;
 use aws_config::BehaviorVersion;
 use rslock::{Lock, LockGuard, LockManager};
 use rundler_provider::EvmProvider;
-use rundler_utils::handle::SpawnGuard;
+use rundler_task::TaskSpawner;
 use tokio::{sync::oneshot, time::sleep};
 
 use super::monitor_account_balance;
@@ -28,12 +28,11 @@ use super::monitor_account_balance;
 #[derive(Debug)]
 pub(crate) struct KmsSigner {
     pub(crate) signer: AwsSigner,
-    _kms_guard: Option<SpawnGuard>,
-    _monitor_guard: SpawnGuard,
 }
 
 impl KmsSigner {
-    pub(crate) async fn connect<P: EvmProvider + Clone + 'static>(
+    pub(crate) async fn connect<P: EvmProvider + Clone + 'static, T: TaskSpawner>(
+        task_spawner: &T,
         provider: P,
         chain_id: u64,
         key_ids: Vec<String>,
@@ -43,36 +42,32 @@ impl KmsSigner {
         let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
         let client = aws_sdk_kms::Client::new(&config);
 
-        let mut kms_guard = None;
-        let key_id;
-
-        if key_ids.len() > 1 {
+        let key_id = if key_ids.len() > 1 {
             let (tx, rx) = oneshot::channel::<String>();
-            kms_guard = Some(SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
-                redis_uri, key_ids, chain_id, ttl_millis, tx,
-            )));
-            key_id = rx.await.context("should lock key_id")?;
+            task_spawner.spawn_critical(
+                "kms lock manager loop",
+                Box::pin(Self::lock_manager_loop(
+                    redis_uri, key_ids, chain_id, ttl_millis, tx,
+                )),
+            );
+            rx.await.context("should lock key_id")?
         } else {
-            key_id = key_ids
+            key_ids
                 .first()
                 .expect("There should be at least one kms key")
-                .to_owned();
+                .to_owned()
         };
 
         let signer = AwsSigner::new(client, key_id, Some(chain_id))
             .await
             .context("should create signer")?;
 
-        let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
+        task_spawner.spawn(Box::pin(monitor_account_balance(
             signer.address(),
             provider.clone(),
-        ));
+        )));
 
-        Ok(Self {
-            signer,
-            _kms_guard: kms_guard,
-            _monitor_guard: monitor_guard,
-        })
+        Ok(Self { signer })
     }
 
     async fn lock_manager_loop(

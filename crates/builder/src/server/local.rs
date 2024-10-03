@@ -13,13 +13,13 @@
 
 use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
-use rundler_task::server::{HealthCheck, ServerStatus};
-use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinHandle,
+use futures::future::BoxFuture;
+use rundler_task::{
+    server::{HealthCheck, ServerStatus},
+    GracefulShutdown,
 };
-use tokio_util::sync::CancellationToken;
+use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResult};
 
@@ -52,11 +52,11 @@ impl LocalBuilderBuilder {
         self,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
-        shutdown_token: CancellationToken,
-    ) -> JoinHandle<anyhow::Result<()>> {
-        let mut runner =
+        shutdown: GracefulShutdown,
+    ) -> BoxFuture<'static, ()> {
+        let runner =
             LocalBuilderServerRunner::new(self.req_receiver, bundle_sender_actions, entry_points);
-        tokio::spawn(async move { runner.run(shutdown_token).await })
+        Box::pin(runner.run(shutdown))
     }
 }
 
@@ -147,11 +147,11 @@ impl LocalBuilderServerRunner {
         }
     }
 
-    async fn run(&mut self, shutdown_token: CancellationToken) -> anyhow::Result<()> {
+    async fn run(mut self, shutdown: GracefulShutdown) {
         loop {
             tokio::select! {
-                _ = shutdown_token.cancelled() => {
-                    return Ok(())
+                _ = shutdown.clone() => {
+                    return;
                 }
                 Some(req) = self.req_receiver.recv() => {
                     let resp: BuilderResult<ServerResponse> = 'a:  {

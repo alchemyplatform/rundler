@@ -14,22 +14,21 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
-use async_trait::async_trait;
+use futures::FutureExt;
 use rundler_provider::{EntryPointProvider, EvmProvider};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
 };
-use rundler_task::Task;
+use rundler_task::TaskSpawnerExt;
 use rundler_types::{
     chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
     UserOperationVariant,
 };
-use rundler_utils::{emit::WithEntryPoint, handle};
-use tokio::{sync::broadcast, try_join};
-use tokio_util::sync::CancellationToken;
+use rundler_utils::emit::WithEntryPoint;
+use tokio::sync::broadcast;
 
 use super::mempool::PoolConfig;
 use crate::{
@@ -38,7 +37,7 @@ use crate::{
     mempool::{
         AddressReputation, Mempool, PaymasterConfig, PaymasterTracker, ReputationParams, UoPool,
     },
-    server::{spawn_remote_mempool_server, LocalPoolBuilder},
+    server::{self, LocalPoolBuilder},
 };
 
 /// Arguments for the pool task.
@@ -74,114 +73,6 @@ pub struct PoolTask<P, E06, E07> {
     ep_07: Option<E07>,
 }
 
-#[async_trait]
-impl<P, E06, E07> Task for PoolTask<P, E06, E07>
-where
-    P: EvmProvider + Clone + 'static,
-    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
-{
-    fn boxed(self) -> Box<dyn Task> {
-        Box::new(self)
-    }
-
-    async fn run(mut self: Box<Self>, shutdown_token: CancellationToken) -> anyhow::Result<()> {
-        let chain_id = self.args.chain_spec.id;
-        tracing::info!("Chain id: {chain_id}");
-        tracing::info!("Http url: {:?}", self.args.http_url);
-
-        // create chain
-        let chain_settings = chain::Settings {
-            history_size: self.args.chain_spec.chain_history_size,
-            poll_interval: self.args.chain_poll_interval,
-            max_sync_retries: self.args.chain_max_sync_retries,
-            entry_point_addresses: self
-                .args
-                .pool_configs
-                .iter()
-                .map(|config| (config.entry_point, config.entry_point_version))
-                .collect(),
-        };
-
-        let chain = Chain::new(self.provider.clone(), chain_settings);
-        let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
-        let chain_handle = tokio::spawn({
-            let update_sender = update_sender.clone();
-            let shutdown_token = shutdown_token.clone();
-            async move { chain.watch(update_sender, shutdown_token).await }
-        });
-
-        // create mempools
-        let mut mempools = HashMap::new();
-        for pool_config in &self.args.pool_configs {
-            match pool_config.entry_point_version {
-                EntryPointVersion::V0_6 => {
-                    let pool = self
-                        .create_mempool_v0_6(
-                            self.args.chain_spec.clone(),
-                            pool_config,
-                            self.args.unsafe_mode,
-                            self.event_sender.clone(),
-                        )
-                        .context("should have created mempool")?;
-
-                    mempools.insert(pool_config.entry_point, pool);
-                }
-                EntryPointVersion::V0_7 => {
-                    let pool = self
-                        .create_mempool_v0_7(
-                            self.args.chain_spec.clone(),
-                            pool_config,
-                            self.args.unsafe_mode,
-                            self.event_sender.clone(),
-                        )
-                        .context("should have created mempool")?;
-
-                    mempools.insert(pool_config.entry_point, pool);
-                }
-                EntryPointVersion::Unspecified => {
-                    bail!("Unsupported entry point version");
-                }
-            }
-        }
-
-        let pool_handle = self.pool_builder.get_handle();
-        let pool_runner_handle =
-            self.pool_builder
-                .run(mempools, update_sender.subscribe(), shutdown_token.clone());
-
-        let remote_handle = match self.args.remote_address {
-            Some(addr) => {
-                spawn_remote_mempool_server(
-                    self.args.chain_spec.clone(),
-                    pool_handle,
-                    addr,
-                    shutdown_token,
-                )
-                .await?
-            }
-            None => tokio::spawn(async { Ok(()) }),
-        };
-
-        tracing::info!("Started op_pool");
-
-        match try_join!(
-            handle::flatten_handle(pool_runner_handle),
-            handle::flatten_handle(remote_handle),
-            handle::as_anyhow_handle(chain_handle),
-        ) {
-            Ok(_) => {
-                tracing::info!("Pool server shutdown");
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!("Pool server error: {e:?}");
-                bail!("Pool server error: {e:?}")
-            }
-        }
-    }
-}
-
 impl<P, E06, E07> PoolTask<P, E06, E07> {
     /// Create a new pool task.
     pub fn new(
@@ -203,19 +94,114 @@ impl<P, E06, E07> PoolTask<P, E06, E07> {
     }
 }
 
-impl<'a, P, E06, E07> PoolTask<P, E06, E07>
+impl<P, E06, E07> PoolTask<P, E06, E07>
 where
-    P: EvmProvider + Clone + 'a,
-    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'a,
-    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'a,
+    P: EvmProvider + Clone + 'static,
+    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
+    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
 {
-    fn create_mempool_v0_6(
+    /// Spawns the mempool task on the given task spawner.
+    pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
+        let chain_id = self.args.chain_spec.id;
+        tracing::info!("Chain id: {chain_id}");
+        tracing::info!("Http url: {:?}", self.args.http_url);
+
+        // create chain
+        let chain_settings = chain::Settings {
+            history_size: self.args.chain_spec.chain_history_size,
+            poll_interval: self.args.chain_poll_interval,
+            max_sync_retries: self.args.chain_max_sync_retries,
+            entry_point_addresses: self
+                .args
+                .pool_configs
+                .iter()
+                .map(|config| (config.entry_point, config.entry_point_version))
+                .collect(),
+        };
+
+        let chain = Chain::new(self.provider.clone(), chain_settings);
+        let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
+
+        task_spawner.spawn_critical_with_graceful_shutdown_signal("chain watcher", |shutdown| {
+            chain.watch(update_sender.clone(), shutdown)
+        });
+
+        // create mempools
+        let mut mempools = HashMap::new();
+        for pool_config in &self.args.pool_configs {
+            match pool_config.entry_point_version {
+                EntryPointVersion::V0_6 => {
+                    let pool = self
+                        .create_mempool_v0_6(
+                            &task_spawner,
+                            self.args.chain_spec.clone(),
+                            pool_config,
+                            self.args.unsafe_mode,
+                            self.event_sender.clone(),
+                        )
+                        .context("should have created mempool")?;
+
+                    mempools.insert(pool_config.entry_point, pool);
+                }
+                EntryPointVersion::V0_7 => {
+                    let pool = self
+                        .create_mempool_v0_7(
+                            &task_spawner,
+                            self.args.chain_spec.clone(),
+                            pool_config,
+                            self.args.unsafe_mode,
+                            self.event_sender.clone(),
+                        )
+                        .context("should have created mempool")?;
+
+                    mempools.insert(pool_config.entry_point, pool);
+                }
+                EntryPointVersion::Unspecified => {
+                    bail!("Unsupported entry point version");
+                }
+            }
+        }
+
+        let pool_handle = self.pool_builder.get_handle();
+
+        let ts_box = Box::new(task_spawner.clone());
+        task_spawner.spawn_critical_with_graceful_shutdown_signal(
+            "local pool server",
+            |shutdown| {
+                self.pool_builder
+                    .run(ts_box, mempools, update_sender.subscribe(), shutdown)
+            },
+        );
+
+        if let Some(addr) = self.args.remote_address {
+            let ts_box = Box::new(task_spawner.clone());
+            task_spawner.spawn_critical_with_graceful_shutdown_signal(
+                "remote mempool server",
+                |shutdown| {
+                    server::remote_mempool_server_task(
+                        ts_box,
+                        self.args.chain_spec.clone(),
+                        pool_handle,
+                        addr,
+                        shutdown,
+                    )
+                },
+            );
+        };
+
+        tracing::info!("Started op_pool");
+
+        Ok(())
+    }
+
+    fn create_mempool_v0_6<T: TaskSpawnerExt>(
         &self,
+        task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    ) -> anyhow::Result<Arc<dyn Mempool + 'a>> {
+    ) -> anyhow::Result<Arc<dyn Mempool + 'static>> {
         let ep = self
             .ep_06
             .clone()
@@ -228,6 +214,7 @@ where
                 pool_config.sim_settings.clone(),
             );
             Self::create_mempool(
+                task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
@@ -243,6 +230,7 @@ where
                 pool_config.mempool_channel_configs.clone(),
             );
             Self::create_mempool(
+                task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
@@ -253,13 +241,14 @@ where
         }
     }
 
-    fn create_mempool_v0_7(
+    fn create_mempool_v0_7<T: TaskSpawnerExt>(
         &self,
+        task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    ) -> anyhow::Result<Arc<dyn Mempool + 'a>> {
+    ) -> anyhow::Result<Arc<dyn Mempool + 'static>> {
         let ep = self
             .ep_07
             .clone()
@@ -272,6 +261,7 @@ where
                 pool_config.sim_settings.clone(),
             );
             Self::create_mempool(
+                task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
@@ -287,6 +277,7 @@ where
                 pool_config.mempool_channel_configs.clone(),
             );
             Self::create_mempool(
+                task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
@@ -297,19 +288,21 @@ where
         }
     }
 
-    fn create_mempool<UO, E, S>(
+    fn create_mempool<T, UO, E, S>(
+        task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         provider: P,
         ep: E,
         simulator: S,
-    ) -> anyhow::Result<Arc<dyn Mempool + 'a>>
+    ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
     where
+        T: TaskSpawnerExt,
         UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
         UserOperationVariant: From<UO>,
-        E: EntryPointProvider<UO> + Clone + 'a,
-        S: Simulator<UO = UO> + 'a,
+        E: EntryPointProvider<UO> + Clone + 'static,
+        S: Simulator<UO = UO> + 'static,
     {
         let fee_oracle = gas::get_fee_oracle(&chain_spec, provider.clone());
         let fee_estimator = FeeEstimatorImpl::new(
@@ -337,7 +330,10 @@ where
 
         // Start reputation manager
         let reputation_runner = Arc::clone(&reputation);
-        tokio::spawn(async move { reputation_runner.run().await });
+        task_spawner.spawn_critical(
+            "reputation manager",
+            async move { reputation_runner.run().await }.boxed(),
+        );
 
         let paymaster = PaymasterTracker::new(
             ep.clone(),

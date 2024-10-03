@@ -15,17 +15,16 @@ use alloy_signer::Signer as _;
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context;
 use rundler_provider::EvmProvider;
-use rundler_utils::handle::SpawnGuard;
-
+use rundler_task::TaskSpawner;
 /// A local signer handle
 #[derive(Debug)]
 pub(crate) struct LocalSigner {
     pub(crate) signer: PrivateKeySigner,
-    _monitor_abort_handle: SpawnGuard,
 }
 
 impl LocalSigner {
-    pub(crate) async fn connect<P: EvmProvider + 'static>(
+    pub(crate) async fn connect<P: EvmProvider + 'static, T: TaskSpawner>(
+        task_spawner: &T,
         provider: P,
         chain_id: u64,
         private_key: String,
@@ -33,14 +32,14 @@ impl LocalSigner {
         let signer = private_key
             .parse::<PrivateKeySigner>()
             .context("should create signer")?;
-        let _monitor_abort_handle = SpawnGuard::spawn_with_guard(super::monitor_account_balance(
+
+        task_spawner.spawn(Box::pin(super::monitor_account_balance(
             signer.address(),
             provider,
-        ));
+        )));
 
         Ok(Self {
             signer: signer.with_chain_id(Some(chain_id)),
-            _monitor_abort_handle,
         })
     }
 }

@@ -32,14 +32,13 @@ use rundler_contracts::{
     },
 };
 use rundler_provider::{Block, EvmProvider, Filter, Log};
-use rundler_task::block_watcher;
+use rundler_task::{block_watcher, GracefulShutdown};
 use rundler_types::{EntryPointVersion, Timestamp, UserOperationId};
 use tokio::{
     select,
     sync::{broadcast, Semaphore},
     time,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
@@ -175,14 +174,14 @@ impl<P: EvmProvider> Chain<P> {
     pub(crate) async fn watch(
         mut self,
         sender: broadcast::Sender<Arc<ChainUpdate>>,
-        shutdown_token: CancellationToken,
+        shutdown: GracefulShutdown,
     ) {
         loop {
             select! {
                 update = self.wait_for_update() => {
                     let _ = sender.send(Arc::new(update));
                 }
-                _ = shutdown_token.cancelled() => {
+                _ = shutdown.clone() => {
                     info!("Shutting down chain watcher");
                     break;
                 }
