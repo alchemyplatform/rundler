@@ -361,7 +361,7 @@ mod tests {
     );
 
     #[tokio::test]
-    async fn test_get_code_hash_unorder() {
+    async fn test_get_code_hash_unorder_equal() {
         let alloy_provider = ProviderBuilder::new().on_anvil();
 
         let get_code_hashes_contract = GetCodeHashes::deploy(alloy_provider.clone()).await.unwrap();
@@ -371,21 +371,40 @@ mod tests {
         let address_1 = get_code_hashes_contract.address();
         let address_2 = get_gas_used_contract.address();
 
-        let result_1 = emv_provider
+        let hash_1 = emv_provider
             .get_code_hash(vec![*address_1, *address_2], None)
-            .await;
-        let hash_1 = result_1.ok();
+            .await
+            .unwrap();
 
-        let result_2 = emv_provider
+        let hash_2 = emv_provider
             .get_code_hash(vec![*address_2, *address_1], None)
-            .await;
-        let hash_2 = result_2.ok();
+            .await
+            .unwrap();
 
         assert_eq!(hash_1, hash_2);
+    }
 
-        let result_3 = emv_provider.get_code_hash(vec![*address_1], None).await;
-        let hash_3 = result_3.ok();
+    #[tokio::test]
+    async fn test_get_code_hash_unequal() {
+        let alloy_provider = ProviderBuilder::new().on_anvil();
 
-        assert_ne!(hash_1, hash_3);
+        let get_code_hashes_contract = GetCodeHashes::deploy(alloy_provider.clone()).await.unwrap();
+        let get_gas_used_contract = GetGasUsed::deploy(alloy_provider.clone()).await.unwrap();
+
+        let emv_provider = AlloyEvmProvider::new(alloy_provider);
+        let address_1 = get_code_hashes_contract.address();
+        let address_2 = get_gas_used_contract.address();
+
+        let hash_1 = emv_provider
+            .get_code_hash(vec![*address_1, *address_2], None)
+            .await
+            .unwrap();
+
+        let hash_2 = emv_provider
+            .get_code_hash(vec![*address_1], None)
+            .await
+            .unwrap();
+
+        assert_ne!(hash_1, hash_2);
     }
 }
