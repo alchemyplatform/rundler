@@ -31,7 +31,7 @@ thiserror.workspace = true
 mockall = {workspace = true, optional = true }
 
 [dev-dependencies]
-rundler-types = { path = ".", features = ["test-utils"] }
+rundler-types = { workspace = true, features = ["test-utils"] }
 alloy-primitives = { workspace = true, features = ["rand"] }
 
 [features]

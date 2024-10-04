@@ -183,6 +183,7 @@ where
     /// Creates a new `ValidationContextProvider` for entry point v0.6 with the given provider and entry point.
     pub(crate) fn new(provider: P, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
+            // TODO(danc): HERE
             simulate_validation_tracer: SimulateValidationTracerImpl::new(
                 provider,
                 entry_point,
@@ -201,7 +202,11 @@ mod tests {
     use alloy_primitives::{address, bytes, hex, Bytes, U256};
     use alloy_sol_types::SolError;
     use rundler_contracts::v0_6::IEntryPoint::FailedOp;
-    use rundler_types::{v0_6::UserOperation, Opcode};
+    use rundler_types::{
+        chain::ChainSpec,
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+        Opcode,
+    };
     use sim_context::ContractInfo;
 
     use super::*;
@@ -322,7 +327,7 @@ mod tests {
             Ok(tracer_output)
         });
 
-        let user_operation = UserOperation {
+        let user_operation = UserOperationBuilder::new(&ChainSpec::default(),UserOperationRequiredFields {
             sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
             nonce: U256::from(264),
             init_code: Bytes::default(),
@@ -334,7 +339,7 @@ mod tests {
             max_priority_fee_per_gas: 105000000,
             paymaster_and_data: Bytes::default(),
             signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
-        };
+        }).build();
 
         let context = ValidationContextProvider {
             simulate_validation_tracer: tracer,

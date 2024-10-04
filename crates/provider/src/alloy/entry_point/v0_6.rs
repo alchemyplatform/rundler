@@ -33,18 +33,18 @@ use rundler_types::{
     ValidationRevert,
 };
 
-use super::L1GasOracle;
+use super::DAGasOracle;
 use crate::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, DepositInfo, EntryPoint,
+    AggregatorOut, AggregatorSimOut, BundleHandler, DAGasProvider, DepositInfo, EntryPoint,
     EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult, HandleOpsOut,
-    L1GasProvider, ProviderResult, SignatureAggregator, SimulationProvider,
+    ProviderResult, SignatureAggregator, SimulationProvider,
 };
 
 /// Entry point provider for v0.6
 #[derive(Clone)]
 pub struct EntryPointProvider<AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
-    l1_gas_oracle: L1GasOracle,
+    da_gas_oracle: DAGasOracle,
     max_aggregation_gas: u64,
 }
 
@@ -57,7 +57,7 @@ where
     pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u64, provider: AP) -> Self {
         Self {
             i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_6, provider),
-            l1_gas_oracle: L1GasOracle::new(chain_spec),
+            da_gas_oracle: DAGasOracle::new(chain_spec),
             max_aggregation_gas,
         }
     }
@@ -134,6 +134,8 @@ where
     ) -> ProviderResult<Option<Bytes>> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
         let ops: Vec<ContractUserOperation> = ops.into_iter().map(Into::into).collect();
+
+        // TODO(danc): HERE
         let result = aggregator
             .aggregateSignatures(ops)
             .gas(self.max_aggregation_gas)
@@ -264,14 +266,14 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> L1GasProvider for EntryPointProvider<AP, T>
+impl<AP, T> DAGasProvider for EntryPointProvider<AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,
 {
     type UO = UserOperation;
 
-    async fn calc_l1_gas(
+    async fn calc_da_gas(
         &self,
         entry_point_address: Address,
         user_op: UserOperation,
@@ -287,8 +289,8 @@ where
 
         let bundle_data = super::max_bundle_transaction_data(entry_point_address, data, gas_price);
 
-        self.l1_gas_oracle
-            .estimate_l1_gas(
+        self.da_gas_oracle
+            .estimate_da_gas(
                 self.i_entry_point.provider(),
                 entry_point_address,
                 bundle_data,

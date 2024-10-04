@@ -62,16 +62,16 @@ pub struct ChainSpec {
     /*
      * Gas estimation
      */
-    /// true if calldata is priced in preVerificationGas
-    pub calldata_pre_verification_gas: bool,
+    /// true if DA is priced in preVerificationGas
+    pub da_pre_verification_gas: bool,
     /// type of gas oracle contract for pricing calldata in preVerificationGas
-    /// If calldata_pre_verification_gas is true, this must not be None
-    pub l1_gas_oracle_contract_type: L1GasOracleContractType,
+    /// If da_pre_verification_gas is true, this must not be None
+    pub da_gas_oracle_contract_type: DAGasOracleContractType,
     /// address of gas oracle contract for pricing calldata in preVerificationGas
-    pub l1_gas_oracle_contract_address: Address,
-    /// true if L1 calldata gas should be included in the gas limit
-    /// only applies when calldata_pre_verification_gas is true
-    pub include_l1_gas_in_gas_limit: bool,
+    pub da_gas_oracle_contract_address: Address,
+    /// true if Data Availability (DA) calldata gas should be included in the gas limit
+    /// only applies when da_pre_verification_gas is true
+    pub include_da_gas_in_gas_limit: bool,
 
     /*
      * Fee estimation
@@ -121,7 +121,7 @@ pub struct ChainSpec {
 /// Type of gas oracle contract for pricing calldata in preVerificationGas
 #[derive(Clone, Copy, Debug, Deserialize, Default, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum L1GasOracleContractType {
+pub enum DAGasOracleContractType {
     /// No gas oracle contract
     #[default]
     None,
@@ -158,10 +158,10 @@ impl Default for ChainSpec {
             calldata_zero_byte_gas: 4,
             calldata_non_zero_byte_gas: 16,
             eip1559_enabled: true,
-            calldata_pre_verification_gas: false,
-            l1_gas_oracle_contract_type: L1GasOracleContractType::default(),
-            l1_gas_oracle_contract_address: Address::ZERO,
-            include_l1_gas_in_gas_limit: true,
+            da_pre_verification_gas: false,
+            da_gas_oracle_contract_type: DAGasOracleContractType::default(),
+            da_gas_oracle_contract_address: Address::ZERO,
+            include_da_gas_in_gas_limit: false,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
             min_max_priority_fee_per_gas: 0,
             max_max_priority_fee_per_gas: u64::MAX,

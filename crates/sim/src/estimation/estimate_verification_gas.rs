@@ -127,6 +127,7 @@ where
                     Address::ZERO,
                     Bytes::new(),
                     block_hash.into(),
+                    // TODO(danc): HERE
                     self.settings.max_simulate_handle_ops_gas,
                     state_override,
                 )
@@ -149,6 +150,7 @@ where
         };
 
         let mut max_failure_gas = 1;
+
         let mut min_success_gas = self.settings.max_verification_gas;
 
         if gas_used.gasUsed.gt(&U256::from(u128::MAX)) {

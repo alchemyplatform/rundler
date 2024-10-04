@@ -32,7 +32,7 @@ pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
 /// 32 bytes for user op array offset
 /// 32 bytes for beneficiary
 /// 32 bytes for array count
-/// Ontop of this offset there needs to be another 32 bytes for each
+/// On top of this offset there needs to be another 32 bytes for each
 /// user operation in the bundle to store its offset within the array
 pub const BUNDLE_BYTE_OVERHEAD: usize = 4 + 32 + 32 + 32;
 
@@ -136,12 +136,10 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the pre-verification gas
     fn pre_verification_gas(&self) -> u128;
 
-    /// Calculate the static portion of the pre-verification gas for this user operation
-    fn calc_static_pre_verification_gas(
-        &self,
-        chain_spec: &ChainSpec,
-        include_fixed_gas_overhead: bool,
-    ) -> u128;
+    /// Get the static portion of the pre-verification gas for this user operation
+    ///
+    /// This does NOT include any shared gas costs for a bundle (i.e. intrinsic gas)
+    fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128;
 
     /// Clear the signature field of the user op
     ///
@@ -154,6 +152,98 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Calculate the size of the user operation in single UO bundle in bytes
     fn single_uo_bundle_size_bytes(&self) -> usize {
         self.abi_encoded_size() + BUNDLE_BYTE_OVERHEAD + USER_OP_OFFSET_WORD_SIZE
+    }
+
+    /// Gas limit functions
+    ///
+    /// Gas limit: Total as limit for the bundle transaction
+    ///     - This value is required to be high enough so that the bundle transaction does not
+    ///         run out of gas.
+    /// Execution gas limit: Gas spent during the execution part of the bundle transaction
+    ///     - This value is typically limited by block builders/sequencers and is the value by which
+    ///         we will limit the amount of gas used in a bundle.
+    ///
+    /// For example, on Arbitrum chains the L1-DA gas portion is added at the beginning of transaction execution
+    /// and uses up the gas limit of the transaction. However, this L1-DA portion is not part of the maximum gas
+    /// allowed by the sequencer per block.
+    ///
+    /// If calculating the gas limit value to put on a bundle transaction, use the gas limit functions.
+    /// If limiting the size of a bundle transaction to adhere to block gas limit, use the execution gas limit functions.
+
+    /// Returns the gas limit that applies to bundle's total gas limit
+    ///
+    /// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential DA costs
+    /// if the chain requires it.
+    ///
+    /// This is needed to set the gas limit for the bundle transaction.
+    fn gas_limit(&self, chain_spec: &ChainSpec, include_intrinsic_gas: bool) -> u128 {
+        self.pre_verification_gas_limit(chain_spec, include_intrinsic_gas)
+            + self.total_verification_gas_limit()
+            + self.required_pre_execution_buffer()
+            + self.call_gas_limit()
+    }
+
+    /// Returns the gas limit that applies to the execution portion of a bundle's gas limit
+    ///
+    /// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential DA costs.
+    ///
+    /// This is needed to limit the size of the bundle transaction to adhere to the block gas limit.
+    fn execution_gas_limit(&self, chain_spec: &ChainSpec, include_intrinsic_gas: bool) -> u128 {
+        self.pre_verification_execution_gas_limit(chain_spec, include_intrinsic_gas)
+            + self.total_verification_gas_limit()
+            + self.required_pre_execution_buffer()
+            + self.call_gas_limit()
+    }
+
+    /// Returns the portion of pre-verification gas the applies to the DA portion of a bundle's gas limit
+    ///
+    /// On an L2 this is the portion of the pre_verification_gas that is due to DA costs
+    fn pre_verification_da_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
+        // On some chains (OP bedrock) the DA gas fee is charged via pre_verification_gas
+        // but this not part of the gas limit of the transaction.
+        //
+        // On other chains (Arbitrum), the DA portion IS charged in the gas limit, so calculate it here.
+        if chain_spec.da_pre_verification_gas && chain_spec.include_da_gas_in_gas_limit {
+            self.pre_verification_gas()
+                .saturating_sub(self.static_pre_verification_gas(chain_spec))
+                .saturating_sub(chain_spec.transaction_intrinsic_gas())
+        } else {
+            0
+        }
+    }
+
+    /// Returns the portion of pre-verification gas the applies to the execution portion of a bundle's gas limit
+    ///
+    /// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential DA costs
+    fn pre_verification_execution_gas_limit(
+        &self,
+        chain_spec: &ChainSpec,
+        include_intrinsic_gas: bool,
+    ) -> u128 {
+        // On some chains (OP bedrock, Arbitrum) the DA gas fee is charged via pre_verification_gas
+        // but this not part of the EXECUTION gas limit of the transaction.
+        //
+        // On other chains, the DA portion is zero.
+        //
+        // Thus, only consider the static portion of the pre_verification_gas in the gas limit.
+        let static_pvg = self.static_pre_verification_gas(chain_spec);
+        if include_intrinsic_gas {
+            static_pvg.saturating_add(chain_spec.transaction_intrinsic_gas())
+        } else {
+            static_pvg
+        }
+    }
+
+    /// Returns the portion of pre-verification gas that applies to a bundle's total gas limit
+    ///
+    /// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential DA costs
+    fn pre_verification_gas_limit(
+        &self,
+        chain_spec: &ChainSpec,
+        include_intrinsic_gas: bool,
+    ) -> u128 {
+        self.pre_verification_execution_gas_limit(chain_spec, include_intrinsic_gas)
+            + self.pre_verification_da_gas_limit(chain_spec)
     }
 }
 
@@ -278,18 +368,10 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn calc_static_pre_verification_gas(
-        &self,
-        chain_spec: &ChainSpec,
-        include_fixed_gas_overhead: bool,
-    ) -> u128 {
+    fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
         match self {
-            UserOperationVariant::V0_6(op) => {
-                op.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
-            }
-            UserOperationVariant::V0_7(op) => {
-                op.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
-            }
+            UserOperationVariant::V0_6(op) => op.static_pre_verification_gas(chain_spec),
+            UserOperationVariant::V0_7(op) => op.static_pre_verification_gas(chain_spec),
         }
     }
 

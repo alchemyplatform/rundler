@@ -29,7 +29,7 @@ use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{
-    BundleHandler, EntryPoint, EvmProvider, HandleOpsOut, L1GasProvider, SignatureAggregator,
+    BundleHandler, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut, SignatureAggregator,
 };
 use rundler_sim::{
     gas, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult,
@@ -163,7 +163,7 @@ where
     UO: UserOperation + From<UserOperationVariant>,
     UserOperationVariant: AsRef<UO>,
     S: Simulator<UO = UO>,
-    E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
+    E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + DAGasProvider<UO = UO>,
     P: EvmProvider,
     M: Pool,
     F: FeeEstimator,
@@ -307,7 +307,7 @@ where
     UO: UserOperation + From<UserOperationVariant>,
     UserOperationVariant: AsRef<UO>,
     S: Simulator<UO = UO>,
-    E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + L1GasProvider<UO = UO>,
+    E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + DAGasProvider<UO = UO>,
     P: EvmProvider,
     M: Pool,
     F: FeeEstimator,
@@ -525,8 +525,7 @@ where
             }
 
             // Skip this op if the bundle does not have enough remaining gas to execute it.
-            let required_gas = gas_spent
-                + gas::user_operation_execution_gas_limit(&self.settings.chain_spec, &op, false);
+            let required_gas = gas_spent + op.execution_gas_limit(&self.settings.chain_spec, false);
             if required_gas > self.settings.max_bundle_gas {
                 continue;
             }
@@ -562,8 +561,7 @@ where
             }
 
             // Update the running gas that would need to be be spent to execute the bundle so far.
-            gas_spent +=
-                gas::user_operation_execution_gas_limit(&self.settings.chain_spec, &op, false);
+            gas_spent += op.execution_gas_limit(&self.settings.chain_spec, false);
 
             constructed_bundle_size =
                 constructed_bundle_size.saturating_add(op_size_with_offset_word);
@@ -1000,8 +998,7 @@ where
         for op in ops {
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas =
-                gas::user_operation_execution_gas_limit(&self.settings.chain_spec, &op.uo, false);
+            let gas = op.uo.execution_gas_limit(&self.settings.chain_spec, false);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
@@ -1241,7 +1238,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // needed to have the buffer for each op.
 
         self.iter_ops_with_simulations()
-            .map(|sim_op| gas::user_operation_gas_limit(chain_spec, &sim_op.op, false))
+            .map(|sim_op| sim_op.op.gas_limit(chain_spec, false))
             .sum::<u128>()
             + chain_spec.transaction_intrinsic_gas()
     }
@@ -1420,8 +1417,8 @@ mod tests {
     use rundler_sim::{MockFeeEstimator, MockSimulator};
     use rundler_types::{
         pool::{MockPool, SimulationViolation},
-        v0_6::{UserOperation, ENTRY_POINT_INNER_GAS_OVERHEAD},
-        UserOperation as UserOperationTrait, ValidTimeRange,
+        v0_6::UserOperation,
+        UserOperation as _, ValidTimeRange,
     };
 
     use super::*;
@@ -1444,11 +1441,7 @@ mod tests {
         let cs = ChainSpec::default();
 
         let expected_gas: u64 = math::increase_by_percent(
-            op.pre_verification_gas
-                + op.verification_gas_limit * 2
-                + op.call_gas_limit
-                + cs.transaction_intrinsic_gas()
-                + ENTRY_POINT_INNER_GAS_OVERHEAD,
+            op.gas_limit(&cs, true),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         )
         .try_into()
@@ -1931,6 +1924,13 @@ mod tests {
         )
         .await;
 
+        let cs = ChainSpec::default();
+        let expected_gas_limit: u64 = (op1.gas_limit(&cs, false)
+            + op2.gas_limit(&cs, false)
+            + cs.transaction_intrinsic_gas())
+        .try_into()
+        .unwrap();
+
         assert_eq!(bundle.entity_updates, vec![]);
         assert_eq!(bundle.rejected_ops, vec![]);
         assert_eq!(
@@ -1942,10 +1942,7 @@ mod tests {
         );
         assert_eq!(
             bundle.gas_estimate,
-            math::increase_by_percent(
-                9_000_000 + 2 * 5_000 + 21_000,
-                BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT
-            )
+            math::increase_by_percent(expected_gas_limit, BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT)
         );
     }
 
@@ -1983,15 +1980,8 @@ mod tests {
             entity_updates: BTreeMap::new(),
         };
 
-        let expected_gas_limit = op1.pre_verification_gas
-            + op1.verification_gas_limit * 2
-            + op1.call_gas_limit
-            + 5_000
-            + op2.pre_verification_gas
-            + op2.verification_gas_limit * 2
-            + op2.call_gas_limit
-            + 5_000
-            + 21_000;
+        let expected_gas_limit =
+            op1.gas_limit(&cs, false) + op2.gas_limit(&cs, false) + cs.transaction_intrinsic_gas();
 
         assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
     }
@@ -2031,15 +2021,8 @@ mod tests {
         };
         let gas_limit = context.get_bundle_gas_limit(&cs);
 
-        let expected_gas_limit = op1.pre_verification_gas
-            + op1.verification_gas_limit * 3
-            + op1.call_gas_limit
-            + 5_000
-            + op2.pre_verification_gas
-            + op2.verification_gas_limit * 2
-            + op2.call_gas_limit
-            + 5_000
-            + 21_000;
+        let expected_gas_limit =
+            op1.gas_limit(&cs, false) + op2.gas_limit(&cs, false) + cs.transaction_intrinsic_gas();
 
         assert_eq!(gas_limit, expected_gas_limit);
     }

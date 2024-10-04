@@ -37,7 +37,7 @@ sol! {
     }
 }
 
-pub(crate) async fn estimate_l1_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
+pub(crate) async fn estimate_da_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
     provider: AP,
     oracle_address: Address,
     to_address: Address,
