@@ -149,6 +149,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-genesis"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8429cf4554eed9b40feec7f4451113e76596086447550275e3def933faf47ce3"
+dependencies = [
+ "alloy-primitives",
+ "alloy-serde",
+ "serde",
+]
+
+[[package]]
 name = "alloy-json-abi"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -209,6 +220,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-node-bindings"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f1334a738aa1710cb8227441b3fcc319202ce78e967ef37406940242df4a454"
+dependencies = [
+ "alloy-genesis",
+ "alloy-primitives",
+ "k256",
+ "rand",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "alloy-primitives"
 version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -248,10 +276,13 @@ dependencies = [
  "alloy-json-rpc",
  "alloy-network",
  "alloy-network-primitives",
+ "alloy-node-bindings",
  "alloy-primitives",
  "alloy-rpc-client",
+ "alloy-rpc-types-anvil",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
+ "alloy-signer-local",
  "alloy-transport",
  "alloy-transport-http",
  "async-stream",
@@ -313,6 +344,17 @@ dependencies = [
  "tower 0.5.1",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "alloy-rpc-types-anvil"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d780adaa5d95b07ad92006b2feb68ecfa7e2015f7d5976ceaac4c906c73ebd07"
+dependencies = [
+ "alloy-primitives",
+ "alloy-serde",
+ "serde",
 ]
 
 [[package]]
@@ -4483,12 +4525,14 @@ dependencies = [
  "alloy-consensus",
  "alloy-contract",
  "alloy-json-rpc",
+ "alloy-node-bindings",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rlp",
  "alloy-rpc-client",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
+ "alloy-sol-macro",
  "alloy-sol-types",
  "alloy-transport",
  "alloy-transport-http",
@@ -4502,6 +4546,7 @@ dependencies = [
  "rundler-types",
  "rundler-utils",
  "thiserror",
+ "tokio",
  "tracing",
  "url",
 ]
