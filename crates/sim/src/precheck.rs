@@ -18,7 +18,7 @@ use anyhow::Context;
 use arrayvec::ArrayVec;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{EntryPoint, EvmProvider, L1GasProvider};
+use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider};
 use rundler_types::{
     chain::ChainSpec,
     pool::{MempoolError, PrecheckViolation},
@@ -137,7 +137,7 @@ struct FeeCache {
 impl<UO, P, E, F> Prechecker for PrecheckerImpl<UO, P, E, F>
 where
     P: EvmProvider + Clone,
-    E: EntryPoint + L1GasProvider<UO = UO>,
+    E: EntryPoint + DAGasProvider<UO = UO>,
     UO: UserOperation,
     F: FeeEstimator,
 {
@@ -171,7 +171,7 @@ where
 impl<UO, P, E, F> PrecheckerImpl<UO, P, E, F>
 where
     P: EvmProvider + Clone,
-    E: EntryPoint + L1GasProvider<UO = UO>,
+    E: EntryPoint + DAGasProvider<UO = UO>,
     UO: UserOperation,
     F: FeeEstimator,
 {
@@ -242,7 +242,7 @@ where
 
         // compute the worst case total gas limit by assuming the UO is in its own bundle and has a postOp call.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = gas::user_operation_execution_gas_limit(&self.chain_spec, op, true);
+        let gas_limit = op.execution_gas_limit(&self.chain_spec, true);
         if gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
@@ -413,7 +413,10 @@ mod tests {
     use alloy_primitives::{address, bytes, Bytes};
     use gas::MockFeeEstimator;
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider};
-    use rundler_types::v0_6::UserOperation;
+    use rundler_types::{
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+        UserOperation as _,
+    };
 
     use super::*;
 
@@ -447,25 +450,29 @@ mod tests {
         let (cs, provider, entry_point, fee_estimator) = create_base_config();
         let provider = Arc::new(provider);
         let prechecker = PrecheckerImpl::new(
-            cs,
+            cs.clone(),
             provider,
             entry_point,
             fee_estimator,
             Settings::default(),
         );
-        let op = UserOperation {
-            sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
-            nonce: U256::from(100),
-            init_code: bytes!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
-            call_data: Bytes::default(),
-            call_gas_limit: 9_000, // large call gas limit high to trigger TotalGasLimitTooHigh
-            verification_gas_limit: 10_000_000,
-            pre_verification_gas: 0,
-            max_fee_per_gas: 5_000,
-            max_priority_fee_per_gas: 2_000,
-            paymaster_and_data: Bytes::default(),
-            signature: Bytes::default(),
-        };
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
+                nonce: U256::from(100),
+                init_code: bytes!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
+                call_data: Bytes::default(),
+                call_gas_limit: 9_000, // large call gas limit high to trigger TotalGasLimitTooHigh
+                verification_gas_limit: 10_000_000,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 5_000,
+                max_priority_fee_per_gas: 2_000,
+                paymaster_and_data: Bytes::default(),
+                signature: Bytes::default(),
+            },
+        )
+        .build();
 
         let res = prechecker.check_init_code(&op, get_test_async_data());
         let mut expected = ArrayVec::new();
@@ -488,30 +495,41 @@ mod tests {
 
         let (cs, provider, entry_point, fee_estimator) = create_base_config();
         let provider = Arc::new(provider);
-        let prechecker =
-            PrecheckerImpl::new(cs, provider, entry_point, fee_estimator, test_settings);
+        let prechecker = PrecheckerImpl::new(
+            cs.clone(),
+            provider,
+            entry_point,
+            fee_estimator,
+            test_settings,
+        );
 
-        let op = UserOperation {
-            sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
-            nonce: U256::from(100),
-            init_code: bytes!("1000000000000000000000000000000000000000"),
-            call_data: Bytes::default(),
-            call_gas_limit: 9_000, // large call gas limit high to trigger TotalGasLimitTooHigh
-            verification_gas_limit: 10_000_000,
-            pre_verification_gas: 0,
-            max_fee_per_gas: 5_000,
-            max_priority_fee_per_gas: 2_000,
-            paymaster_and_data: Bytes::default(),
-            signature: Bytes::default(),
-        };
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
+                nonce: U256::from(100),
+                init_code: bytes!("1000000000000000000000000000000000000000"),
+                call_data: Bytes::default(),
+                call_gas_limit: 9_000, // large call gas limit high to trigger TotalGasLimitTooHigh
+                verification_gas_limit: 10_000_000,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 5_000,
+                max_priority_fee_per_gas: 2_000,
+                paymaster_and_data: Bytes::default(),
+                signature: Bytes::default(),
+            },
+        )
+        .build();
 
         let res = prechecker.check_gas(&op, get_test_async_data());
+
+        let total_gas_limit = op.gas_limit(&cs, true);
 
         assert_eq!(
             res,
             ArrayVec::<PrecheckViolation, 6>::from([
                 PrecheckViolation::VerificationGasLimitTooHigh(10_000_000, 5_000_000,),
-                PrecheckViolation::TotalGasLimitTooHigh(20_014_000, 10_000_000,),
+                PrecheckViolation::TotalGasLimitTooHigh(total_gas_limit, 10_000_000,),
                 PrecheckViolation::PreVerificationGasTooLow(0, 1_000,),
                 PrecheckViolation::MaxPriorityFeePerGasTooLow(2_000, 4_000,),
                 PrecheckViolation::MaxFeePerGasTooLow(5_000, 8_000,),
@@ -525,28 +543,32 @@ mod tests {
         let (cs, provider, entry_point, fee_estimator) = create_base_config();
         let provider = Arc::new(provider);
         let prechecker = PrecheckerImpl::new(
-            cs,
+            cs.clone(),
             provider,
             entry_point,
             fee_estimator,
             Settings::default(),
         );
 
-        let op = UserOperation {
-            sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
-            nonce: U256::from(100),
-            init_code: Bytes::default(),
-            call_data: Bytes::default(),
-            call_gas_limit: 500_000,
-            verification_gas_limit: 500_000,
-            pre_verification_gas: 0,
-            max_fee_per_gas: 1_000,
-            max_priority_fee_per_gas: 0,
-            paymaster_and_data: bytes!(
-                "a4b2c8f0351d60729e4f0a12345678d9b1c3e5f27890abcdef123456780abcdef1"
-            ),
-            signature: Bytes::default(),
-        };
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                sender: address!("3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"),
+                nonce: U256::from(100),
+                init_code: Bytes::default(),
+                call_data: Bytes::default(),
+                call_gas_limit: 500_000,
+                verification_gas_limit: 500_000,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 1_000,
+                max_priority_fee_per_gas: 0,
+                paymaster_and_data: bytes!(
+                    "a4b2c8f0351d60729e4f0a12345678d9b1c3e5f27890abcdef123456780abcdef1"
+                ),
+                signature: Bytes::default(),
+            },
+        )
+        .build();
 
         let res = prechecker.check_payer(&op, get_test_async_data());
         assert_eq!(

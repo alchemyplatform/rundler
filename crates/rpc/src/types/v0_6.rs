@@ -14,7 +14,9 @@
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
     chain::ChainSpec,
-    v0_6::{UserOperation, UserOperationOptionalGas},
+    v0_6::{
+        UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
+    },
     GasEstimate,
 };
 use serde::{Deserialize, Serialize};
@@ -57,20 +59,24 @@ impl From<UserOperation> for RpcUserOperation {
 }
 
 impl FromRpc<RpcUserOperation> for UserOperation {
-    fn from_rpc(def: RpcUserOperation, _chain_spec: &ChainSpec) -> Self {
-        UserOperation {
-            sender: def.sender.into(),
-            nonce: def.nonce,
-            init_code: def.init_code,
-            call_data: def.call_data,
-            call_gas_limit: def.call_gas_limit.to(),
-            verification_gas_limit: def.verification_gas_limit.to(),
-            pre_verification_gas: def.pre_verification_gas.to(),
-            max_fee_per_gas: def.max_fee_per_gas.to(),
-            max_priority_fee_per_gas: def.max_priority_fee_per_gas.to(),
-            paymaster_and_data: def.paymaster_and_data,
-            signature: def.signature,
-        }
+    fn from_rpc(def: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
+        UserOperationBuilder::new(
+            chain_spec,
+            UserOperationRequiredFields {
+                sender: def.sender.into(),
+                nonce: def.nonce,
+                init_code: def.init_code,
+                call_data: def.call_data,
+                call_gas_limit: def.call_gas_limit.to(),
+                verification_gas_limit: def.verification_gas_limit.to(),
+                pre_verification_gas: def.pre_verification_gas.to(),
+                max_fee_per_gas: def.max_fee_per_gas.to(),
+                max_priority_fee_per_gas: def.max_priority_fee_per_gas.to(),
+                paymaster_and_data: def.paymaster_and_data,
+                signature: def.signature,
+            },
+        )
+        .build()
     }
 }
 

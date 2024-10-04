@@ -24,12 +24,12 @@ use rundler_contracts::v0_7::{
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_provider::{
-    AccountOverride, EntryPoint, EvmProvider, L1GasProvider, SimulationProvider, StateOverride,
+    AccountOverride, DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
 };
 use rundler_types::{
     chain::ChainSpec,
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
-    GasEstimate,
+    GasEstimate, UserOperation as _,
 };
 use rundler_utils::math;
 use tokio::join;
@@ -55,7 +55,7 @@ pub struct GasEstimator<P, E, VGE, CGE, F> {
 impl<P, E, VGE, CGE, F> super::GasEstimator for GasEstimator<P, E, VGE, CGE, F>
 where
     P: EvmProvider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + DAGasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
     CGE: CallGasEstimator<UO = UserOperation>,
     F: FeeEstimator,
@@ -123,8 +123,7 @@ where
         op_with_gas.call_gas_limit = call_gas_limit;
         op_with_gas.verification_gas_limit = verification_gas_limit;
         op_with_gas.paymaster_verification_gas_limit = paymaster_verification_gas_limit;
-        let gas_limit =
-            gas::user_operation_execution_gas_limit(&self.chain_spec, &op_with_gas, true);
+        let gas_limit = op_with_gas.execution_gas_limit(&self.chain_spec, true);
         if gas_limit > self.settings.max_total_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -155,7 +154,7 @@ where
     P: EvmProvider + Clone,
     E: EntryPoint
         + SimulationProvider<UO = UserOperation>
-        + L1GasProvider<UO = UserOperation>
+        + DAGasProvider<UO = UserOperation>
         + Clone,
     F: FeeEstimator,
 {
@@ -199,7 +198,7 @@ where
 impl<P, E, VGE, CGE, F> GasEstimator<P, E, VGE, CGE, F>
 where
     P: EvmProvider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + DAGasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
     CGE: CallGasEstimator<UO = UserOperation>,
     F: FeeEstimator,
@@ -209,6 +208,7 @@ where
         optional_op: &UserOperationOptionalGas,
     ) -> Result<(), GasEstimationError> {
         if let Some(pvg) = optional_op.pre_verification_gas {
+            // TODO(danc): HERE
             if pvg > self.settings.max_verification_gas {
                 return Err(GasEstimationError::GasFieldTooLarge(
                     "preVerificationGas",
@@ -355,7 +355,7 @@ where
         }
 
         // If not using calldata pre-verification gas, return 0
-        let gas_price = if !self.chain_spec.calldata_pre_verification_gas {
+        let gas_price = if !self.chain_spec.da_pre_verification_gas {
             0
         } else {
             // If the user provides fees, use them, otherwise use the current bundle fees

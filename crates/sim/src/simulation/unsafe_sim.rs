@@ -81,6 +81,7 @@ where
             }
         };
 
+        // TODO(danc): HERE
         // simulate the validation
         let validation_result = self
             .entry_point
@@ -127,6 +128,7 @@ where
         let mut violations = vec![];
 
         let aggregator = if let Some(aggregator_info) = validation_result.aggregator_info {
+            // TODO(danc): HERE
             let agg_out = self
                 .entry_point
                 .validate_user_op_signature(

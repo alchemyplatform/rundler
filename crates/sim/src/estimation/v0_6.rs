@@ -24,12 +24,12 @@ use rundler_contracts::v0_6::{
     ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
 };
 use rundler_provider::{
-    AccountOverride, EntryPoint, EvmProvider, L1GasProvider, SimulationProvider, StateOverride,
+    AccountOverride, DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
 };
 use rundler_types::{
     chain::ChainSpec,
-    v0_6::{UserOperation, UserOperationOptionalGas},
-    GasEstimate,
+    v0_6::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
+    GasEstimate, UserOperation as _,
 };
 use rundler_utils::math;
 use tokio::join;
@@ -58,7 +58,7 @@ pub struct GasEstimator<P, E, VGE, CGE, F> {
 impl<P, E, VGE, CGE, F> GasEstimatorTrait for GasEstimator<P, E, VGE, CGE, F>
 where
     P: EvmProvider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + DAGasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
     CGE: CallGasEstimator<UO = UserOperation>,
     F: FeeEstimator,
@@ -80,13 +80,15 @@ where
 
         let pre_verification_gas = self.estimate_pre_verification_gas(&op).await?;
 
-        let full_op = UserOperation {
-            pre_verification_gas,
-            ..op.clone().into_user_operation(
+        let full_op = op
+            .clone()
+            .into_user_operation_builder(
+                &self.chain_spec,
                 self.settings.max_call_gas,
                 self.settings.max_verification_gas,
             )
-        };
+            .pre_verification_gas(pre_verification_gas)
+            .build();
 
         let verification_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
@@ -105,8 +107,7 @@ where
         let mut op_with_gas = full_op;
         op_with_gas.verification_gas_limit = verification_gas_limit;
         op_with_gas.call_gas_limit = call_gas_limit;
-        let gas_limit =
-            gas::user_operation_execution_gas_limit(&self.chain_spec, &op_with_gas, true);
+        let gas_limit = op_with_gas.execution_gas_limit(&self.chain_spec, true);
         if gas_limit > self.settings.max_total_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -135,7 +136,7 @@ where
     P: EvmProvider + Clone,
     E: EntryPoint
         + SimulationProvider<UO = UserOperation>
-        + L1GasProvider<UO = UserOperation>
+        + DAGasProvider<UO = UserOperation>
         + Clone,
     F: FeeEstimator,
 {
@@ -160,7 +161,9 @@ where
         let call_gas_estimator = CallGasEstimatorImpl::new(
             entry_point.clone(),
             settings,
-            CallGasEstimatorSpecializationV06,
+            CallGasEstimatorSpecializationV06 {
+                chain_spec: chain_spec.clone(),
+            },
         );
         Self {
             chain_spec,
@@ -177,7 +180,7 @@ where
 impl<P, E, VGE, CGE, F> GasEstimator<P, E, VGE, CGE, F>
 where
     P: EvmProvider,
-    E: EntryPoint + SimulationProvider<UO = UserOperation> + L1GasProvider<UO = UserOperation>,
+    E: EntryPoint + SimulationProvider<UO = UserOperation> + DAGasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
     CGE: CallGasEstimator<UO = UserOperation>,
     F: FeeEstimator,
@@ -186,6 +189,7 @@ where
         &self,
         optional_op: &UserOperationOptionalGas,
     ) -> Result<(), GasEstimationError> {
+        // TODO(danc): HERE
         if let Some(pvg) = optional_op.pre_verification_gas {
             if pvg > self.settings.max_verification_gas {
                 return Err(GasEstimationError::GasFieldTooLarge(
@@ -230,16 +234,16 @@ where
             }
         }
 
-        fn get_op_with_limit(op: UserOperation, args: GetOpWithLimitArgs) -> UserOperation {
+        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
-            UserOperation {
-                verification_gas_limit: gas,
-                max_fee_per_gas: fee,
-                max_priority_fee_per_gas: fee,
-                call_gas_limit: 0,
-                ..op
-            }
-        }
+
+            UserOperationBuilder::from_uo(op, &self.chain_spec)
+                .verification_gas_limit(gas)
+                .max_fee_per_gas(fee)
+                .max_priority_fee_per_gas(fee)
+                .call_gas_limit(0)
+                .build()
+        };
 
         let verification_gas_limit: u128 = self
             .verification_gas_estimator
@@ -277,7 +281,7 @@ where
         }
 
         // If not using calldata pre-verification gas, return 0
-        let gas_price = if !self.chain_spec.calldata_pre_verification_gas {
+        let gas_price = if !self.chain_spec.da_pre_verification_gas {
             0
         } else {
             // If the user provides fees, use them, otherwise use the current bundle fees
@@ -295,14 +299,8 @@ where
         Ok(gas::estimate_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
-            &optional_op.max_fill(
-                self.settings.max_call_gas,
-                self.settings.max_verification_gas,
-            ),
-            &optional_op.random_fill(
-                self.settings.max_call_gas,
-                self.settings.max_verification_gas,
-            ),
+            &optional_op.max_fill(&self.chain_spec),
+            &optional_op.random_fill(&self.chain_spec),
             gas_price,
         )
         .await?)
@@ -343,7 +341,9 @@ where
 /// Implementation of functions that specialize the call gas estimator to the
 /// v0.6 entry point.
 #[derive(Debug)]
-pub struct CallGasEstimatorSpecializationV06;
+pub struct CallGasEstimatorSpecializationV06 {
+    chain_spec: ChainSpec,
+}
 
 impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
     type UO = UserOperation;
@@ -374,11 +374,10 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
     }
 
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO {
-        UserOperation {
-            call_gas_limit: 0,
-            max_fee_per_gas: 0,
-            ..op
-        }
+        UserOperationBuilder::from_uo(op, &self.chain_spec)
+            .call_gas_limit(0)
+            .max_fee_per_gas(0)
+            .build()
     }
 
     fn get_estimate_call_gas_calldata(
@@ -443,8 +442,8 @@ mod tests {
         EvmCall, ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider,
     };
     use rundler_types::{
-        chain::L1GasOracleContractType,
-        v0_6::{UserOperation, UserOperationOptionalGas},
+        chain::DAGasOracleContractType,
+        v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
     use CallGasEstimationProxy::{
@@ -576,19 +575,23 @@ mod tests {
     }
 
     fn demo_user_op() -> UserOperation {
-        UserOperation {
-            sender: Address::ZERO,
-            nonce: U256::ZERO,
-            init_code: Bytes::new(),
-            call_data: Bytes::new(),
-            call_gas_limit: 100,
-            verification_gas_limit: 1000,
-            pre_verification_gas: 1000,
-            max_fee_per_gas: 1000,
-            max_priority_fee_per_gas: 1000,
-            paymaster_and_data: Bytes::new(),
-            signature: Bytes::new(),
-        }
+        UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: Address::ZERO,
+                nonce: U256::ZERO,
+                init_code: Bytes::new(),
+                call_data: Bytes::new(),
+                call_gas_limit: 100,
+                verification_gas_limit: 1000,
+                pre_verification_gas: 1000,
+                max_fee_per_gas: 1000,
+                max_priority_fee_per_gas: 1000,
+                paymaster_and_data: Bytes::new(),
+                signature: Bytes::new(),
+            },
+        )
+        .build()
     }
 
     #[tokio::test]
@@ -601,14 +604,14 @@ mod tests {
             .expect_get_max_priority_fee()
             .returning(|| Ok(TEST_FEE));
 
-        let (estimator, settings) = create_estimator(entry, provider);
+        let (estimator, _) = create_estimator(entry, provider);
         let user_op = demo_user_op_optional_gas(None);
         let estimation = estimator
             .estimate_pre_verification_gas(&user_op)
             .await
             .unwrap();
 
-        let uo = user_op.max_fill(settings.max_call_gas, settings.max_verification_gas);
+        let uo = user_op.max_fill(&ChainSpec::default());
 
         let cuo_bytes = ContractUserOperation::from(uo).abi_encode();
         let length_in_words = (cuo_bytes.len() + 31) / 32;
@@ -633,7 +636,7 @@ mod tests {
     async fn test_calc_pre_verification_input_arbitrum() {
         let (mut entry, provider) = create_base_config();
         entry
-            .expect_calc_l1_gas()
+            .expect_calc_da_gas()
             .returning(|_a, _b, _c| Ok(TEST_FEE));
 
         let settings = Settings {
@@ -649,8 +652,8 @@ mod tests {
         // Chose arbitrum
         let cs = ChainSpec {
             id: 42161,
-            calldata_pre_verification_gas: true,
-            l1_gas_oracle_contract_type: L1GasOracleContractType::ArbitrumNitro,
+            da_pre_verification_gas: true,
+            da_gas_oracle_contract_type: DAGasOracleContractType::ArbitrumNitro,
             ..Default::default()
         };
         let provider = Arc::new(provider);
@@ -680,7 +683,7 @@ mod tests {
             .await
             .unwrap();
 
-        let uo = user_op.max_fill(settings.max_call_gas, settings.max_verification_gas);
+        let uo = user_op.max_fill(&ChainSpec::default());
 
         let cuo_bytes = ContractUserOperation::from(uo).abi_encode();
         let length_in_words = (cuo_bytes.len() + 31) / 32;
@@ -698,10 +701,10 @@ mod tests {
             + PER_USER_OP
             + PER_USER_OP_WORD * (length_in_words as u32);
 
-        //Arbitrum dynamic gas
-        let dynamic_gas: u128 = 1000;
+        //Arbitrum DA gas
+        let da_gas: u128 = 1000;
 
-        assert_eq!(result as u128 + dynamic_gas, estimation);
+        assert_eq!(result as u128 + da_gas, estimation);
     }
 
     #[tokio::test]
@@ -709,7 +712,7 @@ mod tests {
         let (mut entry, provider) = create_base_config();
 
         entry
-            .expect_calc_l1_gas()
+            .expect_calc_da_gas()
             .returning(|_a, _b, _c| Ok(TEST_FEE));
 
         let settings = Settings {
@@ -725,8 +728,8 @@ mod tests {
         // Chose OP
         let cs = ChainSpec {
             id: 10,
-            calldata_pre_verification_gas: true,
-            l1_gas_oracle_contract_type: L1GasOracleContractType::OptimismBedrock,
+            da_pre_verification_gas: true,
+            da_gas_oracle_contract_type: DAGasOracleContractType::OptimismBedrock,
             ..Default::default()
         };
         let mut fee_estimator = MockFeeEstimator::new();
@@ -748,7 +751,7 @@ mod tests {
             .await
             .unwrap();
 
-        let uo = user_op.max_fill(settings.max_call_gas, settings.max_verification_gas);
+        let uo = user_op.max_fill(&ChainSpec::default());
 
         let cuo_bytes = ContractUserOperation::from(uo).abi_encode();
         let length_in_words = (cuo_bytes.len() + 31) / 32;
@@ -766,10 +769,10 @@ mod tests {
             + PER_USER_OP
             + PER_USER_OP_WORD * (length_in_words as u32);
 
-        //OP dynamic gas
-        let dynamic_gas = 1000;
+        //OP DA gas
+        let da_gas = 1000;
 
-        assert_eq!(result + dynamic_gas, estimation as u32);
+        assert_eq!(result + da_gas, estimation as u32);
     }
 
     #[tokio::test]

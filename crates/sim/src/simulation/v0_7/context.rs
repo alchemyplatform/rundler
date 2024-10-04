@@ -465,6 +465,7 @@ where
     pub(crate) fn new(provider: P, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
             entry_point_address: *entry_point.address(),
+            // TODO(danc): HERE
             simulate_validation_tracer: SimulateValidationTracerImpl::new(
                 provider,
                 entry_point,

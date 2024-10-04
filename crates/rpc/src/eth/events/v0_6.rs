@@ -17,7 +17,10 @@ use rundler_contracts::v0_6::IEntryPoint::{
     IEntryPointCalls, UserOperationEvent, UserOperationRevertReason,
 };
 use rundler_provider::{Log, TransactionReceipt};
-use rundler_types::{chain::ChainSpec, v0_6::UserOperation};
+use rundler_types::{
+    chain::ChainSpec,
+    v0_6::{UserOperation, UserOperationBuilder},
+};
 
 use super::common::{EntryPointEvents, UserOperationEventProviderImpl};
 use crate::types::RpcUserOperationReceipt;
@@ -73,7 +76,7 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
         }
     }
 
-    fn get_user_operations_from_tx_data(tx_data: Bytes, _chain_spec: &ChainSpec) -> Vec<Self::UO> {
+    fn get_user_operations_from_tx_data(tx_data: Bytes, chain_spec: &ChainSpec) -> Vec<Self::UO> {
         let entry_point_calls = match IEntryPointCalls::abi_decode(&tx_data, false) {
             Ok(entry_point_calls) => entry_point_calls,
             Err(_) => return vec![],
@@ -83,13 +86,23 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
             IEntryPointCalls::handleOps(handle_ops_call) => handle_ops_call
                 .ops
                 .into_iter()
-                .filter_map(|op| op.try_into().ok())
+                .filter_map(|op| {
+                    UserOperationBuilder::from_contract(chain_spec, op)
+                        .ok()
+                        .map(|b| b.build())
+                })
                 .collect(),
             IEntryPointCalls::handleAggregatedOps(handle_aggregated_ops_call) => {
                 handle_aggregated_ops_call
                     .opsPerAggregator
                     .into_iter()
-                    .flat_map(|ops| ops.userOps.into_iter().filter_map(|op| op.try_into().ok()))
+                    .flat_map(|ops| {
+                        ops.userOps.into_iter().filter_map(|op| {
+                            UserOperationBuilder::from_contract(chain_spec, op)
+                                .ok()
+                                .map(|b| b.build())
+                        })
+                    })
                     .collect()
             }
             _ => vec![],
