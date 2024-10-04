@@ -152,6 +152,6 @@ impl GrpcMetricsRecorder {
 
     // Record the latency of a request for a given method and service.
     fn record_request_latency(method_name: &str, scope: &str, latency: Duration) {
-        metrics::histogram!("grpc_request_latency", "method_name" => method_name.to_string(), "service" => scope.to_string()).record(latency)
+        metrics::histogram!("grpc_request_latency", "method_name" => method_name.to_string(), "service" => scope.to_string()).record(latency.as_millis() as f64)
     }
 }
