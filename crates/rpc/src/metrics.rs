@@ -98,6 +98,7 @@ impl RpcMetrics {
     }
 
     fn record_request_latency(method_name: String, latency: Duration) {
-        metrics::histogram!("rpc_request_latency", "method_name" => method_name).record(latency);
+        metrics::histogram!("rpc_request_latency", "method_name" => method_name)
+            .record(latency.as_millis() as f64);
     }
 }
