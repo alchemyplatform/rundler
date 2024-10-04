@@ -1,10 +1,9 @@
 name = "Optimism"
 id = 10
 
-calldata_pre_verification_gas = true
-l1_gas_oracle_contract_type = "OPTIMISM_BEDROCK"
-l1_gas_oracle_contract_address = "0x420000000000000000000000000000000000000F"
-include_l1_gas_in_gas_limit = false
+da_pre_verification_gas = true
+da_gas_oracle_contract_type = "OPTIMISM_BEDROCK"
+da_gas_oracle_contract_address = "0x420000000000000000000000000000000000000F"
 
 priority_fee_oracle_type = "USAGE_BASED"
 min_max_priority_fee_per_gas = 100000

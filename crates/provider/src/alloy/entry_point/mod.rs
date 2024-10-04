@@ -17,7 +17,7 @@ use alloy_provider::Provider as AlloyProvider;
 use alloy_rlp::Encodable;
 use alloy_rpc_types_eth::TransactionRequest;
 use alloy_transport::Transport;
-use rundler_types::chain::{ChainSpec, L1GasOracleContractType};
+use rundler_types::chain::{ChainSpec, DAGasOracleContractType};
 
 use crate::ProviderResult;
 
@@ -28,27 +28,27 @@ mod arbitrum;
 mod optimism;
 
 #[derive(Debug, Default, Clone)]
-enum L1GasOracle {
+enum DAGasOracle {
     ArbitrumNitro(Address),
     OptimismBedrock(Address),
     #[default]
     None,
 }
 
-impl L1GasOracle {
-    fn new(chain_spec: &ChainSpec) -> L1GasOracle {
-        match chain_spec.l1_gas_oracle_contract_type {
-            L1GasOracleContractType::ArbitrumNitro => {
-                L1GasOracle::ArbitrumNitro(chain_spec.l1_gas_oracle_contract_address)
+impl DAGasOracle {
+    fn new(chain_spec: &ChainSpec) -> DAGasOracle {
+        match chain_spec.da_gas_oracle_contract_type {
+            DAGasOracleContractType::ArbitrumNitro => {
+                DAGasOracle::ArbitrumNitro(chain_spec.da_gas_oracle_contract_address)
             }
-            L1GasOracleContractType::OptimismBedrock => {
-                L1GasOracle::OptimismBedrock(chain_spec.l1_gas_oracle_contract_address)
+            DAGasOracleContractType::OptimismBedrock => {
+                DAGasOracle::OptimismBedrock(chain_spec.da_gas_oracle_contract_address)
             }
-            L1GasOracleContractType::None => L1GasOracle::None,
+            DAGasOracleContractType::None => DAGasOracle::None,
         }
     }
 
-    async fn estimate_l1_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
+    async fn estimate_da_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
         &self,
         provider: AP,
         to_address: Address,
@@ -56,13 +56,13 @@ impl L1GasOracle {
         gas_price: u128,
     ) -> ProviderResult<u128> {
         match self {
-            L1GasOracle::ArbitrumNitro(oracle_address) => {
-                arbitrum::estimate_l1_gas(provider, *oracle_address, to_address, data).await
+            DAGasOracle::ArbitrumNitro(oracle_address) => {
+                arbitrum::estimate_da_gas(provider, *oracle_address, to_address, data).await
             }
-            L1GasOracle::OptimismBedrock(oracle_address) => {
-                optimism::estimate_l1_gas(provider, *oracle_address, data, gas_price).await
+            DAGasOracle::OptimismBedrock(oracle_address) => {
+                optimism::estimate_da_gas(provider, *oracle_address, data, gas_price).await
             }
-            L1GasOracle::None => Ok(0),
+            DAGasOracle::None => Ok(0),
         }
     }
 }

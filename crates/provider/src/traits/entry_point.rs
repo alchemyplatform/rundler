@@ -150,19 +150,19 @@ pub trait BundleHandler: Send + Sync {
     ) -> TransactionRequest;
 }
 
-/// Trait for calculating L1 gas costs for user operations
+/// Trait for calculating Data Availability (DA) gas costs for user operations
 ///
-/// Used for L2 gas estimation
+/// Used for L2+ gas estimation
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
-pub trait L1GasProvider: Send + Sync {
+pub trait DAGasProvider: Send + Sync {
     /// The type of user operation used by this entry point
     type UO: UserOperation;
 
-    /// Calculate the L1 portion of the gas for a user operation
+    /// Calculate the DA portion of the gas for a user operation
     ///
-    /// Returns zero for operations that do not require L1 gas
-    async fn calc_l1_gas(
+    /// Returns zero for operations that do not require DA gas
+    async fn calc_da_gas(
         &self,
         entry_point_address: Address,
         op: Self::UO,
@@ -224,6 +224,6 @@ pub trait EntryPointProvider<UO>:
     + SignatureAggregator<UO = UO>
     + BundleHandler<UO = UO>
     + SimulationProvider<UO = UO>
-    + L1GasProvider<UO = UO>
+    + DAGasProvider<UO = UO>
 {
 }

@@ -420,6 +420,8 @@ where
                 Some(block_id),
             )
             .map_err(|e| SimulationError::from(anyhow::anyhow!("should call get_code_hash {e:?}")));
+
+        // TODO(danc): HERE
         let aggregator_signature_future = self.validate_aggregator_signature(
             op,
             aggregator_address,
@@ -686,7 +688,11 @@ mod tests {
     use rundler_provider::{
         AggregatorOut, BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider,
     };
-    use rundler_types::{v0_6::UserOperation, Opcode, StakeInfo};
+    use rundler_types::{
+        chain::ChainSpec,
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+        Opcode, StakeInfo,
+    };
 
     use self::context::{Phase, TracerOutput};
     use super::*;
@@ -893,7 +899,7 @@ mod tests {
             .expect_validate_user_op_signature()
             .returning(|_, _, _| Ok(AggregatorOut::NotNeeded));
 
-        let user_operation = UserOperation {
+        let user_operation = UserOperationBuilder::new(&ChainSpec::default(),UserOperationRequiredFields {
             sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
             nonce: U256::from(264),
             init_code: Bytes::default(),
@@ -905,7 +911,7 @@ mod tests {
             max_priority_fee_per_gas: 105000000,
             paymaster_and_data: Bytes::default(),
             signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
-        };
+        }).build();
 
         let simulator = create_simulator(provider, entry_point, context);
         let res = simulator

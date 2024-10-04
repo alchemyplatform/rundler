@@ -27,7 +27,7 @@ sol! {
     }
 }
 
-pub(crate) async fn estimate_l1_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
+pub(crate) async fn estimate_da_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
     provider: AP,
     oracle_address: Address,
     data: Bytes,
@@ -41,7 +41,7 @@ pub(crate) async fn estimate_l1_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
         .await?
         ._0
         .try_into()
-        .context("failed to convert L1 fee to u128")?;
+        .context("failed to convert DA fee to u128")?;
 
     Ok(l1_fee.checked_div(gas_price).unwrap_or(u128::MAX))
 }

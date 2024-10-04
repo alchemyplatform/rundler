@@ -51,7 +51,7 @@ const ABI_ENCODED_USER_OPERATION_FIXED_LEN: usize = 512;
 /// User Operation for Entry Point v0.6
 ///
 /// Direct conversion to/from onchain UserOperation
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserOperation {
     /// Sender
     pub sender: Address,
@@ -77,6 +77,32 @@ pub struct UserOperation {
     pub paymaster_and_data: Bytes,
     /// Signature
     pub signature: Bytes,
+
+    /// Cached calldata gas cost
+    pub calldata_gas_cost: u128,
+}
+
+#[cfg(feature = "test-utils")]
+impl Default for UserOperation {
+    fn default() -> Self {
+        UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: Address::ZERO,
+                nonce: U256::ZERO,
+                init_code: Bytes::new(),
+                call_data: Bytes::new(),
+                signature: Bytes::new(),
+                paymaster_and_data: Bytes::new(),
+                call_gas_limit: 0,
+                verification_gas_limit: 0,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+            },
+        )
+        .build()
+    }
 }
 
 sol! {
@@ -221,11 +247,7 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit + ENTRY_POINT_INNER_GAS_OVERHEAD
     }
 
-    fn calc_static_pre_verification_gas(
-        &self,
-        chain_spec: &ChainSpec,
-        include_fixed_gas_overhead: bool,
-    ) -> u128 {
+    fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
         super::op_calldata_gas_cost(
             ContractUserOperation::from(self.clone()),
             chain_spec.calldata_zero_byte_gas(),
@@ -234,11 +256,6 @@ impl UserOperationTrait for UserOperation {
         ) + chain_spec.per_user_op_v0_6_gas()
             + (if self.factory().is_some() {
                 chain_spec.per_user_op_deploy_overhead_gas()
-            } else {
-                0
-            })
-            + (if include_fixed_gas_overhead {
-                chain_spec.transaction_intrinsic_gas()
             } else {
                 0
             })
@@ -272,26 +289,6 @@ impl From<UserOperation> for ContractUserOperation {
             paymasterAndData: op.paymaster_and_data,
             signature: op.signature,
         }
-    }
-}
-
-impl TryFrom<ContractUserOperation> for UserOperation {
-    type Error = FromUintError<u128>;
-
-    fn try_from(op: ContractUserOperation) -> Result<Self, Self::Error> {
-        Ok(UserOperation {
-            sender: op.sender,
-            nonce: op.nonce,
-            init_code: op.initCode,
-            call_data: op.callData,
-            call_gas_limit: op.callGasLimit.try_into()?,
-            verification_gas_limit: op.verificationGasLimit.try_into()?,
-            pre_verification_gas: op.preVerificationGas.try_into()?,
-            max_fee_per_gas: op.maxFeePerGas.try_into()?,
-            max_priority_fee_per_gas: op.maxPriorityFeePerGas.try_into()?,
-            paymaster_and_data: op.paymasterAndData,
-            signature: op.signature,
-        })
     }
 }
 
@@ -389,19 +386,28 @@ pub struct UserOperationOptionalGas {
 impl UserOperationOptionalGas {
     /// Fill in the optional and dummy fields of the user operation with values
     /// that will cause the maximum possible calldata gas cost.
-    pub fn max_fill(&self, max_call_gas: u128, max_verification_gas: u128) -> UserOperation {
-        UserOperation {
-            call_gas_limit: u128::MAX,
-            verification_gas_limit: u128::MAX,
-            pre_verification_gas: u128::MAX,
-            max_fee_per_gas: u128::MAX,
-            max_priority_fee_per_gas: u128::MAX,
-            signature: vec![255_u8; self.signature.len()].into(),
-            paymaster_and_data: vec![255_u8; self.paymaster_and_data.len()].into(),
-            ..self
-                .clone()
-                .into_user_operation(max_call_gas, max_verification_gas)
-        }
+    pub fn max_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
+        let max_4 = u32::MAX as u128;
+        let max_8 = u64::MAX as u128;
+
+        let builder = UserOperationBuilder::new(
+            chain_spec,
+            UserOperationRequiredFields {
+                sender: self.sender,
+                nonce: self.nonce,
+                init_code: self.init_code.clone(),
+                call_data: self.call_data.clone(),
+                signature: vec![255_u8; self.signature.len()].into(),
+                paymaster_and_data: vec![255_u8; self.paymaster_and_data.len()].into(),
+                call_gas_limit: max_4,
+                verification_gas_limit: max_4,
+                pre_verification_gas: max_4,
+                max_priority_fee_per_gas: max_8,
+                max_fee_per_gas: max_8,
+            },
+        );
+
+        builder.build()
     }
 
     /// Fill in the optional and dummy fields of the user operation with random values.
@@ -413,36 +419,44 @@ impl UserOperationOptionalGas {
     //
     /// Note that this will slightly overestimate the calldata gas needed as it uses
     /// the worst case scenario for the unknown gas values and paymaster_and_data.
-    pub fn random_fill(&self, max_call_gas: u128, max_verification_gas: u128) -> UserOperation {
-        UserOperation {
-            call_gas_limit: u128::from_le_bytes(random_bytes_array::<16, 4>()), // 30M max
-            verification_gas_limit: u128::from_le_bytes(random_bytes_array::<16, 4>()), // 30M max
-            pre_verification_gas: u128::from_le_bytes(random_bytes_array::<16, 4>()), // 30M max
-            max_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
-            max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
-            signature: random_bytes(self.signature.len()),
-            paymaster_and_data: random_bytes(self.paymaster_and_data.len()),
-            ..self
-                .clone()
-                .into_user_operation(max_call_gas, max_verification_gas)
-        }
+    pub fn random_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
+        let builder = UserOperationBuilder::new(
+            chain_spec,
+            UserOperationRequiredFields {
+                sender: self.sender,
+                nonce: self.nonce,
+                init_code: self.init_code.clone(),
+                call_data: self.call_data.clone(),
+                signature: random_bytes(self.signature.len()),
+                paymaster_and_data: random_bytes(self.paymaster_and_data.len()),
+                call_gas_limit: u128::from_le_bytes(random_bytes_array::<16, 4>()), // 30M max
+                verification_gas_limit: u128::from_le_bytes(random_bytes_array::<16, 4>()), // 30M max
+                pre_verification_gas: u128::from_le_bytes(random_bytes_array::<16, 4>()), // 30M max
+                max_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
+                max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
+            },
+        );
+
+        builder.build()
     }
 
-    /// Convert into a full user operation.
+    /// Convert into a user operation builder.
     /// Fill in the optional fields of the user operation with default values if unset
-    pub fn into_user_operation(
+    pub fn into_user_operation_builder(
         self,
+        chain_spec: &ChainSpec,
         max_call_gas: u128,
         max_verification_gas: u128,
-    ) -> UserOperation {
+    ) -> UserOperationBuilder<'_> {
         // If unset or zero, default these to gas limits from settings
         // Cap their values to the gas limits from settings
         let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, 0);
         let vgl =
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
+        // TODO(danc): HERE
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
-        UserOperation {
+        let required = UserOperationRequiredFields {
             sender: self.sender,
             nonce: self.nonce,
             init_code: self.init_code,
@@ -455,7 +469,9 @@ impl UserOperationOptionalGas {
             // These aren't used in gas estimation, set to if unset 0 so that there are no payment attempts during gas estimation
             max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
-        }
+        };
+
+        UserOperationBuilder::new(chain_spec, required)
     }
 
     /// Abi encoded size of the user operation (with its dummy fields)
@@ -478,6 +494,170 @@ impl From<super::UserOperationOptionalGas> for UserOperationOptionalGas {
             super::UserOperationOptionalGas::V0_6(op) => op,
             _ => panic!("Expected UserOperationOptionalGasV0_6"),
         }
+    }
+}
+
+/// User operation builder
+pub struct UserOperationBuilder<'a> {
+    // chain spec
+    chain_spec: &'a ChainSpec,
+
+    // required fields
+    required: UserOperationRequiredFields,
+
+    // optional fields
+    contract_uo: Option<ContractUserOperation>,
+}
+
+/// User operation required fields
+pub struct UserOperationRequiredFields {
+    /// Sender
+    pub sender: Address,
+    /// None
+    pub nonce: U256,
+    /// Init code
+    pub init_code: Bytes,
+    /// Call data
+    pub call_data: Bytes,
+    /// Call gas limit
+    pub call_gas_limit: u128,
+    /// Verification gas limit
+    pub verification_gas_limit: u128,
+    /// Pre verification gas
+    pub pre_verification_gas: u128,
+    /// Max fee per gas
+    pub max_fee_per_gas: u128,
+    /// Max priority fee per gas
+    pub max_priority_fee_per_gas: u128,
+    /// Paymaster and data
+    pub paymaster_and_data: Bytes,
+    /// Signature
+    pub signature: Bytes,
+}
+
+impl TryFrom<ContractUserOperation> for UserOperationRequiredFields {
+    type Error = FromUintError<u128>;
+
+    fn try_from(op: ContractUserOperation) -> Result<Self, Self::Error> {
+        Ok(UserOperationRequiredFields {
+            sender: op.sender,
+            nonce: op.nonce,
+            init_code: op.initCode,
+            call_data: op.callData,
+            call_gas_limit: op.callGasLimit.try_into()?,
+            verification_gas_limit: op.verificationGasLimit.try_into()?,
+            pre_verification_gas: op.preVerificationGas.try_into()?,
+            max_fee_per_gas: op.maxFeePerGas.try_into()?,
+            max_priority_fee_per_gas: op.maxPriorityFeePerGas.try_into()?,
+            paymaster_and_data: op.paymasterAndData,
+            signature: op.signature,
+        })
+    }
+}
+
+impl<'a> UserOperationBuilder<'a> {
+    /// Create a new builder
+    pub fn new(chain_spec: &'a ChainSpec, required: UserOperationRequiredFields) -> Self {
+        Self {
+            chain_spec,
+            required,
+            contract_uo: None,
+        }
+    }
+
+    /// Create a builder from a contract user operation
+    pub fn from_contract(
+        chain_spec: &'a ChainSpec,
+        contract_uo: ContractUserOperation,
+    ) -> Result<Self, FromUintError<u128>> {
+        let required = UserOperationRequiredFields::try_from(contract_uo.clone())?;
+        Ok(Self {
+            chain_spec,
+            required,
+            contract_uo: Some(contract_uo),
+        })
+    }
+
+    /// Create a builder from a user operation
+    pub fn from_uo(uo: UserOperation, chain_spec: &'a ChainSpec) -> Self {
+        Self {
+            chain_spec,
+            required: UserOperationRequiredFields {
+                sender: uo.sender,
+                nonce: uo.nonce,
+                call_data: uo.call_data,
+                paymaster_and_data: uo.paymaster_and_data,
+                init_code: uo.init_code,
+                call_gas_limit: uo.call_gas_limit,
+                verification_gas_limit: uo.verification_gas_limit,
+                pre_verification_gas: uo.pre_verification_gas,
+                max_priority_fee_per_gas: uo.max_priority_fee_per_gas,
+                max_fee_per_gas: uo.max_fee_per_gas,
+                signature: uo.signature,
+            },
+            contract_uo: None,
+        }
+    }
+
+    /// Sets the pre-verification gas
+    pub fn pre_verification_gas(mut self, pre_verification_gas: u128) -> Self {
+        self.required.pre_verification_gas = pre_verification_gas;
+        self
+    }
+
+    /// Sets the verification gas limit
+    pub fn verification_gas_limit(mut self, verification_gas_limit: u128) -> Self {
+        self.required.verification_gas_limit = verification_gas_limit;
+        self
+    }
+
+    /// Sets the call gas limit
+    pub fn call_gas_limit(mut self, call_gas_limit: u128) -> Self {
+        self.required.call_gas_limit = call_gas_limit;
+        self
+    }
+
+    /// Sets the max fee per gas
+    pub fn max_fee_per_gas(mut self, max_fee_per_gas: u128) -> Self {
+        self.required.max_fee_per_gas = max_fee_per_gas;
+        self
+    }
+
+    /// Sets the max priority fee per gas
+    pub fn max_priority_fee_per_gas(mut self, max_priority_fee_per_gas: u128) -> Self {
+        self.required.max_priority_fee_per_gas = max_priority_fee_per_gas;
+        self
+    }
+
+    /// Build the user operation
+    pub fn build(self) -> UserOperation {
+        let mut uo = UserOperation {
+            sender: self.required.sender,
+            nonce: self.required.nonce,
+            init_code: self.required.init_code,
+            call_data: self.required.call_data,
+            call_gas_limit: self.required.call_gas_limit,
+            verification_gas_limit: self.required.verification_gas_limit,
+            pre_verification_gas: self.required.pre_verification_gas,
+            max_fee_per_gas: self.required.max_fee_per_gas,
+            max_priority_fee_per_gas: self.required.max_priority_fee_per_gas,
+            paymaster_and_data: self.required.paymaster_and_data,
+            signature: self.required.signature,
+            calldata_gas_cost: 0,
+        };
+
+        let cuo = self
+            .contract_uo
+            .unwrap_or_else(|| ContractUserOperation::from(uo.clone()));
+
+        uo.calldata_gas_cost = super::op_calldata_gas_cost(
+            cuo,
+            self.chain_spec.calldata_zero_byte_gas(),
+            self.chain_spec.calldata_non_zero_byte_gas(),
+            self.chain_spec.per_user_op_word_gas(),
+        );
+
+        uo
     }
 }
 
@@ -509,19 +689,23 @@ mod tests {
         //   }
         //
         // Hash: 0xdca97c3b49558ab360659f6ead939773be8bf26631e61bb17045bb70dc983b2d
-        let operation = UserOperation {
-            sender: address!("0000000000000000000000000000000000000000"),
-            nonce: U256::ZERO,
-            init_code: Bytes::default(),
-            call_data: Bytes::default(),
-            call_gas_limit: 0,
-            verification_gas_limit: 0,
-            pre_verification_gas: 0,
-            max_fee_per_gas: 0,
-            max_priority_fee_per_gas: 0,
-            paymaster_and_data: Bytes::default(),
-            signature: Bytes::default(),
-        };
+        let operation = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: address!("0000000000000000000000000000000000000000"),
+                nonce: U256::ZERO,
+                init_code: Bytes::default(),
+                call_data: Bytes::default(),
+                call_gas_limit: 0,
+                verification_gas_limit: 0,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                paymaster_and_data: Bytes::default(),
+                signature: Bytes::default(),
+            },
+        )
+        .build();
         let entry_point = address!("66a15edcc3b50a663e72f1457ffd49b9ae284ddc");
         let chain_id = 1337;
         let hash = operation.hash(entry_point, chain_id);
@@ -554,27 +738,31 @@ mod tests {
         //   }
         //
         // Hash: 0x484add9e4d8c3172d11b5feb6a3cc712280e176d278027cfa02ee396eb28afa1
-        let operation = UserOperation {
-            sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
-                .parse()
-                .unwrap(),
-            nonce: U256::from(8942),
-            init_code: "0x6942069420694206942069420694206942069420"
-                .parse()
-                .unwrap(),
-            call_data: "0x0000000000000000000000000000000000000000080085"
-                .parse()
-                .unwrap(),
-            call_gas_limit: 10_000,
-            verification_gas_limit: 100_000,
-            pre_verification_gas: 100,
-            max_fee_per_gas: 99_999,
-            max_priority_fee_per_gas: 9_999_999,
-            paymaster_and_data: bytes!(
+        let operation = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
+                    .parse()
+                    .unwrap(),
+                nonce: U256::from(8942),
+                init_code: "0x6942069420694206942069420694206942069420"
+                    .parse()
+                    .unwrap(),
+                call_data: "0x0000000000000000000000000000000000000000080085"
+                    .parse()
+                    .unwrap(),
+                call_gas_limit: 10_000,
+                verification_gas_limit: 100_000,
+                pre_verification_gas: 100,
+                max_fee_per_gas: 99_999,
+                max_priority_fee_per_gas: 9_999_999,
+                paymaster_and_data: bytes!(
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             ),
-            signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
-        };
+                signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
+            },
+        )
+        .build();
         let entry_point = address!("66a15edcc3b50a663e72f1457ffd49b9ae284ddc");
         let chain_id = 1337;
         let hash = operation.hash(entry_point, chain_id);
@@ -599,27 +787,31 @@ mod tests {
 
     #[test]
     fn test_abi_encoded_size() {
-        let operation = UserOperation {
-            sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
-                .parse()
-                .unwrap(),
-            nonce: U256::from(8942),
-            init_code: "0x6942069420694206942069420694206942069420"
-                .parse()
-                .unwrap(),
-            call_data: "0x0000000000000000000000000000000000000000080085"
-                .parse()
-                .unwrap(),
-            call_gas_limit: 10_000,
-            verification_gas_limit: 100_000,
-            pre_verification_gas: 100,
-            max_fee_per_gas: 99_999,
-            max_priority_fee_per_gas: 9_999_999,
-            paymaster_and_data: bytes!(
+        let operation = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: "0x1306b01bc3e4ad202612d3843387e94737673f53"
+                    .parse()
+                    .unwrap(),
+                nonce: U256::from(8942),
+                init_code: "0x6942069420694206942069420694206942069420"
+                    .parse()
+                    .unwrap(),
+                call_data: "0x0000000000000000000000000000000000000000080085"
+                    .parse()
+                    .unwrap(),
+                call_gas_limit: 10_000,
+                verification_gas_limit: 100_000,
+                pre_verification_gas: 100,
+                max_fee_per_gas: 99_999,
+                max_priority_fee_per_gas: 9_999_999,
+                paymaster_and_data: bytes!(
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             ),
-            signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
-        };
+                signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
+            },
+        )
+        .build();
 
         let size = operation.abi_encoded_size();
         let cuo = ContractUserOperation::from(operation).abi_encode();
@@ -628,19 +820,23 @@ mod tests {
 
     #[test]
     fn test_abi_encoded_size_min() {
-        let operation = UserOperation {
-            sender: address!("0000000000000000000000000000000000000000"),
-            nonce: U256::ZERO,
-            init_code: Bytes::default(),
-            call_data: Bytes::default(),
-            call_gas_limit: 0,
-            verification_gas_limit: 0,
-            pre_verification_gas: 0,
-            max_fee_per_gas: 0,
-            max_priority_fee_per_gas: 0,
-            paymaster_and_data: Bytes::default(),
-            signature: Bytes::default(),
-        };
+        let operation = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: address!("0000000000000000000000000000000000000000"),
+                nonce: U256::ZERO,
+                init_code: Bytes::default(),
+                call_data: Bytes::default(),
+                call_gas_limit: 0,
+                verification_gas_limit: 0,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                paymaster_and_data: Bytes::default(),
+                signature: Bytes::default(),
+            },
+        )
+        .build();
         let size = operation.abi_encoded_size();
         let cuo = ContractUserOperation::from(operation).abi_encode();
         assert_eq!(size, cuo.len());
@@ -669,7 +865,7 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
         }
-        .max_fill(u128::MAX, u128::MAX);
+        .max_fill(&ChainSpec::default());
 
         let size = max_op.abi_encoded_size();
         let cuo = ContractUserOperation::from(max_op).abi_encode();

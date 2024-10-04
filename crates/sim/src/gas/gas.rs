@@ -16,7 +16,7 @@ use std::{cmp, fmt::Debug};
 use anyhow::{bail, Context};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{EntryPoint, EvmProvider, L1GasProvider};
+use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider};
 use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
@@ -31,14 +31,14 @@ use super::oracle::FeeOracle;
 ///
 /// `random_op` is either the user operation submitted via `sendUserOperation`
 /// or the user operation that was submitted via `estimateUserOperationGas` and filled
-/// in via its `random_fill()` call. It is used to calculate the dynamic portion of the pre_verification_gas
+/// in via its `random_fill()` call. It is used to calculate the DA portion of the pre_verification_gas
 /// on networks that require it.
 ///
-/// Networks that require dynamic pre_verification_gas are typically those that charge extra calldata fees
-/// that can scale based on dynamic gas prices.
+/// Networks that require Data Availability (DA) pre_verification_gas are those that charge extra calldata fees
+/// that can scale based on DA gas prices.
 pub async fn estimate_pre_verification_gas<
     UO: UserOperation,
-    E: EntryPoint + L1GasProvider<UO = UO>,
+    E: EntryPoint + DAGasProvider<UO = UO>,
 >(
     chain_spec: &ChainSpec,
     entry_point: &E,
@@ -46,16 +46,20 @@ pub async fn estimate_pre_verification_gas<
     random_op: &UO,
     gas_price: u128,
 ) -> anyhow::Result<u128> {
-    let static_gas = full_op.calc_static_pre_verification_gas(chain_spec, true);
-    if !chain_spec.calldata_pre_verification_gas {
-        return Ok(static_gas);
-    }
+    let static_gas = full_op.static_pre_verification_gas(chain_spec);
 
-    let dynamic_gas = entry_point
-        .calc_l1_gas(*entry_point.address(), random_op.clone(), gas_price)
-        .await?;
+    // Currently assume 1 op bundle
+    let shared_gas = chain_spec.transaction_intrinsic_gas();
 
-    Ok(static_gas.saturating_add(dynamic_gas))
+    let da_gas = if chain_spec.da_pre_verification_gas {
+        entry_point
+            .calc_da_gas(*entry_point.address(), random_op.clone(), gas_price)
+            .await?
+    } else {
+        0
+    };
+
+    Ok(static_gas.saturating_add(shared_gas).saturating_add(da_gas))
 }
 
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
@@ -63,117 +67,36 @@ pub async fn estimate_pre_verification_gas<
 /// The effective gas price is calculated as min(base_fee + max_priority_fee_per_gas, max_fee_per_gas)
 pub async fn calc_required_pre_verification_gas<
     UO: UserOperation,
-    E: EntryPoint + L1GasProvider<UO = UO>,
+    E: EntryPoint + DAGasProvider<UO = UO>,
 >(
     chain_spec: &ChainSpec,
     entry_point: &E,
     op: &UO,
     base_fee: u128,
 ) -> anyhow::Result<u128> {
-    let static_gas = op.calc_static_pre_verification_gas(chain_spec, true);
-    if !chain_spec.calldata_pre_verification_gas {
-        return Ok(static_gas);
-    }
+    let static_gas = op.static_pre_verification_gas(chain_spec);
 
-    let gas_price = cmp::min(
-        base_fee + op.max_priority_fee_per_gas(),
-        op.max_fee_per_gas(),
-    );
+    // Currently assume 1 op bundle
+    let shared_gas = chain_spec.transaction_intrinsic_gas();
 
-    if gas_price == 0 {
-        bail!("Gas price cannot be zero")
-    }
+    let da_gas = if chain_spec.da_pre_verification_gas {
+        let gas_price = cmp::min(
+            base_fee + op.max_priority_fee_per_gas(),
+            op.max_fee_per_gas(),
+        );
 
-    let dynamic_gas = entry_point
-        .calc_l1_gas(*entry_point.address(), op.clone(), gas_price)
-        .await?;
+        if gas_price == 0 {
+            bail!("Gas price cannot be zero")
+        }
 
-    Ok(static_gas + dynamic_gas)
-}
-
-/// Gas limit functions
-///
-/// Gas limit: Total as limit for the bundle transaction
-///     - This value is required to be high enough so that the bundle transaction does not
-///         run out of gas.
-/// Execution gas limit: Gas spent during the execution part of the bundle transaction
-///     - This value is typically limited by block builders/sequencers and is the value by which
-///         we will limit the amount of gas used in a bundle.
-///
-/// For example, on Arbitrum chains the L1 gas portion is added at the beginning of transaction execution
-/// and uses up the gas limit of the transaction. However, this L1 portion is not part of the maximum gas
-/// allowed by the sequencer per block.
-///
-/// If calculating the gas limit value to put on a bundle transaction, use the gas limit functions.
-/// If limiting the size of a bundle transaction to adhere to block gas limit, use the execution gas limit functions.
-
-/// Returns the gas limit for the user operation that applies to bundle transaction's limit
-///
-/// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential L1 costs
-/// if the chain requires it.
-///
-/// This is needed to set the gas limit for the bundle transaction.
-pub fn user_operation_gas_limit<UO: UserOperation>(
-    chain_spec: &ChainSpec,
-    uo: &UO,
-    assume_single_op_bundle: bool,
-) -> u128 {
-    user_operation_pre_verification_gas_limit(chain_spec, uo, assume_single_op_bundle)
-        + uo.total_verification_gas_limit()
-        + uo.required_pre_execution_buffer()
-        + uo.call_gas_limit()
-}
-
-/// Returns the gas limit for the user operation that applies to bundle transaction's execution limit
-///
-/// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential L1 costs.
-///
-/// This is needed to limit the size of the bundle transaction to adhere to the block gas limit.
-pub fn user_operation_execution_gas_limit<UO: UserOperation>(
-    chain_spec: &ChainSpec,
-    uo: &UO,
-    assume_single_op_bundle: bool,
-) -> u128 {
-    user_operation_pre_verification_execution_gas_limit(chain_spec, uo, assume_single_op_bundle)
-        + uo.total_verification_gas_limit()
-        + uo.required_pre_execution_buffer()
-        + uo.call_gas_limit()
-}
-
-/// Returns the static pre-verification gas cost of a user operation
-///
-/// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential L1 costs
-pub fn user_operation_pre_verification_execution_gas_limit<UO: UserOperation>(
-    chain_spec: &ChainSpec,
-    uo: &UO,
-    include_fixed_gas_overhead: bool,
-) -> u128 {
-    // On some chains (OP bedrock, Arbitrum) the L1 gas fee is charged via pre_verification_gas
-    // but this not part of the EXECUTION gas limit of the transaction.
-    // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
-    if chain_spec.calldata_pre_verification_gas {
-        uo.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
+        entry_point
+            .calc_da_gas(*entry_point.address(), op.clone(), gas_price)
+            .await?
     } else {
-        uo.pre_verification_gas()
-    }
-}
+        0
+    };
 
-/// Returns the gas limit for the user operation that applies to bundle transaction's limit
-///
-/// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential L1 costs
-pub fn user_operation_pre_verification_gas_limit<UO: UserOperation>(
-    chain_spec: &ChainSpec,
-    uo: &UO,
-    include_fixed_gas_overhead: bool,
-) -> u128 {
-    // On some chains (OP bedrock) the L1 gas fee is charged via pre_verification_gas
-    // but this not part of the execution TOTAL limit of the transaction.
-    // In such cases we only consider the static portion of the pre_verification_gas in the gas limit.
-    if chain_spec.calldata_pre_verification_gas && !chain_spec.include_l1_gas_in_gas_limit {
-        uo.calc_static_pre_verification_gas(chain_spec, include_fixed_gas_overhead)
-    } else {
-        uo.pre_verification_gas()
-    }
+    Ok(static_gas.saturating_add(shared_gas).saturating_add(da_gas))
 }
 
 /// Different modes for calculating the required priority fee
