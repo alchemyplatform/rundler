@@ -52,3 +52,13 @@ pub enum HttpCode {
     FiveHundreds,
     Other,
 }
+
+/// utility function to conert a http status code to HttpCode object.
+pub fn get_http_status_from_code(code: u16) -> HttpCode {
+    match code {
+        x if (200..=299).contains(&x) => HttpCode::TwoHundreds,
+        x if (400..=499).contains(&x) => HttpCode::FourHundreds,
+        x if (500..=599).contains(&x) => HttpCode::FiveHundreds,
+        _ => HttpCode::Other,
+    }
+}

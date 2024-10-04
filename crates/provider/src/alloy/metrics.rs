@@ -14,7 +14,7 @@
 use std::task::{Context, Poll};
 
 use alloy_json_rpc::{RequestPacket, ResponsePacket};
-use alloy_transport::{BoxFuture, TransportError};
+use alloy_transport::{BoxFuture, HttpError, TransportError, TransportErrorKind};
 use futures_util::FutureExt;
 use rundler_types::task::{
     metric_recorder::MethodSessionLogger,
@@ -99,34 +99,20 @@ where
                     method_logger.record_rpc(get_rpc_status_code(resp));
                 }
                 Err(e) => match e {
-                    alloy_json_rpc::RpcError::ErrorResp(_) => {
-                        method_logger.record_http(HttpCode::FiveHundreds);
-                        method_logger.record_rpc(RpcCode::ServerError);
+                    alloy_json_rpc::RpcError::ErrorResp(rpc_error) => {
+                        method_logger.record_http(HttpCode::TwoHundreds);
+                        method_logger.record_rpc(get_rpc_status_from_code(rpc_error.code));
+                    }
+                    alloy_json_rpc::RpcError::Transport(TransportErrorKind::HttpError(
+                        HttpError { status, body: _ },
+                    )) => {
+                        method_logger.record_http(get_http_status_from_code(*status));
                     }
                     alloy_json_rpc::RpcError::NullResp => {
-                        method_logger.record_http(HttpCode::FiveHundreds);
-                        method_logger.record_rpc(RpcCode::InternalError);
+                        method_logger.record_http(HttpCode::TwoHundreds);
+                        method_logger.record_rpc(RpcCode::Success);
                     }
-                    alloy_json_rpc::RpcError::UnsupportedFeature(_) => {
-                        method_logger.record_http(HttpCode::FourHundreds);
-                        method_logger.record_rpc(RpcCode::MethodNotFound);
-                    }
-                    alloy_json_rpc::RpcError::LocalUsageError(_) => {
-                        method_logger.record_http(HttpCode::FourHundreds);
-                        method_logger.record_rpc(RpcCode::InvalidRequest);
-                    }
-                    alloy_json_rpc::RpcError::SerError(_) => {
-                        method_logger.record_http(HttpCode::FiveHundreds);
-                        method_logger.record_rpc(RpcCode::InternalError);
-                    }
-                    alloy_json_rpc::RpcError::DeserError { .. } => {
-                        method_logger.record_http(HttpCode::FourHundreds);
-                        method_logger.record_rpc(RpcCode::ParseError);
-                    }
-                    alloy_json_rpc::RpcError::Transport(transport_error) => {
-                        method_logger.record_http(HttpCode::FiveHundreds);
-                        method_logger.record_rpc(RpcCode::ServerError);
-                    }
+                    _ => {}
                 },
             }
             response
@@ -146,6 +132,27 @@ fn get_method_name(req: &RequestPacket) -> String {
     }
 }
 
+fn get_rpc_status_from_code(code: i64) -> RpcCode {
+    match code {
+        -32700 => RpcCode::ParseError,
+        -32600 => RpcCode::InvalidRequest,
+        -32601 => RpcCode::MethodNotFound,
+        -32602 => RpcCode::InvalidParams,
+        -32603 => RpcCode::InternalError,
+        x if (-32099..=-32000).contains(&x) => RpcCode::ServerError,
+        _ => RpcCode::Other,
+    }
+}
+
+fn get_http_status_from_code(code: u16) -> HttpCode {
+    match code {
+        x if (200..=299).contains(&x) => HttpCode::TwoHundreds,
+        x if (400..=499).contains(&x) => HttpCode::FourHundreds,
+        x if (500..=599).contains(&x) => HttpCode::FiveHundreds,
+        _ => HttpCode::Other,
+    }
+}
+
 fn get_rpc_status_code(response_packet: &ResponsePacket) -> RpcCode {
     let response: &alloy_json_rpc::Response = match response_packet {
         ResponsePacket::Batch(resps) => &resps[0],
@@ -155,15 +162,5 @@ fn get_rpc_status_code(response_packet: &ResponsePacket) -> RpcCode {
         alloy_json_rpc::ResponsePayload::Success(_) => 0,
         alloy_json_rpc::ResponsePayload::Failure(error_payload) => error_payload.code,
     };
-
-    let rpc_code = match response_code {
-        -32700 => RpcCode::ParseError,
-        -32600 => RpcCode::InvalidRequest,
-        -32601 => RpcCode::MethodNotFound,
-        -32602 => RpcCode::InvalidParams,
-        -32603 => RpcCode::InternalError,
-        x if (-32000..=-32099).contains(&x) => RpcCode::ServerError,
-        _ => RpcCode::Other,
-    };
-    rpc_code
+    get_rpc_status_from_code(response_code)
 }

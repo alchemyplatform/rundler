@@ -4564,6 +4564,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures-util",
+ "http 1.1.0",
  "jsonrpsee",
  "metrics",
  "mockall",

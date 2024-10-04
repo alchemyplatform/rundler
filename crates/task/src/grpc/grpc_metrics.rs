@@ -20,7 +20,9 @@ use std::{
 };
 
 use pin_project::pin_project;
-use rundler_types::task::{metric_recorder::MethodSessionLogger, status_code::HttpCode};
+use rundler_types::task::{
+    metric_recorder::MethodSessionLogger, status_code::get_http_status_from_code,
+};
 use tonic::codegen::http;
 use tower::{Layer, Service};
 
@@ -59,9 +61,9 @@ impl<S> GrpcMetrics<S> {
     }
 }
 
-impl<S, Body> Service<http::Request<Body>> for GrpcMetrics<S>
+impl<S, Body, ResBody> Service<http::Request<Body>> for GrpcMetrics<S>
 where
-    S: Service<http::Request<Body>> + Sync,
+    S: Service<http::Request<Body>, Response = http::Response<ResBody>> + Sync,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -84,7 +86,7 @@ where
         method_logger.start();
         ResponseFuture {
             response_future: self.inner.call(request),
-            method_logger: method_logger,
+            method_logger,
         }
     }
 }
@@ -100,11 +102,11 @@ pub struct ResponseFuture<F> {
     method_logger: MethodSessionLogger,
 }
 
-impl<F, Response, E> Future for ResponseFuture<F>
+impl<F, ResBody, Error> Future for ResponseFuture<F>
 where
-    F: Future<Output = Result<Response, E>>,
+    F: Future<Output = Result<http::Response<ResBody>, Error>>,
 {
-    type Output = Result<Response, E>;
+    type Output = Result<http::Response<ResBody>, Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -112,14 +114,11 @@ where
         match &res {
             Poll::Ready(response) => {
                 this.method_logger.done();
-                match response {
-                    Ok(_) => {
-                        this.method_logger.record_http(HttpCode::TwoHundreds);
-                    }
-                    Err(_) => {
-                        // extract the error message form the error trait
-                        this.method_logger.record_http(HttpCode::FiveHundreds);
-                    }
+
+                let http_status = response.as_ref().ok().map(|response| response.status());
+                if let Some(status_code) = http_status {
+                    this.method_logger
+                        .record_http(get_http_status_from_code(status_code.as_u16()));
                 }
             }
             Poll::Pending => {}

@@ -23,11 +23,7 @@ use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use rundler_task::{
-    grpc::{
-        grpc_metrics::{HttpMethodExtractor, HttpResponseCodeExtractor},
-        protos::from_bytes,
-    },
-    metrics::MetricsLayer,
+    grpc::{grpc_metrics::GrpcMetricsLayer, protos::from_bytes},
     GracefulShutdown, TaskSpawner,
 };
 use rundler_types::{
@@ -86,19 +82,20 @@ pub(crate) async fn remote_mempool_server_task(
         .set_serving::<OpPoolServer<OpPoolImpl>>()
         .await;
 
-    let metrics_layer = GrpcMetricsLayer::new("op_pool".to_string());
-    let handle = tokio::spawn(async move {
-        Server::builder()
-            .layer(metrics_layer)
-            .add_service(op_pool_server)
-            .add_service(reflection_service)
-            .add_service(health_service)
-            .serve_with_shutdown(addr, async move { shutdown_token.cancelled().await })
-            .await
-            .map_err(|e| anyhow::anyhow!(format!("pool server failed: {e:?}")))
-    });
+    let metrics_layer = GrpcMetricsLayer::new("op_pool_service".to_string());
 
-    Ok(handle)
+    if let Err(e) = Server::builder()
+        .layer(metrics_layer)
+        .add_service(op_pool_server)
+        .add_service(reflection_service)
+        .add_service(health_service)
+        .serve_with_shutdown(addr, async move {
+            let _ = shutdown.await;
+        })
+        .await
+    {
+        tracing::error!("pool server failed: {e:?}");
+    }
 }
 
 struct OpPoolImpl {

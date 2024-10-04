@@ -29,12 +29,12 @@ impl MethodSessionLogger {
     pub fn new(service_name: String, method_name: String, protocol: String) -> Self {
         Self {
             start_time: Instant::now(),
-            method_name: method_name,
-            service_name: service_name,
-            protocol: protocol,
+            method_name,
+            service_name,
+            protocol,
         }
     }
-    
+
     /// start the session. time will be initialized.
     pub fn start(&mut self) {
         self.start_time = Instant::now();
@@ -117,6 +117,6 @@ impl MethodMetrics {
         protocol: &str,
         latency: Duration,
     ) {
-        histogram!("request_latency", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).record(latency)
+        histogram!("request_latency", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).record(latency.as_millis() as f64)
     }
 }
