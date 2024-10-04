@@ -43,8 +43,8 @@ mockall = {workspace = true, optional = true }
 
 [dev-dependencies]
 mockall.workspace = true
-rundler-sim = { path = "../sim", features = ["test-utils"] }
-rundler-provider = { path = "../provider", features = ["test-utils"] }
+rundler-sim = { workspace = true, features = ["test-utils"] }
+rundler-provider = { workspace = true, features = ["test-utils"] }
 reth-tasks.workspace = true
 
 [build-dependencies]

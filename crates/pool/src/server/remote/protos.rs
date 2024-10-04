@@ -68,21 +68,25 @@ pub trait TryUoFromProto<T>: Sized {
 impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
     fn try_uo_from_proto(
         op: UserOperationV06,
-        _chain_spec: &ChainSpec,
+        chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
-        Ok(v0_6::UserOperation {
-            sender: from_bytes(&op.sender)?,
-            nonce: from_bytes(&op.nonce)?,
-            init_code: op.init_code.into(),
-            call_data: op.call_data.into(),
-            call_gas_limit: from_bytes(&op.call_gas_limit)?,
-            verification_gas_limit: from_bytes(&op.verification_gas_limit)?,
-            pre_verification_gas: from_bytes(&op.pre_verification_gas)?,
-            max_fee_per_gas: from_bytes(&op.max_fee_per_gas)?,
-            max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
-            paymaster_and_data: op.paymaster_and_data.into(),
-            signature: op.signature.into(),
-        })
+        Ok(v0_6::UserOperationBuilder::new(
+            chain_spec,
+            v0_6::UserOperationRequiredFields {
+                sender: from_bytes(&op.sender)?,
+                nonce: from_bytes(&op.nonce)?,
+                init_code: op.init_code.into(),
+                call_data: op.call_data.into(),
+                call_gas_limit: from_bytes(&op.call_gas_limit)?,
+                verification_gas_limit: from_bytes(&op.verification_gas_limit)?,
+                pre_verification_gas: from_bytes(&op.pre_verification_gas)?,
+                max_fee_per_gas: from_bytes(&op.max_fee_per_gas)?,
+                max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
+                paymaster_and_data: op.paymaster_and_data.into(),
+                signature: op.signature.into(),
+            },
+        )
+        .build())
     }
 }
 

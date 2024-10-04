@@ -143,6 +143,7 @@ where
             Err(EthRpcError::InvalidParams("Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero".to_string()))?;
         }
 
+        // TODO(danc): HERE
         let valid = self
             .entry_point_router
             .check_signature(&entry_point, uo, self.settings.max_verification_gas)

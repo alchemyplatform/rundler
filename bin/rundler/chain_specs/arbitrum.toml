@@ -1,9 +1,10 @@
 name = "Arbitrum"
 id = 42161
 
-calldata_pre_verification_gas = true 
-l1_gas_oracle_contract_type = "ARBITRUM_NITRO"
-l1_gas_oracle_contract_address = "0x00000000000000000000000000000000000000C8"
+da_pre_verification_gas = true 
+da_gas_oracle_contract_type = "ARBITRUM_NITRO"
+da_gas_oracle_contract_address = "0x00000000000000000000000000000000000000C8"
+include_da_gas_in_gas_limit = true
 
 supports_eip1559 = false
 max_transaction_size_bytes = 95000

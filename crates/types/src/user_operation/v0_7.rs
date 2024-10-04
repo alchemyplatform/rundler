@@ -191,20 +191,11 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit + self.paymaster_verification_gas_limit
     }
 
-    fn calc_static_pre_verification_gas(
-        &self,
-        chain_spec: &ChainSpec,
-        include_fixed_gas_overhead: bool,
-    ) -> u128 {
+    fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
         self.calldata_gas_cost
             + chain_spec.per_user_op_v0_7_gas()
             + (if self.factory.is_some() {
                 chain_spec.per_user_op_deploy_overhead_gas()
-            } else {
-                0
-            })
-            + (if include_fixed_gas_overhead {
-                chain_spec.transaction_intrinsic_gas()
             } else {
                 0
             })
@@ -423,7 +414,7 @@ impl UserOperationOptionalGas {
     /// Fill in the optional fields of the user operation with default values if unset
     pub fn into_user_operation_builder(
         self,
-        chian_spec: &ChainSpec,
+        chain_spec: &ChainSpec,
         max_call_gas: u128,
         max_verification_gas: u128,
         max_paymaster_verification_gas: u128,
@@ -438,10 +429,11 @@ impl UserOperationOptionalGas {
             max_paymaster_verification_gas,
             0,
         );
+        // TODO(danc): HERE
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
         let mut builder = UserOperationBuilder::new(
-            chian_spec,
+            chain_spec,
             UserOperationRequiredFields {
                 sender: self.sender,
                 nonce: self.nonce,
@@ -557,6 +549,53 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_data: Bytes::new(),
             packed_uo: None,
         }
+    }
+
+    /// Creates a builder from a packed user operation
+    pub fn from_packed(
+        puo: PackedUserOperation,
+        chain_spec: &'a ChainSpec,
+    ) -> Result<Self, FromUintError<u128>> {
+        let mut builder = UserOperationBuilder::new(
+            chain_spec,
+            UserOperationRequiredFields {
+                sender: puo.sender,
+                nonce: puo.nonce,
+                call_data: puo.callData.clone(),
+                call_gas_limit: u128_from_be_slice(&puo.accountGasLimits[16..]),
+                verification_gas_limit: u128_from_be_slice(&puo.accountGasLimits[..16]),
+                pre_verification_gas: puo.preVerificationGas.try_into()?,
+                max_priority_fee_per_gas: u128_from_be_slice(&puo.gasFees[..16]),
+                max_fee_per_gas: u128_from_be_slice(&puo.gasFees[16..]),
+                signature: puo.signature.clone(),
+            },
+        );
+
+        builder = builder.packed(puo.clone());
+
+        if !puo.initCode.is_empty() {
+            let factory = Address::from_slice(&puo.initCode[..20]);
+            let factory_data = Bytes::from_iter(&puo.initCode[20..]);
+
+            builder = builder.factory(factory, factory_data);
+        }
+
+        if !puo.paymasterAndData.is_empty() {
+            let paymaster = Address::from_slice(&puo.paymasterAndData[..20]);
+            let paymaster_verification_gas_limit =
+                u128_from_be_slice(&puo.paymasterAndData[20..36]);
+            let paymaster_post_op_gas_limit = u128_from_be_slice(&puo.paymasterAndData[36..52]);
+            let paymaster_data = Bytes::from_iter(&puo.paymasterAndData[52..]);
+
+            builder = builder.paymaster(
+                paymaster,
+                paymaster_verification_gas_limit,
+                paymaster_post_op_gas_limit,
+                paymaster_data,
+            );
+        }
+
+        Ok(builder)
     }
 
     /// Creates a builder from an existing UO
@@ -748,52 +787,6 @@ fn u128_from_be_slice(input: &[u8]) -> u128 {
     u128::from_be_bytes(int_bytes.try_into().unwrap())
 }
 
-/// Unpacks a packed user operation into a user operation
-pub fn unpack_user_operation(
-    puo: PackedUserOperation,
-    chain_spec: &ChainSpec,
-) -> Result<UserOperation, FromUintError<u128>> {
-    let mut builder = UserOperationBuilder::new(
-        chain_spec,
-        UserOperationRequiredFields {
-            sender: puo.sender,
-            nonce: puo.nonce,
-            call_data: puo.callData.clone(),
-            call_gas_limit: u128_from_be_slice(&puo.accountGasLimits[16..]),
-            verification_gas_limit: u128_from_be_slice(&puo.accountGasLimits[..16]),
-            pre_verification_gas: puo.preVerificationGas.try_into()?,
-            max_priority_fee_per_gas: u128_from_be_slice(&puo.gasFees[..16]),
-            max_fee_per_gas: u128_from_be_slice(&puo.gasFees[16..]),
-            signature: puo.signature.clone(),
-        },
-    );
-
-    builder = builder.packed(puo.clone());
-
-    if !puo.initCode.is_empty() {
-        let factory = Address::from_slice(&puo.initCode[..20]);
-        let factory_data = Bytes::from_iter(&puo.initCode[20..]);
-
-        builder = builder.factory(factory, factory_data);
-    }
-
-    if !puo.paymasterAndData.is_empty() {
-        let paymaster = Address::from_slice(&puo.paymasterAndData[..20]);
-        let paymaster_verification_gas_limit = u128_from_be_slice(&puo.paymasterAndData[20..36]);
-        let paymaster_post_op_gas_limit = u128_from_be_slice(&puo.paymasterAndData[36..52]);
-        let paymaster_data = Bytes::from_iter(&puo.paymasterAndData[52..]);
-
-        builder = builder.paymaster(
-            paymaster,
-            paymaster_verification_gas_limit,
-            paymaster_post_op_gas_limit,
-            paymaster_data,
-        );
-    }
-
-    Ok(builder.build())
-}
-
 sol! {
     #[allow(missing_docs)]
     #[derive(Default, Debug, PartialEq, Eq)]
@@ -886,7 +879,9 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = unpack_user_operation(packed, &cs).unwrap();
+        let unpacked = UserOperationBuilder::from_packed(packed, &cs)
+            .unwrap()
+            .build();
 
         assert_eq!(uo, unpacked);
     }
@@ -914,7 +909,9 @@ mod tests {
 
         let uo = builder.build();
         let packed = uo.clone().pack();
-        let unpacked = unpack_user_operation(packed, &cs).unwrap();
+        let unpacked = UserOperationBuilder::from_packed(packed, &cs)
+            .unwrap()
+            .build();
 
         assert_eq!(uo, unpacked);
     }
@@ -940,7 +937,7 @@ mod tests {
         };
 
         let hash = b256!("e486401370d145766c3cf7ba089553214a1230d38662ae532c9b62eb6dadcf7e");
-        let uo = unpack_user_operation(puo, &cs).unwrap();
+        let uo = UserOperationBuilder::from_packed(puo, &cs).unwrap().build();
         assert_eq!(uo.hash(cs.entry_point_address_v0_7, cs.id), hash);
     }
 
