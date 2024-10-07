@@ -46,11 +46,6 @@ pub async fn estimate_pre_verification_gas<
     random_op: &UO,
     gas_price: u128,
 ) -> anyhow::Result<u128> {
-    let static_gas = full_op.static_pre_verification_gas(chain_spec);
-
-    // Currently assume 1 op bundle
-    let shared_gas = chain_spec.transaction_intrinsic_gas();
-
     let da_gas = if chain_spec.da_pre_verification_gas {
         entry_point
             .calc_da_gas(*entry_point.address(), random_op.clone(), gas_price)
@@ -59,7 +54,8 @@ pub async fn estimate_pre_verification_gas<
         0
     };
 
-    Ok(static_gas.saturating_add(shared_gas).saturating_add(da_gas))
+    // Currently assume 1 op bundle
+    Ok(full_op.required_pre_verification_gas(chain_spec, 1, da_gas))
 }
 
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
@@ -74,11 +70,6 @@ pub async fn calc_required_pre_verification_gas<
     op: &UO,
     base_fee: u128,
 ) -> anyhow::Result<u128> {
-    let static_gas = op.static_pre_verification_gas(chain_spec);
-
-    // Currently assume 1 op bundle
-    let shared_gas = chain_spec.transaction_intrinsic_gas();
-
     let da_gas = if chain_spec.da_pre_verification_gas {
         let gas_price = cmp::min(
             base_fee + op.max_priority_fee_per_gas(),
@@ -96,7 +87,8 @@ pub async fn calc_required_pre_verification_gas<
         0
     };
 
-    Ok(static_gas.saturating_add(shared_gas).saturating_add(da_gas))
+    // Currently assume 1 op bundle
+    Ok(op.required_pre_verification_gas(chain_spec, 1, da_gas))
 }
 
 /// Different modes for calculating the required priority fee

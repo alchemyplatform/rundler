@@ -107,7 +107,8 @@ where
         let mut op_with_gas = full_op;
         op_with_gas.verification_gas_limit = verification_gas_limit;
         op_with_gas.call_gas_limit = call_gas_limit;
-        let gas_limit = op_with_gas.execution_gas_limit(&self.chain_spec, true);
+        // require that this can fit in a bundle of size 1
+        let gas_limit = op_with_gas.execution_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > self.settings.max_total_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
