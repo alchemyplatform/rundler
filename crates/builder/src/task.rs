@@ -225,11 +225,7 @@ where
                     i + ep.bundle_builder_index_offset,
                     self.provider.clone(),
                     ep_v0_6.clone(),
-                    UnsafeSimulator::new(
-                        self.provider.clone(),
-                        ep_v0_6.clone(),
-                        self.args.sim_settings.clone(),
-                    ),
+                    UnsafeSimulator::new(self.provider.clone(), ep_v0_6.clone()),
                     pk_iter,
                 )
                 .await?
@@ -277,11 +273,7 @@ where
                     i + ep.bundle_builder_index_offset,
                     self.provider.clone(),
                     ep_v0_7.clone(),
-                    UnsafeSimulator::new(
-                        self.provider.clone(),
-                        ep_v0_7.clone(),
-                        self.args.sim_settings.clone(),
-                    ),
+                    UnsafeSimulator::new(self.provider.clone(), ep_v0_7.clone()),
                     pk_iter,
                 )
                 .await?

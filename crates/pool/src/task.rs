@@ -208,11 +208,7 @@ where
             .context("entry point v0.6 not supplied")?;
 
         if unsafe_mode {
-            let simulator = UnsafeSimulator::new(
-                self.provider.clone(),
-                ep.clone(),
-                pool_config.sim_settings.clone(),
-            );
+            let simulator = UnsafeSimulator::new(self.provider.clone(), ep.clone());
             Self::create_mempool(
                 task_spawner,
                 chain_spec,
@@ -255,11 +251,7 @@ where
             .context("entry point v0.7 not supplied")?;
 
         if unsafe_mode {
-            let simulator = UnsafeSimulator::new(
-                self.provider.clone(),
-                ep.clone(),
-                pool_config.sim_settings.clone(),
-            );
+            let simulator = UnsafeSimulator::new(self.provider.clone(), ep.clone());
             Self::create_mempool(
                 task_spawner,
                 chain_spec,

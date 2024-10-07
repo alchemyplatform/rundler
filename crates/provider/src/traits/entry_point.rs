@@ -121,7 +121,6 @@ pub trait SignatureAggregator: Send + Sync {
         &self,
         aggregator_address: Address,
         user_op: Self::UO,
-        gas_cap: u64,
     ) -> ProviderResult<AggregatorOut>;
 }
 
@@ -133,11 +132,13 @@ pub trait BundleHandler: Send + Sync {
     type UO: UserOperation;
 
     /// Call the entry point contract's `handleOps` function
+    ///
+    /// If `gas_limit` is `None`, the maximum gas limit is used.
     async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<Self::UO>>,
         beneficiary: Address,
-        gas: u64,
+        gas_limit: Option<u64>,
     ) -> ProviderResult<HandleOpsOut>;
 
     /// Construct the transaction to send a bundle of operations to the entry point contract
@@ -145,7 +146,7 @@ pub trait BundleHandler: Send + Sync {
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<Self::UO>>,
         beneficiary: Address,
-        gas: u64,
+        gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest;
 }
@@ -181,14 +182,12 @@ pub trait SimulationProvider: Send + Sync {
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u64,
     ) -> ProviderResult<(TransactionRequest, StateOverride)>;
 
     /// Call the entry point contract's `simulateValidation` function.
     async fn simulate_validation(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u64,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
 
@@ -203,7 +202,6 @@ pub trait SimulationProvider: Send + Sync {
         target: Address,
         target_call_data: Bytes,
         block_hash: BlockId,
-        gas: u64,
         state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
 

@@ -276,7 +276,6 @@ where
                     entry_point_router,
                     self.pool.clone(),
                     fee_estimator,
-                    self.args.rundler_api_settings,
                 )
                 .into_rpc(),
             )?;

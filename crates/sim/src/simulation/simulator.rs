@@ -160,7 +160,6 @@ where
         &self,
         op: UO,
         aggregator_address: Option<Address>,
-        gas_cap: u64,
     ) -> Result<AggregatorOut, SimulationError> {
         let Some(aggregator_address) = aggregator_address else {
             return Ok(AggregatorOut::NotNeeded);
@@ -168,7 +167,7 @@ where
 
         Ok(self
             .entry_point
-            .validate_user_op_signature(aggregator_address, op, gas_cap)
+            .validate_user_op_signature(aggregator_address, op)
             .await
             .context("should call validate user op signature")?)
     }
@@ -421,12 +420,8 @@ where
             )
             .map_err(|e| SimulationError::from(anyhow::anyhow!("should call get_code_hash {e:?}")));
 
-        // TODO(danc): HERE
-        let aggregator_signature_future = self.validate_aggregator_signature(
-            op,
-            aggregator_address,
-            self.sim_settings.max_verification_gas,
-        );
+        let aggregator_signature_future =
+            self.validate_aggregator_signature(op, aggregator_address);
 
         let (code_hash, aggregator_out) =
             tokio::try_join!(code_hash_future, aggregator_signature_future)?;
@@ -897,7 +892,7 @@ mod tests {
 
         entry_point
             .expect_validate_user_op_signature()
-            .returning(|_, _, _| Ok(AggregatorOut::NotNeeded));
+            .returning(|_, _| Ok(AggregatorOut::NotNeeded));
 
         let user_operation = UserOperationBuilder::new(&ChainSpec::default(),UserOperationRequiredFields {
             sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),

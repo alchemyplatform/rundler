@@ -183,11 +183,9 @@ where
     /// Creates a new `ValidationContextProvider` for entry point v0.6 with the given provider and entry point.
     pub(crate) fn new(provider: P, entry_point: E, sim_settings: SimulationSettings) -> Self {
         Self {
-            // TODO(danc): HERE
             simulate_validation_tracer: SimulateValidationTracerImpl::new(
                 provider,
                 entry_point,
-                sim_settings.max_verification_gas,
                 sim_settings.tracer_timeout.clone(),
             ),
             sim_settings,

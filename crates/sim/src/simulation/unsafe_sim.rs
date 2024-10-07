@@ -19,9 +19,7 @@ use rundler_provider::{
 };
 use rundler_types::{pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange};
 
-use crate::{
-    SimulationError, SimulationResult, SimulationSettings as Settings, Simulator, ViolationError,
-};
+use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
 
 /// An unsafe simulator that can be used in place of a regular simulator
 /// to extract the information needed from simulation while avoiding the use
@@ -32,17 +30,15 @@ use crate::{
 pub struct UnsafeSimulator<UO, P, E> {
     provider: P,
     entry_point: E,
-    sim_settings: Settings,
     _uo_type: PhantomData<UO>,
 }
 
 impl<UO, P, E> UnsafeSimulator<UO, P, E> {
     /// Creates a new unsafe simulator
-    pub fn new(provider: P, entry_point: E, sim_settings: Settings) -> Self {
+    pub fn new(provider: P, entry_point: E) -> Self {
         Self {
             provider,
             entry_point,
-            sim_settings,
             _uo_type: PhantomData,
         }
     }
@@ -81,15 +77,10 @@ where
             }
         };
 
-        // TODO(danc): HERE
         // simulate the validation
         let validation_result = self
             .entry_point
-            .simulate_validation(
-                op.clone(),
-                self.sim_settings.max_verification_gas,
-                Some(block_hash.into()),
-            )
+            .simulate_validation(op.clone(), Some(block_hash.into()))
             .await?;
 
         let validation_result = match validation_result {
@@ -128,14 +119,9 @@ where
         let mut violations = vec![];
 
         let aggregator = if let Some(aggregator_info) = validation_result.aggregator_info {
-            // TODO(danc): HERE
             let agg_out = self
                 .entry_point
-                .validate_user_op_signature(
-                    aggregator_info.address,
-                    op,
-                    self.sim_settings.max_verification_gas,
-                )
+                .validate_user_op_signature(aggregator_info.address, op)
                 .await?;
 
             match agg_out {
