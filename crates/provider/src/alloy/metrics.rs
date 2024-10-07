@@ -32,7 +32,6 @@ impl<S> Layer<S> for AlloyMetricLayer
 where
     S: Service<RequestPacket, Response = ResponsePacket, Error = TransportError> + Sync,
 {
-    // type Service = S;
     type Service = AlloyMetricMiddleware<S>;
 
     fn layer(&self, service: S) -> Self::Service {
@@ -81,14 +80,14 @@ where
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
+
     fn call(&mut self, request: RequestPacket) -> Self::Future {
         let method_name = get_method_name(&request);
-        let mut method_logger = MethodSessionLogger::new(
+        let method_logger = MethodSessionLogger::start(
             "alloy_provider_client".to_string(),
             method_name,
             "rpc".to_string(),
         );
-        method_logger.start();
         let mut svc = self.service.clone();
         async move {
             let response = svc.call(request).await;
@@ -155,7 +154,12 @@ fn get_http_status_from_code(code: u16) -> HttpCode {
 
 fn get_rpc_status_code(response_packet: &ResponsePacket) -> RpcCode {
     let response: &alloy_json_rpc::Response = match response_packet {
-        ResponsePacket::Batch(resps) => &resps[0],
+        ResponsePacket::Batch(resps) => {
+            if resps.is_empty() {
+                return RpcCode::Success;
+            }
+            &resps[0]
+        }
         ResponsePacket::Single(resp) => resp,
     };
     let response_code: i64 = match &response.payload {

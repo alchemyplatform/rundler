@@ -21,7 +21,8 @@ use std::{
 
 use pin_project::pin_project;
 use rundler_types::task::{
-    metric_recorder::MethodSessionLogger, status_code::get_http_status_from_code,
+    metric_recorder::MethodSessionLogger,
+    status_code::{get_http_status_from_code, HttpCode},
 };
 use tonic::codegen::http;
 use tower::{Layer, Service};
@@ -78,12 +79,11 @@ where
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
         let uri = request.uri().clone();
         let method_name = uri.path().split('/').last().unwrap_or("unknown");
-        let mut method_logger = MethodSessionLogger::new(
+        let method_logger = MethodSessionLogger::start(
             self.scope.clone(),
             method_name.to_string(),
             "grpc".to_string(),
         );
-        method_logger.start();
         ResponseFuture {
             response_future: self.inner.call(request),
             method_logger,
@@ -112,13 +112,17 @@ where
         let this = self.project();
         let res = this.response_future.poll(cx);
         match &res {
-            Poll::Ready(response) => {
+            Poll::Ready(result) => {
                 this.method_logger.done();
-
-                let http_status = response.as_ref().ok().map(|response| response.status());
-                if let Some(status_code) = http_status {
-                    this.method_logger
-                        .record_http(get_http_status_from_code(status_code.as_u16()));
+                match result {
+                    Ok(response) => {
+                        let http_status = response.status();
+                        this.method_logger
+                            .record_http(get_http_status_from_code(http_status.as_u16()));
+                    }
+                    _ => {
+                        this.method_logger.record_http(HttpCode::FiveHundreds);
+                    }
                 }
             }
             Poll::Pending => {}

@@ -34,7 +34,6 @@ futures-util.workspace = true
 tower.workspace = true
 tracing.workspace = true
 url.workspace = true
-pin-project.workspace = true
 
 mockall = {workspace = true, optional = true }
 

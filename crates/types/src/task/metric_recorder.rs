@@ -36,18 +36,10 @@ impl MethodSessionLogger {
     }
 
     /// start the session. time will be initialized.
-    pub fn start(&mut self) {
-        self.start_time = Instant::now();
-        MethodMetrics::increment_num_requests(
-            &self.method_name,
-            &self.service_name,
-            &self.protocol,
-        );
-        MethodMetrics::increment_open_requests(
-            &self.method_name,
-            &self.service_name,
-            &self.protocol,
-        );
+    pub fn start(service_name: String, method_name: String, protocol: String) -> Self {
+        MethodMetrics::increment_num_requests(&method_name, &service_name, &protocol);
+        MethodMetrics::increment_open_requests(&method_name, &service_name, &protocol);
+        Self::new(service_name, method_name, protocol)
     }
 
     /// record a rpc status code.

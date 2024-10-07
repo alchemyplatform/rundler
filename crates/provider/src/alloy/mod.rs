@@ -37,14 +37,14 @@ pub fn new_alloy_evm_provider(rpc_url: &str) -> anyhow::Result<impl EvmProvider 
 pub fn new_alloy_provider(
     rpc_url: &str,
 ) -> anyhow::Result<
-    impl AlloyProvider<AlloyMetricMiddleware<RetryBackoffService<Http<Client>>>> + Clone,
+    impl AlloyProvider<RetryBackoffService<AlloyMetricMiddleware<Http<Client>>>> + Clone,
 > {
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
     let metric_layer = AlloyMetricLayer::default();
     let retry_layer = alloy_transport::layers::RetryBackoffLayer::new(10, 500, 0);
     let client = ClientBuilder::default()
-        .layer(metric_layer)
         .layer(retry_layer)
+        .layer(metric_layer)
         .http(url);
     let provider = ProviderBuilder::new().on_client(client);
     Ok(provider)

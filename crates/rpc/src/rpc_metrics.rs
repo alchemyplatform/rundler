@@ -59,13 +59,12 @@ where
     type Future = BoxFuture<'a, MethodResponse>;
 
     fn call(&self, req: Request<'a>) -> Self::Future {
-        let mut method_logger = MethodSessionLogger::new(
+        let method_logger = MethodSessionLogger::start(
             self.service_name.clone(),
             req.method_name().to_string(),
             "rpc".to_string(),
         );
 
-        method_logger.start();
         let svc = self.service.clone();
 
         async move {
