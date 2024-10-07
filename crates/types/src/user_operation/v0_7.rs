@@ -429,7 +429,6 @@ impl UserOperationOptionalGas {
             max_paymaster_verification_gas,
             0,
         );
-        // TODO(danc): HERE
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
         let mut builder = UserOperationBuilder::new(

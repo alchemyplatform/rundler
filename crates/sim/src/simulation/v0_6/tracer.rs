@@ -51,7 +51,6 @@ pub(super) trait SimulateValidationTracer: Send + Sync {
 pub(crate) struct SimulateValidationTracerImpl<P, E> {
     provider: P,
     entry_point: E,
-    max_validation_gas: u64,
     tracer_timeout: String,
 }
 
@@ -71,7 +70,7 @@ where
     ) -> anyhow::Result<TracerOutput> {
         let (tx, state_override) = self
             .entry_point
-            .get_tracer_simulate_validation_call(op, self.max_validation_gas)
+            .get_tracer_simulate_validation_call(op)
             .context("should get simulate validation call")?;
 
         TracerOutput::try_from(
@@ -98,16 +97,10 @@ where
 
 impl<P, E> SimulateValidationTracerImpl<P, E> {
     /// Creates a new instance of the bundler's custom tracer.
-    pub(crate) fn new(
-        provider: P,
-        entry_point: E,
-        max_validation_gas: u64,
-        tracer_timeout: String,
-    ) -> Self {
+    pub(crate) fn new(provider: P, entry_point: E, tracer_timeout: String) -> Self {
         Self {
             provider,
             entry_point,
-            max_validation_gas,
             tracer_timeout,
         }
     }

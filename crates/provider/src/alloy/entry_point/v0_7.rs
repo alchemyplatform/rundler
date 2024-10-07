@@ -36,8 +36,8 @@ use rundler_contracts::v0_7::{
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
-    chain::ChainSpec, v0_7::UserOperation, GasFees, UserOpsPerAggregator, ValidationOutput,
-    ValidationRevert,
+    chain::ChainSpec, v0_7::UserOperation, GasFees, UserOperation as _, UserOpsPerAggregator,
+    ValidationOutput, ValidationRevert,
 };
 
 use super::DAGasOracle;
@@ -52,7 +52,10 @@ use crate::{
 pub struct EntryPointProvider<AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
     da_gas_oracle: DAGasOracle,
+    max_verification_gas: u64,
+    max_simulate_handle_ops_gas: u64,
     max_aggregation_gas: u64,
+    chain_spec: ChainSpec,
 }
 
 impl<AP, T> EntryPointProvider<AP, T>
@@ -61,11 +64,20 @@ where
     AP: AlloyProvider<T>,
 {
     /// Create a new `EntryPoint` instance for v0.7
-    pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u64, provider: AP) -> Self {
+    pub fn new(
+        chain_spec: ChainSpec,
+        max_verification_gas: u64,
+        max_simulate_handle_ops_gas: u64,
+        max_aggregation_gas: u64,
+        provider: AP,
+    ) -> Self {
         Self {
             i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_7, provider),
-            da_gas_oracle: DAGasOracle::new(chain_spec),
+            da_gas_oracle: DAGasOracle::new(&chain_spec),
+            max_verification_gas,
+            max_simulate_handle_ops_gas,
             max_aggregation_gas,
+            chain_spec,
         }
     }
 }
@@ -142,12 +154,21 @@ where
     ) -> ProviderResult<Option<Bytes>> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
 
+        let ops_len = ops.len();
+        let da_gas: u64 = ops
+            .iter()
+            .map(|op: &UserOperation| {
+                op.pre_verification_da_gas_limit(&self.chain_spec, Some(ops_len))
+            })
+            .sum::<u128>()
+            .try_into()
+            .unwrap_or(u64::MAX);
+
         let packed_ops = ops.into_iter().map(|op| op.pack()).collect();
 
-        // TODO(danc): HERE
         let result = aggregator
             .aggregateSignatures(packed_ops)
-            .gas(self.max_aggregation_gas)
+            .gas(self.max_aggregation_gas.saturating_add(da_gas))
             .call()
             .await;
 
@@ -168,13 +189,16 @@ where
         &self,
         aggregator_address: Address,
         user_op: Self::UO,
-        gas_cap: u64,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
+        let da_gas: u64 = user_op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         let result = aggregator
             .validateUserOpSignature(user_op.pack())
-            .gas(gas_cap)
+            .gas(self.max_verification_gas.saturating_add(da_gas))
             .call()
             .await;
 
@@ -207,9 +231,15 @@ where
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
         beneficiary: Address,
-        gas: u64,
+        gas_limit: Option<u64>,
     ) -> ProviderResult<HandleOpsOut> {
-        let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
+        let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_ops_gas);
+        let tx = get_handle_ops_call(
+            &self.i_entry_point,
+            ops_per_aggregator,
+            beneficiary,
+            gas_limit,
+        );
         let res = self.i_entry_point.provider().call(&tx).await;
 
         match res {
@@ -304,13 +334,13 @@ where
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u64,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
         let addr = *self.i_entry_point.address();
-        let pvg: u64 = user_op
-            .pre_verification_gas
+        let da_gas: u64 = user_op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
-            .context("pre verification gas larger than u64")?;
+            .unwrap_or(u64::MAX);
+
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
 
@@ -319,7 +349,7 @@ where
 
         let call = ep_simulations
             .simulateValidation(user_op.pack())
-            .gas(max_validation_gas + pvg)
+            .gas(self.max_verification_gas.saturating_add(da_gas))
             .into_transaction_request();
 
         Ok((call, override_ep))
@@ -328,11 +358,9 @@ where
     async fn simulate_validation(
         &self,
         user_op: Self::UO,
-        max_validation_gas: u64,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let (tx, overrides) =
-            self.get_tracer_simulate_validation_call(user_op, max_validation_gas)?;
+        let (tx, overrides) = self.get_tracer_simulate_validation_call(user_op)?;
         let mut call = self.i_entry_point.provider().call(&tx);
         if let Some(block_id) = block_id {
             call = call.block(block_id);
@@ -380,9 +408,13 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        gas: u64,
         mut state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
+        let da_gas: u64 = op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
+            .try_into()
+            .unwrap_or(u64::MAX);
+
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
         let ep_simulations = IEntryPointSimulations::new(
             *self.i_entry_point.address(),
@@ -391,7 +423,7 @@ where
         let res = ep_simulations
             .simulateHandleOp(op.pack(), target, target_call_data)
             .block(block_id)
-            .gas(gas)
+            .gas(self.max_simulate_handle_ops_gas.saturating_add(da_gas))
             .state(state_override)
             .call()
             .await;

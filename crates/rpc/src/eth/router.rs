@@ -191,10 +191,9 @@ impl EntryPointRouter {
         &self,
         entry_point: &Address,
         uo: UserOperationVariant,
-        max_verification_gas: u64,
     ) -> EthResult<bool> {
         self.check_and_get_route(entry_point, &uo)?
-            .check_signature(uo, max_verification_gas)
+            .check_signature(uo)
             .await
             .map_err(Into::into)
     }
@@ -245,11 +244,7 @@ pub(crate) trait EntryPointRoute: Send + Sync {
         state_override: Option<StateOverride>,
     ) -> Result<GasEstimate, GasEstimationError>;
 
-    async fn check_signature(
-        &self,
-        uo: UserOperationVariant,
-        max_verification_gas: u64,
-    ) -> anyhow::Result<bool>;
+    async fn check_signature(&self, uo: UserOperationVariant) -> anyhow::Result<bool>;
 }
 
 #[derive(Debug)]
@@ -298,14 +293,10 @@ where
             .await
     }
 
-    async fn check_signature(
-        &self,
-        uo: UserOperationVariant,
-        max_verification_gas: u64,
-    ) -> anyhow::Result<bool> {
+    async fn check_signature(&self, uo: UserOperationVariant) -> anyhow::Result<bool> {
         let output = self
             .entry_point
-            .simulate_validation(uo.into(), max_verification_gas, None)
+            .simulate_validation(uo.into(), None)
             .await??;
 
         Ok(!output.return_info.account_sig_failed)
