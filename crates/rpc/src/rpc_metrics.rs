@@ -147,18 +147,14 @@ where
     }
 
     fn call(&mut self, req: httpRequest<R>) -> Self::Future {
-        let uri = req.uri().clone();
-        let method_name = uri.path().split('/').last().unwrap_or("unknown");
-        let mut method_logger = MethodSessionLogger::new(
+        let method_logger = MethodSessionLogger::new(
             self.service_name.clone(),
-            method_name.to_string(),
+            "jsonrpc-method".to_string(),
             "http".to_string(),
         );
-        method_logger.start();
         let mut svc = self.service.clone();
         async move {
             let rp = svc.call(req).await;
-            method_logger.done();
             let http_status = rp.as_ref().ok().map(|rp| rp.status());
             if let Some(status_code) = http_status {
                 method_logger.record_http(get_http_status_from_code(status_code.as_u16()));
