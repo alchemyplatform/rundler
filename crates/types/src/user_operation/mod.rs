@@ -176,8 +176,10 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// if the chain requires it.
     ///
     /// This is needed to set the gas limit for the bundle transaction.
-    fn gas_limit(&self, chain_spec: &ChainSpec, include_intrinsic_gas: bool) -> u128 {
-        self.pre_verification_gas_limit(chain_spec, include_intrinsic_gas)
+    ///
+    /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
+    fn gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+        self.pre_verification_gas_limit(chain_spec, bundle_size)
             + self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
             + self.call_gas_limit()
@@ -188,8 +190,10 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential DA costs.
     ///
     /// This is needed to limit the size of the bundle transaction to adhere to the block gas limit.
-    fn execution_gas_limit(&self, chain_spec: &ChainSpec, include_intrinsic_gas: bool) -> u128 {
-        self.pre_verification_execution_gas_limit(chain_spec, include_intrinsic_gas)
+    ///
+    /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
+    fn execution_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+        self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
             + self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
             + self.call_gas_limit()
@@ -198,7 +202,13 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the portion of pre-verification gas the applies to the DA portion of a bundle's gas limit
     ///
     /// On an L2 this is the portion of the pre_verification_gas that is due to DA costs
-    fn pre_verification_da_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
+    ///
+    /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
+    fn pre_verification_da_gas_limit(
+        &self,
+        chain_spec: &ChainSpec,
+        bundle_size: Option<usize>,
+    ) -> u128 {
         // On some chains (OP bedrock) the DA gas fee is charged via pre_verification_gas
         // but this not part of the gas limit of the transaction.
         //
@@ -206,7 +216,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         if chain_spec.da_pre_verification_gas && chain_spec.include_da_gas_in_gas_limit {
             self.pre_verification_gas()
                 .saturating_sub(self.static_pre_verification_gas(chain_spec))
-                .saturating_sub(chain_spec.transaction_intrinsic_gas())
+                .saturating_sub(optional_bundle_per_uo_shared_gas(chain_spec, bundle_size))
         } else {
             0
         }
@@ -215,10 +225,12 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the portion of pre-verification gas the applies to the execution portion of a bundle's gas limit
     ///
     /// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential DA costs
+    ///
+    /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
     fn pre_verification_execution_gas_limit(
         &self,
         chain_spec: &ChainSpec,
-        include_intrinsic_gas: bool,
+        bundle_size: Option<usize>,
     ) -> u128 {
         // On some chains (OP bedrock, Arbitrum) the DA gas fee is charged via pre_verification_gas
         // but this not part of the EXECUTION gas limit of the transaction.
@@ -226,24 +238,75 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         // On other chains, the DA portion is zero.
         //
         // Thus, only consider the static portion of the pre_verification_gas in the gas limit.
-        let static_pvg = self.static_pre_verification_gas(chain_spec);
-        if include_intrinsic_gas {
-            static_pvg.saturating_add(chain_spec.transaction_intrinsic_gas())
-        } else {
-            static_pvg
-        }
+        self.static_pre_verification_gas(chain_spec)
+            .saturating_add(optional_bundle_per_uo_shared_gas(chain_spec, bundle_size))
     }
 
     /// Returns the portion of pre-verification gas that applies to a bundle's total gas limit
     ///
     /// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential DA costs
+    ///
+    /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
     fn pre_verification_gas_limit(
         &self,
         chain_spec: &ChainSpec,
-        include_intrinsic_gas: bool,
+        bundle_size: Option<usize>,
     ) -> u128 {
-        self.pre_verification_execution_gas_limit(chain_spec, include_intrinsic_gas)
-            + self.pre_verification_da_gas_limit(chain_spec)
+        self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
+            + self.pre_verification_da_gas_limit(chain_spec, bundle_size)
+    }
+
+    /// Returns the required pre-verification gas for the given user operation
+    ///
+    /// `bundle_size` is the size of the bundle
+    /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
+    fn required_pre_verification_gas(
+        &self,
+        chain_spec: &ChainSpec,
+        bundle_size: usize,
+        da_gas: u128,
+    ) -> u128 {
+        self.static_pre_verification_gas(chain_spec)
+            .saturating_add(bundle_per_uo_shared_gas(chain_spec, bundle_size))
+            .saturating_add(da_gas)
+    }
+
+    /// Returns true if the user operation has enough pre-verification gas to be included in a bundle
+    ///
+    /// `bundle_size` is the size of the bundle
+    /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
+    fn has_required_pre_verification_gas(
+        &self,
+        chain_spec: &ChainSpec,
+        bundle_size: usize,
+        da_gas: u128,
+    ) -> bool {
+        self.pre_verification_gas()
+            > self.required_pre_verification_gas(chain_spec, bundle_size, da_gas)
+    }
+}
+
+/// Returns the total shared gas for a bundle
+pub fn bundle_shared_gas(chain_spec: &ChainSpec) -> u128 {
+    chain_spec.transaction_intrinsic_gas()
+}
+
+/// Returns the shared gas per user operation for a given bundle size
+///
+/// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
+pub fn bundle_per_uo_shared_gas(chain_spec: &ChainSpec, bundle_size: usize) -> u128 {
+    if bundle_size == 0 {
+        0
+    } else {
+        bundle_shared_gas(chain_spec) / bundle_size as u128
+    }
+}
+
+fn optional_bundle_per_uo_shared_gas(chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+    if let Some(bundle_size) = bundle_size {
+        bundle_per_uo_shared_gas(chain_spec, bundle_size)
+    } else {
+        0
     }
 }
 

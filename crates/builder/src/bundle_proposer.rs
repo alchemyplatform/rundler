@@ -470,7 +470,7 @@ where
         let mut context = ProposalContext::<UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
-        let mut gas_spent = self.settings.chain_spec.transaction_intrinsic_gas();
+        let mut gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
         for (po, simulation) in ops_with_simulations {
             let op = po.clone().uo;
@@ -525,7 +525,7 @@ where
             }
 
             // Skip this op if the bundle does not have enough remaining gas to execute it.
-            let required_gas = gas_spent + op.execution_gas_limit(&self.settings.chain_spec, false);
+            let required_gas = gas_spent + op.execution_gas_limit(&self.settings.chain_spec, None);
             if required_gas > self.settings.max_bundle_gas {
                 continue;
             }
@@ -561,7 +561,7 @@ where
             }
 
             // Update the running gas that would need to be be spent to execute the bundle so far.
-            gas_spent += op.execution_gas_limit(&self.settings.chain_spec, false);
+            gas_spent += op.execution_gas_limit(&self.settings.chain_spec, None);
 
             constructed_bundle_size =
                 constructed_bundle_size.saturating_add(op_size_with_offset_word);
@@ -998,7 +998,7 @@ where
         for op in ops {
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = op.uo.execution_gas_limit(&self.settings.chain_spec, false);
+            let gas = op.uo.execution_gas_limit(&self.settings.chain_spec, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
@@ -1238,9 +1238,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // needed to have the buffer for each op.
 
         self.iter_ops_with_simulations()
-            .map(|sim_op| sim_op.op.gas_limit(chain_spec, false))
+            .map(|sim_op| sim_op.op.gas_limit(chain_spec, None))
             .sum::<u128>()
-            + chain_spec.transaction_intrinsic_gas()
+            + rundler_types::bundle_shared_gas(chain_spec)
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -1441,7 +1441,7 @@ mod tests {
         let cs = ChainSpec::default();
 
         let expected_gas: u64 = math::increase_by_percent(
-            op.gas_limit(&cs, true),
+            op.gas_limit(&cs, Some(1)),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         )
         .try_into()
@@ -1925,9 +1925,9 @@ mod tests {
         .await;
 
         let cs = ChainSpec::default();
-        let expected_gas_limit: u64 = (op1.gas_limit(&cs, false)
-            + op2.gas_limit(&cs, false)
-            + cs.transaction_intrinsic_gas())
+        let expected_gas_limit: u64 = (op1.gas_limit(&cs, None)
+            + op2.gas_limit(&cs, None)
+            + rundler_types::bundle_shared_gas(&cs))
         .try_into()
         .unwrap();
 
@@ -1980,8 +1980,9 @@ mod tests {
             entity_updates: BTreeMap::new(),
         };
 
-        let expected_gas_limit =
-            op1.gas_limit(&cs, false) + op2.gas_limit(&cs, false) + cs.transaction_intrinsic_gas();
+        let expected_gas_limit = op1.gas_limit(&cs, None)
+            + op2.gas_limit(&cs, None)
+            + rundler_types::bundle_shared_gas(&cs);
 
         assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
     }
@@ -2021,8 +2022,9 @@ mod tests {
         };
         let gas_limit = context.get_bundle_gas_limit(&cs);
 
-        let expected_gas_limit =
-            op1.gas_limit(&cs, false) + op2.gas_limit(&cs, false) + cs.transaction_intrinsic_gas();
+        let expected_gas_limit = op1.gas_limit(&cs, None)
+            + op2.gas_limit(&cs, None)
+            + rundler_types::bundle_shared_gas(&cs);
 
         assert_eq!(gas_limit, expected_gas_limit);
     }
