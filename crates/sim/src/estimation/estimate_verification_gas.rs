@@ -127,8 +127,6 @@ where
                     Address::ZERO,
                     Bytes::new(),
                     block_hash.into(),
-                    // TODO(danc): HERE
-                    self.settings.max_simulate_handle_ops_gas,
                     state_override,
                 )
                 .await?

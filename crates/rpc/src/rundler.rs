@@ -32,8 +32,6 @@ pub struct Settings {
     /// If using a bundle priority fee, the percentage to add to the network/oracle
     /// provided value as a safety margin for fast inclusion.
     pub bundle_priority_fee_overhead_percent: u32,
-    /// Max verification gas
-    pub max_verification_gas: u64,
 }
 
 #[rpc(client, server, namespace = "rundler")]
@@ -60,7 +58,6 @@ pub trait RundlerApi {
 
 pub(crate) struct RundlerApi<P, F> {
     chain_spec: ChainSpec,
-    settings: Settings,
     fee_estimator: F,
     pool_server: P,
     entry_point_router: EntryPointRouter,
@@ -103,11 +100,9 @@ where
         entry_point_router: EntryPointRouter,
         pool_server: P,
         fee_estimator: F,
-        settings: Settings,
     ) -> Self {
         Self {
             chain_spec: chain_spec.clone(),
-            settings,
             entry_point_router,
             pool_server,
             fee_estimator,
@@ -143,10 +138,9 @@ where
             Err(EthRpcError::InvalidParams("Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero".to_string()))?;
         }
 
-        // TODO(danc): HERE
         let valid = self
             .entry_point_router
-            .check_signature(&entry_point, uo, self.settings.max_verification_gas)
+            .check_signature(&entry_point, uo)
             .await?;
         if !valid {
             Err(EthRpcError::InvalidParams(

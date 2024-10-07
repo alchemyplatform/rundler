@@ -29,8 +29,8 @@ use rundler_contracts::v0_6::{
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
 };
 use rundler_types::{
-    chain::ChainSpec, v0_6::UserOperation, GasFees, UserOpsPerAggregator, ValidationOutput,
-    ValidationRevert,
+    chain::ChainSpec, v0_6::UserOperation, GasFees, UserOperation as _, UserOpsPerAggregator,
+    ValidationOutput, ValidationRevert,
 };
 
 use super::DAGasOracle;
@@ -45,7 +45,10 @@ use crate::{
 pub struct EntryPointProvider<AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
     da_gas_oracle: DAGasOracle,
+    max_verification_gas: u64,
+    max_simulate_handle_op_gas: u64,
     max_aggregation_gas: u64,
+    chain_spec: ChainSpec,
 }
 
 impl<AP, T> EntryPointProvider<AP, T>
@@ -54,11 +57,20 @@ where
     AP: AlloyProvider<T>,
 {
     /// Create a new `EntryPoint` instance for v0.6
-    pub fn new(chain_spec: &ChainSpec, max_aggregation_gas: u64, provider: AP) -> Self {
+    pub fn new(
+        chain_spec: ChainSpec,
+        max_verification_gas: u64,
+        max_simulate_handle_op_gas: u64,
+        max_aggregation_gas: u64,
+        provider: AP,
+    ) -> Self {
         Self {
             i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_6, provider),
-            da_gas_oracle: DAGasOracle::new(chain_spec),
+            da_gas_oracle: DAGasOracle::new(&chain_spec),
+            max_verification_gas,
+            max_simulate_handle_op_gas,
             max_aggregation_gas,
+            chain_spec,
         }
     }
 }
@@ -133,12 +145,20 @@ where
         ops: Vec<Self::UO>,
     ) -> ProviderResult<Option<Bytes>> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
+        let ops_len = ops.len();
+        let da_gas: u64 = ops
+            .iter()
+            .map(|op: &UserOperation| {
+                op.pre_verification_da_gas_limit(&self.chain_spec, Some(ops_len))
+            })
+            .sum::<u128>()
+            .try_into()
+            .unwrap_or(u64::MAX);
         let ops: Vec<ContractUserOperation> = ops.into_iter().map(Into::into).collect();
 
-        // TODO(danc): HERE
         let result = aggregator
             .aggregateSignatures(ops)
-            .gas(self.max_aggregation_gas)
+            .gas(self.max_aggregation_gas.saturating_add(da_gas))
             .call()
             .await;
 
@@ -159,13 +179,16 @@ where
         &self,
         aggregator_address: Address,
         user_op: Self::UO,
-        gas_cap: u64,
     ) -> ProviderResult<AggregatorOut> {
         let aggregator = IAggregator::new(aggregator_address, self.i_entry_point.provider());
+        let da_gas: u64 = user_op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         let result = aggregator
             .validateUserOpSignature(user_op.into())
-            .gas(gas_cap)
+            .gas(self.max_verification_gas.saturating_add(da_gas))
             .call()
             .await;
 
@@ -198,9 +221,15 @@ where
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
         beneficiary: Address,
-        gas: u64,
+        gas_limit: Option<u64>,
     ) -> ProviderResult<HandleOpsOut> {
-        let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
+        let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_op_gas);
+        let tx = get_handle_ops_call(
+            &self.i_entry_point,
+            ops_per_aggregator,
+            beneficiary,
+            gas_limit,
+        );
         let res = self.i_entry_point.provider().call(&tx).await;
 
         match res {
@@ -256,12 +285,17 @@ where
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
         beneficiary: Address,
-        gas: u64,
+        gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas)
-            .max_fee_per_gas(gas_fees.max_fee_per_gas)
-            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+        get_handle_ops_call(
+            &self.i_entry_point,
+            ops_per_aggregator,
+            beneficiary,
+            gas_limit,
+        )
+        .max_fee_per_gas(gas_fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
 }
 
@@ -311,16 +345,15 @@ where
     fn get_tracer_simulate_validation_call(
         &self,
         user_op: UserOperation,
-        max_validation_gas: u64,
     ) -> ProviderResult<(TransactionRequest, StateOverride)> {
-        let pvg: u64 = user_op
-            .pre_verification_gas
+        let da_gas: u64 = user_op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
-            .context("pre verification gas larger than u64")?;
+            .unwrap_or(u64::MAX);
         let call = self
             .i_entry_point
             .simulateValidation(user_op.into())
-            .gas(max_validation_gas + pvg)
+            .gas(self.max_verification_gas.saturating_add(da_gas))
             .into_transaction_request();
         Ok((call, StateOverride::default()))
     }
@@ -328,17 +361,16 @@ where
     async fn simulate_validation(
         &self,
         user_op: UserOperation,
-        max_validation_gas: u64,
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>> {
-        let pvg: u64 = user_op
-            .pre_verification_gas
+        let da_gas: u64 = user_op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
-            .context("pre verification gas larger than u64")?;
+            .unwrap_or(u64::MAX);
         let blockless = self
             .i_entry_point
             .simulateValidation(user_op.into())
-            .gas(max_validation_gas + pvg);
+            .gas(self.max_verification_gas.saturating_add(da_gas));
         let call = match block_id {
             Some(block_id) => blockless.block(block_id),
             None => blockless,
@@ -397,14 +429,18 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        gas: u64,
         state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
+        let da_gas: u64 = op
+            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
+            .try_into()
+            .unwrap_or(u64::MAX);
+
         let contract_error = self
             .i_entry_point
             .simulateHandleOp(op.into(), target, target_call_data)
             .block(block_id)
-            .gas(gas)
+            .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
             .state(state_override)
             .call()
             .await

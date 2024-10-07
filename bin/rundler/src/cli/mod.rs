@@ -396,8 +396,6 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
         Ok(Self::new(
             value.min_unstake_delay,
             U256::from(value.min_stake_value),
-            value.max_simulate_handle_ops_gas,
-            value.max_verification_gas,
             value.tracer_timeout.clone(),
         ))
     }
@@ -419,7 +417,6 @@ impl TryFrom<&CommonArgs> for RundlerApiSettings {
                 value.priority_fee_mode_value,
             )?,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
-            max_verification_gas: value.max_verification_gas,
         })
     }
 }
@@ -559,7 +556,9 @@ pub fn construct_providers(
         None
     } else {
         Some(AlloyEntryPointV0_6::new(
-            chain_spec,
+            chain_spec.clone(),
+            args.max_verification_gas,
+            args.max_simulate_handle_ops_gas,
             args.max_simulate_handle_ops_gas,
             provider.clone(),
         ))
@@ -569,7 +568,9 @@ pub fn construct_providers(
         None
     } else {
         Some(AlloyEntryPointV0_7::new(
-            chain_spec,
+            chain_spec.clone(),
+            args.max_verification_gas,
+            args.max_simulate_handle_ops_gas,
             args.max_simulate_handle_ops_gas,
             provider.clone(),
         ))

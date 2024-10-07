@@ -208,15 +208,6 @@ where
         &self,
         optional_op: &UserOperationOptionalGas,
     ) -> Result<(), GasEstimationError> {
-        if let Some(pvg) = optional_op.pre_verification_gas {
-            // TODO(danc): HERE
-            if pvg > self.settings.max_verification_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "preVerificationGas",
-                    self.settings.max_verification_gas,
-                ));
-            }
-        }
         if let Some(vl) = optional_op.verification_gas_limit {
             if vl > self.settings.max_verification_gas {
                 return Err(GasEstimationError::GasFieldTooLarge(
@@ -624,25 +615,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pvg_over_max() {
-        let (entry, provider) = create_base_config();
-        let (estimator, _) = create_estimator(entry, provider);
-
-        let optional_op = demo_user_op_optional_gas(Some(TEST_MAX_GAS_LIMITS + 1));
-
-        let estimation = estimator
-            .estimate_op_gas(optional_op, StateOverride::default())
-            .await
-            .err()
-            .unwrap();
-
-        assert!(matches!(
-            estimation,
-            GasEstimationError::GasFieldTooLarge("preVerificationGas", TEST_MAX_GAS_LIMITS)
-        ));
-    }
-
-    #[tokio::test]
     async fn test_vgl_over_max() {
         let (entry, provider) = create_base_config();
         let (estimator, _) = create_estimator(entry, provider);
@@ -735,7 +707,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
                         success: true,
@@ -796,7 +768,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
                         success: false,
@@ -834,7 +806,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
                         success: true,
