@@ -168,10 +168,6 @@ pub struct Settings {
     /// The minimum amount of stake that a staked entity must have on the entry point
     /// contract in order to be considered staked.
     pub min_stake_value: U256,
-    /// The maximum amount of gas that can be used during the simulation call
-    pub max_simulate_handle_ops_gas: u64,
-    /// The maximum amount of verification gas that can be used during the simulation call
-    pub max_verification_gas: u64,
     /// The max duration of the custom javascript tracer. Must be in a format parseable by the
     /// ParseDuration function on an ethereum node. See Docs: https://pkg.go.dev/time#ParseDuration
     pub tracer_timeout: String,
@@ -179,18 +175,10 @@ pub struct Settings {
 
 impl Settings {
     /// Create new settings
-    pub fn new(
-        min_unstake_delay: u32,
-        min_stake_value: U256,
-        max_simulate_handle_ops_gas: u64,
-        max_verification_gas: u64,
-        tracer_timeout: String,
-    ) -> Self {
+    pub fn new(min_unstake_delay: u32, min_stake_value: U256, tracer_timeout: String) -> Self {
         Self {
             min_unstake_delay,
             min_stake_value,
-            max_simulate_handle_ops_gas,
-            max_verification_gas,
             tracer_timeout,
         }
     }
@@ -204,9 +192,6 @@ impl Default for Settings {
             min_unstake_delay: 84600,
             // 10^18 wei = 1 eth
             min_stake_value: uint!(1_000_000_000_000_000_000_U256),
-            // 550 million gas: currently the defaults for Alchemy eth_call
-            max_simulate_handle_ops_gas: 550_000_000,
-            max_verification_gas: 5_000_000,
             tracer_timeout: "10s".to_string(),
         }
     }

@@ -720,7 +720,7 @@ where
             .call_handle_ops(
                 context.to_ops_per_aggregator(),
                 self.settings.beneficiary,
-                gas,
+                Some(gas),
             )
             .await
             .context("should call handle ops with candidate bundle")?;
@@ -745,7 +745,7 @@ where
             }
             HandleOpsOut::PostOpRevert => {
                 warn!("PostOpShortRevert error during gas estimation due to bug in the 0.6 entry point contract. Removing the offending op from the bundle.");
-                self.process_post_op_revert(context, gas).await?;
+                self.process_post_op_revert(context).await?;
                 Ok(None)
             }
         }
@@ -869,7 +869,6 @@ where
     async fn process_post_op_revert(
         &self,
         context: &mut ProposalContext<UO>,
-        gas: u64,
     ) -> anyhow::Result<()> {
         let agg_groups = context.to_ops_per_aggregator();
         let mut op_index = 0;
@@ -880,7 +879,7 @@ where
             if agg_group.aggregator.is_zero() {
                 for op in agg_group.user_ops {
                     futures.push(Box::pin(
-                        self.check_for_post_op_revert_single_op(op, gas, op_index),
+                        self.check_for_post_op_revert_single_op(op, op_index),
                     ));
                     op_index += 1;
                 }
@@ -888,7 +887,7 @@ where
                 // For aggregated ops, re-simulate the group
                 let len = agg_group.user_ops.len();
                 futures.push(Box::pin(
-                    self.check_for_post_op_revert_agg_ops(agg_group, gas, op_index),
+                    self.check_for_post_op_revert_agg_ops(agg_group, op_index),
                 ));
                 op_index += len;
             }
@@ -919,12 +918,7 @@ where
         Ok(())
     }
 
-    async fn check_for_post_op_revert_single_op(
-        &self,
-        op: UO,
-        gas: u64,
-        op_index: usize,
-    ) -> Vec<usize> {
+    async fn check_for_post_op_revert_single_op(&self, op: UO, op_index: usize) -> Vec<usize> {
         let op_hash = self.op_hash(&op);
         let bundle = vec![UserOpsPerAggregator {
             aggregator: Address::ZERO,
@@ -933,7 +927,7 @@ where
         }];
         let ret = self
             .entry_point
-            .call_handle_ops(bundle, self.settings.beneficiary, gas)
+            .call_handle_ops(bundle, self.settings.beneficiary, None)
             .await;
         match ret {
             Ok(out) => {
@@ -958,7 +952,6 @@ where
     async fn check_for_post_op_revert_agg_ops(
         &self,
         group: UserOpsPerAggregator<UO>,
-        gas: u64,
         start_index: usize,
     ) -> Vec<usize> {
         let len = group.user_ops.len();
@@ -966,7 +959,7 @@ where
         let bundle = vec![group];
         let ret = self
             .entry_point
-            .call_handle_ops(bundle, self.settings.beneficiary, gas)
+            .call_handle_ops(bundle, self.settings.beneficiary, None)
             .await;
         match ret {
             Ok(out) => {

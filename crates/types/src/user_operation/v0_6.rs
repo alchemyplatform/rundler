@@ -453,7 +453,6 @@ impl UserOperationOptionalGas {
         let cgl = super::default_if_none_or_equal(self.call_gas_limit, max_call_gas, 0);
         let vgl =
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
-        // TODO(danc): HERE
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
         let required = UserOperationRequiredFields {

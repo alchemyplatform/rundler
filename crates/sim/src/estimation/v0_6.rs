@@ -190,15 +190,6 @@ where
         &self,
         optional_op: &UserOperationOptionalGas,
     ) -> Result<(), GasEstimationError> {
-        // TODO(danc): HERE
-        if let Some(pvg) = optional_op.pre_verification_gas {
-            if pvg > self.settings.max_verification_gas {
-                return Err(GasEstimationError::GasFieldTooLarge(
-                    "preVerificationGas",
-                    self.settings.max_verification_gas,
-                ));
-            }
-        }
         if let Some(vl) = optional_op.verification_gas_limit {
             if vl > self.settings.max_verification_gas {
                 return Err(GasEstimationError::GasFieldTooLarge(
@@ -796,7 +787,7 @@ mod tests {
         });
         entry
             .expect_simulate_handle_op()
-            .returning(move |op, _b, _c, _d, _e, _f| {
+            .returning(move |op, _b, _c, _d, _e| {
                 if op.total_verification_gas_limit() < gas_usage {
                     return Ok(Err(ValidationRevert::EntryPoint("AA23".to_string())));
                 }
@@ -855,7 +846,7 @@ mod tests {
         });
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gasEstimate: U256::from(10000),
@@ -910,7 +901,7 @@ mod tests {
         });
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gasEstimate: U256::from(10000),
@@ -958,7 +949,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gasEstimate: U256::from(100),
@@ -1009,7 +1000,7 @@ mod tests {
         //this mocked response causes error
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| Err(anyhow!("Invalid spoof error").into()));
+            .returning(|_a, _b, _c, _d, _e| Err(anyhow!("Invalid spoof error").into()));
 
         provider.expect_get_gas_used().returning(move |_a| {
             Ok(GasUsedResult {
@@ -1049,7 +1040,7 @@ mod tests {
         // this should always revert instead of return success
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gasEstimate: U256::from(10000),
@@ -1083,7 +1074,7 @@ mod tests {
         let gas_estimate = 100_000;
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gasEstimate: U256::from(gas_estimate),
@@ -1121,7 +1112,7 @@ mod tests {
         // for a successful gas estimation
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasRevertAtMax {
                         revertData: Bytes::new(),
@@ -1158,7 +1149,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasContinuation {
                         minGas: U256::from(100),
@@ -1174,7 +1165,7 @@ mod tests {
             .times(1);
         entry
             .expect_simulate_handle_op()
-            .returning(|_a, _b, _c, _d, _e, _f| {
+            .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateCallGasResult {
                         gasEstimate: U256::from(200),
@@ -1213,7 +1204,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |op, _b, _c, _d, _e, _f| {
+            .returning(move |op, _b, _c, _d, _e| {
                 if op.total_verification_gas_limit() < gas_usage {
                     return Ok(Err(ValidationRevert::EntryPoint("AA23".to_string())));
                 }
@@ -1317,25 +1308,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pvg_over_max() {
-        let (entry, provider) = create_base_config();
-        let (estimator, _) = create_estimator(entry, provider);
-
-        let optional_op = demo_user_op_optional_gas(Some(TEST_MAX_GAS_LIMITS + 1));
-
-        let estimation = estimator
-            .estimate_op_gas(optional_op, StateOverride::default())
-            .await
-            .err()
-            .unwrap();
-
-        assert!(matches!(
-            estimation,
-            GasEstimationError::GasFieldTooLarge("preVerificationGas", TEST_MAX_GAS_LIMITS)
-        ));
-    }
-
-    #[tokio::test]
     async fn test_vgl_over_max() {
         let (entry, provider) = create_base_config();
         let (estimator, _) = create_estimator(entry, provider);
@@ -1385,7 +1357,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
                         success: true,
@@ -1439,7 +1411,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
                         success: false,
@@ -1481,7 +1453,7 @@ mod tests {
 
         entry
             .expect_simulate_handle_op()
-            .returning(move |_a, _b, _c, _d, _e, _f| {
+            .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
                         success: true,
