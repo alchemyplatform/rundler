@@ -23,6 +23,7 @@ use url::Url;
 
 use crate::EvmProvider;
 
+pub(crate) mod da;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;

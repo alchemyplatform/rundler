@@ -14,9 +14,7 @@
 use std::marker::PhantomData;
 
 use alloy_primitives::B256;
-use rundler_provider::{
-    AggregatorOut, EntryPoint, EvmProvider, SignatureAggregator, SimulationProvider,
-};
+use rundler_provider::{AggregatorOut, EntryPoint, SignatureAggregator, SimulationProvider};
 use rundler_types::{pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange};
 
 use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
@@ -27,17 +25,15 @@ use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
 ///
 /// WARNING: This is "unsafe" for a reason. None of the ERC-7562 checks are
 /// performed.
-pub struct UnsafeSimulator<UO, P, E> {
-    provider: P,
+pub struct UnsafeSimulator<UO, E> {
     entry_point: E,
     _uo_type: PhantomData<UO>,
 }
 
-impl<UO, P, E> UnsafeSimulator<UO, P, E> {
+impl<UO, E> UnsafeSimulator<UO, E> {
     /// Creates a new unsafe simulator
-    pub fn new(provider: P, entry_point: E) -> Self {
+    pub fn new(entry_point: E) -> Self {
         Self {
-            provider,
             entry_point,
             _uo_type: PhantomData,
         }
@@ -45,10 +41,9 @@ impl<UO, P, E> UnsafeSimulator<UO, P, E> {
 }
 
 #[async_trait::async_trait]
-impl<UO, P, E> Simulator for UnsafeSimulator<UO, P, E>
+impl<UO, E> Simulator for UnsafeSimulator<UO, E>
 where
     UO: UserOperation,
-    P: EvmProvider,
     E: EntryPoint + SimulationProvider<UO = UO> + SignatureAggregator<UO = UO> + Clone,
 {
     type UO = UO;
@@ -59,23 +54,10 @@ where
     async fn simulate_validation(
         &self,
         op: UO,
-        block_hash: Option<B256>,
+        block_hash: B256,
         _expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {
         tracing::info!("Performing unsafe simulation");
-
-        let (block_hash, block_number) = match block_hash {
-            // If we are given a block_hash, we return a None block number, avoiding an extra call
-            Some(block_hash) => (block_hash, None),
-            None => {
-                let hash_and_num = self
-                    .provider
-                    .get_latest_block_hash_and_number()
-                    .await
-                    .map_err(anyhow::Error::from)?;
-                (hash_and_num.0, Some(hash_and_num.1))
-            }
-        };
 
         // simulate the validation
         let validation_result = self
@@ -150,8 +132,6 @@ where
         } else {
             Ok(SimulationResult {
                 mempools: vec![B256::ZERO],
-                block_hash,
-                block_number,
                 pre_op_gas,
                 valid_time_range,
                 requires_post_op,

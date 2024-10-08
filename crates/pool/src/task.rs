@@ -208,7 +208,7 @@ where
             .context("entry point v0.6 not supplied")?;
 
         if unsafe_mode {
-            let simulator = UnsafeSimulator::new(self.provider.clone(), ep.clone());
+            let simulator = UnsafeSimulator::new(ep.clone());
             Self::create_mempool(
                 task_spawner,
                 chain_spec,
@@ -251,7 +251,7 @@ where
             .context("entry point v0.7 not supplied")?;
 
         if unsafe_mode {
-            let simulator = UnsafeSimulator::new(self.provider.clone(), ep.clone());
+            let simulator = UnsafeSimulator::new(ep.clone());
             Self::create_mempool(
                 task_spawner,
                 chain_spec,
@@ -340,6 +340,7 @@ where
         let uo_pool = UoPool::new(
             pool_config.clone(),
             event_sender,
+            provider,
             prechecker,
             simulator,
             paymaster,

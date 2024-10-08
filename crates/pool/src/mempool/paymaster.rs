@@ -526,9 +526,9 @@ mod tests {
             valid_time_range: ValidTimeRange::all_time(),
             expected_code_hash: B256::random(),
             sim_block_hash: B256::random(),
+            sim_block_number: 0,
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
-            sim_block_number: 0,
         }
     }
 
