@@ -4673,6 +4673,7 @@ dependencies = [
  "constcat",
  "futures-util",
  "metrics",
+ "metrics-derive",
  "mockall",
  "num_enum",
  "parse-display",

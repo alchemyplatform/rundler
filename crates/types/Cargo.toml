@@ -30,6 +30,7 @@ thiserror.workspace = true
 metrics.workspace = true
 
 mockall = {workspace = true, optional = true }
+metrics-derive = "0.1.0"
 
 [dev-dependencies]
 rundler-types = { workspace = true, features = ["test-utils"] }
