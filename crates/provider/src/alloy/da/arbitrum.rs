@@ -15,8 +15,10 @@ use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_sol_types::sol;
 use alloy_transport::Transport;
+use NodeInterface::NodeInterfaceInstance;
 
-use crate::ProviderResult;
+use super::DAGasOracle;
+use crate::{BlockHashOrNumber, ProviderResult};
 
 // From https://github.com/OffchainLabs/nitro-contracts/blob/fbbcef09c95f69decabaced3da683f987902f3e2/src/node-interface/NodeInterface.sol#L112
 sol! {
@@ -37,19 +39,41 @@ sol! {
     }
 }
 
-pub(crate) async fn estimate_da_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
-    provider: AP,
-    oracle_address: Address,
-    to_address: Address,
-    data: Bytes,
-) -> ProviderResult<u128> {
-    let inst = NodeInterface::NodeInterfaceInstance::new(oracle_address, provider);
+pub(super) struct ArbitrumNitroDAGasOracle<AP, T> {
+    node_interface: NodeInterfaceInstance<T, AP>,
+}
 
-    // assume contract creation
-    let ret = inst
-        .gasEstimateL1Component(to_address, true, data)
-        .call()
-        .await?;
+impl<AP, T> ArbitrumNitroDAGasOracle<AP, T>
+where
+    AP: AlloyProvider<T>,
+    T: Transport + Clone,
+{
+    pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
+        Self {
+            node_interface: NodeInterfaceInstance::new(oracle_address, provider),
+        }
+    }
+}
 
-    Ok(ret.gasEstimateForL1 as u128)
+#[async_trait::async_trait]
+impl<AP, T> DAGasOracle for ArbitrumNitroDAGasOracle<AP, T>
+where
+    AP: AlloyProvider<T>,
+    T: Transport + Clone,
+{
+    async fn estimate_da_gas(
+        &self,
+        to_address: Address,
+        data: Bytes,
+        block: BlockHashOrNumber,
+        _gas_price: u128,
+    ) -> ProviderResult<u128> {
+        let ret = self
+            .node_interface
+            .gasEstimateL1Component(to_address, true, data)
+            .block(block.into())
+            .call()
+            .await?;
+        Ok(ret.gasEstimateForL1 as u128)
+    }
 }

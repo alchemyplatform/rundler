@@ -80,7 +80,7 @@ where
             .await
             .map_err(anyhow::Error::from)?;
 
-        let pre_verification_gas = self.estimate_pre_verification_gas(&op).await?;
+        let pre_verification_gas = self.estimate_pre_verification_gas(&op, block_hash).await?;
 
         let full_op = op
             .clone()
@@ -339,6 +339,7 @@ where
     async fn estimate_pre_verification_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
+        block_hash: B256,
     ) -> Result<u128, GasEstimationError> {
         if let Some(pvg) = optional_op.pre_verification_gas {
             if pvg != 0 {
@@ -367,6 +368,7 @@ where
             &self.entry_point,
             &optional_op.max_fill(&self.chain_spec),
             &optional_op.random_fill(&self.chain_spec),
+            block_hash.into(),
             gas_price,
         )
         .await?)

@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_contract::Error as ContractError;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider as AlloyProvider;
@@ -33,28 +35,28 @@ use rundler_types::{
     ValidationOutput, ValidationRevert,
 };
 
-use super::DAGasOracle;
 use crate::{
-    AggregatorOut, AggregatorSimOut, BundleHandler, DAGasProvider, DepositInfo, EntryPoint,
-    EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult, HandleOpsOut,
-    ProviderResult, SignatureAggregator, SimulationProvider,
+    alloy::da::{self, DAGasOracle},
+    AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasProvider, DepositInfo,
+    EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult,
+    HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
 };
 
 /// Entry point provider for v0.6
 #[derive(Clone)]
-pub struct EntryPointProvider<AP, T> {
+pub struct EntryPointProvider<'a, AP, T> {
     i_entry_point: IEntryPointInstance<T, AP>,
-    da_gas_oracle: DAGasOracle,
+    da_gas_oracle: Arc<dyn DAGasOracle + 'a>,
     max_verification_gas: u64,
     max_simulate_handle_op_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
 }
 
-impl<AP, T> EntryPointProvider<AP, T>
+impl<'a, AP, T> EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
-    AP: AlloyProvider<T>,
+    AP: AlloyProvider<T> + Clone + 'a,
 {
     /// Create a new `EntryPoint` instance for v0.6
     pub fn new(
@@ -65,8 +67,11 @@ where
         provider: AP,
     ) -> Self {
         Self {
-            i_entry_point: IEntryPointInstance::new(chain_spec.entry_point_address_v0_6, provider),
-            da_gas_oracle: DAGasOracle::new(&chain_spec),
+            i_entry_point: IEntryPointInstance::new(
+                chain_spec.entry_point_address_v0_6,
+                provider.clone(),
+            ),
+            da_gas_oracle: Arc::from(da::da_gas_oracle_for_chain(&chain_spec, provider)),
             max_verification_gas,
             max_simulate_handle_op_gas,
             max_aggregation_gas,
@@ -76,7 +81,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> EntryPoint for EntryPointProvider<AP, T>
+impl<'a, AP, T> EntryPoint for EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,
@@ -132,7 +137,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> SignatureAggregator for EntryPointProvider<AP, T>
+impl<'a, AP, T> SignatureAggregator for EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,
@@ -210,7 +215,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> BundleHandler for EntryPointProvider<AP, T>
+impl<'a, AP, T> BundleHandler for EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,
@@ -300,7 +305,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasProvider for EntryPointProvider<AP, T>
+impl<'a, AP, T> DAGasProvider for EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,
@@ -309,8 +314,8 @@ where
 
     async fn calc_da_gas(
         &self,
-        entry_point_address: Address,
         user_op: UserOperation,
+        block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<u128> {
         let data = self
@@ -321,21 +326,17 @@ where
             .into_input()
             .unwrap();
 
-        let bundle_data = super::max_bundle_transaction_data(entry_point_address, data, gas_price);
+        let bundle_data =
+            super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
 
         self.da_gas_oracle
-            .estimate_da_gas(
-                self.i_entry_point.provider(),
-                entry_point_address,
-                bundle_data,
-                gas_price,
-            )
+            .estimate_da_gas(*self.i_entry_point.address(), bundle_data, block, gas_price)
             .await
     }
 }
 
 #[async_trait::async_trait]
-impl<AP, T> SimulationProvider for EntryPointProvider<AP, T>
+impl<'a, AP, T> SimulationProvider for EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,
@@ -498,7 +499,7 @@ where
     }
 }
 
-impl<AP, T> EntryPointProviderTrait<UserOperation> for EntryPointProvider<AP, T>
+impl<'a, AP, T> EntryPointProviderTrait<UserOperation> for EntryPointProvider<'a, AP, T>
 where
     T: Transport + Clone,
     AP: AlloyProvider<T>,

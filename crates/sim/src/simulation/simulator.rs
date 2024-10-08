@@ -465,21 +465,9 @@ where
     async fn simulate_validation(
         &self,
         op: UO,
-        block_hash: Option<B256>,
+        block_hash: B256,
         expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {
-        let (block_hash, block_number) = match block_hash {
-            // If we are given a block_hash, we return a None block number, avoiding an extra call
-            Some(block_hash) => (block_hash, None),
-            None => {
-                let hash_and_num = self
-                    .provider
-                    .get_latest_block_hash_and_number()
-                    .await
-                    .map_err(anyhow::Error::from)?;
-                (hash_and_num.0, Some(hash_and_num.1))
-            }
-        };
         let block_id = block_hash.into();
         let mut context = match self
             .validation_context_provider
@@ -540,8 +528,6 @@ where
 
         Ok(SimulationResult {
             mempools,
-            block_hash,
-            block_number,
             pre_op_gas,
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
             aggregator,
@@ -910,7 +896,7 @@ mod tests {
 
         let simulator = create_simulator(provider, entry_point, context);
         let res = simulator
-            .simulate_validation(user_operation, None, None)
+            .simulate_validation(user_operation, B256::ZERO, None)
             .await;
         assert!(res.is_ok());
     }

@@ -13,59 +13,11 @@
 
 use alloy_consensus::{transaction::SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_primitives::{address, Address, Bytes, Parity, Signature, U256};
-use alloy_provider::Provider as AlloyProvider;
 use alloy_rlp::Encodable;
 use alloy_rpc_types_eth::TransactionRequest;
-use alloy_transport::Transport;
-use rundler_types::chain::{ChainSpec, DAGasOracleContractType};
-
-use crate::ProviderResult;
 
 pub(crate) mod v0_6;
 pub(crate) mod v0_7;
-
-mod arbitrum;
-mod optimism;
-
-#[derive(Debug, Default, Clone)]
-enum DAGasOracle {
-    ArbitrumNitro(Address),
-    OptimismBedrock(Address),
-    #[default]
-    None,
-}
-
-impl DAGasOracle {
-    fn new(chain_spec: &ChainSpec) -> DAGasOracle {
-        match chain_spec.da_gas_oracle_contract_type {
-            DAGasOracleContractType::ArbitrumNitro => {
-                DAGasOracle::ArbitrumNitro(chain_spec.da_gas_oracle_contract_address)
-            }
-            DAGasOracleContractType::OptimismBedrock => {
-                DAGasOracle::OptimismBedrock(chain_spec.da_gas_oracle_contract_address)
-            }
-            DAGasOracleContractType::None => DAGasOracle::None,
-        }
-    }
-
-    async fn estimate_da_gas<AP: AlloyProvider<T>, T: Transport + Clone>(
-        &self,
-        provider: AP,
-        to_address: Address,
-        data: Bytes,
-        gas_price: u128,
-    ) -> ProviderResult<u128> {
-        match self {
-            DAGasOracle::ArbitrumNitro(oracle_address) => {
-                arbitrum::estimate_da_gas(provider, *oracle_address, to_address, data).await
-            }
-            DAGasOracle::OptimismBedrock(oracle_address) => {
-                optimism::estimate_da_gas(provider, *oracle_address, data, gas_price).await
-            }
-            DAGasOracle::None => Ok(0),
-        }
-    }
-}
 
 fn max_bundle_transaction_data(to_address: Address, data: Bytes, gas_price: u128) -> Bytes {
     // Fill in max values for unknown or varying fields

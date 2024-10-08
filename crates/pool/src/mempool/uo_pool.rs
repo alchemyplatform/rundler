@@ -16,7 +16,7 @@ use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 use alloy_primitives::{utils::format_units, Address, B256, U256};
 use itertools::Itertools;
 use parking_lot::RwLock;
-use rundler_provider::EntryPoint;
+use rundler_provider::{EntryPoint, EvmProvider};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{
     pool::{
@@ -44,12 +44,19 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<UO: UserOperation, P: Prechecker, S: Simulator, E: EntryPoint> {
+pub(crate) struct UoPool<
+    UO: UserOperation,
+    EP: EvmProvider,
+    P: Prechecker,
+    S: Simulator,
+    E: EntryPoint,
+> {
     config: PoolConfig,
     state: RwLock<UoPoolState>,
     paymaster: PaymasterTracker<E>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+    provider: EP,
     prechecker: P,
     simulator: S,
     _uo_type: PhantomData<UO>,
@@ -59,13 +66,15 @@ struct UoPoolState {
     pool: PoolInner,
     throttled_ops: HashSet<B256>,
     block_number: u64,
+    block_hash: B256,
     gas_fees: GasFees,
     base_fee: u128,
 }
 
-impl<UO, P, S, E> UoPool<UO, P, S, E>
+impl<UO, EP, P, S, E> UoPool<UO, EP, P, S, E>
 where
     UO: UserOperation,
+    EP: EvmProvider,
     P: Prechecker<UO = UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint,
@@ -73,6 +82,7 @@ where
     pub(crate) fn new(
         config: PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
+        provider: EP,
         prechecker: P,
         simulator: S,
         paymaster: PaymasterTracker<E>,
@@ -83,12 +93,14 @@ where
                 pool: PoolInner::new(config.clone().into()),
                 throttled_ops: HashSet::new(),
                 block_number: 0,
+                block_hash: B256::ZERO,
                 gas_fees: GasFees::default(),
                 base_fee: 0,
             }),
             reputation,
             paymaster,
             event_sender,
+            provider,
             prechecker,
             simulator,
             config,
@@ -137,9 +149,10 @@ where
 }
 
 #[async_trait]
-impl<UO, P, S, E> Mempool for UoPool<UO, P, S, E>
+impl<UO, EP, P, S, E> Mempool for UoPool<UO, EP, P, S, E>
 where
     UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
+    EP: EvmProvider,
     P: Prechecker<UO = UO>,
     S: Simulator<UO = UO>,
     E: EntryPoint,
@@ -342,6 +355,7 @@ where
                 {
                     let mut state = self.state.write();
                     state.block_number = update.latest_block_number;
+                    state.block_hash = update.latest_block_hash;
                     state.gas_fees = bundle_fees;
                     state.base_fee = base_fee;
                 }
@@ -419,6 +433,18 @@ where
             );
         }
 
+        // NOTE: We get the latest block from the provider here to avoid a race condition
+        // where the pool is still processing the previous block, but the user may have been
+        // notified of a new block.
+        //
+        // This doesn't clear all race conditions, as the pool may need to update its state before
+        // a UO can be valid, i.e. for replacement.
+        let (block_hash, block_number) = self
+            .provider
+            .get_latest_block_hash_and_number()
+            .await
+            .map_err(anyhow::Error::from)?;
+
         // Check if op is already known or replacing another, and if so, ensure its fees are high enough
         // do this before simulation to save resources
         let replacement = self.state.read().pool.check_replacement(&op)?;
@@ -433,12 +459,14 @@ where
 
         // Prechecks
         let versioned_op = op.clone().into();
-        self.prechecker.check(&versioned_op).await?;
+        self.prechecker
+            .check(&versioned_op, block_hash.into())
+            .await?;
 
         // Only let ops with successful simulations through
         let sim_result = self
             .simulator
-            .simulate_validation(versioned_op, None, None)
+            .simulate_validation(versioned_op, block_hash, None)
             .await?;
 
         // No aggregators supported for now
@@ -459,8 +487,8 @@ where
             aggregator: None,
             valid_time_range,
             expected_code_hash: sim_result.code_hash,
-            sim_block_hash: sim_result.block_hash,
-            sim_block_number: sim_result.block_number.unwrap(), // simulation always returns a block number when called without a specified block_hash
+            sim_block_hash: block_hash,
+            sim_block_number: block_number,
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
         };
@@ -733,7 +761,7 @@ mod tests {
 
     use alloy_primitives::Bytes;
     use mockall::Sequence;
-    use rundler_provider::{DepositInfo, MockEntryPointV0_6};
+    use rundler_provider::{DepositInfo, MockEntryPointV0_6, MockEvmProvider};
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, SimulationError,
         SimulationResult, SimulationSettings, ViolationError,
@@ -1517,6 +1545,7 @@ mod tests {
         ops: Vec<OpWithErrors>,
     ) -> UoPool<
         UserOperation,
+        impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
         impl EntryPoint,
@@ -1530,6 +1559,7 @@ mod tests {
         entrypoint: MockEntryPointV0_6,
     ) -> UoPool<
         UserOperation,
+        impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
         impl EntryPoint,
@@ -1554,6 +1584,11 @@ mod tests {
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
         };
+
+        let mut provider = MockEvmProvider::new();
+        provider
+            .expect_get_latest_block_hash_and_number()
+            .returning(|| Ok((B256::ZERO, 0)));
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
@@ -1585,7 +1620,7 @@ mod tests {
         });
 
         for op in ops {
-            prechecker.expect_check().returning(move |_| {
+            prechecker.expect_check().returning(move |_, _| {
                 if let Some(error) = &op.precheck_error {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {
@@ -1603,7 +1638,6 @@ mod tests {
                     } else {
                         Ok(SimulationResult {
                             account_is_staked: op.staked,
-                            block_number: Some(0),
                             valid_time_range: op.valid_time_range,
                             entity_infos: EntityInfos {
                                 sender: EntityInfo {
@@ -1623,6 +1657,7 @@ mod tests {
         UoPool::new(
             args,
             event_sender,
+            provider,
             prechecker,
             simulator,
             paymaster,
@@ -1636,6 +1671,7 @@ mod tests {
     ) -> (
         UoPool<
             UserOperation,
+            impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
             impl EntryPoint,
@@ -1655,6 +1691,7 @@ mod tests {
     ) -> (
         UoPool<
             UserOperation,
+            impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
             impl EntryPoint,

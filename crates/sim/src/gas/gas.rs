@@ -16,7 +16,7 @@ use std::{cmp, fmt::Debug};
 use anyhow::{bail, Context};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider};
+use rundler_provider::{BlockHashOrNumber, DAGasProvider, EntryPoint, EvmProvider};
 use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
@@ -44,11 +44,12 @@ pub async fn estimate_pre_verification_gas<
     entry_point: &E,
     full_op: &UO,
     random_op: &UO,
+    block: BlockHashOrNumber,
     gas_price: u128,
 ) -> anyhow::Result<u128> {
     let da_gas = if chain_spec.da_pre_verification_gas {
         entry_point
-            .calc_da_gas(*entry_point.address(), random_op.clone(), gas_price)
+            .calc_da_gas(random_op.clone(), block, gas_price)
             .await?
     } else {
         0
@@ -68,6 +69,7 @@ pub async fn calc_required_pre_verification_gas<
     chain_spec: &ChainSpec,
     entry_point: &E,
     op: &UO,
+    block: BlockHashOrNumber,
     base_fee: u128,
 ) -> anyhow::Result<u128> {
     let da_gas = if chain_spec.da_pre_verification_gas {
@@ -81,7 +83,7 @@ pub async fn calc_required_pre_verification_gas<
         }
 
         entry_point
-            .calc_da_gas(*entry_point.address(), op.clone(), gas_price)
+            .calc_da_gas(op.clone(), block, gas_price)
             .await?
     } else {
         0
