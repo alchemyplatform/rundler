@@ -21,6 +21,7 @@ metrics.workspace = true
 reth-tasks.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+pin-project.workspace = true
 tonic.workspace = true
 tower.workspace = true
 thiserror.workspace = true

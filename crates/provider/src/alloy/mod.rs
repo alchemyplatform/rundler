@@ -13,9 +13,11 @@
 
 use alloy_provider::{Provider as AlloyProvider, ProviderBuilder};
 use alloy_rpc_client::ClientBuilder;
+use alloy_transport::layers::RetryBackoffService;
 use alloy_transport_http::Http;
 use anyhow::Context;
 use evm::AlloyEvmProvider;
+use metrics::{AlloyMetricLayer, AlloyMetricMiddleware};
 use reqwest::Client;
 use url::Url;
 
@@ -34,8 +36,16 @@ pub fn new_alloy_evm_provider(rpc_url: &str) -> anyhow::Result<impl EvmProvider 
 /// Create a new alloy provider from a given RPC URL
 pub fn new_alloy_provider(
     rpc_url: &str,
-) -> anyhow::Result<impl AlloyProvider<Http<Client>> + Clone> {
+) -> anyhow::Result<
+    impl AlloyProvider<RetryBackoffService<AlloyMetricMiddleware<Http<Client>>>> + Clone,
+> {
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
-    let client = ClientBuilder::default().http(url);
-    Ok(ProviderBuilder::new().on_client(client))
+    let metric_layer = AlloyMetricLayer::default();
+    let retry_layer = alloy_transport::layers::RetryBackoffLayer::new(10, 500, 0);
+    let client = ClientBuilder::default()
+        .layer(retry_layer)
+        .layer(metric_layer)
+        .http(url);
+    let provider = ProviderBuilder::new().on_client(client);
+    Ok(provider)
 }
