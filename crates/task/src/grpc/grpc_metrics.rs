@@ -11,15 +11,123 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use rundler_types::task::traits::RequestExtractor;
+//! Middleware for recording metrics for gRPC requests.
+
+use std::{
+    future::Future,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
+use pin_project::pin_project;
+use rundler_types::task::{
+    metric_recorder::MethodSessionLogger,
+    status_code::{get_http_status_from_code, HttpCode},
+};
 use tonic::codegen::http;
+use tower::{Layer, Service};
 
-/// http request method extractor.
-pub struct HttpMethodExtractor;
+/// A layer for recording metrics for gRPC requests.
+#[derive(Debug, Clone)]
+pub struct GrpcMetricsLayer {
+    scope: String,
+}
 
-impl<Body> RequestExtractor<http::Request<Body>> for HttpMethodExtractor {
-    fn get_method_name(req: &http::Request<Body>) -> String {
-        let method_name = req.uri().path().split('/').last().unwrap_or("unknown");
-        method_name.to_string()
+impl GrpcMetricsLayer {
+    /// Create a new `GrpcMetricsLayer` middleware layer
+    pub fn new(scope: String) -> Self {
+        GrpcMetricsLayer { scope }
+    }
+}
+
+impl<S> Layer<S> for GrpcMetricsLayer {
+    type Service = GrpcMetrics<S>;
+
+    fn layer(&self, service: S) -> Self::Service {
+        GrpcMetrics::new(service, self.scope.clone())
+    }
+}
+
+/// Service for recording metrics for gRPC requests.
+#[derive(Clone, Debug)]
+pub struct GrpcMetrics<S> {
+    inner: S,
+    scope: String,
+}
+
+impl<S> GrpcMetrics<S> {
+    /// Create a new `GrpcMetrics` middleware service.
+    pub fn new(inner: S, scope: String) -> Self {
+        Self { inner, scope }
+    }
+}
+
+impl<S, Body, ResBody> Service<http::Request<Body>> for GrpcMetrics<S>
+where
+    S: Service<http::Request<Body>, Response = http::Response<ResBody>> + Sync,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = ResponseFuture<S::Future>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        // Our middleware doesn't care about backpressure so its ready as long
+        // as the inner service is ready.
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        let uri = request.uri().clone();
+        let method_name = uri.path().split('/').last().unwrap_or("unknown");
+        let method_logger = MethodSessionLogger::start(
+            self.scope.clone(),
+            method_name.to_string(),
+            "grpc".to_string(),
+        );
+        ResponseFuture {
+            response_future: self.inner.call(request),
+            method_logger,
+        }
+    }
+}
+
+/// Future returned by the middleware.
+// checkout: https://github.com/tower-rs/tower/blob/master/guides/building-a-middleware-from-scratch.md
+// for details on the use of Pin here
+#[pin_project]
+pub struct ResponseFuture<F> {
+    #[pin]
+    response_future: F,
+
+    method_logger: MethodSessionLogger,
+}
+
+impl<F, ResBody, Error> Future for ResponseFuture<F>
+where
+    F: Future<Output = Result<http::Response<ResBody>, Error>>,
+{
+    type Output = Result<http::Response<ResBody>, Error>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.project();
+        let res = this.response_future.poll(cx);
+        match &res {
+            Poll::Ready(result) => {
+                this.method_logger.done();
+                match result {
+                    Ok(response) => {
+                        let http_status = response.status();
+                        this.method_logger
+                            .record_http(get_http_status_from_code(http_status.as_u16()));
+                    }
+                    _ => {
+                        this.method_logger.record_http(HttpCode::FiveHundreds);
+                    }
+                }
+            }
+            Poll::Pending => {}
+        };
+
+        res
     }
 }

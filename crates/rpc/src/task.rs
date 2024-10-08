@@ -16,7 +16,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use anyhow::Context;
 use futures_util::FutureExt;
 use jsonrpsee::{
-    server::{middleware::http::ProxyGetRequestLayer, ServerBuilder},
+    server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
 };
 use rundler_provider::{EntryPointProvider, EvmProvider};
@@ -42,6 +42,7 @@ use crate::{
         EthApiSettings, UserOperationEventProviderV0_6, UserOperationEventProviderV0_7,
     },
     health::{HealthChecker, SystemApiServer},
+    rpc_metrics::{HttpMetricMiddlewareLayer, RpcMetricsMiddlewareLayer},
     rundler::{RundlerApi, RundlerApiServer, Settings as RundlerApiSettings},
     types::ApiNamespace,
 };
@@ -203,9 +204,17 @@ where
         let http_middleware = tower::ServiceBuilder::new()
             // Proxy `GET /health` requests to internal `system_health` method.
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
-            .timeout(self.args.rpc_timeout);
+            .timeout(self.args.rpc_timeout)
+            .layer(HttpMetricMiddlewareLayer::new(
+                "rundler-rpc-service-http".to_string(),
+            ));
+
+        let rpc_metric_middleware = RpcServiceBuilder::new().layer(RpcMetricsMiddlewareLayer::new(
+            "rundler-rpc-service".to_string(),
+        ));
 
         let server = ServerBuilder::default()
+            .set_rpc_middleware(rpc_metric_middleware)
             .set_http_middleware(http_middleware)
             .max_connections(self.args.max_connections)
             // Set max request body size to 2x the max transaction size as none of our

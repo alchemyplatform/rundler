@@ -27,12 +27,14 @@ serde.workspace = true
 serde_json.workspace = true
 strum.workspace = true
 thiserror.workspace = true
+metrics.workspace = true
 
 mockall = {workspace = true, optional = true }
 
 [dev-dependencies]
 rundler-types = { workspace = true, features = ["test-utils"] }
 alloy-primitives = { workspace = true, features = ["rand"] }
+cargo-husky.workspace = true
 
 [features]
 test-utils = [ "mockall" ]

@@ -1565,6 +1565,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-husky"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b02b629252fe8ef6460461409564e2c21d0c8e77e0944f3d189ff06c4e932ad"
+
+[[package]]
 name = "cc"
 version = "1.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4539,6 +4545,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "auto_impl",
+ "futures-util",
  "mockall",
  "reqwest",
  "rundler-contracts",
@@ -4547,6 +4554,7 @@ dependencies = [
  "rundler-utils",
  "thiserror",
  "tokio",
+ "tower 0.4.13",
  "tracing",
  "url",
 ]
@@ -4561,6 +4569,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures-util",
+ "http 1.1.0",
  "jsonrpsee",
  "metrics",
  "mockall",
@@ -4621,6 +4630,7 @@ dependencies = [
  "async-trait",
  "futures",
  "metrics",
+ "pin-project",
  "reth-tasks",
  "rundler-provider",
  "rundler-types",
@@ -4641,10 +4651,12 @@ dependencies = [
  "alloy-sol-types",
  "anyhow",
  "async-trait",
+ "cargo-husky",
  "chrono",
  "const-hex",
  "constcat",
  "futures-util",
+ "metrics",
  "mockall",
  "num_enum",
  "parse-display",
