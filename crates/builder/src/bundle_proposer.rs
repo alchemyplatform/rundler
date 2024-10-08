@@ -217,7 +217,7 @@ where
         // (1) Filter out ops that don't pay enough to be included
         let fee_futs = ops
             .into_iter()
-            .map(|op| self.check_fees(op, base_fee, required_op_fees))
+            .map(|op| self.check_fees(op, block_hash, base_fee, required_op_fees))
             .collect::<Vec<_>>();
         let ops = future::join_all(fee_futs)
             .await
@@ -345,6 +345,7 @@ where
     async fn check_fees(
         &self,
         op: PoolOperation,
+        block_hash: B256,
         base_fee: u128,
         required_op_fees: GasFees,
     ) -> Option<PoolOperation> {
@@ -373,6 +374,7 @@ where
             &self.settings.chain_spec,
             &self.entry_point,
             op.uo.as_ref(),
+            block_hash.into(),
             base_fee,
         )
         .await
@@ -428,7 +430,7 @@ where
             .simulator
             .simulate_validation(
                 op.uo.clone().into(),
-                Some(block_hash),
+                block_hash,
                 Some(op.expected_code_hash),
             )
             .await;
@@ -2293,7 +2295,7 @@ mod tests {
         simulator
             .expect_simulate_validation()
             .withf(move |_, &block_hash, &code_hash| {
-                block_hash == Some(current_block_hash) && code_hash == Some(expected_code_hash)
+                block_hash == current_block_hash && code_hash == Some(expected_code_hash)
             })
             .returning(move |op, _, _| simulations_by_op[&op.hash(entry_point_address, 0)]());
         let mut entry_point = MockEntryPointV0_6::new();

@@ -39,8 +39,8 @@ mod traits;
 pub use alloy_json_rpc::{RpcParam, RpcReturn};
 pub use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
-    Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, FilterBlockOption, Header as BlockHeader,
-    Log, ReceiptEnvelope as TransactionReceiptEnvelope,
+    Block, BlockHashOrNumber, BlockId, BlockNumberOrTag, FeeHistory, Filter, FilterBlockOption,
+    Header as BlockHeader, Log, ReceiptEnvelope as TransactionReceiptEnvelope,
     ReceiptWithBloom as TransactionReceiptWithBloom, RpcBlockHash, Transaction, TransactionReceipt,
     TransactionRequest,
 };

@@ -16,7 +16,9 @@ use rundler_types::{
     GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
-use crate::{BlockId, EvmCall, ProviderResult, StateOverride, TransactionRequest};
+use crate::{
+    BlockHashOrNumber, BlockId, EvmCall, ProviderResult, StateOverride, TransactionRequest,
+};
 
 /// Output of a successful signature aggregator simulation call
 #[derive(Clone, Debug, Default)]
@@ -165,8 +167,8 @@ pub trait DAGasProvider: Send + Sync {
     /// Returns zero for operations that do not require DA gas
     async fn calc_da_gas(
         &self,
-        entry_point_address: Address,
         op: Self::UO,
+        block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<u128>;
 }
@@ -201,7 +203,7 @@ pub trait SimulationProvider: Send + Sync {
         op: Self::UO,
         target: Address,
         target_call_data: Bytes,
-        block_hash: BlockId,
+        block_id: BlockId,
         state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
 

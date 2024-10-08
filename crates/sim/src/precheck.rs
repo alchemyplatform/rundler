@@ -18,7 +18,7 @@ use anyhow::Context;
 use arrayvec::ArrayVec;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider};
+use rundler_provider::{BlockHashOrNumber, DAGasProvider, EntryPoint, EvmProvider};
 use rundler_types::{
     chain::ChainSpec,
     pool::{MempoolError, PrecheckViolation},
@@ -43,8 +43,11 @@ pub trait Prechecker: Send + Sync {
     type UO: UserOperation;
 
     /// Run the precheck on the given operation and return an error if it fails.
-    async fn check(&self, op: &Self::UO) -> Result<(), PrecheckError>;
+    async fn check(&self, op: &Self::UO, block: BlockHashOrNumber) -> Result<(), PrecheckError>;
+
     /// Update and return the bundle fees.
+    ///
+    /// This MUST be called at block boundaries before checking any operations.
     async fn update_fees(&self) -> anyhow::Result<(GasFees, u128)>;
 }
 
@@ -143,8 +146,8 @@ where
 {
     type UO = UO;
 
-    async fn check(&self, op: &Self::UO) -> Result<(), PrecheckError> {
-        let async_data = self.load_async_data(op).await?;
+    async fn check(&self, op: &Self::UO, block: BlockHashOrNumber) -> Result<(), PrecheckError> {
+        let async_data = self.load_async_data(op, block).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
         violations.extend(self.check_init_code(op, async_data));
         violations.extend(self.check_gas(op, async_data));
@@ -323,7 +326,11 @@ where
         None
     }
 
-    async fn load_async_data(&self, op: &UO) -> anyhow::Result<AsyncData> {
+    async fn load_async_data(
+        &self,
+        op: &UO,
+        block: BlockHashOrNumber,
+    ) -> anyhow::Result<AsyncData> {
         let (_, base_fee) = self.get_fees().await?;
 
         let (
@@ -337,7 +344,7 @@ where
             self.is_contract(Some(op.sender())),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
-            self.get_required_pre_verification_gas(op.clone(), base_fee)
+            self.get_required_pre_verification_gas(op.clone(), block, base_fee)
         )?;
         Ok(AsyncData {
             factory_exists,
@@ -399,10 +406,17 @@ where
     async fn get_required_pre_verification_gas(
         &self,
         op: UO,
+        block: BlockHashOrNumber,
         base_fee: u128,
     ) -> anyhow::Result<u128> {
-        gas::calc_required_pre_verification_gas(&self.chain_spec, &self.entry_point, &op, base_fee)
-            .await
+        gas::calc_required_pre_verification_gas(
+            &self.chain_spec,
+            &self.entry_point,
+            &op,
+            block,
+            base_fee,
+        )
+        .await
     }
 }
 
