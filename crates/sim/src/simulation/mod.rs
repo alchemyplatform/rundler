@@ -48,10 +48,6 @@ use crate::{ExpectedStorage, ViolationError};
 pub struct SimulationResult {
     /// The mempool IDs that support this operation
     pub mempools: Vec<B256>,
-    /// Block hash this operation was simulated against
-    pub block_hash: B256,
-    /// Block number this operation was simulated against
-    pub block_number: Option<u64>,
     /// Gas used in the pre-op phase of simulation measured
     /// by the entry point
     pub pre_op_gas: u128,
@@ -154,7 +150,7 @@ pub trait Simulator: Send + Sync {
     async fn simulate_validation(
         &self,
         op: Self::UO,
-        block_hash: Option<B256>,
+        block_hash: B256,
         expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError>;
 }

@@ -27,8 +27,8 @@ use rundler_types::{
 
 use super::error::ProviderResult;
 use crate::{
-    AggregatorOut, BundleHandler, DAGasProvider, DepositInfo, EntryPoint, EvmCall,
-    EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, SignatureAggregator,
+    AggregatorOut, BlockHashOrNumber, BundleHandler, DAGasProvider, DepositInfo, EntryPoint,
+    EvmCall, EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, SignatureAggregator,
     SimulationProvider,
 };
 
@@ -173,8 +173,8 @@ mockall::mock! {
         type UO = v0_6::UserOperation;
         async fn calc_da_gas(
             &self,
-            entry_point_address: Address,
             op: v0_6::UserOperation,
+            block: BlockHashOrNumber,
             gas_price: u128,
         ) -> ProviderResult<u128>;
     }
@@ -261,8 +261,8 @@ mockall::mock! {
         type UO = v0_7::UserOperation;
         async fn calc_da_gas(
             &self,
-            entry_point_address: Address,
             op: v0_7::UserOperation,
+            block: BlockHashOrNumber,
             gas_price: u128,
         ) -> ProviderResult<u128>;
     }
