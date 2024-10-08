@@ -30,8 +30,11 @@ anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 thiserror.workspace = true
+futures-util.workspace = true
+tower.workspace = true
 tracing.workspace = true
 url.workspace = true
+
 mockall = {workspace = true, optional = true }
 
 [features]
