@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::{Address, Bytes, B256};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_sol_types::sol;
 use alloy_transport::Transport;
@@ -63,14 +63,15 @@ where
 {
     async fn estimate_da_gas(
         &self,
-        to_address: Address,
+        _hash: B256,
+        to: Address,
         data: Bytes,
         block: BlockHashOrNumber,
         _gas_price: u128,
     ) -> ProviderResult<u128> {
         let ret = self
             .node_interface
-            .gasEstimateL1Component(to_address, true, data)
+            .gasEstimateL1Component(to, true, data)
             .block(block.into())
             .call()
             .await?;
