@@ -23,7 +23,7 @@ use arbitrum::ArbitrumNitroDAGasOracle;
 mod optimism;
 use optimism::OptimismBedrockDAGasOracle;
 mod local;
-use local::LocalBedrockDAGasOracle;
+use local::{CachedNitroDAGasOracle, LocalBedrockDAGasOracle};
 
 /// Trait for a DA gas oracle
 #[async_trait::async_trait]
@@ -74,6 +74,10 @@ where
             chain_spec.da_gas_oracle_contract_address,
             provider,
         )),
+        DAGasOracleContractType::CachedNitro => Box::new(CachedNitroDAGasOracle::new(
+            chain_spec.da_gas_oracle_contract_address,
+            provider,
+        )),
         DAGasOracleContractType::None => Box::new(ZeroDAGasOracle),
     }
 }
@@ -87,10 +91,13 @@ mod tests {
 
     use super::*;
 
+    // Run these tests locally with `ALCHEMY_API_KEY=<key> cargo test -- --ignored`
+
     // This test may begin to fail if an optimism sepolia fork changes how the L1 gas oracle works.
     // If that happens, we should update the local bedrock oracle to match the new fork logic in
     // a backwards compatible way based on the fork booleans in the contract.
     #[tokio::test]
+    #[ignore]
     async fn compare_opt_latest() {
         let provider = opt_provider();
         let block = provider.get_block_number().await.unwrap();
@@ -100,10 +107,86 @@ mod tests {
 
     // This test should never fail for a block on the Fjord fork of optimism sepolia.
     #[tokio::test]
+    #[ignore]
     async fn compare_opt_fixed() {
         let provider = opt_provider();
+        let block: BlockHashOrNumber = 18343127.into();
 
-        compare_opt_and_local_bedrock(provider, 18343127.into()).await;
+        compare_opt_and_local_bedrock(provider, block).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn compare_arb_latest() {
+        let provider = arb_provider();
+        let block = provider.get_block_number().await.unwrap();
+        let uo = test_uo_data_1();
+
+        compare_arb_and_cached_on_data(provider, block.into(), uo).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn compare_arb_fixed() {
+        let provider = arb_provider();
+        let block: BlockHashOrNumber = 262113260.into();
+        let uo = test_uo_data_1();
+
+        compare_arb_and_cached_on_data(provider, block, uo).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn compare_arb_multiple() {
+        let uo1 = test_uo_data_1();
+        let uo2 = test_uo_data_2();
+        let provider = arb_provider();
+
+        let oracle_addr = address!("00000000000000000000000000000000000000C8");
+        let contract_oracle = ArbitrumNitroDAGasOracle::new(oracle_addr, provider.clone());
+        let cached_oracle = CachedNitroDAGasOracle::new(oracle_addr, provider);
+
+        let block: BlockHashOrNumber = 262113260.into();
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo1.clone()).await;
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo2.clone()).await;
+
+        let block: BlockHashOrNumber = 262113261.into();
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo1.clone()).await;
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo2.clone()).await;
+
+        let block: BlockHashOrNumber = 262113262.into();
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo1).await;
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo2).await;
+    }
+
+    async fn compare_oracles(
+        oracle_a: &impl DAGasOracle,
+        oracle_b: &impl DAGasOracle,
+        block: BlockHashOrNumber,
+    ) {
+        compare_oracles_on_data(oracle_a, oracle_b, block, test_uo_data_1()).await;
+    }
+
+    async fn compare_oracles_on_data(
+        oracle_a: &impl DAGasOracle,
+        oracle_b: &impl DAGasOracle,
+        block: BlockHashOrNumber,
+        data: Bytes,
+    ) {
+        let gas_price = 1;
+        let to = Address::random();
+
+        let gas_a = oracle_a
+            .estimate_da_gas(to, data.clone(), block, gas_price)
+            .await
+            .unwrap();
+        let gas_b = oracle_b
+            .estimate_da_gas(to, data, block, gas_price)
+            .await
+            .unwrap();
+
+        // Allow for some variance with oracle b being within 0.1% smaller than oracle a
+        assert!((gas_b as f64 / gas_a as f64) >= 0.999);
     }
 
     async fn compare_opt_and_local_bedrock(
@@ -112,12 +195,46 @@ mod tests {
     ) {
         let oracle_addr = address!("420000000000000000000000000000000000000F");
 
-        let opt_contract_oracle = OptimismBedrockDAGasOracle::new(oracle_addr, provider.clone());
-        let local_contract_oracle = LocalBedrockDAGasOracle::new(oracle_addr, provider.clone());
+        let contract_oracle = OptimismBedrockDAGasOracle::new(oracle_addr, provider.clone());
+        let local_oracle = LocalBedrockDAGasOracle::new(oracle_addr, provider);
 
-        let gas_price = 1;
-        let to = Address::random();
+        compare_oracles(&contract_oracle, &local_oracle, block).await;
+    }
 
+    async fn compare_arb_and_cached_on_data(
+        provider: impl AlloyProvider + Clone,
+        block: BlockHashOrNumber,
+        data: Bytes,
+    ) {
+        let oracle_addr = address!("00000000000000000000000000000000000000C8");
+
+        let contract_oracle = ArbitrumNitroDAGasOracle::new(oracle_addr, provider.clone());
+        let cached_oracle = CachedNitroDAGasOracle::new(oracle_addr, provider);
+
+        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, data).await;
+    }
+
+    fn opt_provider() -> impl AlloyProvider + Clone {
+        ProviderBuilder::new()
+            .on_http(
+                format!("https://opt-sepolia.g.alchemy.com/v2/{}", get_api_key())
+                    .parse()
+                    .unwrap(),
+            )
+            .boxed()
+    }
+
+    fn arb_provider() -> impl AlloyProvider + Clone {
+        ProviderBuilder::new()
+            .on_http(
+                format!("https://arb-mainnet.g.alchemy.com/v2/{}", get_api_key())
+                    .parse()
+                    .unwrap(),
+            )
+            .boxed()
+    }
+
+    fn test_uo_data_1() -> Bytes {
         let puo = PackedUserOperation {
             sender: address!("f497A8026717FbbA3944c3dd2533c0716b7685e2"),
             nonce: uint!(0x23_U256),
@@ -129,23 +246,25 @@ mod tests {
             paymasterAndData: Bytes::default(),
             signature: bytes!("0b83faeeac250d4c4a2459c1d6e1f8427f96af246d7fb3027b10bb05d934912f23a9491c16ab97ab32ac88179f279e871387c23547aa2e27b83fc358058e71fa1c"),
         };
-        let uo_data: Bytes = puo.abi_encode().into();
-
-        let opt_gas = opt_contract_oracle
-            .estimate_da_gas(to, uo_data.clone(), block, gas_price)
-            .await
-            .unwrap();
-        let local_gas = local_contract_oracle
-            .estimate_da_gas(to, uo_data, block, gas_price)
-            .await
-            .unwrap();
-
-        assert_eq!(opt_gas, local_gas);
+        puo.abi_encode().into()
     }
 
-    fn opt_provider() -> impl AlloyProvider + Clone {
-        ProviderBuilder::new()
-            .on_http("https://sepolia.optimism.io".parse().unwrap())
-            .boxed()
+    fn test_uo_data_2() -> Bytes {
+        let puo = PackedUserOperation {
+            sender: address!("f497A8026717FbbA3944c3dd2533c0716b7685e2"),
+            nonce: uint!(0x24_U256), // changed this
+            initCode: Bytes::default(),
+            callData: bytes!("b61d27f6000000000000000000000000f497a8026717fbba3944c3dd2533c0716b7685e2000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
+            accountGasLimits: b256!("000000000000000000000000000114fc0000000000000000000000000012c9b5"),
+            preVerificationGas: U256::from(48916),
+            gasFees: b256!("000000000000000000000000524121000000000000000000000000109a4a441a"),
+            paymasterAndData: Bytes::default(),
+            signature: bytes!("00"), // removed this, should result in different costs
+        };
+        puo.abi_encode().into()
+    }
+
+    fn get_api_key() -> String {
+        std::env::var("ALCHEMY_API_KEY").expect("ALCHEMY_API_KEY must be set")
     }
 }

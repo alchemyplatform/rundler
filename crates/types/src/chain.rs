@@ -131,6 +131,8 @@ pub enum DAGasOracleContractType {
     OptimismBedrock,
     /// Local Bedrock type gas oracle contract
     LocalBedrock,
+    /// Cached Nitro type gas oracle contract
+    CachedNitro,
 }
 
 /// Type of oracle for estimating priority fees
