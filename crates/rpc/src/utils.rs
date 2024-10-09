@@ -18,8 +18,17 @@ use jsonrpsee::{
     core::RpcResult,
     types::{error::INTERNAL_ERROR_CODE, ErrorObjectOwned},
 };
+use metrics::Counter;
+use metrics_derive::Metrics;
 
 use crate::{error::rpc_err, eth::EthRpcError};
+
+#[derive(Metrics)]
+#[metrics(scope = "rpc")]
+struct RPCMetric {
+    #[metric(describe = "the count of rpc panic.")]
+    panic_count: Counter,
+}
 
 pub(crate) async fn safe_call_rpc_handler<F, R, E>(rpc_name: &'static str, f: F) -> RpcResult<R>
 where
@@ -30,7 +39,8 @@ where
     match f.catch_unwind().await {
         Ok(r) => r.map_err(Into::into),
         Err(_) => {
-            metrics::counter!("rpc_panic_count", "rpc_name" => rpc_name).increment(1);
+            let rpc_metric = RPCMetric::new_with_labels(&[("rpc_name", rpc_name)]);
+            rpc_metric.panic_count.increment(1_u64);
             tracing::error!("PANIC in RPC handler: {}", rpc_name);
             Err(EthRpcError::Internal(anyhow::anyhow!("internal error: panic, see logs")).into())
         }

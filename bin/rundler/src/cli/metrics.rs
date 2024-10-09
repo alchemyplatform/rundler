@@ -79,7 +79,145 @@ pub fn initialize<'a, T: TaskSpawner>(
     Ok(())
 }
 
-const TOKIO_PREFIX: &str = "tokio_rt_";
+#[allow(dead_code)]
+#[derive(Metrics)]
+#[metrics(scope = "rundler_tokio_rt")]
+struct TokioMetrics {
+    #[metric(describe = "the total number of tokio wokers.")]
+    num_workers: Gauge,
+    #[metric(describe = "the number of blocking threads.")]
+    num_blocking_threads: Gauge,
+    #[metric(
+        rename = "active_tasks_count",
+        describe = "the number of active threads."
+    )]
+    num_alive_tasks: Gauge,
+    #[metric(describe = "the number of idle threads.")]
+    num_idle_blocking_threads: Gauge,
+    #[metric(describe = "the number of tasks currently scheduled in the blocking thread pool.")]
+    blocking_queue_depth: Gauge,
+    #[metric(describe = "the number of times worker threads parked.")]
+    total_park_count: Gauge,
+    #[metric(describe = "the maximum number of times any worker thread parked.")]
+    max_park_count: Gauge,
+    #[metric(describe = "the minimum number of times any worker thread parked.")]
+    min_park_count: Gauge,
+    #[metric(describe = "the average duration of a single invocation of poll on a task.")]
+    mean_poll_duration: Gauge,
+    #[metric(
+        describe = "the average duration of a single invocation of poll on a task on the worker with the lowest value."
+    )]
+    mean_poll_duration_worker_min: Gauge,
+    #[metric(
+        describe = "the average duration of a single invocation of poll on a task on the worker with the highest value."
+    )]
+    mean_poll_duration_worker_max: Gauge,
+
+    #[metric(
+        describe = "the number of times worker threads unparked but performed no work before parking again."
+    )]
+    total_noop_count: Gauge,
+    #[metric(
+        describe = "the maximum number of times any worker thread unparked but performed no work before parking again."
+    )]
+    max_noop_count: Gauge,
+    #[metric(
+        describe = "the minimum number of times any worker thread unparked but performed no work before parking again."
+    )]
+    min_noop_count: Gauge,
+
+    #[metric(describe = "the number of tasks worker threads stole from another worker thread.")]
+    total_steal_count: Gauge,
+    #[metric(
+        describe = "the maximum number of times any worker thread unparked but performed no work before parking again."
+    )]
+    max_steal_count: Gauge,
+    #[metric(
+        describe = "the minimum number of times any worker thread unparked but performed no work before parking again."
+    )]
+    min_steal_count: Gauge,
+
+    #[metric(
+        describe = "the number of times worker threads stole tasks from another worker thread."
+    )]
+    total_steal_operations: Gauge,
+    #[metric(
+        describe = "the maximum number of any worker thread stole tasks from another worker thread."
+    )]
+    max_steal_operations: Gauge,
+    #[metric(
+        describe = "the maximum number of any worker thread stole tasks from another worker thread."
+    )]
+    min_steal_operations: Gauge,
+
+    #[metric(describe = "the number of tasks scheduled from outside of the runtime.")]
+    num_remote_schedules: Gauge,
+
+    #[metric(describe = "the number of tasks scheduled from worker threads.")]
+    total_local_schedule_count: Gauge,
+    #[metric(describe = "the maximum number of tasks scheduled from any one worker thread.")]
+    max_local_schedule_count: Gauge,
+    #[metric(describe = "the minimum number of tasks scheduled from any one worker thread.")]
+    min_local_schedule_count: Gauge,
+
+    #[metric(describe = "the number of times worker threads saturated their local queues.")]
+    total_overflow_count: Gauge,
+    #[metric(describe = "the maximum number of times any one worker saturated its local queue.")]
+    max_overflow_count: Gauge,
+    #[metric(describe = "the minimum number of times any one worker saturated its local queue.")]
+    min_overflow_count: Gauge,
+
+    #[metric(describe = "the number of tasks that have been polled across all worker threads.")]
+    total_polls_count: Gauge,
+    #[metric(describe = "the maximum number of tasks that have been polled in any worker thread.")]
+    max_polls_count: Gauge,
+    #[metric(describe = "the minimum number of tasks that have been polled in any worker thread.")]
+    min_polls_count: Gauge,
+
+    #[metric(describe = "the amount of time worker threads were busy.")]
+    total_busy_duration: Gauge,
+    #[metric(describe = "the maximum amount of time a worker thread was busy.")]
+    max_busy_duration: Gauge,
+    #[metric(describe = "the minimum amount of time a worker thread was busy.")]
+    min_busy_duration: Gauge,
+
+    #[metric(
+        describe = "the number of tasks currently scheduled in the runtime's injection queue."
+    )]
+    injection_queue_depth: Gauge,
+    #[metric(describe = "the total number of tasks currently scheduled in workers' local queues.")]
+    total_local_queue_depth: Gauge,
+    #[metric(
+        describe = "the maximum number of tasks currently scheduled any worker's local queue."
+    )]
+    max_local_queue_depth: Gauge,
+    #[metric(
+        describe = "the minimum number of tasks currently scheduled any worker's local queue."
+    )]
+    min_local_queue_depth: Gauge,
+
+    #[metric(
+        describe = "the number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
+    )]
+    budget_forced_yield_count: Gauge,
+    #[metric(describe = "the number of ready events processed by the runtime’s I/O driver.")]
+    io_driver_ready_count: Gauge,
+}
+
+macro_rules! log_rm_metric {
+    ($tm:ident, $rm:ident, $metric_name:ident) => {
+        $tm.$metric_name.set($rm.$metric_name() as f64);
+    };
+}
+
+macro_rules! log_wm_metric {
+    ($tm:ident, $wm:ident, $metric_name:ident) => {
+        $tm.$metric_name.set($wm.$metric_name as f64);
+    };
+    ($tm:ident, $wm:ident, $metric_name:ident, $converter:ident) => {
+        $tm.$metric_name.set($wm.$metric_name.$converter() as f64);
+    };
+}
 
 fn collect_tokio(
     runtime_metrics: &tokio::runtime::RuntimeMetrics,
