@@ -318,6 +318,7 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<u128> {
+        let hash = user_op.hash(*self.i_entry_point.address(), self.chain_spec.id);
         let data = self
             .i_entry_point
             .handleOps(vec![user_op.into()], Address::random())
@@ -330,7 +331,13 @@ where
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
 
         self.da_gas_oracle
-            .estimate_da_gas(*self.i_entry_point.address(), bundle_data, block, gas_price)
+            .estimate_da_gas(
+                hash,
+                *self.i_entry_point.address(),
+                bundle_data,
+                block,
+                gas_price,
+            )
             .await
     }
 }
