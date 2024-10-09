@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::{Address, Bytes, B256};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_sol_types::sol;
 use alloy_transport::Transport;
@@ -25,6 +25,13 @@ use crate::{BlockHashOrNumber, ProviderResult};
 sol! {
     #[sol(rpc)]
     interface GasPriceOracle {
+        bool public isFjord;
+
+        function baseFeeScalar() public view returns (uint32);
+        function l1BaseFee() public view returns (uint256);
+        function blobBaseFeeScalar() public view returns (uint32);
+        function blobBaseFee() public view returns (uint256);
+
         function getL1Fee(bytes memory _data) external view returns (uint256);
     }
 }
@@ -52,6 +59,7 @@ where
 {
     async fn estimate_da_gas(
         &self,
+        _hash: B256,
         _to: Address,
         data: Bytes,
         block: BlockHashOrNumber,
