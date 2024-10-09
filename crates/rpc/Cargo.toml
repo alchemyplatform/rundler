@@ -33,6 +33,7 @@ strum.workspace = true
 url.workspace = true
 futures-util.workspace = true
 http = "1.1.0"
+metrics-derive = "0.1.0"
 
 [dev-dependencies]
 mockall.workspace = true

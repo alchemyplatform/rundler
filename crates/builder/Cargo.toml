@@ -51,6 +51,7 @@ serde_json.workspace = true
 strum.workspace = true
 
 mockall = {workspace = true, optional = true }
+metrics-derive = "0.1.0"
 
 [dev-dependencies]
 mockall.workspace = true

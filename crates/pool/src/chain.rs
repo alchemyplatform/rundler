@@ -21,6 +21,8 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::{ensure, Context};
 use futures::future;
+use metrics::{Counter, Gauge};
+use metrics_derive::Metrics;
 use rundler_contracts::{
     v0_6::IEntryPoint::{
         Deposited as DepositedV06, UserOperationEvent as UserOperationEventV06,
@@ -57,8 +59,10 @@ pub(crate) struct Chain<P: EvmProvider> {
     blocks: VecDeque<BlockSummary>,
     /// Semaphore to limit the number of concurrent `eth_getLogs` calls.
     load_ops_semaphore: Semaphore,
-    /// Filter template
+    /// Filter template.
     filter_template: Filter,
+    /// Metrics of chain events.
+    metrics: ChainMetrics,
 }
 
 #[derive(Default, Debug, Eq, PartialEq)]
@@ -168,6 +172,7 @@ impl<P: EvmProvider> Chain<P> {
             blocks: VecDeque::new(),
             load_ops_semaphore: Semaphore::new(MAX_LOAD_OPS_CONCURRENCY),
             filter_template,
+            metrics: ChainMetrics::default(),
         }
     }
 
@@ -206,7 +211,7 @@ impl<P: EvmProvider> Chain<P> {
 
             for i in 0..=self.settings.max_sync_retries {
                 if i > 0 {
-                    ChainMetrics::increment_sync_retries();
+                    self.metrics.sync_retries.increment(1_u64);
                 }
 
                 let update = self.sync_to_block(block.clone()).await;
@@ -224,7 +229,7 @@ impl<P: EvmProvider> Chain<P> {
                 "Failed to update chain at block {:?} after {} retries. Abandoning sync.",
                 block_hash, self.settings.max_sync_retries
             );
-            ChainMetrics::increment_sync_abandoned();
+            self.metrics.sync_abandoned.increment(1_u64);
         }
     }
 
@@ -326,10 +331,10 @@ impl<P: EvmProvider> Chain<P> {
             self.blocks.pop_front();
         }
 
-        ChainMetrics::set_block_height(current_block_number);
+        self.metrics.block_height.set(current_block_number as f64);
         if reorg_depth > 0 {
-            ChainMetrics::increment_reorgs_detected();
-            ChainMetrics::increment_total_reorg_depth(reorg_depth);
+            self.metrics.reorgs_detected.increment(1_u64);
+            self.metrics.total_reorg_depth.increment(reorg_depth);
         }
 
         self.new_update(
@@ -698,28 +703,20 @@ impl ChainUpdate {
     }
 }
 
-struct ChainMetrics {}
+#[derive(Metrics)]
+#[metrics(scope = "op_pool_chain")]
 
-impl ChainMetrics {
-    fn set_block_height(block_height: u64) {
-        metrics::gauge!("op_pool_chain_block_height").set(block_height as f64);
-    }
-
-    fn increment_reorgs_detected() {
-        metrics::counter!("op_pool_chain_reorgs_detected").increment(1);
-    }
-
-    fn increment_total_reorg_depth(depth: u64) {
-        metrics::counter!("op_pool_chain_total_reorg_depth").increment(depth);
-    }
-
-    fn increment_sync_retries() {
-        metrics::counter!("op_pool_chain_sync_retries").increment(1);
-    }
-
-    fn increment_sync_abandoned() {
-        metrics::counter!("op_pool_chain_sync_abandoned").increment(1);
-    }
+struct ChainMetrics {
+    #[metric(describe = "the height of block.")]
+    block_height: Gauge,
+    #[metric(describe = "the number of reorg event detected.")]
+    reorgs_detected: Counter,
+    #[metric(describe = "the total number of reorg depth.")]
+    total_reorg_depth: Counter,
+    #[metric(describe = "the number of removed entities.")]
+    sync_retries: Counter,
+    #[metric(describe = "the number of sync abanded.")]
+    sync_abandoned: Counter,
 }
 
 #[cfg(test)]

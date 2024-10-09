@@ -10,9 +10,10 @@
 //
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use metrics::{counter, gauge, histogram};
+use metrics::{Counter, Gauge, Histogram};
+use metrics_derive::Metrics;
 
 use super::status_code::{HttpCode, RpcCode};
 
@@ -22,6 +23,30 @@ pub struct MethodSessionLogger {
     service_name: String,
     method_name: String,
     protocol: String,
+    method_metric: MethodMetrics,
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "rundler_runtime")]
+pub(crate) struct MethodMetrics {
+    #[metric(describe = "total num of requests.")]
+    num_requests: Counter,
+
+    #[metric(describe = "opening requests.")]
+    open_requests: Gauge,
+
+    #[metric(describe = "opening requests.")]
+    request_latency: Histogram,
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "rundler_runtime")]
+pub(crate) struct MethodStatusMetrics {
+    #[metric(describe = "opening requests.")]
+    http_response_status: Counter,
+
+    #[metric(describe = "opening requests.")]
+    rpc_response_status: Counter,
 }
 
 impl MethodSessionLogger {
@@ -29,86 +54,52 @@ impl MethodSessionLogger {
     pub fn new(service_name: String, method_name: String, protocol: String) -> Self {
         Self {
             start_time: Instant::now(),
-            method_name,
-            service_name,
-            protocol,
+            method_name: method_name.clone(),
+            service_name: service_name.clone(),
+            protocol: protocol.clone(),
+            method_metric: MethodMetrics::new_with_labels(&[
+                ("method_name", method_name),
+                ("service_name", service_name),
+                ("protocol", protocol),
+            ]),
         }
     }
 
     /// start the session. time will be initialized.
     pub fn start(service_name: String, method_name: String, protocol: String) -> Self {
-        MethodMetrics::increment_num_requests(&method_name, &service_name, &protocol);
-        MethodMetrics::increment_open_requests(&method_name, &service_name, &protocol);
-        Self::new(service_name, method_name, protocol)
+        let logger = Self::new(service_name, method_name, protocol);
+        logger.method_metric.num_requests.increment(1);
+        logger.method_metric.open_requests.increment(1);
+        logger
     }
 
     /// record a rpc status code.
     pub fn record_rpc(&self, rpc_code: RpcCode) {
-        MethodMetrics::increment_rpc_response_code(&self.method_name, &self.service_name, rpc_code);
+        let method_status_metric = MethodStatusMetrics::new_with_labels(&[
+            ("method_name", self.method_name.clone()),
+            ("service_name", self.service_name.clone()),
+            ("protocol", self.protocol.clone()),
+            ("status_code", rpc_code.to_string()),
+        ]);
+        method_status_metric.rpc_response_status.increment(1);
     }
 
     /// record a http status code.
     pub fn record_http(&self, http_code: HttpCode) {
-        MethodMetrics::increment_http_response_code(
-            &self.method_name,
-            &self.service_name,
-            http_code,
-        );
+        let method_status_metric = MethodStatusMetrics::new_with_labels(&[
+            ("method_name", self.method_name.clone()),
+            ("service_name", self.service_name.clone()),
+            ("protocol", self.protocol.clone()),
+            ("status_code", http_code.to_string()),
+        ]);
+        method_status_metric.http_response_status.increment(1);
     }
 
     /// end of the session. Record the session duration.
     pub fn done(&self) {
-        MethodMetrics::record_request_latency(
-            &self.method_name,
-            &self.service_name,
-            &self.protocol,
-            self.start_time.elapsed(),
-        );
-        MethodMetrics::decrement_open_requests(
-            &self.method_name,
-            &self.service_name,
-            &self.protocol,
-        );
-    }
-}
-
-struct MethodMetrics {}
-
-impl MethodMetrics {
-    pub(crate) fn increment_num_requests(method_name: &str, service_name: &str, protocol: &str) {
-        counter!("num_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1)
-    }
-
-    pub(crate) fn increment_open_requests(method_name: &str, service_name: &str, protocol: &str) {
-        gauge!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).increment(1_f64)
-    }
-
-    pub(crate) fn decrement_open_requests(method_name: &str, service_name: &str, protocol: &str) {
-        gauge!("open_requests", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).decrement(1_f64)
-    }
-
-    pub(crate) fn increment_http_response_code(
-        method_name: &str,
-        service_name: &str,
-        http_status_code: HttpCode,
-    ) {
-        counter!("http_response_status", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => "http", "response_code" => http_status_code.to_string()).increment(1)
-    }
-
-    pub(crate) fn increment_rpc_response_code(
-        method_name: &str,
-        service_name: &str,
-        rpc_status_code: RpcCode,
-    ) {
-        counter!("rpc_response_status", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => "rpc", "response_code" => rpc_status_code.to_string()).increment(1)
-    }
-
-    pub(crate) fn record_request_latency(
-        method_name: &str,
-        service_name: &str,
-        protocol: &str,
-        latency: Duration,
-    ) {
-        histogram!("request_latency", "method_name" => method_name.to_string(), "service_name" => service_name.to_string(), "protocol" => protocol.to_string()).record(latency.as_millis() as f64)
+        self.method_metric.open_requests.decrement(1);
+        self.method_metric
+            .request_latency
+            .record(self.start_time.elapsed().as_millis() as f64);
     }
 }

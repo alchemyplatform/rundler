@@ -14,6 +14,8 @@
 use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
+use metrics::Gauge;
+use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{EvmProvider, TransactionRequest};
@@ -119,11 +121,11 @@ pub(crate) struct TransactionTrackerImpl<P, T> {
     provider: P,
     sender: T,
     settings: Settings,
-    builder_index: u64,
     nonce: u64,
     transactions: Vec<PendingTransaction>,
     has_abandoned: bool,
     attempt_count: u64,
+    metrics: TransactionTrackerMetrics,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -157,11 +159,14 @@ where
             provider,
             sender,
             settings,
-            builder_index,
             nonce,
             transactions: vec![],
             has_abandoned: false,
             attempt_count: 0,
+            metrics: TransactionTrackerMetrics::new_with_labels(&[(
+                "builder_index",
+                builder_index.to_string(),
+            )]),
         })
     }
 
@@ -203,16 +208,27 @@ where
     }
 
     fn update_metrics(&self) {
-        TransactionTrackerMetrics::set_num_pending_transactions(
-            self.builder_index,
-            self.transactions.len(),
-        );
-        TransactionTrackerMetrics::set_nonce(self.builder_index, self.nonce);
-        TransactionTrackerMetrics::set_attempt_count(self.builder_index, self.attempt_count);
+        self.metrics
+            .num_pending_transactions
+            .set(self.transactions.len() as f64);
+        self.metrics.nonce.set(self.nonce as f64);
+        self.metrics.attempt_count.set(self.attempt_count as f64);
+
         if let Some(tx) = self.transactions.last() {
-            TransactionTrackerMetrics::set_current_fees(self.builder_index, Some(tx.gas_fees));
+            self.metrics
+                .current_max_fee_per_gas
+                .set(tx.gas_fees.max_fee_per_gas as f64);
+            self.metrics
+                .max_priority_fee_per_gas
+                .set(tx.gas_fees.max_priority_fee_per_gas as f64);
         } else {
-            TransactionTrackerMetrics::set_current_fees(self.builder_index, None);
+            let fee = GasFees::default();
+            self.metrics
+                .current_max_fee_per_gas
+                .set(fee.max_fee_per_gas as f64);
+            self.metrics
+                .max_priority_fee_per_gas
+                .set(fee.max_priority_fee_per_gas as f64);
         }
     }
 
@@ -474,31 +490,19 @@ impl From<TxSenderError> for TransactionTrackerError {
     }
 }
 
-struct TransactionTrackerMetrics {}
-
-impl TransactionTrackerMetrics {
-    fn set_num_pending_transactions(builder_index: u64, num_pending_transactions: usize) {
-        metrics::gauge!("builder_tracker_num_pending_transactions", "builder_index" => builder_index.to_string())
-            .set(num_pending_transactions as f64);
-    }
-
-    fn set_nonce(builder_index: u64, nonce: u64) {
-        metrics::gauge!("builder_tracker_nonce", "builder_index" => builder_index.to_string())
-            .set(nonce as f64);
-    }
-
-    fn set_attempt_count(builder_index: u64, attempt_count: u64) {
-        metrics::gauge!("builder_tracker_attempt_count", "builder_index" => builder_index.to_string()).set(attempt_count as f64);
-    }
-
-    fn set_current_fees(builder_index: u64, current_fees: Option<GasFees>) {
-        let fees = current_fees.unwrap_or_default();
-
-        metrics::gauge!("builder_tracker_current_max_fee_per_gas", "builder_index" => builder_index.to_string())
-            .set(fees.max_fee_per_gas as f64);
-        metrics::gauge!("builder_tracker_current_max_priority_fee_per_gas", "builder_index" => builder_index.to_string())
-            .set(fees.max_priority_fee_per_gas as f64);
-    }
+#[derive(Metrics)]
+#[metrics(scope = "builder_tracker_")]
+struct TransactionTrackerMetrics {
+    #[metric(describe = "the number of pending transactions.")]
+    num_pending_transactions: Gauge,
+    #[metric(describe = "the nonce of transaction.")]
+    nonce: Gauge,
+    #[metric(describe = "the number of pending transactions.")]
+    attempt_count: Gauge,
+    #[metric(describe = "the maximum fee per gas of current transaction.")]
+    current_max_fee_per_gas: Gauge,
+    #[metric(describe = "the maximum priority fee per gas of current transaction.")]
+    max_priority_fee_per_gas: Gauge,
 }
 
 #[cfg(test)]
