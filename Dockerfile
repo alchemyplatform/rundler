@@ -48,7 +48,8 @@ FROM ubuntu AS runtime
 WORKDIR /app
 # Install system dependencies for the runtime
 # install curl for healthcheck
-RUN apt-get -y update; apt-get -y install curl
+RUN apt-get -y update; apt-get -y install curl ca-certificates
+RUN update-ca-certificates
 
 # Copy rundler over from the build stage
 COPY --from=builder /app/target/release/rundler /usr/local/bin
