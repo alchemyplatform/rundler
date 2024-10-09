@@ -14,7 +14,8 @@
 use std::{net::SocketAddr, time::Duration};
 
 use itertools::Itertools;
-use metrics::gauge;
+use metrics::Gauge;
+use metrics_derive::Metrics;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use metrics_process::Collector;
 use metrics_util::layers::{PrefixLayer, Stack};
@@ -66,11 +67,13 @@ pub fn initialize<'a, T: TaskSpawner>(
     let frequency = std::time::Duration::from_millis(sample_interval_millis);
     let runtime_metrics = handle.metrics();
     let runtime_monitor = tokio_metrics::RuntimeMonitor::new(&handle);
+    let tokio_runtime_metrics = TokioMetrics::default();
+
     task_spawner.spawn_critical(
         "tokio metrics collector",
         Box::pin(async move {
             for metrics in runtime_monitor.intervals() {
-                collect_tokio(&runtime_metrics, metrics);
+                collect_tokio(&runtime_metrics, metrics, &tokio_runtime_metrics);
                 tokio::time::sleep(frequency).await;
             }
         }),
@@ -82,7 +85,7 @@ pub fn initialize<'a, T: TaskSpawner>(
 #[allow(dead_code)]
 #[derive(Metrics)]
 #[metrics(scope = "rundler_tokio_rt")]
-struct TokioMetrics {
+pub(crate) struct TokioMetrics {
     #[metric(describe = "the total number of tokio wokers.")]
     num_workers: Gauge,
     #[metric(describe = "the number of blocking threads.")]
@@ -211,83 +214,70 @@ macro_rules! log_rm_metric {
 }
 
 macro_rules! log_wm_metric {
-    ($tm:ident, $wm:ident, $metric_name:ident) => {
-        $tm.$metric_name.set($wm.$metric_name as f64);
+    ($tm:ident, $rm:ident, $metric_name:ident) => {
+        $tm.$metric_name.set($rm.$metric_name as f64);
     };
-    ($tm:ident, $wm:ident, $metric_name:ident, $converter:ident) => {
-        $tm.$metric_name.set($wm.$metric_name.$converter() as f64);
+    ($tm:ident, $rm:ident, $metric_name:ident, $converter:ident) => {
+        $tm.$metric_name.set($rm.$metric_name.$converter() as f64);
     };
 }
 
 fn collect_tokio(
-    runtime_metrics: &tokio::runtime::RuntimeMetrics,
-    worker_metrics: tokio_metrics::RuntimeMetrics,
+    rm: &tokio::runtime::RuntimeMetrics,
+    wm: tokio_metrics::RuntimeMetrics,
+    tm: &TokioMetrics,
 ) {
-    gauge!(format!("{}num_workers", TOKIO_PREFIX)).set(runtime_metrics.num_workers() as f64);
-    gauge!(format!("{}num_blocking_threads", TOKIO_PREFIX))
-        .set(runtime_metrics.num_blocking_threads() as f64);
-    gauge!(format!("{}active_tasks_count", TOKIO_PREFIX))
-        .set(runtime_metrics.num_alive_tasks() as f64);
-    gauge!(format!("{}num_idle_blocking_threads", TOKIO_PREFIX))
-        .set(runtime_metrics.num_idle_blocking_threads() as f64);
-    gauge!(format!("{}blocking_queue_depth", TOKIO_PREFIX))
-        .set(runtime_metrics.blocking_queue_depth() as f64);
-    gauge!(format!("{}total_park_count", TOKIO_PREFIX)).set(worker_metrics.total_park_count as f64);
-    gauge!(format!("{}max_park_count", TOKIO_PREFIX)).set(worker_metrics.max_park_count as f64);
-    gauge!(format!("{}min_park_count", TOKIO_PREFIX)).set(worker_metrics.min_park_count as f64);
-    gauge!(format!("{}mean_poll_duration", TOKIO_PREFIX))
-        .set(worker_metrics.mean_poll_duration.as_secs_f64());
-    gauge!(format!("{}mean_poll_duration_worker_min", TOKIO_PREFIX))
-        .set(worker_metrics.mean_poll_duration_worker_min.as_secs_f64());
-    gauge!(format!("{}mean_poll_duration_worker_max", TOKIO_PREFIX))
-        .set(worker_metrics.mean_poll_duration_worker_max.as_secs_f64());
-    gauge!(format!("{}total_noop_count", TOKIO_PREFIX)).set(worker_metrics.total_noop_count as f64);
-    gauge!(format!("{}max_noop_count", TOKIO_PREFIX)).set(worker_metrics.max_noop_count as f64);
-    gauge!(format!("{}min_noop_count", TOKIO_PREFIX)).set(worker_metrics.min_noop_count as f64);
-    gauge!(format!("{}total_steal_count", TOKIO_PREFIX))
-        .set(worker_metrics.total_steal_count as f64);
-    gauge!(format!("{}max_steal_count", TOKIO_PREFIX),).set(worker_metrics.max_steal_count as f64);
-    gauge!(format!("{}min_steal_count", TOKIO_PREFIX),).set(worker_metrics.min_steal_count as f64);
-    gauge!(format!("{}total_steal_operations", TOKIO_PREFIX))
-        .set(worker_metrics.total_steal_operations as f64);
-    gauge!(format!("{}max_steal_operations", TOKIO_PREFIX))
-        .set(worker_metrics.max_steal_operations as f64);
-    gauge!(format!("{}min_steal_operations", TOKIO_PREFIX))
-        .set(worker_metrics.min_steal_operations as f64);
-    gauge!(format!("{}num_remote_schedules", TOKIO_PREFIX))
-        .set(worker_metrics.num_remote_schedules as f64);
-    gauge!(format!("{}total_local_schedule_count", TOKIO_PREFIX))
-        .set(worker_metrics.total_local_schedule_count as f64);
-    gauge!(format!("{}max_local_schedule_count", TOKIO_PREFIX),)
-        .set(worker_metrics.max_local_schedule_count as f64);
-    gauge!(format!("{}min_local_schedule_count", TOKIO_PREFIX),)
-        .set(worker_metrics.min_local_schedule_count as f64);
-    gauge!(format!("{}total_overflow_count", TOKIO_PREFIX))
-        .set(worker_metrics.total_overflow_count as f64);
-    gauge!(format!("{}max_overflow_count", TOKIO_PREFIX))
-        .set(worker_metrics.max_overflow_count as f64);
-    gauge!(format!("{}min_overflow_count", TOKIO_PREFIX),)
-        .set(worker_metrics.min_overflow_count as f64);
-    gauge!(format!("{}total_polls_count", TOKIO_PREFIX))
-        .set(worker_metrics.total_polls_count as f64);
-    gauge!(format!("{}max_polls_count", TOKIO_PREFIX)).set(worker_metrics.max_polls_count as f64);
-    gauge!(format!("{}min_polls_count", TOKIO_PREFIX)).set(worker_metrics.min_polls_count as f64);
-    gauge!(format!("{}total_busy_duration", TOKIO_PREFIX))
-        .set(worker_metrics.total_busy_duration.as_secs_f64());
-    gauge!(format!("{}max_busy_duration", TOKIO_PREFIX))
-        .set(worker_metrics.max_busy_duration.as_secs_f64());
-    gauge!(format!("{}min_busy_duration", TOKIO_PREFIX))
-        .set(worker_metrics.min_busy_duration.as_secs_f64());
-    gauge!(format!("{}injection_queue_depth", TOKIO_PREFIX))
-        .set(worker_metrics.injection_queue_depth as f64);
-    gauge!(format!("{}total_local_queue_depth", TOKIO_PREFIX))
-        .set(worker_metrics.total_local_queue_depth as f64);
-    gauge!(format!("{}max_local_queue_depth", TOKIO_PREFIX))
-        .set(worker_metrics.max_local_queue_depth as f64);
-    gauge!(format!("{}min_local_queue_depth", TOKIO_PREFIX))
-        .set(worker_metrics.min_local_queue_depth as f64);
-    gauge!(format!("{}budget_forced_yield_count", TOKIO_PREFIX))
-        .set(worker_metrics.budget_forced_yield_count as f64);
-    gauge!(format!("{}io_driver_ready_count", TOKIO_PREFIX))
-        .set(worker_metrics.io_driver_ready_count as f64);
+    log_rm_metric!(tm, rm, num_workers);
+    log_rm_metric!(tm, rm, num_blocking_threads);
+    log_rm_metric!(tm, rm, num_alive_tasks);
+    log_rm_metric!(tm, rm, num_idle_blocking_threads);
+    log_rm_metric!(tm, rm, num_idle_blocking_threads);
+    log_rm_metric!(tm, rm, blocking_queue_depth);
+
+    log_wm_metric!(tm, wm, total_park_count);
+    log_wm_metric!(tm, wm, max_park_count);
+    log_wm_metric!(tm, wm, min_park_count);
+
+    log_wm_metric!(tm, wm, mean_poll_duration, as_secs_f64);
+    log_wm_metric!(tm, wm, mean_poll_duration_worker_min, as_secs_f64);
+    log_wm_metric!(tm, wm, mean_poll_duration_worker_max, as_secs_f64);
+
+    log_wm_metric!(tm, wm, total_noop_count);
+    log_wm_metric!(tm, wm, max_noop_count);
+    log_wm_metric!(tm, wm, min_noop_count);
+
+    log_wm_metric!(tm, wm, total_steal_count);
+    log_wm_metric!(tm, wm, max_steal_count);
+    log_wm_metric!(tm, wm, min_steal_count);
+
+    log_wm_metric!(tm, wm, total_steal_operations);
+    log_wm_metric!(tm, wm, max_steal_operations);
+    log_wm_metric!(tm, wm, min_steal_operations);
+
+    log_wm_metric!(tm, wm, num_remote_schedules);
+    log_wm_metric!(tm, wm, total_local_schedule_count);
+
+    log_wm_metric!(tm, wm, max_local_schedule_count);
+    log_wm_metric!(tm, wm, min_local_schedule_count);
+    log_wm_metric!(tm, wm, total_overflow_count);
+
+    log_wm_metric!(tm, wm, max_overflow_count);
+    log_wm_metric!(tm, wm, min_overflow_count);
+    log_wm_metric!(tm, wm, total_polls_count);
+
+    log_wm_metric!(tm, wm, max_polls_count);
+    log_wm_metric!(tm, wm, min_polls_count);
+
+    log_wm_metric!(tm, wm, total_busy_duration, as_secs_f64);
+    log_wm_metric!(tm, wm, max_busy_duration, as_secs_f64);
+    log_wm_metric!(tm, wm, min_busy_duration, as_secs_f64);
+
+    log_wm_metric!(tm, wm, injection_queue_depth);
+
+    log_wm_metric!(tm, wm, total_local_queue_depth);
+    log_wm_metric!(tm, wm, max_local_queue_depth);
+    log_wm_metric!(tm, wm, min_local_queue_depth);
+
+    log_wm_metric!(tm, wm, budget_forced_yield_count);
+    log_wm_metric!(tm, wm, io_driver_ready_count);
 }

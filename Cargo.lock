@@ -4414,6 +4414,7 @@ dependencies = [
  "go-parse-duration",
  "itertools 0.13.0",
  "metrics",
+ "metrics-derive",
  "metrics-exporter-prometheus",
  "metrics-process",
  "metrics-util",
