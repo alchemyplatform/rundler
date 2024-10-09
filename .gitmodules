@@ -26,3 +26,6 @@
 	path = test/spec-tests/v0_7/bundler-spec-tests
 	url = git@github.com:alchemyplatform/bundler-spec-tests.git
 	ignore = dirty
+[submodule "crates/bindings/fastlz/fastlz"]
+	path = crates/bindings/fastlz/fastlz
+	url = https://github.com/ariya/FastLZ

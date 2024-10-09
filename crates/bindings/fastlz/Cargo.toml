@@ -1,0 +1,12 @@
+[package]
+name = "rundler-bindings-fastlz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[build-dependencies]
+bindgen = "0.70.1"
+cc = { version = "1", features = ["parallel"] }
