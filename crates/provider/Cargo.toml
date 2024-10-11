@@ -29,20 +29,20 @@ reqwest.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
-thiserror.workspace = true
 futures-util.workspace = true
+thiserror.workspace = true
 tower.workspace = true
 tracing.workspace = true
 url.workspace = true
 
-mockall = {workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
 
 [features]
-test-utils = [ "mockall" ]
+test-utils = ["mockall"]
 
 [dev-dependencies]
-rundler-provider = { workspace = true, features = ["test-utils"] }
-alloy-provider = {workspace = true,  features=["debug-api", "anvil-node"]}
 alloy-node-bindings = "0.4.2"
-tokio.workspace = true
+alloy-provider = { workspace = true, features = ["debug-api", "anvil-node"] }
 alloy-sol-macro.workspace = true
+rundler-provider = { workspace = true, features = ["test-utils"] }
+tokio.workspace = true

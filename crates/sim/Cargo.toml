@@ -23,25 +23,25 @@ auto_impl.workspace = true
 futures-util.workspace = true
 indexmap = "2.4.0"
 parse-display.workspace = true
-thiserror.workspace = true
+rand.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_with = "3.9.0"
-rand.workspace = true
-reqwest.workspace = true
+strum.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 tracing.workspace = true
 url.workspace = true
-strum.workspace = true
 
-mockall = {workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+alloy-primitives = { workspace = true, features = ["rand"] }
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }
 rundler-types = { workspace = true, features = ["test-utils"] }
-alloy-primitives = { workspace = true, features = ["rand"]}
 
 [features]
-test-utils = [ "mockall" ]
+test-utils = ["mockall"]

@@ -1,8 +1,5 @@
 [workspace]
-members = [
-    "bin/*",
-    "crates/*",
-]
+members = ["bin/*", "crates/*"]
 default-members = ["bin/rundler"]
 resolver = "2"
 
@@ -68,7 +65,7 @@ serde_json = "1.0.128"
 rand = "0.8.5"
 reqwest = { version = "0.12.8", default-features = false, features = ["rustls-tls"] }
 thiserror = "1.0.64"
-tokio = { version = "1.39.3", default-features = false, features = ["rt", "sync", "time"]}
+tokio = { version = "1.39.3", default-features = false, features = ["rt", "sync", "time"] }
 tokio-util = "0.7.12"
 tonic = "0.12.3"
 tonic-build = "0.12.3"
