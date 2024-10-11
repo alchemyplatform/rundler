@@ -25,6 +25,7 @@ futures.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
 metrics.workspace = true
+metrics-derive.workspace = true
 parking_lot = "0.12.3"
 prost.workspace = true
 serde.workspace = true
@@ -39,14 +40,13 @@ tonic-reflection.workspace = true
 tracing.workspace = true
 url.workspace = true
 
-mockall = {workspace = true, optional = true }
-metrics-derive.workspace = true
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 mockall.workspace = true
-rundler-sim = { workspace = true, features = ["test-utils"] }
-rundler-provider = { workspace = true, features = ["test-utils"] }
 reth-tasks.workspace = true
+rundler-provider = { workspace = true, features = ["test-utils"] }
+rundler-sim = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]
 tonic-build.workspace = true

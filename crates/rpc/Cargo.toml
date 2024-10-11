@@ -20,24 +20,24 @@ alloy-sol-types.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-jsonrpsee = { workspace = true , features = ["client", "macros", "server"] }
+futures-util.workspace = true
+http = "1.1.0"
+jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 metrics.workspace = true
 metrics-derive.workspace = true
+serde.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tonic.workspace = true
 tower.workspace = true
 tracing.workspace = true
-serde.workspace = true
-strum.workspace = true
 url.workspace = true
-futures-util.workspace = true
-http = "1.1.0"
 
 [dev-dependencies]
-mockall.workspace = true
 alloy-consensus.workspace = true
-rundler-provider = { workspace = true, features = ["test-utils"]}
+mockall.workspace = true
+rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }
-rundler-types= { workspace = true, features = ["test-utils"]}
+rundler-types = { workspace = true, features = ["test-utils"] }

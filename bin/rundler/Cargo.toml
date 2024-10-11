@@ -24,13 +24,14 @@ alloy-primitives.workspace = true
 
 anyhow.workspace = true
 aws-config.workspace = true
-aws-sdk-s3= { version = "1.52", default-features = false }
-config = "0.14.0"
+aws-sdk-s3 = { version = "1.52", default-features = false }
 clap = { version = "4.5.16", features = ["derive", "env"] }
+config = "0.14.0"
 dotenv = "0.15.0"
+go-parse-duration = "0.1"
 itertools = "0.13.0"
 metrics = "0.23.0"
-go-parse-duration = "0.1"
+metrics-derive.workspace = true
 metrics-exporter-prometheus = { version = "0.15.3", default-features = false, features = ["http-listener"] }
 metrics-process = "2.1.0"
 metrics-util = "0.17.0"
@@ -47,5 +48,4 @@ tracing.workspace = true
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
-metrics-derive.workspace = true
 
