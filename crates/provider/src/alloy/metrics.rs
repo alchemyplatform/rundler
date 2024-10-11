@@ -104,22 +104,28 @@ where
                         );
                     }
                 }
-                Err(e) => match e {
-                    alloy_json_rpc::RpcError::ErrorResp(rpc_error) => {
-                        method_logger.record_http(HttpCode::TwoHundreds);
-                        method_logger.record_rpc(get_rpc_status_from_code(rpc_error.code));
+                Err(e) => {
+                    tracing::error!(
+                        "alloy provider of method {} response with error: {e:?}",
+                        &method_name,
+                    );
+                    match e {
+                        alloy_json_rpc::RpcError::ErrorResp(rpc_error) => {
+                            method_logger.record_http(HttpCode::TwoHundreds);
+                            method_logger.record_rpc(get_rpc_status_from_code(rpc_error.code));
+                        }
+                        alloy_json_rpc::RpcError::Transport(TransportErrorKind::HttpError(
+                            HttpError { status, body: _ },
+                        )) => {
+                            method_logger.record_http(get_http_status_from_code(*status));
+                        }
+                        alloy_json_rpc::RpcError::NullResp => {
+                            method_logger.record_http(HttpCode::TwoHundreds);
+                            method_logger.record_rpc(RpcCode::Success);
+                        }
+                        _ => {}
                     }
-                    alloy_json_rpc::RpcError::Transport(TransportErrorKind::HttpError(
-                        HttpError { status, body: _ },
-                    )) => {
-                        method_logger.record_http(get_http_status_from_code(*status));
-                    }
-                    alloy_json_rpc::RpcError::NullResp => {
-                        method_logger.record_http(HttpCode::TwoHundreds);
-                        method_logger.record_rpc(RpcCode::Success);
-                    }
-                    _ => {}
-                },
+                }
             }
             response
         }
