@@ -64,7 +64,6 @@ where
             req.method_name().to_string(),
             "rpc".to_string(),
         );
-
         let svc = self.service.clone();
 
         async move {
