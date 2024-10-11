@@ -84,7 +84,7 @@ pub fn initialize<'a, T: TaskSpawner>(
 
 #[allow(dead_code)]
 #[derive(Metrics)]
-#[metrics(scope = "rundler_tokio_rt")]
+#[metrics(scope = "tokio_rt")]
 pub(crate) struct TokioMetrics {
     #[metric(describe = "the total number of tokio wokers.")]
     num_workers: Gauge,

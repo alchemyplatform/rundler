@@ -22,6 +22,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 jsonrpsee = { workspace = true , features = ["client", "macros", "server"] }
 metrics.workspace = true
+metrics-derive.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -33,7 +34,6 @@ strum.workspace = true
 url.workspace = true
 futures-util.workspace = true
 http = "1.1.0"
-metrics-derive = "0.1.0"
 
 [dev-dependencies]
 mockall.workspace = true

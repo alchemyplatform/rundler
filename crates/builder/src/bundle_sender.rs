@@ -156,7 +156,7 @@ where
         loop {
             if let Err(e) = self.step_state(&mut state).await {
                 error!("Error in bundle sender loop: {e:#?}");
-                self.metrics.state_machine_errors.increment(1_u64);
+                self.metrics.state_machine_errors.increment(1);
                 state.reset();
             }
         }
@@ -278,7 +278,7 @@ where
                         "Abandoning bundle after {} fee increases, no operations available after fee increase",
                         inner.fee_increase_count
                     );
-                    self.metrics.bundle_txns_abandoned.increment(1_u64);
+                    self.metrics.bundle_txns_abandoned.increment(1);
 
                     // abandon the bundle by starting a new bundle process
                     // If the node we are using still has the transaction in the mempool, its
@@ -311,7 +311,7 @@ where
             }
             Err(error) => {
                 error!("Bundle send error {error:?}");
-                self.metrics.bundle_txns_failed.increment(1_u64);
+                self.metrics.bundle_txns_failed.increment(1);
                 state.bundle_error(error);
             }
         }
@@ -353,7 +353,7 @@ where
                         self.builder_index,
                         nonce,
                     ));
-                    self.metrics.bundle_txns_dropped.increment(1_u64);
+                    self.metrics.bundle_txns_dropped.increment(1);
                     // try again, increasing fees
                     state.update(InnerState::Building(inner.to_building()));
                 }
@@ -363,7 +363,7 @@ where
                         self.builder_index,
                         nonce,
                     ));
-                    self.metrics.bundle_txns_nonce_used.increment(1_u64);
+                    self.metrics.bundle_txns_nonce_used.increment(1);
                     state.reset();
                 }
             }
@@ -376,7 +376,7 @@ where
                 self.settings.max_blocks_to_wait_for_mine,
                 inner.fee_increase_count + 1
             );
-            self.metrics.bundle_txn_fee_increases.increment(1_u64);
+            self.metrics.bundle_txn_fee_increases.increment(1);
             state.update(InnerState::Building(inner.to_building()))
         }
 
@@ -407,7 +407,7 @@ where
         match cancel_res {
             Ok(Some(_)) => {
                 info!("Cancellation transaction sent, waiting for confirmation");
-                self.metrics.cancellation_txns_sent.increment(1_u64);
+                self.metrics.cancellation_txns_sent.increment(1);
 
                 state.update(InnerState::CancelPending(inner.to_cancel_pending(
                     state.block_number() + self.settings.max_blocks_to_wait_for_mine,
@@ -415,7 +415,7 @@ where
             }
             Ok(None) => {
                 info!("Soft cancellation or no transaction to cancel, starting new bundle attempt");
-                self.metrics.soft_cancellations.increment(1_u64);
+                self.metrics.soft_cancellations.increment(1);
                 state.reset();
             }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
@@ -423,7 +423,7 @@ where
                 if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                     // abandon the cancellation
                     warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
-                    self.metrics.cancellations_abandoned.increment(1_u64);
+                    self.metrics.cancellations_abandoned.increment(1);
                     state.reset();
                 } else {
                     // Increase fees again
@@ -441,7 +441,7 @@ where
             }
             Err(e) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
-                self.metrics.cancellation_txns_failed.increment(1_u64);
+                self.metrics.cancellation_txns_failed.increment(1);
                 state.reset();
             }
         }
@@ -466,7 +466,7 @@ where
                     // mined
                     let fee = gas_used.zip(gas_price).map(|(used, price)| used * price);
                     info!("Cancellation transaction mined. Price (wei) {fee:?}");
-                    self.metrics.cancellation_txns_mined.increment(1_u64);
+                    self.metrics.cancellation_txns_mined.increment(1);
                     if let Some(fee) = fee {
                         self.metrics
                             .cancellation_txns_total_fee
@@ -489,7 +489,7 @@ where
             if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                 // abandon the cancellation
                 warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
-                self.metrics.cancellations_abandoned.increment(1_u64);
+                self.metrics.cancellations_abandoned.increment(1);
                 state.reset();
             } else {
                 // start replacement, don't wait for trigger
@@ -549,7 +549,7 @@ where
             op_hashes,
         } = bundle_tx;
 
-        self.metrics.bundle_txns_sent.increment(1_u64);
+        self.metrics.bundle_txns_sent.increment(1);
 
         let send_result = state
             .transaction_tracker
@@ -573,17 +573,17 @@ where
                 Ok(SendBundleAttemptResult::Success)
             }
             Err(TransactionTrackerError::NonceTooLow) => {
-                self.metrics.bundle_txn_nonce_too_low.increment(1_u64);
+                self.metrics.bundle_txn_nonce_too_low.increment(1);
                 warn!("Bundle attempt nonce too low");
                 Ok(SendBundleAttemptResult::NonceTooLow)
             }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
-                self.metrics.bundle_replacement_underpriced.increment(1_u64);
+                self.metrics.bundle_replacement_underpriced.increment(1);
                 warn!("Bundle attempt replacement transaction underpriced");
                 Ok(SendBundleAttemptResult::ReplacementUnderpriced)
             }
             Err(TransactionTrackerError::ConditionNotMet) => {
-                self.metrics.bundle_txn_condition_not_met.increment(1_u64);
+                self.metrics.bundle_txn_condition_not_met.increment(1);
                 warn!("Bundle attempt condition not met");
                 Ok(SendBundleAttemptResult::ConditionNotMet)
             }
@@ -894,7 +894,7 @@ impl BuildingState {
 
     // Finalize an underpriced round.
     //
-    // This will clear out the number of fee increases and increment the number of underpriced rounds.
+    // This will clear out the count of fee increases and increment the count of underpriced rounds.
     // Use this when we are in an underpriced state, but there are no longer any UOs available to bundle.
     fn underpriced_round(self) -> Self {
         let mut underpriced_info = self
@@ -1135,49 +1135,49 @@ impl BundleSenderTrigger {
 #[derive(Metrics)]
 #[metrics(scope = "builder")]
 struct BuilderMetric {
-    #[metric(describe = "the number of bundle transactions already sent.")]
+    #[metric(describe = "the count of bundle transactions already sent.")]
     bundle_txns_sent: Counter,
-    #[metric(describe = "the number of bundle transactions successed.")]
+    #[metric(describe = "the count of bundle transactions successed.")]
     bundle_txns_success: Counter,
-    #[metric(describe = "the number of bundle gas limit.")]
+    #[metric(describe = "the count of bundle gas limit.")]
     bundle_gas_limit: Counter,
-    #[metric(describe = "the number of bundle gas used.")]
+    #[metric(describe = "the count of bundle gas used.")]
     bundle_gas_used: Counter,
-    #[metric(describe = "the number of dropped bundle transactions.")]
+    #[metric(describe = "the count of dropped bundle transactions.")]
     bundle_txns_dropped: Counter,
-    #[metric(describe = "the number of anabdoned bundle transactions.")]
+    #[metric(describe = "the count of anabdoned bundle transactions.")]
     bundle_txns_abandoned: Counter,
-    #[metric(describe = "the number of failed bundle transactions.")]
+    #[metric(describe = "the count of failed bundle transactions.")]
     bundle_txns_failed: Counter,
-    #[metric(describe = "the number of bundle transactin nonce used event.")]
+    #[metric(describe = "the count of bundle transaction nonce used events.")]
     bundle_txns_nonce_used: Counter,
-    #[metric(describe = "the number of bundle transactions fee increase event.")]
+    #[metric(describe = "the count of bundle transactions fee increase events.")]
     bundle_txn_fee_increases: Counter,
-    #[metric(describe = "the number of bundle transactions underprice replaced event.")]
+    #[metric(describe = "the count of bundle transactions underprice replaced events.")]
     bundle_replacement_underpriced: Counter,
-    #[metric(describe = "the number of bundle transactions nonce too low event.")]
+    #[metric(describe = "the count of bundle transactions nonce too low events.")]
     bundle_txn_nonce_too_low: Counter,
-    #[metric(describe = "the number of bundle transactions condition not met event.")]
+    #[metric(describe = "the count of bundle transactions condition not met events.")]
     bundle_txn_condition_not_met: Counter,
-    #[metric(describe = "the number of cancellation bundle transactions sent event.")]
+    #[metric(describe = "the count of cancellation bundle transactions sent events.")]
     cancellation_txns_sent: Counter,
-    #[metric(describe = "the number of cancellation bundle transactions mined event.")]
+    #[metric(describe = "the count of cancellation bundle transactions mined events.")]
     cancellation_txns_mined: Counter,
     #[metric(describe = "the total fee of cancellation bundle transactions.")]
     cancellation_txns_total_fee: Counter,
-    #[metric(describe = "the number of cancellation bundle transactions abandon event.")]
+    #[metric(describe = "the count of cancellation bundle transactions abandon events.")]
     cancellations_abandoned: Counter,
-    #[metric(describe = "the number of soft cancellation bundle transactions event.")]
+    #[metric(describe = "the count of soft cancellation bundle transactions events.")]
     soft_cancellations: Counter,
-    #[metric(describe = "the number of cancellation bundle transactions failed event.")]
+    #[metric(describe = "the count of cancellation bundle transactions failed events.")]
     cancellation_txns_failed: Counter,
-    #[metric(describe = "the number of state machine errors.")]
+    #[metric(describe = "the count of state machine errors.")]
     state_machine_errors: Counter,
 }
 
 impl BuilderMetric {
     fn process_bundle_txn_success(&self, gas_limit: Option<u64>, gas_used: Option<u128>) {
-        self.bundle_txns_success.increment(1_u64);
+        self.bundle_txns_success.increment(1);
         if let Some(limit) = gas_limit {
             self.bundle_gas_limit.increment(limit);
         }

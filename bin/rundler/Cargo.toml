@@ -47,4 +47,5 @@ tracing.workspace = true
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
-metrics-derive = "0.1.0"
+metrics-derive.workspace = true
+

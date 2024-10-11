@@ -27,25 +27,25 @@ pub struct MethodSessionLogger {
 }
 
 #[derive(Metrics)]
-#[metrics(scope = "rundler_runtime")]
+#[metrics(scope = "rpc_stats")]
 pub(crate) struct MethodMetrics {
-    #[metric(describe = "total num of requests.")]
+    #[metric(describe = "total count of requests.")]
     num_requests: Counter,
 
-    #[metric(describe = "opening requests.")]
+    #[metric(describe = "the number of opening requests.")]
     open_requests: Gauge,
 
-    #[metric(describe = "opening requests.")]
+    #[metric(describe = "the distribution of request latency.")]
     request_latency: Histogram,
 }
 
 #[derive(Metrics)]
-#[metrics(scope = "rundler_runtime")]
+#[metrics(scope = "rpc_stats")]
 pub(crate) struct MethodStatusMetrics {
-    #[metric(describe = "opening requests.")]
+    #[metric(describe = "the count of http response status.")]
     http_response_status: Counter,
 
-    #[metric(describe = "opening requests.")]
+    #[metric(describe = "the count of rpc response status.")]
     rpc_response_status: Counter,
 }
 
@@ -75,24 +75,26 @@ impl MethodSessionLogger {
 
     /// record a rpc status code.
     pub fn record_rpc(&self, rpc_code: RpcCode) {
-        let method_status_metric = MethodStatusMetrics::new_with_labels(&[
+        MethodStatusMetrics::new_with_labels(&[
             ("method_name", self.method_name.clone()),
             ("service_name", self.service_name.clone()),
             ("protocol", self.protocol.clone()),
             ("status_code", rpc_code.to_string()),
-        ]);
-        method_status_metric.rpc_response_status.increment(1);
+        ])
+        .rpc_response_status
+        .increment(1);
     }
 
     /// record a http status code.
     pub fn record_http(&self, http_code: HttpCode) {
-        let method_status_metric = MethodStatusMetrics::new_with_labels(&[
+        MethodStatusMetrics::new_with_labels(&[
             ("method_name", self.method_name.clone()),
             ("service_name", self.service_name.clone()),
             ("protocol", self.protocol.clone()),
             ("status_code", http_code.to_string()),
-        ]);
-        method_status_metric.http_response_status.increment(1);
+        ])
+        .http_response_status
+        .increment(1);
     }
 
     /// end of the session. Record the session duration.

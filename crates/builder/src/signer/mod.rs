@@ -73,13 +73,13 @@ struct BuilderMetric {
 }
 
 pub(crate) async fn monitor_account_balance<P: EvmProvider>(addr: Address, provider: P) {
+    let metric = BuilderMetric::new_with_labels(&[("addr", format!("{addr:?}"))]);
     loop {
         match provider.get_balance(addr, None).await {
             Ok(balance) => {
                 let eth_balance = balance.to_f64().unwrap_or_default() / 1e18;
-                tracing::info!("account {addr:?} balance: {}", eth_balance);
-                let metric = BuilderMetric::new_with_labels(&[("addr", format!("{addr:?}"))]);
                 metric.account_balance.set(eth_balance);
+                tracing::info!("account {addr:?} balance: {}", eth_balance);
             }
             Err(err) => {
                 tracing::error!("Get account {addr:?} balance error {err:?}");

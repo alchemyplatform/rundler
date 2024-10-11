@@ -615,15 +615,15 @@ struct PoolMetrics {
     num_ops_in_pool: Gauge,
     #[metric(describe = "the size of mempool in bytes.")]
     size_bytes: Gauge,
-    #[metric(describe = "the number of ops in mempool cache(mined but not persistent).")]
+    #[metric(describe = "the number of ops in mempool cache (mined but not persistent).")]
     num_ops_in_cache: Gauge,
     #[metric(describe = "the size of mempool cache in bytes.")]
     cache_size_bytes: Gauge,
     #[metric(describe = "the number of candidates.")]
     num_candidates: Gauge,
-    #[metric(describe = "the duration of a bundle mined.")]
+    #[metric(describe = "the duration distribution of a bundle mined.")]
     time_to_mine: Histogram,
-    #[metric(describe = "the duration of a blcoked mined.")]
+    #[metric(describe = "the duration distribution of a blocked mined.")]
     blocks_to_mine: Histogram,
 }
 

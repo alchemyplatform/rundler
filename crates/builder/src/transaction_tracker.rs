@@ -495,7 +495,7 @@ impl From<TxSenderError> for TransactionTrackerError {
 struct TransactionTrackerMetrics {
     #[metric(describe = "the number of pending transactions.")]
     num_pending_transactions: Gauge,
-    #[metric(describe = "the nonce of transaction.")]
+    #[metric(describe = "the current account‘s nonce.")]
     nonce: Gauge,
     #[metric(describe = "the number of pending transactions.")]
     attempt_count: Gauge,

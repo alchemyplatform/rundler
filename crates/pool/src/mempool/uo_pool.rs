@@ -130,7 +130,7 @@ where
         self.ep_specific_metrics
             .removed_operations
             .increment(count as u64);
-        self.ep_specific_metrics.removed_entities.increment(1_u64);
+        self.ep_specific_metrics.removed_entities.increment(1);
     }
 
     fn remove_entity(&self, entity: Entity) {
@@ -146,7 +146,7 @@ where
         self.ep_specific_metrics
             .removed_operations
             .increment(count as u64);
-        self.ep_specific_metrics.removed_entities.increment(1_u64);
+        self.ep_specific_metrics.removed_entities.increment(1);
     }
 }
 
@@ -712,11 +712,11 @@ where
 struct UoPoolMetricsEPSpecific {
     #[metric(describe = "the number of ops seen.")]
     ops_seen: Gauge,
-    #[metric(describe = "the number of unmined ops.")]
+    #[metric(describe = "the count of unmined ops.")]
     unmined_operations: Counter,
-    #[metric(describe = "the number of removed ops.")]
+    #[metric(describe = "the count of removed ops.")]
     removed_operations: Counter,
-    #[metric(describe = "the number of removed entities.")]
+    #[metric(describe = "the count of removed entities.")]
     removed_entities: Counter,
 }
 

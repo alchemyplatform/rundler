@@ -40,7 +40,7 @@ where
         Ok(r) => r.map_err(Into::into),
         Err(_) => {
             let rpc_metric = RPCMetric::new_with_labels(&[("rpc_name", rpc_name)]);
-            rpc_metric.panic_count.increment(1_u64);
+            rpc_metric.panic_count.increment(1);
             tracing::error!("PANIC in RPC handler: {}", rpc_name);
             Err(EthRpcError::Internal(anyhow::anyhow!("internal error: panic, see logs")).into())
         }

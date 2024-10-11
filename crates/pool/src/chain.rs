@@ -211,7 +211,7 @@ impl<P: EvmProvider> Chain<P> {
 
             for i in 0..=self.settings.max_sync_retries {
                 if i > 0 {
-                    self.metrics.sync_retries.increment(1_u64);
+                    self.metrics.sync_retries.increment(1);
                 }
 
                 let update = self.sync_to_block(block.clone()).await;
@@ -229,7 +229,7 @@ impl<P: EvmProvider> Chain<P> {
                 "Failed to update chain at block {:?} after {} retries. Abandoning sync.",
                 block_hash, self.settings.max_sync_retries
             );
-            self.metrics.sync_abandoned.increment(1_u64);
+            self.metrics.sync_abandoned.increment(1);
         }
     }
 
@@ -333,7 +333,7 @@ impl<P: EvmProvider> Chain<P> {
 
         self.metrics.block_height.set(current_block_number as f64);
         if reorg_depth > 0 {
-            self.metrics.reorgs_detected.increment(1_u64);
+            self.metrics.reorgs_detected.increment(1);
             self.metrics.total_reorg_depth.increment(reorg_depth);
         }
 
@@ -705,17 +705,16 @@ impl ChainUpdate {
 
 #[derive(Metrics)]
 #[metrics(scope = "op_pool_chain")]
-
 struct ChainMetrics {
     #[metric(describe = "the height of block.")]
     block_height: Gauge,
-    #[metric(describe = "the number of reorg event detected.")]
+    #[metric(describe = "the count of reorg event detected.")]
     reorgs_detected: Counter,
-    #[metric(describe = "the total number of reorg depth.")]
+    #[metric(describe = "the count of reorg depth.")]
     total_reorg_depth: Counter,
-    #[metric(describe = "the number of removed entities.")]
+    #[metric(describe = "the count of sync retries.")]
     sync_retries: Counter,
-    #[metric(describe = "the number of sync abanded.")]
+    #[metric(describe = "the count of sync abanded.")]
     sync_abandoned: Counter,
 }
 
