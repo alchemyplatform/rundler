@@ -64,7 +64,7 @@ where
             req.method_name().to_string(),
             "rpc".to_string(),
         );
-
+        let method_name = req.method_name().to_string();
         let svc = self.service.clone();
 
         async move {
@@ -75,6 +75,11 @@ where
                 method_logger.record_http(HttpCode::TwoHundreds);
                 method_logger.record_rpc(RpcCode::Success);
             } else if let Some(error) = rp.as_error_code() {
+                tracing::error!(
+                    "rpc call with method {} retruns error, code : {}",
+                    method_name,
+                    error
+                );
                 let error_code: ErrorCode = error.into();
                 let rpc_code = match error_code {
                     ErrorCode::ParseError => RpcCode::ParseError,

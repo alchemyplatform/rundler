@@ -85,7 +85,7 @@ where
         let method_name = get_method_name(&request);
         let method_logger = MethodSessionLogger::start(
             "alloy_provider_client".to_string(),
-            method_name,
+            method_name.clone(),
             "rpc".to_string(),
         );
         let mut svc = self.service.clone();
@@ -96,6 +96,13 @@ where
                 Ok(resp) => {
                     method_logger.record_http(HttpCode::TwoHundreds);
                     method_logger.record_rpc(get_rpc_status_code(resp));
+                    if resp.is_error() {
+                        tracing::error!(
+                            "alloy provider of method {} response with error: {}",
+                            &method_name,
+                            resp.as_error().unwrap()
+                        );
+                    }
                 }
                 Err(e) => match e {
                     alloy_json_rpc::RpcError::ErrorResp(rpc_error) => {
