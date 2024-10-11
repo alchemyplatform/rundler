@@ -38,7 +38,7 @@ jobs:
         with:
           command: check
           args: --all --all-features
-      
+
       - name: cargo +nightly fmt
         uses: actions-rs/cargo@v1
         with:
@@ -67,15 +67,25 @@ jobs:
         run: sudo pip3 install codespell tomli
 
       - name: Check spelling
-        run: codespell --toml .github/workflows/codespell.toml *.md docs/*.md 
+        run: codespell --toml .github/workflows/codespell.toml *.md docs/*.md
 
       - name: markdown link check
         uses: gaurav-nelson/github-action-markdown-link-check@v1
         with:
-          folder-path: 'docs'
-          file-path: 'README.md,CONTRIBUTING.md,SECURITY.md'
-          config-file: '.github/workflows/mlc_config.json'
-        
+          folder-path: "docs"
+          file-path: "README.md,CONTRIBUTING.md,SECURITY.md"
+          config-file: ".github/workflows/mlc_config.json"
+
+  cargo-sort:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v3
+      - name: Install cargo-sort
+        run: cargo install --git=https://github.com/DevinR528/cargo-sort --rev=55ec89082466f6bb246d870a8d56d166a8e1f08b cargo-sort
+      - name: Check cargo sort
+        run: cargo sort -g -w -c
+
   cog_check_job:
     runs-on: ubuntu-latest
     name: check conventional commit compliance

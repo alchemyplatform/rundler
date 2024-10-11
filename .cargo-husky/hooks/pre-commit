@@ -32,6 +32,14 @@ buf lint . || {
   exit 1
 }
 
+echo 'install cargo-sort'
+cargo install --git=https://github.com/DevinR528/cargo-sort --rev=55ec89082466f6bb246d870a8d56d166a8e1f08b cargo-sort 
+
+echo 'Running cargo-sort'
+cargo sort -w -g || { 
+  echo >&2 'Sort failed. This most likely means your cargo.toml file(s) has syntax error'
+}
+
 declare -a file_array=()
 for file in $files_to_git_add; do
   file_array+=("${file}")
