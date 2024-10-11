@@ -15,6 +15,8 @@ use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use alloy_primitives::{utils::format_units, Address, B256, U256};
 use itertools::Itertools;
+use metrics::{Counter, Gauge};
+use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::{EntryPoint, EvmProvider};
 use rundler_sim::{Prechecker, Simulator};
@@ -59,6 +61,8 @@ pub(crate) struct UoPool<
     provider: EP,
     prechecker: P,
     simulator: S,
+    ep_specific_metrics: UoPoolMetricsEPSpecific,
+    metrics: UoPoolMetrics,
     _uo_type: PhantomData<UO>,
 }
 
@@ -88,6 +92,7 @@ where
         paymaster: PaymasterTracker<E>,
         reputation: Arc<AddressReputation>,
     ) -> Self {
+        let entry_point = config.entry_point.to_string();
         Self {
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(config.clone().into()),
@@ -104,6 +109,11 @@ where
             prechecker,
             simulator,
             config,
+            ep_specific_metrics: UoPoolMetricsEPSpecific::new_with_labels(&[(
+                "entry_point",
+                entry_point,
+            )]),
+            metrics: UoPoolMetrics::default(),
             _uo_type: PhantomData,
         }
     }
@@ -129,8 +139,10 @@ where
                 reason: OpRemovalReason::EntityThrottled { entity },
             })
         }
-        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
-        UoPoolMetrics::increment_removed_entities(self.config.entry_point);
+        self.ep_specific_metrics
+            .removed_operations
+            .increment(count as u64);
+        self.ep_specific_metrics.removed_entities.increment(1);
     }
 
     fn remove_entity(&self, entity: Entity) {
@@ -143,8 +155,10 @@ where
                 reason: OpRemovalReason::EntityRemoved { entity },
             })
         }
-        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
-        UoPoolMetrics::increment_removed_entities(self.config.entry_point);
+        self.ep_specific_metrics
+            .removed_operations
+            .increment(count as u64);
+        self.ep_specific_metrics.removed_entities.increment(1);
     }
 }
 
@@ -273,11 +287,11 @@ where
                     update.latest_block_hash,
                 );
             }
-            UoPoolMetrics::update_ops_seen(
-                mined_op_count as isize - unmined_op_count as isize,
-                self.config.entry_point,
-            );
-            UoPoolMetrics::increment_unmined_operations(unmined_op_count, self.config.entry_point);
+            let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
+            self.ep_specific_metrics.ops_seen.increment(ops_seen);
+            self.ep_specific_metrics
+                .unmined_operations
+                .increment(unmined_op_count);
 
             let mut state = self.state.write();
             state
@@ -336,20 +350,22 @@ where
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
                     Err(_) => 0.0,
                 };
-                UoPoolMetrics::current_max_fee_gwei(max_fee);
+                self.metrics.current_max_fee_gwei.set(max_fee);
 
                 let max_priority_fee =
                     match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
                         Ok(s) => s.parse::<f64>().unwrap_or_default(),
                         Err(_) => 0.0,
                     };
-                UoPoolMetrics::current_max_priority_fee_gwei(max_priority_fee);
+                self.metrics
+                    .current_max_priority_fee_gwei
+                    .set(max_priority_fee);
 
                 let base_fee_f64 = match format_units(base_fee, "gwei") {
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
                     Err(_) => 0.0,
                 };
-                UoPoolMetrics::current_base_fee(base_fee_f64);
+                self.metrics.current_base_fee.set(base_fee_f64);
 
                 // cache for the next update
                 {
@@ -566,7 +582,7 @@ where
     }
 
     fn remove_operations(&self, hashes: &[B256]) {
-        let mut count = 0;
+        let mut count: u64 = 0;
         let mut removed_hashes = vec![];
         {
             let mut state = self.state.write();
@@ -585,7 +601,7 @@ where
                 reason: OpRemovalReason::Requested,
             })
         }
-        UoPoolMetrics::increment_removed_operations(count, self.config.entry_point);
+        self.ep_specific_metrics.removed_operations.increment(count);
     }
 
     fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<B256>> {
@@ -719,40 +735,28 @@ where
     }
 }
 
-struct UoPoolMetrics {}
+#[derive(Metrics)]
+#[metrics(scope = "op_pool")]
+struct UoPoolMetricsEPSpecific {
+    #[metric(describe = "the number of ops seen.")]
+    ops_seen: Gauge,
+    #[metric(describe = "the count of unmined ops.")]
+    unmined_operations: Counter,
+    #[metric(describe = "the count of removed ops.")]
+    removed_operations: Counter,
+    #[metric(describe = "the count of removed entities.")]
+    removed_entities: Counter,
+}
 
-impl UoPoolMetrics {
-    fn update_ops_seen(num_ops: isize, entry_point: Address) {
-        metrics::gauge!("op_pool_ops_seen", "entry_point" => entry_point.to_string())
-            .increment(num_ops as f64);
-    }
-
-    fn increment_unmined_operations(num_ops: usize, entry_point: Address) {
-        metrics::counter!("op_pool_unmined_operations", "entry_point" => entry_point.to_string())
-            .increment(num_ops as u64);
-    }
-
-    fn increment_removed_operations(num_ops: usize, entry_point: Address) {
-        metrics::counter!("op_pool_removed_operations", "entry_point" => entry_point.to_string())
-            .increment(num_ops as u64);
-    }
-
-    fn increment_removed_entities(entry_point: Address) {
-        metrics::counter!("op_pool_removed_entities", "entry_point" => entry_point.to_string())
-            .increment(1);
-    }
-
-    fn current_max_fee_gwei(fee: f64) {
-        metrics::gauge!("op_pool_current_max_fee_gwei").set(fee);
-    }
-
-    fn current_max_priority_fee_gwei(fee: f64) {
-        metrics::gauge!("op_pool_current_max_priority_fee_gwei").set(fee);
-    }
-
-    fn current_base_fee(fee: f64) {
-        metrics::gauge!("op_pool_current_base_fee").set(fee);
-    }
+#[derive(Metrics)]
+#[metrics(scope = "op_pool")]
+struct UoPoolMetrics {
+    #[metric(describe = "the maximum fee in Gwei.")]
+    current_max_fee_gwei: Gauge,
+    #[metric(describe = "the maximum priority fee in Gwei.")]
+    current_max_priority_fee_gwei: Gauge,
+    #[metric(describe = "the base fee of current block.")]
+    current_base_fee: Gauge,
 }
 
 #[cfg(test)]

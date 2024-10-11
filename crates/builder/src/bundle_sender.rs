@@ -18,6 +18,8 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::StreamExt;
+use metrics::Counter;
+use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{BundleHandler, EntryPoint, TransactionRequest};
@@ -70,7 +72,7 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     pool: C,
     settings: Settings,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-    metrics: BuilderMetrics,
+    metrics: BuilderMetric,
     _uo_type: PhantomData<UO>,
 }
 
@@ -154,7 +156,7 @@ where
         loop {
             if let Err(e) = self.step_state(&mut state).await {
                 error!("Error in bundle sender loop: {e:#?}");
-                self.metrics.increment_state_machine_errors();
+                self.metrics.state_machine_errors.increment(1);
                 state.reset();
             }
         }
@@ -192,10 +194,10 @@ where
             pool,
             settings,
             event_sender,
-            metrics: BuilderMetrics {
-                builder_index,
-                entry_point: *entry_point.address(),
-            },
+            metrics: BuilderMetric::new_with_labels(&[
+                ("entry_point", entry_point.address().to_string()),
+                ("builder_index", builder_index.to_string()),
+            ]),
             entry_point,
             _uo_type: PhantomData,
         }
@@ -276,7 +278,7 @@ where
                         "Abandoning bundle after {} fee increases, no operations available after fee increase",
                         inner.fee_increase_count
                     );
-                    self.metrics.increment_bundle_txns_abandoned();
+                    self.metrics.bundle_txns_abandoned.increment(1);
 
                     // abandon the bundle by starting a new bundle process
                     // If the node we are using still has the transaction in the mempool, its
@@ -309,7 +311,7 @@ where
             }
             Err(error) => {
                 error!("Bundle send error {error:?}");
-                self.metrics.increment_bundle_txns_failed();
+                self.metrics.bundle_txns_failed.increment(1);
                 state.bundle_error(error);
             }
         }
@@ -335,6 +337,7 @@ where
                     ..
                 } => {
                     info!("Bundle transaction mined");
+
                     self.metrics.process_bundle_txn_success(gas_limit, gas_used);
                     self.emit(BuilderEvent::transaction_mined(
                         self.builder_index,
@@ -350,7 +353,7 @@ where
                         self.builder_index,
                         nonce,
                     ));
-                    self.metrics.increment_bundle_txns_dropped();
+                    self.metrics.bundle_txns_dropped.increment(1);
                     // try again, increasing fees
                     state.update(InnerState::Building(inner.to_building()));
                 }
@@ -360,7 +363,7 @@ where
                         self.builder_index,
                         nonce,
                     ));
-                    self.metrics.increment_bundle_txns_nonce_used();
+                    self.metrics.bundle_txns_nonce_used.increment(1);
                     state.reset();
                 }
             }
@@ -373,7 +376,7 @@ where
                 self.settings.max_blocks_to_wait_for_mine,
                 inner.fee_increase_count + 1
             );
-            self.metrics.increment_bundle_txn_fee_increases();
+            self.metrics.bundle_txn_fee_increases.increment(1);
             state.update(InnerState::Building(inner.to_building()))
         }
 
@@ -404,7 +407,7 @@ where
         match cancel_res {
             Ok(Some(_)) => {
                 info!("Cancellation transaction sent, waiting for confirmation");
-                self.metrics.increment_cancellation_txns_sent();
+                self.metrics.cancellation_txns_sent.increment(1);
 
                 state.update(InnerState::CancelPending(inner.to_cancel_pending(
                     state.block_number() + self.settings.max_blocks_to_wait_for_mine,
@@ -412,7 +415,7 @@ where
             }
             Ok(None) => {
                 info!("Soft cancellation or no transaction to cancel, starting new bundle attempt");
-                self.metrics.increment_soft_cancellations();
+                self.metrics.soft_cancellations.increment(1);
                 state.reset();
             }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
@@ -420,7 +423,7 @@ where
                 if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                     // abandon the cancellation
                     warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
-                    self.metrics.increment_cancellations_abandoned();
+                    self.metrics.cancellations_abandoned.increment(1);
                     state.reset();
                 } else {
                     // Increase fees again
@@ -438,7 +441,7 @@ where
             }
             Err(e) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
-                self.metrics.increment_cancellation_txns_failed();
+                self.metrics.cancellation_txns_failed.increment(1);
                 state.reset();
             }
         }
@@ -463,9 +466,11 @@ where
                     // mined
                     let fee = gas_used.zip(gas_price).map(|(used, price)| used * price);
                     info!("Cancellation transaction mined. Price (wei) {fee:?}");
-                    self.metrics.increment_cancellation_txns_mined();
+                    self.metrics.cancellation_txns_mined.increment(1);
                     if let Some(fee) = fee {
-                        self.metrics.increment_cancellation_txns_total_fee(fee);
+                        self.metrics
+                            .cancellation_txns_total_fee
+                            .increment(fee as u64);
                     };
                 }
                 TrackerUpdate::LatestTxDropped { .. } => {
@@ -484,7 +489,7 @@ where
             if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                 // abandon the cancellation
                 warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
-                self.metrics.increment_cancellations_abandoned();
+                self.metrics.cancellations_abandoned.increment(1);
                 state.reset();
             } else {
                 // start replacement, don't wait for trigger
@@ -544,7 +549,7 @@ where
             op_hashes,
         } = bundle_tx;
 
-        self.metrics.increment_bundle_txns_sent();
+        self.metrics.bundle_txns_sent.increment(1);
 
         let send_result = state
             .transaction_tracker
@@ -568,17 +573,17 @@ where
                 Ok(SendBundleAttemptResult::Success)
             }
             Err(TransactionTrackerError::NonceTooLow) => {
-                self.metrics.increment_bundle_txn_nonce_too_low();
+                self.metrics.bundle_txn_nonce_too_low.increment(1);
                 warn!("Bundle attempt nonce too low");
                 Ok(SendBundleAttemptResult::NonceTooLow)
             }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
-                self.metrics.increment_bundle_txn_replacement_underpriced();
+                self.metrics.bundle_replacement_underpriced.increment(1);
                 warn!("Bundle attempt replacement transaction underpriced");
                 Ok(SendBundleAttemptResult::ReplacementUnderpriced)
             }
             Err(TransactionTrackerError::ConditionNotMet) => {
-                self.metrics.increment_bundle_txn_condition_not_met();
+                self.metrics.bundle_txn_condition_not_met.increment(1);
                 warn!("Bundle attempt condition not met");
                 Ok(SendBundleAttemptResult::ConditionNotMet)
             }
@@ -889,7 +894,7 @@ impl BuildingState {
 
     // Finalize an underpriced round.
     //
-    // This will clear out the number of fee increases and increment the number of underpriced rounds.
+    // This will clear out the count of fee increases and increment the count of underpriced rounds.
     // Use this when we are in an underpriced state, but there are no longer any UOs available to bundle.
     fn underpriced_round(self) -> Self {
         let mut underpriced_info = self
@@ -1127,89 +1132,59 @@ impl BundleSenderTrigger {
     }
 }
 
-#[derive(Debug, Clone)]
-struct BuilderMetrics {
-    builder_index: u64,
-    entry_point: Address,
+#[derive(Metrics)]
+#[metrics(scope = "builder")]
+struct BuilderMetric {
+    #[metric(describe = "the count of bundle transactions already sent.")]
+    bundle_txns_sent: Counter,
+    #[metric(describe = "the count of bundle transactions successed.")]
+    bundle_txns_success: Counter,
+    #[metric(describe = "the count of bundle gas limit.")]
+    bundle_gas_limit: Counter,
+    #[metric(describe = "the count of bundle gas used.")]
+    bundle_gas_used: Counter,
+    #[metric(describe = "the count of dropped bundle transactions.")]
+    bundle_txns_dropped: Counter,
+    #[metric(describe = "the count of anabdoned bundle transactions.")]
+    bundle_txns_abandoned: Counter,
+    #[metric(describe = "the count of failed bundle transactions.")]
+    bundle_txns_failed: Counter,
+    #[metric(describe = "the count of bundle transaction nonce used events.")]
+    bundle_txns_nonce_used: Counter,
+    #[metric(describe = "the count of bundle transactions fee increase events.")]
+    bundle_txn_fee_increases: Counter,
+    #[metric(describe = "the count of bundle transactions underprice replaced events.")]
+    bundle_replacement_underpriced: Counter,
+    #[metric(describe = "the count of bundle transactions nonce too low events.")]
+    bundle_txn_nonce_too_low: Counter,
+    #[metric(describe = "the count of bundle transactions condition not met events.")]
+    bundle_txn_condition_not_met: Counter,
+    #[metric(describe = "the count of cancellation bundle transactions sent events.")]
+    cancellation_txns_sent: Counter,
+    #[metric(describe = "the count of cancellation bundle transactions mined events.")]
+    cancellation_txns_mined: Counter,
+    #[metric(describe = "the total fee of cancellation bundle transactions.")]
+    cancellation_txns_total_fee: Counter,
+    #[metric(describe = "the count of cancellation bundle transactions abandon events.")]
+    cancellations_abandoned: Counter,
+    #[metric(describe = "the count of soft cancellation bundle transactions events.")]
+    soft_cancellations: Counter,
+    #[metric(describe = "the count of cancellation bundle transactions failed events.")]
+    cancellation_txns_failed: Counter,
+    #[metric(describe = "the count of state machine errors.")]
+    state_machine_errors: Counter,
 }
 
-impl BuilderMetrics {
-    fn increment_bundle_txns_sent(&self) {
-        metrics::counter!("builder_bundle_txns_sent", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string())
-            .increment(1);
-    }
-
+impl BuilderMetric {
     fn process_bundle_txn_success(&self, gas_limit: Option<u64>, gas_used: Option<u128>) {
-        metrics::counter!("builder_bundle_txns_success", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-
+        self.bundle_txns_success.increment(1);
         if let Some(limit) = gas_limit {
-            metrics::counter!("builder_bundle_gas_limit", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(limit);
+            self.bundle_gas_limit.increment(limit);
         }
         if let Some(used) = gas_used {
-            metrics::counter!("builder_bundle_gas_used", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(used.try_into().unwrap_or(u64::MAX));
+            self.bundle_gas_used
+                .increment(used.try_into().unwrap_or(u64::MAX));
         }
-    }
-
-    fn increment_bundle_txns_dropped(&self) {
-        metrics::counter!("builder_bundle_txns_dropped", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    // used when we decide to stop trying a transaction
-    fn increment_bundle_txns_abandoned(&self) {
-        metrics::counter!("builder_bundle_txns_abandoned", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    // used when sending a transaction fails
-    fn increment_bundle_txns_failed(&self) {
-        metrics::counter!("builder_bundle_txns_failed", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_bundle_txns_nonce_used(&self) {
-        metrics::counter!("builder_bundle_txns_nonce_used", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_bundle_txn_fee_increases(&self) {
-        metrics::counter!("builder_bundle_fee_increases", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_bundle_txn_replacement_underpriced(&self) {
-        metrics::counter!("builder_bundle_replacement_underpriced", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_bundle_txn_nonce_too_low(&self) {
-        metrics::counter!("builder_bundle_nonce_too_low", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_bundle_txn_condition_not_met(&self) {
-        metrics::counter!("builder_bundle_condition_not_met", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_cancellation_txns_sent(&self) {
-        metrics::counter!("builder_cancellation_txns_sent", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_cancellation_txns_mined(&self) {
-        metrics::counter!("builder_cancellation_txns_mined", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_cancellation_txns_total_fee(&self, fee: u128) {
-        metrics::counter!("builder_cancellation_txns_total_fee", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(fee.try_into().unwrap_or(u64::MAX));
-    }
-
-    fn increment_cancellations_abandoned(&self) {
-        metrics::counter!("builder_cancellations_abandoned", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_soft_cancellations(&self) {
-        metrics::counter!("builder_soft_cancellations", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_cancellation_txns_failed(&self) {
-        metrics::counter!("builder_cancellation_txns_failed", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
-    }
-
-    fn increment_state_machine_errors(&self) {
-        metrics::counter!("builder_state_machine_errors", "entry_point" => self.entry_point.to_string(), "builder_index" => self.builder_index.to_string()).increment(1);
     }
 }
 
