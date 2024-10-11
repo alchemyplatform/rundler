@@ -20,6 +20,8 @@ use std::{
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
+use metrics::{Gauge, Histogram};
+use metrics_derive::Metrics;
 use rundler_types::{
     pool::{MempoolError, PoolOperation},
     Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
@@ -85,10 +87,13 @@ pub(crate) struct PoolInner {
     prev_sys_block_time: Duration,
     /// The number of the previous block
     prev_block_number: u64,
+    /// The metrics of pool.
+    metrics: PoolMetrics,
 }
 
 impl PoolInner {
     pub(crate) fn new(config: PoolInnerConfig) -> Self {
+        let entry_point = config.entry_point.to_string();
         Self {
             config,
             by_hash: HashMap::new(),
@@ -103,6 +108,7 @@ impl PoolInner {
             cache_size: SizeTracker::default(),
             prev_sys_block_time: Duration::default(),
             prev_block_number: 0,
+            metrics: PoolMetrics::new_with_labels(&[("entry_point", entry_point)]),
         }
     }
 
@@ -200,7 +206,7 @@ impl PoolInner {
             self.remove_operation_by_hash(*hash);
         }
 
-        PoolMetrics::set_num_candidates(num_candidates, self.config.entry_point);
+        self.metrics.num_candidates.set(num_candidates as f64);
         self.prev_block_number = block_number;
         self.prev_sys_block_time = sys_block_time;
 
@@ -295,7 +301,12 @@ impl PoolInner {
         // Time to mine will also fail because UO1's hash was removed from the pool.
 
         if let Some(time_to_mine) = self.time_to_mine.get(&mined_op.hash) {
-            PoolMetrics::record_time_to_mine(time_to_mine, mined_op.entry_point);
+            self.metrics
+                .time_to_mine
+                .record(time_to_mine.candidate_for_time.as_secs_f64());
+            self.metrics
+                .blocks_to_mine
+                .record(time_to_mine.candidate_for_blocks as f64);
         } else {
             warn!("Could not find time to mine for {:?}", mined_op.hash);
         }
@@ -524,16 +535,13 @@ impl PoolInner {
     }
 
     fn update_metrics(&self) {
-        PoolMetrics::set_pool_metrics(
-            self.by_hash.len(),
-            self.pool_size.0,
-            self.config.entry_point,
-        );
-        PoolMetrics::set_cache_metrics(
-            self.mined_hashes_with_block_numbers.len(),
-            self.cache_size.0,
-            self.config.entry_point,
-        );
+        self.metrics.num_ops_in_pool.set(self.by_hash.len() as f64);
+        self.metrics.size_bytes.set(self.pool_size.0 as f64);
+
+        self.metrics
+            .num_ops_in_cache
+            .set(self.mined_hashes_with_block_numbers.len() as f64);
+        self.metrics.cache_size_bytes.set(self.cache_size.0 as f64);
     }
 }
 
@@ -600,41 +608,23 @@ impl TimeToMineInfo {
     }
 }
 
-struct PoolMetrics {}
-
-impl PoolMetrics {
-    fn set_pool_metrics(num_ops: usize, size_bytes: isize, entry_point: Address) {
-        metrics::gauge!("op_pool_num_ops_in_pool", "entry_point" => entry_point.to_string())
-            .set(num_ops as f64);
-        metrics::gauge!("op_pool_size_bytes", "entry_point" => entry_point.to_string())
-            .set(size_bytes as f64);
-    }
-
-    fn set_cache_metrics(num_ops: usize, size_bytes: isize, entry_point: Address) {
-        metrics::gauge!("op_pool_num_ops_in_cache", "entry_point" => entry_point.to_string())
-            .set(num_ops as f64);
-        metrics::gauge!("op_pool_cache_size_bytes", "entry_point" => entry_point.to_string())
-            .set(size_bytes as f64);
-    }
-
-    // Set the number of candidates in the pool, only changes on block boundaries
-    fn set_num_candidates(num_candidates: usize, entry_point: Address) {
-        metrics::gauge!("op_pool_num_candidates", "entry_point" => entry_point.to_string())
-            .set(num_candidates as f64);
-    }
-
-    fn record_time_to_mine(time_to_mine: &TimeToMineInfo, entry_point: Address) {
-        metrics::histogram!(
-            "op_pool_time_to_mine",
-            "entry_point" => entry_point.to_string()
-        )
-        .record(time_to_mine.candidate_for_time.as_secs_f64());
-        metrics::histogram!(
-            "op_pool_blocks_to_mine",
-            "entry_point" => entry_point.to_string()
-        )
-        .record(time_to_mine.candidate_for_blocks as f64);
-    }
+#[derive(Metrics)]
+#[metrics(scope = "op_pool")]
+struct PoolMetrics {
+    #[metric(describe = "the number of ops in mempool.")]
+    num_ops_in_pool: Gauge,
+    #[metric(describe = "the size of mempool in bytes.")]
+    size_bytes: Gauge,
+    #[metric(describe = "the number of ops in mempool cache (mined but not persistent).")]
+    num_ops_in_cache: Gauge,
+    #[metric(describe = "the size of mempool cache in bytes.")]
+    cache_size_bytes: Gauge,
+    #[metric(describe = "the number of candidates.")]
+    num_candidates: Gauge,
+    #[metric(describe = "the duration distribution of a bundle mined.")]
+    time_to_mine: Histogram,
+    #[metric(describe = "the duration distribution of a blocked mined.")]
+    blocks_to_mine: Histogram,
 }
 
 #[cfg(test)]

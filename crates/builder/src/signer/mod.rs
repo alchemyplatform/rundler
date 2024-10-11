@@ -21,6 +21,8 @@ use alloy_signer::{Signature, Signer as _};
 use anyhow::{bail, Context};
 pub(crate) use aws::*;
 pub(crate) use local::*;
+use metrics::Gauge;
+use metrics_derive::Metrics;
 use num_traits::cast::ToPrimitive;
 use rundler_provider::{EvmProvider, TransactionRequest};
 
@@ -63,14 +65,21 @@ pub(crate) trait Signer: Send + Sync {
     }
 }
 
+#[derive(Metrics)]
+#[metrics(scope = "bundle_builder")]
+struct BuilderMetric {
+    #[metric(describe = "the balance of bundler builder.")]
+    account_balance: Gauge,
+}
+
 pub(crate) async fn monitor_account_balance<P: EvmProvider>(addr: Address, provider: P) {
+    let metric = BuilderMetric::new_with_labels(&[("addr", format!("{addr:?}"))]);
     loop {
         match provider.get_balance(addr, None).await {
             Ok(balance) => {
                 let eth_balance = balance.to_f64().unwrap_or_default() / 1e18;
+                metric.account_balance.set(eth_balance);
                 tracing::info!("account {addr:?} balance: {}", eth_balance);
-                metrics::gauge!("bundle_builder_account_balance", "addr" => format!("{addr:?}"))
-                    .set(eth_balance);
             }
             Err(err) => {
                 tracing::error!("Get account {addr:?} balance error {err:?}");
