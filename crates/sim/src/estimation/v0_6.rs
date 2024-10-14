@@ -436,7 +436,7 @@ mod tests {
         EvmCall, ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider,
     };
     use rundler_types::{
-        chain::DAGasOracleContractType,
+        da::DAGasOracleContractType,
         v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
@@ -631,7 +631,7 @@ mod tests {
         let (mut entry, provider) = create_base_config();
         entry
             .expect_calc_da_gas()
-            .returning(|_a, _b, _c| Ok(TEST_FEE));
+            .returning(|_a, _b, _c| Ok((TEST_FEE, Default::default(), Default::default())));
 
         let settings = Settings {
             max_verification_gas: 10000000000,
@@ -707,7 +707,7 @@ mod tests {
 
         entry
             .expect_calc_da_gas()
-            .returning(|_a, _b, _c| Ok(TEST_FEE));
+            .returning(|_a, _b, _c| Ok((TEST_FEE, Default::default(), Default::default())));
 
         let settings = Settings {
             max_verification_gas: 10000000000,

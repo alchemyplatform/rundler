@@ -13,6 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
+    da::{DAGasBlockData, DAGasUOData},
     GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
@@ -164,13 +165,43 @@ pub trait DAGasProvider: Send + Sync {
 
     /// Calculate the DA portion of the gas for a user operation
     ///
-    /// Returns zero for operations that do not require DA gas
+    /// Returns the da gas plus any calculated DAGasUOData and DAGasBlockData.
+    /// These values can be cached and re-used if the same UO is used for multiple calls within
+    /// a small time period (no hard forks impacting DA calculations).
+    ///
+    /// Returns zero for operations that do not require DA gas.
     async fn calc_da_gas(
         &self,
-        op: Self::UO,
+        uo: Self::UO,
         block: BlockHashOrNumber,
         gas_price: u128,
-    ) -> ProviderResult<u128>;
+    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+
+    /// Retrieve the DA gas data for a given block. This value can change block to block and
+    /// thus must be retrieved fresh from the DA for every block.
+    async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
+
+    /// Retrieve the DA gas data for a given user operation's bytes
+    ///
+    /// This should not change block to block, but may change after underlying hard forks,
+    /// thus a block number is required.
+    ///
+    /// It is safe to calculate this once and re-use if the same UO is used for multiple calls within
+    /// a small time period (no hard forks impacting DA calculations)
+    async fn uo_data(&self, uo: Self::UO, block: BlockHashOrNumber) -> ProviderResult<DAGasUOData>;
+
+    /// Synchronously calculate the DA gas for a given user operation data and block data.
+    /// These values must have been previously retrieved from a DA provider of the same implementation
+    /// else this function will PANIC.
+    ///
+    /// This function is intended to allow synchronous DA gas calculation from a cached UO data and a
+    /// recently retrieved block data.
+    fn calc_da_gas_sync(
+        &self,
+        uo_data: &DAGasUOData,
+        block_data: &DAGasBlockData,
+        gas_price: u128,
+    ) -> u128;
 }
 
 /// Trait for simulating user operations on an entry point contract

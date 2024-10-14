@@ -11,14 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Mutex as StdMutex;
-
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 use alloy_transport::Transport;
 use anyhow::Context;
 use reth_tasks::pool::BlockingTaskPool;
+use rundler_types::da::{BedrockDAGasBlockData, BedrockDAGasUOData, DAGasBlockData, DAGasUOData};
 use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -47,17 +46,8 @@ const MIN_TRANSACTION_SIZE: i128 = 100_000_000;
 pub(crate) struct LocalBedrockDAGasOracle<AP, T> {
     oracle: GasPriceOracleInstance<T, AP>,
     multicaller: MulticallInstance<T, AP>,
-    block_da_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BlockDAData>>,
-    uo_cache: StdMutex<LruMap<B256, u64>>,
+    block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BedrockDAGasBlockData>>,
     blocking_task_pool: BlockingTaskPool,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct BlockDAData {
-    base_fee_scalar: u64,
-    l1_base_fee: u64,
-    blob_base_fee_scalar: u64,
-    blob_base_fee: u64,
 }
 
 impl<AP, T> LocalBedrockDAGasOracle<AP, T>
@@ -71,8 +61,7 @@ where
         Self {
             oracle,
             multicaller,
-            block_da_data_cache: TokioMutex::new(LruMap::new(100)),
-            uo_cache: StdMutex::new(LruMap::new(10000)),
+            block_data_cache: TokioMutex::new(LruMap::new(100)),
             blocking_task_pool: BlockingTaskPool::build()
                 .expect("failed to build blocking task pool"),
         }
@@ -87,27 +76,59 @@ where
 {
     async fn estimate_da_gas(
         &self,
-        hash: B256,
-        _to: Address,
         data: Bytes,
+        to: Address,
         block: BlockHashOrNumber,
         gas_price: u128,
-    ) -> ProviderResult<u128> {
-        let block_da_data = {
-            let mut cache = self.block_da_data_cache.lock().await;
+    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
+        let block_data = self.block_data(block).await?;
+        let uo_data = self.uo_data(data, to, block).await?;
+        let da_gas = self.calc_da_gas_sync(&uo_data, &block_data, gas_price);
+        Ok((da_gas, uo_data, block_data))
+    }
 
-            match cache.get(&block) {
-                Some(block_da_data) => *block_da_data,
-                None => {
-                    let block_da_data = self.get_block_da_data(block).await?;
-                    cache.insert(block, block_da_data);
-                    block_da_data
-                }
+    async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
+        let mut cache = self.block_data_cache.lock().await;
+        match cache.get(&block) {
+            Some(block_data) => Ok(DAGasBlockData::Bedrock(block_data.clone())),
+            None => {
+                let block_data = self.get_block_data(block).await?;
+                cache.insert(block, block_data.clone());
+                Ok(DAGasBlockData::Bedrock(block_data))
             }
+        }
+    }
+
+    async fn uo_data(
+        &self,
+        uo_data: Bytes,
+        _to: Address,
+        _block: BlockHashOrNumber,
+    ) -> ProviderResult<DAGasUOData> {
+        let uo_data = self.get_uo_data(uo_data).await?;
+        Ok(DAGasUOData::Bedrock(uo_data))
+    }
+
+    fn calc_da_gas_sync(
+        &self,
+        uo_data: &DAGasUOData,
+        block_data: &DAGasBlockData,
+        gas_price: u128,
+    ) -> u128 {
+        let block_da_data = match block_data {
+            DAGasBlockData::Bedrock(block_da_data) => block_da_data,
+            _ => panic!("LocalBedrockDAGasOracle only supports Bedrock block data"),
+        };
+        let uo_data = match uo_data {
+            DAGasUOData::Bedrock(uo_data) => uo_data,
+            _ => panic!("LocalBedrockDAGasOracle only supports Bedrock user operation data"),
         };
 
-        let l1_fee = self.fjord_l1_fee(hash, data, &block_da_data).await?;
-        Ok(l1_fee.checked_div(gas_price).unwrap_or(u128::MAX))
+        let fee_scaled = (block_da_data.base_fee_scalar * 16 * block_da_data.l1_base_fee
+            + block_da_data.blob_base_fee_scalar * block_da_data.blob_base_fee)
+            as u128;
+        let l1_fee = (uo_data.uo_units as u128 * fee_scaled) / DECIMAL_SCALAR;
+        l1_fee.checked_div(gas_price).unwrap_or(u128::MAX)
     }
 }
 
@@ -125,7 +146,10 @@ where
             .unwrap_or(false)
     }
 
-    async fn get_block_da_data(&self, block: BlockHashOrNumber) -> ProviderResult<BlockDAData> {
+    async fn get_block_data(
+        &self,
+        block: BlockHashOrNumber,
+    ) -> ProviderResult<BedrockDAGasBlockData> {
         assert!(self.is_fjord().await);
 
         let calls = vec![
@@ -187,7 +211,7 @@ where
                 .try_into()
                 .context("blob_base_fee too large for u64")?;
 
-        Ok(BlockDAData {
+        Ok(BedrockDAGasBlockData {
             base_fee_scalar,
             l1_base_fee,
             blob_base_fee_scalar,
@@ -195,49 +219,27 @@ where
         })
     }
 
-    async fn fjord_l1_fee(
-        &self,
-        hash: B256,
-        data: Bytes,
-        block_da_data: &BlockDAData,
-    ) -> ProviderResult<u128> {
-        let maybe_uo_units = self.uo_cache.lock().unwrap().get(&hash).cloned();
-        let uo_units = match maybe_uo_units {
-            Some(uo_units) => uo_units,
-            None => {
-                // Blocking call compressing potentially a lot of data.
-                // Generally takes more than 100µs so should be spawned on blocking threadpool.
-                // https://ryhl.io/blog/async-what-is-blocking/
-                // https://docs.rs/tokio/latest/tokio/index.html#cpu-bound-tasks-and-blocking-code
-                let compressed_len = self
-                    .blocking_task_pool
-                    .spawn(move || {
-                        let mut buf = vec![0; data.len() * 2];
-                        rundler_bindings_fastlz::compress(&data, &mut buf).len() as u64;
-                    })
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to compress data: {:?}", e))?;
+    async fn get_uo_data(&self, data: Bytes) -> ProviderResult<BedrockDAGasUOData> {
+        // Blocking call compressing potentially a lot of data.
+        // Generally takes more than 100µs so should be spawned on blocking threadpool.
+        // https://ryhl.io/blog/async-what-is-blocking/
+        // https://docs.rs/tokio/latest/tokio/index.html#cpu-bound-tasks-and-blocking-code
+        let compressed_len = self
+            .blocking_task_pool
+            .spawn(move || {
+                let mut buf = vec![0; data.len() * 2];
+                rundler_bindings_fastlz::compress(&data, &mut buf).len() as u64
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to compress data: {:?}", e))?;
 
-                let uo_units = compressed_len + 68;
-                self.uo_cache.lock().unwrap().insert(hash, uo_units);
-                uo_units
-            }
-        };
+        let compressed_with_buffer = compressed_len + 68;
 
-        Ok(Self::fjord_l1_cost(uo_units, block_da_data))
-    }
+        let estimated_size = COST_INTERCEPT + COST_FASTLZ_COEF * compressed_with_buffer as i128;
+        let uo_units = estimated_size.clamp(MIN_TRANSACTION_SIZE, u64::MAX as i128);
 
-    fn fjord_l1_cost(fast_lz_size: u64, block_da_data: &BlockDAData) -> u128 {
-        let estimated_size = Self::fjord_linear_regression(fast_lz_size) as u128;
-        let fee_scaled = (block_da_data.base_fee_scalar * 16 * block_da_data.l1_base_fee
-            + block_da_data.blob_base_fee_scalar * block_da_data.blob_base_fee)
-            as u128;
-        (estimated_size * fee_scaled) / DECIMAL_SCALAR
-    }
-
-    fn fjord_linear_regression(fast_lz_size: u64) -> u64 {
-        let estimated_size = COST_INTERCEPT + COST_FASTLZ_COEF * fast_lz_size as i128;
-        let ret = estimated_size.clamp(MIN_TRANSACTION_SIZE, u64::MAX as i128);
-        ret as u64
+        Ok(BedrockDAGasUOData {
+            uo_units: uo_units as u64,
+        })
     }
 }
