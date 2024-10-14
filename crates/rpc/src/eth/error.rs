@@ -376,7 +376,7 @@ impl From<SimulationViolation> for EthRpcError {
 
 impl From<EthRpcError> for ErrorObjectOwned {
     fn from(error: EthRpcError) -> Self {
-        let msg = error.to_string();
+        let msg = format!("{:#}", error);
 
         match error {
             EthRpcError::Internal(_) => rpc_err(INTERNAL_ERROR_CODE, msg),
