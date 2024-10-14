@@ -11,12 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Mutex as StdMutex;
-
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_transport::Transport;
 use anyhow::Context;
+use rundler_types::da::{DAGasBlockData, DAGasUOData, NitroDAGasBlockData, NitroDAGasUOData};
 use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 
@@ -32,15 +31,7 @@ use crate::{
 pub(crate) struct CachedNitroDAGasOracle<AP, T> {
     node_interface: NodeInterfaceInstance<T, AP>,
     // Use a tokio::Mutex here to ensure only one network call per block, other threads can async wait for the result
-    block_da_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BlockDAData>>,
-    // Use a std::sync::Mutex here as both reads and writes to the LRU cache require interior mutability
-    uo_cache: StdMutex<LruMap<B256, u128>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct BlockDAData {
-    l1_base_fee: u128,
-    base_fee: u128,
+    block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, NitroDAGasBlockData>>,
 }
 
 impl<AP, T> CachedNitroDAGasOracle<AP, T>
@@ -51,8 +42,7 @@ where
     pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
         Self {
             node_interface: NodeInterfaceInstance::new(oracle_address, provider),
-            block_da_data_cache: TokioMutex::new(LruMap::new(100)),
-            uo_cache: StdMutex::new(LruMap::new(10000)),
+            block_data_cache: TokioMutex::new(LruMap::new(100)),
         }
     }
 }
@@ -67,44 +57,81 @@ where
 {
     async fn estimate_da_gas(
         &self,
-        hash: B256,
-        to: Address,
         data: Bytes,
+        to: Address,
         block: BlockHashOrNumber,
         _gas_price: u128,
-    ) -> ProviderResult<u128> {
-        let mut cache = self.block_da_data_cache.lock().await;
+    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
+        let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
             Some(block_da_data) => {
                 // Found the block, drop the block cache
-                let block_da_data = *block_da_data;
+                let block_da_data = block_da_data.clone();
                 drop(cache);
 
-                // Check if we have uo units cached
-                let maybe_uo_units = self.uo_cache.lock().unwrap().get(&hash).cloned();
+                let uo_data = self.get_uo_data(to, data, block).await?;
+                let uo_data = DAGasUOData::Nitro(uo_data);
+                let block_data = DAGasBlockData::Nitro(block_da_data);
+                let l1_gas_estimate = self.calc_da_gas_sync(&uo_data, &block_data, _gas_price);
 
-                if let Some(uo_units) = maybe_uo_units {
-                    // Double cache hit, calculate the da fee from the cached uo units
-                    Ok(calculate_da_fee(uo_units, &block_da_data))
-                } else {
-                    // UO cache miss, make remote call to get the da fee
-                    let (_, uo_units, gas_estimate_for_l1) =
-                        self.get_da_data(to, data, block).await?;
-                    self.uo_cache.lock().unwrap().insert(hash, uo_units);
-                    Ok(gas_estimate_for_l1)
-                }
+                Ok((l1_gas_estimate, uo_data, block_data))
             }
             None => {
                 // Block cache miss, make remote call to get the da fee
-                let (block_da_data, uo_units, gas_estimate_for_l1) =
-                    self.get_da_data(to, data, block).await?;
-                cache.insert(block, block_da_data);
+                let (gas_estimate_for_l1, block_da_data) =
+                    self.call_oracle_contract(to, data, block).await?;
+                cache.insert(block, block_da_data.clone());
                 drop(cache);
 
-                self.uo_cache.lock().unwrap().insert(hash, uo_units);
-                Ok(gas_estimate_for_l1)
+                let uo_units = calculate_uo_units(gas_estimate_for_l1, &block_da_data);
+
+                Ok((
+                    gas_estimate_for_l1,
+                    DAGasUOData::Nitro(NitroDAGasUOData { uo_units }),
+                    DAGasBlockData::Nitro(block_da_data),
+                ))
             }
         }
+    }
+
+    async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
+        let mut cache = self.block_data_cache.lock().await;
+        match cache.get(&block) {
+            Some(block_data) => Ok(DAGasBlockData::Nitro(block_data.clone())),
+            None => {
+                let block_data = self.get_block_data(block).await?;
+                cache.insert(block, block_data.clone());
+                Ok(DAGasBlockData::Nitro(block_data))
+            }
+        }
+    }
+
+    async fn uo_data(
+        &self,
+        uo_data: Bytes,
+        to: Address,
+        block: BlockHashOrNumber,
+    ) -> ProviderResult<DAGasUOData> {
+        let uo_data = self.get_uo_data(to, uo_data, block).await?;
+        Ok(DAGasUOData::Nitro(uo_data))
+    }
+
+    fn calc_da_gas_sync(
+        &self,
+        uo_data: &DAGasUOData,
+        block_data: &DAGasBlockData,
+        _gas_price: u128,
+    ) -> u128 {
+        let uo_units = match uo_data {
+            DAGasUOData::Nitro(uo_data) => uo_data.uo_units,
+            _ => panic!("NitroDAGasOracle only supports Nitro DAGasUOData"),
+        };
+        let block_data = match block_data {
+            DAGasBlockData::Nitro(block_data) => block_data,
+            _ => panic!("NitroDAGasOracle only supports Nitro DAGasBlockData"),
+        };
+
+        calculate_da_fee(uo_units, block_data)
     }
 }
 
@@ -113,12 +140,36 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    async fn get_da_data(
+    async fn get_block_data(
+        &self,
+        block: BlockHashOrNumber,
+    ) -> ProviderResult<NitroDAGasBlockData> {
+        // phantom data, not important for the calculation
+        let data = Bytes::new();
+        let to = Address::ZERO;
+
+        let (_, block_data) = self.call_oracle_contract(to, data, block).await?;
+
+        Ok(block_data)
+    }
+
+    async fn get_uo_data(
         &self,
         to: Address,
         data: Bytes,
         block: BlockHashOrNumber,
-    ) -> ProviderResult<(BlockDAData, u128, u128)> {
+    ) -> ProviderResult<NitroDAGasUOData> {
+        let (l1_gas_estimate, block_da_data) = self.call_oracle_contract(to, data, block).await?;
+        let uo_units = calculate_uo_units(l1_gas_estimate, &block_da_data);
+        Ok(NitroDAGasUOData { uo_units })
+    }
+
+    async fn call_oracle_contract(
+        &self,
+        to: Address,
+        data: Bytes,
+        block: BlockHashOrNumber,
+    ) -> ProviderResult<(u128, NitroDAGasBlockData)> {
         let ret = self
             .node_interface
             .gasEstimateL1Component(to, true, data)
@@ -135,15 +186,13 @@ where
             .try_into()
             .context("Arbitrum NodeInterface returned baseFee too big for u128")?;
 
-        let block_da_data = BlockDAData {
-            l1_base_fee,
-            base_fee,
-        };
-
-        // Calculate UO units from the gas estimate for L1
-        let uo_units = calculate_uo_units(ret.gasEstimateForL1 as u128, &block_da_data);
-
-        Ok((block_da_data, uo_units, ret.gasEstimateForL1 as u128))
+        Ok((
+            ret.gasEstimateForL1 as u128,
+            NitroDAGasBlockData {
+                l1_base_fee,
+                base_fee,
+            },
+        ))
     }
 }
 
@@ -154,8 +203,8 @@ where
 //
 // Errors should round down
 
-// Calculate the da fee from the cahed scaled UO units
-fn calculate_da_fee(uo_units: u128, block_da_data: &BlockDAData) -> u128 {
+// Calculate the da fee from the cached scaled UO units
+fn calculate_da_fee(uo_units: u128, block_da_data: &NitroDAGasBlockData) -> u128 {
     // Multiply by l1_base_fee
     let a = uo_units.saturating_mul(block_da_data.l1_base_fee);
     // Add 10%
@@ -171,7 +220,7 @@ fn calculate_da_fee(uo_units: u128, block_da_data: &BlockDAData) -> u128 {
 }
 
 // Calculate scaled UO units from the da fee
-fn calculate_uo_units(da_fee: u128, block_da_data: &BlockDAData) -> u128 {
+fn calculate_uo_units(da_fee: u128, block_da_data: &NitroDAGasBlockData) -> u128 {
     // Undo base fee division, scale up to reduce rounding error
     let a = da_fee
         .saturating_mul(CACHE_UNITS_SCALAR)

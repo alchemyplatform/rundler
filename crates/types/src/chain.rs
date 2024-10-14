@@ -18,6 +18,8 @@ use std::str::FromStr;
 use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
+use crate::da::DAGasOracleContractType;
+
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
 
@@ -116,23 +118,6 @@ pub struct ChainSpec {
      */
     /// Size of the chain history to keep to handle reorgs
     pub chain_history_size: u64,
-}
-
-/// Type of gas oracle contract for pricing calldata in preVerificationGas
-#[derive(Clone, Copy, Debug, Deserialize, Default, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DAGasOracleContractType {
-    /// No gas oracle contract
-    #[default]
-    None,
-    /// Arbitrum Nitro type gas oracle contract
-    ArbitrumNitro,
-    /// Optimism Bedrock type gas oracle contract
-    OptimismBedrock,
-    /// Local Bedrock type gas oracle contract
-    LocalBedrock,
-    /// Cached Nitro type gas oracle contract
-    CachedNitro,
 }
 
 /// Type of oracle for estimating priority fees

@@ -11,11 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_sol_types::sol;
 use alloy_transport::Transport;
 use anyhow::Context;
+use rundler_types::da::{DAGasBlockData, DAGasUOData};
 use GasPriceOracle::GasPriceOracleInstance;
 
 use super::DAGasOracle;
@@ -59,12 +60,11 @@ where
 {
     async fn estimate_da_gas(
         &self,
-        _hash: B256,
-        _to: Address,
         data: Bytes,
+        _to: Address,
         block: BlockHashOrNumber,
         gas_price: u128,
-    ) -> ProviderResult<u128> {
+    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         let l1_fee: u128 = self
             .oracle
             .getL1Fee(data)
@@ -75,6 +75,32 @@ where
             .try_into()
             .context("failed to convert DA fee to u128")?;
 
-        Ok(l1_fee.checked_div(gas_price).unwrap_or(u128::MAX))
+        Ok((
+            l1_fee.checked_div(gas_price).unwrap_or(u128::MAX),
+            DAGasUOData::Empty,
+            DAGasBlockData::Empty,
+        ))
+    }
+
+    async fn block_data(&self, _block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
+        Ok(DAGasBlockData::Empty)
+    }
+
+    async fn uo_data(
+        &self,
+        _uo_data: Bytes,
+        _to: Address,
+        _block: BlockHashOrNumber,
+    ) -> ProviderResult<DAGasUOData> {
+        Ok(DAGasUOData::Empty)
+    }
+
+    fn calc_da_gas_sync(
+        &self,
+        _uo_data: &DAGasUOData,
+        _block_data: &DAGasBlockData,
+        _gas_price: u128,
+    ) -> u128 {
+        panic!("OptimismBedrockDAGasOracle does not support calc_da_gas_sync")
     }
 }

@@ -24,6 +24,8 @@ pub mod builder;
 
 pub mod chain;
 
+pub mod da;
+
 mod entity;
 pub use entity::{Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType};
 
