@@ -13,6 +13,7 @@
 
 use std::fmt::Display;
 
+use alloy_json_rpc::RpcError;
 use alloy_primitives::{Address, Bytes, U128, U256, U32};
 use jsonrpsee::types::{
     error::{CALL_EXECUTION_FAILED_CODE, INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
@@ -376,7 +377,7 @@ impl From<SimulationViolation> for EthRpcError {
 
 impl From<EthRpcError> for ErrorObjectOwned {
     fn from(error: EthRpcError) -> Self {
-        let msg = format!("{:#}", error);
+        let msg = format!("{}", error);
 
         match error {
             EthRpcError::Internal(_) => rpc_err(INTERNAL_ERROR_CODE, msg),
@@ -443,7 +444,34 @@ impl From<tonic::Status> for EthRpcError {
 
 impl From<ProviderError> for EthRpcError {
     fn from(e: ProviderError) -> Self {
-        Self::Internal(anyhow::anyhow!("provider error: {e:?}"))
+        let inner_msg = match &e {
+            ProviderError::RPC(rpc_error) => match rpc_error {
+                RpcError::ErrorResp(error_payload) => {
+                    format!("rpc error with code: {} ", error_payload.code)
+                }
+                RpcError::Transport(e) => {
+                    format!("transport error: {}", e)
+                }
+                _ => e.to_string(),
+            },
+            ProviderError::ContractError(error) => match &error {
+                alloy_contract::Error::TransportError(rpc_error) => match rpc_error {
+                    RpcError::ErrorResp(error_payload) => {
+                        format!("rpc error with code: {} ", error_payload.code)
+                    }
+                    RpcError::Transport(err) => {
+                        format!("transport error: {}", err)
+                    }
+                    _ => error.to_string(),
+                },
+                _ => error.to_string(),
+            },
+            ProviderError::Other(error) => {
+                format!("other error: {}", error)
+            }
+        };
+
+        Self::Internal(anyhow::anyhow!("provider error: {}", inner_msg))
     }
 }
 
