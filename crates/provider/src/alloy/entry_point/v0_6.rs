@@ -31,15 +31,16 @@ use rundler_contracts::v0_6::{
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
 };
 use rundler_types::{
-    chain::ChainSpec, v0_6::UserOperation, GasFees, UserOperation as _, UserOpsPerAggregator,
-    ValidationOutput, ValidationRevert,
+    chain::ChainSpec,
+    da::{DAGasBlockData, DAGasUOData},
+    v0_6::UserOperation,
+    GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
 use crate::{
-    alloy::da::{self, DAGasOracle},
-    AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasProvider, DepositInfo,
-    EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult,
-    HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
+    alloy::da, AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle,
+    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
+    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
 };
 
 /// Entry point provider for v0.6
@@ -317,8 +318,7 @@ where
         user_op: UserOperation,
         block: BlockHashOrNumber,
         gas_price: u128,
-    ) -> ProviderResult<u128> {
-        let hash = user_op.hash(*self.i_entry_point.address(), self.chain_spec.id);
+    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         let data = self
             .i_entry_point
             .handleOps(vec![user_op.into()], Address::random())
@@ -331,14 +331,44 @@ where
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
 
         self.da_gas_oracle
-            .estimate_da_gas(
-                hash,
-                *self.i_entry_point.address(),
-                bundle_data,
-                block,
-                gas_price,
-            )
+            .estimate_da_gas(bundle_data, *self.i_entry_point.address(), block, gas_price)
             .await
+    }
+
+    async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
+        self.da_gas_oracle.block_data(block).await
+    }
+
+    async fn uo_data(
+        &self,
+        uo: UserOperation,
+        block: BlockHashOrNumber,
+    ) -> ProviderResult<DAGasUOData> {
+        let gas_price = uo.max_fee_per_gas;
+        let data = self
+            .i_entry_point
+            .handleOps(vec![uo.into()], Address::random())
+            .into_transaction_request()
+            .input
+            .into_input()
+            .unwrap();
+
+        let bundle_data =
+            super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
+
+        self.da_gas_oracle
+            .uo_data(bundle_data, *self.i_entry_point.address(), block)
+            .await
+    }
+
+    fn calc_da_gas_sync(
+        &self,
+        uo_data: &DAGasUOData,
+        block_data: &DAGasBlockData,
+        gas_price: u128,
+    ) -> u128 {
+        self.da_gas_oracle
+            .calc_da_gas_sync(uo_data, block_data, gas_price)
     }
 }
 
