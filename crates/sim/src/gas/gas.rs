@@ -51,6 +51,7 @@ pub async fn estimate_pre_verification_gas<
         entry_point
             .calc_da_gas(random_op.clone(), block, gas_price)
             .await?
+            .0
     } else {
         0
     };
@@ -85,6 +86,7 @@ pub async fn calc_required_pre_verification_gas<
         entry_point
             .calc_da_gas(op.clone(), block, gas_price)
             .await?
+            .0
     } else {
         0
     };
