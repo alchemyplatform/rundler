@@ -13,6 +13,8 @@ rundler-provider.workspace = true
 rundler-types.workspace = true
 rundler-utils.workspace = true
 
+alloy-contract.workspace = true
+alloy-json-rpc.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 

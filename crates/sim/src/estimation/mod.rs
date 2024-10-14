@@ -11,6 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_json_rpc::RpcError;
 use alloy_primitives::Bytes;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -65,7 +66,34 @@ pub enum GasEstimationError {
 
 impl From<ProviderError> for GasEstimationError {
     fn from(error: ProviderError) -> Self {
-        GasEstimationError::Other(anyhow::anyhow!("provider error: {error:?}"))
+        let inner_msg = match &error {
+            ProviderError::RPC(rpc_error) => match rpc_error {
+                RpcError::ErrorResp(error_payload) => {
+                    format!("rpc error with code: {} ", error_payload.code)
+                }
+                RpcError::Transport(e) => {
+                    format!("transport error: {}", e)
+                }
+                _ => error.to_string(),
+            },
+            ProviderError::ContractError(error) => match &error {
+                alloy_contract::Error::TransportError(rpc_error) => match rpc_error {
+                    RpcError::ErrorResp(error_payload) => {
+                        format!("rpc error with code: {} ", error_payload.code)
+                    }
+                    RpcError::Transport(e) => {
+                        format!("transport error: {}", e)
+                    }
+                    _ => error.to_string(),
+                },
+                _ => error.to_string(),
+            },
+            ProviderError::Other(error) => {
+                format!("other error: {}", error)
+            }
+        };
+
+        GasEstimationError::Other(anyhow::anyhow!("provider error: {inner_msg}"))
     }
 }
 
