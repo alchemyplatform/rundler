@@ -16,8 +16,8 @@ use std::{cmp, fmt::Debug};
 use anyhow::{bail, Context};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{BlockHashOrNumber, DAGasProvider, EntryPoint, EvmProvider};
-use rundler_types::{chain::ChainSpec, GasFees, UserOperation};
+use rundler_provider::{BlockHashOrNumber, DAGasProvider, EvmProvider};
+use rundler_types::{chain::ChainSpec, da::DAGasUOData, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
 
@@ -36,10 +36,7 @@ use super::oracle::FeeOracle;
 ///
 /// Networks that require Data Availability (DA) pre_verification_gas are those that charge extra calldata fees
 /// that can scale based on DA gas prices.
-pub async fn estimate_pre_verification_gas<
-    UO: UserOperation,
-    E: EntryPoint + DAGasProvider<UO = UO>,
->(
+pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<UO = UO>>(
     chain_spec: &ChainSpec,
     entry_point: &E,
     full_op: &UO,
@@ -63,17 +60,14 @@ pub async fn estimate_pre_verification_gas<
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
 ///
 /// The effective gas price is calculated as min(base_fee + max_priority_fee_per_gas, max_fee_per_gas)
-pub async fn calc_required_pre_verification_gas<
-    UO: UserOperation,
-    E: EntryPoint + DAGasProvider<UO = UO>,
->(
+pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvider<UO = UO>>(
     chain_spec: &ChainSpec,
     entry_point: &E,
     op: &UO,
     block: BlockHashOrNumber,
     base_fee: u128,
-) -> anyhow::Result<u128> {
-    let da_gas = if chain_spec.da_pre_verification_gas {
+) -> anyhow::Result<(u128, DAGasUOData)> {
+    let (da_gas, uo_data) = if chain_spec.da_pre_verification_gas {
         let gas_price = cmp::min(
             base_fee + op.max_priority_fee_per_gas(),
             op.max_fee_per_gas(),
@@ -83,16 +77,19 @@ pub async fn calc_required_pre_verification_gas<
             bail!("Gas price cannot be zero")
         }
 
-        entry_point
+        let (da_gas, uo_data, _) = entry_point
             .calc_da_gas(op.clone(), block, gas_price)
-            .await?
-            .0
+            .await?;
+        (da_gas, uo_data)
     } else {
-        0
+        (0, DAGasUOData::Empty)
     };
 
     // Currently assume 1 op bundle
-    Ok(op.required_pre_verification_gas(chain_spec, 1, da_gas))
+    Ok((
+        op.required_pre_verification_gas(chain_spec, 1, da_gas),
+        uo_data,
+    ))
 }
 
 /// Different modes for calculating the required priority fee

@@ -285,7 +285,7 @@ where
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: P,
+        evm: P,
         ep: E,
         simulator: S,
     ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
@@ -296,9 +296,9 @@ where
         E: EntryPointProvider<UO> + Clone + 'static,
         S: Simulator<UO = UO> + 'static,
     {
-        let fee_oracle = gas::get_fee_oracle(&chain_spec, provider.clone());
+        let fee_oracle = gas::get_fee_oracle(&chain_spec, evm.clone());
         let fee_estimator = FeeEstimatorImpl::new(
-            provider.clone(),
+            evm.clone(),
             fee_oracle,
             pool_config.precheck_settings.priority_fee_mode,
             pool_config
@@ -308,7 +308,7 @@ where
 
         let prechecker = PrecheckerImpl::new(
             chain_spec,
-            provider.clone(),
+            evm.clone(),
             ep.clone(),
             fee_estimator,
             pool_config.precheck_settings,
@@ -340,7 +340,8 @@ where
         let uo_pool = UoPool::new(
             pool_config.clone(),
             event_sender,
-            provider,
+            evm,
+            ep,
             prechecker,
             simulator,
             paymaster,

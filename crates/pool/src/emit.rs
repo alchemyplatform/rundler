@@ -56,6 +56,17 @@ pub enum OpPoolEvent {
         /// The throttled entity
         entity: Entity,
     },
+    /// DA data was updated for an operation
+    UpdatedDAData {
+        /// The operation hash
+        op_hash: B256,
+        /// The DA data
+        eligible: bool,
+        /// The required pre_verification_gas
+        required_pvg: u128,
+        /// The actual pre_verification_gas
+        actual_pvg: u128,
+    },
 }
 
 /// Summary of the entities associated with an operation
@@ -191,6 +202,24 @@ impl Display for OpPoolEvent {
             }
             OpPoolEvent::ThrottledEntity { entity } => {
                 write!(f, concat!("Throttled entity.", "    Entity: {}",), entity,)
+            }
+            OpPoolEvent::UpdatedDAData {
+                op_hash,
+                eligible,
+                required_pvg,
+                actual_pvg,
+            } => {
+                write!(
+                    f,
+                    concat!(
+                        "Updated DA data for op: ",
+                        "Hash: {:?} ",
+                        "Eligible: {} ",
+                        "Required PVG: {} ",
+                        "Actual PVG: {}",
+                    ),
+                    op_hash, eligible, required_pvg, actual_pvg,
+                )
             }
         }
     }

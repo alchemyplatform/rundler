@@ -216,6 +216,7 @@ mod tests {
             sim_block_number: 1000,
             account_is_staked: false,
             entity_infos: EntityInfos::default(),
+            da_gas_data: rundler_types::da::DAGasUOData::Empty,
         };
 
         let mut pool = MockPool::default();

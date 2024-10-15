@@ -1018,7 +1018,7 @@ impl Trigger for BundleSenderTrigger {
                 a = self.bundle_action_receiver.recv() => {
                     match a {
                         Some(BundleSenderAction::ChangeMode(mode)) => {
-                            debug!("changing bundling mode to {mode:?}");
+                            info!("changing bundling mode to {mode:?}");
                             self.bundling_mode = mode;
                             continue;
                         },

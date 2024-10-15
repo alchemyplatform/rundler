@@ -33,6 +33,7 @@ use alloy_primitives::{Address, B256};
 use mockall::automock;
 use rundler_sim::{MempoolConfig, PrecheckSettings, SimulationSettings};
 use rundler_types::{
+    chain::ChainSpec,
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
@@ -124,12 +125,12 @@ pub trait Mempool: Send + Sync {
 /// Config for the mempool
 #[derive(Debug, Clone)]
 pub struct PoolConfig {
+    /// Chain specification
+    pub chain_spec: ChainSpec,
     /// Address of the entry point this pool targets
     pub entry_point: Address,
     /// Version of the entry point this pool targets
     pub entry_point_version: EntryPointVersion,
-    /// Chain ID this pool targets
-    pub chain_id: u64,
     /// The maximum number of operations an unstaked sender can have in the mempool
     pub same_sender_mempool_count: usize,
     /// The minimum fee bump required to replace an operation in the mempool
@@ -162,6 +163,8 @@ pub struct PoolConfig {
     pub paymaster_cache_length: u32,
     /// Boolean field used to toggle the operation of the reputation tracker
     pub reputation_tracking_enabled: bool,
+    /// Boolean field used to toggle the operation of the DA tracker
+    pub da_gas_tracking_enabled: bool,
     /// The minimum number of blocks a user operation must be in the mempool before it can be dropped
     pub drop_min_num_blocks: u64,
 }
@@ -227,6 +230,7 @@ mod tests {
                     is_staked: false,
                 }),
             },
+            da_gas_data: Default::default(),
         };
 
         let entities = po.entities().collect::<Vec<_>>();

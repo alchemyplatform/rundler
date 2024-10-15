@@ -333,6 +333,9 @@ impl BuilderArgs {
 
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
 
+        let da_gas_tracking_enabled =
+            super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
+
         Ok(BuilderTaskArgs {
             entry_points,
             chain_spec,
@@ -353,6 +356,7 @@ impl BuilderArgs {
             max_cancellation_fee_increases: self.max_cancellation_fee_increases,
             max_replacement_underpriced_blocks: self.max_replacement_underpriced_blocks,
             remote_address,
+            da_gas_tracking_enabled,
         })
     }
 

@@ -11,14 +11,14 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, marker::PhantomData, sync::Arc};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Instant};
 
 use alloy_primitives::{utils::format_units, Address, B256, U256};
 use itertools::Itertools;
-use metrics::{Counter, Gauge};
+use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
-use rundler_provider::{EntryPoint, EvmProvider};
+use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{
     pool::{
@@ -46,19 +46,14 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<
-    UO: UserOperation,
-    EP: EvmProvider,
-    P: Prechecker,
-    S: Simulator,
-    E: EntryPoint,
-> {
+pub(crate) struct UoPool<UO, EP, P, S, E> {
     config: PoolConfig,
-    state: RwLock<UoPoolState>,
+    state: RwLock<UoPoolState<E>>,
     paymaster: PaymasterTracker<E>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    provider: EP,
+    entry_point: E,
+    evm: EP,
     prechecker: P,
     simulator: S,
     ep_specific_metrics: UoPoolMetricsEPSpecific,
@@ -66,8 +61,8 @@ pub(crate) struct UoPool<
     _uo_type: PhantomData<UO>,
 }
 
-struct UoPoolState {
-    pool: PoolInner,
+struct UoPoolState<E> {
+    pool: PoolInner<E>,
     throttled_ops: HashSet<B256>,
     block_number: u64,
     block_hash: B256,
@@ -77,25 +72,24 @@ struct UoPoolState {
 
 impl<UO, EP, P, S, E> UoPool<UO, EP, P, S, E>
 where
-    UO: UserOperation,
-    EP: EvmProvider,
-    P: Prechecker<UO = UO>,
-    S: Simulator<UO = UO>,
-    E: EntryPoint,
+    E: DAGasProvider<UO = UO> + Clone,
 {
+    // TODO refactor provider args
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        provider: EP,
+        evm: EP,
+        entry_point: E,
         prechecker: P,
         simulator: S,
         paymaster: PaymasterTracker<E>,
         reputation: Arc<AddressReputation>,
     ) -> Self {
-        let entry_point = config.entry_point.to_string();
+        let ep = config.entry_point.to_string();
         Self {
             state: RwLock::new(UoPoolState {
-                pool: PoolInner::new(config.clone().into()),
+                pool: PoolInner::new(config.clone().into(), entry_point.clone()),
                 throttled_ops: HashSet::new(),
                 block_number: 0,
                 block_hash: B256::ZERO,
@@ -105,14 +99,12 @@ where
             reputation,
             paymaster,
             event_sender,
-            provider,
+            evm,
+            entry_point,
             prechecker,
             simulator,
             config,
-            ep_specific_metrics: UoPoolMetricsEPSpecific::new_with_labels(&[(
-                "entry_point",
-                entry_point,
-            )]),
+            ep_specific_metrics: UoPoolMetricsEPSpecific::new_with_labels(&[("entry_point", ep)]),
             metrics: UoPoolMetrics::default(),
             _uo_type: PhantomData,
         }
@@ -169,17 +161,27 @@ where
     EP: EvmProvider,
     P: Prechecker<UO = UO>,
     S: Simulator<UO = UO>,
-    E: EntryPoint,
+    E: EntryPoint + DAGasProvider<UO = UO> + Clone,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
-        {
-            let deduped_ops = update.deduped_ops();
-            let mined_ops = deduped_ops
-                .mined_ops
-                .iter()
-                .filter(|op| op.entry_point == self.config.entry_point);
+        let deduped_ops = update.deduped_ops();
+        let mined_ops = deduped_ops
+            .mined_ops
+            .iter()
+            .filter(|op| op.entry_point == self.config.entry_point);
 
-            let entity_balance_updates = update.entity_balance_updates.iter().filter_map(|u| {
+        let entity_balance_updates = update.entity_balance_updates.iter().filter_map(|u| {
+            if u.entrypoint == self.config.entry_point {
+                Some(u.address)
+            } else {
+                None
+            }
+        });
+
+        let unmined_entity_balance_updates = update
+            .unmined_entity_balance_updates
+            .iter()
+            .filter_map(|u| {
                 if u.entrypoint == self.config.entry_point {
                     Some(u.address)
                 } else {
@@ -187,112 +189,119 @@ where
                 }
             });
 
-            let unmined_entity_balance_updates = update
-                .unmined_entity_balance_updates
-                .iter()
-                .filter_map(|u| {
-                    if u.entrypoint == self.config.entry_point {
-                        Some(u.address)
-                    } else {
-                        None
-                    }
-                });
+        let unmined_ops = deduped_ops
+            .unmined_ops
+            .iter()
+            .filter(|op| op.entry_point == self.config.entry_point);
+        let mut mined_op_count = 0;
+        let mut unmined_op_count = 0;
 
-            let unmined_ops = deduped_ops
-                .unmined_ops
-                .iter()
-                .filter(|op| op.entry_point == self.config.entry_point);
-            let mut mined_op_count = 0;
-            let mut unmined_op_count = 0;
+        for op in mined_ops {
+            if op.entry_point != self.config.entry_point {
+                continue;
+            }
+            self.paymaster.update_paymaster_balance_from_mined_op(op);
 
-            for op in mined_ops {
-                if op.entry_point != self.config.entry_point {
-                    continue;
+            // Remove throttled ops that were included in the block
+            self.state.write().throttled_ops.remove(&op.hash);
+
+            if let Some(pool_op) = self
+                .state
+                .write()
+                .pool
+                .mine_operation(op, update.latest_block_number)
+            {
+                // Only account for an entity once
+                for entity_addr in pool_op.entities().map(|e| e.address).unique() {
+                    self.reputation.add_included(entity_addr);
                 }
-                self.paymaster.update_paymaster_balance_from_mined_op(op);
+                mined_op_count += 1;
+            }
+        }
 
-                // Remove throttled ops that were included in the block
-                self.state.write().throttled_ops.remove(&op.hash);
+        for op in unmined_ops {
+            if op.entry_point != self.config.entry_point {
+                continue;
+            }
 
-                if let Some(pool_op) = self
-                    .state
-                    .write()
-                    .pool
-                    .mine_operation(op, update.latest_block_number)
+            if let Some(paymaster) = op.paymaster {
+                self.paymaster
+                    .unmine_actual_cost(&paymaster, op.actual_gas_cost);
+            }
+
+            let pool_op = self.state.write().pool.unmine_operation(op);
+
+            if let Some(po) = pool_op {
+                for entity_addr in po.entities().map(|e| e.address).unique() {
+                    self.reputation.remove_included(entity_addr);
+                }
+
+                unmined_op_count += 1;
+                let _ = self.paymaster.add_or_update_balance(&po).await;
+            }
+        }
+
+        // Update paymaster balances AFTER updating the pool to reset confirmed balances if needed.
+        if update.reorg_larger_than_history {
+            if let Err(e) = self.reset_confirmed_paymaster_balances().await {
+                tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
+            }
+        } else {
+            let addresses = entity_balance_updates
+                .chain(unmined_entity_balance_updates)
+                .unique()
+                .collect::<Vec<_>>();
+            if !addresses.is_empty() {
+                if let Err(e) = self
+                    .paymaster
+                    .reset_confirmed_balances_for(&addresses)
+                    .await
                 {
-                    // Only account for an entity once
-                    for entity_addr in pool_op.entities().map(|e| e.address).unique() {
-                        self.reputation.add_included(entity_addr);
-                    }
-                    mined_op_count += 1;
-                }
-            }
-
-            for op in unmined_ops {
-                if op.entry_point != self.config.entry_point {
-                    continue;
-                }
-
-                if let Some(paymaster) = op.paymaster {
-                    self.paymaster
-                        .unmine_actual_cost(&paymaster, op.actual_gas_cost);
-                }
-
-                let pool_op = self.state.write().pool.unmine_operation(op);
-
-                if let Some(po) = pool_op {
-                    for entity_addr in po.entities().map(|e| e.address).unique() {
-                        self.reputation.remove_included(entity_addr);
-                    }
-
-                    unmined_op_count += 1;
-                    let _ = self.paymaster.add_or_update_balance(&po).await;
-                }
-            }
-
-            // Update paymaster balances AFTER updating the pool to reset confirmed balances if needed.
-            if update.reorg_larger_than_history {
-                if let Err(e) = self.reset_confirmed_paymaster_balances().await {
                     tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
                 }
-            } else {
-                let addresses = entity_balance_updates
-                    .chain(unmined_entity_balance_updates)
-                    .unique()
-                    .collect::<Vec<_>>();
-                if !addresses.is_empty() {
-                    if let Err(e) = self
-                        .paymaster
-                        .reset_confirmed_balances_for(&addresses)
-                        .await
-                    {
-                        tracing::error!("Failed to reset confirmed paymaster balances: {:?}", e);
-                    }
+            }
+        }
+
+        if mined_op_count > 0 {
+            info!(
+                "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                self.config.entry_point,
+                update.latest_block_number,
+                update.latest_block_hash,
+            );
+        }
+        if unmined_op_count > 0 {
+            info!(
+                "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
+                self.config.entry_point,
+                update.latest_block_number,
+                update.latest_block_hash,
+            );
+        }
+        let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
+        self.ep_specific_metrics.ops_seen.increment(ops_seen);
+        self.ep_specific_metrics
+            .unmined_operations
+            .increment(unmined_op_count);
+
+        let da_block_data = if self.config.da_gas_tracking_enabled {
+            match self
+                .entry_point
+                .block_data(update.latest_block_hash.into())
+                .await
+            {
+                Ok(da_block_data) => Some(da_block_data),
+                Err(e) => {
+                    tracing::error!("Failed to get da block data, skipping da tracking: {:?}", e);
+                    None
                 }
             }
+        } else {
+            None
+        };
 
-            if mined_op_count > 0 {
-                info!(
-                    "{mined_op_count} op(s) mined on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                    self.config.entry_point,
-                    update.latest_block_number,
-                    update.latest_block_hash,
-                );
-            }
-            if unmined_op_count > 0 {
-                info!(
-                    "{unmined_op_count} op(s) unmined in reorg on entry point {:?} when advancing to block with number {}, hash {:?}.",
-                    self.config.entry_point,
-                    update.latest_block_number,
-                    update.latest_block_hash,
-                );
-            }
-            let ops_seen: f64 = (mined_op_count as isize - unmined_op_count as isize) as f64;
-            self.ep_specific_metrics.ops_seen.increment(ops_seen);
-            self.ep_specific_metrics
-                .unmined_operations
-                .increment(unmined_op_count);
-
+        let start = Instant::now();
+        let events = {
             let mut state = self.state.write();
             state
                 .pool
@@ -328,19 +337,25 @@ where
             // pool maintenance
             let gas_fees = state.gas_fees;
             let base_fee = state.base_fee;
-            let expired = state.pool.do_maintenance(
+            state.pool.do_maintenance(
                 update.latest_block_number,
                 update.latest_block_timestamp,
+                da_block_data.as_ref(),
                 gas_fees,
                 base_fee,
-            );
+            )
+        };
+        let maintenance_time = start.elapsed();
+        tracing::debug!(
+            "Pool maintenance took {:?} µs",
+            maintenance_time.as_micros()
+        );
+        self.ep_specific_metrics
+            .maintenance_time
+            .record(maintenance_time.as_micros() as f64);
 
-            for (hash, until) in expired {
-                self.emit(OpPoolEvent::RemovedOp {
-                    op_hash: hash,
-                    reason: OpRemovalReason::Expired { valid_until: until },
-                })
-            }
+        for event in events {
+            self.emit(event);
         }
 
         // update required bundle fees and update metrics
@@ -394,19 +409,6 @@ where
         self.config.entry_point_version
     }
 
-    fn set_tracking(&self, paymaster: bool, reputation: bool) {
-        self.paymaster.set_tracking(paymaster);
-        self.reputation.set_tracking(reputation);
-    }
-
-    async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
-        self.paymaster.reset_confirmed_balances().await
-    }
-
-    async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
-        self.paymaster.get_stake_status(address).await
-    }
-
     async fn add_operation(
         &self,
         origin: OperationOrigin,
@@ -456,7 +458,7 @@ where
         // This doesn't clear all race conditions, as the pool may need to update its state before
         // a UO can be valid, i.e. for replacement.
         let (block_hash, block_number) = self
-            .provider
+            .evm
             .get_latest_block_hash_and_number()
             .await
             .map_err(anyhow::Error::from)?;
@@ -475,7 +477,9 @@ where
 
         // Prechecks
         let versioned_op = op.clone().into();
-        self.prechecker
+
+        let precheck_ret = self
+            .prechecker
             .check(&versioned_op, block_hash.into())
             .await?;
 
@@ -507,6 +511,7 @@ where
             sim_block_number: block_number,
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
+            da_gas_data: precheck_ret.da_gas_data,
         };
 
         // Check sender count in mempool. If sender has too many operations, must be staked
@@ -538,9 +543,13 @@ where
         }
 
         // Add op to pool
+        let has_required_pvg =
+            pool_op.uo.pre_verification_gas() >= precheck_ret.required_pre_verification_gas;
         let hash = {
             let mut state = self.state.write();
-            let hash = state.pool.add_operation(pool_op.clone())?;
+            let hash = state
+                .pool
+                .add_operation(pool_op.clone(), has_required_pvg)?;
 
             if throttled {
                 state.throttled_ops.insert(hash);
@@ -563,18 +572,18 @@ where
                 }
             });
         }
+
+        // Emit event
         let op_hash = pool_op
             .uo
-            .hash(self.config.entry_point, self.config.chain_id);
-        let valid_after = pool_op.valid_time_range.valid_after;
-        let valid_until = pool_op.valid_time_range.valid_until;
+            .hash(self.config.entry_point, self.config.chain_spec.id);
         self.emit(OpPoolEvent::ReceivedOp {
             op_hash,
             op: pool_op.uo,
             block_number: pool_op.sim_block_number,
             origin,
-            valid_after,
-            valid_until,
+            valid_after: pool_op.valid_time_range.valid_after,
+            valid_until: pool_op.valid_time_range.valid_until,
             entities: entity_summary,
         });
 
@@ -623,7 +632,9 @@ where
             }
         };
 
-        let hash = po.uo.hash(self.config.entry_point, self.config.chain_id);
+        let hash = po
+            .uo
+            .hash(self.config.entry_point, self.config.chain_spec.id);
 
         // This can return none if the operation was removed by another thread
         if self
@@ -669,7 +680,8 @@ where
         }
 
         // get the best operations from the pool
-        let ordered_ops = self.state.read().pool.best_operations();
+        let state = self.state.read();
+        let ordered_ops = state.pool.best_operations();
         // keep track of senders to avoid sending multiple ops from the same sender
         let mut senders = HashSet::<Address>::new();
 
@@ -703,6 +715,8 @@ where
         self.state.read().pool.get_operation_by_hash(hash)
     }
 
+    // DEBUG METHODS
+
     fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool) {
         if clear_mempool {
             self.state.write().pool.clear();
@@ -733,6 +747,19 @@ where
         self.reputation
             .set_reputation(address, ops_seen, ops_included)
     }
+
+    async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
+        self.paymaster.get_stake_status(address).await
+    }
+
+    async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
+        self.paymaster.reset_confirmed_balances().await
+    }
+
+    fn set_tracking(&self, paymaster: bool, reputation: bool) {
+        self.paymaster.set_tracking(paymaster);
+        self.reputation.set_tracking(reputation);
+    }
 }
 
 #[derive(Metrics)]
@@ -746,6 +773,8 @@ struct UoPoolMetricsEPSpecific {
     removed_operations: Counter,
     #[metric(describe = "the count of removed entities.")]
     removed_entities: Counter,
+    #[metric(describe = "time to run pool maintenance in µs.")]
+    maintenance_time: Histogram,
 }
 
 #[derive(Metrics)]
@@ -767,10 +796,12 @@ mod tests {
     use mockall::Sequence;
     use rundler_provider::{DepositInfo, MockEntryPointV0_6, MockEvmProvider};
     use rundler_sim::{
-        MockPrechecker, MockSimulator, PrecheckError, PrecheckSettings, SimulationError,
-        SimulationResult, SimulationSettings, ViolationError,
+        MockPrechecker, MockSimulator, PrecheckError, PrecheckReturn, PrecheckSettings,
+        SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
+        chain::ChainSpec,
+        da::DAGasUOData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::UserOperation,
         EntityInfo, EntityInfos, EntityType, EntryPointVersion, GasFees,
@@ -879,7 +910,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 0),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
@@ -964,7 +995,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 0),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::from(10),
@@ -1004,7 +1035,7 @@ mod tests {
             mined_ops: vec![],
             unmined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 0),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::from(10),
@@ -1021,10 +1052,10 @@ mod tests {
         })
         .await;
 
+        check_ops(pool.best_operations(3, 0).unwrap(), uos);
+
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(metadata.pending_balance, U256::from(840));
-
-        check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -1045,7 +1076,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: Address::random(),
-                hash: uos[0].hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 0),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
@@ -1087,7 +1118,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 0),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
@@ -1163,7 +1194,7 @@ mod tests {
             reorg_depth: 0,
             mined_ops: vec![MinedOp {
                 entry_point: pool.config.entry_point,
-                hash: uos[0].hash(pool.config.entry_point, 1),
+                hash: uos[0].hash(pool.config.entry_point, 0),
                 sender: uos[0].sender(),
                 nonce: uos[0].nonce(),
                 actual_gas_cost: U256::ZERO,
@@ -1477,7 +1508,7 @@ mod tests {
             .add_operation(OperationOrigin::Local, op.op.clone())
             .await
             .unwrap();
-        let hash = op.op.hash(pool.config.entry_point, 1);
+        let hash = op.op.hash(pool.config.entry_point, 0);
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 11,
@@ -1552,7 +1583,7 @@ mod tests {
         impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
-        impl EntryPoint,
+        impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
     > {
         let entrypoint = MockEntryPointV0_6::new();
         create_pool_with_entry_point(ops, entrypoint)
@@ -1566,12 +1597,13 @@ mod tests {
         impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
-        impl EntryPoint,
+        impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
     > {
+        let entrypoint = Arc::new(entrypoint);
         let args = PoolConfig {
+            chain_spec: ChainSpec::default(),
             entry_point: Address::random(),
             entry_point_version: EntryPointVersion::V0_6,
-            chain_id: 1,
             min_replacement_fee_increase_percentage: 10,
             max_size_of_pool_bytes: 10000,
             blocklist: None,
@@ -1584,21 +1616,21 @@ mod tests {
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
             paymaster_tracking_enabled: true,
+            da_gas_tracking_enabled: false,
             paymaster_cache_length: 100,
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
         };
 
-        let mut provider = MockEvmProvider::new();
-        provider
-            .expect_get_latest_block_hash_and_number()
+        let mut evm = MockEvmProvider::new();
+        evm.expect_get_latest_block_hash_and_number()
             .returning(|| Ok((B256::ZERO, 0)));
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
 
         let paymaster = PaymasterTracker::new(
-            entrypoint,
+            entrypoint.clone(),
             PaymasterConfig::new(
                 args.sim_settings.min_stake_value,
                 args.sim_settings.min_unstake_delay,
@@ -1628,7 +1660,10 @@ mod tests {
                 if let Some(error) = &op.precheck_error {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {
-                    Ok(())
+                    Ok(PrecheckReturn {
+                        da_gas_data: DAGasUOData::Empty,
+                        required_pre_verification_gas: 0,
+                    })
                 }
             });
             simulator
@@ -1661,7 +1696,8 @@ mod tests {
         UoPool::new(
             args,
             event_sender,
-            provider,
+            evm,
+            entrypoint,
             prechecker,
             simulator,
             paymaster,
@@ -1678,7 +1714,7 @@ mod tests {
             impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
-            impl EntryPoint,
+            impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
         >,
         Vec<UserOperationVariant>,
     ) {
@@ -1698,7 +1734,7 @@ mod tests {
             impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
-            impl EntryPoint,
+            impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
         >,
         Vec<UserOperationVariant>,
     ) {
