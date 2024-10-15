@@ -201,7 +201,9 @@ impl PoolArgs {
         };
         tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
 
-        let chain_id = chain_spec.id;
+        let da_gas_tracking_enabled =
+            super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
+
         let pool_config_base = PoolConfig {
             // update per entry point
             entry_point: Address::ZERO,
@@ -209,7 +211,7 @@ impl PoolArgs {
             num_shards: 0,
             mempool_channel_configs: HashMap::new(),
             // Base config
-            chain_id,
+            chain_spec: chain_spec.clone(),
             same_sender_mempool_count: self.same_sender_mempool_count,
             min_replacement_fee_increase_percentage: self.min_replacement_fee_increase_percentage,
             max_size_of_pool_bytes: self.max_size_in_bytes,
@@ -223,6 +225,7 @@ impl PoolArgs {
             paymaster_cache_length: self.paymaster_cache_length,
             reputation_tracking_enabled: self.reputation_tracking_enabled,
             drop_min_num_blocks: self.drop_min_num_blocks,
+            da_gas_tracking_enabled,
         };
 
         let mut pool_configs = vec![];
