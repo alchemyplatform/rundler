@@ -16,6 +16,10 @@ use anyhow::{anyhow, Context};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
     chain::ChainSpec,
+    da::{
+        BedrockDAGasUOData as RundlerBedrockDAGasUOData, DAGasUOData as RundlerDAGasUOData,
+        NitroDAGasUOData as RundlerNitroDAGasUOData,
+    },
     pool::{
         NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
@@ -359,7 +363,49 @@ impl From<&PoolOperation> for MempoolOp {
             expected_code_hash: op.expected_code_hash.to_proto_bytes(),
             sim_block_hash: op.sim_block_hash.to_proto_bytes(),
             account_is_staked: op.account_is_staked,
+            da_gas_data: Some(DaGasUoData::from(&op.da_gas_data)),
         }
+    }
+}
+
+impl From<&RundlerDAGasUOData> for DaGasUoData {
+    fn from(data: &RundlerDAGasUOData) -> Self {
+        match data {
+            RundlerDAGasUOData::Empty => DaGasUoData {
+                data: Some(da_gas_uo_data::Data::Empty(EmptyUoData {})),
+            },
+            RundlerDAGasUOData::Nitro(data) => DaGasUoData {
+                data: Some(da_gas_uo_data::Data::Nitro(NitroDaGasUoData {
+                    uo_units: data.uo_units.to_proto_bytes(),
+                })),
+            },
+            RundlerDAGasUOData::Bedrock(data) => DaGasUoData {
+                data: Some(da_gas_uo_data::Data::Bedrock(BedrockDaGasUoData {
+                    uo_units: data.uo_units,
+                })),
+            },
+        }
+    }
+}
+
+impl TryFrom<DaGasUoData> for RundlerDAGasUOData {
+    type Error = ConversionError;
+
+    fn try_from(data: DaGasUoData) -> Result<Self, Self::Error> {
+        let ret = match data.data {
+            Some(da_gas_uo_data::Data::Empty(_)) => RundlerDAGasUOData::Empty,
+            Some(da_gas_uo_data::Data::Nitro(NitroDaGasUoData { uo_units })) => {
+                RundlerDAGasUOData::Nitro(RundlerNitroDAGasUOData {
+                    uo_units: from_bytes(&uo_units)?,
+                })
+            }
+            Some(da_gas_uo_data::Data::Bedrock(BedrockDaGasUoData { uo_units })) => {
+                RundlerDAGasUOData::Bedrock(RundlerBedrockDAGasUOData { uo_units })
+            }
+            None => RundlerDAGasUOData::Empty,
+        };
+
+        Ok(ret)
     }
 }
 
@@ -394,6 +440,10 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
             sim_block_number: 0,
             account_is_staked: op.account_is_staked,
             entity_infos: EntityInfos::default(),
+            da_gas_data: op
+                .da_gas_data
+                .context("DA gas data should be set")?
+                .try_into()?,
         })
     }
 }

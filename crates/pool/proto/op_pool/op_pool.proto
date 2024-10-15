@@ -153,6 +153,29 @@ message MempoolOp {
   bool account_is_staked = 7;
   // The entry point address of this operation
   bytes entry_point = 8;
+  // The DA gas data for the UO
+  DaGasUoData da_gas_data = 9;
+}
+
+// Data associated with a user operation for DA gas calculations
+message DaGasUoData {
+  oneof data {
+    EmptyUoData empty = 1;
+    NitroDaGasUoData nitro = 2;
+    BedrockDaGasUoData bedrock = 3;
+  }
+}
+
+message EmptyUoData {}
+
+// Data associated with a user operation for Nitro DA gas calculations
+message NitroDaGasUoData {
+  bytes uo_units = 1;
+}
+
+// Data associated with a user operation for Bedrock DA gas calculations
+message BedrockDaGasUoData {
+  uint64 uo_units = 1;
 }
 
 // Defines the gRPC endpoints for a UserOperation mempool service

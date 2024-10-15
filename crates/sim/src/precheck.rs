@@ -21,6 +21,7 @@ use mockall::automock;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, EntryPoint, EvmProvider};
 use rundler_types::{
     chain::ChainSpec,
+    da::DAGasUOData,
     pool::{MempoolError, PrecheckViolation},
     GasFees, UserOperation,
 };
@@ -34,6 +35,14 @@ use crate::{
 /// The min cost of a `CALL` with nonzero value, as required by the spec.
 pub const MIN_CALL_GAS_LIMIT: u128 = 9100;
 
+/// The result of a precheck call.
+pub struct PrecheckReturn {
+    /// DA gas data for the operation
+    pub da_gas_data: DAGasUOData,
+    /// The required pre-verification gas for the operation
+    pub required_pre_verification_gas: u128,
+}
+
 /// Trait for checking if a user operation is valid before simulation
 /// according to the spec rules.
 #[cfg_attr(feature = "test-utils", automock(type UO = rundler_types::v0_6::UserOperation;))]
@@ -43,7 +52,11 @@ pub trait Prechecker: Send + Sync {
     type UO: UserOperation;
 
     /// Run the precheck on the given operation and return an error if it fails.
-    async fn check(&self, op: &Self::UO, block: BlockHashOrNumber) -> Result<(), PrecheckError>;
+    async fn check(
+        &self,
+        op: &Self::UO,
+        block: BlockHashOrNumber,
+    ) -> Result<PrecheckReturn, PrecheckError>;
 
     /// Update and return the bundle fees.
     ///
@@ -98,6 +111,7 @@ pub struct Settings {
     /// Percentage of the current network base fee that a user operation must have to be accepted into the mempool.
     pub base_fee_accept_percent: u32,
     /// Percentage of the preVerificationGas that a user operation must have to be accepted into the mempool.
+    /// Only applied if the chain has dynamic preVerificationGas, else enforced to 100%
     pub pre_verification_gas_accept_percent: u32,
 }
 
@@ -115,7 +129,7 @@ impl Default for Settings {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct AsyncData {
     factory_exists: bool,
     sender_exists: bool,
@@ -123,6 +137,7 @@ struct AsyncData {
     payer_funds: U256,
     base_fee: u128,
     min_pre_verification_gas: u128,
+    da_gas_data: DAGasUOData,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -146,16 +161,23 @@ where
 {
     type UO = UO;
 
-    async fn check(&self, op: &Self::UO, block: BlockHashOrNumber) -> Result<(), PrecheckError> {
+    async fn check(
+        &self,
+        op: &Self::UO,
+        block: BlockHashOrNumber,
+    ) -> Result<PrecheckReturn, PrecheckError> {
         let async_data = self.load_async_data(op, block).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
-        violations.extend(self.check_init_code(op, async_data));
-        violations.extend(self.check_gas(op, async_data));
-        violations.extend(self.check_payer(op, async_data));
+        violations.extend(self.check_init_code(op, &async_data));
+        violations.extend(self.check_gas(op, &async_data));
+        violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
             Err(violations)?
         }
-        Ok(())
+        Ok(PrecheckReturn {
+            da_gas_data: async_data.da_gas_data,
+            required_pre_verification_gas: async_data.min_pre_verification_gas,
+        })
     }
 
     async fn update_fees(&self) -> anyhow::Result<(GasFees, u128)> {
@@ -197,7 +219,7 @@ where
         }
     }
 
-    fn check_init_code(&self, op: &UO, async_data: AsyncData) -> ArrayVec<PrecheckViolation, 2> {
+    fn check_init_code(&self, op: &UO, async_data: &AsyncData) -> ArrayVec<PrecheckViolation, 2> {
         let AsyncData {
             factory_exists,
             sender_exists,
@@ -216,14 +238,14 @@ where
                     op.factory().unwrap(),
                 ))
             }
-            if sender_exists {
+            if *sender_exists {
                 violations.push(PrecheckViolation::ExistingSenderWithInitCode(op.sender()));
             }
         }
         violations
     }
 
-    fn check_gas(&self, op: &UO, async_data: AsyncData) -> ArrayVec<PrecheckViolation, 6> {
+    fn check_gas(&self, op: &UO, async_data: &AsyncData) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
             max_verification_gas,
             max_total_execution_gas,
@@ -231,9 +253,9 @@ where
         } = self.settings;
         let AsyncData {
             base_fee,
-            min_pre_verification_gas,
+            mut min_pre_verification_gas,
             ..
-        } = async_data;
+        } = *async_data;
 
         let mut violations = ArrayVec::new();
         if op.verification_gas_limit() > max_verification_gas {
@@ -255,10 +277,12 @@ where
 
         // if preVerificationGas is dynamic, then allow for the percentage buffer
         // and check if the preVerificationGas is at least the minimum.
-        let min_pre_verification_gas = math::percent(
-            min_pre_verification_gas,
-            self.settings.pre_verification_gas_accept_percent,
-        );
+        if self.chain_spec.da_pre_verification_gas {
+            min_pre_verification_gas = math::percent(
+                min_pre_verification_gas,
+                self.settings.pre_verification_gas_accept_percent,
+            );
+        }
         if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas(),
@@ -298,12 +322,12 @@ where
         violations
     }
 
-    fn check_payer(&self, op: &UO, async_data: AsyncData) -> Option<PrecheckViolation> {
+    fn check_payer(&self, op: &UO, async_data: &AsyncData) -> Option<PrecheckViolation> {
         let AsyncData {
             paymaster_exists,
             payer_funds,
             ..
-        } = async_data;
+        } = *async_data;
         if let Some(paymaster) = op.paymaster() {
             if !paymaster_exists {
                 return Some(PrecheckViolation::PaymasterIsNotContract(paymaster));
@@ -338,7 +362,7 @@ where
             sender_exists,
             paymaster_exists,
             payer_funds,
-            min_pre_verification_gas,
+            (min_pre_verification_gas, da_gas_data),
         ) = tokio::try_join!(
             self.is_contract(op.factory()),
             self.is_contract(Some(op.sender())),
@@ -353,6 +377,7 @@ where
             payer_funds,
             base_fee,
             min_pre_verification_gas,
+            da_gas_data,
         })
     }
 
@@ -408,7 +433,7 @@ where
         op: UO,
         block: BlockHashOrNumber,
         base_fee: u128,
-    ) -> anyhow::Result<u128> {
+    ) -> anyhow::Result<(u128, DAGasUOData)> {
         gas::calc_required_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
@@ -456,6 +481,7 @@ mod tests {
             payer_funds: U256::from(5_000_000),
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
+            da_gas_data: DAGasUOData::Empty,
         }
     }
 
@@ -488,7 +514,7 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_init_code(&op, get_test_async_data());
+        let res = prechecker.check_init_code(&op, &get_test_async_data());
         let mut expected = ArrayVec::new();
         expected.push(PrecheckViolation::ExistingSenderWithInitCode(address!(
             "3f8a2b6c4d5e1079286fa1b3c0d4e5f6902b7c8d"
@@ -535,7 +561,7 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, get_test_async_data());
+        let res = prechecker.check_gas(&op, &get_test_async_data());
 
         let total_gas_limit = op.gas_limit(&cs, Some(1));
 
@@ -584,7 +610,7 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_payer(&op, get_test_async_data());
+        let res = prechecker.check_payer(&op, &get_test_async_data());
         assert_eq!(
             res,
             Some(PrecheckViolation::PaymasterDepositTooLow(
@@ -624,7 +650,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, async_data);
+        let res = prechecker.check_gas(&op, &async_data);
         assert!(res.is_empty());
     }
 
@@ -652,7 +678,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, async_data);
+        let res = prechecker.check_gas(&op, &async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxFeePerGasTooLow(
             math::percent(5_000, settings.base_fee_accept_percent - 10),
@@ -692,7 +718,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, async_data);
+        let res = prechecker.check_gas(&op, &async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
             mintip - 1,
@@ -729,7 +755,7 @@ mod tests {
             ..Default::default()
         };
 
-        let res = prechecker.check_gas(&op, async_data);
+        let res = prechecker.check_gas(&op, &async_data);
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::PreVerificationGasTooLow(
             math::percent(1_000, settings.pre_verification_gas_accept_percent - 10),
