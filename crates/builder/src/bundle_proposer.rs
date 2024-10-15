@@ -32,11 +32,12 @@ use rundler_provider::{
     BundleHandler, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut, SignatureAggregator,
 };
 use rundler_sim::{
-    gas, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult,
-    Simulator, ViolationError,
+    ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator,
+    ViolationError,
 };
 use rundler_types::{
     chain::ChainSpec,
+    da::DAGasBlockData,
     pool::{Pool, PoolOperation, SimulationViolation},
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
     Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, BUNDLE_BYTE_OVERHEAD,
@@ -44,7 +45,7 @@ use rundler_types::{
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::emit::{BuilderEvent, ConditionNotMetReason, OpRejectionReason, SkipReason};
 
@@ -155,6 +156,7 @@ pub(crate) struct Settings {
     pub(crate) beneficiary: Address,
     pub(crate) bundle_priority_fee_overhead_percent: u32,
     pub(crate) priority_fee_mode: PriorityFeeMode,
+    pub(crate) da_gas_tracking_enabled: bool,
 }
 
 #[async_trait]
@@ -200,7 +202,7 @@ where
             return Err(BundleProposerError::NoOperationsInitially);
         }
 
-        tracing::debug!("Starting bundle proposal with {} ops", ops.len());
+        debug!("Starting bundle proposal with {} ops", ops.len());
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
@@ -214,10 +216,30 @@ where
             .filter_map(|op| op.uo.paymaster())
             .collect::<Vec<Address>>();
 
+        let da_block_data = if self.settings.da_gas_tracking_enabled {
+            match self.entry_point.block_data(block_hash.into()).await {
+                Ok(block_data) => Some(block_data),
+                Err(e) => {
+                    error!("Failed to get block data for block hash {block_hash:?}, falling back to async da gas calculations: {e:?}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // (1) Filter out ops that don't pay enough to be included
         let fee_futs = ops
             .into_iter()
-            .map(|op| self.check_fees(op, block_hash, base_fee, required_op_fees))
+            .map(|op| {
+                self.check_fees(
+                    op,
+                    block_hash,
+                    da_block_data.as_ref(),
+                    base_fee,
+                    required_op_fees,
+                )
+            })
             .collect::<Vec<_>>();
         let ops = future::join_all(fee_futs)
             .await
@@ -233,7 +255,7 @@ where
         // (2) Limit the amount of operations for simulation
         let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
 
-        tracing::debug!(
+        debug!(
             "Bundle proposal after gas limit had {} ops and {:?} gas limit",
             ops.len(),
             gas_limit
@@ -340,12 +362,14 @@ where
     // Check fees for a single user op. Returns None if the op should be skipped.
     //
     // Filters on:
-    // - insufficient gas fees
-    // - insufficient pre-verification gas
+    // - Insufficient gas fees
+    // - Insufficient pre-verification gas. The initial PVG check is done when the block is updated in the mempool. However,
+    //   that check uses the initial gas fee estimate, whereas this check uses the gas fees specifically from this bundle.
     async fn check_fees(
         &self,
         op: PoolOperation,
         block_hash: B256,
+        da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
     ) -> Option<PoolOperation> {
@@ -369,31 +393,51 @@ where
             return None;
         }
 
-        // Check if the pvg is enough
-        let required_pvg = match gas::calc_required_pre_verification_gas(
-            &self.settings.chain_spec,
-            &self.entry_point,
-            op.uo.as_ref(),
-            block_hash.into(),
-            base_fee,
-        )
-        .await
-        {
-            Ok(pvg) => pvg,
-            Err(e) => {
-                error!("Failed to calculate required pre-verification gas for op: {e:?}, skipping");
-                self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
-                    op_hash,
-                    SkipReason::Other {
-                        reason: Arc::new(format!(
-                            "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
-                        )),
-                    },
-                ));
-                return None;
+        if !self.settings.chain_spec.da_pre_verification_gas {
+            // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
+            return Some(op);
+        }
+
+        let required_da_gas = if self.settings.da_gas_tracking_enabled && da_block_data.is_some() {
+            let da_block_data = da_block_data.unwrap();
+            self.entry_point.calc_da_gas_sync(
+                &op.da_gas_data,
+                da_block_data,
+                required_op_fees.max_fee_per_gas,
+            )
+        } else {
+            match self
+                .entry_point
+                .calc_da_gas(
+                    op.uo.clone().into(),
+                    block_hash.into(),
+                    required_op_fees.max_fee_per_gas,
+                )
+                .await
+            {
+                Ok((required_da_gas, _, _)) => required_da_gas,
+                Err(e) => {
+                    error!(
+                        "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
+                    );
+                    self.emit(BuilderEvent::skipped_op(
+                        self.builder_index,
+                        op_hash,
+                        SkipReason::Other {
+                            reason: Arc::new(format!(
+                                "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
+                            )),
+                        },
+                    ));
+                    return None;
+                }
             }
         };
+
+        // This assumes a bundle size of 1
+        let required_pvg =
+            op.uo
+                .required_pre_verification_gas(&self.settings.chain_spec, 1, required_da_gas);
 
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
@@ -1645,49 +1689,52 @@ mod tests {
         assert!(bundle.rejected_ops.is_empty());
     }
 
-    #[tokio::test]
-    async fn test_drops_but_not_rejects_op_with_too_low_pvg() {
-        let base_fee = 1000;
-        let max_priority_fee_per_gas = 50;
-        let mut op1 = op_with_sender_and_fees(address(1), 1054, 55);
-        op1.pre_verification_gas = 0; // Should be dropped but not rejected
-        let op2 = op_with_sender_and_fees(address(2), 1055, 55);
-        let bundle = mock_make_bundle(
-            vec![
-                MockOp {
-                    op: op1.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                },
-                MockOp {
-                    op: op2.clone(),
-                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                },
-            ],
-            vec![],
-            vec![HandleOpsOut::Success],
-            vec![],
-            base_fee,
-            max_priority_fee_per_gas,
-            false,
-            ExpectedStorage::default(),
-        )
-        .await;
-        assert_eq!(
-            bundle.gas_fees,
-            GasFees {
-                max_fee_per_gas: 1050,
-                max_priority_fee_per_gas: 50,
-            }
-        );
-        assert_eq!(
-            bundle.ops_per_aggregator,
-            vec![UserOpsPerAggregator {
-                user_ops: vec![op2],
-                ..Default::default()
-            }],
-        );
-        assert!(bundle.rejected_ops.is_empty());
-    }
+    // TODO(danc): This test is now longer valid as we only recheck PVG for
+    // chains with external DA. We should add tests for that, but will require adding
+    // mock calls to the DA provider.
+    // #[tokio::test]
+    // async fn test_drops_but_not_rejects_op_with_too_low_pvg() {
+    //     let base_fee = 1000;
+    //     let max_priority_fee_per_gas = 50;
+    //     let mut op1 = op_with_sender_and_fees(address(1), 1054, 55);
+    //     op1.pre_verification_gas = 0; // Should be dropped but not rejected
+    //     let op2 = op_with_sender_and_fees(address(2), 1055, 55);
+    //     let bundle = mock_make_bundle(
+    //         vec![
+    //             MockOp {
+    //                 op: op1.clone(),
+    //                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
+    //             },
+    //             MockOp {
+    //                 op: op2.clone(),
+    //                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
+    //             },
+    //         ],
+    //         vec![],
+    //         vec![HandleOpsOut::Success],
+    //         vec![],
+    //         base_fee,
+    //         max_priority_fee_per_gas,
+    //         false,
+    //         ExpectedStorage::default(),
+    //     )
+    //     .await;
+    //     assert_eq!(
+    //         bundle.gas_fees,
+    //         GasFees {
+    //             max_fee_per_gas: 1050,
+    //             max_priority_fee_per_gas: 50,
+    //         }
+    //     );
+    //     assert_eq!(
+    //         bundle.ops_per_aggregator,
+    //         vec![UserOpsPerAggregator {
+    //             user_ops: vec![op2],
+    //             ..Default::default()
+    //         }],
+    //     );
+    //     assert!(bundle.rejected_ops.is_empty());
+    // }
 
     #[tokio::test]
     async fn test_aggregators() {
@@ -2279,6 +2326,7 @@ mod tests {
                 valid_time_range: ValidTimeRange::default(),
                 entity_infos: EntityInfos::default(),
                 aggregator: None,
+                da_gas_data: Default::default(),
             })
             .collect();
 
@@ -2374,6 +2422,7 @@ mod tests {
                 beneficiary,
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 bundle_priority_fee_overhead_percent: 0,
+                da_gas_tracking_enabled: false,
             },
             event_sender,
         );

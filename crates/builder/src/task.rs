@@ -87,6 +87,8 @@ pub struct Args {
     pub remote_address: Option<SocketAddr>,
     /// Entry points to start builders for
     pub entry_points: Vec<EntryPointBuilderSettings>,
+    /// Enable DA tracking
+    pub da_gas_tracking_enabled: bool,
 }
 
 /// Builder settings for an entrypoint
@@ -360,6 +362,7 @@ where
             beneficiary,
             priority_fee_mode: self.args.priority_fee_mode,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
+            da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
         };
 
         let transaction_sender = self

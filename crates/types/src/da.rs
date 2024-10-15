@@ -16,7 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Type of gas oracle contract for pricing calldata in preVerificationGas
-#[derive(Clone, Copy, Debug, Deserialize, Default, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum DAGasOracleContractType {
     /// No gas oracle contract

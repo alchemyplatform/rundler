@@ -15,7 +15,8 @@ use alloy_primitives::{Address, B256, U256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    entity::EntityInfos, Entity, StakeInfo, UserOperation, UserOperationVariant, ValidTimeRange,
+    da::DAGasUOData, entity::EntityInfos, Entity, StakeInfo, UserOperation, UserOperationVariant,
+    ValidTimeRange,
 };
 
 /// The new head of the chain, as viewed by the pool
@@ -119,6 +120,8 @@ pub struct PoolOperation {
     pub account_is_staked: bool,
     /// Staking information about all the entities.
     pub entity_infos: EntityInfos,
+    /// The DA gas data for this operation
+    pub da_gas_data: DAGasUOData,
 }
 
 impl PoolOperation {
