@@ -11,7 +11,6 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_json_rpc::RpcError;
 use alloy_primitives::Bytes;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -59,42 +58,12 @@ pub enum GasEstimationError {
     /// The total amount of gas used by the UO is greater than allowed
     #[error("total gas used by the user operation {0} is greater than the allowed limit: {1}")]
     GasTotalTooLarge(u128, u128),
+    /// Error from provider
+    #[error(transparent)]
+    ProviderError(#[from] ProviderError),
     /// Other error
     #[error(transparent)]
     Other(#[from] anyhow::Error),
-}
-
-impl From<ProviderError> for GasEstimationError {
-    fn from(error: ProviderError) -> Self {
-        let inner_msg = match &error {
-            ProviderError::RPC(rpc_error) => match rpc_error {
-                RpcError::ErrorResp(error_payload) => {
-                    format!("rpc error with code: {} ", error_payload.code)
-                }
-                RpcError::Transport(e) => {
-                    format!("transport error: {}", e)
-                }
-                _ => error.to_string(),
-            },
-            ProviderError::ContractError(error) => match &error {
-                alloy_contract::Error::TransportError(rpc_error) => match rpc_error {
-                    RpcError::ErrorResp(error_payload) => {
-                        format!("rpc error with code: {} ", error_payload.code)
-                    }
-                    RpcError::Transport(e) => {
-                        format!("transport error: {}", e)
-                    }
-                    _ => error.to_string(),
-                },
-                _ => error.to_string(),
-            },
-            ProviderError::Other(error) => {
-                format!("other error: {}", error)
-            }
-        };
-
-        GasEstimationError::Other(anyhow::anyhow!("provider error: {inner_msg}"))
-    }
 }
 
 /// Gas estimator trait
