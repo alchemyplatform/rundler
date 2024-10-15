@@ -97,11 +97,14 @@ where
                     method_logger.record_http(HttpCode::TwoHundreds);
                     method_logger.record_rpc(get_rpc_status_code(resp));
                     if resp.is_error() {
-                        tracing::error!(
-                            "alloy provider of method {} response with error: {}",
-                            &method_name,
-                            resp.as_error().unwrap()
-                        );
+                        let error = resp.as_error().unwrap();
+                        if error.code < 0 {
+                            tracing::error!(
+                                "alloy provider of method {} response with error: {}",
+                                &method_name,
+                                error
+                            );
+                        }
                     }
                 }
                 Err(e) => {
@@ -152,6 +155,7 @@ fn get_rpc_status_from_code(code: i64) -> RpcCode {
         -32602 => RpcCode::InvalidParams,
         -32603 => RpcCode::InternalError,
         x if (-32099..=-32000).contains(&x) => RpcCode::ServerError,
+        x if x >= 0 => RpcCode::Success,
         _ => RpcCode::Other,
     }
 }
