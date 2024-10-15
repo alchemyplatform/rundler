@@ -442,9 +442,14 @@ impl From<tonic::Status> for EthRpcError {
     }
 }
 
-impl From<ProviderError> for EthRpcError {
-    fn from(e: ProviderError) -> Self {
-        let inner_msg = match &e {
+struct ProviderErrorWithContext {
+    error: ProviderError,
+    context: Option<String>,
+}
+
+impl From<ProviderErrorWithContext> for EthRpcError {
+    fn from(e: ProviderErrorWithContext) -> Self {
+        let inner_msg = match &e.error {
             ProviderError::RPC(rpc_error) => match rpc_error {
                 RpcError::ErrorResp(error_payload) => {
                     format!("rpc error with code: {} ", error_payload.code)
@@ -452,7 +457,7 @@ impl From<ProviderError> for EthRpcError {
                 RpcError::Transport(e) => {
                     format!("transport error: {}", e)
                 }
-                _ => e.to_string(),
+                _ => e.error.to_string(),
             },
             ProviderError::ContractError(error) => match &error {
                 alloy_contract::Error::TransportError(rpc_error) => match rpc_error {
@@ -470,11 +475,26 @@ impl From<ProviderError> for EthRpcError {
                 format!("other error: {}", error)
             }
         };
-
-        Self::Internal(anyhow::anyhow!("provider error: {}", inner_msg))
+        if let Some(context_msg) = e.context {
+            Self::Internal(anyhow::anyhow!(
+                "{}: provider error: {}",
+                context_msg,
+                inner_msg
+            ))
+        } else {
+            Self::Internal(anyhow::anyhow!("provider error: {}", inner_msg))
+        }
     }
 }
 
+impl From<ProviderError> for ProviderErrorWithContext {
+    fn from(value: ProviderError) -> Self {
+        Self {
+            error: value,
+            context: None,
+        }
+    }
+}
 impl From<GasEstimationError> for EthRpcError {
     fn from(e: GasEstimationError) -> Self {
         match e {
@@ -494,7 +514,19 @@ impl From<GasEstimationError> for EthRpcError {
             error @ GasEstimationError::GasFieldTooLarge(_, _) => {
                 Self::InvalidParams(error.to_string())
             }
-            GasEstimationError::Other(error) => Self::Internal(error),
+            GasEstimationError::ProviderError(provider_error) => {
+                EthRpcError::from(ProviderErrorWithContext::from(provider_error))
+            }
+            GasEstimationError::Other(error) => {
+                let context = error.to_string();
+                match error.downcast::<ProviderError>() {
+                    Ok(provider_error) => EthRpcError::from(ProviderErrorWithContext {
+                        error: provider_error,
+                        context: Some(context),
+                    }),
+                    Err(error) => Self::Internal(error),
+                }
+            }
         }
     }
 }

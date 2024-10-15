@@ -4738,8 +4738,6 @@ dependencies = [
 name = "rundler-sim"
 version = "0.3.0"
 dependencies = [
- "alloy-contract",
- "alloy-json-rpc",
  "alloy-primitives",
  "alloy-sol-types",
  "anyhow",
