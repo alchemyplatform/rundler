@@ -306,7 +306,6 @@ impl TryFrom<ReturnInfoV0_7> for ValidationReturnInfo {
 
         let account = parse_validation_data(accountValidationData);
         let paymaster = parse_validation_data(paymasterValidationData);
-
         let intersect_range = account
             .valid_time_range()
             .intersect(paymaster.valid_time_range());
@@ -355,13 +354,18 @@ impl ValidationData {
 /// Parse the validation data from a U256
 ///
 /// Works for both v0.6 and v0.7 validation data
+///
+/// Converts 0 valid until to u64::MAX
 pub fn parse_validation_data(data: U256) -> ValidationData {
     let slice: [u8; 32] = data.to_be_bytes();
     let aggregator = Address::from_slice(&slice[12..]);
 
     let mut buf = [0; 8];
     buf[2..8].copy_from_slice(&slice[6..12]);
-    let valid_until = u64::from_be_bytes(buf);
+    let mut valid_until = u64::from_be_bytes(buf);
+    if valid_until == 0 {
+        valid_until = u64::MAX;
+    }
 
     let mut buf = [0; 8];
     buf[2..8].copy_from_slice(&slice[..6]);
@@ -472,6 +476,19 @@ mod tests {
         );
 
         assert_eq!(parsed.valid_until, 0x66778899aabb);
+        assert_eq!(parsed.valid_after, 0x001122334455);
+    }
+
+    #[test]
+    fn test_parse_validation_data_zero_valid_until() {
+        let data = uint!(0x001122334455000000000000ccddeeff00112233445566778899aabbccddeeff_U256);
+        let parsed = parse_validation_data(data);
+        assert_eq!(
+            parsed.aggregator,
+            address!("ccddeeff00112233445566778899aabbccddeeff")
+        );
+
+        assert_eq!(parsed.valid_until, u64::MAX);
         assert_eq!(parsed.valid_after, 0x001122334455);
     }
 }
