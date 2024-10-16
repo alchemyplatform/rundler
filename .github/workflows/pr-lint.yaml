@@ -4,6 +4,15 @@ on:
       - opened
       - edited
       - reopened
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  pull-requests: read
 
 name: PR title check
 jobs:
