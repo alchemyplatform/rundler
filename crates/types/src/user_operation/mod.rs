@@ -104,6 +104,12 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the maximum cost, in wei, of this user operation
     fn max_gas_cost(&self) -> U256;
 
+    /// Returns the gas price for this UO given the base fee
+    fn gas_price(&self, base_fee: u128) -> u128 {
+        self.max_fee_per_gas()
+            .min(base_fee + self.max_priority_fee_per_gas())
+    }
+
     /*
      * Enhanced functions
      */
@@ -132,6 +138,11 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// minus the call gas limit. The entry point will check for this buffer before
     /// executing the user operation.
     fn required_pre_execution_buffer(&self) -> u128;
+
+    /// Returns the limit of gas that may be used used prior to the execution of the user operation
+    fn pre_op_gas_limit(&self) -> u128 {
+        self.pre_verification_gas() + self.total_verification_gas_limit()
+    }
 
     /// Returns the pre-verification gas
     fn pre_verification_gas(&self) -> u128;
