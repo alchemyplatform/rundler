@@ -15,18 +15,14 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use futures::FutureExt;
-use rundler_provider::{DAGasOracleSync, EntryPointProvider, EvmProvider};
+use rundler_provider::{Providers, ProvidersWithEntryPointT};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
 };
 use rundler_task::TaskSpawnerExt;
-use rundler_types::{
-    chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
-    v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
-    UserOperationVariant,
-};
+use rundler_types::{chain::ChainSpec, EntryPointVersion, UserOperation, UserOperationVariant};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 
@@ -36,6 +32,7 @@ use crate::{
     emit::OpPoolEvent,
     mempool::{
         AddressReputation, Mempool, PaymasterConfig, PaymasterTracker, ReputationParams, UoPool,
+        UoPoolProviders,
     },
     server::{self, LocalPoolBuilder},
 };
@@ -63,44 +60,33 @@ pub struct Args {
 }
 
 /// Mempool task.
-pub struct PoolTask<P, E06, E07> {
+pub struct PoolTask<P> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     pool_builder: LocalPoolBuilder,
-    provider: P,
-    ep_06: Option<E06>,
-    ep_07: Option<E07>,
-    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
+    providers: P,
 }
 
-impl<P, E06, E07> PoolTask<P, E06, E07> {
+impl<P> PoolTask<P> {
     /// Create a new pool task.
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         pool_builder: LocalPoolBuilder,
-        provider: P,
-        ep_06: Option<E06>,
-        ep_07: Option<E07>,
-        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
+        providers: P,
     ) -> Self {
         Self {
             args,
             event_sender,
             pool_builder,
-            provider,
-            ep_06,
-            ep_07,
-            da_gas_oracle,
+            providers,
         }
     }
 }
 
-impl<P, E06, E07> PoolTask<P, E06, E07>
+impl<P> PoolTask<P>
 where
-    P: EvmProvider + Clone + 'static,
-    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
+    P: Providers + 'static,
 {
     /// Spawns the mempool task on the given task spawner.
     pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
@@ -121,7 +107,7 @@ where
                 .collect(),
         };
 
-        let chain = Chain::new(self.provider.clone(), chain_settings);
+        let chain = Chain::new(self.providers.evm().clone(), chain_settings);
         let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
 
         task_spawner.spawn_critical_with_graceful_shutdown_signal("chain watcher", |shutdown| {
@@ -204,25 +190,26 @@ where
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     ) -> anyhow::Result<Arc<dyn Mempool + 'static>> {
-        let ep = self
-            .ep_06
+        let ep_providers = self
+            .providers
+            .ep_v0_6_providers()
             .clone()
             .context("entry point v0.6 not supplied")?;
 
         if unsafe_mode {
-            let simulator = UnsafeSimulator::new(ep.clone());
+            let simulator = UnsafeSimulator::new(ep_providers.entry_point().clone());
             self.create_mempool(
                 task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
-                ep.clone(),
+                ep_providers,
                 simulator,
             )
         } else {
             let simulator = simulation::new_v0_6_simulator(
-                self.provider.clone(),
-                ep.clone(),
+                ep_providers.evm().clone(),
+                ep_providers.entry_point().clone(),
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
             );
@@ -231,7 +218,7 @@ where
                 chain_spec,
                 pool_config,
                 event_sender,
-                ep.clone(),
+                ep_providers,
                 simulator,
             )
         }
@@ -245,25 +232,26 @@ where
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     ) -> anyhow::Result<Arc<dyn Mempool + 'static>> {
-        let ep = self
-            .ep_07
+        let ep_providers = self
+            .providers
+            .ep_v0_7_providers()
             .clone()
             .context("entry point v0.7 not supplied")?;
 
         if unsafe_mode {
-            let simulator = UnsafeSimulator::new(ep.clone());
+            let simulator = UnsafeSimulator::new(ep_providers.entry_point().clone());
             self.create_mempool(
                 task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
-                ep.clone(),
+                ep_providers,
                 simulator,
             )
         } else {
             let simulator = simulation::new_v0_7_simulator(
-                self.provider.clone(),
-                ep.clone(),
+                self.providers.evm().clone(),
+                ep_providers.entry_point().clone(),
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
             );
@@ -272,31 +260,31 @@ where
                 chain_spec,
                 pool_config,
                 event_sender,
-                ep.clone(),
+                ep_providers,
                 simulator,
             )
         }
     }
 
-    fn create_mempool<T, UO, E, S>(
+    fn create_mempool<T, UO, EP, S>(
         &self,
         task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        ep: E,
+        ep_providers: EP,
         simulator: S,
     ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
     where
         T: TaskSpawnerExt,
         UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
         UserOperationVariant: From<UO>,
-        E: EntryPointProvider<UO> + Clone + 'static,
+        EP: ProvidersWithEntryPointT<UO = UO> + 'static,
         S: Simulator<UO = UO> + 'static,
     {
-        let fee_oracle = gas::get_fee_oracle(&chain_spec, self.provider.clone());
+        let fee_oracle = gas::get_fee_oracle(&chain_spec, ep_providers.evm().clone());
         let fee_estimator = FeeEstimatorImpl::new(
-            self.provider.clone(),
+            ep_providers.evm().clone(),
             fee_oracle,
             pool_config.precheck_settings.priority_fee_mode,
             pool_config
@@ -306,8 +294,8 @@ where
 
         let prechecker = PrecheckerImpl::new(
             chain_spec,
-            self.provider.clone(),
-            ep.clone(),
+            ep_providers.evm().clone(),
+            ep_providers.entry_point().clone(),
             fee_estimator,
             pool_config.precheck_settings,
         );
@@ -326,7 +314,7 @@ where
         );
 
         let paymaster = PaymasterTracker::new(
-            ep.clone(),
+            ep_providers.entry_point().clone(),
             PaymasterConfig::new(
                 pool_config.sim_settings.min_stake_value,
                 pool_config.sim_settings.min_unstake_delay,
@@ -337,14 +325,11 @@ where
 
         let uo_pool = UoPool::new(
             pool_config.clone(),
+            ep_providers,
+            UoPoolProviders::new(simulator, prechecker),
             event_sender,
-            self.provider.clone(),
-            ep,
-            prechecker,
-            simulator,
             paymaster,
             reputation,
-            self.da_gas_oracle.clone(),
         );
 
         Ok(Arc::new(uo_pool))

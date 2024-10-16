@@ -29,8 +29,8 @@ use rundler_types::{
 use super::error::ProviderResult;
 use crate::{
     AggregatorOut, BlockHashOrNumber, BundleHandler, DAGasProvider, DepositInfo, EntryPoint,
-    EvmCall, EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, SignatureAggregator,
-    SimulationProvider,
+    EntryPointProvider, EvmCall, EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut,
+    SignatureAggregator, SimulationProvider,
 };
 
 mockall::mock! {
@@ -197,6 +197,8 @@ mockall::mock! {
             gas_fees: GasFees,
         ) -> TransactionRequest;
     }
+
+    impl EntryPointProvider<v0_6::UserOperation> for EntryPointV0_6 {}
 }
 
 mockall::mock! {
@@ -285,4 +287,6 @@ mockall::mock! {
             gas_fees: GasFees,
         ) -> TransactionRequest;
     }
+
+    impl EntryPointProvider<v0_7::UserOperation> for EntryPointV0_7 {}
 }

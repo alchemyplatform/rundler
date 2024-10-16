@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use rundler_provider::{DAGasOracleSync, EntryPointProvider, EvmProvider};
+use rundler_provider::{Providers as ProvidersT, ProvidersWithEntryPointT};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
@@ -23,9 +23,7 @@ use rundler_sim::{
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
-    v0_7::UserOperation as UserOperationV0_7, EntryPointVersion, UserOperation,
-    UserOperationVariant,
+    chain::ChainSpec, pool::Pool as PoolT, EntryPointVersion, UserOperation, UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
@@ -35,7 +33,7 @@ use tokio::{
 use tracing::info;
 
 use crate::{
-    bundle_proposer::{self, BundleProposerImpl},
+    bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
@@ -107,49 +105,38 @@ pub struct EntryPointBuilderSettings {
 }
 
 /// Builder task
-pub struct BuilderTask<P, PR, E06, E07> {
+pub struct BuilderTask<Pool, Providers> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     builder_builder: LocalBuilderBuilder,
-    pool: P,
-    provider: PR,
-    ep_06: Option<E06>,
-    ep_07: Option<E07>,
-    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
+    pool: Pool,
+    providers: Providers,
 }
 
-impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
+impl<Pool, Providers> BuilderTask<Pool, Providers> {
     /// Create a new builder task
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
         builder_builder: LocalBuilderBuilder,
-        pool: P,
-        provider: PR,
-        ep_06: Option<E06>,
-        ep_07: Option<E07>,
-        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
+        pool: Pool,
+        providers: Providers,
     ) -> Self {
         Self {
             args,
             event_sender,
             builder_builder,
             pool,
-            provider,
-            ep_06,
-            ep_07,
-            da_gas_oracle,
+            providers,
         }
     }
 }
 
-impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07>
+impl<Pool, Providers> BuilderTask<Pool, Providers>
 where
-    P: Pool + Clone + 'static,
-    PR: EvmProvider + Clone + 'static,
-    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
+    Pool: PoolT + Clone + 'static,
+    Providers: ProvidersT + 'static,
 {
     /// Spawn the builder task on the given task spawner
     pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
@@ -218,8 +205,9 @@ where
         I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
-        let ep_v0_6 = self
-            .ep_06
+        let ep_providers = self
+            .providers
+            .ep_v0_6_providers()
             .clone()
             .context("entry point v0.6 not supplied")?;
         let mut bundle_sender_actions = vec![];
@@ -228,9 +216,8 @@ where
                 self.create_bundle_builder(
                     task_spawner,
                     i + ep.bundle_builder_index_offset,
-                    self.provider.clone(),
-                    ep_v0_6.clone(),
-                    UnsafeSimulator::new(ep_v0_6.clone()),
+                    ep_providers.clone(),
+                    UnsafeSimulator::new(ep_providers.entry_point().clone()),
                     pk_iter,
                 )
                 .await?
@@ -238,11 +225,10 @@ where
                 self.create_bundle_builder(
                     task_spawner,
                     i + ep.bundle_builder_index_offset,
-                    self.provider.clone(),
-                    ep_v0_6.clone(),
+                    ep_providers.clone(),
                     simulation::new_v0_6_simulator(
-                        self.provider.clone(),
-                        ep_v0_6.clone(),
+                        ep_providers.evm().clone(),
+                        ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
@@ -266,8 +252,9 @@ where
         I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
-        let ep_v0_7 = self
-            .ep_07
+        let ep_providers = self
+            .providers
+            .ep_v0_7_providers()
             .clone()
             .context("entry point v0.7 not supplied")?;
         let mut bundle_sender_actions = vec![];
@@ -276,9 +263,8 @@ where
                 self.create_bundle_builder(
                     task_spawner,
                     i + ep.bundle_builder_index_offset,
-                    self.provider.clone(),
-                    ep_v0_7.clone(),
-                    UnsafeSimulator::new(ep_v0_7.clone()),
+                    ep_providers.clone(),
+                    UnsafeSimulator::new(ep_providers.entry_point().clone()),
                     pk_iter,
                 )
                 .await?
@@ -286,11 +272,10 @@ where
                 self.create_bundle_builder(
                     task_spawner,
                     i + ep.bundle_builder_index_offset,
-                    self.provider.clone(),
-                    ep_v0_7.clone(),
+                    ep_providers.clone(),
                     simulation::new_v0_7_simulator(
-                        self.provider.clone(),
-                        ep_v0_7.clone(),
+                        ep_providers.evm().clone(),
+                        ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
@@ -303,12 +288,11 @@ where
         Ok(bundle_sender_actions)
     }
 
-    async fn create_bundle_builder<T, UO, E, S, I>(
+    async fn create_bundle_builder<T, UO, EP, S, I>(
         &self,
         task_spawner: &T,
         index: u64,
-        provider: PR,
-        entry_point: E,
+        ep_providers: EP,
         simulator: S,
         pk_iter: &mut I,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
@@ -316,7 +300,7 @@ where
         T: TaskSpawnerExt,
         UO: UserOperation + From<UserOperationVariant>,
         UserOperationVariant: AsRef<UO>,
-        E: EntryPointProvider<UO> + Clone + 'static,
+        EP: ProvidersWithEntryPointT + 'static,
         S: Simulator<UO = UO> + 'static,
         I: Iterator<Item = String>,
     {
@@ -327,7 +311,7 @@ where
             BundlerSigner::Local(
                 LocalSigner::connect(
                     &task_spawner,
-                    provider.clone(),
+                    self.providers.evm().clone(),
                     self.args.chain_spec.id,
                     pk.to_owned(),
                 )
@@ -343,7 +327,7 @@ where
                 Duration::from_millis(self.args.redis_lock_ttl_millis / 4),
                 KmsSigner::connect(
                     &task_spawner,
-                    provider.clone(),
+                    self.providers.evm().clone(),
                     self.args.chain_spec.id,
                     self.args.aws_kms_key_ids.clone(),
                     self.args.redis_uri.clone(),
@@ -379,7 +363,7 @@ where
         };
 
         let transaction_tracker = TransactionTrackerImpl::new(
-            provider.clone(),
+            ep_providers.evm().clone(),
             transaction_sender,
             tracker_settings,
             index,
@@ -392,9 +376,9 @@ where
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
-        let fee_oracle = gas::get_fee_oracle(&self.args.chain_spec, provider.clone());
+        let fee_oracle = gas::get_fee_oracle(&self.args.chain_spec, ep_providers.evm().clone());
         let fee_estimator = FeeEstimatorImpl::new(
-            provider.clone(),
+            ep_providers.evm().clone(),
             fee_oracle,
             proposer_settings.priority_fee_mode,
             proposer_settings.bundle_priority_fee_overhead_percent,
@@ -402,12 +386,8 @@ where
 
         let proposer = BundleProposerImpl::new(
             index,
-            self.pool.clone(),
-            simulator,
-            entry_point.clone(),
-            provider.clone(),
-            fee_estimator,
-            self.da_gas_oracle.clone(),
+            ep_providers.clone(),
+            BundleProposerProviders::new(self.pool.clone(), simulator, fee_estimator),
             proposer_settings,
             self.event_sender.clone(),
         );
@@ -418,7 +398,7 @@ where
             self.args.chain_spec.clone(),
             beneficiary,
             proposer,
-            entry_point,
+            ep_providers.entry_point().clone(),
             transaction_tracker,
             self.pool.clone(),
             builder_settings,

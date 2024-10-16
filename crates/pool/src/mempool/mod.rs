@@ -40,7 +40,7 @@ use rundler_types::{
     EntityUpdate, EntryPointVersion, UserOperationId, UserOperationVariant,
 };
 use tonic::async_trait;
-pub(crate) use uo_pool::UoPool;
+pub(crate) use uo_pool::{UoPool, UoPoolProviders};
 
 use super::chain::ChainUpdate;
 

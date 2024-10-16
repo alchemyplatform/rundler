@@ -22,7 +22,7 @@ use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
 use rundler_types::chain::ChainSpec;
 
-use super::{CommonArgs, RundlerProviders};
+use super::CommonArgs;
 
 /// CLI options for the RPC server
 #[derive(Args, Debug)]
@@ -79,7 +79,6 @@ pub struct RpcArgs {
 impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
-    #[allow(clippy::too_many_arguments)]
     pub fn to_args(
         &self,
         chain_spec: ChainSpec,
@@ -176,16 +175,14 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    let RundlerProviders {
-        provider,
-        ep_v0_6,
-        ep_v0_7,
-        ..
-    } = super::construct_providers(&common_args, &chain_spec)?;
-
-    RpcTask::new(task_args, pool, builder, provider, ep_v0_6, ep_v0_7)
-        .spawn(task_spawner)
-        .await?;
+    RpcTask::new(
+        task_args,
+        pool,
+        builder,
+        super::construct_providers(&common_args, &chain_spec)?,
+    )
+    .spawn(task_spawner)
+    .await?;
 
     Ok(())
 }
