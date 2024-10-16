@@ -89,7 +89,11 @@ where
         let ep = config.entry_point.to_string();
         Self {
             state: RwLock::new(UoPoolState {
-                pool: PoolInner::new(config.clone().into(), entry_point.clone()),
+                pool: PoolInner::new(
+                    config.clone().into(),
+                    entry_point.clone(),
+                    event_sender.clone(),
+                ),
                 throttled_ops: HashSet::new(),
                 block_number: 0,
                 block_hash: B256::ZERO,
@@ -301,7 +305,7 @@ where
         };
 
         let start = Instant::now();
-        let events = {
+        {
             let mut state = self.state.write();
             state
                 .pool
@@ -344,7 +348,7 @@ where
                 gas_fees,
                 base_fee,
             )
-        };
+        }
         let maintenance_time = start.elapsed();
         tracing::debug!(
             "Pool maintenance took {:?} µs",
@@ -353,10 +357,6 @@ where
         self.ep_specific_metrics
             .maintenance_time
             .record(maintenance_time.as_micros() as f64);
-
-        for event in events {
-            self.emit(event);
-        }
 
         // update required bundle fees and update metrics
         match self.prechecker.update_fees().await {
@@ -543,13 +543,11 @@ where
         }
 
         // Add op to pool
-        let has_required_pvg =
-            pool_op.uo.pre_verification_gas() >= precheck_ret.required_pre_verification_gas;
         let hash = {
             let mut state = self.state.write();
             let hash = state
                 .pool
-                .add_operation(pool_op.clone(), has_required_pvg)?;
+                .add_operation(pool_op.clone(), precheck_ret.required_pre_verification_gas)?;
 
             if throttled {
                 state.throttled_ops.insert(hash);
