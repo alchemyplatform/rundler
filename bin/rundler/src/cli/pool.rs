@@ -171,6 +171,14 @@ pub struct PoolArgs {
         default_value = "10"
     )]
     pub drop_min_num_blocks: u64,
+
+    #[arg(
+        long = "pool.gas_limit_efficiency_reject_threshold",
+        name = "pool.gas_limit_efficiency_reject_threshold",
+        env = "POOL_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",
+        default_value = "0.0"
+    )]
+    pub gas_limit_efficiency_reject_threshold: f32,
 }
 
 impl PoolArgs {
@@ -226,6 +234,7 @@ impl PoolArgs {
             reputation_tracking_enabled: self.reputation_tracking_enabled,
             drop_min_num_blocks: self.drop_min_num_blocks,
             da_gas_tracking_enabled,
+            gas_limit_efficiency_reject_threshold: self.gas_limit_efficiency_reject_threshold,
         };
 
         let mut pool_configs = vec![];

@@ -167,6 +167,10 @@ pub struct PoolConfig {
     pub da_gas_tracking_enabled: bool,
     /// The minimum number of blocks a user operation must be in the mempool before it can be dropped
     pub drop_min_num_blocks: u64,
+    /// Reject user operations with gas limit efficiency below this threshold.
+    /// Gas limit efficiency is defined as the ratio of the gas limit to the gas used.
+    /// This applies to all the verification, call, and paymaster gas limits.
+    pub gas_limit_efficiency_reject_threshold: f32,
 }
 
 /// Origin of an operation.

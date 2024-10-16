@@ -159,6 +159,8 @@ List of command line options for configuring the Pool.
   - env: *POOL_REPUTATION_TRACKING_ENABLED*
 - `--pool.drop_min_num_blocks`: The minimum number of blocks that a UO must stay in the mempool before it can be requested to be dropped by the user (default: `10`)
   - env: *POOL_DROP_MIN_NUM_BLOCKS*
+- `--pool.gas_limit_efficiency_reject_threshold`: The ratio of gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
+  - env: *POOL_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 
 ## Builder Options
 
