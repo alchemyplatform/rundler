@@ -311,6 +311,12 @@ impl From<MempoolError> for EthRpcError {
                 Self::EntryPointValidationRejected(format!("unknown entry point: {}", a))
             }
             MempoolError::OperationDropTooSoon(_, _, _) => Self::InvalidParams(value.to_string()),
+            MempoolError::PreOpGasLimitEfficiencyTooLow(_, _) => {
+                Self::InvalidParams(value.to_string())
+            }
+            MempoolError::CallGasLimitEfficiencyTooLow(_, _) => {
+                Self::InvalidParams(value.to_string())
+            }
         }
     }
 }

@@ -24,21 +24,22 @@ use rundler_types::{
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
     AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorValidationFailed,
-    AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender, CallGasLimitTooLow,
-    CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
-    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
-    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
-    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
-    InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
-    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
-    OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, PanicRevert,
-    PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
-    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
-    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
-    UsedForbiddenOpcode, UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
+    CallGasLimitEfficiencyTooLow, CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod,
+    CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity, EntityThrottledError,
+    EntityType, EntryPointRevert, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
+    FactoryIsNotContract, InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature,
+    InvalidStorageAccess, InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError,
+    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
+    NotStaked, OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
+    PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
+    PreOpGasLimitEfficiencyTooLow, PreVerificationGasTooLow,
+    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
+    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
+    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert,
+    UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
+    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
     VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
@@ -125,6 +126,12 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             }
             Some(mempool_error::Error::OperationDropTooSoon(e)) => {
                 MempoolError::OperationDropTooSoon(e.added_at, e.attempted_at, e.must_wait)
+            }
+            Some(mempool_error::Error::PreOpGasLimitEfficiencyTooLow(e)) => {
+                MempoolError::PreOpGasLimitEfficiencyTooLow(e.required, e.actual)
+            }
+            Some(mempool_error::Error::CallGasLimitEfficiencyTooLow(e)) => {
+                MempoolError::CallGasLimitEfficiencyTooLow(e.required, e.actual)
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -230,6 +237,16 @@ impl From<MempoolError> for ProtoMempoolError {
                     )),
                 }
             }
+            MempoolError::PreOpGasLimitEfficiencyTooLow(required, actual) => ProtoMempoolError {
+                error: Some(mempool_error::Error::PreOpGasLimitEfficiencyTooLow(
+                    PreOpGasLimitEfficiencyTooLow { required, actual },
+                )),
+            },
+            MempoolError::CallGasLimitEfficiencyTooLow(required, actual) => ProtoMempoolError {
+                error: Some(mempool_error::Error::CallGasLimitEfficiencyTooLow(
+                    CallGasLimitEfficiencyTooLow { required, actual },
+                )),
+            },
         }
     }
 }
