@@ -13,12 +13,14 @@
 
 use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Instant};
 
-use alloy_primitives::{utils::format_units, Address, B256, U256};
+use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
+use anyhow::Context;
+use futures::TryFutureExt;
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
-use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider};
+use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{
     pool::{
@@ -72,7 +74,8 @@ struct UoPoolState<E> {
 
 impl<UO, EP, P, S, E> UoPool<UO, EP, P, S, E>
 where
-    E: DAGasProvider<UO = UO> + Clone,
+    UO: From<UserOperationVariant>,
+    E: DAGasProvider<UO = UO> + SimulationProvider<UO = UO> + Clone,
 {
     // TODO refactor provider args
     #[allow(clippy::too_many_arguments)]
@@ -156,6 +159,54 @@ where
             .increment(count as u64);
         self.ep_specific_metrics.removed_entities.increment(1);
     }
+
+    async fn check_call_gas_limit_efficiency(
+        &self,
+        op: UserOperationVariant,
+        block_hash: B256,
+    ) -> MempoolResult<()> {
+        // Check call gas limit efficiency only if needed
+        if self.config.gas_limit_efficiency_reject_threshold > 0.0 {
+            let gas_price = op.gas_price(0);
+            let call_gas_limit = op.call_gas_limit();
+
+            let sim_result = self
+                .entry_point
+                .simulate_handle_op(
+                    op.into(),
+                    Address::ZERO,
+                    Bytes::new(),
+                    block_hash.into(),
+                    StateOverride::default(),
+                )
+                .await;
+            match sim_result {
+                Err(e) => {
+                    tracing::error!("Failed to simulate handle op for gas limit efficiency check, failing open: {:?}", e);
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Failed to simulate handle op for gas limit efficiency check, failing open: {:?}", e);
+                }
+                Ok(Ok(execution_res)) => {
+                    let total_gas_used: u128 = (execution_res.paid / U256::from(gas_price))
+                        .try_into()
+                        .context("total gas used should fit in u128")?;
+
+                    let call_gas_used = total_gas_used - execution_res.pre_op_gas;
+
+                    let call_gas_efficiency = call_gas_used as f32 / call_gas_limit as f32;
+                    if call_gas_efficiency < self.config.gas_limit_efficiency_reject_threshold {
+                        return Err(MempoolError::CallGasLimitEfficiencyTooLow(
+                            self.config.gas_limit_efficiency_reject_threshold,
+                            call_gas_efficiency,
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -165,7 +216,7 @@ where
     EP: EvmProvider,
     P: Prechecker<UO = UO>,
     S: Simulator<UO = UO>,
-    E: EntryPoint + DAGasProvider<UO = UO> + Clone,
+    E: EntryPoint + DAGasProvider<UO = UO> + SimulationProvider<UO = UO> + Clone,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
         let deduped_ops = update.deduped_ops();
@@ -484,10 +535,13 @@ where
             .await?;
 
         // Only let ops with successful simulations through
-        let sim_result = self
+        // Run simulation and call gas limit efficiency check in parallel
+        let sim_fut = self
             .simulator
             .simulate_validation(versioned_op, block_hash, None)
-            .await?;
+            .map_err(Into::into);
+        let call_gas_check_future = self.check_call_gas_limit_efficiency(op.clone(), block_hash);
+        let (sim_result, _) = tokio::try_join!(sim_fut, call_gas_check_future)?;
 
         // No aggregators supported for now
         if let Some(agg) = &sim_result.aggregator {
@@ -499,6 +553,15 @@ where
             .read()
             .pool
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
+
+        // Check pre op gas limit efficiency
+        let pre_op_gas_efficiency = sim_result.pre_op_gas as f32 / op.pre_op_gas_limit() as f32;
+        if pre_op_gas_efficiency < self.config.gas_limit_efficiency_reject_threshold {
+            return Err(MempoolError::PreOpGasLimitEfficiencyTooLow(
+                self.config.gas_limit_efficiency_reject_threshold,
+                pre_op_gas_efficiency,
+            ));
+        }
 
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
@@ -1581,7 +1644,10 @@ mod tests {
         impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
-        impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
+        impl EntryPoint
+            + DAGasProvider<UO = UserOperation>
+            + SimulationProvider<UO = UserOperation>
+            + Clone,
     > {
         let entrypoint = MockEntryPointV0_6::new();
         create_pool_with_entry_point(ops, entrypoint)
@@ -1595,7 +1661,10 @@ mod tests {
         impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
-        impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
+        impl EntryPoint
+            + DAGasProvider<UO = UserOperation>
+            + SimulationProvider<UO = UserOperation>
+            + Clone,
     > {
         let entrypoint = Arc::new(entrypoint);
         let args = PoolConfig {
@@ -1618,6 +1687,7 @@ mod tests {
             paymaster_cache_length: 100,
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
+            gas_limit_efficiency_reject_threshold: 0.0,
         };
 
         let mut evm = MockEvmProvider::new();
@@ -1683,6 +1753,7 @@ mod tests {
                                 },
                                 ..EntityInfos::default()
                             },
+                            pre_op_gas: 1000,
                             ..SimulationResult::default()
                         })
                     }
@@ -1712,7 +1783,10 @@ mod tests {
             impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
-            impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
+            impl EntryPoint
+                + DAGasProvider<UO = UserOperation>
+                + SimulationProvider<UO = UserOperation>
+                + Clone,
         >,
         Vec<UserOperationVariant>,
     ) {
@@ -1732,7 +1806,10 @@ mod tests {
             impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
-            impl EntryPoint + DAGasProvider<UO = UserOperation> + Clone,
+            impl EntryPoint
+                + DAGasProvider<UO = UserOperation>
+                + SimulationProvider<UO = UserOperation>
+                + Clone,
         >,
         Vec<UserOperationVariant>,
     ) {
