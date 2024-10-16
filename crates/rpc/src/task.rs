@@ -19,7 +19,7 @@ use jsonrpsee::{
     server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
 };
-use rundler_provider::{EntryPointProvider, EvmProvider};
+use rundler_provider::Providers as ProvidersT;
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl, FeeOracle},
     EstimationSettings, FeeEstimator, GasEstimatorV0_6, GasEstimatorV0_7, PrecheckSettings,
@@ -28,10 +28,7 @@ use rundler_task::{
     server::{format_socket_addr, HealthCheck},
     TaskSpawner,
 };
-use rundler_types::{
-    builder::Builder, chain::ChainSpec, pool::Pool, v0_6::UserOperation as UserOperationV0_6,
-    v0_7::UserOperation as UserOperationV0_7,
-};
+use rundler_types::{builder::Builder as BuilderT, chain::ChainSpec, pool::Pool as PoolT};
 use tracing::info;
 
 use crate::{
@@ -82,43 +79,30 @@ pub struct Args {
 
 /// JSON-RPC server task.
 #[derive(Debug)]
-pub struct RpcTask<P, B, PR, E06, E07> {
+pub struct RpcTask<Pool, Builder, Providers> {
     args: Args,
-    pool: P,
-    builder: B,
-    provider: PR,
-    ep_06: Option<E06>,
-    ep_07: Option<E07>,
+    pool: Pool,
+    builder: Builder,
+    providers: Providers,
 }
 
-impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07> {
+impl<Pool, Builder, Providers> RpcTask<Pool, Builder, Providers> {
     /// Creates a new RPC server task.
-    pub fn new(
-        args: Args,
-        pool: P,
-        builder: B,
-        provider: PR,
-        ep_06: Option<E06>,
-        ep_07: Option<E07>,
-    ) -> Self {
+    pub fn new(args: Args, pool: Pool, builder: Builder, providers: Providers) -> Self {
         Self {
             args,
             pool,
             builder,
-            provider,
-            ep_06,
-            ep_07,
+            providers,
         }
     }
 }
 
-impl<P, B, PR, E06, E07> RpcTask<P, B, PR, E06, E07>
+impl<Pool, Builder, Providers> RpcTask<Pool, Builder, Providers>
 where
-    P: Pool + HealthCheck + Clone + 'static,
-    B: Builder + HealthCheck + Clone + 'static,
-    PR: EvmProvider + Clone + 'static,
-    E06: EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-    E07: EntryPointProvider<UserOperationV0_7> + Clone + 'static,
+    Pool: PoolT + HealthCheck + Clone + 'static,
+    Builder: BuilderT + HealthCheck + Clone + 'static,
+    Providers: ProvidersT + 'static,
 {
     /// Spawns the RPC server task on the given task spawner.
     pub async fn spawn<T: TaskSpawner>(self, task_spawner: T) -> anyhow::Result<()> {
@@ -128,10 +112,10 @@ where
         let mut router_builder = EntryPointRouterBuilder::default();
         let fee_oracle = Arc::<dyn FeeOracle>::from(gas::get_fee_oracle(
             &self.args.chain_spec,
-            self.provider.clone(),
+            self.providers.evm().clone(),
         ));
         let fee_estimator = FeeEstimatorImpl::new(
-            self.provider.clone(),
+            self.providers.evm().clone(),
             fee_oracle,
             self.args.precheck_settings.priority_fee_mode,
             self.args
@@ -141,7 +125,8 @@ where
 
         if self.args.entry_point_v0_6_enabled {
             let ep = self
-                .ep_06
+                .providers
+                .ep_v0_6()
                 .clone()
                 .context("entry point v0.6 not supplied")?;
 
@@ -149,14 +134,14 @@ where
                 ep.clone(),
                 GasEstimatorV0_6::new(
                     self.args.chain_spec.clone(),
-                    self.provider.clone(),
+                    self.providers.evm().clone(),
                     ep.clone(),
                     self.args.estimation_settings,
                     fee_estimator.clone(),
                 ),
                 UserOperationEventProviderV0_6::new(
                     self.args.chain_spec.clone(),
-                    self.provider.clone(),
+                    self.providers.evm().clone(),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
@@ -166,7 +151,8 @@ where
 
         if self.args.entry_point_v0_7_enabled {
             let ep = self
-                .ep_07
+                .providers
+                .ep_v0_7()
                 .clone()
                 .context("entry point v0.7 not supplied")?;
 
@@ -174,14 +160,14 @@ where
                 ep.clone(),
                 GasEstimatorV0_7::new(
                     self.args.chain_spec.clone(),
-                    self.provider.clone(),
+                    self.providers.evm().clone(),
                     ep.clone(),
                     self.args.estimation_settings,
                     fee_estimator.clone(),
                 ),
                 UserOperationEventProviderV0_7::new(
                     self.args.chain_spec.clone(),
-                    self.provider.clone(),
+                    self.providers.evm().clone(),
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
