@@ -167,10 +167,11 @@ impl TransactionSenderArgs {
         let provider = rundler_provider::new_alloy_evm_provider(rpc_url)?;
         let sender = match self {
             Self::Raw(args) => {
+                let submitter = rundler_provider::new_alloy_evm_provider(&args.submit_url)?;
+
                 if args.use_submit_for_status {
-                    let submitter = rundler_provider::new_alloy_evm_provider(&args.submit_url)?;
                     TransactionSenderEnum::Raw(RawTransactionSender::new(
-                        provider,
+                        submitter.clone(),
                         submitter,
                         signer,
                         args.dropped_status_supported,
@@ -178,7 +179,7 @@ impl TransactionSenderArgs {
                     ))
                 } else {
                     TransactionSenderEnum::Raw(RawTransactionSender::new(
-                        provider.clone(),
+                        submitter,
                         provider,
                         signer,
                         args.dropped_status_supported,
