@@ -180,6 +180,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         provider,
         ep_v0_6,
         ep_v0_7,
+        ..
     } = super::construct_providers(&common_args, &chain_spec)?;
 
     RpcTask::new(task_args, pool, builder, provider, ep_v0_6, ep_v0_7)
