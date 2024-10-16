@@ -20,8 +20,8 @@ use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::{
-    alloy::da::{arbitrum::NodeInterface::NodeInterfaceInstance, DAGasOracle},
-    BlockHashOrNumber, ProviderResult,
+    alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance, BlockHashOrNumber, DAGasOracle,
+    DAGasOracleSync, ProviderResult,
 };
 
 /// Cached Arbitrum Nitro DA gas oracle
@@ -93,7 +93,14 @@ where
             }
         }
     }
+}
 
+#[async_trait::async_trait]
+impl<AP, T> DAGasOracleSync for CachedNitroDAGasOracle<AP, T>
+where
+    AP: AlloyProvider<T>,
+    T: Transport + Clone,
+{
     async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {

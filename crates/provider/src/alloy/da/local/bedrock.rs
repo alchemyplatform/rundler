@@ -23,14 +23,11 @@ use tokio::sync::Mutex as TokioMutex;
 
 use super::multicall::{self, Multicall::MulticallInstance, MULTICALL_BYTECODE};
 use crate::{
-    alloy::da::{
-        optimism::GasPriceOracle::{
-            baseFeeScalarCall, blobBaseFeeCall, blobBaseFeeScalarCall, l1BaseFeeCall,
-            GasPriceOracleCalls, GasPriceOracleInstance,
-        },
-        DAGasOracle,
+    alloy::da::optimism::GasPriceOracle::{
+        baseFeeScalarCall, blobBaseFeeCall, blobBaseFeeScalarCall, l1BaseFeeCall,
+        GasPriceOracleCalls, GasPriceOracleInstance,
     },
-    BlockHashOrNumber, ProviderResult,
+    BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult,
 };
 
 // From https://github.com/ethereum-optimism/optimism/blob/f93f9f40adcd448168c6ea27820aeee5da65fcbd/packages/contracts-bedrock/src/L2/GasPriceOracle.sol#L26
@@ -86,7 +83,14 @@ where
         let da_gas = self.calc_da_gas_sync(&uo_data, &block_data, gas_price);
         Ok((da_gas, uo_data, block_data))
     }
+}
 
+#[async_trait::async_trait]
+impl<AP, T> DAGasOracleSync for LocalBedrockDAGasOracle<AP, T>
+where
+    AP: AlloyProvider<T>,
+    T: Transport + Clone,
+{
     async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {

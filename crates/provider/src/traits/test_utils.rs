@@ -29,8 +29,8 @@ use rundler_types::{
 use super::error::ProviderResult;
 use crate::{
     AggregatorOut, BlockHashOrNumber, BundleHandler, DAGasProvider, DepositInfo, EntryPoint,
-    EvmCall, EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, SignatureAggregator,
-    SimulationProvider,
+    EntryPointProvider, EvmCall, EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut,
+    SignatureAggregator, SimulationProvider,
 };
 
 mockall::mock! {
@@ -178,12 +178,6 @@ mockall::mock! {
             block: BlockHashOrNumber,
             gas_price: u128,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
-
-        async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
-
-        async fn uo_data(&self, uo: v0_6::UserOperation, block: BlockHashOrNumber) -> ProviderResult<DAGasUOData>;
-
-        fn calc_da_gas_sync(&self, uo_data: &DAGasUOData, block_data: &DAGasBlockData, gas_price: u128) -> u128;
     }
 
     #[async_trait::async_trait]
@@ -203,6 +197,8 @@ mockall::mock! {
             gas_fees: GasFees,
         ) -> TransactionRequest;
     }
+
+    impl EntryPointProvider<v0_6::UserOperation> for EntryPointV0_6 {}
 }
 
 mockall::mock! {
@@ -272,12 +268,6 @@ mockall::mock! {
             block: BlockHashOrNumber,
             gas_price: u128,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
-
-        async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
-
-        async fn uo_data(&self, uo: v0_7::UserOperation, block: BlockHashOrNumber) -> ProviderResult<DAGasUOData>;
-
-        fn calc_da_gas_sync(&self, uo_data: &DAGasUOData, block_data: &DAGasBlockData, gas_price: u128) -> u128;
     }
 
     #[async_trait::async_trait]
@@ -297,4 +287,6 @@ mockall::mock! {
             gas_fees: GasFees,
         ) -> TransactionRequest;
     }
+
+    impl EntryPointProvider<v0_7::UserOperation> for EntryPointV0_7 {}
 }

@@ -21,7 +21,6 @@ use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
 use self::events::Event;
-use super::RundlerProviders;
 use crate::cli::{
     builder::{self, BuilderArgs},
     pool::PoolArgs,
@@ -110,19 +109,13 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     let builder_builder = LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY);
     let builder_handle = builder_builder.get_handle();
 
-    let RundlerProviders {
-        provider,
-        ep_v0_6,
-        ep_v0_7,
-    } = super::construct_providers(&common_args, &chain_spec)?;
+    let providers = super::construct_providers(&common_args, &chain_spec)?;
 
     PoolTask::new(
         pool_task_args,
         op_pool_event_sender,
         pool_builder,
-        provider.clone(),
-        ep_v0_6.clone(),
-        ep_v0_7.clone(),
+        providers.clone(),
     )
     .spawn(task_spawner.clone())
     .await?;
@@ -132,23 +125,14 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         builder_event_sender,
         builder_builder,
         pool_handle.clone(),
-        provider.clone(),
-        ep_v0_6.clone(),
-        ep_v0_7.clone(),
+        providers.clone(),
     )
     .spawn(task_spawner.clone())
     .await?;
 
-    RpcTask::new(
-        rpc_task_args,
-        pool_handle,
-        builder_handle,
-        provider,
-        ep_v0_6,
-        ep_v0_7,
-    )
-    .spawn(task_spawner)
-    .await?;
+    RpcTask::new(rpc_task_args, pool_handle, builder_handle, providers)
+        .spawn(task_spawner)
+        .await?;
 
     Ok(())
 }

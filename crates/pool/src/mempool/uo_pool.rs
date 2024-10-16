@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, marker::PhantomData, sync::Arc, time::Instant};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
 use anyhow::Context;
@@ -20,7 +20,9 @@ use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
-use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride};
+use rundler_provider::{
+    DAGasOracleSync, EvmProvider, ProvidersWithEntryPointT, SimulationProvider, StateOverride,
+};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{
     pool::{
@@ -48,23 +50,20 @@ use crate::{
 /// Wrapper around a pool object that implements thread-safety
 /// via a RwLock. Safe to call from multiple threads. Methods
 /// block on write locks.
-pub(crate) struct UoPool<UO, EP, P, S, E> {
+pub(crate) struct UoPool<UP: UoPoolProvidersT, EP: ProvidersWithEntryPointT> {
     config: PoolConfig,
-    state: RwLock<UoPoolState<E>>,
-    paymaster: PaymasterTracker<E>,
+    ep_providers: EP,
+    pool_providers: UP,
+    state: RwLock<UoPoolState<EP::DAGasOracleSync>>,
+    paymaster: PaymasterTracker<EP::EntryPoint>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    entry_point: E,
-    evm: EP,
-    prechecker: P,
-    simulator: S,
     ep_specific_metrics: UoPoolMetricsEPSpecific,
     metrics: UoPoolMetrics,
-    _uo_type: PhantomData<UO>,
 }
 
-struct UoPoolState<E> {
-    pool: PoolInner<E>,
+struct UoPoolState<D> {
+    pool: PoolInner<D>,
     throttled_ops: HashSet<B256>,
     block_number: u64,
     block_hash: B256,
@@ -72,21 +71,17 @@ struct UoPoolState<E> {
     base_fee: u128,
 }
 
-impl<UO, EP, P, S, E> UoPool<UO, EP, P, S, E>
+impl<UP, EP> UoPool<UP, EP>
 where
-    UO: From<UserOperationVariant>,
-    E: DAGasProvider<UO = UO> + SimulationProvider<UO = UO> + Clone,
+    UP: UoPoolProvidersT,
+    EP: ProvidersWithEntryPointT,
 {
-    // TODO refactor provider args
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         config: PoolConfig,
+        ep_providers: EP,
+        pool_providers: UP,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        evm: EP,
-        entry_point: E,
-        prechecker: P,
-        simulator: S,
-        paymaster: PaymasterTracker<E>,
+        paymaster: PaymasterTracker<EP::EntryPoint>,
         reputation: Arc<AddressReputation>,
     ) -> Self {
         let ep = config.entry_point.to_string();
@@ -94,7 +89,7 @@ where
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(
                     config.clone().into(),
-                    entry_point.clone(),
+                    ep_providers.da_gas_oracle_sync().clone(),
                     event_sender.clone(),
                 ),
                 throttled_ops: HashSet::new(),
@@ -106,14 +101,11 @@ where
             reputation,
             paymaster,
             event_sender,
-            evm,
-            entry_point,
-            prechecker,
-            simulator,
             config,
             ep_specific_metrics: UoPoolMetricsEPSpecific::new_with_labels(&[("entry_point", ep)]),
             metrics: UoPoolMetrics::default(),
-            _uo_type: PhantomData,
+            ep_providers,
+            pool_providers,
         }
     }
 
@@ -171,7 +163,8 @@ where
             let call_gas_limit = op.call_gas_limit();
 
             let sim_result = self
-                .entry_point
+                .ep_providers
+                .entry_point()
                 .simulate_handle_op(
                     op.into(),
                     Address::ZERO,
@@ -210,13 +203,10 @@ where
 }
 
 #[async_trait]
-impl<UO, EP, P, S, E> Mempool for UoPool<UO, EP, P, S, E>
+impl<UP, EP> Mempool for UoPool<UP, EP>
 where
-    UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
-    EP: EvmProvider,
-    P: Prechecker<UO = UO>,
-    S: Simulator<UO = UO>,
-    E: EntryPoint + DAGasProvider<UO = UO> + SimulationProvider<UO = UO> + Clone,
+    UP: UoPoolProvidersT,
+    EP: ProvidersWithEntryPointT,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
         let deduped_ops = update.deduped_ops();
@@ -339,9 +329,11 @@ where
             .unmined_operations
             .increment(unmined_op_count);
 
-        let da_block_data = if self.config.da_gas_tracking_enabled {
-            match self
-                .entry_point
+        let da_block_data = if self.config.da_gas_tracking_enabled
+            && self.ep_providers.da_gas_oracle_sync().is_some()
+        {
+            let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
+            match da_gas_oracle
                 .block_data(update.latest_block_hash.into())
                 .await
             {
@@ -410,7 +402,7 @@ where
             .record(maintenance_time.as_micros() as f64);
 
         // update required bundle fees and update metrics
-        match self.prechecker.update_fees().await {
+        match self.pool_providers.prechecker().update_fees().await {
             Ok((bundle_fees, base_fee)) => {
                 let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
@@ -509,7 +501,8 @@ where
         // This doesn't clear all race conditions, as the pool may need to update its state before
         // a UO can be valid, i.e. for replacement.
         let (block_hash, block_number) = self
-            .evm
+            .ep_providers
+            .evm()
             .get_latest_block_hash_and_number()
             .await
             .map_err(anyhow::Error::from)?;
@@ -530,14 +523,16 @@ where
         let versioned_op = op.clone().into();
 
         let precheck_ret = self
-            .prechecker
+            .pool_providers
+            .prechecker()
             .check(&versioned_op, block_hash.into())
             .await?;
 
         // Only let ops with successful simulations through
         // Run simulation and call gas limit efficiency check in parallel
         let sim_fut = self
-            .simulator
+            .pool_providers
+            .simulator()
             .simulate_validation(versioned_op, block_hash, None)
             .map_err(Into::into);
         let call_gas_check_future = self.check_call_gas_limit_efficiency(op.clone(), block_hash);
@@ -823,6 +818,50 @@ where
     }
 }
 
+// Type erasure for UoPool providers
+pub(crate) trait UoPoolProvidersT: Send + Sync {
+    type UO: UserOperation + From<UserOperationVariant>;
+    type Prechecker: Prechecker<UO = Self::UO>;
+    type Simulator: Simulator<UO = Self::UO>;
+
+    fn prechecker(&self) -> &Self::Prechecker;
+
+    fn simulator(&self) -> &Self::Simulator;
+}
+
+pub(crate) struct UoPoolProviders<S, P> {
+    simulator: S,
+    prechecker: P,
+}
+
+impl<S, P> UoPoolProviders<S, P> {
+    pub(crate) fn new(simulator: S, prechecker: P) -> Self {
+        Self {
+            simulator,
+            prechecker,
+        }
+    }
+}
+
+impl<S, P> UoPoolProvidersT for UoPoolProviders<S, P>
+where
+    S: Simulator,
+    S::UO: UserOperation + From<UserOperationVariant>,
+    P: Prechecker<UO = S::UO>,
+{
+    type UO = S::UO;
+    type Prechecker = P;
+    type Simulator = S;
+
+    fn prechecker(&self) -> &Self::Prechecker {
+        &self.prechecker
+    }
+
+    fn simulator(&self) -> &Self::Simulator {
+        &self.simulator
+    }
+}
+
 #[derive(Metrics)]
 #[metrics(scope = "op_pool")]
 struct UoPoolMetricsEPSpecific {
@@ -855,7 +894,9 @@ mod tests {
 
     use alloy_primitives::Bytes;
     use mockall::Sequence;
-    use rundler_provider::{DepositInfo, MockEntryPointV0_6, MockEvmProvider};
+    use rundler_provider::{
+        DepositInfo, MockEntryPointV0_6, MockEvmProvider, ProvidersWithEntryPoint,
+    };
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckReturn, PrecheckSettings,
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
@@ -1639,16 +1680,7 @@ mod tests {
 
     fn create_pool(
         ops: Vec<OpWithErrors>,
-    ) -> UoPool<
-        UserOperation,
-        impl EvmProvider,
-        impl Prechecker<UO = UserOperation>,
-        impl Simulator<UO = UserOperation>,
-        impl EntryPoint
-            + DAGasProvider<UO = UserOperation>
-            + SimulationProvider<UO = UserOperation>
-            + Clone,
-    > {
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
         let entrypoint = MockEntryPointV0_6::new();
         create_pool_with_entry_point(ops, entrypoint)
     }
@@ -1656,16 +1688,7 @@ mod tests {
     fn create_pool_with_entry_point(
         ops: Vec<OpWithErrors>,
         entrypoint: MockEntryPointV0_6,
-    ) -> UoPool<
-        UserOperation,
-        impl EvmProvider,
-        impl Prechecker<UO = UserOperation>,
-        impl Simulator<UO = UserOperation>,
-        impl EntryPoint
-            + DAGasProvider<UO = UserOperation>
-            + SimulationProvider<UO = UserOperation>
-            + Clone,
-    > {
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
         let entrypoint = Arc::new(entrypoint);
         let args = PoolConfig {
             chain_spec: ChainSpec::default(),
@@ -1696,9 +1719,10 @@ mod tests {
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
+        let entry_point = Arc::new(entrypoint);
 
         let paymaster = PaymasterTracker::new(
-            entrypoint.clone(),
+            entry_point.clone(),
             PaymasterConfig::new(
                 args.sim_settings.min_stake_value,
                 args.sim_settings.min_unstake_delay,
@@ -1761,14 +1785,13 @@ mod tests {
         }
 
         let (event_sender, _) = broadcast::channel(4);
+        let none_oracle: Option<Arc<dyn DAGasOracleSync>> = None;
 
         UoPool::new(
             args,
+            ProvidersWithEntryPoint::new(Arc::new(evm), entry_point, none_oracle),
+            UoPoolProviders::new(simulator, prechecker),
             event_sender,
-            evm,
-            entrypoint,
-            prechecker,
-            simulator,
             paymaster,
             reputation,
         )
@@ -1778,16 +1801,7 @@ mod tests {
         ops: Vec<OpWithErrors>,
         entrypoint: MockEntryPointV0_6,
     ) -> (
-        UoPool<
-            UserOperation,
-            impl EvmProvider,
-            impl Prechecker<UO = UserOperation>,
-            impl Simulator<UO = UserOperation>,
-            impl EntryPoint
-                + DAGasProvider<UO = UserOperation>
-                + SimulationProvider<UO = UserOperation>
-                + Clone,
-        >,
+        UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT>,
         Vec<UserOperationVariant>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
@@ -1801,16 +1815,7 @@ mod tests {
     async fn create_pool_insert_ops(
         ops: Vec<OpWithErrors>,
     ) -> (
-        UoPool<
-            UserOperation,
-            impl EvmProvider,
-            impl Prechecker<UO = UserOperation>,
-            impl Simulator<UO = UserOperation>,
-            impl EntryPoint
-                + DAGasProvider<UO = UserOperation>
-                + SimulationProvider<UO = UserOperation>
-                + Clone,
-        >,
+        UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT>,
         Vec<UserOperationVariant>,
     ) {
         let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();

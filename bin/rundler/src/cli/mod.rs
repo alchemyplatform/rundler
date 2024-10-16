@@ -32,7 +32,8 @@ use pool::PoolCliArgs;
 use reth_tasks::TaskManager;
 use rpc::RpcCliArgs;
 use rundler_provider::{
-    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, EntryPointProvider, EvmProvider,
+    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, DAGasOracleSync,
+    EntryPointProvider, EvmProvider, Providers,
 };
 use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
@@ -540,25 +541,52 @@ pub struct Cli {
     logs: LogsArgs,
 }
 
-pub struct RundlerProviders<P, EP06, EP07> {
+#[derive(Clone)]
+pub struct RundlerProviders<P, EP06, EP07, D> {
     provider: P,
     ep_v0_6: Option<EP06>,
     ep_v0_7: Option<EP07>,
+    da_gas_oracle_sync: Option<D>,
+}
+
+impl<P, EP06, EP07, D> Providers for RundlerProviders<P, EP06, EP07, D>
+where
+    P: EvmProvider + Clone,
+    EP06: EntryPointProvider<UserOperationV0_6> + Clone,
+    EP07: EntryPointProvider<UserOperationV0_7> + Clone,
+    D: DAGasOracleSync + Clone,
+{
+    type Evm = P;
+    type EntryPointV0_6 = EP06;
+    type EntryPointV0_7 = EP07;
+    type DAGasOracleSync = D;
+
+    fn evm(&self) -> &Self::Evm {
+        &self.provider
+    }
+
+    fn ep_v0_6(&self) -> &Option<Self::EntryPointV0_6> {
+        &self.ep_v0_6
+    }
+
+    fn ep_v0_7(&self) -> &Option<Self::EntryPointV0_7> {
+        &self.ep_v0_7
+    }
+
+    fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync> {
+        &self.da_gas_oracle_sync
+    }
 }
 
 pub fn construct_providers(
     args: &CommonArgs,
     chain_spec: &ChainSpec,
-) -> anyhow::Result<
-    RundlerProviders<
-        impl EvmProvider + Clone + 'static,
-        impl EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-        impl EntryPointProvider<UserOperationV0_7> + Clone + 'static,
-    >,
-> {
+) -> anyhow::Result<impl Providers> {
     let provider = Arc::new(rundler_provider::new_alloy_provider(
         args.node_http.as_ref().context("must provide node_http")?,
     )?);
+    let (da_gas_oracle, da_gas_oracle_sync) =
+        rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
 
     let ep_v0_6 = if args.disable_entry_point_v0_6 {
         None
@@ -569,6 +597,7 @@ pub fn construct_providers(
             args.max_simulate_handle_ops_gas,
             args.max_simulate_handle_ops_gas,
             provider.clone(),
+            da_gas_oracle.clone(),
         ))
     };
 
@@ -581,6 +610,7 @@ pub fn construct_providers(
             args.max_simulate_handle_ops_gas,
             args.max_simulate_handle_ops_gas,
             provider.clone(),
+            da_gas_oracle.clone(),
         ))
     };
 
@@ -588,6 +618,7 @@ pub fn construct_providers(
         provider: AlloyEvmProvider::new(provider),
         ep_v0_6,
         ep_v0_7,
+        da_gas_oracle_sync,
     })
 }
 
