@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use rundler_provider::{EntryPointProvider, EvmProvider};
+use rundler_provider::{DAGasOracleSync, EntryPointProvider, EvmProvider};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
@@ -107,7 +107,6 @@ pub struct EntryPointBuilderSettings {
 }
 
 /// Builder task
-#[derive(Debug)]
 pub struct BuilderTask<P, PR, E06, E07> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -116,10 +115,12 @@ pub struct BuilderTask<P, PR, E06, E07> {
     provider: PR,
     ep_06: Option<E06>,
     ep_07: Option<E07>,
+    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
 }
 
 impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
     /// Create a new builder task
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         args: Args,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
@@ -128,6 +129,7 @@ impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
         provider: PR,
         ep_06: Option<E06>,
         ep_07: Option<E07>,
+        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
     ) -> Self {
         Self {
             args,
@@ -137,6 +139,7 @@ impl<P, PR, E06, E07> BuilderTask<P, PR, E06, E07> {
             provider,
             ep_06,
             ep_07,
+            da_gas_oracle,
         }
     }
 }
@@ -404,6 +407,7 @@ where
             entry_point.clone(),
             provider.clone(),
             fee_estimator,
+            self.da_gas_oracle.clone(),
             proposer_settings,
             self.event_sender.clone(),
         );

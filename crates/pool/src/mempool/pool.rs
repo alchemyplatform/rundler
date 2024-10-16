@@ -23,7 +23,7 @@ use anyhow::Context;
 use metrics::{Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
-use rundler_provider::DAGasProvider;
+use rundler_provider::DAGasOracleSync;
 use rundler_types::{
     chain::ChainSpec,
     da::DAGasBlockData,
@@ -67,8 +67,8 @@ impl From<PoolConfig> for PoolInnerConfig {
 pub(crate) struct PoolInner<D> {
     /// Pool settings
     config: PoolInnerConfig,
-    /// DA Gas Provider
-    da_gas_provider: D,
+    /// DA Gas Oracle
+    da_gas_oracle: Option<D>,
     /// Operations by hash
     by_hash: HashMap<B256, Arc<OrderedPoolOperation>>,
     /// Operations by operation ID
@@ -104,17 +104,17 @@ pub(crate) struct PoolInner<D> {
 
 impl<D> PoolInner<D>
 where
-    D: DAGasProvider,
+    D: DAGasOracleSync,
 {
     pub(crate) fn new(
         config: PoolInnerConfig,
-        da_gas_provider: D,
+        da_gas_oracle: Option<D>,
         event_sender: broadcast::Sender<WithEntryPoint<PoolEvent>>,
     ) -> Self {
         let entry_point = config.entry_point.to_string();
         Self {
             config,
-            da_gas_provider,
+            da_gas_oracle,
             by_hash: HashMap::new(),
             by_id: HashMap::new(),
             best: BTreeSet::new(),
@@ -259,9 +259,11 @@ where
                 continue;
             }
 
-            if self.config.da_gas_tracking_enabled && block_da_data.is_some() {
+            if self.da_gas_oracle.is_some() && block_da_data.is_some() {
+                let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
                 let block_da_data = block_da_data.unwrap();
-                let required_da_gas = self.da_gas_provider.calc_da_gas_sync(
+
+                let required_da_gas = da_gas_oracle.calc_da_gas_sync(
                     &op.po.da_gas_data,
                     block_da_data,
                     candidate_gas_price,
@@ -764,7 +766,6 @@ struct PoolMetrics {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
-    use rundler_provider::MockEntryPointV0_6;
     use rundler_types::{
         v0_6::UserOperation, EntityInfo, EntityInfos, UserOperation as UserOperationTrait,
         ValidTimeRange,
@@ -1238,20 +1239,12 @@ mod tests {
         }
     }
 
-    fn pool() -> PoolInner<MockEntryPointV0_6> {
-        PoolInner::new(
-            conf(),
-            MockEntryPointV0_6::new(),
-            broadcast::channel(100000).0,
-        )
+    fn pool() -> PoolInner<Box<dyn DAGasOracleSync>> {
+        PoolInner::new(conf(), None, broadcast::channel(100000).0)
     }
 
-    fn pool_with_conf(conf: PoolInnerConfig) -> PoolInner<MockEntryPointV0_6> {
-        PoolInner::new(
-            conf,
-            MockEntryPointV0_6::new(),
-            broadcast::channel(100000).0,
-        )
+    fn pool_with_conf(conf: PoolInnerConfig) -> PoolInner<Box<dyn DAGasOracleSync>> {
+        PoolInner::new(conf, None, broadcast::channel(100000).0)
     }
 
     fn mem_size_of_ordered_pool_op() -> usize {
