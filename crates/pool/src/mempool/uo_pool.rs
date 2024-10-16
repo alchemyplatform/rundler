@@ -20,7 +20,9 @@ use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
-use rundler_provider::{DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride};
+use rundler_provider::{
+    DAGasOracleSync, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
+};
 use rundler_sim::{Prechecker, Simulator};
 use rundler_types::{
     pool::{
@@ -50,7 +52,7 @@ use crate::{
 /// block on write locks.
 pub(crate) struct UoPool<UO, EP, P, S, E> {
     config: PoolConfig,
-    state: RwLock<UoPoolState<E>>,
+    state: RwLock<UoPoolState>,
     paymaster: PaymasterTracker<E>,
     reputation: Arc<AddressReputation>,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
@@ -60,11 +62,12 @@ pub(crate) struct UoPool<UO, EP, P, S, E> {
     simulator: S,
     ep_specific_metrics: UoPoolMetricsEPSpecific,
     metrics: UoPoolMetrics,
+    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
     _uo_type: PhantomData<UO>,
 }
 
-struct UoPoolState<E> {
-    pool: PoolInner<E>,
+struct UoPoolState {
+    pool: PoolInner<Arc<dyn DAGasOracleSync>>,
     throttled_ops: HashSet<B256>,
     block_number: u64,
     block_hash: B256,
@@ -75,7 +78,7 @@ struct UoPoolState<E> {
 impl<UO, EP, P, S, E> UoPool<UO, EP, P, S, E>
 where
     UO: From<UserOperationVariant>,
-    E: DAGasProvider<UO = UO> + SimulationProvider<UO = UO> + Clone,
+    E: SimulationProvider<UO = UO> + Clone,
 {
     // TODO refactor provider args
     #[allow(clippy::too_many_arguments)]
@@ -88,13 +91,14 @@ where
         simulator: S,
         paymaster: PaymasterTracker<E>,
         reputation: Arc<AddressReputation>,
+        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
     ) -> Self {
         let ep = config.entry_point.to_string();
         Self {
             state: RwLock::new(UoPoolState {
                 pool: PoolInner::new(
                     config.clone().into(),
-                    entry_point.clone(),
+                    da_gas_oracle.clone(),
                     event_sender.clone(),
                 ),
                 throttled_ops: HashSet::new(),
@@ -113,6 +117,7 @@ where
             config,
             ep_specific_metrics: UoPoolMetricsEPSpecific::new_with_labels(&[("entry_point", ep)]),
             metrics: UoPoolMetrics::default(),
+            da_gas_oracle,
             _uo_type: PhantomData,
         }
     }
@@ -216,7 +221,7 @@ where
     EP: EvmProvider,
     P: Prechecker<UO = UO>,
     S: Simulator<UO = UO>,
-    E: EntryPoint + DAGasProvider<UO = UO> + SimulationProvider<UO = UO> + Clone,
+    E: EntryPoint + SimulationProvider<UO = UO> + Clone,
 {
     async fn on_chain_update(&self, update: &ChainUpdate) {
         let deduped_ops = update.deduped_ops();
@@ -339,9 +344,9 @@ where
             .unmined_operations
             .increment(unmined_op_count);
 
-        let da_block_data = if self.config.da_gas_tracking_enabled {
-            match self
-                .entry_point
+        let da_block_data = if self.config.da_gas_tracking_enabled && self.da_gas_oracle.is_some() {
+            let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
+            match da_gas_oracle
                 .block_data(update.latest_block_hash.into())
                 .await
             {
@@ -1644,10 +1649,7 @@ mod tests {
         impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
-        impl EntryPoint
-            + DAGasProvider<UO = UserOperation>
-            + SimulationProvider<UO = UserOperation>
-            + Clone,
+        impl EntryPoint + SimulationProvider<UO = UserOperation> + Clone,
     > {
         let entrypoint = MockEntryPointV0_6::new();
         create_pool_with_entry_point(ops, entrypoint)
@@ -1661,10 +1663,7 @@ mod tests {
         impl EvmProvider,
         impl Prechecker<UO = UserOperation>,
         impl Simulator<UO = UserOperation>,
-        impl EntryPoint
-            + DAGasProvider<UO = UserOperation>
-            + SimulationProvider<UO = UserOperation>
-            + Clone,
+        impl EntryPoint + SimulationProvider<UO = UserOperation> + Clone,
     > {
         let entrypoint = Arc::new(entrypoint);
         let args = PoolConfig {
@@ -1771,6 +1770,7 @@ mod tests {
             simulator,
             paymaster,
             reputation,
+            None,
         )
     }
 
@@ -1783,10 +1783,7 @@ mod tests {
             impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
-            impl EntryPoint
-                + DAGasProvider<UO = UserOperation>
-                + SimulationProvider<UO = UserOperation>
-                + Clone,
+            impl EntryPoint + SimulationProvider<UO = UserOperation> + Clone,
         >,
         Vec<UserOperationVariant>,
     ) {
@@ -1806,10 +1803,7 @@ mod tests {
             impl EvmProvider,
             impl Prechecker<UO = UserOperation>,
             impl Simulator<UO = UserOperation>,
-            impl EntryPoint
-                + DAGasProvider<UO = UserOperation>
-                + SimulationProvider<UO = UserOperation>
-                + Clone,
+            impl EntryPoint + SimulationProvider<UO = UserOperation> + Clone,
         >,
         Vec<UserOperationVariant>,
     ) {
