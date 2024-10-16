@@ -576,10 +576,15 @@ where
         self.best.insert(pool_op);
         self.time_to_mine.insert(hash, TimeToMineInfo::new());
 
-        // TODO(danc): This silently drops UOs from the pool without reporting
         let removed = self
             .enforce_size()
             .context("should have succeeded in resizing the pool")?;
+        for hash in &removed {
+            self.emit(PoolEvent::RemovedOp {
+                op_hash: *hash,
+                reason: OpRemovalReason::PoolSizeExceeded,
+            });
+        }
 
         if removed.contains(&hash) {
             Err(MempoolError::DiscardedOnInsert)?;

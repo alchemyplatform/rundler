@@ -139,6 +139,7 @@ pub enum OpRemovalReason {
         /// Op was valid until this timestamp
         valid_until: Timestamp,
     },
+    PoolSizeExceeded,
 }
 
 impl EntitySummary {
