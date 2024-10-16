@@ -178,12 +178,6 @@ mockall::mock! {
             block: BlockHashOrNumber,
             gas_price: u128,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
-
-        async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
-
-        async fn uo_data(&self, uo: v0_6::UserOperation, block: BlockHashOrNumber) -> ProviderResult<DAGasUOData>;
-
-        fn calc_da_gas_sync(&self, uo_data: &DAGasUOData, block_data: &DAGasBlockData, gas_price: u128) -> u128;
     }
 
     #[async_trait::async_trait]
@@ -272,12 +266,6 @@ mockall::mock! {
             block: BlockHashOrNumber,
             gas_price: u128,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
-
-        async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
-
-        async fn uo_data(&self, uo: v0_7::UserOperation, block: BlockHashOrNumber) -> ProviderResult<DAGasUOData>;
-
-        fn calc_da_gas_sync(&self, uo_data: &DAGasUOData, block_data: &DAGasBlockData, gas_price: u128) -> u128;
     }
 
     #[async_trait::async_trait]
