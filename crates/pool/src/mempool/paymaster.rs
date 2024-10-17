@@ -253,13 +253,13 @@ impl PaymasterTrackerInner {
                 .pending_balance
                 .saturating_add(prev.max_op_cost);
 
-            if reset_balance.lt(&max_op_cost) {
+            if reset_balance.lt(&max_op_cost) && self.tracker_enabled {
                 return Err(MempoolError::PaymasterBalanceTooLow(
                     max_op_cost,
                     reset_balance,
                 ));
             }
-        } else if paymaster_metadata.pending_balance.lt(&max_op_cost) {
+        } else if paymaster_metadata.pending_balance.lt(&max_op_cost) && self.tracker_enabled {
             return Err(MempoolError::PaymasterBalanceTooLow(
                 max_op_cost,
                 paymaster_metadata.pending_balance,
