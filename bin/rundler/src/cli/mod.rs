@@ -39,6 +39,7 @@ use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
+use rundler_task::providers::Providers;
 use rundler_types::{
     chain::ChainSpec, da::DAGasOracleContractType, v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
@@ -541,23 +542,47 @@ pub struct Cli {
     logs: LogsArgs,
 }
 
-pub struct RundlerProviders<P, EP06, EP07> {
+#[derive(Clone)]
+pub struct RundlerProviders<P, EP06, EP07, D> {
     provider: P,
     ep_v0_6: Option<EP06>,
     ep_v0_7: Option<EP07>,
-    da_gas_oracle_sync: Option<Arc<dyn DAGasOracleSync>>,
+    da_gas_oracle_sync: Option<D>,
+}
+
+impl<P, EP06, EP07, D> Providers for RundlerProviders<P, EP06, EP07, D>
+where
+    P: EvmProvider + Clone,
+    EP06: EntryPointProvider<UserOperationV0_6> + Clone,
+    EP07: EntryPointProvider<UserOperationV0_7> + Clone,
+    D: DAGasOracleSync + Clone,
+{
+    type Evm = P;
+    type EntryPointV0_6 = EP06;
+    type EntryPointV0_7 = EP07;
+    type DAGasOracleSync = D;
+
+    fn evm(&self) -> &Self::Evm {
+        &self.provider
+    }
+
+    fn ep_v0_6(&self) -> &Option<Self::EntryPointV0_6> {
+        &self.ep_v0_6
+    }
+
+    fn ep_v0_7(&self) -> &Option<Self::EntryPointV0_7> {
+        &self.ep_v0_7
+    }
+
+    fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync> {
+        &self.da_gas_oracle_sync
+    }
 }
 
 pub fn construct_providers(
     args: &CommonArgs,
     chain_spec: &ChainSpec,
-) -> anyhow::Result<
-    RundlerProviders<
-        impl EvmProvider + Clone + 'static,
-        impl EntryPointProvider<UserOperationV0_6> + Clone + 'static,
-        impl EntryPointProvider<UserOperationV0_7> + Clone + 'static,
-    >,
-> {
+) -> anyhow::Result<impl Providers> {
     let provider = Arc::new(rundler_provider::new_alloy_provider(
         args.node_http.as_ref().context("must provide node_http")?,
     )?);

@@ -21,6 +21,7 @@
 
 pub mod block_watcher;
 pub mod grpc;
+pub mod providers;
 pub mod server;
 
 pub use reth_tasks::{

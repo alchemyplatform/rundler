@@ -14,7 +14,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     future::Future,
-    marker::PhantomData,
     mem,
     pin::Pin,
     sync::Arc,
@@ -135,18 +134,12 @@ pub(crate) enum BundleProposerError {
     Other(#[from] anyhow::Error),
 }
 
-pub(crate) struct BundleProposerImpl<UO, S, E, P, M, F> {
+pub(crate) struct BundleProposerImpl<Providers> {
     builder_index: u64,
-    pool: M,
-    simulator: S,
-    entry_point: E,
-    provider: P,
     settings: Settings,
-    fee_estimator: F,
+    providers: Providers,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
-    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
-    _uo_type: PhantomData<UO>,
 }
 
 #[derive(Debug)]
@@ -161,24 +154,19 @@ pub(crate) struct Settings {
 }
 
 #[async_trait]
-impl<UO, S, E, P, M, F> BundleProposer for BundleProposerImpl<UO, S, E, P, M, F>
+impl<Providers> BundleProposer for BundleProposerImpl<Providers>
 where
-    UO: UserOperation + From<UserOperationVariant>,
-    UserOperationVariant: AsRef<UO>,
-    S: Simulator<UO = UO>,
-    E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + DAGasProvider<UO = UO>,
-    P: EvmProvider,
-    M: Pool,
-    F: FeeEstimator,
+    Providers: BundleProposerProvidersT,
 {
-    type UO = UO;
+    type UO = Providers::UO;
 
     async fn estimate_gas_fees(
         &self,
         required_fees: Option<GasFees>,
     ) -> BundleProposerResult<(GasFees, u128)> {
         Ok(self
-            .fee_estimator
+            .providers
+            .fee_estimator()
             .required_bundle_fees(required_fees)
             .await?)
     }
@@ -191,10 +179,11 @@ where
         &mut self,
         required_fees: Option<GasFees>,
         is_replacement: bool,
-    ) -> BundleProposerResult<Bundle<UO>> {
+    ) -> BundleProposerResult<Bundle<Self::UO>> {
         let (ops, (block_hash, _), (bundle_fees, base_fee)) = try_join!(
             self.get_ops_from_pool(),
-            self.provider
+            self.providers
+                .evm()
                 .get_latest_block_hash_and_number()
                 .map_err(BundleProposerError::from),
             self.estimate_gas_fees(required_fees)
@@ -210,16 +199,17 @@ where
         let required_op_fees = if is_replacement {
             bundle_fees
         } else {
-            self.fee_estimator.required_op_fees(bundle_fees)
+            self.providers.fee_estimator().required_op_fees(bundle_fees)
         };
         let all_paymaster_addresses = ops
             .iter()
             .filter_map(|op| op.uo.paymaster())
             .collect::<Vec<Address>>();
 
-        let da_block_data = if self.settings.da_gas_tracking_enabled && self.da_gas_oracle.is_some()
+        let da_block_data = if self.settings.da_gas_tracking_enabled
+            && self.providers.da_gas_oracle().is_some()
         {
-            let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
+            let da_gas_oracle = self.providers.da_gas_oracle().as_ref().unwrap();
 
             match da_gas_oracle.block_data(block_hash.into()).await {
                 Ok(block_data) => Some(block_data),
@@ -328,40 +318,23 @@ where
     }
 }
 
-impl<UO, S, E, P, M, F> BundleProposerImpl<UO, S, E, P, M, F>
+impl<Providers> BundleProposerImpl<Providers>
 where
-    UO: UserOperation + From<UserOperationVariant>,
-    UserOperationVariant: AsRef<UO>,
-    S: Simulator<UO = UO>,
-    E: EntryPoint + SignatureAggregator<UO = UO> + BundleHandler<UO = UO> + DAGasProvider<UO = UO>,
-    P: EvmProvider,
-    M: Pool,
-    F: FeeEstimator,
+    Providers: BundleProposerProvidersT,
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_index: u64,
-        pool: M,
-        simulator: S,
-        entry_point: E,
-        provider: P,
-        fee_estimator: F,
-        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
+        providers: Providers,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
             builder_index,
-            pool,
-            simulator,
-            entry_point,
-            provider,
-            fee_estimator,
-            da_gas_oracle,
+            providers,
             settings,
             event_sender,
             condition_not_met_notified: false,
-            _uo_type: PhantomData,
         }
     }
 
@@ -406,9 +379,9 @@ where
 
         let required_da_gas = if self.settings.da_gas_tracking_enabled
             && da_block_data.is_some()
-            && self.da_gas_oracle.is_some()
+            && self.providers.da_gas_oracle().is_some()
         {
-            let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
+            let da_gas_oracle = self.providers.da_gas_oracle().as_ref().unwrap();
             let da_block_data = da_block_data.unwrap();
             da_gas_oracle.calc_da_gas_sync(
                 &op.da_gas_data,
@@ -417,7 +390,8 @@ where
             )
         } else {
             match self
-                .entry_point
+                .providers
+                .entry_point()
                 .calc_da_gas(
                     op.uo.clone().into(),
                     block_hash.into(),
@@ -481,7 +455,8 @@ where
 
         // Simulate
         let result = self
-            .simulator
+            .providers
+            .simulator()
             .simulate_validation(
                 op.uo.clone().into(),
                 block_hash,
@@ -518,12 +493,12 @@ where
         &self,
         ops_with_simulations: Vec<(PoolOperation, Result<SimulationResult, SimulationError>)>,
         mut balances_by_paymaster: HashMap<Address, U256>,
-    ) -> ProposalContext<UO> {
+    ) -> ProposalContext<Providers::UO> {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
             .map(|(op, _)| op.uo.sender())
             .collect();
-        let mut context = ProposalContext::<UO>::new();
+        let mut context = ProposalContext::<Providers::UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
         let mut gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
@@ -640,7 +615,10 @@ where
         context
     }
 
-    async fn check_conditions_met(&self, context: &mut ProposalContext<UO>) -> anyhow::Result<()> {
+    async fn check_conditions_met(
+        &self,
+        context: &mut ProposalContext<Providers::UO>,
+    ) -> anyhow::Result<()> {
         let futs = context
             .iter_ops_with_simulations()
             .enumerate()
@@ -674,7 +652,8 @@ where
             .iter()
             .map(|(address, slots)| async move {
                 let storage = match self
-                    .provider
+                    .providers
+                    .evm()
                     .batch_get_storage_at(*address, slots.keys().copied().collect())
                     .await
                 {
@@ -707,7 +686,7 @@ where
         None
     }
 
-    async fn reject_index(&self, context: &mut ProposalContext<UO>, i: usize) {
+    async fn reject_index(&self, context: &mut ProposalContext<Providers::UO>, i: usize) {
         let changed_aggregator = context.reject_index(i);
         self.compute_aggregator_signatures(context, &changed_aggregator)
             .await;
@@ -715,7 +694,7 @@ where
 
     async fn reject_entity(
         &self,
-        context: &mut ProposalContext<UO>,
+        context: &mut ProposalContext<Providers::UO>,
         entity: Entity,
         is_staked: bool,
     ) {
@@ -724,7 +703,10 @@ where
             .await;
     }
 
-    async fn compute_all_aggregator_signatures(&self, context: &mut ProposalContext<UO>) {
+    async fn compute_all_aggregator_signatures(
+        &self,
+        context: &mut ProposalContext<Providers::UO>,
+    ) {
         let aggregators: Vec<_> = context
             .groups_by_aggregator
             .keys()
@@ -737,7 +719,7 @@ where
 
     async fn compute_aggregator_signatures<'a>(
         &self,
-        context: &mut ProposalContext<UO>,
+        context: &mut ProposalContext<Providers::UO>,
         aggregators: impl IntoIterator<Item = &'a Address>,
     ) {
         let signature_futures = aggregators.into_iter().filter_map(|&aggregator| {
@@ -757,7 +739,7 @@ where
     /// op(s) caused the failure.
     async fn estimate_gas_rejecting_failed_ops(
         &self,
-        context: &mut ProposalContext<UO>,
+        context: &mut ProposalContext<Providers::UO>,
     ) -> BundleProposerResult<Option<u64>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
@@ -772,7 +754,8 @@ where
 
         // call handle ops with the bundle to filter any rejected ops before sending
         let handle_ops_out = self
-            .entry_point
+            .providers
+            .entry_point()
             .call_handle_ops(
                 context.to_ops_per_aggregator(),
                 self.settings.beneficiary,
@@ -814,9 +797,10 @@ where
         // NOTE: this assumes that the pool server has as many shards as there
         // are builders.
         Ok(self
-            .pool
+            .providers
+            .pool()
             .get_ops(
-                *self.entry_point.address(),
+                *self.providers.entry_point().address(),
                 self.settings.max_bundle_size,
                 self.builder_index,
             )
@@ -833,7 +817,8 @@ where
     ) -> BundleProposerResult<HashMap<Address, U256>> {
         let futures = addresses.into_iter().map(|address| async move {
             let deposit = self
-                .entry_point
+                .providers
+                .entry_point()
                 .balance_of(address, Some(block_hash.into()))
                 .await?;
             Ok::<_, anyhow::Error>((address, deposit))
@@ -847,7 +832,7 @@ where
     async fn aggregate_signatures(
         &self,
         aggregator: Address,
-        group: &AggregatorGroup<UO>,
+        group: &AggregatorGroup<Providers::UO>,
     ) -> (Address, anyhow::Result<Option<Bytes>>) {
         let ops = group
             .ops_with_simulations
@@ -855,7 +840,8 @@ where
             .map(|op_with_simulation| op_with_simulation.op.clone())
             .collect();
         let result = self
-            .entry_point
+            .providers
+            .entry_point()
             .aggregate_signatures(aggregator, ops)
             .await
             .map_err(anyhow::Error::from);
@@ -864,7 +850,7 @@ where
 
     async fn process_failed_op(
         &self,
-        context: &mut ProposalContext<UO>,
+        context: &mut ProposalContext<Providers::UO>,
         index: usize,
         message: String,
     ) -> anyhow::Result<()> {
@@ -924,7 +910,7 @@ where
     // from the bundle and from the pool.
     async fn process_post_op_revert(
         &self,
-        context: &mut ProposalContext<UO>,
+        context: &mut ProposalContext<Providers::UO>,
     ) -> anyhow::Result<()> {
         let agg_groups = context.to_ops_per_aggregator();
         let mut op_index = 0;
@@ -974,7 +960,11 @@ where
         Ok(())
     }
 
-    async fn check_for_post_op_revert_single_op(&self, op: UO, op_index: usize) -> Vec<usize> {
+    async fn check_for_post_op_revert_single_op(
+        &self,
+        op: Providers::UO,
+        op_index: usize,
+    ) -> Vec<usize> {
         let op_hash = self.op_hash(&op);
         let bundle = vec![UserOpsPerAggregator {
             aggregator: Address::ZERO,
@@ -982,7 +972,8 @@ where
             user_ops: vec![op],
         }];
         let ret = self
-            .entry_point
+            .providers
+            .entry_point()
             .call_handle_ops(bundle, self.settings.beneficiary, None)
             .await;
         match ret {
@@ -1007,14 +998,15 @@ where
 
     async fn check_for_post_op_revert_agg_ops(
         &self,
-        group: UserOpsPerAggregator<UO>,
+        group: UserOpsPerAggregator<Providers::UO>,
         start_index: usize,
     ) -> Vec<usize> {
         let len = group.user_ops.len();
         let agg = group.aggregator;
         let bundle = vec![group];
         let ret = self
-            .entry_point
+            .providers
+            .entry_point()
             .call_handle_ops(bundle, self.settings.beneficiary, None)
             .await;
         match ret {
@@ -1067,7 +1059,7 @@ where
 
     fn emit(&self, event: BuilderEvent) {
         let _ = self.event_sender.send(WithEntryPoint {
-            entry_point: *self.entry_point.address(),
+            entry_point: *self.providers.entry_point().address(),
             event,
         });
     }
@@ -1076,7 +1068,91 @@ where
     where
         T: UserOperation,
     {
-        op.hash(*self.entry_point.address(), self.settings.chain_spec.id)
+        op.hash(
+            *self.providers.entry_point().address(),
+            self.settings.chain_spec.id,
+        )
+    }
+}
+
+// Type erasure for the bundle proposer providers
+pub(crate) trait BundleProposerProvidersT: Send + Sync {
+    type UO: UserOperation + From<UserOperationVariant>;
+    type Evm: EvmProvider;
+    type Pool: Pool;
+    type Simulator: Simulator<UO = Self::UO>;
+    type EntryPoint: EntryPoint
+        + SignatureAggregator<UO = Self::UO>
+        + BundleHandler<UO = Self::UO>
+        + DAGasProvider<UO = Self::UO>;
+    type FeeEstimator: FeeEstimator;
+    type DAGasOracle: DAGasOracleSync;
+
+    fn evm(&self) -> &Self::Evm;
+
+    fn pool(&self) -> &Self::Pool;
+
+    fn simulator(&self) -> &Self::Simulator;
+
+    fn entry_point(&self) -> &Self::EntryPoint;
+
+    fn fee_estimator(&self) -> &Self::FeeEstimator;
+
+    fn da_gas_oracle(&self) -> &Option<Self::DAGasOracle>;
+}
+
+pub(crate) struct BundleProposerProviders<E, P, S, EP, F, D> {
+    pub(crate) evm: E,
+    pub(crate) pool: P,
+    pub(crate) simulator: S,
+    pub(crate) entry_point: EP,
+    pub(crate) fee_estimator: F,
+    pub(crate) da_gas_oracle: Option<D>,
+}
+
+impl<E, P, S, EP, F, D> BundleProposerProvidersT for BundleProposerProviders<E, P, S, EP, F, D>
+where
+    E: EvmProvider,
+    S: Simulator,
+    <S as Simulator>::UO: UserOperation + From<UserOperationVariant>,
+    P: Pool,
+    EP: EntryPoint
+        + SignatureAggregator<UO = <S as Simulator>::UO>
+        + BundleHandler<UO = <S as Simulator>::UO>
+        + DAGasProvider<UO = <S as Simulator>::UO>,
+    F: FeeEstimator,
+    D: DAGasOracleSync,
+{
+    type UO = <S as Simulator>::UO;
+    type Evm = E;
+    type Pool = P;
+    type Simulator = S;
+    type EntryPoint = EP;
+    type FeeEstimator = F;
+    type DAGasOracle = D;
+
+    fn evm(&self) -> &Self::Evm {
+        &self.evm
+    }
+
+    fn pool(&self) -> &Self::Pool {
+        &self.pool
+    }
+
+    fn simulator(&self) -> &Self::Simulator {
+        &self.simulator
+    }
+
+    fn entry_point(&self) -> &Self::EntryPoint {
+        &self.entry_point
+    }
+
+    fn fee_estimator(&self) -> &Self::FeeEstimator {
+        &self.fee_estimator
+    }
+
+    fn da_gas_oracle(&self) -> &Option<Self::DAGasOracle> {
+        &self.da_gas_oracle
     }
 }
 
@@ -2418,14 +2494,17 @@ mod tests {
             .returning(move |address, _| Ok(signatures_by_aggregator[&address]().unwrap()));
 
         let (event_sender, _) = broadcast::channel(16);
+        let none_oracle: Option<Box<dyn DAGasOracleSync>> = None;
         let mut proposer = BundleProposerImpl::new(
             0,
-            pool_client,
-            simulator,
-            entry_point,
-            provider,
-            fee_estimator,
-            None,
+            BundleProposerProviders {
+                entry_point,
+                evm: provider,
+                fee_estimator,
+                pool: pool_client,
+                simulator,
+                da_gas_oracle: none_oracle,
+            },
             Settings {
                 chain_spec: ChainSpec::default(),
                 max_bundle_size,
