@@ -23,7 +23,7 @@ use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
-use super::{CommonArgs, RundlerProviders};
+use super::CommonArgs;
 use crate::cli::json::get_json_config;
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
@@ -301,21 +301,11 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         Box::pin(emit::receive_and_log_events_with_filter(event_rx, |_| true)),
     );
 
-    let RundlerProviders {
-        provider,
-        ep_v0_6,
-        ep_v0_7,
-        da_gas_oracle_sync,
-    } = super::construct_providers(&common_args, &chain_spec)?;
-
     PoolTask::new(
         task_args,
         event_sender,
         LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
-        provider,
-        ep_v0_6,
-        ep_v0_7,
-        da_gas_oracle_sync,
+        super::construct_providers(&common_args, &chain_spec)?,
     )
     .spawn(task_spawner)
     .await?;
