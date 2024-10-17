@@ -14,7 +14,7 @@
 //! Traits for the provider module.
 
 mod da;
-pub(crate) use da::DAGasOracle;
+pub use da::{DAGasOracle, DAGasOracleSync};
 
 mod error;
 pub use error::*;

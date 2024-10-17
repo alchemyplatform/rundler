@@ -29,7 +29,8 @@ use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{
-    BundleHandler, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut, SignatureAggregator,
+    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
+    SignatureAggregator,
 };
 use rundler_sim::{
     ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator,
@@ -134,7 +135,6 @@ pub(crate) enum BundleProposerError {
     Other(#[from] anyhow::Error),
 }
 
-#[derive(Debug)]
 pub(crate) struct BundleProposerImpl<UO, S, E, P, M, F> {
     builder_index: u64,
     pool: M,
@@ -145,6 +145,7 @@ pub(crate) struct BundleProposerImpl<UO, S, E, P, M, F> {
     fee_estimator: F,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
+    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
     _uo_type: PhantomData<UO>,
 }
 
@@ -216,8 +217,11 @@ where
             .filter_map(|op| op.uo.paymaster())
             .collect::<Vec<Address>>();
 
-        let da_block_data = if self.settings.da_gas_tracking_enabled {
-            match self.entry_point.block_data(block_hash.into()).await {
+        let da_block_data = if self.settings.da_gas_tracking_enabled && self.da_gas_oracle.is_some()
+        {
+            let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
+
+            match da_gas_oracle.block_data(block_hash.into()).await {
                 Ok(block_data) => Some(block_data),
                 Err(e) => {
                     error!("Failed to get block data for block hash {block_hash:?}, falling back to async da gas calculations: {e:?}");
@@ -342,6 +346,7 @@ where
         entry_point: E,
         provider: P,
         fee_estimator: F,
+        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
@@ -352,6 +357,7 @@ where
             entry_point,
             provider,
             fee_estimator,
+            da_gas_oracle,
             settings,
             event_sender,
             condition_not_met_notified: false,
@@ -398,9 +404,13 @@ where
             return Some(op);
         }
 
-        let required_da_gas = if self.settings.da_gas_tracking_enabled && da_block_data.is_some() {
+        let required_da_gas = if self.settings.da_gas_tracking_enabled
+            && da_block_data.is_some()
+            && self.da_gas_oracle.is_some()
+        {
+            let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
             let da_block_data = da_block_data.unwrap();
-            self.entry_point.calc_da_gas_sync(
+            da_gas_oracle.calc_da_gas_sync(
                 &op.da_gas_data,
                 da_block_data,
                 required_op_fees.max_fee_per_gas,
@@ -2415,6 +2425,7 @@ mod tests {
             entry_point,
             provider,
             fee_estimator,
+            None,
             Settings {
                 chain_spec: ChainSpec::default(),
                 max_bundle_size,

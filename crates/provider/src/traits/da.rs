@@ -16,10 +16,10 @@ use rundler_types::da::{DAGasBlockData, DAGasUOData};
 
 use crate::{BlockHashOrNumber, ProviderResult};
 
-// Trait for a DA gas oracle
+/// Trait for a DA gas oracle
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
-pub(crate) trait DAGasOracle: Send + Sync {
+pub trait DAGasOracle: Send + Sync {
     /// Estimate the DA gas for a given user operation's bytes
     ///
     /// Returns the estimated gas, as well as both the UO DA data and the block DA data.
@@ -32,7 +32,12 @@ pub(crate) trait DAGasOracle: Send + Sync {
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+}
 
+/// Trait for a DA gas oracle with a synchronous calculation method
+#[async_trait::async_trait]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
+pub trait DAGasOracleSync: DAGasOracle {
     /// Retrieve the DA gas data for a given block. This value can change block to block and
     /// thus must be retrieved fresh from the DA for every block.
     async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;

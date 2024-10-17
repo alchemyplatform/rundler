@@ -81,26 +81,4 @@ where
             DAGasBlockData::Empty,
         ))
     }
-
-    async fn block_data(&self, _block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
-        Ok(DAGasBlockData::Empty)
-    }
-
-    async fn uo_data(
-        &self,
-        _uo_data: Bytes,
-        _to: Address,
-        _block: BlockHashOrNumber,
-    ) -> ProviderResult<DAGasUOData> {
-        Ok(DAGasUOData::Empty)
-    }
-
-    fn calc_da_gas_sync(
-        &self,
-        _uo_data: &DAGasUOData,
-        _block_data: &DAGasBlockData,
-        _gas_price: u128,
-    ) -> u128 {
-        panic!("ArbitrumNitroDAGasOracle does not support calc_da_gas_sync")
-    }
 }

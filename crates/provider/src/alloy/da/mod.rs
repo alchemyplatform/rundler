@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::Provider as AlloyProvider;
 use alloy_transport::Transport;
@@ -19,7 +21,7 @@ use rundler_types::{
     da::{DAGasBlockData, DAGasOracleContractType, DAGasUOData},
 };
 
-use crate::{BlockHashOrNumber, DAGasOracle, ProviderResult};
+use crate::{BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult};
 
 mod arbitrum;
 use arbitrum::ArbitrumNitroDAGasOracle;
@@ -41,56 +43,50 @@ impl DAGasOracle for ZeroDAGasOracle {
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         Ok((0, DAGasUOData::Empty, DAGasBlockData::Empty))
     }
-
-    async fn block_data(&self, _block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
-        Ok(DAGasBlockData::Empty)
-    }
-
-    async fn uo_data(
-        &self,
-        _uo_data: Bytes,
-        _to: Address,
-        _block: BlockHashOrNumber,
-    ) -> ProviderResult<DAGasUOData> {
-        Ok(DAGasUOData::Empty)
-    }
-
-    fn calc_da_gas_sync(
-        &self,
-        _uo_data: &DAGasUOData,
-        _block_data: &DAGasBlockData,
-        _gas_price: u128,
-    ) -> u128 {
-        panic!("ZeroDAGasOracle does not support calc_da_gas_sync")
-    }
 }
 
-pub(crate) fn da_gas_oracle_for_chain<'a, AP, T>(
+/// Create a DA gas oracle for the given chain spec
+pub fn new_alloy_da_gas_oracle<'a, AP, T>(
     chain_spec: &ChainSpec,
     provider: AP,
-) -> Box<dyn DAGasOracle + 'a>
+) -> (
+    Arc<dyn DAGasOracle + 'a>,
+    Option<Arc<dyn DAGasOracleSync + 'a>>,
+)
 where
     AP: AlloyProvider<T> + Clone + 'a,
     T: Transport + Clone,
 {
     match chain_spec.da_gas_oracle_contract_type {
-        DAGasOracleContractType::ArbitrumNitro => Box::new(ArbitrumNitroDAGasOracle::new(
-            chain_spec.da_gas_oracle_contract_address,
-            provider,
-        )),
-        DAGasOracleContractType::OptimismBedrock => Box::new(OptimismBedrockDAGasOracle::new(
-            chain_spec.da_gas_oracle_contract_address,
-            provider,
-        )),
-        DAGasOracleContractType::LocalBedrock => Box::new(LocalBedrockDAGasOracle::new(
-            chain_spec.da_gas_oracle_contract_address,
-            provider,
-        )),
-        DAGasOracleContractType::CachedNitro => Box::new(CachedNitroDAGasOracle::new(
-            chain_spec.da_gas_oracle_contract_address,
-            provider,
-        )),
-        DAGasOracleContractType::None => Box::new(ZeroDAGasOracle),
+        DAGasOracleContractType::ArbitrumNitro => {
+            let oracle = Arc::new(ArbitrumNitroDAGasOracle::new(
+                chain_spec.da_gas_oracle_contract_address,
+                provider,
+            ));
+            (oracle, None)
+        }
+        DAGasOracleContractType::OptimismBedrock => {
+            let oracle = Arc::new(OptimismBedrockDAGasOracle::new(
+                chain_spec.da_gas_oracle_contract_address,
+                provider,
+            ));
+            (oracle, None)
+        }
+        DAGasOracleContractType::LocalBedrock => {
+            let oracle = Arc::new(LocalBedrockDAGasOracle::new(
+                chain_spec.da_gas_oracle_contract_address,
+                provider,
+            ));
+            (oracle.clone(), Some(oracle))
+        }
+        DAGasOracleContractType::CachedNitro => {
+            let oracle = Arc::new(CachedNitroDAGasOracle::new(
+                chain_spec.da_gas_oracle_contract_address,
+                provider,
+            ));
+            (oracle.clone(), Some(oracle))
+        }
+        DAGasOracleContractType::None => (Arc::new(ZeroDAGasOracle), None),
     }
 }
 

@@ -23,7 +23,8 @@ use url::Url;
 
 use crate::EvmProvider;
 
-pub(crate) mod da;
+mod da;
+pub use da::new_alloy_da_gas_oracle;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;

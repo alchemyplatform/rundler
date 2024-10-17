@@ -15,7 +15,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use futures::FutureExt;
-use rundler_provider::{EntryPointProvider, EvmProvider};
+use rundler_provider::{DAGasOracleSync, EntryPointProvider, EvmProvider};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
@@ -63,7 +63,6 @@ pub struct Args {
 }
 
 /// Mempool task.
-#[derive(Debug)]
 pub struct PoolTask<P, E06, E07> {
     args: Args,
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
@@ -71,6 +70,7 @@ pub struct PoolTask<P, E06, E07> {
     provider: P,
     ep_06: Option<E06>,
     ep_07: Option<E07>,
+    da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
 }
 
 impl<P, E06, E07> PoolTask<P, E06, E07> {
@@ -82,6 +82,7 @@ impl<P, E06, E07> PoolTask<P, E06, E07> {
         provider: P,
         ep_06: Option<E06>,
         ep_07: Option<E07>,
+        da_gas_oracle: Option<Arc<dyn DAGasOracleSync>>,
     ) -> Self {
         Self {
             args,
@@ -90,6 +91,7 @@ impl<P, E06, E07> PoolTask<P, E06, E07> {
             provider,
             ep_06,
             ep_07,
+            da_gas_oracle,
         }
     }
 }
@@ -209,12 +211,11 @@ where
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(ep.clone());
-            Self::create_mempool(
+            self.create_mempool(
                 task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
-                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
@@ -225,12 +226,11 @@ where
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
             );
-            Self::create_mempool(
+            self.create_mempool(
                 task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
-                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
@@ -252,12 +252,11 @@ where
 
         if unsafe_mode {
             let simulator = UnsafeSimulator::new(ep.clone());
-            Self::create_mempool(
+            self.create_mempool(
                 task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
-                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
@@ -268,12 +267,11 @@ where
                 pool_config.sim_settings.clone(),
                 pool_config.mempool_channel_configs.clone(),
             );
-            Self::create_mempool(
+            self.create_mempool(
                 task_spawner,
                 chain_spec,
                 pool_config,
                 event_sender,
-                self.provider.clone(),
                 ep.clone(),
                 simulator,
             )
@@ -281,11 +279,11 @@ where
     }
 
     fn create_mempool<T, UO, E, S>(
+        &self,
         task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-        evm: P,
         ep: E,
         simulator: S,
     ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
@@ -296,9 +294,9 @@ where
         E: EntryPointProvider<UO> + Clone + 'static,
         S: Simulator<UO = UO> + 'static,
     {
-        let fee_oracle = gas::get_fee_oracle(&chain_spec, evm.clone());
+        let fee_oracle = gas::get_fee_oracle(&chain_spec, self.provider.clone());
         let fee_estimator = FeeEstimatorImpl::new(
-            evm.clone(),
+            self.provider.clone(),
             fee_oracle,
             pool_config.precheck_settings.priority_fee_mode,
             pool_config
@@ -308,7 +306,7 @@ where
 
         let prechecker = PrecheckerImpl::new(
             chain_spec,
-            evm.clone(),
+            self.provider.clone(),
             ep.clone(),
             fee_estimator,
             pool_config.precheck_settings,
@@ -340,12 +338,13 @@ where
         let uo_pool = UoPool::new(
             pool_config.clone(),
             event_sender,
-            evm,
+            self.provider.clone(),
             ep,
             prechecker,
             simulator,
             paymaster,
             reputation,
+            self.da_gas_oracle.clone(),
         );
 
         Ok(Arc::new(uo_pool))
