@@ -15,20 +15,20 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Type of gas oracle contract for pricing calldata in preVerificationGas
+/// Type of gas oracle for pricing calldata in preVerificationGas
 #[derive(Clone, Copy, Debug, Deserialize, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DAGasOracleContractType {
-    /// No gas oracle contract
+pub enum DAGasOracleType {
+    /// No gas oracle
     #[default]
     None,
-    /// Arbitrum Nitro type gas oracle contract
+    /// Arbitrum Nitro type gas oracle
     ArbitrumNitro,
-    /// Optimism Bedrock type gas oracle contract
+    /// Optimism Bedrock type gas oracle
     OptimismBedrock,
-    /// Local Bedrock type gas oracle contract
+    /// Local Bedrock type gas oracle
     LocalBedrock,
-    /// Cached Nitro type gas oracle contract
+    /// Cached Nitro type gas oracle
     CachedNitro,
 }
 
