@@ -31,7 +31,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-          toolchain: 1.79.0
+          toolchain: 1.82.0
 
       - name: Install toolchain (nightly)
         run: rustup toolchain add nightly --component rustfmt --profile minimal
