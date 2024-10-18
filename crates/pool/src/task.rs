@@ -289,6 +289,9 @@ where
             pool_config.precheck_settings.priority_fee_mode,
             pool_config
                 .precheck_settings
+                .bundle_base_fee_overhead_percent,
+            pool_config
+                .precheck_settings
                 .bundle_priority_fee_overhead_percent,
         );
 

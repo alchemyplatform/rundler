@@ -65,6 +65,8 @@ pub struct Args {
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit
     pub max_bundle_gas: u128,
+    /// Percentage to add to the network pending base fee for the bundle base fee
+    pub bundle_base_fee_overhead_percent: u32,
     /// Percentage to add to the network priority fee for the bundle priority fee
     pub bundle_priority_fee_overhead_percent: u32,
     /// Priority fee mode to use for operation priority fee minimums
@@ -348,6 +350,7 @@ where
             max_bundle_gas: self.args.max_bundle_gas,
             beneficiary,
             priority_fee_mode: self.args.priority_fee_mode,
+            bundle_base_fee_overhead_percent: self.args.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
         };
@@ -381,6 +384,7 @@ where
             ep_providers.evm().clone(),
             fee_oracle,
             proposer_settings.priority_fee_mode,
+            proposer_settings.bundle_base_fee_overhead_percent,
             proposer_settings.bundle_priority_fee_overhead_percent,
         );
 

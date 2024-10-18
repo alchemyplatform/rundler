@@ -47,6 +47,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--verification_estimation_gas_fee`: The gas fee to use during verification estimation. (default: `1000000000000` 10K gwei).
   - env: *VERIFICATION_ESTIMATION_GAS_FEE*
   - See [RPC documentation](./architecture/rpc.md#verificationGasLimit-estimation) for details.
+- `--bundle_base_fee_overhead_percent`: bundle transaction base fee overhead over network pending value. (default: `27`).
+  - env: *BUNDLE_BASE_FEE_OVERHEAD_PERCENT*
 - `--bundle_priority_fee_overhead_percent`: bundle transaction priority fee overhead over network value. (default: `0`).
   - env: *BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT*
 - `--priority_fee_mode_kind`: Priority fee mode kind. Possible values are `base_fee_percent` and `priority_fee_increase_percent`. (default: `priority_fee_increase_percent`).
