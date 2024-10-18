@@ -18,7 +18,7 @@ use alloy_provider::Provider as AlloyProvider;
 use alloy_transport::Transport;
 use rundler_types::{
     chain::ChainSpec,
-    da::{DAGasBlockData, DAGasOracleContractType, DAGasUOData},
+    da::{DAGasBlockData, DAGasOracleType, DAGasUOData},
 };
 
 use crate::{BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult};
@@ -57,36 +57,36 @@ where
     AP: AlloyProvider<T> + Clone + 'a,
     T: Transport + Clone,
 {
-    match chain_spec.da_gas_oracle_contract_type {
-        DAGasOracleContractType::ArbitrumNitro => {
+    match chain_spec.da_gas_oracle_type {
+        DAGasOracleType::ArbitrumNitro => {
             let oracle = Arc::new(ArbitrumNitroDAGasOracle::new(
                 chain_spec.da_gas_oracle_contract_address,
                 provider,
             ));
             (oracle, None)
         }
-        DAGasOracleContractType::OptimismBedrock => {
+        DAGasOracleType::OptimismBedrock => {
             let oracle = Arc::new(OptimismBedrockDAGasOracle::new(
                 chain_spec.da_gas_oracle_contract_address,
                 provider,
             ));
             (oracle, None)
         }
-        DAGasOracleContractType::LocalBedrock => {
+        DAGasOracleType::LocalBedrock => {
             let oracle = Arc::new(LocalBedrockDAGasOracle::new(
                 chain_spec.da_gas_oracle_contract_address,
                 provider,
             ));
             (oracle.clone(), Some(oracle))
         }
-        DAGasOracleContractType::CachedNitro => {
+        DAGasOracleType::CachedNitro => {
             let oracle = Arc::new(CachedNitroDAGasOracle::new(
                 chain_spec.da_gas_oracle_contract_address,
                 provider,
             ));
             (oracle.clone(), Some(oracle))
         }
-        DAGasOracleContractType::None => (Arc::new(ZeroDAGasOracle), None),
+        DAGasOracleType::None => (Arc::new(ZeroDAGasOracle), None),
     }
 }
 

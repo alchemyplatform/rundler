@@ -18,7 +18,7 @@ use std::str::FromStr;
 use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
-use crate::da::DAGasOracleContractType;
+use crate::da::DAGasOracleType;
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -68,7 +68,7 @@ pub struct ChainSpec {
     pub da_pre_verification_gas: bool,
     /// type of gas oracle contract for pricing calldata in preVerificationGas
     /// If da_pre_verification_gas is true, this must not be None
-    pub da_gas_oracle_contract_type: DAGasOracleContractType,
+    pub da_gas_oracle_type: DAGasOracleType,
     /// address of gas oracle contract for pricing calldata in preVerificationGas
     pub da_gas_oracle_contract_address: Address,
     /// true if Data Availability (DA) calldata gas should be included in the gas limit
@@ -148,7 +148,7 @@ impl Default for ChainSpec {
             calldata_non_zero_byte_gas: 16,
             eip1559_enabled: true,
             da_pre_verification_gas: false,
-            da_gas_oracle_contract_type: DAGasOracleContractType::default(),
+            da_gas_oracle_type: DAGasOracleType::default(),
             da_gas_oracle_contract_address: Address::ZERO,
             include_da_gas_in_gas_limit: false,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
