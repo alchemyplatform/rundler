@@ -2,7 +2,7 @@ name = "Optimism"
 id = 10
 
 da_pre_verification_gas = true
-da_gas_oracle_contract_type = "OPTIMISM_BEDROCK"
+da_gas_oracle_type = "OPTIMISM_BEDROCK"
 da_gas_oracle_contract_address = "0x420000000000000000000000000000000000000F"
 
 priority_fee_oracle_type = "USAGE_BASED"

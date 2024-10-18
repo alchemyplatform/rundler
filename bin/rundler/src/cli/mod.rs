@@ -40,7 +40,7 @@ use rundler_sim::{
     EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
 use rundler_types::{
-    chain::ChainSpec, da::DAGasOracleContractType, v0_6::UserOperation as UserOperationV0_6,
+    chain::ChainSpec, da::DAGasOracleType, v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
 };
 
@@ -630,10 +630,10 @@ fn lint_da_gas_tracking(da_gas_tracking_enabled: bool, chain_spec: &ChainSpec) -
     if !chain_spec.da_pre_verification_gas {
         tracing::warn!("DA tracking is disabled because DA pre-verification gas is not enabled");
         false
-    } else if !(chain_spec.da_gas_oracle_contract_type == DAGasOracleContractType::CachedNitro
-        || chain_spec.da_gas_oracle_contract_type == DAGasOracleContractType::LocalBedrock)
+    } else if !(chain_spec.da_gas_oracle_type == DAGasOracleType::CachedNitro
+        || chain_spec.da_gas_oracle_type == DAGasOracleType::LocalBedrock)
     {
-        tracing::warn!("DA tracking is disabled because DA gas oracle contract type {:?} does not support caching", chain_spec.da_gas_oracle_contract_type);
+        tracing::warn!("DA tracking is disabled because DA gas oracle contract type {:?} does not support caching", chain_spec.da_gas_oracle_type);
         false
     } else {
         true

@@ -436,7 +436,7 @@ mod tests {
         EvmCall, ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider,
     };
     use rundler_types::{
-        da::DAGasOracleContractType,
+        da::DAGasOracleType,
         v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
@@ -647,7 +647,7 @@ mod tests {
         let cs = ChainSpec {
             id: 42161,
             da_pre_verification_gas: true,
-            da_gas_oracle_contract_type: DAGasOracleContractType::ArbitrumNitro,
+            da_gas_oracle_type: DAGasOracleType::ArbitrumNitro,
             ..Default::default()
         };
         let provider = Arc::new(provider);
@@ -723,7 +723,7 @@ mod tests {
         let cs = ChainSpec {
             id: 10,
             da_pre_verification_gas: true,
-            da_gas_oracle_contract_type: DAGasOracleContractType::OptimismBedrock,
+            da_gas_oracle_type: DAGasOracleType::OptimismBedrock,
             ..Default::default()
         };
         let mut fee_estimator = MockFeeEstimator::new();
