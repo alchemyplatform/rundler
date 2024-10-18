@@ -175,6 +175,7 @@ pub trait FeeEstimator: Send + Sync {
 pub struct FeeEstimatorImpl<P, O> {
     provider: P,
     priority_fee_mode: PriorityFeeMode,
+    bundle_base_fee_overhead_percent: u32,
     bundle_priority_fee_overhead_percent: u32,
     fee_oracle: O,
 }
@@ -190,12 +191,14 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimatorImpl<P, O> {
         provider: P,
         fee_oracle: O,
         priority_fee_mode: PriorityFeeMode,
+        bundle_base_fee_overhead_percent: u32,
         bundle_priority_fee_overhead_percent: u32,
     ) -> Self {
         Self {
             provider,
             fee_oracle,
             priority_fee_mode,
+            bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent,
         }
     }
@@ -221,15 +224,13 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
         let (base_fee, priority_fee) =
             try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
 
+        let base_fee = math::increase_by_percent(base_fee, self.bundle_base_fee_overhead_percent);
+        let priority_fee =
+            math::increase_by_percent(priority_fee, self.bundle_priority_fee_overhead_percent);
+
         let required_fees = min_fees.unwrap_or_default();
 
-        let max_priority_fee_per_gas =
-            required_fees
-                .max_priority_fee_per_gas
-                .max(math::increase_by_percent(
-                    priority_fee,
-                    self.bundle_priority_fee_overhead_percent,
-                ));
+        let max_priority_fee_per_gas = required_fees.max_priority_fee_per_gas.max(priority_fee);
 
         let max_fee_per_gas = required_fees
             .max_fee_per_gas

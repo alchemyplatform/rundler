@@ -103,6 +103,8 @@ pub struct Settings {
     pub max_verification_gas: u128,
     /// Maximum total execution gas allowed for a user operation
     pub max_total_execution_gas: u128,
+    /// The percentage to add to the network pending base fee as a safety margin for fast inclusion.
+    pub bundle_base_fee_overhead_percent: u32,
     /// If using a bundle priority fee, the percentage to add to the network/oracle
     /// provided value as a safety margin for fast inclusion.
     pub bundle_priority_fee_overhead_percent: u32,
@@ -120,6 +122,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             max_verification_gas: 5_000_000,
+            bundle_base_fee_overhead_percent: 27, // 2 12.5% EIP-1559 increases
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(0),
             max_total_execution_gas: 10_000_000,
@@ -527,6 +530,7 @@ mod tests {
         let test_settings = Settings {
             max_verification_gas: 5_000_000,
             max_total_execution_gas: 10_000_000,
+            bundle_base_fee_overhead_percent: 27,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(100),
             base_fee_accept_percent: 100,
