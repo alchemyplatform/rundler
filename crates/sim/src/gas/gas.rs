@@ -281,6 +281,9 @@ impl<P: Provider> FeeEstimator<P> {
     ) -> anyhow::Result<(GasFees, U256)> {
         let (base_fee, priority_fee) = try_join!(self.get_base_fee(), self.get_priority_fee())?;
 
+        // hot fix, increase base fee estimation by 30%
+        let base_fee = math::increase_by_percent(base_fee, 30);
+
         let required_fees = min_fees.unwrap_or_default();
 
         let max_priority_fee_per_gas =
