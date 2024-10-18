@@ -43,7 +43,8 @@ pub fn new_alloy_provider(
 > {
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
     let metric_layer = AlloyMetricLayer::default();
-    let retry_layer = alloy_transport::layers::RetryBackoffLayer::new(10, 500, 0);
+    // TODO: make this configurable: use a large number for CUPS for now
+    let retry_layer = alloy_transport::layers::RetryBackoffLayer::new(10, 500, 1_000_000);
     let client = ClientBuilder::default()
         .layer(retry_layer)
         .layer(metric_layer)
