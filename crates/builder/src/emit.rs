@@ -13,7 +13,8 @@
 
 use std::{fmt::Display, sync::Arc};
 
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
+use alloy_primitives::{Address, B256};
+use rundler_provider::TransactionRequest;
 use rundler_sim::SimulationError;
 use rundler_types::{GasFees, ValidTimeRange};
 use rundler_utils::strs;
@@ -55,7 +56,7 @@ impl BuilderEvent {
 
     pub(crate) fn transaction_mined(
         builder_index: u64,
-        tx_hash: H256,
+        tx_hash: B256,
         nonce: u64,
         block_number: u64,
     ) -> Self {
@@ -83,7 +84,7 @@ impl BuilderEvent {
         )
     }
 
-    pub(crate) fn skipped_op(builder_index: u64, op_hash: H256, reason: SkipReason) -> Self {
+    pub(crate) fn skipped_op(builder_index: u64, op_hash: B256, reason: SkipReason) -> Self {
         Self::new(
             builder_index,
             BuilderEventKind::SkippedOp { op_hash, reason },
@@ -92,7 +93,7 @@ impl BuilderEvent {
 
     pub(crate) fn rejected_op(
         builder_index: u64,
-        op_hash: H256,
+        op_hash: B256,
         reason: OpRejectionReason,
     ) -> Self {
         Self::new(
@@ -121,7 +122,7 @@ pub enum BuilderEventKind {
     /// A bundle transaction was mined
     TransactionMined {
         /// Transaction hash
-        tx_hash: H256,
+        tx_hash: B256,
         /// Transaction nonce
         nonce: u64,
         /// Block number containing the transaction
@@ -140,14 +141,14 @@ pub enum BuilderEventKind {
     /// An operation was skipped in the bundle
     SkippedOp {
         /// Operation hash
-        op_hash: H256,
+        op_hash: B256,
         /// Reason for skipping
         reason: SkipReason,
     },
     /// An operation was rejected from the bundle and requested to be removed from the pool
     RejectedOp {
         /// Operation hash
-        op_hash: H256,
+        op_hash: B256,
         /// Reason for rejection
         reason: OpRejectionReason,
     },
@@ -157,11 +158,11 @@ pub enum BuilderEventKind {
 #[derive(Clone, Debug)]
 pub struct BundleTxDetails {
     /// Transaction hash
-    pub tx_hash: H256,
+    pub tx_hash: B256,
     /// The transaction
-    pub tx: TypedTransaction,
+    pub tx: TransactionRequest,
     /// Operation hashes included in the bundle
-    pub op_hashes: Arc<Vec<H256>>,
+    pub op_hashes: Arc<Vec<B256>>,
 }
 
 /// Reason for skipping an operation in a bundle
@@ -178,10 +179,10 @@ pub enum SkipReason {
     },
     /// Insufficient pre-verification gas for the operation at the given base fee
     InsufficientPreVerificationGas {
-        base_fee: U256,
+        base_fee: u128,
         op_fees: GasFees,
-        required_pvg: U256,
-        actual_pvg: U256,
+        required_pvg: u128,
+        actual_pvg: u128,
     },
     /// Bundle ran out of space by gas limit to include the operation
     GasLimit,
@@ -204,9 +205,9 @@ pub enum OpRejectionReason {
 #[derive(Clone, Debug)]
 pub struct ConditionNotMetReason {
     pub address: Address,
-    pub slot: H256,
-    pub expected: H256,
-    pub actual: H256,
+    pub slot: B256,
+    pub expected: B256,
+    pub actual: B256,
 }
 
 impl Display for BuilderEvent {

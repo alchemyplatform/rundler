@@ -11,19 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::marker::PhantomData;
 
-use ethers::types::H256;
-use rundler_provider::{
-    AggregatorOut, EntryPoint, Provider, SignatureAggregator, SimulationProvider,
-};
-use rundler_types::{
-    pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange, ValidationError,
-};
+use alloy_primitives::B256;
+use rundler_provider::{AggregatorOut, EntryPoint, SignatureAggregator, SimulationProvider};
+use rundler_types::{pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange};
 
-use crate::{
-    SimulationError, SimulationResult, SimulationSettings as Settings, Simulator, ViolationError,
-};
+use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
 
 /// An unsafe simulator that can be used in place of a regular simulator
 /// to extract the information needed from simulation while avoiding the use
@@ -31,30 +25,25 @@ use crate::{
 ///
 /// WARNING: This is "unsafe" for a reason. None of the ERC-7562 checks are
 /// performed.
-pub struct UnsafeSimulator<UO, P, E> {
-    provider: Arc<P>,
+pub struct UnsafeSimulator<UO, E> {
     entry_point: E,
-    sim_settings: Settings,
     _uo_type: PhantomData<UO>,
 }
 
-impl<UO, P, E> UnsafeSimulator<UO, P, E> {
+impl<UO, E> UnsafeSimulator<UO, E> {
     /// Creates a new unsafe simulator
-    pub fn new(provider: Arc<P>, entry_point: E, sim_settings: Settings) -> Self {
+    pub fn new(entry_point: E) -> Self {
         Self {
-            provider,
             entry_point,
-            sim_settings,
             _uo_type: PhantomData,
         }
     }
 }
 
 #[async_trait::async_trait]
-impl<UO, P, E> Simulator for UnsafeSimulator<UO, P, E>
+impl<UO, E> Simulator for UnsafeSimulator<UO, E>
 where
     UO: UserOperation,
-    P: Provider,
     E: EntryPoint + SimulationProvider<UO = UO> + SignatureAggregator<UO = UO> + Clone,
 {
     type UO = UO;
@@ -65,50 +54,25 @@ where
     async fn simulate_validation(
         &self,
         op: UO,
-        block_hash: Option<H256>,
-        _expected_code_hash: Option<H256>,
+        block_hash: B256,
+        _expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {
         tracing::info!("Performing unsafe simulation");
-
-        let (block_hash, block_number) = match block_hash {
-            // If we are given a block_hash, we return a None block number, avoiding an extra call
-            Some(block_hash) => (block_hash, None),
-            None => {
-                let hash_and_num = self
-                    .provider
-                    .get_latest_block_hash_and_number()
-                    .await
-                    .map_err(anyhow::Error::from)?;
-                (hash_and_num.0, Some(hash_and_num.1.as_u64()))
-            }
-        };
 
         // simulate the validation
         let validation_result = self
             .entry_point
-            .call_simulate_validation(
-                op.clone(),
-                self.sim_settings.max_verification_gas,
-                Some(block_hash),
-            )
-            .await;
+            .simulate_validation(op.clone(), Some(block_hash.into()))
+            .await?;
 
         let validation_result = match validation_result {
             Ok(res) => res,
-            Err(err) => match err {
-                ValidationError::Revert(revert) => {
-                    return Err(SimulationError {
-                        violation_error: vec![SimulationViolation::ValidationRevert(revert)].into(),
-                        entity_infos: None,
-                    })
-                }
-                ValidationError::Other(err) => {
-                    return Err(SimulationError {
-                        violation_error: ViolationError::Other(err),
-                        entity_infos: None,
-                    })
-                }
-            },
+            Err(err) => {
+                return Err(SimulationError {
+                    violation_error: vec![SimulationViolation::ValidationRevert(err)].into(),
+                    entity_infos: None,
+                });
+            }
         };
 
         let valid_until = if validation_result.return_info.valid_until == 0.into() {
@@ -139,11 +103,7 @@ where
         let aggregator = if let Some(aggregator_info) = validation_result.aggregator_info {
             let agg_out = self
                 .entry_point
-                .validate_user_op_signature(
-                    aggregator_info.address,
-                    op,
-                    self.sim_settings.max_verification_gas,
-                )
+                .validate_user_op_signature(aggregator_info.address, op)
                 .await?;
 
             match agg_out {
@@ -171,9 +131,7 @@ where
             })?
         } else {
             Ok(SimulationResult {
-                mempools: vec![H256::zero()],
-                block_hash,
-                block_number,
+                mempools: vec![B256::ZERO],
                 pre_op_gas,
                 valid_time_range,
                 requires_post_op,

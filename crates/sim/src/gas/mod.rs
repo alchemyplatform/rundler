@@ -18,3 +18,4 @@ mod gas;
 pub use gas::*;
 
 mod oracle;
+pub use oracle::*;

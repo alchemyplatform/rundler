@@ -5,23 +5,28 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
-rundler-provider = { path = "../provider" }
-rundler-sim = { path = "../sim" }
-rundler-task = { path = "../task" }
-rundler-types = { path = "../types" }
-rundler-utils = { path = "../utils" }
+rundler-contracts.workspace = true
+rundler-provider.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
+
+alloy-primitives.workspace = true
+alloy-sol-types.workspace = true
 
 anyhow.workspace = true
 async-stream = "0.3.5"
 async-trait.workspace = true
-ethers.workspace = true
 futures.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
 metrics.workspace = true
-parking_lot = "0.12.1"
+metrics-derive.workspace = true
+parking_lot = "0.12.3"
 prost.workspace = true
 serde.workspace = true
 strum.workspace = true
@@ -35,12 +40,14 @@ tonic-reflection.workspace = true
 tracing.workspace = true
 url.workspace = true
 
-mockall = {workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 mockall.workspace = true
-rundler-sim = { path = "../sim", features = ["test-utils"] }
-rundler-provider = { path = "../provider", features = ["test-utils"] }
+reth-tasks.workspace = true
+rundler-provider = { workspace = true, features = ["test-utils"] }
+rundler-sim = { workspace = true, features = ["test-utils"] }
+rundler-types = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]
 tonic-build.workspace = true

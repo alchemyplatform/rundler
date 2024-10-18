@@ -11,11 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Context};
-use ethers::types::{Address, H256};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
     chain::ChainSpec,
+    da::{
+        BedrockDAGasUOData as RundlerBedrockDAGasUOData, DAGasUOData as RundlerDAGasUOData,
+        NitroDAGasUOData as RundlerNitroDAGasUOData,
+    },
     pool::{
         NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
@@ -68,21 +72,25 @@ pub trait TryUoFromProto<T>: Sized {
 impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
     fn try_uo_from_proto(
         op: UserOperationV06,
-        _chain_spec: &ChainSpec,
+        chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
-        Ok(v0_6::UserOperation {
-            sender: from_bytes(&op.sender)?,
-            nonce: from_bytes(&op.nonce)?,
-            init_code: op.init_code.into(),
-            call_data: op.call_data.into(),
-            call_gas_limit: from_bytes(&op.call_gas_limit)?,
-            verification_gas_limit: from_bytes(&op.verification_gas_limit)?,
-            pre_verification_gas: from_bytes(&op.pre_verification_gas)?,
-            max_fee_per_gas: from_bytes(&op.max_fee_per_gas)?,
-            max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
-            paymaster_and_data: op.paymaster_and_data.into(),
-            signature: op.signature.into(),
-        })
+        Ok(v0_6::UserOperationBuilder::new(
+            chain_spec,
+            v0_6::UserOperationRequiredFields {
+                sender: from_bytes(&op.sender)?,
+                nonce: from_bytes(&op.nonce)?,
+                init_code: op.init_code.into(),
+                call_data: op.call_data.into(),
+                call_gas_limit: from_bytes(&op.call_gas_limit)?,
+                verification_gas_limit: from_bytes(&op.verification_gas_limit)?,
+                pre_verification_gas: from_bytes(&op.pre_verification_gas)?,
+                max_fee_per_gas: from_bytes(&op.max_fee_per_gas)?,
+                max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
+                paymaster_and_data: op.paymaster_and_data.into(),
+                signature: op.signature.into(),
+            },
+        )
+        .build())
     }
 }
 
@@ -322,8 +330,8 @@ impl TryFrom<StakeStatus> for RundlerStakeStatus {
             return Ok(RundlerStakeStatus {
                 is_staked: stake_status.is_staked,
                 stake_info: RundlerStakeInfo {
-                    stake: stake_info.stake.into(),
-                    unstake_delay_sec: stake_info.unstake_delay_sec.into(),
+                    stake: from_bytes(&stake_info.stake)?,
+                    unstake_delay_sec: stake_info.unstake_delay_sec,
                 },
             });
         }
@@ -337,8 +345,8 @@ impl From<RundlerStakeStatus> for StakeStatus {
         StakeStatus {
             is_staked: stake_status.is_staked,
             stake_info: Some(StakeInfo {
-                stake: stake_status.stake_info.stake.as_u64(),
-                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec.as_u32(),
+                stake: stake_status.stake_info.stake.to_proto_bytes(),
+                unstake_delay_sec: stake_status.stake_info.unstake_delay_sec,
             }),
         }
     }
@@ -355,7 +363,49 @@ impl From<&PoolOperation> for MempoolOp {
             expected_code_hash: op.expected_code_hash.to_proto_bytes(),
             sim_block_hash: op.sim_block_hash.to_proto_bytes(),
             account_is_staked: op.account_is_staked,
+            da_gas_data: Some(DaGasUoData::from(&op.da_gas_data)),
         }
+    }
+}
+
+impl From<&RundlerDAGasUOData> for DaGasUoData {
+    fn from(data: &RundlerDAGasUOData) -> Self {
+        match data {
+            RundlerDAGasUOData::Empty => DaGasUoData {
+                data: Some(da_gas_uo_data::Data::Empty(EmptyUoData {})),
+            },
+            RundlerDAGasUOData::Nitro(data) => DaGasUoData {
+                data: Some(da_gas_uo_data::Data::Nitro(NitroDaGasUoData {
+                    uo_units: data.uo_units.to_proto_bytes(),
+                })),
+            },
+            RundlerDAGasUOData::Bedrock(data) => DaGasUoData {
+                data: Some(da_gas_uo_data::Data::Bedrock(BedrockDaGasUoData {
+                    uo_units: data.uo_units,
+                })),
+            },
+        }
+    }
+}
+
+impl TryFrom<DaGasUoData> for RundlerDAGasUOData {
+    type Error = ConversionError;
+
+    fn try_from(data: DaGasUoData) -> Result<Self, Self::Error> {
+        let ret = match data.data {
+            Some(da_gas_uo_data::Data::Empty(_)) => RundlerDAGasUOData::Empty,
+            Some(da_gas_uo_data::Data::Nitro(NitroDaGasUoData { uo_units })) => {
+                RundlerDAGasUOData::Nitro(RundlerNitroDAGasUOData {
+                    uo_units: from_bytes(&uo_units)?,
+                })
+            }
+            Some(da_gas_uo_data::Data::Bedrock(BedrockDaGasUoData { uo_units })) => {
+                RundlerDAGasUOData::Bedrock(RundlerBedrockDAGasUOData { uo_units })
+            }
+            None => RundlerDAGasUOData::Empty,
+        };
+
+        Ok(ret)
     }
 }
 
@@ -377,8 +427,8 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
 
         let valid_time_range = ValidTimeRange::new(op.valid_after.into(), op.valid_until.into());
 
-        let expected_code_hash = H256::from_slice(&op.expected_code_hash);
-        let sim_block_hash = H256::from_slice(&op.sim_block_hash);
+        let expected_code_hash = B256::from_slice(&op.expected_code_hash);
+        let sim_block_hash = B256::from_slice(&op.sim_block_hash);
 
         Ok(PoolOperation {
             uo,
@@ -390,6 +440,10 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
             sim_block_number: 0,
             account_is_staked: op.account_is_staked,
             entity_infos: EntityInfos::default(),
+            da_gas_data: op
+                .da_gas_data
+                .context("DA gas data should be set")?
+                .try_into()?,
         })
     }
 }
@@ -429,7 +483,7 @@ impl TryFrom<PaymasterBalance> for PoolPaymasterMetadata {
 impl From<PoolPaymasterMetadata> for PaymasterBalance {
     fn from(paymaster_metadata: PoolPaymasterMetadata) -> Self {
         Self {
-            address: paymaster_metadata.address.as_bytes().to_vec(),
+            address: paymaster_metadata.address.to_vec(),
             confirmed_balance: paymaster_metadata.confirmed_balance.to_proto_bytes(),
             pending_balance: paymaster_metadata.pending_balance.to_proto_bytes(),
         }

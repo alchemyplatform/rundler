@@ -5,15 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
+alloy-primitives.workspace = true
 anyhow.workspace = true
-derive_more = "0.99.17"
-ethers.workspace = true
+derive_more = "0.99.18"
 futures.workspace = true
 itertools.workspace = true
 rand.workspace = true
-reqwest.workspace = true
 schnellru = "0.2.1"
 tokio.workspace = true
 tracing.workspace = true

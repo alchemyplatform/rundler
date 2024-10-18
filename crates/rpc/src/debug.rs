@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::{Address, B256, U64};
 use anyhow::Context;
 use async_trait::async_trait;
-use ethers::types::{Address, H256};
 use futures_util::StreamExt;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_types::{
@@ -48,7 +48,7 @@ pub trait DebugApi {
     ///
     /// Note that the bundling mode must be set to `Manual` else this will fail.
     #[method(name = "bundler_sendBundleNow")]
-    async fn bundler_send_bundle_now(&self) -> RpcResult<H256>;
+    async fn bundler_send_bundle_now(&self) -> RpcResult<B256>;
 
     /// Sets the bundling mode.
     #[method(name = "bundler_setBundlingMode")]
@@ -103,8 +103,8 @@ impl<P, B> DebugApi<P, B> {
 #[async_trait]
 impl<P, B> DebugApiServer for DebugApi<P, B>
 where
-    P: Pool,
-    B: Builder,
+    P: Pool + 'static,
+    B: Builder + 'static,
 {
     async fn bundler_clear_state(&self) -> RpcResult<String> {
         utils::safe_call_rpc_handler("bundler_clearState", DebugApi::bundler_clear_state(self))
@@ -127,7 +127,7 @@ where
         .await
     }
 
-    async fn bundler_send_bundle_now(&self) -> RpcResult<H256> {
+    async fn bundler_send_bundle_now(&self) -> RpcResult<B256> {
         utils::safe_call_rpc_handler(
             "bundler_sendBundleNow",
             DebugApi::bundler_send_bundle_now(self),
@@ -235,7 +235,7 @@ where
             .collect::<Vec<RpcUserOperation>>())
     }
 
-    async fn bundler_send_bundle_now(&self) -> InternalRpcResult<H256> {
+    async fn bundler_send_bundle_now(&self) -> InternalRpcResult<B256> {
         tracing::debug!("Sending bundle");
 
         let mut new_heads = self
@@ -318,8 +318,8 @@ where
 
             let reputation = RpcReputationOutput {
                 address: r.address,
-                ops_seen: r.ops_seen.into(),
-                ops_included: r.ops_included.into(),
+                ops_seen: U64::from(r.ops_seen),
+                ops_included: U64::from(r.ops_included),
                 status,
             };
 
@@ -344,8 +344,12 @@ where
             is_staked: result.is_staked,
             stake_info: RpcStakeInfo {
                 addr: address,
-                stake: result.stake_info.stake.as_u128(),
-                unstake_delay_sec: result.stake_info.unstake_delay_sec.as_u32(),
+                stake: result
+                    .stake_info
+                    .stake
+                    .try_into()
+                    .context("stake should fit in u128")?,
+                unstake_delay_sec: result.stake_info.unstake_delay_sec,
             },
         })
     }

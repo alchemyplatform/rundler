@@ -13,7 +13,7 @@
 
 //! Types for interacting with EVM storage
 
-use ethers::types::{Address, U256};
+use alloy_primitives::{Address, U256};
 
 /// An EVM storage slot
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]

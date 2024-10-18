@@ -19,7 +19,7 @@ use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
-use rundler_task::{server::connect_with_retries_shutdown, spawn_tasks_with_shutdown};
+use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
 use rundler_types::chain::ChainSpec;
 
 use super::CommonArgs;
@@ -79,7 +79,6 @@ pub struct RpcArgs {
 impl RpcArgs {
     /// Convert the CLI arguments into the arguments for the RPC server combining
     /// common and rpc specific arguments.
-    #[allow(clippy::too_many_arguments)]
     pub fn to_args(
         &self,
         chain_spec: ChainSpec,
@@ -100,10 +99,7 @@ impl RpcArgs {
             unsafe_mode: common.unsafe_mode,
             port: self.port,
             host: self.host.clone(),
-            rpc_url: common
-                .node_http
-                .clone()
-                .context("rpc requires node_http arg")?,
+            rpc_url: common.node_http.clone().context("must provide node_http")?,
             api_namespaces: apis,
             precheck_settings,
             eth_api_settings,
@@ -142,7 +138,8 @@ pub struct RpcCliArgs {
     builder_url: String,
 }
 
-pub async fn run(
+pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
+    task_spawner: T,
     chain_spec: ChainSpec,
     rpc_args: RpcCliArgs,
     common_args: CommonArgs,
@@ -165,7 +162,7 @@ pub async fn run(
     let pool = connect_with_retries_shutdown(
         "op pool from rpc",
         &pool_url,
-        |url| RemotePoolClient::connect(url, chain_spec.clone()),
+        |url| RemotePoolClient::connect(url, chain_spec.clone(), Box::new(task_spawner.clone())),
         tokio::signal::ctrl_c(),
     )
     .await?;
@@ -178,10 +175,14 @@ pub async fn run(
     )
     .await?;
 
-    spawn_tasks_with_shutdown(
-        [RpcTask::new(task_args, pool, builder).boxed()],
-        tokio::signal::ctrl_c(),
+    RpcTask::new(
+        task_args,
+        pool,
+        builder,
+        super::construct_providers(&common_args, &chain_spec)?,
     )
-    .await;
+    .spawn(task_spawner)
+    .await?;
+
     Ok(())
 }

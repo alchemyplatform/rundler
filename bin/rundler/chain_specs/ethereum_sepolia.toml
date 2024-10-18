@@ -6,4 +6,4 @@ id = 11155111
 flashbots_relay_url = "https://relay-sepolia.flashbots.net"
 flashbots_status_url = "https://protect-sepolia.flashbots.net/tx/"
 
-min_max_priority_fee_per_gas = "0x3B9ACA00" # 0.1 GWEI
+min_max_priority_fee_per_gas = 100000000

@@ -11,15 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
+use alloy_signer::Signer as _;
+use alloy_signer_aws::AwsSigner;
 use anyhow::Context;
-use ethers::providers::Middleware;
-use ethers_signers::{AwsSigner, Signer};
+use aws_config::BehaviorVersion;
 use rslock::{Lock, LockGuard, LockManager};
-use rundler_utils::handle::SpawnGuard;
-use rusoto_core::Region;
-use rusoto_kms::KmsClient;
+use rundler_provider::EvmProvider;
+use rundler_task::TaskSpawner;
 use tokio::{sync::oneshot, time::sleep};
 
 use super::monitor_account_balance;
@@ -28,50 +28,46 @@ use super::monitor_account_balance;
 #[derive(Debug)]
 pub(crate) struct KmsSigner {
     pub(crate) signer: AwsSigner,
-    _kms_guard: Option<SpawnGuard>,
-    _monitor_guard: SpawnGuard,
 }
 
 impl KmsSigner {
-    pub(crate) async fn connect<M: Middleware + 'static>(
-        provider: Arc<M>,
+    pub(crate) async fn connect<P: EvmProvider + Clone + 'static, T: TaskSpawner>(
+        task_spawner: &T,
+        provider: P,
         chain_id: u64,
-        region: Region,
         key_ids: Vec<String>,
         redis_uri: String,
         ttl_millis: u64,
     ) -> anyhow::Result<Self> {
-        let client = KmsClient::new(region);
-        let mut kms_guard = None;
-        let key_id;
+        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+        let client = aws_sdk_kms::Client::new(&config);
 
-        if key_ids.len() > 1 {
+        let key_id = if key_ids.len() > 1 {
             let (tx, rx) = oneshot::channel::<String>();
-            kms_guard = Some(SpawnGuard::spawn_with_guard(Self::lock_manager_loop(
-                redis_uri, key_ids, chain_id, ttl_millis, tx,
-            )));
-            key_id = rx.await.context("should lock key_id")?;
+            task_spawner.spawn_critical(
+                "kms lock manager loop",
+                Box::pin(Self::lock_manager_loop(
+                    redis_uri, key_ids, chain_id, ttl_millis, tx,
+                )),
+            );
+            rx.await.context("should lock key_id")?
         } else {
-            key_id = key_ids
+            key_ids
                 .first()
                 .expect("There should be at least one kms key")
-                .to_owned();
+                .to_owned()
         };
 
-        let signer = AwsSigner::new(client, key_id, chain_id)
+        let signer = AwsSigner::new(client, key_id, Some(chain_id))
             .await
             .context("should create signer")?;
 
-        let monitor_guard = SpawnGuard::spawn_with_guard(monitor_account_balance(
+        task_spawner.spawn(Box::pin(monitor_account_balance(
             signer.address(),
             provider.clone(),
-        ));
+        )));
 
-        Ok(Self {
-            signer,
-            _kms_guard: kms_guard,
-            _monitor_guard: monitor_guard,
-        })
+        Ok(Self { signer })
     }
 
     async fn lock_manager_loop(
@@ -92,7 +88,7 @@ impl KmsSigner {
             .collect::<Vec<_>>();
 
         for (lock_id, key_id) in lock_context.iter() {
-            if let Some(l) = try_lock(&lm, lock_id, ttl_millis as usize).await {
+            if let Some(l) = try_lock(&lm, lock_id, ttl_millis).await {
                 lock = Some(l);
                 kid = Some(key_id.clone());
                 locked_id = Some(lock_id.clone());
@@ -113,7 +109,7 @@ impl KmsSigner {
             sleep(Duration::from_millis(ttl_millis / 10)).await;
 
             if let Some(lg) = &lg_opt {
-                match lm.extend(&lg.lock, ttl_millis as usize).await {
+                match lm.extend(&lg.lock, Duration::from_millis(ttl_millis)).await {
                     Ok(_) => {
                         tracing::debug!("extended lock");
                     }
@@ -122,7 +118,7 @@ impl KmsSigner {
                         lg_opt.take();
                     }
                 }
-            } else if let Some(l) = try_lock(&lm, &lock_id, ttl_millis as usize).await {
+            } else if let Some(l) = try_lock(&lm, &lock_id, ttl_millis).await {
                 lg_opt = Some(LockGuard { lock: l });
             } else {
                 tracing::error!("could not re-lock key_id {lock_id}");
@@ -131,8 +127,11 @@ impl KmsSigner {
     }
 }
 
-async fn try_lock<'a>(lm: &'a LockManager, lock_id: &str, ttl_millis: usize) -> Option<Lock<'a>> {
-    match lm.lock(lock_id.as_bytes(), ttl_millis).await {
+async fn try_lock<'a>(lm: &'a LockManager, lock_id: &str, ttl_millis: u64) -> Option<Lock<'a>> {
+    match lm
+        .lock(lock_id.as_bytes(), Duration::from_millis(ttl_millis))
+        .await
+    {
         Ok(l) => Some(l),
         Err(e) => {
             tracing::warn!("could not lock key_id {lock_id}: {e:?}");

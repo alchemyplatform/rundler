@@ -38,6 +38,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *MIN_STAKE_VALUE*
 - `--min_unstake_delay`: Minimum unstake delay. (default: `84600`).
   - env: *MIN_UNSTAKE_DELAY*
+- `--tracer_timeout`: The timeout used for custom javascript tracers, the string must be in a valid parseable format that can be used in the `ParseDuration` function on an ethereum node. See Docs [Here](https://pkg.go.dev/time#ParseDuration). (default: `15s`)
+  - env: *TRACER_TIMEOUT*
 - `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`. (default: all blocks)
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
 - `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
@@ -45,6 +47,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
 - `--verification_estimation_gas_fee`: The gas fee to use during verification estimation. (default: `1000000000000` 10K gwei).
   - env: *VERIFICATION_ESTIMATION_GAS_FEE*
   - See [RPC documentation](./architecture/rpc.md#verificationGasLimit-estimation) for details.
+- `--bundle_base_fee_overhead_percent`: bundle transaction base fee overhead over network pending value. (default: `27`).
+  - env: *BUNDLE_BASE_FEE_OVERHEAD_PERCENT*
 - `--bundle_priority_fee_overhead_percent`: bundle transaction priority fee overhead over network value. (default: `0`).
   - env: *BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT*
 - `--priority_fee_mode_kind`: Priority fee mode kind. Possible values are `base_fee_percent` and `priority_fee_increase_percent`. (default: `priority_fee_increase_percent`).
@@ -71,8 +75,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *DISABLE_ENTRY_POINT_V0_7*
 - `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
   - env: *NUM_BUILDERS_V0_7*
-- `--tracer_timeout`: The timeout used for custom javascript tracers, the string must be in a valid parseable format that can be used in the `ParseDuration` function on an ethereum node. See Docs [Here](https://pkg.go.dev/time#ParseDuration). (default: `15s`)
-  - env: *TRACER_TIMEOUT*
+- `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
+  - env: *DA_GAS_TRACKING_ENABLED*
 
 ## Metrics Options
 
@@ -157,6 +161,8 @@ List of command line options for configuring the Pool.
   - env: *POOL_REPUTATION_TRACKING_ENABLED*
 - `--pool.drop_min_num_blocks`: The minimum number of blocks that a UO must stay in the mempool before it can be requested to be dropped by the user (default: `10`)
   - env: *POOL_DROP_MIN_NUM_BLOCKS*
+- `--pool.gas_limit_efficiency_reject_threshold`: The ratio of gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
+  - env: *POOL_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 
 ## Builder Options
 

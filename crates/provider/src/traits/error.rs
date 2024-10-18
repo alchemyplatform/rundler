@@ -11,18 +11,34 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::providers::JsonRpcError;
+use alloy_contract::Error as ContractError;
+use alloy_transport::TransportError;
 
 /// Error enumeration for the Provider trait
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
-    /// JSON-RPC error
-    #[error(transparent)]
-    JsonRpcError(#[from] JsonRpcError),
+    /// RPC Error
+    #[error("RPC Error: {0}")]
+    RPC(TransportError),
     /// Contract Error
     #[error("Contract Error: {0}")]
-    ContractError(String),
+    ContractError(ContractError),
     /// Internal errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+impl From<TransportError> for ProviderError {
+    fn from(err: TransportError) -> Self {
+        ProviderError::RPC(err)
+    }
+}
+
+impl From<ContractError> for ProviderError {
+    fn from(err: ContractError) -> Self {
+        ProviderError::ContractError(err)
+    }
+}
+
+/// Result of a provider method call
+pub type ProviderResult<T> = Result<T, ProviderError>;

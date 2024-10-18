@@ -1,0 +1,19 @@
+[package]
+name = "rundler-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+alloy-contract.workspace = true
+alloy-primitives.workspace = true
+alloy-sol-macro = { workspace = true, features = ["json"] }
+alloy-sol-types.workspace = true
+const-hex.workspace = true
+
+[build-dependencies]
+serde_json.workspace = true
+

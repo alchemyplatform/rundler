@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   rundler:
     image: alchemy-platform/rundler:$TAG

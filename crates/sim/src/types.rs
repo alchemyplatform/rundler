@@ -13,14 +13,14 @@
 
 use std::collections::{btree_map, BTreeMap};
 
+use alloy_primitives::{Address, B256, U256};
 use anyhow::bail;
-use ethers::types::{Address, H256, U256};
 use serde::{Deserialize, Serialize};
 
 /// The expected storage values for a user operation that must
 /// be checked to determine if this operation is valid.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct ExpectedStorage(pub BTreeMap<Address, BTreeMap<H256, H256>>);
+pub struct ExpectedStorage(pub BTreeMap<Address, BTreeMap<B256, B256>>);
 
 impl ExpectedStorage {
     /// Merge this expected storage with another one, accounting for conflicts.
@@ -49,13 +49,10 @@ impl ExpectedStorage {
 
     /// Insert a new storage slot value for a given address.
     pub fn insert(&mut self, address: Address, slot: U256, value: U256) {
-        let buf: [u8; 32] = slot.into();
-        let slot = H256::from_slice(&buf);
-
-        let buf: [u8; 32] = value.into();
-        let value = H256::from_slice(&buf);
-
-        self.0.entry(address).or_default().insert(slot, value);
+        self.0
+            .entry(address)
+            .or_default()
+            .insert(B256::from(slot), B256::from(value));
     }
 }
 

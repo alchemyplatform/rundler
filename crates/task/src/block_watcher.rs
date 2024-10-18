@@ -15,8 +15,8 @@
 
 use std::time::Duration;
 
-use ethers::types::{Block, BlockNumber, H256};
-use rundler_provider::Provider;
+use alloy_primitives::B256;
+use rundler_provider::{Block, BlockId, EvmProvider};
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::time;
 use tracing::error;
@@ -26,14 +26,14 @@ use tracing::error;
 /// This function polls the provider for the latest block until a new block is discovered, with
 /// unlimited retries.
 pub async fn wait_for_new_block(
-    provider: &impl Provider,
-    last_block_hash: H256,
+    provider: &impl EvmProvider,
+    last_block_hash: B256,
     poll_interval: Duration,
-) -> (H256, Block<H256>) {
+) -> (B256, Block) {
     loop {
         let block = retry::with_unlimited_retries(
             "watch latest block",
-            || provider.get_block(BlockNumber::Latest),
+            || provider.get_block(BlockId::latest()),
             UnlimitedRetryOpts::default(),
         )
         .await;
@@ -41,12 +41,8 @@ pub async fn wait_for_new_block(
             error!("Latest block should be present when waiting for new block.");
             continue;
         };
-        let Some(hash) = block.hash else {
-            error!("Latest block should have hash.");
-            continue;
-        };
-        if last_block_hash != hash {
-            return (hash, block);
+        if last_block_hash != block.header.hash {
+            return (block.header.hash, block);
         }
         time::sleep(poll_interval).await;
     }
@@ -57,7 +53,7 @@ pub async fn wait_for_new_block(
 /// This function polls the provider for the latest block number until a new block number is discovered,
 /// with unlimited retries.
 pub async fn wait_for_new_block_number(
-    provider: &impl Provider,
+    provider: &impl EvmProvider,
     last_block_number: u64,
     poll_interval: Duration,
 ) -> u64 {

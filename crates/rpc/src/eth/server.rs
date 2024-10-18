@@ -11,8 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{spoof, Address, H256, U64};
+use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
+use rundler_provider::StateOverride;
 use rundler_types::{pool::Pool, UserOperationVariant};
 
 use super::{api::EthApi, EthApiServer};
@@ -27,13 +28,13 @@ use crate::{
 #[async_trait::async_trait]
 impl<P> EthApiServer for EthApi<P>
 where
-    P: Pool,
+    P: Pool + 'static,
 {
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
         entry_point: Address,
-    ) -> RpcResult<H256> {
+    ) -> RpcResult<B256> {
         utils::safe_call_rpc_handler(
             "eth_sendUserOperation",
             EthApi::send_user_operation(
@@ -49,7 +50,7 @@ where
         &self,
         op: RpcUserOperationOptionalGas,
         entry_point: Address,
-        state_override: Option<spoof::State>,
+        state_override: Option<StateOverride>,
     ) -> RpcResult<RpcGasEstimate> {
         utils::safe_call_rpc_handler(
             "eth_estimateUserOperationGas",
@@ -60,7 +61,7 @@ where
 
     async fn get_user_operation_by_hash(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> RpcResult<Option<RpcUserOperationByHash>> {
         utils::safe_call_rpc_handler(
             "eth_getUserOperationByHash",
@@ -71,7 +72,7 @@ where
 
     async fn get_user_operation_receipt(
         &self,
-        hash: H256,
+        hash: B256,
     ) -> RpcResult<Option<RpcUserOperationReceipt>> {
         utils::safe_call_rpc_handler(
             "eth_getUserOperationReceipt",

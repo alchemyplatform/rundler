@@ -11,12 +11,10 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::U256;
-
 mod context;
 pub(crate) use context::ValidationContextProvider;
 
 mod tracer;
 
 /// Required buffer for verification gas limit when targeting the 0.6 entrypoint contract
-pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: U256 = U256([2000, 0, 0, 0]);
+pub(crate) const REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER: u128 = 2000;

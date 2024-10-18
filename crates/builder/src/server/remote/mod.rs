@@ -19,4 +19,4 @@ mod error;
 pub mod protos;
 
 mod server;
-pub(crate) use server::spawn_remote_builder_server;
+pub(crate) use server::remote_builder_server_task;

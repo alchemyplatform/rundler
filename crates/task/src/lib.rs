@@ -23,5 +23,11 @@ pub mod block_watcher;
 pub mod grpc;
 pub mod server;
 
-mod task;
-pub use task::*;
+pub use reth_tasks::{
+    shutdown::GracefulShutdown, TaskSpawner, TaskSpawnerExt as RethTaskSpawnerExt,
+};
+
+/// A trait that extends Reth's `TaskSpawner` with additional methods.
+pub trait TaskSpawnerExt: TaskSpawner + RethTaskSpawnerExt + Clone + 'static {}
+
+impl<T: TaskSpawner + RethTaskSpawnerExt + Clone + 'static> TaskSpawnerExt for T {}

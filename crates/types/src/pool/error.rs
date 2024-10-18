@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Address, U256};
+use alloy_primitives::{Address, U256};
 
 use crate::{
     validation_results::ValidationRevert, Entity, EntityType, StorageSlot, Timestamp,
@@ -53,7 +53,7 @@ pub enum MempoolError {
     /// Operation with same sender/nonce already in pool
     /// and the replacement operation has lower gas price.
     #[error("Replacement operation underpriced. Existing priority fee: {0}. Existing fee: {1}")]
-    ReplacementUnderpriced(U256, U256),
+    ReplacementUnderpriced(u128, u128),
     /// Max operations reached for unstaked sender [UREP-010] or unstaked non-sender entity [UREP-020]
     #[error("Max operations ({0}) reached for entity {1}")]
     MaxOperationsReached(usize, Entity),
@@ -94,6 +94,12 @@ pub enum MempoolError {
     /// The operation drop attempt too soon after being added to the pool
     #[error("Operation drop attempt too soon after being added to the pool. Added at {0}, attempted to drop at {1}, must wait {2} blocks.")]
     OperationDropTooSoon(u64, u64, u64),
+    /// Pre-op gas limit efficiency too low
+    #[error("Pre-op gas limit efficiency too low. Required: {0}, Actual: {1}")]
+    PreOpGasLimitEfficiencyTooLow(f32, f32),
+    /// Call gas limit efficiency too low
+    #[error("Call gas limit efficiency too low. Required: {0}, Actual: {1}")]
+    CallGasLimitEfficiencyTooLow(f32, f32),
 }
 
 /// Precheck violation enumeration
@@ -113,13 +119,13 @@ pub enum PrecheckViolation {
     /// The total gas limit of the user operation is too high.
     /// See `gas::user_operation_execution_gas_limit` for calculation.
     #[display("total gas limit is {0} but must be at most {1}")]
-    TotalGasLimitTooHigh(U256, U256),
+    TotalGasLimitTooHigh(u128, u128),
     /// The verification gas limit of the user operation is too high.
     #[display("verificationGasLimit is {0} but must be at most {1}")]
-    VerificationGasLimitTooHigh(U256, U256),
+    VerificationGasLimitTooHigh(u128, u128),
     /// The pre-verification gas of the user operation is too low.
     #[display("preVerificationGas is {0} but must be at least {1}")]
-    PreVerificationGasTooLow(U256, U256),
+    PreVerificationGasTooLow(u128, u128),
     /// A paymaster is provided, but the address is not deployed.
     #[display("paymasterAndData indicates paymaster with no code: {0:?}")]
     PaymasterIsNotContract(Address),
@@ -132,13 +138,13 @@ pub enum PrecheckViolation {
     SenderFundsTooLow(U256, U256),
     /// The provided max priority fee per gas is too low based on the current network rate.
     #[display("maxPriorityFeePerGas is {0} but must be at least {1}")]
-    MaxPriorityFeePerGasTooLow(U256, U256),
+    MaxPriorityFeePerGasTooLow(u128, u128),
     /// The provided max fee per gas is too low based on the current network rate.
     #[display("maxFeePerGas is {0} but must be at least {1}")]
-    MaxFeePerGasTooLow(U256, U256),
+    MaxFeePerGasTooLow(u128, u128),
     /// The call gas limit is too low to account for any possible call.
     #[display("callGasLimit is {0} but must be at least {1}")]
-    CallGasLimitTooLow(U256, U256),
+    CallGasLimitTooLow(u128, u128),
 }
 
 /// All possible simulation violations
@@ -224,7 +230,7 @@ pub enum SimulationViolation {
     AggregatorValidationFailed,
     /// Verification gas limit doesn't have the required buffer on the measured gas
     #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
-    VerificationGasLimitBufferTooLow(U256, U256),
+    VerificationGasLimitBufferTooLow(u128, u128),
     /// Unsupported contract type
     #[display("accessed unsupported contract type: {0:?} at {1:?}. Address must be whitelisted")]
     AccessedUnsupportedContractType(String, Address),
@@ -246,5 +252,5 @@ pub struct NeedsStakeInformation {
     /// Minumum stake
     pub min_stake: U256,
     /// Minumum delay after an unstake event
-    pub min_unstake_delay: U256,
+    pub min_unstake_delay: u32,
 }

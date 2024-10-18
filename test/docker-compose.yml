@@ -1,5 +1,4 @@
 # A docker-compose for running a local geth node for testing
-version: "3.8"
 services:
   geth:
     image: ethereum/client-go:v1.10.26

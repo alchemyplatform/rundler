@@ -13,12 +13,13 @@
 
 use std::{pin::Pin, str::FromStr};
 
+use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use ethers::types::{Address, H256};
 use futures_util::Stream;
 use rundler_task::{
     grpc::protos::{from_bytes, ConversionError, ToProtoBytes},
     server::{HealthCheck, ServerStatus},
+    TaskSpawner,
 };
 use rundler_types::{
     chain::ChainSpec,
@@ -61,11 +62,16 @@ pub struct RemotePoolClient {
     chain_spec: ChainSpec,
     op_pool_client: OpPoolClient<Channel>,
     op_pool_health: HealthClient<Channel>,
+    task_spawner: Box<dyn TaskSpawner>,
 }
 
 impl RemotePoolClient {
     /// Connect to a remote pool server, returning a client for submitting requests.
-    pub async fn connect(url: String, chain_spec: ChainSpec) -> anyhow::Result<Self> {
+    pub async fn connect(
+        url: String,
+        chain_spec: ChainSpec,
+        task_spawner: Box<dyn TaskSpawner>,
+    ) -> anyhow::Result<Self> {
         let op_pool_client = OpPoolClient::connect(url.clone()).await?;
         let op_pool_health =
             HealthClient::new(Channel::builder(Uri::from_str(&url)?).connect().await?);
@@ -73,6 +79,7 @@ impl RemotePoolClient {
             chain_spec,
             op_pool_client,
             op_pool_health,
+            task_spawner,
         })
     }
 
@@ -145,12 +152,12 @@ impl Pool for RemotePoolClient {
             .map_err(anyhow::Error::from)?)
     }
 
-    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<H256> {
+    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<B256> {
         let res = self
             .op_pool_client
             .clone()
             .add_op(AddOpRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
                 op: Some(protos::UserOperation::from(&op)),
             })
             .await
@@ -159,7 +166,7 @@ impl Pool for RemotePoolClient {
             .result;
 
         match res {
-            Some(add_op_response::Result::Success(s)) => Ok(H256::from_slice(&s.hash)),
+            Some(add_op_response::Result::Success(s)) => Ok(B256::from_slice(&s.hash)),
             Some(add_op_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
@@ -177,7 +184,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .get_ops(GetOpsRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
                 max_ops,
                 shard_index,
             })
@@ -203,12 +210,12 @@ impl Pool for RemotePoolClient {
         }
     }
 
-    async fn get_op_by_hash(&self, hash: H256) -> PoolResult<Option<PoolOperation>> {
+    async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>> {
         let res = self
             .op_pool_client
             .clone()
             .get_op_by_hash(protos::GetOpByHashRequest {
-                hash: hash.as_bytes().to_vec(),
+                hash: hash.to_proto_bytes(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -235,13 +242,13 @@ impl Pool for RemotePoolClient {
         }
     }
 
-    async fn remove_ops(&self, entry_point: Address, ops: Vec<H256>) -> PoolResult<()> {
+    async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()> {
         let res = self
             .op_pool_client
             .clone()
             .remove_ops(RemoveOpsRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-                hashes: ops.into_iter().map(|h| h.as_bytes().to_vec()).collect(),
+                entry_point: entry_point.to_vec(),
+                hashes: ops.into_iter().map(|h| h.to_proto_bytes()).collect(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -261,7 +268,7 @@ impl Pool for RemotePoolClient {
         &self,
         entry_point: Address,
         id: UserOperationId,
-    ) -> PoolResult<Option<H256>> {
+    ) -> PoolResult<Option<B256>> {
         let res = self
             .op_pool_client
             .clone()
@@ -280,7 +287,7 @@ impl Pool for RemotePoolClient {
                 if s.hash.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(H256::from_slice(&s.hash)))
+                    Ok(Some(B256::from_slice(&s.hash)))
                 }
             }
             Some(remove_op_by_id_response::Result::Failure(f)) => Err(f.try_into()?),
@@ -299,7 +306,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .update_entities(UpdateEntitiesRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
                 entity_updates: entity_updates
                     .iter()
                     .map(protos::EntityUpdate::from)
@@ -357,7 +364,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .admin_set_tracking(AdminSetTrackingRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
                 reputation,
                 paymaster,
             })
@@ -380,7 +387,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .debug_dump_mempool(DebugDumpMempoolRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -413,7 +420,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .debug_set_reputation(DebugSetReputationRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
                 reputations: reputations
                     .into_iter()
                     .map(protos::Reputation::from)
@@ -438,7 +445,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .debug_dump_reputation(DebugDumpReputationRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -467,7 +474,7 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .debug_dump_paymaster_balances(DebugDumpPaymasterBalancesRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -497,8 +504,8 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .get_reputation_status(GetReputationStatusRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-                address: address.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
+                address: address.to_vec(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -528,8 +535,8 @@ impl Pool for RemotePoolClient {
             .op_pool_client
             .clone()
             .get_stake_status(GetStakeStatusRequest {
-                entry_point: entry_point.as_bytes().to_vec(),
-                address: address.as_bytes().to_vec(),
+                entry_point: entry_point.to_vec(),
+                address: address.to_vec(),
             })
             .await
             .map_err(anyhow::Error::from)?
@@ -551,7 +558,8 @@ impl Pool for RemotePoolClient {
         let (tx, rx) = mpsc::unbounded_channel();
         let client = self.op_pool_client.clone();
 
-        tokio::spawn(Self::new_heads_subscription_handler(client, tx));
+        self.task_spawner
+            .spawn(Box::pin(Self::new_heads_subscription_handler(client, tx)));
         Ok(Box::pin(UnboundedReceiverStream::new(rx)))
     }
 }

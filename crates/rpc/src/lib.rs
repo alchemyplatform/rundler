@@ -31,7 +31,6 @@ mod eth;
 pub use eth::{EthApiClient, EthApiSettings};
 
 mod health;
-mod metrics;
 
 mod rundler;
 pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
@@ -39,5 +38,6 @@ pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
 mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};
 
+mod rpc_metrics;
 mod types;
 mod utils;

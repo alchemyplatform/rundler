@@ -15,8 +15,10 @@
 
 use std::str::FromStr;
 
-use ethers::types::{Address, U256};
+use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
+
+use crate::da::DAGasOracleType;
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -40,38 +42,38 @@ pub struct ChainSpec {
     ///
     /// NOTE: This must take into account when the storage slot was originally 0
     /// and is now non-zero, making the overhead slightly higher for most operations.
-    pub deposit_transfer_overhead: U256,
+    pub deposit_transfer_overhead: u64,
     /// The maximum size of a transaction in bytes
     pub max_transaction_size_bytes: usize,
     /// Intrinsic gas cost for a transaction
-    pub transaction_intrinsic_gas: U256,
+    pub transaction_intrinsic_gas: u64,
     /// Per user operation gas cost for v0.6
-    pub per_user_op_v0_6_gas: U256,
+    pub per_user_op_v0_6_gas: u64,
     /// Per user operation gas cost for v0.7
-    pub per_user_op_v0_7_gas: U256,
+    pub per_user_op_v0_7_gas: u64,
     /// Per user operation deploy gas cost overhead, to capture
     /// deploy costs that are not metered by the entry point
-    pub per_user_op_deploy_overhead_gas: U256,
+    pub per_user_op_deploy_overhead_gas: u64,
     /// Gas cost for a user operation word in a bundle transaction
-    pub per_user_op_word_gas: U256,
+    pub per_user_op_word_gas: u64,
     /// Gas cost for a zero byte in calldata
-    pub calldata_zero_byte_gas: U256,
+    pub calldata_zero_byte_gas: u64,
     /// Gas cost for a non-zero byte in calldata
-    pub calldata_non_zero_byte_gas: U256,
+    pub calldata_non_zero_byte_gas: u64,
 
     /*
      * Gas estimation
      */
-    /// true if calldata is priced in preVerificationGas
-    pub calldata_pre_verification_gas: bool,
+    /// true if DA is priced in preVerificationGas
+    pub da_pre_verification_gas: bool,
     /// type of gas oracle contract for pricing calldata in preVerificationGas
-    /// If calldata_pre_verification_gas is true, this must not be None
-    pub l1_gas_oracle_contract_type: L1GasOracleContractType,
+    /// If da_pre_verification_gas is true, this must not be None
+    pub da_gas_oracle_type: DAGasOracleType,
     /// address of gas oracle contract for pricing calldata in preVerificationGas
-    pub l1_gas_oracle_contract_address: Address,
-    /// true if L1 calldata gas should be included in the gas limit
-    /// only applies when calldata_pre_verification_gas is true
-    pub include_l1_gas_in_gas_limit: bool,
+    pub da_gas_oracle_contract_address: Address,
+    /// true if Data Availability (DA) calldata gas should be included in the gas limit
+    /// only applies when da_pre_verification_gas is true
+    pub include_da_gas_in_gas_limit: bool,
 
     /*
      * Fee estimation
@@ -81,9 +83,9 @@ pub struct ChainSpec {
     /// Type of oracle for estimating priority fees
     pub priority_fee_oracle_type: PriorityFeeOracleType,
     /// Minimum max priority fee per gas for the network
-    pub min_max_priority_fee_per_gas: U256,
+    pub min_max_priority_fee_per_gas: u64,
     /// Maximum max priority fee per gas for the network
-    pub max_max_priority_fee_per_gas: U256,
+    pub max_max_priority_fee_per_gas: u64,
     /// Usage ratio of the chain that determines "congestion"
     /// Some chains have artificially high block gas limits but
     /// actually cap block gas usage at a lower value.
@@ -118,19 +120,6 @@ pub struct ChainSpec {
     pub chain_history_size: u64,
 }
 
-/// Type of gas oracle contract for pricing calldata in preVerificationGas
-#[derive(Clone, Copy, Debug, Deserialize, Default, Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum L1GasOracleContractType {
-    /// No gas oracle contract
-    #[default]
-    None,
-    /// Arbitrum Nitro type gas oracle contract
-    ArbitrumNitro,
-    /// Optimism Bedrock type gas oracle contract
-    OptimismBedrock,
-}
-
 /// Type of oracle for estimating priority fees
 #[derive(Clone, Debug, Deserialize, Default, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -149,22 +138,22 @@ impl Default for ChainSpec {
             id: 0,
             entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
             entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V7_0).unwrap(),
-            deposit_transfer_overhead: U256::from(30_000),
-            transaction_intrinsic_gas: U256::from(21_000),
-            per_user_op_v0_6_gas: U256::from(18_300),
-            per_user_op_v0_7_gas: U256::from(19_500),
-            per_user_op_deploy_overhead_gas: U256::from(0),
-            per_user_op_word_gas: U256::from(4),
-            calldata_zero_byte_gas: U256::from(4),
-            calldata_non_zero_byte_gas: U256::from(16),
+            deposit_transfer_overhead: 30_000,
+            transaction_intrinsic_gas: 21_000,
+            per_user_op_v0_6_gas: 18_300,
+            per_user_op_v0_7_gas: 19_500,
+            per_user_op_deploy_overhead_gas: 0,
+            per_user_op_word_gas: 4,
+            calldata_zero_byte_gas: 4,
+            calldata_non_zero_byte_gas: 16,
             eip1559_enabled: true,
-            calldata_pre_verification_gas: false,
-            l1_gas_oracle_contract_type: L1GasOracleContractType::default(),
-            l1_gas_oracle_contract_address: Address::zero(),
-            include_l1_gas_in_gas_limit: true,
+            da_pre_verification_gas: false,
+            da_gas_oracle_type: DAGasOracleType::default(),
+            da_gas_oracle_contract_address: Address::ZERO,
+            include_da_gas_in_gas_limit: false,
             priority_fee_oracle_type: PriorityFeeOracleType::default(),
-            min_max_priority_fee_per_gas: U256::zero(),
-            max_max_priority_fee_per_gas: U256::MAX,
+            min_max_priority_fee_per_gas: 0,
+            max_max_priority_fee_per_gas: u64::MAX,
             congestion_trigger_usage_ratio_threshold: 0.75,
             max_transaction_size_bytes: 131072, // 128 KiB
             bundle_max_send_interval_millis: u64::MAX,
@@ -174,5 +163,57 @@ impl Default for ChainSpec {
             bloxroute_enabled: false,
             chain_history_size: 64,
         }
+    }
+}
+
+impl ChainSpec {
+    /// Get the deposit transfer overhead
+    pub fn deposit_transfer_overhead(&self) -> u128 {
+        self.deposit_transfer_overhead as u128
+    }
+
+    /// Get the transaction intrinsic gas
+    pub fn transaction_intrinsic_gas(&self) -> u128 {
+        self.transaction_intrinsic_gas as u128
+    }
+
+    /// Get the minimum max priority fee per gas
+    pub fn min_max_priority_fee_per_gas(&self) -> u128 {
+        self.min_max_priority_fee_per_gas as u128
+    }
+
+    /// Get the maximum max priority fee per gas
+    pub fn max_max_priority_fee_per_gas(&self) -> u128 {
+        self.max_max_priority_fee_per_gas as u128
+    }
+
+    /// Get the per user operation word gas
+    pub fn per_user_op_word_gas(&self) -> u128 {
+        self.per_user_op_word_gas as u128
+    }
+
+    /// Get the per user operation v0_6 gas
+    pub fn per_user_op_v0_6_gas(&self) -> u128 {
+        self.per_user_op_v0_6_gas as u128
+    }
+
+    /// Get the per user operation v0_7 gas
+    pub fn per_user_op_v0_7_gas(&self) -> u128 {
+        self.per_user_op_v0_7_gas as u128
+    }
+
+    /// Get the calldata zero byte gas
+    pub fn calldata_zero_byte_gas(&self) -> u128 {
+        self.calldata_zero_byte_gas as u128
+    }
+
+    /// Get the calldata non zero byte gas
+    pub fn calldata_non_zero_byte_gas(&self) -> u128 {
+        self.calldata_non_zero_byte_gas as u128
+    }
+
+    /// Get the per user operation deploy overhead gas
+    pub fn per_user_op_deploy_overhead_gas(&self) -> u128 {
+        self.per_user_op_deploy_overhead_gas as u128
     }
 }

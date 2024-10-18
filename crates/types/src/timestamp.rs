@@ -21,8 +21,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use alloy_primitives::U64;
 use chrono::{DateTime, LocalResult, TimeZone, Utc};
-use ethers::types::U64;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// An on-chain timestamp expressed as seconds since the epoch, as might be
@@ -120,7 +120,7 @@ impl<'de> Deserialize<'de> for Timestamp {
         D: Deserializer<'de>,
     {
         let n = <U64>::deserialize(deserializer)?;
-        Ok(Self(n.as_u64()))
+        Ok(Self(n.to()))
     }
 }
 
@@ -266,7 +266,7 @@ mod test {
     #[test]
     fn test_out_of_bounds_display() {
         let actual = get_timestamp_out_of_bounds_for_datetime().to_string();
-        assert_eq!(actual, "later than +262143-12-31 23:59:59.999999999 UTC");
+        assert_eq!(actual, "later than +262142-12-31 23:59:59.999999999 UTC");
     }
 
     #[test]

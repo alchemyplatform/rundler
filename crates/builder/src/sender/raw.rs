@@ -11,64 +11,51 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
-
+use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use async_trait::async_trait;
-use ethers::{
-    middleware::SignerMiddleware,
-    providers::{JsonRpcClient, Middleware, Provider},
-    types::{transaction::eip2718::TypedTransaction, Address, H256, U256},
-};
-use ethers_signers::Signer;
+use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
-use crate::sender::{
-    create_hard_cancel_tx, fill_and_sign, SentTxInfo, TransactionSender, TxStatus,
+use crate::{
+    sender::{create_hard_cancel_tx, SentTxInfo, TransactionSender, TxStatus},
+    signer::Signer,
 };
 
 #[derive(Debug)]
-pub(crate) struct RawTransactionSender<C, S>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-{
-    provider: Arc<Provider<C>>,
-    // The `SignerMiddleware` specifically needs to wrap a `Provider`, and not
-    // just any `Middleware`, because `.request()` is only on `Provider` and not
-    // on `Middleware`.
-    submitter: SignerMiddleware<Arc<Provider<C>>, S>,
+pub(crate) struct RawTransactionSender<P, S> {
+    submit_provider: P,
+    status_provider: P,
+    signer: S,
     dropped_status_supported: bool,
     use_conditional_rpc: bool,
 }
 
 #[async_trait]
-impl<C, S> TransactionSender for RawTransactionSender<C, S>
+impl<P, S> TransactionSender for RawTransactionSender<P, S>
 where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
+    P: EvmProvider,
+    S: Signer,
 {
     async fn send_transaction(
         &self,
-        tx: TypedTransaction,
+        tx: TransactionRequest,
         expected_storage: &ExpectedStorage,
     ) -> Result<SentTxInfo> {
-        let (raw_tx, nonce) = fill_and_sign(&self.submitter, tx).await?;
+        let (raw_tx, nonce) = self.signer.fill_and_sign(tx).await?;
 
         let tx_hash = if self.use_conditional_rpc {
-            self.submitter
-                .provider()
+            self.submit_provider
                 .request(
                     "eth_sendRawTransactionConditional",
                     (raw_tx, json!({ "knownAccounts": expected_storage })),
                 )
                 .await?
         } else {
-            self.submitter
-                .provider()
+            self.submit_provider
                 .request("eth_sendRawTransaction", (raw_tx,))
                 .await?
         };
@@ -78,18 +65,17 @@ where
 
     async fn cancel_transaction(
         &self,
-        _tx_hash: H256,
-        nonce: U256,
+        _tx_hash: B256,
+        nonce: u64,
         to: Address,
         gas_fees: GasFees,
     ) -> Result<CancelTxInfo> {
-        let tx = create_hard_cancel_tx(self.submitter.address(), to, nonce, gas_fees);
+        let tx = create_hard_cancel_tx(to, nonce, gas_fees);
 
-        let (raw_tx, _) = fill_and_sign(&self.submitter, tx).await?;
+        let (raw_tx, _) = self.signer.fill_and_sign(tx).await?;
 
         let tx_hash = self
-            .submitter
-            .provider()
+            .submit_provider
             .request("eth_sendRawTransaction", (raw_tx,))
             .await?;
 
@@ -99,10 +85,10 @@ where
         })
     }
 
-    async fn get_transaction_status(&self, tx_hash: H256) -> Result<TxStatus> {
+    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus> {
         let tx = self
-            .provider
-            .get_transaction(tx_hash)
+            .status_provider
+            .get_transaction_by_hash(tx_hash)
             .await
             .context("provider should return transaction status")?;
         Ok(match tx {
@@ -115,33 +101,28 @@ where
             }
             Some(tx) => match tx.block_number {
                 None => TxStatus::Pending,
-                Some(block_number) => TxStatus::Mined {
-                    block_number: block_number.as_u64(),
-                },
+                Some(block_number) => TxStatus::Mined { block_number },
             },
         })
     }
 
     fn address(&self) -> Address {
-        self.submitter.address()
+        self.signer.address()
     }
 }
 
-impl<C, S> RawTransactionSender<C, S>
-where
-    C: JsonRpcClient + 'static,
-    S: Signer + 'static,
-{
+impl<P, S> RawTransactionSender<P, S> {
     pub(crate) fn new(
-        provider: Arc<Provider<C>>,
-        submitter: Arc<Provider<C>>,
+        submit_provider: P,
+        status_provider: P,
         signer: S,
         dropped_status_supported: bool,
         use_conditional_rpc: bool,
     ) -> Self {
         Self {
-            provider,
-            submitter: SignerMiddleware::new(submitter, signer),
+            submit_provider,
+            status_provider,
+            signer,
             dropped_status_supported,
             use_conditional_rpc,
         }

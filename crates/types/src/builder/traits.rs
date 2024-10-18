@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use ethers::types::{Address, H256};
+use alloy_primitives::{Address, B256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
@@ -23,14 +23,14 @@ pub type BuilderResult<T> = std::result::Result<T, BuilderError>;
 /// Builder
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait::async_trait]
-pub trait Builder: Send + Sync + 'static {
+pub trait Builder: Send + Sync {
     /// Get the supported entry points of this builder
     async fn get_supported_entry_points(&self) -> BuilderResult<Vec<Address>>;
 
     /// Trigger the builder to send a bundle now, used for debugging.
     ///
     /// Bundling mode must be set to `Manual`, or this will error
-    async fn debug_send_bundle_now(&self) -> BuilderResult<(H256, u64)>;
+    async fn debug_send_bundle_now(&self) -> BuilderResult<(B256, u64)>;
 
     /// Set the bundling mode
     async fn debug_set_bundling_mode(&self, mode: BundlingMode) -> BuilderResult<()>;

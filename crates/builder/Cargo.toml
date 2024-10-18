@@ -5,32 +5,44 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish = false
 
 [dependencies]
-rundler-provider = { path = "../provider" }
-rundler-sim = { path = "../sim" }
-rundler-task = { path = "../task" }
-rundler-types = { path = "../types" }
-rundler-utils = { path = "../utils" }
+rundler-provider.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
+
+alloy-consensus.workspace = true
+alloy-eips.workspace = true
+alloy-primitives.workspace = true
+alloy-signer.workspace = true
+alloy-signer-aws.workspace = true
+alloy-signer-local.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-enum_dispatch = "0.3.11"
-ethers.workspace = true
-ethers-signers = {version = "2.0.8", features = ["aws"] }
+aws-config.workspace = true
+aws-sdk-kms = { version = "1.44", default-features = false }
+enum_dispatch = "0.3.13"
 futures.workspace = true
-futures-timer = "3.0.2"
+futures-timer = "3.0.3"
 futures-util.workspace = true
-jsonrpsee = { workspace = true, features = [ "http-client" ]}
+jsonrpsee = { workspace = true, features = [ "http-client" ] }
 linked-hash-map = "0.5.6"
 metrics.workspace = true
+metrics-derive.workspace = true
+num-traits = "0.2.19"
+parse-display.workspace = true
 pin-project.workspace = true
 prost.workspace = true
-parse-display.workspace = true
-reqwest.workspace = true
-rslock = "0.3.0"
-rusoto_core = { version = "0.48.0", default-features = false, features = ["rustls"] }
-rusoto_kms = { version = "0.48.0", default-features = false, features = ["rustls"] }
+reqwest = { workspace = true, default-features = false, features = ["json"] }
+rslock = "0.4.0"
+ruint = { version = "1.12.3", features = ["num-traits"] }
+serde.workspace = true
+serde_json.workspace = true
+strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
@@ -38,20 +50,14 @@ tonic.workspace = true
 tonic-health.workspace = true
 tonic-reflection.workspace = true
 tracing.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-strum.workspace = true
 
-mockall = {workspace = true, optional = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 mockall.workspace = true
-rundler-types = { path = "../types", features = ["test-utils"] }
-rundler-provider = { path = "../provider", features = ["test-utils"] }
-rundler-sim = { path = "../sim", features = ["test-utils"] }
+rundler-provider = { workspace = true, features = ["test-utils"] }
+rundler-sim = { workspace = true, features = ["test-utils"] }
+rundler-types = { workspace = true, features = ["test-utils"] }
 
 [build-dependencies]
 tonic-build.workspace = true
-
-[features]
-test-utils = [ "mockall" ]

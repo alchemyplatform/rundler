@@ -153,6 +153,29 @@ message MempoolOp {
   bool account_is_staked = 7;
   // The entry point address of this operation
   bytes entry_point = 8;
+  // The DA gas data for the UO
+  DaGasUoData da_gas_data = 9;
+}
+
+// Data associated with a user operation for DA gas calculations
+message DaGasUoData {
+  oneof data {
+    EmptyUoData empty = 1;
+    NitroDaGasUoData nitro = 2;
+    BedrockDaGasUoData bedrock = 3;
+  }
+}
+
+message EmptyUoData {}
+
+// Data associated with a user operation for Nitro DA gas calculations
+message NitroDaGasUoData {
+  bytes uo_units = 1;
+}
+
+// Data associated with a user operation for Bedrock DA gas calculations
+message BedrockDaGasUoData {
+  uint64 uo_units = 1;
 }
 
 // Defines the gRPC endpoints for a UserOperation mempool service
@@ -302,7 +325,7 @@ message GetStakeStatusSuccess {
 }
 
 message StakeInfo { 
-  uint64 stake = 1;
+  bytes stake = 1;
   uint32 unstake_delay_sec= 2;
 }
 
@@ -488,6 +511,8 @@ message MempoolError {
     AssociatedStorageIsAlternateSender associated_storage_is_alternate_sender = 14;
     PaymasterBalanceTooLow paymaster_balance_too_low = 15;
     OperationDropTooSoon operation_drop_too_soon = 16;
+    PreOpGasLimitEfficiencyTooLow pre_op_gas_limit_efficiency_too_low = 17;
+    CallGasLimitEfficiencyTooLow call_gas_limit_efficiency_too_low = 18;
   }
 }
 
@@ -538,6 +563,16 @@ message OperationDropTooSoon {
   uint64 added_at = 1;
   uint64 attempted_at = 2;
   uint64 must_wait = 3;
+}
+
+message PreOpGasLimitEfficiencyTooLow {
+  float required = 1;
+  float actual = 2;
+}
+
+message CallGasLimitEfficiencyTooLow {
+  float required = 1;
+  float actual = 2;
 }
 
 // PRECHECK VIOLATIONS
@@ -708,7 +743,7 @@ message NotStaked {
   bytes accessed_address = 4;
   bytes slot = 5;
   bytes min_stake = 6;
-  bytes min_unstake_delay = 7;
+  uint32 min_unstake_delay = 7;
 }
 
 message UnintendedRevert {
@@ -752,6 +787,7 @@ message ValidationRevert {
     EntryPointRevert entry_point = 1;
     OperationRevert operation = 2;
     UnknownRevert unknown = 3;
+    PanicRevert panic = 4;
   }
 }
 message EntryPointRevert {
@@ -764,6 +800,9 @@ message OperationRevert {
 }
 message UnknownRevert {
   bytes revert_bytes = 1;
+}
+message PanicRevert {
+  bytes code = 1;
 }
 
 message AccessedUnsupportedContractType {

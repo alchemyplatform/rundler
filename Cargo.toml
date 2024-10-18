@@ -1,7 +1,16 @@
 [workspace]
 members = [
-    "bin/*",
-    "crates/*",
+    "bin/rundler/",
+    "crates/bindings/fastlz/",
+    "crates/builder/",
+    "crates/contracts/",
+    "crates/pool/",
+    "crates/provider/",
+    "crates/rpc/",
+    "crates/sim/",
+    "crates/task/",
+    "crates/types/",
+    "crates/utils/"
 ]
 default-members = ["bin/rundler"]
 resolver = "2"
@@ -9,38 +18,75 @@ resolver = "2"
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.79"
-license = "MIT OR Apache-2.0"
+rust-version = "1.82"
+license = "LGPL-3.0-only"
 repository = "https://github.com/alchemyplatform/rundler"
 
 [workspace.dependencies]
-anyhow = "1.0.70"
-async-trait = "0.1.73"
+# rundler dependency crates
+rundler-contracts = { path = "crates/contracts" }
+rundler-provider = { path = "crates/provider" }
+rundler-sim = { path = "crates/sim" }
+rundler-task = { path = "crates/task" }
+rundler-types = { path = "crates/types" }
+rundler-utils = { path = "crates/utils" }
+rundler-bindings-fastlz = { path = "crates/bindings/fastlz" }
+
+# alloy core
+alloy-primitives = "0.8.5"
+alloy-sol-macro = "0.8.5"
+alloy-sol-types =  "0.8.5"
+
+# alloy
+alloy-consensus = "0.4.1"
+alloy-contract = "0.4.1"
+alloy-eips = "0.4.1"
+alloy-json-rpc = "0.4.1"
+alloy-provider = { version = "0.4.1", default-features = false, features = ["reqwest", "reqwest-rustls-tls"] }
+alloy-rpc-client = "0.4.1"
+alloy-rpc-types-eth = "0.4.1"
+alloy-rpc-types-trace = "0.4.1"
+alloy-signer = "0.4.1"
+alloy-signer-aws = "0.4.1"
+alloy-signer-local = "0.4.1"
+alloy-transport = "0.4.1"
+alloy-transport-http = { version = "0.4.1", default-features = false, features = ["reqwest", "reqwest-rustls-tls"] }
+
+# alloy other
+alloy-rlp = "0.3.8"
+
+# reth
+reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.0.7" }
+
+anyhow = "1.0.89"
+async-trait = "0.1.83"
+auto_impl = "1.2.0"
+aws-config = { version = "1.5.6", default-features = false, features = ["rt-tokio", "rustls"] }
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
-ethers = "2.0.10"
-futures = "0.3.28"
-futures-util = "0.3.28"
-itertools = "0.12.1"
-jsonrpsee = "0.20.1"
-metrics = "0.22.1"
-mockall = "0.12.1"
-parse-display = "0.9.0"
-pin-project = "1.0.12"
-prost = "0.12.0"
-serde = "1.0.160"
-serde_json = "1.0.64"
+const-hex = "1.12.0"
+futures = "0.3.30"
+futures-util = "0.3.30"
+itertools = "0.13.0"
+jsonrpsee = "0.24.5"
+metrics = "0.23.0"
+metrics-derive = "0.1.0"
+mockall = "0.13.0"
+parse-display = "0.10.0"
+pin-project = "1.1.5"
+prost = "0.13.3"
+serde = "1.0.210"
+serde_json = "1.0.128"
 rand = "0.8.5"
-reqwest = { version = "0.11.18", default-features = false, features = ["rustls-tls"] }
-rustls = "0.22.4"
-thiserror = "1.0.40"
-tokio = { version = "1.27.0", default-features = false }
-tokio-util = "0.7.8"
-tonic = "0.11.0"
-tonic-build = "0.11.0"
-tonic-health = "0.11.0"
-tonic-reflection = "0.11.0"
-tonic-types = "0.11.0"
-tower = "0.4.13"
-tracing = "0.1.37"
-strum = { version = "0.26.1", features = ["derive"] }
-url = "2.3.1"
+reqwest = { version = "0.12.8", default-features = false, features = ["rustls-tls"] }
+thiserror = "1.0.64"
+tokio = { version = "1.39.3", default-features = false, features = ["rt", "sync", "time"] }
+tokio-util = "0.7.12"
+tonic = "0.12.3"
+tonic-build = "0.12.3"
+tonic-health = "0.12.3"
+tonic-reflection = "0.12.3"
+tonic-types = "0.12.3"
+tower = { version = "0.4.13", features = ["timeout"] }
+tracing = "0.1.40"
+strum = { version = "0.26.3", features = ["derive"] }
+url = "2.5.2"

@@ -13,8 +13,8 @@
 
 use std::{fmt::Display, hash::Hash, str::FromStr};
 
+use alloy_primitives::Address;
 use anyhow::bail;
-use ethers::{types::Address, utils::to_checksum};
 use parse_display::Display;
 use serde::{ser::SerializeStruct, Deserialize, Serialize};
 use strum::{EnumIter, IntoEnumIterator};
@@ -113,14 +113,14 @@ impl Entity {
 
 impl Display for Entity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{:?}", self.kind, to_checksum(&self.address, None))
+        write!(f, "{}:{:?}", self.kind, self.address.to_checksum(None))
     }
 }
 
 impl Serialize for Entity {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut e = serializer.serialize_struct("Entity", 1)?;
-        e.serialize_field(self.kind.to_str(), &to_checksum(&self.address, None))?;
+        e.serialize_field(self.kind.to_str(), &self.address.to_checksum(None))?;
         e.end()
     }
 }

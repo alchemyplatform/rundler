@@ -13,6 +13,7 @@
 
 //! Utilities for working with gRPC
 
-pub mod metrics;
+/// grpc method extractor implmentation.
+pub mod grpc_metrics;
 #[allow(non_snake_case)]
 pub mod protos;

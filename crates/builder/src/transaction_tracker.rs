@@ -11,17 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
-
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use ethers::types::{transaction::eip2718::TypedTransaction, Address, H256, U256};
+use metrics::Gauge;
+use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
-use rundler_provider::Provider;
+use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::sender::{TransactionSender, TxSenderError, TxStatus};
 
@@ -36,9 +36,9 @@ use crate::sender::{TransactionSender, TxSenderError, TxStatus};
 /// have changed so that it is worth making another attempt.
 #[async_trait]
 #[cfg_attr(test, automock)]
-pub(crate) trait TransactionTracker: Send + Sync + 'static {
+pub(crate) trait TransactionTracker: Send + Sync {
     /// Returns the current nonce and the required fees for the next transaction.
-    fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(U256, Option<GasFees>)>;
+    fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(u64, Option<GasFees>)>;
 
     /// Sends the provided transaction and typically returns its transaction
     /// hash, but if the transaction failed to send because another transaction
@@ -46,9 +46,9 @@ pub(crate) trait TransactionTracker: Send + Sync + 'static {
     /// transaction instead.
     async fn send_transaction(
         &mut self,
-        tx: TypedTransaction,
+        tx: TransactionRequest,
         expected_stroage: &ExpectedStorage,
-    ) -> TransactionTrackerResult<H256>;
+    ) -> TransactionTrackerResult<B256>;
 
     /// Cancel the abandoned transaction in the tracker.
     ///
@@ -58,7 +58,7 @@ pub(crate) trait TransactionTracker: Send + Sync + 'static {
         &mut self,
         to: Address,
         estimated_fees: GasFees,
-    ) -> TransactionTrackerResult<Option<H256>>;
+    ) -> TransactionTrackerResult<Option<B256>>;
 
     /// Checks:
     /// 1. One of our transactions mines (not necessarily the one just sent).
@@ -100,57 +100,53 @@ pub(crate) type TransactionTrackerResult<T> = std::result::Result<T, Transaction
 #[allow(dead_code)]
 pub(crate) enum TrackerUpdate {
     Mined {
-        tx_hash: H256,
-        nonce: U256,
+        tx_hash: B256,
+        nonce: u64,
         block_number: u64,
         attempt_number: u64,
-        gas_limit: Option<U256>,
-        gas_used: Option<U256>,
-        gas_price: Option<U256>,
+        gas_limit: Option<u64>,
+        gas_used: Option<u128>,
+        gas_price: Option<u128>,
     },
     LatestTxDropped {
-        nonce: U256,
+        nonce: u64,
     },
     NonceUsedForOtherTx {
-        nonce: U256,
+        nonce: u64,
     },
 }
 
 #[derive(Debug)]
-pub(crate) struct TransactionTrackerImpl<P, T>
-where
-    P: Provider,
-    T: TransactionSender,
-{
-    provider: Arc<P>,
+pub(crate) struct TransactionTrackerImpl<P, T> {
+    provider: P,
     sender: T,
     settings: Settings,
-    builder_index: u64,
-    nonce: U256,
+    nonce: u64,
     transactions: Vec<PendingTransaction>,
     has_abandoned: bool,
     attempt_count: u64,
+    metrics: TransactionTrackerMetrics,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Settings {
-    pub(crate) replacement_fee_percent_increase: u64,
+    pub(crate) replacement_fee_percent_increase: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct PendingTransaction {
-    tx_hash: H256,
+    tx_hash: B256,
     gas_fees: GasFees,
     attempt_number: u64,
 }
 
 impl<P, T> TransactionTrackerImpl<P, T>
 where
-    P: Provider,
+    P: EvmProvider,
     T: TransactionSender,
 {
     pub(crate) async fn new(
-        provider: Arc<P>,
+        provider: P,
         sender: T,
         settings: Settings,
         builder_index: u64,
@@ -158,20 +154,23 @@ where
         let nonce = provider
             .get_transaction_count(sender.address())
             .await
-            .unwrap_or(U256::zero());
+            .unwrap_or(0);
         Ok(Self {
             provider,
             sender,
             settings,
-            builder_index,
             nonce,
             transactions: vec![],
             has_abandoned: false,
             attempt_count: 0,
+            metrics: TransactionTrackerMetrics::new_with_labels(&[(
+                "builder_index",
+                builder_index.to_string(),
+            )]),
         })
     }
 
-    fn set_nonce_and_clear_state(&mut self, nonce: U256) {
+    fn set_nonce_and_clear_state(&mut self, nonce: u64) {
         self.nonce = nonce;
         self.transactions.clear();
         self.attempt_count = 0;
@@ -179,18 +178,21 @@ where
         self.update_metrics();
     }
 
-    async fn get_external_nonce(&self) -> anyhow::Result<U256> {
+    async fn get_external_nonce(&self) -> anyhow::Result<u64> {
         self.provider
             .get_transaction_count(self.sender.address())
             .await
             .context("tracker should load current nonce from provider")
     }
 
-    fn validate_transaction(&self, tx: &TypedTransaction) -> anyhow::Result<()> {
-        let Some(&nonce) = tx.nonce() else {
+    fn validate_transaction(&self, tx: &TransactionRequest) -> anyhow::Result<()> {
+        let Some(nonce) = tx.nonce else {
             bail!("transaction given to tracker should have nonce set");
         };
-        let gas_fees = GasFees::from(tx);
+        let gas_fees = GasFees {
+            max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
+        };
         let (required_nonce, required_gas_fees) = self.get_nonce_and_required_fees()?;
         if nonce != required_nonce {
             bail!("tried to send transaction with nonce {nonce}, but should match tracker's nonce of {required_nonce}");
@@ -206,25 +208,36 @@ where
     }
 
     fn update_metrics(&self) {
-        TransactionTrackerMetrics::set_num_pending_transactions(
-            self.builder_index,
-            self.transactions.len(),
-        );
-        TransactionTrackerMetrics::set_nonce(self.builder_index, self.nonce);
-        TransactionTrackerMetrics::set_attempt_count(self.builder_index, self.attempt_count);
+        self.metrics
+            .num_pending_transactions
+            .set(self.transactions.len() as f64);
+        self.metrics.nonce.set(self.nonce as f64);
+        self.metrics.attempt_count.set(self.attempt_count as f64);
+
         if let Some(tx) = self.transactions.last() {
-            TransactionTrackerMetrics::set_current_fees(self.builder_index, Some(tx.gas_fees));
+            self.metrics
+                .current_max_fee_per_gas
+                .set(tx.gas_fees.max_fee_per_gas as f64);
+            self.metrics
+                .max_priority_fee_per_gas
+                .set(tx.gas_fees.max_priority_fee_per_gas as f64);
         } else {
-            TransactionTrackerMetrics::set_current_fees(self.builder_index, None);
+            let fee = GasFees::default();
+            self.metrics
+                .current_max_fee_per_gas
+                .set(fee.max_fee_per_gas as f64);
+            self.metrics
+                .max_priority_fee_per_gas
+                .set(fee.max_priority_fee_per_gas as f64);
         }
     }
 
     async fn get_mined_tx_gas_info(
         &self,
-        tx_hash: H256,
-    ) -> anyhow::Result<(Option<U256>, Option<U256>, Option<U256>)> {
+        tx_hash: B256,
+    ) -> anyhow::Result<(Option<u64>, Option<u128>, Option<u128>)> {
         let (tx, tx_receipt) = tokio::try_join!(
-            self.provider.get_transaction(tx_hash),
+            self.provider.get_transaction_by_hash(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
         )?;
         let gas_limit = tx.map(|t| t.gas).or_else(|| {
@@ -232,7 +245,7 @@ where
             None
         });
         let (gas_used, gas_price) = match tx_receipt {
-            Some(r) => (r.gas_used, r.effective_gas_price),
+            Some(r) => (Some(r.gas_used), Some(r.effective_gas_price)),
             None => {
                 warn!("failed to fetch transaction receipt for tx: {}", tx_hash);
                 (None, None)
@@ -245,10 +258,10 @@ where
 #[async_trait]
 impl<P, T> TransactionTracker for TransactionTrackerImpl<P, T>
 where
-    P: Provider,
+    P: EvmProvider,
     T: TransactionSender,
 {
-    fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(U256, Option<GasFees>)> {
+    fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(u64, Option<GasFees>)> {
         let gas_fees = if self.has_abandoned {
             None
         } else {
@@ -262,16 +275,19 @@ where
 
     async fn send_transaction(
         &mut self,
-        tx: TypedTransaction,
+        tx: TransactionRequest,
         expected_storage: &ExpectedStorage,
-    ) -> TransactionTrackerResult<H256> {
+    ) -> TransactionTrackerResult<B256> {
         self.validate_transaction(&tx)?;
-        let gas_fees = GasFees::from(&tx);
+        let gas_fees = GasFees {
+            max_fee_per_gas: tx.max_fee_per_gas.unwrap_or(0),
+            max_priority_fee_per_gas: tx.max_priority_fee_per_gas.unwrap_or(0),
+        };
         info!(
             "Sending transaction with nonce: {:?} gas fees: {:?} gas limit: {:?}",
             self.nonce,
             gas_fees,
-            tx.gas()
+            tx.gas.unwrap_or(0),
         );
         let sent_tx = self.sender.send_transaction(tx, expected_storage).await;
 
@@ -303,7 +319,7 @@ where
                         && gas_fees.max_priority_fee_per_gas > t.gas_fees.max_priority_fee_per_gas
                 }) {
                     self.transactions.push(PendingTransaction {
-                        tx_hash: H256::zero(),
+                        tx_hash: B256::ZERO,
                         gas_fees,
                         attempt_number: self.attempt_count,
                     });
@@ -322,7 +338,7 @@ where
         &mut self,
         to: Address,
         estimated_fees: GasFees,
-    ) -> TransactionTrackerResult<Option<H256>> {
+    ) -> TransactionTrackerResult<Option<B256>> {
         let (tx_hash, gas_fees) = match self.transactions.last() {
             Some(tx) => {
                 let increased_fees = tx
@@ -338,7 +354,7 @@ where
                 };
                 (tx.tx_hash, gas_fees)
             }
-            None => (H256::zero(), estimated_fees),
+            None => (B256::ZERO, estimated_fees),
         };
 
         let cancel_info = self
@@ -373,7 +389,7 @@ where
         if self.nonce < external_nonce {
             // The nonce has changed. Check to see which of our transactions has
             // mined, if any.
-            debug!(
+            info!(
                 "Nonce has changed from {:?} to {:?}",
                 self.nonce, external_nonce
             );
@@ -410,7 +426,7 @@ where
             return Ok(None);
         };
 
-        if last_tx.tx_hash == H256::zero() {
+        if last_tx.tx_hash == B256::ZERO {
             // If the last transaction was a replacement that failed to send, we
             // don't need to check for updates.
             return Ok(None);
@@ -474,61 +490,50 @@ impl From<TxSenderError> for TransactionTrackerError {
     }
 }
 
-struct TransactionTrackerMetrics {}
-
-impl TransactionTrackerMetrics {
-    fn set_num_pending_transactions(builder_index: u64, num_pending_transactions: usize) {
-        metrics::gauge!("builder_tracker_num_pending_transactions", "builder_index" => builder_index.to_string())
-            .set(num_pending_transactions as f64);
-    }
-
-    fn set_nonce(builder_index: u64, nonce: U256) {
-        metrics::gauge!("builder_tracker_nonce", "builder_index" => builder_index.to_string())
-            .set(nonce.as_u64() as f64);
-    }
-
-    fn set_attempt_count(builder_index: u64, attempt_count: u64) {
-        metrics::gauge!("builder_tracker_attempt_count", "builder_index" => builder_index.to_string()).set(attempt_count as f64);
-    }
-
-    fn set_current_fees(builder_index: u64, current_fees: Option<GasFees>) {
-        let fees = current_fees.unwrap_or_default();
-
-        metrics::gauge!("builder_tracker_current_max_fee_per_gas", "builder_index" => builder_index.to_string())
-            .set(fees.max_fee_per_gas.as_u64() as f64);
-        metrics::gauge!("builder_tracker_current_max_priority_fee_per_gas", "builder_index" => builder_index.to_string())
-            .set(fees.max_priority_fee_per_gas.as_u64() as f64);
-    }
+#[derive(Metrics)]
+#[metrics(scope = "builder_tracker_")]
+struct TransactionTrackerMetrics {
+    #[metric(describe = "the number of pending transactions.")]
+    num_pending_transactions: Gauge,
+    #[metric(describe = "the current account‘s nonce.")]
+    nonce: Gauge,
+    #[metric(describe = "the number of pending transactions.")]
+    attempt_count: Gauge,
+    #[metric(describe = "the maximum fee per gas of current transaction.")]
+    current_max_fee_per_gas: Gauge,
+    #[metric(describe = "the maximum priority fee per gas of current transaction.")]
+    max_priority_fee_per_gas: Gauge,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use ethers::types::{Address, Eip1559TransactionRequest, Transaction, TransactionReceipt};
+    use alloy_primitives::Address;
     use mockall::Sequence;
-    use rundler_provider::MockProvider;
+    use rundler_provider::{
+        MockEvmProvider, Transaction, TransactionReceipt, TransactionReceiptEnvelope,
+        TransactionReceiptWithBloom,
+    };
 
     use super::*;
     use crate::sender::{MockTransactionSender, SentTxInfo};
 
-    fn create_base_config() -> (MockTransactionSender, MockProvider) {
+    fn create_base_config() -> (MockTransactionSender, MockEvmProvider) {
         let sender = MockTransactionSender::new();
-        let provider = MockProvider::new();
+        let provider = MockEvmProvider::new();
 
         (sender, provider)
     }
 
     async fn create_tracker(
         sender: MockTransactionSender,
-        provider: MockProvider,
-    ) -> TransactionTrackerImpl<MockProvider, MockTransactionSender> {
+        provider: MockEvmProvider,
+    ) -> TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> {
         let settings = Settings {
             replacement_fee_percent_increase: 5,
         };
 
-        let tracker: TransactionTrackerImpl<MockProvider, MockTransactionSender> =
-            TransactionTrackerImpl::new(Arc::new(provider), sender, settings, 0)
+        let tracker: TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> =
+            TransactionTrackerImpl::new(provider, sender, settings, 0)
                 .await
                 .unwrap();
 
@@ -538,38 +543,38 @@ mod tests {
     #[tokio::test]
     async fn test_nonce_and_fees() {
         let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
-                    nonce: U256::from(0),
-                    tx_hash: H256::zero(),
+                    nonce: 0,
+                    tx_hash: B256::ZERO,
                 })
             })
         });
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(0)));
+            .returning(move |_a| Ok(0));
 
         let mut tracker = create_tracker(sender, provider).await;
 
-        let tx = Eip1559TransactionRequest::new()
+        let tx = TransactionRequest::default()
             .nonce(0)
-            .gas(10000)
+            .gas_limit(10000)
             .max_fee_per_gas(10000);
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let _sent = tracker.send_transaction(tx, &exp).await;
         let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
         assert_eq!(
             (
-                U256::from(0),
+                0,
                 Some(GasFees {
-                    max_fee_per_gas: U256::from(10500),
-                    max_priority_fee_per_gas: U256::zero(),
+                    max_fee_per_gas: 10500,
+                    max_priority_fee_per_gas: 0,
                 })
             ),
             nonce_and_fees
@@ -579,7 +584,7 @@ mod tests {
     #[tokio::test]
     async fn test_nonce_and_fees_abandoned() {
         let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
 
         sender
             .expect_get_transaction_status()
@@ -588,57 +593,57 @@ mod tests {
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
-                    nonce: U256::from(0),
-                    tx_hash: H256::zero(),
+                    nonce: 0,
+                    tx_hash: B256::ZERO,
                 })
             })
         });
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(0)));
+            .returning(move |_a| Ok(0));
 
         let mut tracker = create_tracker(sender, provider).await;
 
-        let tx = Eip1559TransactionRequest::new()
+        let tx = TransactionRequest::default()
             .nonce(0)
-            .gas(10000)
+            .gas_limit(10000)
             .max_fee_per_gas(10000);
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let _sent = tracker.send_transaction(tx, &exp).await;
         let _tracker_update = tracker.check_for_update().await.unwrap();
 
         tracker.abandon();
 
         let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
-        assert_eq!((U256::from(0), None), nonce_and_fees);
+        assert_eq!((0, None), nonce_and_fees);
     }
 
     #[tokio::test]
     async fn test_send_transaction_without_nonce() {
         let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
-                    nonce: U256::from(0),
-                    tx_hash: H256::zero(),
+                    nonce: 0,
+                    tx_hash: B256::ZERO,
                 })
             })
         });
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(2)));
+            .returning(move |_a| Ok(2));
 
         let mut tracker = create_tracker(sender, provider).await;
 
-        let tx = Eip1559TransactionRequest::new();
+        let tx = TransactionRequest::default();
         let exp = ExpectedStorage::default();
-        let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
+        let sent_transaction = tracker.send_transaction(tx, &exp).await;
 
         assert!(sent_transaction.is_err());
     }
@@ -647,25 +652,25 @@ mod tests {
     async fn test_send_transaction_with_invalid_nonce() {
         let (mut sender, mut provider) = create_base_config();
 
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
-                    nonce: U256::from(0),
-                    tx_hash: H256::zero(),
+                    nonce: 0,
+                    tx_hash: B256::ZERO,
                 })
             })
         });
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(2)));
+            .returning(move |_a| Ok(2));
 
         let mut tracker = create_tracker(sender, provider).await;
 
-        let tx = Eip1559TransactionRequest::new().nonce(0);
+        let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
-        let sent_transaction = tracker.send_transaction(tx.into(), &exp).await;
+        let sent_transaction = tracker.send_transaction(tx, &exp).await;
 
         assert!(sent_transaction.is_err());
     }
@@ -673,32 +678,32 @@ mod tests {
     #[tokio::test]
     async fn test_send_transaction() {
         let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
-                    nonce: U256::from(0),
-                    tx_hash: H256::zero(),
+                    nonce: 0,
+                    tx_hash: B256::ZERO,
                 })
             })
         });
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(0)));
+            .returning(move |_a| Ok(0));
 
         let mut tracker = create_tracker(sender, provider).await;
 
-        let tx = Eip1559TransactionRequest::new().nonce(0);
+        let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
-        tracker.send_transaction(tx.into(), &exp).await.unwrap();
+        tracker.send_transaction(tx, &exp).await.unwrap();
     }
 
     // TODO(#295): fix dropped status
     // #[tokio::test]
     // async fn test_wait_for_update_dropped() {
     //     let (mut sender, mut provider) = create_base_config();
-    //     sender.expect_address().return_const(Address::zero());
+    //     sender.expect_address().return_const(Address::ZERO);
 
     //     sender
     //         .expect_get_transaction_status()
@@ -707,15 +712,15 @@ mod tests {
     //     sender.expect_send_transaction().returning(move |_a, _b| {
     //         Box::pin(async {
     //             Ok(SentTxInfo {
-    //                 nonce: U256::from(0),
-    //                 tx_hash: H256::zero(),
+    //                 nonce: U256::ZERO,
+    //                 tx_hash: B256::zero(),
     //             })
     //         })
     //     });
 
     //     provider
     //         .expect_get_transaction_count()
-    //         .returning(move |_a| Ok(U256::from(0)));
+    //         .returning(move |_a| Ok(U256::ZERO));
 
     //     provider.expect_get_block_number().returning(move || Ok(1));
 
@@ -735,13 +740,13 @@ mod tests {
     #[tokio::test]
     async fn test_check_for_update_nonce_used() {
         let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
 
         let mut provider_seq = Sequence::new();
         for transaction_count in 0..=1 {
             provider
                 .expect_get_transaction_count()
-                .returning(move |_a| Ok(U256::from(transaction_count)))
+                .returning(move |_a| Ok(transaction_count))
                 .times(1)
                 .in_sequence(&mut provider_seq);
         }
@@ -759,7 +764,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_for_update_mined() {
         let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::zero());
+        sender.expect_address().return_const(Address::ZERO);
         sender
             .expect_get_transaction_status()
             .returning(move |_a| Box::pin(async { Ok(TxStatus::Mined { block_number: 1 }) }));
@@ -767,39 +772,55 @@ mod tests {
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
-                    nonce: U256::from(0),
-                    tx_hash: H256::random(),
+                    nonce: 0,
+                    tx_hash: B256::random(),
                 })
             })
         });
 
         provider
             .expect_get_transaction_count()
-            .returning(move |_a| Ok(U256::from(0)));
+            .returning(move |_a| Ok(0));
 
-        provider.expect_get_transaction().returning(|_: H256| {
-            Ok(Some(Transaction {
-                gas: U256::from(0),
-                ..Default::default()
-            }))
-        });
+        provider
+            .expect_get_transaction_by_hash()
+            .returning(|_: B256| {
+                Ok(Some(Transaction {
+                    gas: 0,
+                    ..Default::default()
+                }))
+            });
 
         provider
             .expect_get_transaction_receipt()
-            .returning(|_: H256| {
+            .returning(|_: B256| {
                 Ok(Some(TransactionReceipt {
-                    gas_used: Some(U256::from(0)),
-                    ..Default::default()
+                    inner: TransactionReceiptEnvelope::Legacy(
+                        TransactionReceiptWithBloom::default(),
+                    ),
+                    transaction_hash: B256::ZERO,
+                    transaction_index: None,
+                    block_hash: None,
+                    block_number: None,
+                    gas_used: 0,
+                    effective_gas_price: 0,
+                    blob_gas_used: None,
+                    blob_gas_price: None,
+                    from: Address::ZERO,
+                    to: None,
+                    contract_address: None,
+                    state_root: None,
+                    authorization_list: None,
                 }))
             });
 
         let mut tracker = create_tracker(sender, provider).await;
 
-        let tx = Eip1559TransactionRequest::new().nonce(0);
+        let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = tracker.send_transaction(tx.into(), &exp).await;
+        let _sent = tracker.send_transaction(tx, &exp).await;
         let tracker_update = tracker.check_for_update().await.unwrap().unwrap();
 
         assert!(matches!(tracker_update, TrackerUpdate::Mined { .. }));

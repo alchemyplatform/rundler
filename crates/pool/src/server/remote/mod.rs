@@ -18,4 +18,4 @@ mod protos;
 mod server;
 
 pub use client::*;
-pub(crate) use server::spawn_remote_mempool_server;
+pub(crate) use server::remote_mempool_server_task;

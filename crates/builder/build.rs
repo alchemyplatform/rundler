@@ -23,6 +23,6 @@ fn generate_protos() -> Result<(), Box<dyn error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     tonic_build::configure()
         .file_descriptor_set_path(out_dir.join("builder_descriptor.bin"))
-        .compile(&["proto/builder/builder.proto"], &["proto"])?;
+        .compile_protos(&["proto/builder/builder.proto"], &["proto"])?;
     Ok(())
 }

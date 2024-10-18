@@ -15,7 +15,7 @@ use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
 use rundler_rpc::RpcTask;
-use rundler_task::spawn_tasks_with_shutdown;
+use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
@@ -44,7 +44,8 @@ pub struct NodeCliArgs {
     rpc: RpcArgs,
 }
 
-pub async fn run(
+pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
+    task_spawner: T,
     chain_spec: ChainSpec,
     bundler_args: NodeCliArgs,
     common_args: CommonArgs,
@@ -62,7 +63,7 @@ pub async fn run(
         .to_args(chain_spec.clone(), &common_args, None)
         .await?;
     let rpc_task_args = rpc_args.to_args(
-        chain_spec,
+        chain_spec.clone(),
         &common_args,
         (&common_args).try_into()?,
         (&common_args).into(),
@@ -77,21 +78,30 @@ pub async fn run(
     let (builder_event_sender, builder_event_rx) =
         broadcast::channel::<WithEntryPoint<BuilderEvent>>(EVENT_CHANNEL_CAPACITY);
 
-    emit::receive_and_log_events_with_filter(event_rx, |_| true);
-    emit::receive_events("op pool", op_pool_event_rx, {
-        let event_sender = event_sender.clone();
-        move |event| {
-            let _ = event_sender.send(WithEntryPoint::of(event));
-        }
-    });
-    emit::receive_events("builder", builder_event_rx, {
-        let event_sender = event_sender.clone();
-        move |event| {
-            if builder::is_nonspammy_event(&event) {
+    task_spawner.spawn_critical(
+        "recv and log events",
+        Box::pin(emit::receive_and_log_events_with_filter(event_rx, |_| true)),
+    );
+    task_spawner.spawn_critical(
+        "recv op pool events",
+        Box::pin(emit::receive_events("op pool", op_pool_event_rx, {
+            let event_sender = event_sender.clone();
+            move |event| {
                 let _ = event_sender.send(WithEntryPoint::of(event));
             }
-        }
-    });
+        })),
+    );
+    task_spawner.spawn_critical(
+        "recv builder events",
+        Box::pin(emit::receive_events("builder", builder_event_rx, {
+            let event_sender = event_sender.clone();
+            move |event| {
+                if builder::is_nonspammy_event(&event) {
+                    let _ = event_sender.send(WithEntryPoint::of(event));
+                }
+            }
+        })),
+    );
 
     let pool_builder = LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY);
     let pool_handle = pool_builder.get_handle();
@@ -99,21 +109,30 @@ pub async fn run(
     let builder_builder = LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY);
     let builder_handle = builder_builder.get_handle();
 
-    spawn_tasks_with_shutdown(
-        [
-            PoolTask::new(pool_task_args, op_pool_event_sender, pool_builder).boxed(),
-            BuilderTask::new(
-                builder_task_args,
-                builder_event_sender,
-                builder_builder,
-                pool_handle.clone(),
-            )
-            .boxed(),
-            RpcTask::new(rpc_task_args, pool_handle, builder_handle).boxed(),
-        ],
-        tokio::signal::ctrl_c(),
+    let providers = super::construct_providers(&common_args, &chain_spec)?;
+
+    PoolTask::new(
+        pool_task_args,
+        op_pool_event_sender,
+        pool_builder,
+        providers.clone(),
     )
-    .await;
+    .spawn(task_spawner.clone())
+    .await?;
+
+    BuilderTask::new(
+        builder_task_args,
+        builder_event_sender,
+        builder_builder,
+        pool_handle.clone(),
+        providers.clone(),
+    )
+    .spawn(task_spawner.clone())
+    .await?;
+
+    RpcTask::new(rpc_task_args, pool_handle, builder_handle, providers)
+        .spawn(task_spawner)
+        .await?;
 
     Ok(())
 }
