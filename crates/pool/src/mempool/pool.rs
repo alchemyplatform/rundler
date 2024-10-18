@@ -182,7 +182,7 @@ where
     ) -> MempoolResult<B256> {
         // only eligibility criteria is required PVG which is enabled when da_gas_tracking is enabled
         let is_eligible = if self.config.da_gas_tracking_enabled {
-            if op.uo.pre_verification_gas() >= required_pvg {
+            if op.uo.pre_verification_gas() < required_pvg {
                 self.emit(PoolEvent::UpdatedDAData {
                     op_hash: op
                         .uo
