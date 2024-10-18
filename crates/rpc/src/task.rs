@@ -118,6 +118,7 @@ where
             self.providers.evm().clone(),
             fee_oracle,
             self.args.precheck_settings.priority_fee_mode,
+            self.args.precheck_settings.bundle_base_fee_overhead_percent,
             self.args
                 .precheck_settings
                 .bundle_priority_fee_overhead_percent,

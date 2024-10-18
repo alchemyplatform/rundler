@@ -239,6 +239,15 @@ pub struct CommonArgs {
     verification_estimation_gas_fee: u128,
 
     #[arg(
+        long = "bundle_base_fee_overhead_percent",
+        name = "bundle_base_fee_overhead_percent",
+        env = "BUNDLE_BASE_FEE_OVERHEAD_PERCENT",
+        default_value = "27", // 2 12.5% EIP-1559 increases
+        global = true
+    )]
+    bundle_base_fee_overhead_percent: u32,
+
+    #[arg(
         long = "bundle_priority_fee_overhead_percent",
         name = "bundle_priority_fee_overhead_percent",
         env = "BUNDLE_PRIORITY_FEE_OVERHEAD_PERCENT",
@@ -383,6 +392,7 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
             max_total_execution_gas: value.max_bundle_gas,
+            bundle_base_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),
