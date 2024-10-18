@@ -347,6 +347,7 @@ impl BuilderArgs {
             redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             max_bundle_size: self.max_bundle_size,
             max_bundle_gas: common.max_bundle_gas,
+            bundle_base_fee_overhead_percent: common.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
             sender_args,
