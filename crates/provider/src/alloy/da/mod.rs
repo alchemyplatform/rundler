@@ -99,6 +99,9 @@ mod tests {
 
     use super::*;
 
+    const OPT_ORACLE_ADDRESS: Address = address!("420000000000000000000000000000000000000F");
+    const ARB_ORACLE_ADDRESS: Address = address!("00000000000000000000000000000000000000C8");
+
     // Run these tests locally with `ALCHEMY_API_KEY=<key> cargo test -- --ignored`
 
     // This test may begin to fail if an optimism sepolia fork changes how the L1 gas oracle works.
@@ -151,63 +154,146 @@ mod tests {
         let uo2 = test_uo_data_2();
         let provider = arb_provider();
 
-        let oracle_addr = address!("00000000000000000000000000000000000000C8");
-        let contract_oracle = ArbitrumNitroDAGasOracle::new(oracle_addr, provider.clone());
-        let cached_oracle = CachedNitroDAGasOracle::new(oracle_addr, provider);
+        let contract_oracle = ArbitrumNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider.clone());
+        let cached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider);
 
         let block: BlockHashOrNumber = 262113260.into();
-        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo1.clone()).await;
-        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo2.clone()).await;
+        compare_oracles_on_data(&cached_oracle, &contract_oracle, block, uo1.clone()).await;
+        compare_oracles_on_data(&cached_oracle, &contract_oracle, block, uo2.clone()).await;
 
         let block: BlockHashOrNumber = 262113261.into();
-        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo1.clone()).await;
-        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo2.clone()).await;
+        compare_oracles_on_data(&cached_oracle, &contract_oracle, block, uo1.clone()).await;
+        compare_oracles_on_data(&cached_oracle, &contract_oracle, block, uo2.clone()).await;
 
         let block: BlockHashOrNumber = 262113262.into();
-        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo1).await;
-        compare_oracles_on_data(&contract_oracle, &cached_oracle, block, uo2).await;
+        compare_oracles_on_data(&cached_oracle, &contract_oracle, block, uo1).await;
+        compare_oracles_on_data(&cached_oracle, &contract_oracle, block, uo2).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn arb_e2e_cached() {
+        let uo = test_uo_data_1();
+        let to = Address::random();
+
+        let provider = arb_provider();
+        let block = provider.get_block_number().await.unwrap();
+
+        let contract_oracle = ArbitrumNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider.clone());
+        let cached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider);
+
+        let cached_res = cached_e2e(cached_oracle, block, to, uo.clone()).await;
+        let contract_res = contract_oracle
+            .estimate_da_gas(uo, to, block.into(), 1)
+            .await
+            .unwrap()
+            .0;
+
+        compare_results(cached_res, contract_res);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn opt_e2e_cached() {
+        let uo = test_uo_data_1();
+        let to = Address::random();
+
+        let provider = opt_provider();
+        let block = provider.get_block_number().await.unwrap();
+
+        let contract_oracle = OptimismBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
+        let cached_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
+
+        let cached_res = cached_e2e(cached_oracle, block, to, uo.clone()).await;
+        let contract_res = contract_oracle
+            .estimate_da_gas(uo, to, block.into(), 1)
+            .await
+            .unwrap()
+            .0;
+
+        compare_results(cached_res, contract_res);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn arb_block_cache() {
+        let provider = arb_provider();
+        let block = provider.get_block_number().await.unwrap();
+
+        let cached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider.clone());
+        let block_data_1 = cached_oracle.block_data(block.into()).await.unwrap();
+
+        let uncached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider);
+        let block_data_2 = uncached_oracle.block_data(block.into()).await.unwrap();
+
+        assert_eq!(block_data_1, block_data_2);
+
+        let block_data_3 = cached_oracle.block_data(block.into()).await.unwrap();
+
+        assert_eq!(block_data_1, block_data_3);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn opt_block_cache() {
+        let provider = opt_provider();
+        let block = provider.get_block_number().await.unwrap();
+
+        let cached_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
+        let block_data_1 = cached_oracle.block_data(block.into()).await.unwrap();
+
+        let uncached_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
+        let block_data_2 = uncached_oracle.block_data(block.into()).await.unwrap();
+
+        assert_eq!(block_data_1, block_data_2);
+
+        let block_data_3 = cached_oracle.block_data(block.into()).await.unwrap();
+
+        assert_eq!(block_data_1, block_data_3);
+    }
+
+    fn compare_results(cached_res: u128, contract_res: u128) {
+        // Allow for some variance with cached being within 0.1% smaller than contract
+        let ratio = cached_res as f64 / contract_res as f64;
+        assert!((0.999..=1.000).contains(&ratio));
     }
 
     async fn compare_oracles(
-        oracle_a: &impl DAGasOracle,
-        oracle_b: &impl DAGasOracle,
+        cached_oracle: &impl DAGasOracle,
+        contract_oracle: &impl DAGasOracle,
         block: BlockHashOrNumber,
     ) {
         let uo = test_uo_data_1();
-        compare_oracles_on_data(oracle_a, oracle_b, block, uo).await;
+        compare_oracles_on_data(cached_oracle, contract_oracle, block, uo).await;
     }
 
     async fn compare_oracles_on_data(
-        oracle_a: &impl DAGasOracle,
-        oracle_b: &impl DAGasOracle,
+        cached_oracle: &impl DAGasOracle,
+        contract_oracle: &impl DAGasOracle,
         block: BlockHashOrNumber,
         data: Bytes,
     ) {
         let gas_price = 1;
         let to = Address::random();
 
-        let (gas_a, _, _) = oracle_a
+        let (gas_a, _, _) = cached_oracle
             .estimate_da_gas(data.clone(), to, block, gas_price)
             .await
             .unwrap();
-        let (gas_b, _, _) = oracle_b
+        let (gas_b, _, _) = contract_oracle
             .estimate_da_gas(data, to, block, gas_price)
             .await
             .unwrap();
 
-        // Allow for some variance with oracle b being within 0.1% smaller than oracle a
-        let ratio = gas_b as f64 / gas_a as f64;
-        assert!((0.999..=1.000).contains(&ratio));
+        compare_results(gas_a, gas_b);
     }
 
     async fn compare_opt_and_local_bedrock(
         provider: impl AlloyProvider + Clone,
         block: BlockHashOrNumber,
     ) {
-        let oracle_addr = address!("420000000000000000000000000000000000000F");
-
-        let contract_oracle = OptimismBedrockDAGasOracle::new(oracle_addr, provider.clone());
-        let local_oracle = LocalBedrockDAGasOracle::new(oracle_addr, provider);
+        let contract_oracle = OptimismBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
+        let local_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
 
         compare_oracles(&contract_oracle, &local_oracle, block).await;
     }
@@ -217,12 +303,21 @@ mod tests {
         block: BlockHashOrNumber,
         data: Bytes,
     ) {
-        let oracle_addr = address!("00000000000000000000000000000000000000C8");
-
-        let contract_oracle = ArbitrumNitroDAGasOracle::new(oracle_addr, provider.clone());
-        let cached_oracle = CachedNitroDAGasOracle::new(oracle_addr, provider);
+        let contract_oracle = ArbitrumNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider.clone());
+        let cached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider);
 
         compare_oracles_on_data(&contract_oracle, &cached_oracle, block, data).await;
+    }
+
+    async fn cached_e2e(
+        oracle: impl DAGasOracleSync,
+        block: u64,
+        to: Address,
+        data: Bytes,
+    ) -> u128 {
+        let block_data = oracle.block_data(block.into()).await.unwrap();
+        let uo_data = oracle.uo_data(data, to, block.into()).await.unwrap();
+        oracle.calc_da_gas_sync(&uo_data, &block_data, 1)
     }
 
     fn opt_provider() -> impl AlloyProvider + Clone {
