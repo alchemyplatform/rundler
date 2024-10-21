@@ -9,4 +9,4 @@ max_transaction_size_bytes = 130000
 
 priority_fee_oracle_type = "USAGE_BASED"
 min_max_priority_fee_per_gas = 1000000
-congestion_trigger_usage_ratio_threshold = 0.25
+congestion_trigger_usage_ratio_threshold = 0.20
