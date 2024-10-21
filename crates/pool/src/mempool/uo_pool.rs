@@ -159,8 +159,21 @@ where
     ) -> MempoolResult<()> {
         // Check call gas limit efficiency only if needed
         if self.config.gas_limit_efficiency_reject_threshold > 0.0 {
+            // Node clients set base_fee to 0 during eth_call.
+            // Geth: https://github.com/ethereum/go-ethereum/blob/a5fe7353cff959d6fcfcdd9593de19056edb9bdb/internal/ethapi/api.go#L1202
+            // Reth: https://github.com/paradigmxyz/reth/blob/4d3b35dbd24c3a5c6b1a4f7bd86b1451e8efafcc/crates/rpc/rpc-eth-api/src/helpers/call.rs#L1098
+            // Arb-geth: https://github.com/OffchainLabs/go-ethereum/blob/54adef6e3fbea263e770c578047fd38842b8e17f/internal/ethapi/api.go#L1126
             let gas_price = op.gas_price(0);
+
+            if gas_price == 0 {
+                // Can't calculate efficiency without gas price, fail open.
+                return Ok(());
+            }
+
             let call_gas_limit = op.call_gas_limit();
+            if call_gas_limit == 0 {
+                return Ok(()); // No call gas limit, not useful, but not a failure here.
+            }
 
             let sim_result = self
                 .ep_providers
@@ -890,12 +903,13 @@ struct UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, vec};
 
-    use alloy_primitives::Bytes;
+    use alloy_primitives::{uint, Bytes};
     use mockall::Sequence;
     use rundler_provider::{
-        DepositInfo, MockEntryPointV0_6, MockEvmProvider, ProvidersWithEntryPoint,
+        DepositInfo, ExecutionResult, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
+        ProvidersWithEntryPoint,
     };
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckReturn, PrecheckSettings,
@@ -1669,6 +1683,118 @@ mod tests {
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
     }
 
+    #[tokio::test]
+    async fn test_pre_op_gas_limit_reject() {
+        let mut config = default_config();
+        config.gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            call_gas_limit: 10_000,
+            verification_gas_limit: 500_000, // used 100K of 550K
+            pre_verification_gas: 50_000,
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+            ..Default::default()
+        });
+
+        let mut ep = MockEntryPointV0_6::new();
+        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+            Ok(Ok(ExecutionResult {
+                pre_op_gas: 100_000,
+                paid: uint!(110_000_U256),
+                target_success: true,
+                ..Default::default()
+            }))
+        });
+
+        let pool = create_pool_with_entry_point_config(config, vec![op.clone()], ep);
+        let ret = pool.add_operation(OperationOrigin::Local, op.op).await;
+        let actual_eff = 100_000_f32 / 550_000_f32;
+
+        match ret.err().unwrap() {
+            MempoolError::PreOpGasLimitEfficiencyTooLow(eff, actual) => {
+                assert_eq!(eff, 0.25);
+                assert_eq!(actual, actual_eff);
+            }
+            _ => panic!("Expected PreOpGasLimitEfficiencyTooLow error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_call_gas_limit_reject() {
+        let mut config = default_config();
+        config.gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            call_gas_limit: 50_000,
+            max_fee_per_gas: 1,
+            max_priority_fee_per_gas: 1,
+            ..Default::default()
+        });
+
+        let mut ep = MockEntryPointV0_6::new();
+        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
+            Ok(Ok(ExecutionResult {
+                pre_op_gas: 50_000,
+                paid: uint!(60_000_U256), // call gas used is 10K
+                target_success: true,
+                ..Default::default()
+            }))
+        });
+
+        let pool = create_pool_with_entry_point_config(config, vec![op.clone()], ep);
+        let ret = pool.add_operation(OperationOrigin::Local, op.op).await;
+        let actual_eff = 10_000_f32 / 50_000_f32;
+
+        match ret.err().unwrap() {
+            MempoolError::CallGasLimitEfficiencyTooLow(eff, actual) => {
+                assert_eq!(eff, 0.25);
+                assert_eq!(actual, actual_eff);
+            }
+            _ => panic!("Expected CallGasLimitEfficiencyTooLow error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_gas_price_zero_fail_open() {
+        let mut config = default_config();
+        config.gas_limit_efficiency_reject_threshold = 0.25;
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            call_gas_limit: 50_000,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            ..Default::default()
+        });
+
+        let pool = create_pool_with_config(config, vec![op.clone()]);
+        pool.add_operation(OperationOrigin::Local, op.op)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_da_gas_ineligible() {
+        let mut config = default_config();
+        config.da_gas_tracking_enabled = true;
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            call_gas_limit: 50_000,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            pre_verification_gas: 50_000, // below 100K
+            ..Default::default()
+        });
+
+        let pool = create_pool_with_config(config, vec![op.clone()]);
+        pool.add_operation(OperationOrigin::Local, op.op)
+            .await
+            .unwrap();
+
+        let best = pool.best_operations(10000, 0).unwrap();
+        assert_eq!(best.len(), 0);
+    }
+
     #[derive(Clone, Debug)]
     struct OpWithErrors {
         op: UserOperationVariant,
@@ -1678,19 +1804,8 @@ mod tests {
         staked: bool,
     }
 
-    fn create_pool(
-        ops: Vec<OpWithErrors>,
-    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
-        let entrypoint = MockEntryPointV0_6::new();
-        create_pool_with_entry_point(ops, entrypoint)
-    }
-
-    fn create_pool_with_entry_point(
-        ops: Vec<OpWithErrors>,
-        entrypoint: MockEntryPointV0_6,
-    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
-        let entrypoint = Arc::new(entrypoint);
-        let args = PoolConfig {
+    fn default_config() -> PoolConfig {
+        PoolConfig {
             chain_spec: ChainSpec::default(),
             entry_point: Address::random(),
             entry_point_version: EntryPointVersion::V0_6,
@@ -1711,7 +1826,38 @@ mod tests {
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
             gas_limit_efficiency_reject_threshold: 0.0,
-        };
+        }
+    }
+
+    fn create_pool(
+        ops: Vec<OpWithErrors>,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        let entrypoint = MockEntryPointV0_6::new();
+        create_pool_with_entry_point(ops, entrypoint)
+    }
+
+    fn create_pool_with_config(
+        args: PoolConfig,
+        ops: Vec<OpWithErrors>,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        let entrypoint = MockEntryPointV0_6::new();
+        create_pool_with_entry_point_config(args, ops, entrypoint)
+    }
+
+    fn create_pool_with_entry_point(
+        ops: Vec<OpWithErrors>,
+        entrypoint: MockEntryPointV0_6,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        let config = default_config();
+        create_pool_with_entry_point_config(config, ops, entrypoint)
+    }
+
+    fn create_pool_with_entry_point_config(
+        args: PoolConfig,
+        ops: Vec<OpWithErrors>,
+        entrypoint: MockEntryPointV0_6,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        let entrypoint = Arc::new(entrypoint);
 
         let mut evm = MockEvmProvider::new();
         evm.expect_get_latest_block_hash_and_number()
@@ -1754,7 +1900,7 @@ mod tests {
                 } else {
                     Ok(PrecheckReturn {
                         da_gas_data: DAGasUOData::Empty,
-                        required_pre_verification_gas: 0,
+                        required_pre_verification_gas: 100_000,
                     })
                 }
             });
@@ -1777,7 +1923,7 @@ mod tests {
                                 },
                                 ..EntityInfos::default()
                             },
-                            pre_op_gas: 1000,
+                            pre_op_gas: 100_000,
                             ..SimulationResult::default()
                         })
                     }
@@ -1785,11 +1931,11 @@ mod tests {
         }
 
         let (event_sender, _) = broadcast::channel(4);
-        let none_oracle: Option<Arc<dyn DAGasOracleSync>> = None;
+        let da_oracle = Arc::new(MockDAGasOracleSync::new());
 
         UoPool::new(
             args,
-            ProvidersWithEntryPoint::new(Arc::new(evm), entry_point, none_oracle),
+            ProvidersWithEntryPoint::new(Arc::new(evm), entry_point, Some(da_oracle)),
             UoPoolProviders::new(simulator, prechecker),
             event_sender,
             paymaster,
@@ -1874,6 +2020,16 @@ mod tests {
             precheck_error,
             simulation_error,
             staked,
+        }
+    }
+
+    fn create_op_from_op_v0_6(op: UserOperation) -> OpWithErrors {
+        OpWithErrors {
+            op: op.into(),
+            valid_time_range: ValidTimeRange::default(),
+            precheck_error: None,
+            simulation_error: None,
+            staked: false,
         }
     }
 
