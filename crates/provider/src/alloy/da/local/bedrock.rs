@@ -20,6 +20,7 @@ use reth_tasks::pool::BlockingTaskPool;
 use rundler_types::da::{BedrockDAGasBlockData, BedrockDAGasUOData, DAGasBlockData, DAGasUOData};
 use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
+use tracing::error;
 
 use super::multicall::{self, Multicall::MulticallInstance, MULTICALL_BYTECODE};
 use crate::{
@@ -147,6 +148,7 @@ where
             .call()
             .await
             .map(|r| r.isFjord)
+            .map_err(|e| error!("failed to check if fjord: {:?}", e))
             .unwrap_or(false)
     }
 
