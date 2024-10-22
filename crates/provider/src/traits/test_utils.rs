@@ -28,9 +28,9 @@ use rundler_types::{
 
 use super::error::ProviderResult;
 use crate::{
-    AggregatorOut, BlockHashOrNumber, BundleHandler, DAGasProvider, DepositInfo, EntryPoint,
-    EntryPointProvider, EvmCall, EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut,
-    SignatureAggregator, SimulationProvider,
+    AggregatorOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync, DAGasProvider,
+    DepositInfo, EntryPoint, EntryPointProvider, EvmCall, EvmProvider as EvmProviderTrait,
+    ExecutionResult, HandleOpsOut, SignatureAggregator, SimulationProvider,
 };
 
 mockall::mock! {
@@ -289,4 +289,36 @@ mockall::mock! {
     }
 
     impl EntryPointProvider<v0_7::UserOperation> for EntryPointV0_7 {}
+}
+
+mockall::mock! {
+    pub DAGasOracleSync {}
+
+    #[async_trait::async_trait]
+    impl DAGasOracleSync for DAGasOracleSync {
+        async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
+        async fn uo_data(
+            &self,
+            uo_data: Bytes,
+            to: Address,
+            block: BlockHashOrNumber,
+        ) -> ProviderResult<DAGasUOData>;
+        fn calc_da_gas_sync(
+            &self,
+            uo_data: &DAGasUOData,
+            block_data: &DAGasBlockData,
+            gas_price: u128,
+        ) -> u128;
+    }
+
+    #[async_trait::async_trait]
+    impl DAGasOracle for DAGasOracleSync {
+        async fn estimate_da_gas(
+            &self,
+            uo_bytes: Bytes,
+            to: Address,
+            block: BlockHashOrNumber,
+            gas_price: u128,
+        ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+    }
 }
