@@ -1526,10 +1526,12 @@ mod tests {
     use alloy_primitives::{utils::parse_units, Address, B256};
     use anyhow::anyhow;
     use rundler_provider::{
-        AggregatorSimOut, MockEntryPointV0_6, MockEvmProvider, ProvidersWithEntryPoint,
+        AggregatorSimOut, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
+        ProvidersWithEntryPoint,
     };
     use rundler_sim::{MockFeeEstimator, MockSimulator};
     use rundler_types::{
+        da::BedrockDAGasBlockData,
         pool::{MockPool, SimulationViolation},
         v0_6::UserOperation,
         UserOperation as _, ValidTimeRange,
@@ -1649,7 +1651,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drops_but_not_rejects_op_accessing_another_sender() {
+    async fn test_skips_but_not_rejects_op_accessing_another_sender() {
         let op1 = op_with_sender(address(1));
         let op2 = op_with_sender(address(2));
         let bundle = simple_make_bundle(vec![
@@ -1684,7 +1686,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drops_but_not_rejects_op_with_too_low_max_priority_fee() {
+    async fn test_skips_but_not_rejects_op_with_too_low_max_priority_fee() {
         // With 10% required overhead on priority fee, op1 should be excluded
         // but op2 accepted.
         let base_fee = 1000;
@@ -1709,6 +1711,7 @@ mod tests {
             max_priority_fee_per_gas,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
         assert_eq!(
@@ -1722,7 +1725,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_drops_but_not_rejects_op_with_too_low_max_fee_per_gas() {
+    async fn test_skips_but_not_rejects_op_with_too_low_max_fee_per_gas() {
         let base_fee = 1000;
         let max_priority_fee_per_gas = 50;
         let op1 = op_with_sender_and_fees(address(1), 1049, 49);
@@ -1745,6 +1748,7 @@ mod tests {
             max_priority_fee_per_gas,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
         assert_eq!(
@@ -1764,52 +1768,53 @@ mod tests {
         assert!(bundle.rejected_ops.is_empty());
     }
 
-    // TODO(danc): This test is now longer valid as we only recheck PVG for
-    // chains with external DA. We should add tests for that, but will require adding
-    // mock calls to the DA provider.
-    // #[tokio::test]
-    // async fn test_drops_but_not_rejects_op_with_too_low_pvg() {
-    //     let base_fee = 1000;
-    //     let max_priority_fee_per_gas = 50;
-    //     let mut op1 = op_with_sender_and_fees(address(1), 1054, 55);
-    //     op1.pre_verification_gas = 0; // Should be dropped but not rejected
-    //     let op2 = op_with_sender_and_fees(address(2), 1055, 55);
-    //     let bundle = mock_make_bundle(
-    //         vec![
-    //             MockOp {
-    //                 op: op1.clone(),
-    //                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-    //             },
-    //             MockOp {
-    //                 op: op2.clone(),
-    //                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-    //             },
-    //         ],
-    //         vec![],
-    //         vec![HandleOpsOut::Success],
-    //         vec![],
-    //         base_fee,
-    //         max_priority_fee_per_gas,
-    //         false,
-    //         ExpectedStorage::default(),
-    //     )
-    //     .await;
-    //     assert_eq!(
-    //         bundle.gas_fees,
-    //         GasFees {
-    //             max_fee_per_gas: 1050,
-    //             max_priority_fee_per_gas: 50,
-    //         }
-    //     );
-    //     assert_eq!(
-    //         bundle.ops_per_aggregator,
-    //         vec![UserOpsPerAggregator {
-    //             user_ops: vec![op2],
-    //             ..Default::default()
-    //         }],
-    //     );
-    //     assert!(bundle.rejected_ops.is_empty());
-    // }
+    #[tokio::test]
+    async fn test_skips_but_not_rejects_op_with_too_low_pvg() {
+        let base_fee = 1000;
+        let max_priority_fee_per_gas = 50;
+
+        let mut op1 = op_with_sender_and_fees(address(1), 1054, 55);
+        op1.pre_verification_gas = 0; // Should be skipped but not rejected
+        let mut op2 = op_with_sender_and_fees(address(2), 1055, 55);
+        op2.pre_verification_gas = DEFAULT_PVG; // Should be included
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            base_fee,
+            max_priority_fee_per_gas,
+            false,
+            ExpectedStorage::default(),
+            true,
+        )
+        .await;
+        assert_eq!(
+            bundle.gas_fees,
+            GasFees {
+                max_fee_per_gas: 1050,
+                max_priority_fee_per_gas: 50,
+            }
+        );
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op2],
+                ..Default::default()
+            }],
+        );
+        assert!(bundle.rejected_ops.is_empty());
+    }
 
     #[tokio::test]
     async fn test_aggregators() {
@@ -1885,6 +1890,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -1975,6 +1981,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
 
@@ -2038,6 +2045,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
 
@@ -2161,6 +2169,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
 
@@ -2195,6 +2204,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
 
@@ -2263,6 +2273,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await;
 
@@ -2304,6 +2315,7 @@ mod tests {
             0,
             true,
             actual_storage,
+            false,
         )
         .await;
 
@@ -2342,6 +2354,7 @@ mod tests {
             0,
             true,
             actual_storage,
+            false,
         )
         .await;
 
@@ -2369,6 +2382,7 @@ mod tests {
             0,
             false,
             ExpectedStorage::default(),
+            false,
         )
         .await
     }
@@ -2383,6 +2397,7 @@ mod tests {
         max_priority_fee_per_gas: u128,
         notify_condition_not_met: bool,
         actual_storage: ExpectedStorage,
+        da_gas_tracking_enabled: bool,
     ) -> Bundle<UserOperation> {
         let entry_point_address = address(123);
         let beneficiary = address(124);
@@ -2483,20 +2498,46 @@ mod tests {
             .returning(move |address, _| Ok(signatures_by_aggregator[&address]().unwrap()));
 
         let (event_sender, _) = broadcast::channel(16);
-        let none_oracle: Option<Arc<dyn DAGasOracleSync>> = None;
+
+        let mut da_oracle = MockDAGasOracleSync::new();
+        let block_data = DAGasBlockData::Bedrock(BedrockDAGasBlockData {
+            base_fee_scalar: 1,
+            l1_base_fee: 1,
+            blob_base_fee: 1,
+            blob_base_fee_scalar: 1,
+        });
+        let bd_cloned = block_data.clone();
+        da_oracle
+            .expect_block_data()
+            .returning(move |_| Ok(bd_cloned.clone()));
+        da_oracle
+            .expect_calc_da_gas_sync()
+            .returning(move |_, bd, gp| {
+                assert_eq!(*bd, block_data);
+                assert_eq!(gp, base_fee + max_priority_fee_per_gas);
+                100_000
+            });
+
         let mut proposer = BundleProposerImpl::new(
             0,
-            ProvidersWithEntryPoint::new(Arc::new(provider), Arc::new(entry_point), none_oracle),
+            ProvidersWithEntryPoint::new(
+                Arc::new(provider),
+                Arc::new(entry_point),
+                Some(Arc::new(da_oracle)),
+            ),
             BundleProposerProviders::new(pool_client, simulator, fee_estimator),
             Settings {
-                chain_spec: ChainSpec::default(),
+                chain_spec: ChainSpec {
+                    da_pre_verification_gas: da_gas_tracking_enabled,
+                    ..Default::default()
+                },
                 max_bundle_size,
                 max_bundle_gas: 10_000_000,
                 beneficiary,
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 bundle_base_fee_overhead_percent: 27,
                 bundle_priority_fee_overhead_percent: 0,
-                da_gas_tracking_enabled: false,
+                da_gas_tracking_enabled,
             },
             event_sender,
         );

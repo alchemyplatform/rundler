@@ -181,7 +181,7 @@ where
         required_pvg: u128,
     ) -> MempoolResult<B256> {
         // only eligibility criteria is required PVG which is enabled when da_gas_tracking is enabled
-        let is_eligible = if self.config.da_gas_tracking_enabled {
+        let is_eligible = if self.config.da_gas_tracking_enabled && self.da_gas_oracle.is_some() {
             if op.uo.pre_verification_gas() < required_pvg {
                 self.emit(PoolEvent::UpdatedDAData {
                     op_hash: op
@@ -766,6 +766,7 @@ struct PoolMetrics {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
+    use rundler_provider::MockDAGasOracleSync;
     use rundler_types::{
         v0_6::UserOperation, EntityInfo, EntityInfos, UserOperation as UserOperationTrait,
         ValidTimeRange,
@@ -1227,6 +1228,164 @@ mod tests {
         assert_eq!(None, pool.get_operation_by_hash(hash3));
     }
 
+    #[test]
+    fn test_add_operation_ineligible_initially() {
+        let mut conf = conf();
+        conf.da_gas_tracking_enabled = true;
+        let mut pool = pool_with_conf_oracle(conf.clone(), MockDAGasOracleSync::default());
+
+        let po1 = create_op(Address::random(), 0, 10);
+
+        let hash = pool.add_operation(po1, 50_001).unwrap();
+
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0); // UO is ineligible due to pvg
+    }
+
+    #[test]
+    fn test_add_operation_ineligible_then_eligible() {
+        let mut conf = conf();
+        conf.chain_spec.da_pre_verification_gas = true;
+        conf.chain_spec.include_da_gas_in_gas_limit = true;
+        conf.da_gas_tracking_enabled = true;
+
+        let po1 = create_op(Address::random(), 0, 10);
+        let pvg = po1.uo.pre_verification_gas();
+        let da_pvg = po1
+            .uo
+            .pre_verification_da_gas_limit(&conf.chain_spec, Some(1));
+
+        let mut oracle = MockDAGasOracleSync::default();
+        oracle
+            .expect_calc_da_gas_sync()
+            .returning(move |_, _, _| da_pvg - 1);
+
+        let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
+
+        let hash = pool.add_operation(po1, pvg + 1).unwrap();
+
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0); // UO is ineligible due to pvg
+
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            GasFees::default(),
+            0,
+        );
+
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1); // UO is now eligible
+    }
+
+    #[test]
+    fn test_add_operation_eligible_then_ineligible() {
+        let mut conf = conf();
+        conf.chain_spec.da_pre_verification_gas = true;
+        conf.chain_spec.include_da_gas_in_gas_limit = true;
+        conf.da_gas_tracking_enabled = true;
+
+        let po1 = create_op(Address::random(), 0, 10);
+        let pvg = po1.uo.pre_verification_gas();
+        let da_pvg = po1
+            .uo
+            .pre_verification_da_gas_limit(&conf.chain_spec, Some(1));
+
+        let mut oracle = MockDAGasOracleSync::default();
+        oracle
+            .expect_calc_da_gas_sync()
+            .returning(move |_, _, _| da_pvg + 1);
+
+        let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
+
+        let hash = pool.add_operation(po1, pvg).unwrap();
+
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
+
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            GasFees::default(),
+            0,
+        );
+
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
+    }
+
+    #[test]
+    fn test_add_operation_eligible_then_eligible() {
+        let mut conf = conf();
+        conf.chain_spec.da_pre_verification_gas = true;
+        conf.chain_spec.include_da_gas_in_gas_limit = true;
+        conf.da_gas_tracking_enabled = true;
+
+        let po1 = create_op(Address::random(), 0, 10);
+        let pvg = po1.uo.pre_verification_gas();
+        let da_pvg = po1
+            .uo
+            .pre_verification_da_gas_limit(&conf.chain_spec, Some(1));
+
+        let mut oracle = MockDAGasOracleSync::default();
+        oracle
+            .expect_calc_da_gas_sync()
+            .returning(move |_, _, _| da_pvg);
+
+        let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
+
+        let hash = pool.add_operation(po1, pvg).unwrap();
+
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
+
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            GasFees::default(),
+            0,
+        );
+
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
+    }
+
+    #[test]
+    fn test_add_operation_ineligible_then_ineligible() {
+        let mut conf = conf();
+        conf.chain_spec.da_pre_verification_gas = true;
+        conf.chain_spec.include_da_gas_in_gas_limit = true;
+        conf.da_gas_tracking_enabled = true;
+
+        let po1 = create_op(Address::random(), 0, 10);
+        let pvg = po1.uo.pre_verification_gas();
+        let da_pvg = po1
+            .uo
+            .pre_verification_da_gas_limit(&conf.chain_spec, Some(1));
+
+        let mut oracle = MockDAGasOracleSync::default();
+        oracle
+            .expect_calc_da_gas_sync()
+            .returning(move |_, _, _| da_pvg + 1);
+
+        let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
+
+        let hash = pool.add_operation(po1, pvg + 1).unwrap();
+
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
+
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            GasFees::default(),
+            0,
+        );
+
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
+    }
+
     fn conf() -> PoolInnerConfig {
         PoolInnerConfig {
             chain_spec: ChainSpec::default(),
@@ -1247,6 +1406,13 @@ mod tests {
         PoolInner::new(conf, None, broadcast::channel(100000).0)
     }
 
+    fn pool_with_conf_oracle(
+        conf: PoolInnerConfig,
+        oracle: MockDAGasOracleSync,
+    ) -> PoolInner<MockDAGasOracleSync> {
+        PoolInner::new(conf, Some(oracle), broadcast::channel(100000).0)
+    }
+
     fn mem_size_of_ordered_pool_op() -> usize {
         OrderedPoolOperation::new(Arc::new(create_op(Address::random(), 1, 1)), 1, true).mem_size()
     }
@@ -1257,6 +1423,7 @@ mod tests {
                 sender,
                 nonce: U256::from(nonce),
                 max_fee_per_gas,
+                pre_verification_gas: 50_000,
                 ..UserOperation::default()
             }
             .into(),
