@@ -392,7 +392,7 @@ impl TryFrom<&CommonArgs> for PrecheckSettings {
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
             max_total_execution_gas: value.max_bundle_gas,
-            bundle_base_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
+            bundle_base_fee_overhead_percent: value.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),

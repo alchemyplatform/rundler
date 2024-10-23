@@ -342,6 +342,48 @@ where
             .unmined_operations
             .increment(unmined_op_count);
 
+        // update required bundle fees and update metrics
+        match self.pool_providers.prechecker().update_fees().await {
+            Ok((bundle_fees, base_fee)) => {
+                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
+                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                    Err(_) => 0.0,
+                };
+                self.metrics.current_max_fee_gwei.set(max_fee);
+
+                let max_priority_fee =
+                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
+                        Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                        Err(_) => 0.0,
+                    };
+                self.metrics
+                    .current_max_priority_fee_gwei
+                    .set(max_priority_fee);
+
+                let base_fee_f64 = match format_units(base_fee, "gwei") {
+                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
+                    Err(_) => 0.0,
+                };
+                self.metrics.current_base_fee.set(base_fee_f64);
+
+                // cache for the next update
+                {
+                    let mut state = self.state.write();
+                    state.block_number = update.latest_block_number;
+                    state.block_hash = update.latest_block_hash;
+                    state.gas_fees = bundle_fees;
+                    state.base_fee = base_fee;
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to update fees: {:?}", e);
+                {
+                    let mut state = self.state.write();
+                    state.block_number = update.latest_block_number;
+                }
+            }
+        }
+
         let da_block_data = if self.config.da_gas_tracking_enabled
             && self.ep_providers.da_gas_oracle_sync().is_some()
         {
@@ -403,7 +445,7 @@ where
                 da_block_data.as_ref(),
                 gas_fees,
                 base_fee,
-            )
+            );
         }
         let maintenance_time = start.elapsed();
         tracing::debug!(
@@ -413,48 +455,6 @@ where
         self.ep_specific_metrics
             .maintenance_time
             .record(maintenance_time.as_micros() as f64);
-
-        // update required bundle fees and update metrics
-        match self.pool_providers.prechecker().update_fees().await {
-            Ok((bundle_fees, base_fee)) => {
-                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
-                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                    Err(_) => 0.0,
-                };
-                self.metrics.current_max_fee_gwei.set(max_fee);
-
-                let max_priority_fee =
-                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
-                        Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                        Err(_) => 0.0,
-                    };
-                self.metrics
-                    .current_max_priority_fee_gwei
-                    .set(max_priority_fee);
-
-                let base_fee_f64 = match format_units(base_fee, "gwei") {
-                    Ok(s) => s.parse::<f64>().unwrap_or_default(),
-                    Err(_) => 0.0,
-                };
-                self.metrics.current_base_fee.set(base_fee_f64);
-
-                // cache for the next update
-                {
-                    let mut state = self.state.write();
-                    state.block_number = update.latest_block_number;
-                    state.block_hash = update.latest_block_hash;
-                    state.gas_fees = bundle_fees;
-                    state.base_fee = base_fee;
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to update fees: {:?}", e);
-                {
-                    let mut state = self.state.write();
-                    state.block_number = update.latest_block_number;
-                }
-            }
-        }
     }
 
     fn entry_point(&self) -> Address {
