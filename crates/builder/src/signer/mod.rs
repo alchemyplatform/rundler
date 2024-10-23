@@ -23,7 +23,6 @@ pub(crate) use aws::*;
 pub(crate) use local::*;
 use metrics::Gauge;
 use metrics_derive::Metrics;
-use num_traits::cast::ToPrimitive;
 use rundler_provider::{EvmProvider, TransactionRequest};
 
 #[async_trait::async_trait]
@@ -77,9 +76,18 @@ pub(crate) async fn monitor_account_balance<P: EvmProvider>(addr: Address, provi
     loop {
         match provider.get_balance(addr, None).await {
             Ok(balance) => {
-                let eth_balance = balance.to_f64().unwrap_or_default() / 1e18;
-                metric.account_balance.set(eth_balance);
-                tracing::info!("account {addr:?} balance: {}", eth_balance);
+                let eth_string = alloy_primitives::utils::format_ether(balance);
+                match eth_string.parse::<f64>() {
+                    Ok(eth_f64) => {
+                        metric.account_balance.set(eth_f64);
+                        tracing::info!("account {addr:?} balance: {eth_f64:.6}");
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            "Parse balance {balance} to eth {eth_string} to f64 error {err:?}"
+                        );
+                    }
+                }
             }
             Err(err) => {
                 tracing::error!("Get account {addr:?} balance error {err:?}");
