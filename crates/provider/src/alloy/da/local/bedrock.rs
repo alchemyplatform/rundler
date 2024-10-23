@@ -149,7 +149,7 @@ where
             .await
             .map(|r| r.isFjord)
             .map_err(|e| error!("failed to check if fjord: {:?}", e))
-            .unwrap_or(false)
+            .unwrap_or(true) // Fail-open. Assume fjord if we can't check, so this can be used downstream in asserts w/o panic on RPC errors.
     }
 
     async fn get_block_data(
