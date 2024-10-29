@@ -65,6 +65,10 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
+        if gas_price == 0 {
+            Err(anyhow::anyhow!("gas price cannot be zero"))?;
+        }
+
         let l1_fee: u128 = self
             .oracle
             .getL1Fee(data)

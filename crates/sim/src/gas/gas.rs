@@ -11,9 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, fmt::Debug};
+use std::fmt::Debug;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, EvmProvider};
@@ -68,17 +68,8 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
     base_fee: u128,
 ) -> anyhow::Result<(u128, DAGasUOData)> {
     let (da_gas, uo_data) = if chain_spec.da_pre_verification_gas {
-        let gas_price = cmp::min(
-            base_fee + op.max_priority_fee_per_gas(),
-            op.max_fee_per_gas(),
-        );
-
-        if gas_price == 0 {
-            bail!("Gas price cannot be zero")
-        }
-
         let (da_gas, uo_data, _) = entry_point
-            .calc_da_gas(op.clone(), block, gas_price)
+            .calc_da_gas(op.clone(), block, op.gas_price(base_fee))
             .await?;
         (da_gas, uo_data)
     } else {
