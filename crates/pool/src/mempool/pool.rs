@@ -266,7 +266,7 @@ where
                 let required_da_gas = da_gas_oracle.calc_da_gas_sync(
                     &op.po.da_gas_data,
                     block_da_data,
-                    candidate_gas_price,
+                    op.uo().gas_price(base_fee),
                 );
 
                 let required_pvg = op.uo().required_pre_verification_gas(
@@ -1356,17 +1356,20 @@ mod tests {
         conf.chain_spec.da_pre_verification_gas = true;
         conf.chain_spec.include_da_gas_in_gas_limit = true;
         conf.da_gas_tracking_enabled = true;
+        let base_fee = 0;
 
         let po1 = create_op(Address::random(), 0, 10);
+        let po1_gas_price = po1.uo.gas_price(base_fee);
         let pvg = po1.uo.pre_verification_gas();
         let da_pvg = po1
             .uo
             .pre_verification_da_gas_limit(&conf.chain_spec, Some(1));
 
         let mut oracle = MockDAGasOracleSync::default();
-        oracle
-            .expect_calc_da_gas_sync()
-            .returning(move |_, _, _| da_pvg + 1);
+        oracle.expect_calc_da_gas_sync().returning(move |_, _, gp| {
+            assert_eq!(gp, po1_gas_price);
+            da_pvg + 1
+        });
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
@@ -1380,7 +1383,7 @@ mod tests {
             0.into(),
             Some(&DAGasBlockData::default()),
             GasFees::default(),
-            0,
+            base_fee,
         );
 
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);

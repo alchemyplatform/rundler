@@ -394,7 +394,7 @@ where
             da_gas_oracle.calc_da_gas_sync(
                 &op.da_gas_data,
                 da_block_data,
-                required_op_fees.max_fee_per_gas,
+                op.uo.gas_price(base_fee),
             )
         } else {
             match self
@@ -403,7 +403,7 @@ where
                 .calc_da_gas(
                     op.uo.clone().into(),
                     block_hash.into(),
-                    required_op_fees.max_fee_per_gas,
+                    op.uo.gas_price(base_fee),
                 )
                 .await
             {
@@ -2512,9 +2512,8 @@ mod tests {
             .returning(move |_| Ok(bd_cloned.clone()));
         da_oracle
             .expect_calc_da_gas_sync()
-            .returning(move |_, bd, gp| {
+            .returning(move |_, bd, _| {
                 assert_eq!(*bd, block_data);
-                assert_eq!(gp, base_fee + max_priority_fee_per_gas);
                 100_000
             });
 
