@@ -99,7 +99,7 @@ where
                     if resp.is_error() {
                         let error = resp.as_error().unwrap();
                         if error.code < 0 {
-                            tracing::error!(
+                            tracing::warn!(
                                 "alloy provider of method {} response with error: {}",
                                 &method_name,
                                 error
@@ -108,7 +108,7 @@ where
                     }
                 }
                 Err(e) => {
-                    tracing::error!(
+                    tracing::warn!(
                         "alloy provider of method {} response with error: {e:?}",
                         &method_name,
                     );
