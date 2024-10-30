@@ -743,13 +743,20 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     }
 
     // Sends a success result and moves to initial state
+    //
+    // In auto mode, will not wait for trigger and will move to the next bundle.
+    // In manual mode, will wait for the next trigger
     fn bundle_mined(&mut self, block_number: u64, attempt_number: u64, tx_hash: B256) {
         self.send_result(SendBundleResult::Success {
             block_number,
             attempt_number,
             tx_hash,
         });
-        self.initial();
+        self.update(InnerState::Building(BuildingState {
+            wait_for_trigger: self.trigger.builder_must_wait_for_trigger(),
+            fee_increase_count: 0,
+            underpriced_info: None,
+        }));
     }
 
     // No operations are available, send result, move to initial state
@@ -962,12 +969,21 @@ impl CancelPendingState {
 #[async_trait]
 #[cfg_attr(test, automock)]
 trait Trigger {
+    // Wait for the next trigger to send a bundle
+    // Depending on the mode this will either wait for the next block, a timer tick, or a manual trigger
     async fn wait_for_trigger(
         &mut self,
     ) -> anyhow::Result<Option<oneshot::Sender<SendBundleResult>>>;
 
+    // Wait for the next block
     async fn wait_for_block(&mut self) -> anyhow::Result<NewHead>;
 
+    // Whether the builder must wait for a trigger to send a bundle
+    //
+    // When in auto mode the builder doesn't need to wait for a trigger to send a bundle
+    fn builder_must_wait_for_trigger(&self) -> bool;
+
+    // Get the last block processed by the trigger
     fn last_block(&self) -> &NewHead;
 }
 
@@ -1056,6 +1072,13 @@ impl Trigger for BundleSenderTrigger {
             .ok_or_else(|| anyhow::anyhow!("Block stream closed"))?;
         self.consume_blocks()?;
         Ok(self.last_block.clone())
+    }
+
+    fn builder_must_wait_for_trigger(&self) -> bool {
+        match self.bundling_mode {
+            BundlingMode::Manual => true,
+            BundlingMode::Auto => false,
+        }
     }
 
     fn last_block(&self) -> &NewHead {
@@ -1380,7 +1403,7 @@ mod tests {
         assert!(matches!(
             state.inner,
             InnerState::Building(BuildingState {
-                wait_for_trigger: true,
+                wait_for_trigger: false, // don't wait for trigger in auto mode
                 fee_increase_count: 0,
                 underpriced_info: None,
             })
@@ -1756,6 +1779,9 @@ mod tests {
                 block_number,
                 block_hash: B256::ZERO,
             });
+        mock_trigger
+            .expect_builder_must_wait_for_trigger()
+            .return_const(false);
     }
 
     fn bundle() -> Bundle<UserOperation> {
