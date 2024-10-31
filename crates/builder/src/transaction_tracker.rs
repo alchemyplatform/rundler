@@ -310,7 +310,10 @@ where
             Err(e) if matches!(e, TxSenderError::ReplacementUnderpriced) => {
                 // Only can get into this state if there is an unknown pending transaction causing replacement
                 // underpriced errors, or if the last transaction was abandoned.
-                info!("Replacement underpriced: nonce: {:?}", self.nonce);
+                warn!(
+                    "Replacement underpriced: nonce: {:?}, fees: {:?}",
+                    self.nonce, gas_fees
+                );
 
                 // Store this transaction as pending if last is empty or if it has higher gas fees than last
                 // so that we can continue to increase fees.
@@ -357,31 +360,57 @@ where
             None => (B256::ZERO, estimated_fees),
         };
 
-        let cancel_info = self
+        let cancel_res = self
             .sender
             .cancel_transaction(tx_hash, self.nonce, to, gas_fees)
-            .await?;
+            .await;
 
-        if cancel_info.soft_cancelled {
-            // If the transaction was soft-cancelled. Reset internal state.
-            self.reset().await;
-            return Ok(None);
+        match cancel_res {
+            Ok(cancel_info) => {
+                if cancel_info.soft_cancelled {
+                    // If the transaction was soft-cancelled. Reset internal state.
+                    self.reset().await;
+                    return Ok(None);
+                }
+
+                info!(
+                    "Sent cancellation tx {:?} fees: {:?}",
+                    cancel_info.tx_hash, gas_fees
+                );
+
+                self.transactions.push(PendingTransaction {
+                    tx_hash: cancel_info.tx_hash,
+                    gas_fees,
+                    attempt_number: self.attempt_count,
+                });
+
+                self.attempt_count += 1;
+                self.update_metrics();
+                Ok(Some(cancel_info.tx_hash))
+            }
+            Err(TxSenderError::ReplacementUnderpriced) => {
+                warn!(
+                    "Cancellation tx replacement underpriced: nonce: {:?} fees: {:?}",
+                    self.nonce, gas_fees
+                );
+
+                // Store this transaction as pending if last is empty or if it has higher gas fees than last
+                // so that we can continue to increase fees.
+                if self.transactions.last().map_or(true, |t| {
+                    gas_fees.max_fee_per_gas > t.gas_fees.max_fee_per_gas
+                        && gas_fees.max_priority_fee_per_gas > t.gas_fees.max_priority_fee_per_gas
+                }) {
+                    self.transactions.push(PendingTransaction {
+                        tx_hash: B256::ZERO,
+                        gas_fees,
+                        attempt_number: self.attempt_count,
+                    });
+                };
+
+                Err(TransactionTrackerError::ReplacementUnderpriced)
+            }
+            Err(e) => Err(e.into()),
         }
-
-        info!(
-            "Sent cancellation tx {:?} fees: {:?}",
-            cancel_info.tx_hash, gas_fees
-        );
-
-        self.transactions.push(PendingTransaction {
-            tx_hash: cancel_info.tx_hash,
-            gas_fees,
-            attempt_number: self.attempt_count,
-        });
-
-        self.attempt_count += 1;
-        self.update_metrics();
-        Ok(Some(cancel_info.tx_hash))
     }
 
     async fn check_for_update(&mut self) -> TransactionTrackerResult<Option<TrackerUpdate>> {
