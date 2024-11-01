@@ -123,5 +123,6 @@ define_hardcoded_chain_specs!(
     polygon_amoy,
     avax,
     bera_bartio,
-    avax_fuji
+    avax_fuji,
+    opbnb_testnet
 );

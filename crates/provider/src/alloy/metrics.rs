@@ -88,9 +88,9 @@ where
             method_name.clone(),
             "rpc".to_string(),
         );
-        let mut svc = self.service.clone();
+        let fut = self.service.call(request);
         async move {
-            let response = svc.call(request).await;
+            let response = fut.await;
             method_logger.done();
             match &response {
                 Ok(resp) => {
