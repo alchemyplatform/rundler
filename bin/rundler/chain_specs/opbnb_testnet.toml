@@ -1,7 +1,2 @@
 name = "Opbnb Testnet"
 id = 5611
-
-priority_fee_oracle_type = "USAGE_BASED"
-min_max_priority_fee_per_gas = 30000000000
-bloxroute_enabled = true
-max_transaction_size_bytes = 130000
