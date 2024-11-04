@@ -69,6 +69,8 @@ jobs:
       - name: Install protobuf
         if: contains( ${{ matrix.target }}, 'apple')
         uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       # ==============================
       # Apple Silicon SDK setup
