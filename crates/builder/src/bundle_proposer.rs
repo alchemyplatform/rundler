@@ -1411,7 +1411,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         // If not a staked factory or sender, attribute errors to each entity directly.
         // For a given op, there can only be a single update per entity so we don't double count the [UREP-030] throttle penalty.
-        let mut paymaster_ammendment_required = false;
+        let mut paymaster_amendment_required = false;
         for violation in violations {
             match violation {
                 SimulationViolation::UsedForbiddenOpcode(entity, _, _) => {
@@ -1471,7 +1471,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
                     // [EREP-015] If user operations error derived from factory or account, paymaster opsSeen amendment is required.
                     let re = Regex::new(r"^AA[21]").unwrap();
                     if re.is_match(&entry_point_reason) {
-                        paymaster_ammendment_required = true;
+                        paymaster_amendment_required = true;
                     }
                 }
                 SimulationViolation::OutOfGas(entity) => {
@@ -1481,7 +1481,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             }
         }
 
-        if paymaster_ammendment_required {
+        if paymaster_amendment_required {
             if let Some(paymaster) = entity_infos.paymaster {
                 self.add_erep_015_paymaster_amendment(paymaster.entity)
             };
