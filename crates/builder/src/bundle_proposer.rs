@@ -27,6 +27,7 @@ use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
+use regex::Regex;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
     ProvidersWithEntryPointT, SignatureAggregator,
@@ -40,8 +41,8 @@ use rundler_types::{
     da::DAGasBlockData,
     pool::{Pool, PoolOperation, SimulationViolation},
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, BUNDLE_BYTE_OVERHEAD,
-    TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidationRevert,
+    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::{sync::broadcast, try_join};
@@ -1371,8 +1372,26 @@ impl<UO: UserOperation> ProposalContext<UO> {
         violations: Vec<SimulationViolation>,
         entity_infos: EntityInfos,
     ) {
+        // If a staked factory or sender is present, we attribute errors to them directly.
+
+        // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the staked factory or account.
+        // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
+        let is_factory_staked = entity_infos.factory.map_or(false, |f| f.is_staked);
+        let is_sender_staked = entity_infos.sender.is_staked;
+        if is_factory_staked || is_sender_staked {
+            if let Some(paymaster) = entity_infos.paymaster {
+                self.entity_updates.insert(
+                    paymaster.address(),
+                    EntityUpdate {
+                        entity: paymaster.entity,
+                        update_type: EntityUpdateType::PaymasterAmendment,
+                    },
+                );
+            }
+        }
+
         // [EREP-020] When there is a staked factory any error in validation is attributed to it.
-        if entity_infos.factory.map_or(false, |f| f.is_staked) {
+        if is_factory_staked {
             let factory = entity_infos.factory.unwrap();
             self.entity_updates.insert(
                 factory.address(),
@@ -1385,7 +1404,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
 
         // [EREP-030] When there is a staked sender (without a staked factory) any error in validation is attributed to it.
-        if entity_infos.sender.is_staked {
+        if is_sender_staked {
             self.entity_updates.insert(
                 entity_infos.sender.address(),
                 EntityUpdate {
@@ -1398,6 +1417,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         // If not a staked factory or sender, attribute errors to each entity directly.
         // For a given op, there can only be a single update per entity so we don't double count the [UREP-030] throttle penalty.
+        let mut paymaster_ammendment_required = false;
         for violation in violations {
             match violation {
                 SimulationViolation::UsedForbiddenOpcode(entity, _, _) => {
@@ -1450,11 +1470,33 @@ impl<UO: UserOperation> ProposalContext<UO> {
                         );
                     }
                 }
+                SimulationViolation::ValidationRevert(ValidationRevert::Operation {
+                    entry_point_reason,
+                    ..
+                }) => {
+                    // [EREP-015] If user operations error derived from factory or account, paymaster opsSeen amendment is required.
+                    let re = Regex::new(r"^AA[21]").unwrap();
+                    if re.is_match(&entry_point_reason) {
+                        paymaster_ammendment_required = true;
+                    }
+                }
                 SimulationViolation::OutOfGas(entity) => {
                     self.add_entity_update(entity, entity_infos)
                 }
                 _ => continue,
             }
+        }
+
+        if paymaster_ammendment_required {
+            if let Some(paymaster) = entity_infos.paymaster {
+                self.entity_updates.insert(
+                    paymaster.address(),
+                    EntityUpdate {
+                        entity: paymaster.entity,
+                        update_type: EntityUpdateType::PaymasterAmendment,
+                    },
+                );
+            };
         }
     }
 

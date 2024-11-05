@@ -134,6 +134,8 @@ pub enum EntityUpdateType {
     UnstakedInvalidation,
     /// SREP-050
     StakedInvalidation,
+    /// EREP-015
+    PaymasterAmendment,
 }
 
 impl TryFrom<i32> for EntityUpdateType {

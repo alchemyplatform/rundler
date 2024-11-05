@@ -732,6 +732,9 @@ where
             EntityUpdateType::StakedInvalidation => {
                 self.reputation.handle_srep_050_penalty(entity.address);
             }
+            EntityUpdateType::PaymasterAmendment => {
+                self.reputation.remove_seen(entity.address);
+            }
         }
 
         if self.reputation.status(entity.address) == ReputationStatus::Banned {

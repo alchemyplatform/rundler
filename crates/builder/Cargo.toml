@@ -37,6 +37,7 @@ num-traits = "0.2.19"
 parse-display.workspace = true
 pin-project.workspace = true
 prost.workspace = true
+regex.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["json"] }
 rslock = "0.4.0"
 ruint = { version = "1.12.3", features = ["num-traits"] }

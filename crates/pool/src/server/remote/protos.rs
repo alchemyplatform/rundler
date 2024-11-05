@@ -264,6 +264,7 @@ impl From<RundlerEntityUpdateType> for EntityUpdateType {
         match update_type {
             RundlerEntityUpdateType::UnstakedInvalidation => EntityUpdateType::UnstakedInvalidation,
             RundlerEntityUpdateType::StakedInvalidation => EntityUpdateType::StakedInvalidation,
+            RundlerEntityUpdateType::PaymasterAmendment => EntityUpdateType::PaymasterAmendment,
         }
     }
 }

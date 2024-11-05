@@ -213,7 +213,7 @@ pub enum SimulationViolation {
     /// Simulation reverted with an unintended reason
     #[display("reverted while simulating {0} validation")]
     UnintendedRevert(EntityType, Option<Address>),
-    /// Validation revert (only used for unsafe sim)
+    /// Validation revert (used for v0_7 sim and unsafe sim)
     #[display("validation revert: {0}")]
     ValidationRevert(ValidationRevert),
     /// Simulation did not revert, a revert is always expected
