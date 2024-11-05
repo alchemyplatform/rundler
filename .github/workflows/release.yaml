@@ -47,9 +47,6 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             profile: release
-          - target: x86_64-pc-windows-gnu
-            os: ubuntu-20.04
-            profile: release
 
     steps:
       - uses: actions/checkout@v4
@@ -93,8 +90,7 @@ jobs:
       - name: Move cross-compiled binary
         run: |
           mkdir artifacts
-          [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
-          sudo mv "target/${{ matrix.target }}/${{ matrix.profile }}/rundler${ext}" ./artifacts
+          sudo mv "target/${{ matrix.target }}/${{ matrix.profile }}/rundler" ./artifacts
 
       # ==============================
       #       Signing
@@ -118,13 +114,13 @@ jobs:
       # This is required to share artifacts between different jobs
       # =======================================================================
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz
           path: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz
 
       - name: Upload signature
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz.asc
           path: rundler-${{ needs.extract-version.outputs.VERSION }}-${{ matrix.target }}.tar.gz.asc
@@ -150,6 +146,10 @@ jobs:
         # ==============================
         - name: Download artifacts
           uses: actions/download-artifact@v4
+          with:
+            path: artifacts
+            pattern: rundler-*
+            merge-multiple: true
 
         # ==============================
         #       Create release draft
@@ -204,7 +204,6 @@ jobs:
             |:---:|:---:|:---:|:---|
             | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | x86_64 | [rundler-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz.asc) |
             | <img src="https://simpleicons.org/icons/linux.svg" style="width: 32px;"/> | aarch64 | [rundler-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz.asc) |
-            | <img src="https://simpleicons.org/icons/windows.svg" style="width: 32px;"/> | x86_64 | [rundler-${{ env.VERSION }}-x86_64-pc-windows-gnu.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-x86_64-pc-windows-gnu.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-x86_64-pc-windows-gnu.tar.gz.asc) |
             | <img src="https://simpleicons.org/icons/apple.svg" style="width: 32px;"/> | x86_64 | [rundler-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-x86_64-apple-darwin.tar.gz.asc) |
             | <img src="https://simpleicons.org/icons/apple.svg" style="width: 32px;"/> | aarch64 | [rundler-${{ env.VERSION }}-aarch64-apple-darwin.tar.gz](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-aarch64-apple-darwin.tar.gz) | [PGP Signature](https://github.com/${{ env.REPO_NAME }}/releases/download/${{ env.VERSION }}/rundler-${{ env.VERSION }}-aarch64-apple-darwin.tar.gz.asc) |
             | | | | |
@@ -214,8 +213,8 @@ jobs:
             ENDBODY
             )
             assets=()
-            for asset in ./rundler-*.tar.gz*; do
-                assets+=("$asset/$asset")
+            for asset in artifacts/rundler-*.tar.gz*; do
+                assets+=("$asset")
             done
             tag_name="${{ env.VERSION }}"
             echo "$body" | gh release create --draft -t "Rundler $tag_name" -F "-" "$tag_name" "${assets[@]}"
