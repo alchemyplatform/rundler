@@ -34,7 +34,7 @@ use rundler_types::{
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 use tonic::async_trait;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::{
     paymaster::PaymasterTracker, pool::PoolInner, reputation::AddressReputation, Mempool,
@@ -733,7 +733,14 @@ where
                 self.reputation.handle_srep_050_penalty(entity.address);
             }
             EntityUpdateType::PaymasterAmendment => {
-                self.reputation.remove_seen(entity.address);
+                if entity.is_paymaster() {
+                    self.reputation.remove_seen(entity.address);
+                } else {
+                    warn!(
+                        "Received paymaster amendment for non-paymaster entity: {:?}",
+                        entity
+                    );
+                }
             }
         }
 

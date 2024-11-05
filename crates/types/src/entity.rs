@@ -100,6 +100,11 @@ impl Entity {
         Self::new(EntityType::Paymaster, address)
     }
 
+    /// Check if the entity is a paymaster
+    pub fn is_paymaster(&self) -> bool {
+        self.kind == EntityType::Paymaster
+    }
+
     /// Create a new aggregator entity at address
     pub fn aggregator(address: Address) -> Self {
         Self::new(EntityType::Aggregator, address)

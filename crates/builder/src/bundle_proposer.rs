@@ -1380,13 +1380,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         let is_sender_staked = entity_infos.sender.is_staked;
         if is_factory_staked || is_sender_staked {
             if let Some(paymaster) = entity_infos.paymaster {
-                self.entity_updates.insert(
-                    paymaster.address(),
-                    EntityUpdate {
-                        entity: paymaster.entity,
-                        update_type: EntityUpdateType::PaymasterAmendment,
-                    },
-                );
+                self.add_erep_015_paymaster_amendment(paymaster.entity)
             }
         }
 
@@ -1489,13 +1483,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         if paymaster_ammendment_required {
             if let Some(paymaster) = entity_infos.paymaster {
-                self.entity_updates.insert(
-                    paymaster.address(),
-                    EntityUpdate {
-                        entity: paymaster.entity,
-                        update_type: EntityUpdateType::PaymasterAmendment,
-                    },
-                );
+                self.add_erep_015_paymaster_amendment(paymaster.entity)
             };
         }
     }
@@ -1558,6 +1546,23 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 }
             }
         }
+    }
+
+    fn add_erep_015_paymaster_amendment(&mut self, entity: Entity) {
+        if !entity.is_paymaster() {
+            warn!(
+                "Attempted to add EREP-015 paymaster amendment for non-paymaster entity: {:?}",
+                entity
+            );
+            return;
+        }
+        self.entity_updates.insert(
+            entity.address,
+            EntityUpdate {
+                entity,
+                update_type: EntityUpdateType::PaymasterAmendment,
+            },
+        );
     }
 }
 
