@@ -1471,8 +1471,6 @@ impl<UO: UserOperation> ProposalContext<UO> {
                     ..
                 }) => {
                     // [EREP-015] If user operations error derived from factory or account, paymaster opsSeen amendment is required.
-                    tracing::info!("HERE!!!");
-                    tracing::info!("{}", &entry_point_reason[..3]);
                     paymaster_amendment_required |=
                         matches!(&entry_point_reason[..3], "AA1" | "AA2");
                 }
