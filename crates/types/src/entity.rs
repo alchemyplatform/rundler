@@ -131,7 +131,9 @@ impl Serialize for Entity {
 }
 
 /// Updates that can be applied to an entity
-#[derive(Display, Debug, Default, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
+#[derive(
+    Display, Debug, Default, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize,
+)]
 #[display(style = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub enum EntityUpdateType {
@@ -151,9 +153,11 @@ impl TryFrom<i32> for EntityUpdateType {
         match update_type {
             x if x == EntityUpdateType::UnstakedInvalidation as i32 => {
                 Ok(Self::UnstakedInvalidation)
-            },
+            }
             x if x == EntityUpdateType::StakedInvalidation as i32 => Ok(Self::StakedInvalidation),
-            x if x == EntityUpdateType::PaymasterOpsSeenDecrement as i32 => Ok(Self::PaymasterOpsSeenDecrement),
+            x if x == EntityUpdateType::PaymasterOpsSeenDecrement as i32 => {
+                Ok(Self::PaymasterOpsSeenDecrement)
+            }
             _ => bail!("Invalid entity update type: {}", update_type),
         }
     }

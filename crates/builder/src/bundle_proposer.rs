@@ -12,7 +12,11 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet}, future::Future, mem, pin::Pin, sync::Arc
+    collections::{BTreeMap, HashMap, HashSet},
+    future::Future,
+    mem,
+    pin::Pin,
+    sync::Arc,
 };
 
 use alloy_primitives::{Address, Bytes, B256, U256};
@@ -1469,7 +1473,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
                     // [EREP-015] If user operations error derived from factory or account, paymaster opsSeen amendment is required.
                     tracing::info!("HERE!!!");
                     tracing::info!("{}", &entry_point_reason[..3]);
-                    paymaster_amendment_required |= matches!(&entry_point_reason[..3], "AA1" | "AA2");
+                    paymaster_amendment_required |=
+                        matches!(&entry_point_reason[..3], "AA1" | "AA2");
                 }
                 SimulationViolation::OutOfGas(entity) => {
                     self.add_entity_update(entity, entity_infos)
@@ -1548,8 +1553,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     fn add_erep_015_paymaster_amendment(&mut self, address: Address) {
         // Insert to entity_updates if entry is vacant, otherwise increment the value (precicely EntityUpdate.value)
-        self
-            .entity_updates
+        self.entity_updates
             .entry(address)
             .and_modify(|e| {
                 if let Some(value) = &mut e.value {
@@ -2066,7 +2070,7 @@ mod tests {
 
         let deposit = parse_units("1", "ether").unwrap().into();
 
-        let entity_infos = EntityInfos{
+        let entity_infos = EntityInfos {
             sender: EntityInfo::new(Entity::account(sender), false),
             factory: Some(EntityInfo::new(Entity::factory(staked_factory), true)),
             paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
@@ -2107,7 +2111,7 @@ mod tests {
             EntityUpdate {
                 entity: Entity::paymaster(paymaster),
                 update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
-                value: Some(1)
+                value: Some(1),
             },
         ];
 
@@ -2125,7 +2129,7 @@ mod tests {
 
         let deposit = parse_units("1", "ether").unwrap().into();
 
-        let entity_infos = EntityInfos{
+        let entity_infos = EntityInfos {
             sender: EntityInfo::new(Entity::account(sender), true),
             factory: None,
             paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
@@ -2166,13 +2170,13 @@ mod tests {
             EntityUpdate {
                 entity: Entity::paymaster(paymaster),
                 update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
-                value: Some(1)
+                value: Some(1),
             },
         ];
 
         // we want to check that the entity updates are the same regardless of order
         actual_entity_updates.sort_by(|a, b| a.entity.address.cmp(&b.entity.address));
-        expected_entity_updates.sort_by(|a, b|  a.entity.address.cmp(&b.entity.address));
+        expected_entity_updates.sort_by(|a, b| a.entity.address.cmp(&b.entity.address));
 
         assert_eq!(actual_entity_updates, expected_entity_updates);
     }
@@ -2186,14 +2190,14 @@ mod tests {
 
         let deposit = parse_units("1", "ether").unwrap().into();
 
-        let entity_infos_1 = EntityInfos{
+        let entity_infos_1 = EntityInfos {
             sender: EntityInfo::new(Entity::account(sender_1), false),
             factory: Some(EntityInfo::new(Entity::factory(factory), false)),
             paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
             aggregator: None,
         };
 
-        let entity_infos_2 = EntityInfos{
+        let entity_infos_2 = EntityInfos {
             sender: EntityInfo::new(Entity::account(sender_2), false),
             factory: Some(EntityInfo::new(Entity::factory(factory), false)),
             paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
@@ -2211,11 +2215,14 @@ mod tests {
                     simulation_result: Box::new(move || {
                         Err(SimulationError {
                             violation_error: ViolationError::Violations(vec![
-                                SimulationViolation::ValidationRevert(ValidationRevert::Operation {
-                                    entry_point_reason: "AA1x: factory related errors".to_string(),
-                                    inner_revert_reason: None,
-                                    inner_revert_data: Bytes::new(),
-                                }),
+                                SimulationViolation::ValidationRevert(
+                                    ValidationRevert::Operation {
+                                        entry_point_reason: "AA1x: factory related errors"
+                                            .to_string(),
+                                        inner_revert_reason: None,
+                                        inner_revert_data: Bytes::new(),
+                                    },
+                                ),
                             ]),
                             entity_infos: Some(entity_infos_1),
                         })
@@ -2226,11 +2233,14 @@ mod tests {
                     simulation_result: Box::new(move || {
                         Err(SimulationError {
                             violation_error: ViolationError::Violations(vec![
-                                SimulationViolation::ValidationRevert(ValidationRevert::Operation {
-                                    entry_point_reason: "AA2x: sender related errors".to_string(),
-                                    inner_revert_reason: None,
-                                    inner_revert_data: Bytes::new(),
-                                }),
+                                SimulationViolation::ValidationRevert(
+                                    ValidationRevert::Operation {
+                                        entry_point_reason: "AA2x: sender related errors"
+                                            .to_string(),
+                                        inner_revert_reason: None,
+                                        inner_revert_data: Bytes::new(),
+                                    },
+                                ),
                             ]),
                             entity_infos: Some(entity_infos_2),
                         })
@@ -2249,13 +2259,11 @@ mod tests {
         .await;
 
         let actual_entity_updates = bundle.entity_updates;
-        let expected_entity_updates = vec![
-            EntityUpdate {
-                entity: Entity::paymaster(paymaster),
-                update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
-                value: Some(2),
-            },
-        ];
+        let expected_entity_updates = vec![EntityUpdate {
+            entity: Entity::paymaster(paymaster),
+            update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
+            value: Some(2),
+        }];
 
         assert_eq!(actual_entity_updates, expected_entity_updates);
     }
@@ -2848,7 +2856,11 @@ mod tests {
         }
     }
 
-    fn op_with_sender_factory_paymaster(sender: Address, factory: Address, paymaster: Address) -> UserOperation {
+    fn op_with_sender_factory_paymaster(
+        sender: Address,
+        factory: Address,
+        paymaster: Address,
+    ) -> UserOperation {
         UserOperation {
             sender,
             init_code: factory.to_vec().into(),
@@ -2856,7 +2868,7 @@ mod tests {
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
         }
-    } 
+    }
 
     fn op_with_sender_and_fees(
         sender: Address,
