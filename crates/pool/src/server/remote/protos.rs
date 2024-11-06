@@ -267,7 +267,7 @@ impl From<RundlerEntityUpdateType> for EntityUpdateType {
             RundlerEntityUpdateType::UnstakedInvalidation => EntityUpdateType::UnstakedInvalidation,
             RundlerEntityUpdateType::StakedInvalidation => EntityUpdateType::StakedInvalidation,
             RundlerEntityUpdateType::PaymasterOpsSeenDecrement => {
-                EntityUpdateType::PaymasterAmendment
+                EntityUpdateType::PaymasterOpsSeenDecrement
             }
         }
     }

@@ -2076,7 +2076,7 @@ mod tests {
         };
 
         // EREP-015: If a staked factory or sender is present, we attribute errors to them directly.
-        // Expect EntityUpdateType::PaymasterAmendment to be recorded.
+        // Expect EntityUpdateType::PaymasterOpsSeenDecrement to be recorded.
         let op = op_with_sender_factory_paymaster(sender, staked_factory, paymaster);
         let bundle = mock_make_bundle(
             vec![MockOp {
@@ -2135,7 +2135,7 @@ mod tests {
         };
 
         // EREP-015: If not a staked factory or sender, attribute errors to each entity directly.
-        // Expect EntityUpdateType::PaymasterAmendment to be recorded.
+        // Expect EntityUpdateType::PaymasterOpsSeenDecrement to be recorded.
         let op = op_with_sender_paymaster(sender, paymaster);
         let bundle = mock_make_bundle(
             vec![MockOp {
@@ -2203,7 +2203,7 @@ mod tests {
         };
 
         // EREP-015: If a staked factory or sender is present, we attribute errors to them directly.
-        // Expect EntityUpdateType::PaymasterAmendment to be recorded.
+        // Expect EntityUpdateType::PaymasterOpsSeenDecrement to be recorded.
         let op_1 = op_with_sender_factory_paymaster(sender_1, factory, paymaster);
         let op_2 = op_with_sender_factory_paymaster(sender_2, factory, paymaster);
         let bundle = mock_make_bundle(
