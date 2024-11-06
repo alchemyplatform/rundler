@@ -34,7 +34,7 @@ use rundler_types::{
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 use tonic::async_trait;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{
     paymaster::PaymasterTracker, pool::PoolInner, reputation::AddressReputation, Mempool,
@@ -732,15 +732,10 @@ where
             EntityUpdateType::StakedInvalidation => {
                 self.reputation.handle_srep_050_penalty(entity.address);
             }
-            EntityUpdateType::PaymasterAmendment => {
-                if entity.is_paymaster() {
-                    self.reputation.remove_seen(entity.address);
-                } else {
-                    warn!(
-                        "Received paymaster amendment for non-paymaster entity: {:?}",
-                        entity
-                    );
-                }
+            EntityUpdateType::PaymasterOpsSeenDecrement => {
+                assert!(entity.is_paymaster(), "Attempted to add EREP-015 paymaster amendment for non-paymaster entity");
+                assert!(update.value.is_some(), "PaymasterOpsSeenDecrement must carry an explicit decrement value");
+                self.reputation.remove_seen(entity.address, update.value.unwrap());
             }
         }
 

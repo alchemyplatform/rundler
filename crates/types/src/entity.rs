@@ -131,16 +131,17 @@ impl Serialize for Entity {
 }
 
 /// Updates that can be applied to an entity
-#[derive(Display, Debug, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
+#[derive(Display, Debug, Default, Clone, Ord, Copy, Eq, PartialEq, EnumIter, PartialOrd, Deserialize)]
 #[display(style = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub enum EntityUpdateType {
     /// UREP-030
+    #[default]
     UnstakedInvalidation,
     /// SREP-050
     StakedInvalidation,
     /// EREP-015
-    PaymasterAmendment,
+    PaymasterOpsSeenDecrement,
 }
 
 impl TryFrom<i32> for EntityUpdateType {
@@ -150,20 +151,23 @@ impl TryFrom<i32> for EntityUpdateType {
         match update_type {
             x if x == EntityUpdateType::UnstakedInvalidation as i32 => {
                 Ok(Self::UnstakedInvalidation)
-            }
+            },
             x if x == EntityUpdateType::StakedInvalidation as i32 => Ok(Self::StakedInvalidation),
-            _ => bail!("Invalid entity update type: {update_type}"),
+            x if x == EntityUpdateType::PaymasterOpsSeenDecrement as i32 => Ok(Self::PaymasterOpsSeenDecrement),
+            _ => bail!("Invalid entity update type: {}", update_type),
         }
     }
 }
 
 /// A update that needs to be applied to an entity
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Default)]
 pub struct EntityUpdate {
     /// The entity to update
     pub entity: Entity,
     /// The kind of update to perform for the entity
     pub update_type: EntityUpdateType,
+    /// The value to carry with specific EntityUpdateType (e.g. PaymasterOpsSeenDecrement)
+    pub value: Option<u64>,
 }
 
 /// additional context about an entity

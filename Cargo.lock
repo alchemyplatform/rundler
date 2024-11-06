@@ -4582,7 +4582,6 @@ dependencies = [
  "parse-display",
  "pin-project",
  "prost",
- "regex",
  "reqwest",
  "rslock",
  "ruint",

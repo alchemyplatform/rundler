@@ -120,8 +120,8 @@ impl AddressReputation {
         self.state.write().add_seen(address);
     }
 
-    pub(crate) fn remove_seen(&self, address: Address) {
-        self.state.write().remove_seen(address);
+    pub(crate) fn remove_seen(&self, address: Address, value: u64) {
+        self.state.write().remove_seen(address, value);
     }
 
     pub(crate) fn handle_urep_030_penalty(&self, address: Address) {
@@ -222,9 +222,9 @@ impl AddressReputationInner {
         count.ops_seen += 1;
     }
 
-    fn remove_seen(&mut self, address: Address) {
+    fn remove_seen(&mut self, address: Address, value: u64) {
         let count = self.counts.entry(address).or_default();
-        count.ops_seen = count.ops_seen.saturating_sub(1);
+        count.ops_seen = count.ops_seen.saturating_sub(value);
     }
 
     fn handle_urep_030_penalty(&mut self, address: Address) {
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(counts.ops_seen, 1000);
         assert_eq!(counts.ops_included, 1000);
 
-        reputation.remove_seen(addr);
+        reputation.remove_seen(addr, 1);
         reputation.remove_included(addr);
         let counts = reputation.counts.get(&addr).unwrap();
         assert_eq!(counts.ops_seen, 999);

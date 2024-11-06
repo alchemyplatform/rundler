@@ -118,6 +118,7 @@ enum EntityUpdateType {
 message EntityUpdate {
   Entity entity = 1;
   EntityUpdateType update_type = 2;
+  uint64 value = 3;
 }
 
 // Defines a UserOperation persisted in a local mempool

@@ -77,7 +77,6 @@ prost = "0.13.3"
 serde = "1.0.210"
 serde_json = "1.0.128"
 rand = "0.8.5"
-regex = "1"
 reqwest = { version = "0.12.8", default-features = false, features = ["rustls-tls"] }
 thiserror = "1.0.64"
 tokio = { version = "1.39.3", default-features = false, features = ["rt", "sync", "time"] }

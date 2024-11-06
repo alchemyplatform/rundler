@@ -12,11 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    future::Future,
-    mem,
-    pin::Pin,
-    sync::Arc,
+    collections::{BTreeMap, HashMap, HashSet}, future::Future, mem, pin::Pin, sync::Arc
 };
 
 use alloy_primitives::{Address, Bytes, B256, U256};
@@ -27,7 +23,6 @@ use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 #[cfg(test)]
 use mockall::automock;
-use regex::Regex;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
     ProvidersWithEntryPointT, SignatureAggregator,
@@ -1281,6 +1276,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 } else {
                     EntityUpdateType::UnstakedInvalidation
                 },
+                ..Default::default()
             },
         );
         ret
@@ -1376,34 +1372,36 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the staked factory or account.
         // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
-        let is_factory_staked = entity_infos.factory.map_or(false, |f| f.is_staked);
-        let is_sender_staked = entity_infos.sender.is_staked;
-        if is_factory_staked || is_sender_staked {
+        let is_staked_factory = entity_infos.factory.map_or(false, |f| f.is_staked);
+        let is_staked_sender = entity_infos.sender.is_staked;
+        if is_staked_factory || is_staked_sender {
             if let Some(paymaster) = entity_infos.paymaster {
-                self.add_erep_015_paymaster_amendment(paymaster.entity)
+                self.add_erep_015_paymaster_amendment(paymaster.address())
             }
         }
 
         // [EREP-020] When there is a staked factory any error in validation is attributed to it.
-        if is_factory_staked {
+        if is_staked_factory {
             let factory = entity_infos.factory.unwrap();
             self.entity_updates.insert(
                 factory.address(),
                 EntityUpdate {
                     entity: factory.entity,
                     update_type: EntityUpdateType::StakedInvalidation,
+                    value: None,
                 },
             );
             return;
         }
 
         // [EREP-030] When there is a staked sender (without a staked factory) any error in validation is attributed to it.
-        if is_sender_staked {
+        if is_staked_sender {
             self.entity_updates.insert(
                 entity_infos.sender.address(),
                 EntityUpdate {
                     entity: entity_infos.sender.entity,
                     update_type: EntityUpdateType::StakedInvalidation,
+                    value: None,
                 },
             );
             return;
@@ -1469,10 +1467,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
                     ..
                 }) => {
                     // [EREP-015] If user operations error derived from factory or account, paymaster opsSeen amendment is required.
-                    let re = Regex::new(r"^AA[21]").unwrap();
-                    if re.is_match(&entry_point_reason) {
-                        paymaster_amendment_required = true;
-                    }
+                    tracing::info!("HERE!!!");
+                    tracing::info!("{}", &entry_point_reason[..3]);
+                    paymaster_amendment_required |= matches!(&entry_point_reason[..3], "AA1" | "AA2");
                 }
                 SimulationViolation::OutOfGas(entity) => {
                     self.add_entity_update(entity, entity_infos)
@@ -1483,7 +1480,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         if paymaster_amendment_required {
             if let Some(paymaster) = entity_infos.paymaster {
-                self.add_erep_015_paymaster_amendment(paymaster.entity)
+                self.add_erep_015_paymaster_amendment(paymaster.address())
             };
         }
     }
@@ -1493,6 +1490,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         let entity_update = EntityUpdate {
             entity,
             update_type: ProposalContext::<UO>::get_entity_update_type(entity.kind, entity_infos),
+            value: None,
         };
         self.entity_updates.insert(entity.address, entity_update);
     }
@@ -1548,15 +1546,24 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
     }
 
-    fn add_erep_015_paymaster_amendment(&mut self, entity: Entity) {
-   assert!(entity.is_paymaster(), "Attempted to add EREP-015 paymaster amendment for non-paymaster entity")
-        self.entity_updates.insert(
-            entity.address,
-            EntityUpdate {
-                entity,
-                update_type: EntityUpdateType::PaymasterAmendment,
-            },
-        );
+    fn add_erep_015_paymaster_amendment(&mut self, address: Address) {
+        // Insert to entity_updates if entry is vacant, otherwise increment the value (precicely EntityUpdate.value)
+        self
+            .entity_updates
+            .entry(address)
+            .and_modify(|e| {
+                if let Some(value) = &mut e.value {
+                    *value += 1;
+                }
+            })
+            .or_insert_with(|| EntityUpdate {
+                entity: Entity {
+                    kind: EntityType::Paymaster,
+                    address,
+                },
+                update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
+                value: Some(1),
+            });
     }
 }
 
@@ -2032,10 +2039,12 @@ mod tests {
                 EntityUpdate {
                     entity: Entity::paymaster(address(1)),
                     update_type: EntityUpdateType::UnstakedInvalidation,
+                    ..Default::default()
                 },
                 EntityUpdate {
                     entity: Entity::factory(address(3)),
                     update_type: EntityUpdateType::UnstakedInvalidation,
+                    ..Default::default()
                 },
             ]
         );
@@ -2047,6 +2056,208 @@ mod tests {
                 ..Default::default()
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn test_paymaster_amended_by_staked_factory_revert() {
+        let sender = address(1);
+        let staked_factory = address(2);
+        let paymaster = address(3);
+
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let entity_infos = EntityInfos{
+            sender: EntityInfo::new(Entity::account(sender), false),
+            factory: Some(EntityInfo::new(Entity::factory(staked_factory), true)),
+            paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
+            aggregator: None,
+        };
+
+        // EREP-015: If a staked factory or sender is present, we attribute errors to them directly.
+        // Expect EntityUpdateType::PaymasterAmendment to be recorded.
+        let op = op_with_sender_factory_paymaster(sender, staked_factory, paymaster);
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(move || {
+                    Err(SimulationError {
+                        violation_error: ViolationError::Violations(vec![]),
+                        entity_infos: Some(entity_infos),
+                    })
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![deposit],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+        )
+        .await;
+
+        let mut actual_entity_updates = bundle.entity_updates;
+        let mut expected_entity_updates = vec![
+            EntityUpdate {
+                entity: Entity::factory(staked_factory),
+                update_type: EntityUpdateType::StakedInvalidation,
+                ..Default::default()
+            },
+            EntityUpdate {
+                entity: Entity::paymaster(paymaster),
+                update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
+                value: Some(1)
+            },
+        ];
+
+        // we want to check that the entity updates are the same regardless of order
+        actual_entity_updates.sort_by(|a, b| a.entity.address.cmp(&b.entity.address));
+        expected_entity_updates.sort_by(|a, b| a.entity.address.cmp(&b.entity.address));
+
+        assert_eq!(actual_entity_updates, expected_entity_updates);
+    }
+
+    #[tokio::test]
+    async fn test_paymaster_amended_by_staked_sender_revert() {
+        let sender = address(1);
+        let paymaster = address(2);
+
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let entity_infos = EntityInfos{
+            sender: EntityInfo::new(Entity::account(sender), true),
+            factory: None,
+            paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
+            aggregator: None,
+        };
+
+        // EREP-015: If not a staked factory or sender, attribute errors to each entity directly.
+        // Expect EntityUpdateType::PaymasterAmendment to be recorded.
+        let op = op_with_sender_paymaster(sender, paymaster);
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(move || {
+                    Err(SimulationError {
+                        violation_error: ViolationError::Violations(vec![]),
+                        entity_infos: Some(entity_infos),
+                    })
+                }),
+            }],
+            vec![],
+            vec![],
+            vec![deposit],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+        )
+        .await;
+
+        let mut actual_entity_updates = bundle.entity_updates;
+        let mut expected_entity_updates = vec![
+            EntityUpdate {
+                entity: Entity::account(sender),
+                update_type: EntityUpdateType::StakedInvalidation,
+                ..Default::default()
+            },
+            EntityUpdate {
+                entity: Entity::paymaster(paymaster),
+                update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
+                value: Some(1)
+            },
+        ];
+
+        // we want to check that the entity updates are the same regardless of order
+        actual_entity_updates.sort_by(|a, b| a.entity.address.cmp(&b.entity.address));
+        expected_entity_updates.sort_by(|a, b|  a.entity.address.cmp(&b.entity.address));
+
+        assert_eq!(actual_entity_updates, expected_entity_updates);
+    }
+
+    #[tokio::test]
+    async fn test_paymaster_amended_by_factory_or_sender_revert() {
+        let sender_1 = address(1);
+        let sender_2 = address(2);
+        let factory = address(3);
+        let paymaster = address(4);
+
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let entity_infos_1 = EntityInfos{
+            sender: EntityInfo::new(Entity::account(sender_1), false),
+            factory: Some(EntityInfo::new(Entity::factory(factory), false)),
+            paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
+            aggregator: None,
+        };
+
+        let entity_infos_2 = EntityInfos{
+            sender: EntityInfo::new(Entity::account(sender_2), false),
+            factory: Some(EntityInfo::new(Entity::factory(factory), false)),
+            paymaster: Some(EntityInfo::new(Entity::paymaster(paymaster), false)),
+            aggregator: None,
+        };
+
+        // EREP-015: If a staked factory or sender is present, we attribute errors to them directly.
+        // Expect EntityUpdateType::PaymasterAmendment to be recorded.
+        let op_1 = op_with_sender_factory_paymaster(sender_1, factory, paymaster);
+        let op_2 = op_with_sender_factory_paymaster(sender_2, factory, paymaster);
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op_1.clone(),
+                    simulation_result: Box::new(move || {
+                        Err(SimulationError {
+                            violation_error: ViolationError::Violations(vec![
+                                SimulationViolation::ValidationRevert(ValidationRevert::Operation {
+                                    entry_point_reason: "AA1x: factory related errors".to_string(),
+                                    inner_revert_reason: None,
+                                    inner_revert_data: Bytes::new(),
+                                }),
+                            ]),
+                            entity_infos: Some(entity_infos_1),
+                        })
+                    }),
+                },
+                MockOp {
+                    op: op_2.clone(),
+                    simulation_result: Box::new(move || {
+                        Err(SimulationError {
+                            violation_error: ViolationError::Violations(vec![
+                                SimulationViolation::ValidationRevert(ValidationRevert::Operation {
+                                    entry_point_reason: "AA2x: sender related errors".to_string(),
+                                    inner_revert_reason: None,
+                                    inner_revert_data: Bytes::new(),
+                                }),
+                            ]),
+                            entity_infos: Some(entity_infos_2),
+                        })
+                    }),
+                },
+            ],
+            vec![],
+            vec![],
+            vec![deposit, deposit],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+        )
+        .await;
+
+        let actual_entity_updates = bundle.entity_updates;
+        let expected_entity_updates = vec![
+            EntityUpdate {
+                entity: Entity::paymaster(paymaster),
+                update_type: EntityUpdateType::PaymasterOpsSeenDecrement,
+                value: Some(2),
+            },
+        ];
+
+        assert_eq!(actual_entity_updates, expected_entity_updates);
     }
 
     #[tokio::test]
@@ -2636,6 +2847,16 @@ mod tests {
             ..Default::default()
         }
     }
+
+    fn op_with_sender_factory_paymaster(sender: Address, factory: Address, paymaster: Address) -> UserOperation {
+        UserOperation {
+            sender,
+            init_code: factory.to_vec().into(),
+            paymaster_and_data: paymaster.to_vec().into(),
+            pre_verification_gas: DEFAULT_PVG,
+            ..Default::default()
+        }
+    } 
 
     fn op_with_sender_and_fees(
         sender: Address,
