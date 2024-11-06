@@ -1549,13 +1549,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn add_erep_015_paymaster_amendment(&mut self, entity: Entity) {
-        if !entity.is_paymaster() {
-            warn!(
-                "Attempted to add EREP-015 paymaster amendment for non-paymaster entity: {:?}",
-                entity
-            );
-            return;
-        }
+   assert!(entity.is_paymaster(), "Attempted to add EREP-015 paymaster amendment for non-paymaster entity")
         self.entity_updates.insert(
             entity.address,
             EntityUpdate {
