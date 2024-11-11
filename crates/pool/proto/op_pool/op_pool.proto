@@ -111,12 +111,14 @@ enum EntityUpdateType {
   ENTITY_UPDATE_TYPE_UNSPECIFIED = 0;
   ENTITY_UPDATE_TYPE_UNSTAKED_INVALIDATION = 1;
   ENTITY_UPDATE_TYPE_STAKED_INVALIDATION = 2;
+  ENTITY_UPDATE_TYPE_PAYMASTER_OPS_SEEN_DECREMENT = 3;
 }
 
 // A tuple consisting of an entity and what kind of update to perform on it
 message EntityUpdate {
   Entity entity = 1;
   EntityUpdateType update_type = 2;
+  uint64 value = 3;
 }
 
 // Defines a UserOperation persisted in a local mempool

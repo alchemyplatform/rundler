@@ -204,9 +204,11 @@ impl TryFrom<&EntityUpdate> for RundlerEntityUpdate {
             .try_into()?;
         let update_type = RundlerEntityUpdateType::try_from(entity_update.update_type)
             .map_err(|_| ConversionError::InvalidEnumValue(entity_update.update_type))?;
+        let value = Some(entity_update.value).filter(|&v| v != 0);
         Ok(RundlerEntityUpdate {
             entity,
             update_type,
+            value,
         })
     }
 }
@@ -264,6 +266,9 @@ impl From<RundlerEntityUpdateType> for EntityUpdateType {
         match update_type {
             RundlerEntityUpdateType::UnstakedInvalidation => EntityUpdateType::UnstakedInvalidation,
             RundlerEntityUpdateType::StakedInvalidation => EntityUpdateType::StakedInvalidation,
+            RundlerEntityUpdateType::PaymasterOpsSeenDecrement => {
+                EntityUpdateType::PaymasterOpsSeenDecrement
+            }
         }
     }
 }
@@ -273,6 +278,7 @@ impl From<&RundlerEntityUpdate> for EntityUpdate {
         EntityUpdate {
             entity: Some(Entity::from(&entity_update.entity)),
             update_type: EntityUpdateType::from(entity_update.update_type).into(),
+            value: entity_update.value.unwrap_or_default(),
         }
     }
 }
