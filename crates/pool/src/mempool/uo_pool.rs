@@ -735,6 +735,18 @@ where
             EntityUpdateType::StakedInvalidation => {
                 self.reputation.handle_srep_050_penalty(entity.address);
             }
+            EntityUpdateType::PaymasterOpsSeenDecrement => {
+                assert!(
+                    entity.is_paymaster(),
+                    "Attempted to add EREP-015 paymaster amendment for non-paymaster entity"
+                );
+                assert!(
+                    update.value.is_some(),
+                    "PaymasterOpsSeenDecrement must carry an explicit decrement value"
+                );
+                self.reputation
+                    .remove_seen(entity.address, update.value.unwrap());
+            }
         }
 
         if self.reputation.status(entity.address) == ReputationStatus::Banned {
