@@ -13,6 +13,7 @@ anyhow.workspace = true
 derive_more = "0.99.18"
 futures.workspace = true
 itertools.workspace = true
+metrics.workspace = true
 rand.workspace = true
 schnellru = "0.2.1"
 tokio.workspace = true
