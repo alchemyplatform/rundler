@@ -25,6 +25,8 @@ use async_trait::async_trait;
 use futures::future;
 use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
+use metrics::Histogram;
+use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{
@@ -43,7 +45,7 @@ use rundler_types::{
     Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidationRevert,
     BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
-use rundler_utils::{emit::WithEntryPoint, math};
+use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
 use tokio::{sync::broadcast, try_join};
 use tracing::{debug, error, info, warn};
 
@@ -141,6 +143,7 @@ pub(crate) struct BundleProposerImpl<EP, BP> {
     bundle_providers: BP,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
+    metric: BuilderProposerMetric,
 }
 
 #[derive(Debug)]
@@ -183,6 +186,7 @@ where
         required_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
+        let _bundler_build_timer = CustomTimerGuard::new(self.metric.bundle_build_ms.clone());
         let (ops, (block_hash, _), (bundle_fees, base_fee)) = try_join!(
             self.get_ops_from_pool(),
             self.ep_providers
@@ -194,8 +198,6 @@ where
         if ops.is_empty() {
             return Err(BundleProposerError::NoOperationsInitially);
         }
-
-        debug!("Starting bundle proposal with {} ops", ops.len());
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
@@ -226,7 +228,6 @@ where
         } else {
             None
         };
-
         // (1) Filter out ops that don't pay enough to be included
         let fee_futs = ops
             .into_iter()
@@ -269,8 +270,10 @@ where
         let ops_with_simulations_future = future::join_all(simulation_futures);
         let balances_by_paymaster_future =
             self.get_balances_by_paymaster(all_paymaster_addresses, block_hash);
+
         let (ops_with_simulations, balances_by_paymaster) =
             tokio::join!(ops_with_simulations_future, balances_by_paymaster_future);
+
         let balances_by_paymaster = balances_by_paymaster?;
         let ops_with_simulations = ops_with_simulations
             .into_iter()
@@ -302,7 +305,6 @@ where
                 for op in context.iter_ops_with_simulations() {
                     expected_storage.merge(&op.simulation.expected_storage)?;
                 }
-
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
@@ -314,6 +316,7 @@ where
             }
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
+
         Ok(Bundle {
             rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
             entity_updates: context.entity_updates.into_values().collect(),
@@ -321,6 +324,15 @@ where
             ..Default::default()
         })
     }
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "builder_proposer")]
+struct BuilderProposerMetric {
+    #[metric(describe = "the distribution of end to end bundle build time.")]
+    bundle_build_ms: Histogram,
+    #[metric(describe = "the distribution of op simulation time of a bundle.")]
+    op_simulation_ms: Histogram,
 }
 
 impl<EP, BP> BundleProposerImpl<EP, BP>
@@ -343,6 +355,7 @@ where
             settings,
             event_sender,
             condition_not_met_notified: false,
+            metric: BuilderProposerMetric::default(),
         }
     }
 
@@ -459,6 +472,8 @@ where
         op: PoolOperation,
         block_hash: B256,
     ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
+        let _timer_guard =
+            rundler_utils::guard_timer::CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
         let op_hash = self.op_hash(&op.uo);
 
         // Simulate

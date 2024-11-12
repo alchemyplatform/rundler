@@ -4815,6 +4815,7 @@ dependencies = [
  "derive_more 0.99.18",
  "futures",
  "itertools 0.13.0",
+ "metrics",
  "rand",
  "schnellru",
  "tokio",
