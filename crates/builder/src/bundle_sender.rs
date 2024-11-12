@@ -18,7 +18,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::StreamExt;
-use metrics::Counter;
+use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
@@ -544,6 +544,9 @@ where
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
         let (nonce, required_fees) = state.transaction_tracker.get_nonce_and_required_fees()?;
+        let _timer_guard = rundler_utils::guard_timer::CustomTimerGuard::new(
+            self.metrics.bundle_build_time_ms.clone(),
+        );
 
         let bundle = match self
             .proposer
@@ -1237,6 +1240,8 @@ struct BuilderMetric {
     cancellation_txns_failed: Counter,
     #[metric(describe = "the count of state machine errors.")]
     state_machine_errors: Counter,
+    #[metric(describe = "the timespan a bundle is build.")]
+    bundle_build_time_ms: Histogram,
 }
 
 impl BuilderMetric {
