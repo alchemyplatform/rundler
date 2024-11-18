@@ -437,7 +437,10 @@ mod tests {
     };
     use rundler_types::{
         da::DAGasOracleType,
-        v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
+        v0_6::{
+            ExtendedUserOperation, UserOperation, UserOperationOptionalGas,
+            UserOperationRequiredFields,
+        },
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
     use CallGasEstimationProxy::{
@@ -565,7 +568,7 @@ mod tests {
             max_priority_fee_per_gas: None,
             paymaster_and_data: Bytes::new(),
             signature: Bytes::new(),
-            authorization_list: vec![],
+            authorization_tuple: None,
         }
     }
 
@@ -584,6 +587,9 @@ mod tests {
                 max_priority_fee_per_gas: 1000,
                 paymaster_and_data: Bytes::new(),
                 signature: Bytes::new(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build()

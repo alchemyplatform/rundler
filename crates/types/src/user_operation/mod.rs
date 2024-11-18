@@ -111,7 +111,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     }
 
     /// Return the authorization list of the UO. empty if it is not 7702 txn.
-    fn authorization_list(&self) -> Vec<Authorization>;
+    fn authorization_tuple(&self) -> Option<Authorization>;
 
     /*
      * Enhanced functions
@@ -480,10 +480,10 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn authorization_list(&self) -> Vec<Authorization> {
+    fn authorization_tuple(&self) -> Option<Authorization> {
         match self {
-            UserOperationVariant::V0_6(op) => op.authorization_list(),
-            UserOperationVariant::V0_7(op) => op.authorization_list(),
+            UserOperationVariant::V0_6(op) => op.authorization_tuple(),
+            UserOperationVariant::V0_7(op) => op.authorization_tuple(),
         }
     }
 }

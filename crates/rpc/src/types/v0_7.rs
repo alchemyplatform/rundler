@@ -13,6 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, B256, U128, U256};
 use rundler_types::{
+    authorization::Authorization,
     chain::ChainSpec,
     v0_7::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
@@ -48,6 +49,8 @@ pub(crate) struct RpcUserOperation {
     #[serde(skip_serializing_if = "Option::is_none")]
     paymaster_data: Option<Bytes>,
     signature: Bytes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authorization_tuple: Option<Authorization>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -85,6 +88,7 @@ impl From<UserOperation> for RpcUserOperation {
             paymaster_post_op_gas_limit: paymaster_post_op_gas_limit.map(|x| U128::from(x)),
             paymaster_data,
             signature: op.signature,
+            authorization_tuple: op.authorization_tuple,
         }
     }
 }
@@ -154,6 +158,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_post_op_gas_limit: Option<U128>,
     paymaster_data: Option<Bytes>,
     signature: Bytes,
+    authorization_tuple: Option<Authorization>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -174,6 +179,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_post_op_gas_limit: def.paymaster_post_op_gas_limit.map(|x| x.to()),
             paymaster_data: def.paymaster_data.unwrap_or_default(),
             signature: def.signature,
+            authorization_tuple: def.authorization_tuple,
         }
     }
 }

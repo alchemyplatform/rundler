@@ -613,6 +613,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
+            authorization_tuple: None,
         }
     }
 
@@ -845,6 +846,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
+            authorization_tuple: None,
         };
 
         let estimation = estimator

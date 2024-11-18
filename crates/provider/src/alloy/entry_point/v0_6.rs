@@ -443,7 +443,7 @@ where
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
-        let authorization_list = op.authorization_list.clone();
+        let authorization_tuple = op.authorization_tuple.clone();
 
         let mut request = self
             .i_entry_point
@@ -453,11 +453,9 @@ where
             .state(state_override);
 
         request = request.map(|mut req| {
-            let mut signed_authorization_list = vec![];
-            for authorization in authorization_list.iter() {
-                signed_authorization_list.push(SignedAuthorization::from(authorization.clone()));
+            if let Some(authorization) = authorization_tuple {
+                req.set_authorization_list(vec![SignedAuthorization::from(authorization.clone())]);
             }
-            req.set_authorization_list(signed_authorization_list);
             req
         });
 
@@ -541,8 +539,8 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .user_ops
                 .into_iter()
                 .map(|op| {
-                    for authorization in &op.authorization_list {
-                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                    if let Some(authorization) = &op.authorization_tuple {
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()))
                     }
                     op.into()
                 })

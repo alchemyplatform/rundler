@@ -424,7 +424,7 @@ where
             .try_into()
             .unwrap_or(u64::MAX);
 
-        let authorization_list = op.authorization_list.clone();
+        let authorization_tuple = op.authorization_tuple.clone();
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
         let ep_simulations = IEntryPointSimulations::new(
             *self.i_entry_point.address(),
@@ -436,11 +436,9 @@ where
             .gas(self.max_simulate_handle_ops_gas.saturating_add(da_gas))
             .state(state_override);
         request = request.map(|mut req| {
-            let mut signed_authorization_list = vec![];
-            for authorization in authorization_list.iter() {
-                signed_authorization_list.push(SignedAuthorization::from(authorization.clone()));
+            if let Some(authorization) = authorization_tuple {
+                req.set_authorization_list(vec![SignedAuthorization::from(authorization.clone())]);
             }
-            req.set_authorization_list(signed_authorization_list);
             req
         });
         let res = request.call().await;
@@ -502,8 +500,8 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .user_ops
                 .into_iter()
                 .map(|op| {
-                    for authorization in &op.authorization_list {
-                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                    if let Some(authorization) = &op.authorization_tuple {
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()))
                     }
                     op.pack()
                 })

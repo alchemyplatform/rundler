@@ -77,8 +77,10 @@ where
         let paymaster_gas_fee = self.settings.verification_estimation_gas_fee;
 
         // TODO(andy): apply the authorization fee to pvg.
-        let _authorization_list_gas = (op.authorization_list().len() as u64)
-            * alloy_eips::eip7702::constants::PER_AUTH_BASE_COST;
+        let _authorization_list_gas = match op.authorization_tuple() {
+            Some(_) => alloy_eips::eip7702::constants::PER_AUTH_BASE_COST,
+            None => 0,
+        };
 
         // Fee logic for gas estimation:
         //

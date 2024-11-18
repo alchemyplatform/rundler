@@ -108,6 +108,24 @@ impl FromFixedLengthProtoBytes for u128 {
     }
 }
 
+impl FromFixedLengthProtoBytes for u64 {
+    const LEN: usize = 8;
+
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        let (int_bytes, _) = bytes.split_at(std::mem::size_of::<u128>());
+        u64::from_le_bytes(int_bytes.try_into().unwrap())
+    }
+}
+
+impl FromFixedLengthProtoBytes for u8 {
+    const LEN: usize = 1;
+
+    fn from_fixed_length_bytes(bytes: &[u8]) -> Self {
+        let (int_bytes, _) = bytes.split_at(std::mem::size_of::<u128>());
+        u8::from_le_bytes(int_bytes.try_into().unwrap())
+    }
+}
+
 /// Trait for a type that can be converted to protobuf bytes.
 pub trait ToProtoBytes {
     /// Convert to protobuf bytes.
@@ -145,6 +163,18 @@ impl ToProtoBytes for Bytes {
 }
 
 impl ToProtoBytes for u128 {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        self.to_le_bytes().into()
+    }
+}
+
+impl ToProtoBytes for u64 {
+    fn to_proto_bytes(&self) -> Vec<u8> {
+        self.to_le_bytes().into()
+    }
+}
+
+impl ToProtoBytes for u8 {
     fn to_proto_bytes(&self) -> Vec<u8> {
         self.to_le_bytes().into()
     }
