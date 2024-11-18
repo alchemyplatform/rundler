@@ -22,7 +22,7 @@ pub mod v0_6;
 /// User Operation types for Entry Point v0.7
 pub mod v0_7;
 
-use crate::{chain::ChainSpec, Entity};
+use crate::{authorization::Authorization, chain::ChainSpec, Entity};
 
 /// A user op must be valid for at least this long into the future to be included.
 pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
@@ -109,6 +109,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         self.max_fee_per_gas()
             .min(base_fee + self.max_priority_fee_per_gas())
     }
+
+    /// Return the authorization list of the UO. empty if it is not 7702 txn.
+    fn authorization_list(&self) -> Vec<Authorization>;
 
     /*
      * Enhanced functions
@@ -474,6 +477,13 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.abi_encoded_size(),
             UserOperationVariant::V0_7(op) => op.abi_encoded_size(),
+        }
+    }
+
+    fn authorization_list(&self) -> Vec<Authorization> {
+        match self {
+            UserOperationVariant::V0_6(op) => op.authorization_list(),
+            UserOperationVariant::V0_7(op) => op.authorization_list(),
         }
     }
 }

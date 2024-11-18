@@ -19,7 +19,7 @@ use super::{
     random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
     UserOperationVariant,
 };
-use crate::{chain::ChainSpec, Entity, EntryPointVersion};
+use crate::{authorization::Authorization, chain::ChainSpec, Entity, EntryPointVersion};
 
 /// Gas overhead required by the entry point contract for the inner call
 pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 10_000;
@@ -82,6 +82,9 @@ pub struct UserOperation {
     pub paymaster_post_op_gas_limit: u128,
     /// Paymaster data
     pub paymaster_data: Bytes,
+    /// eip 7702 - list of authorities.
+    pub authorization_list: Vec<Authorization>,
+
     /*
      * Cached fields, not part of the UO
      */
@@ -230,6 +233,10 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.packed.callData)
             + super::byte_array_abi_len(&self.packed.paymasterAndData)
             + super::byte_array_abi_len(&self.packed.signature)
+    }
+
+    fn authorization_list(&self) -> Vec<Authorization> {
+        self.authorization_list.clone()
     }
 }
 
@@ -510,6 +517,9 @@ pub struct UserOperationBuilder<'a> {
     paymaster_post_op_gas_limit: u128,
     paymaster_data: Bytes,
     packed_uo: Option<PackedUserOperation>,
+
+    /// eip 7702 - list of authorities.
+    authorization_list: Vec<Authorization>,
 }
 
 /// Required fields for UserOperation v0.7
@@ -547,6 +557,7 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_post_op_gas_limit: 0,
             paymaster_data: Bytes::new(),
             packed_uo: None,
+            authorization_list: vec![],
         }
     }
 
@@ -619,6 +630,7 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_post_op_gas_limit: uo.paymaster_post_op_gas_limit,
             paymaster_data: uo.paymaster_data,
             packed_uo: None,
+            authorization_list: uo.authorization_list,
         }
     }
 
@@ -695,6 +707,12 @@ impl<'a> UserOperationBuilder<'a> {
         self
     }
 
+    /// Sets the authorization list
+    pub fn authorization_list(mut self, authorization_list: Vec<Authorization>) -> Self {
+        self.authorization_list = authorization_list;
+        self
+    }
+
     /// Builds the UserOperation
     pub fn build(self) -> UserOperation {
         let uo = UserOperation {
@@ -712,6 +730,7 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_verification_gas_limit: self.paymaster_verification_gas_limit,
             paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
             paymaster_data: self.paymaster_data,
+            authorization_list: self.authorization_list,
             signature: self.required.signature,
             entry_point: self.chain_spec.entry_point_address_v0_7,
             chain_id: self.chain_spec.id,

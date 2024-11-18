@@ -4797,6 +4797,7 @@ version = "0.4.0"
 dependencies = [
  "alloy-consensus",
  "alloy-contract",
+ "alloy-eips",
  "alloy-json-rpc",
  "alloy-node-bindings 0.4.2",
  "alloy-primitives",
@@ -4869,6 +4870,7 @@ dependencies = [
 name = "rundler-sim"
 version = "0.4.0"
 dependencies = [
+ "alloy-eips",
  "alloy-primitives",
  "alloy-sol-types",
  "anyhow",
@@ -4922,6 +4924,7 @@ dependencies = [
 name = "rundler-types"
 version = "0.4.0"
 dependencies = [
+ "alloy-eips",
  "alloy-primitives",
  "alloy-sol-types",
  "anyhow",

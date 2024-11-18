@@ -13,6 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
+    authorization::Authorization,
     chain::ChainSpec,
     v0_6::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
@@ -38,6 +39,7 @@ pub(crate) struct RpcUserOperation {
     max_priority_fee_per_gas: U128,
     paymaster_and_data: Bytes,
     signature: Bytes,
+    authorization_list: Vec<Authorization>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -54,6 +56,7 @@ impl From<UserOperation> for RpcUserOperation {
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
+            authorization_list: op.authorization_list,
         }
     }
 }
@@ -109,6 +112,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             max_fee_per_gas: def.max_fee_per_gas.map(|x| x.to()),
             max_priority_fee_per_gas: def.max_priority_fee_per_gas.map(|x| x.to()),
             paymaster_and_data: def.paymaster_and_data,
+            authorization_list: vec![],
             signature: def.signature,
         }
     }

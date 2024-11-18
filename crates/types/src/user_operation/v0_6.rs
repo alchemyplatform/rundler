@@ -22,6 +22,7 @@ use super::{
     UserOperationVariant,
 };
 use crate::{
+    authorization::Authorization,
     chain::ChainSpec,
     entity::{Entity, EntityType},
     EntryPointVersion,
@@ -77,6 +78,9 @@ pub struct UserOperation {
     pub paymaster_and_data: Bytes,
     /// Signature
     pub signature: Bytes,
+
+    /// eip 7702 - list of authorities.
+    pub authorization_list: Vec<Authorization>,
 
     /// Cached calldata gas cost
     pub calldata_gas_cost: u128,
@@ -272,6 +276,10 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.paymaster_and_data)
             + super::byte_array_abi_len(&self.signature)
     }
+
+    fn authorization_list(&self) -> Vec<Authorization> {
+        self.authorization_list.clone()
+    }
 }
 
 impl From<UserOperation> for ContractUserOperation {
@@ -381,6 +389,9 @@ pub struct UserOperationOptionalGas {
     pub paymaster_and_data: Bytes,
     /// Signature (required, dummy value for gas estimation)
     pub signature: Bytes,
+
+    /// eip 7702 - list of authorities.
+    pub authorization_list: Vec<Authorization>,
 }
 
 impl UserOperationOptionalGas {
@@ -642,6 +653,7 @@ impl<'a> UserOperationBuilder<'a> {
             max_priority_fee_per_gas: self.required.max_priority_fee_per_gas,
             paymaster_and_data: self.required.paymaster_and_data,
             signature: self.required.signature,
+            authorization_list: vec![],
             calldata_gas_cost: 0,
         };
 
@@ -662,6 +674,8 @@ impl<'a> UserOperationBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
+
+    use std::vec;
 
     use alloy_primitives::{address, b256, bytes};
 
@@ -863,6 +877,7 @@ mod tests {
             pre_verification_gas: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
+            authorization_list: vec![],
         }
         .max_fill(&ChainSpec::default());
 

@@ -12,8 +12,9 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
+use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::Provider as AlloyProvider;
+use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
 use alloy_transport::{Transport, TransportError};
@@ -442,13 +443,25 @@ where
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
+        let authorization_list = op.authorization_list.clone();
 
-        let contract_error = self
+        let mut request = self
             .i_entry_point
             .simulateHandleOp(op.into(), target, target_call_data)
             .block(block_id)
             .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
-            .state(state_override)
+            .state(state_override);
+
+        request = request.map(|mut req| {
+            let mut signed_authorization_list = vec![];
+            for authorization in authorization_list.iter() {
+                signed_authorization_list.push(SignedAuthorization::from(authorization.clone()));
+            }
+            req.set_authorization_list(signed_authorization_list);
+            req
+        });
+
+        let contract_error = request
             .call()
             .await
             .err()
@@ -519,10 +532,21 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     beneficiary: Address,
     gas: u64,
 ) -> TransactionRequest {
+    let mut authorization_list: Vec<SignedAuthorization> = vec![];
+
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
         .into_iter()
         .map(|uoa| UserOpsPerAggregatorV0_6 {
-            userOps: uoa.user_ops.into_iter().map(Into::into).collect(),
+            userOps: uoa
+                .user_ops
+                .into_iter()
+                .map(|op| {
+                    for authorization in &op.authorization_list {
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                    }
+                    op.into()
+                })
+                .collect(),
             aggregator: uoa.aggregator,
             signature: uoa.signature,
         })
@@ -537,6 +561,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
             .handleAggregatedOps(ops_per_aggregator, beneficiary)
             .gas(gas)
             .into_transaction_request()
+            .with_authorization_list(authorization_list)
     }
 }
 
