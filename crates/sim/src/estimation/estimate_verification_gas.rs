@@ -77,7 +77,7 @@ where
         let paymaster_gas_fee = self.settings.verification_estimation_gas_fee;
 
         // TODO(andy): apply the authorization fee to pvg.
-        let _authorization_list_gas = match op.authorization_tuple() {
+        let authorization_list_gas = match op.authorization_tuple() {
             Some(_) => alloy_eips::eip7702::constants::PER_AUTH_BASE_COST,
             None => 0,
         };
@@ -187,6 +187,8 @@ where
         if op.paymaster().is_none() {
             min_success_gas += self.chain_spec.deposit_transfer_overhead();
         }
+
+        min_success_gas += authorization_list_gas as u128;
 
         Ok(min_success_gas)
     }
