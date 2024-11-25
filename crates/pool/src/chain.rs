@@ -41,7 +41,7 @@ use tokio::{
     sync::{broadcast, Semaphore},
     time,
 };
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 
@@ -218,7 +218,7 @@ impl<P: EvmProvider> Chain<P> {
                 match update {
                     Ok(update) => return update,
                     Err(error) => {
-                        debug!("Failed to update chain at block {block_hash:?}: {error:?}");
+                        warn!("Failed to update chain at block {block_hash:?}: {error:?}");
                     }
                 }
 
@@ -241,15 +241,15 @@ impl<P: EvmProvider> Chain<P> {
         let current_block_number = current_block.number;
         let new_block_number = new_head.number;
         ensure!(
-            current_block_number < new_block_number + self.settings.history_size,
-            "new block number {new_block_number} should be greater than start of history (current block: {current_block_number})"
-        );
+        new_block_number >= current_block_number - self.settings.history_size,
+        "new block number {new_block_number} should be greater than the start of history (current block: {current_block_number})"
+    );
 
         if current_block_number + self.settings.history_size < new_block_number {
             warn!(
-                "New block {new_block_number} number is {} blocks ahead of the previously known head. Chain history will skip ahead.",
-                new_block_number - current_block_number,
-            );
+            "New block {new_block_number} is {} blocks ahead of the previously known head. Chain history will skip ahead.",
+            new_block_number - current_block_number,
+        );
             return self.reset_and_initialize(new_head).await;
         }
 
