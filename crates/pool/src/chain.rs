@@ -41,7 +41,7 @@ use tokio::{
     sync::{broadcast, Semaphore},
     time,
 };
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 
@@ -218,7 +218,7 @@ impl<P: EvmProvider> Chain<P> {
                 match update {
                     Ok(update) => return update,
                     Err(error) => {
-                        debug!("Failed to update chain at block {block_hash:?}: {error:?}");
+                        warn!("Failed to update chain at block {block_hash:?}: {error:?}");
                     }
                 }
 
