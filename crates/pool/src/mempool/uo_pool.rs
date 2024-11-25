@@ -191,7 +191,10 @@ where
                     tracing::error!("Failed to simulate handle op for gas limit efficiency check, failing open: {:?}", e);
                 }
                 Ok(Err(e)) => {
-                    tracing::error!("Failed to simulate handle op for gas limit efficiency check, failing open: {:?}", e);
+                    tracing::debug!(
+                        "Validation error during gas limit efficiency check, failing open: {:?}",
+                        e
+                    );
                 }
                 Ok(Ok(execution_res)) => {
                     let total_gas_used: u128 = (execution_res.paid / U256::from(gas_price))
