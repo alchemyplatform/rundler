@@ -156,15 +156,12 @@ struct BloxrouteResponse {
 
 impl From<jsonrpsee::core::ClientError> for TxSenderError {
     fn from(value: jsonrpsee::core::ClientError) -> Self {
-        match &value {
-            jsonrpsee::core::ClientError::Call(e) => {
-                if super::is_replacement_underpriced(e.message()) {
-                    TxSenderError::ReplacementUnderpriced
-                } else {
-                    TxSenderError::Other(value.into())
-                }
+        if let jsonrpsee::core::ClientError::Call(e) = &value {
+            if let Some(e) = super::parse_known_call_execution_failed(e.message()) {
+                return e;
             }
-            _ => TxSenderError::Other(value.into()),
         }
+
+        TxSenderError::Other(value.into())
     }
 }
