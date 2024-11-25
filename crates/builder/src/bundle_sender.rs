@@ -117,10 +117,14 @@ enum SendBundleAttemptResult {
     NoOperationsAfterFeeFilter,
     // There were no operations after the bundle was simulated
     NoOperationsAfterSimulation,
+    // Underpriced
+    Underpriced,
     // Replacement Underpriced
     ReplacementUnderpriced,
     // Condition not met
     ConditionNotMet,
+    // Rejected
+    Rejected,
     // Nonce too low
     NonceTooLow,
 }
@@ -296,18 +300,32 @@ where
                 info!("Nonce too low, starting new bundle attempt");
                 state.reset();
             }
+            Ok(SendBundleAttemptResult::Underpriced) => {
+                info!(
+                    "Bundle underpriced, marking as underpriced. Num fee increases {:?}",
+                    inner.fee_increase_count
+                );
+                state.update(InnerState::Building(inner.underpriced(block_number)));
+            }
             Ok(SendBundleAttemptResult::ReplacementUnderpriced) => {
                 info!("Replacement transaction underpriced, marking as underpriced. Num fee increases {:?}", inner.fee_increase_count);
                 // unabandon to allow fee estimation to consider any submitted transactions, wait for next trigger
                 state.transaction_tracker.unabandon();
-                state.update(InnerState::Building(
-                    inner.replacement_underpriced(block_number),
-                ));
+                state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Ok(SendBundleAttemptResult::ConditionNotMet) => {
                 info!("Condition not met, notifying proposer and starting new bundle attempt");
                 self.proposer.notify_condition_not_met();
                 state.update(InnerState::Building(inner.retry()));
+            }
+            Ok(SendBundleAttemptResult::Rejected) => {
+                // Bundle was rejected, try with a higher price
+                // May want to consider a simple retry instead of increasing fees, but this should be rare
+                info!(
+                    "Bundle rejected, assuming underpriced. Num fee increases {:?}",
+                    inner.fee_increase_count
+                );
+                state.update(InnerState::Building(inner.underpriced(block_number)));
             }
             Err(error) => {
                 error!("Bundle send error {error:?}");
@@ -418,8 +436,10 @@ where
                 self.metrics.soft_cancellations.increment(1);
                 state.reset();
             }
-            Err(TransactionTrackerError::ReplacementUnderpriced) => {
-                info!("Replacement transaction underpriced during cancellation, trying again");
+            Err(TransactionTrackerError::Rejected)
+            | Err(TransactionTrackerError::Underpriced)
+            | Err(TransactionTrackerError::ReplacementUnderpriced) => {
+                info!("Transaction underpriced/rejected during cancellation, trying again. {cancel_res:?}");
                 if inner.fee_increase_count >= self.settings.max_cancellation_fee_increases {
                     // abandon the cancellation
                     warn!("Abandoning cancellation after max fee increases {}, starting new bundle attempt", inner.fee_increase_count);
@@ -439,7 +459,14 @@ where
                 info!("Nonce too low during cancellation, starting new bundle attempt");
                 state.reset();
             }
-            Err(e) => {
+            Err(TransactionTrackerError::ConditionNotMet) => {
+                error!(
+                    "Unexpected condition not met during cancellation, starting new bundle attempt"
+                );
+                self.metrics.cancellation_txns_failed.increment(1);
+                state.reset();
+            }
+            Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to cancel transaction, moving back to building state: {e:#?}");
                 self.metrics.cancellation_txns_failed.increment(1);
                 state.reset();
@@ -577,6 +604,11 @@ where
                 warn!("Bundle attempt nonce too low");
                 Ok(SendBundleAttemptResult::NonceTooLow)
             }
+            Err(TransactionTrackerError::Underpriced) => {
+                self.metrics.bundle_txn_underpriced.increment(1);
+                warn!("Bundle attempt underpriced");
+                Ok(SendBundleAttemptResult::Underpriced)
+            }
             Err(TransactionTrackerError::ReplacementUnderpriced) => {
                 self.metrics.bundle_replacement_underpriced.increment(1);
                 warn!("Bundle attempt replacement transaction underpriced");
@@ -587,9 +619,14 @@ where
                 warn!("Bundle attempt condition not met");
                 Ok(SendBundleAttemptResult::ConditionNotMet)
             }
-            Err(e) => {
+            Err(TransactionTrackerError::Rejected) => {
+                self.metrics.bundle_txn_rejected.increment(1);
+                warn!("Bundle attempt rejected");
+                Ok(SendBundleAttemptResult::Rejected)
+            }
+            Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to send bundle with unexpected error: {e:?}");
-                Err(e.into())
+                Err(e)
             }
         }
     }
@@ -879,10 +916,10 @@ impl BuildingState {
         self
     }
 
-    // Mark a replacement as underpriced
+    // Mark as underpriced
     //
     // The next state will wait for a trigger to reduce bundle building loops
-    fn replacement_underpriced(self, block_number: u64) -> Self {
+    fn underpriced(self, block_number: u64) -> Self {
         let ui = if let Some(underpriced_info) = self.underpriced_info {
             underpriced_info
         } else {
@@ -1176,12 +1213,16 @@ struct BuilderMetric {
     bundle_txns_nonce_used: Counter,
     #[metric(describe = "the count of bundle transactions fee increase events.")]
     bundle_txn_fee_increases: Counter,
-    #[metric(describe = "the count of bundle transactions underprice replaced events.")]
+    #[metric(describe = "the count of bundle transactions underpriced events.")]
+    bundle_txn_underpriced: Counter,
+    #[metric(describe = "the count of bundle transactions underpriced replacement events.")]
     bundle_replacement_underpriced: Counter,
     #[metric(describe = "the count of bundle transactions nonce too low events.")]
     bundle_txn_nonce_too_low: Counter,
     #[metric(describe = "the count of bundle transactions condition not met events.")]
     bundle_txn_condition_not_met: Counter,
+    #[metric(describe = "the count of bundle transactions rejected.")]
+    bundle_txn_rejected: Counter,
     #[metric(describe = "the count of cancellation bundle transactions sent events.")]
     cancellation_txns_sent: Counter,
     #[metric(describe = "the count of cancellation bundle transactions mined events.")]

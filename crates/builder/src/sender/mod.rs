@@ -52,6 +52,9 @@ pub(crate) enum TxStatus {
 /// Errors from transaction senders
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TxSenderError {
+    /// Transaction was underpriced and dropped
+    #[error("transaction underpriced")]
+    Underpriced,
     /// Replacement transaction was underpriced
     #[error("replacement transaction underpriced")]
     ReplacementUnderpriced,
@@ -61,6 +64,12 @@ pub(crate) enum TxSenderError {
     /// Conditional value not met
     #[error("storage slot value condition not met")]
     ConditionNotMet,
+    /// Transaction was rejected
+    ///
+    /// This is a catch-all for when a transaction is rejected for any reason
+    /// that can be solved with a retry.
+    #[error("transaction rejected")]
+    Rejected,
     /// Soft cancellation failed
     #[error("soft cancel failed")]
     SoftCancelFailed,
@@ -230,33 +239,53 @@ impl From<ProviderError> for TxSenderError {
         match &value {
             ProviderError::RPC(e) => {
                 if let Some(e) = e.as_error_resp() {
-                    if is_replacement_underpriced(&e.message) {
-                        return TxSenderError::ReplacementUnderpriced;
-                    // geth, erigon, reth
-                    } else if e.message.contains("nonce too low") {
-                        return TxSenderError::NonceTooLow;
-                    // Arbitrum conditional sender error message
-                    // TODO push them to use a specific error code and to return the specific slot that is not met.
-                    } else if e
-                        .message
-                        .to_lowercase()
-                        .contains("storage slot value condition not met")
-                    {
-                        return TxSenderError::ConditionNotMet;
+                    // Client impls use different error codes, just match on the message
+                    if let Some(e) = parse_known_call_execution_failed(&e.message) {
+                        e
+                    } else {
+                        TxSenderError::Other(value.into())
                     }
+                } else {
+                    TxSenderError::Other(value.into())
                 }
-                TxSenderError::Other(value.into())
             }
             _ => TxSenderError::Other(value.into()),
         }
     }
 }
 
-fn is_replacement_underpriced(e: &str) -> bool {
-    // geth
-    e.to_lowercase().contains("replacement transaction underpriced") ||
-    // erigon
-    e.to_lowercase().contains("could not replace existing tx") ||
-    // reth
-    e.to_lowercase().contains("insufficient gas price to replace existing transaction")
+fn parse_known_call_execution_failed(e: &str) -> Option<TxSenderError> {
+    match &e.to_lowercase() {
+        // geth
+        x if x.contains("transaction underpriced") => Some(TxSenderError::Underpriced),
+        // erigon
+        x if x.contains("underpriced") => Some(TxSenderError::Underpriced),
+        // reth
+        x if x.contains("transaction discarded outright due to pool size constraints") => {
+            Some(TxSenderError::Underpriced)
+        }
+        // geth. Reth & erigon don't have similar
+        x if x.contains("future transaction tries to replace pending") => {
+            Some(TxSenderError::Rejected)
+        }
+        // geth
+        x if x.contains("replacement transaction underpriced") => {
+            Some(TxSenderError::ReplacementUnderpriced)
+        }
+        // erigon
+        x if x.contains("could not replace existing tx") => {
+            Some(TxSenderError::ReplacementUnderpriced)
+        }
+        // reth
+        x if x.contains("insufficient gas price to replace existing transaction") => {
+            Some(TxSenderError::ReplacementUnderpriced)
+        }
+        // geth, erigon, reth
+        x if x.contains("nonce too low") => Some(TxSenderError::NonceTooLow),
+        // Arbitrum conditional sender error message
+        x if x.contains("storage slot value condition not met") => {
+            Some(TxSenderError::ConditionNotMet)
+        }
+        _ => None,
+    }
 }

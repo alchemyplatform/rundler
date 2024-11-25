@@ -85,10 +85,14 @@ pub(crate) trait TransactionTracker: Send + Sync {
 pub(crate) enum TransactionTrackerError {
     #[error("nonce too low")]
     NonceTooLow,
+    #[error("transaction underpriced")]
+    Underpriced,
     #[error("replacement transaction underpriced")]
     ReplacementUnderpriced,
     #[error("storage slot value condition not met")]
     ConditionNotMet,
+    #[error("rejected")]
+    Rejected,
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -507,10 +511,12 @@ impl From<TxSenderError> for TransactionTrackerError {
     fn from(value: TxSenderError) -> Self {
         match value {
             TxSenderError::NonceTooLow => TransactionTrackerError::NonceTooLow,
+            TxSenderError::Underpriced => TransactionTrackerError::Underpriced,
             TxSenderError::ReplacementUnderpriced => {
                 TransactionTrackerError::ReplacementUnderpriced
             }
             TxSenderError::ConditionNotMet => TransactionTrackerError::ConditionNotMet,
+            TxSenderError::Rejected => TransactionTrackerError::Rejected,
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }
@@ -727,44 +733,6 @@ mod tests {
         let exp = ExpectedStorage::default();
         tracker.send_transaction(tx, &exp).await.unwrap();
     }
-
-    // TODO(#295): fix dropped status
-    // #[tokio::test]
-    // async fn test_wait_for_update_dropped() {
-    //     let (mut sender, mut provider) = create_base_config();
-    //     sender.expect_address().return_const(Address::ZERO);
-
-    //     sender
-    //         .expect_get_transaction_status()
-    //         .returning(move |_a| Box::pin(async { Ok(TxStatus::Dropped) }));
-
-    //     sender.expect_send_transaction().returning(move |_a, _b| {
-    //         Box::pin(async {
-    //             Ok(SentTxInfo {
-    //                 nonce: U256::ZERO,
-    //                 tx_hash: B256::zero(),
-    //             })
-    //         })
-    //     });
-
-    //     provider
-    //         .expect_get_transaction_count()
-    //         .returning(move |_a| Ok(U256::ZERO));
-
-    //     provider.expect_get_block_number().returning(move || Ok(1));
-
-    //     let tracker = create_tracker(sender, provider).await;
-
-    //     let tx = Eip1559TransactionRequest::new().nonce(0);
-    //     let exp = ExpectedStorage::default();
-    //     let _sent_transaction = tracker.send_transaction(tx.into(), &exp).await.unwrap();
-    //     let tracker_update = tracker.wait_for_update().await.unwrap();
-
-    //     assert!(matches!(
-    //         tracker_update,
-    //         TrackerUpdate::LatestTxDropped { .. }
-    //     ));
-    // }
 
     #[tokio::test]
     async fn test_check_for_update_nonce_used() {
