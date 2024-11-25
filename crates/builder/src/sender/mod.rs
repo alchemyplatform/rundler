@@ -254,6 +254,9 @@ impl From<ProviderError> for TxSenderError {
     }
 }
 
+// Geth: https://github.com/ethereum/go-ethereum/blob/23800122b37695be50565f8221858a16ce1763db/core/txpool/errors.go#L31
+// Reth: https://github.com/paradigmxyz/reth/blob/8e4a917ec1aa70b3779083454ff2d5ecf6b44168/crates/rpc/rpc-eth-types/src/error/mod.rs#L624
+// Erigon: https://github.com/erigontech/erigon/blob/96fabf3fd1a4ddce26b845ffe2b6cfb50d5b4b2d/txnprovider/txpool/txpoolcfg/txpoolcfg.go#L124
 fn parse_known_call_execution_failed(e: &str) -> Option<TxSenderError> {
     match &e.to_lowercase() {
         // geth
@@ -261,23 +264,17 @@ fn parse_known_call_execution_failed(e: &str) -> Option<TxSenderError> {
         // erigon
         x if x.contains("underpriced") => Some(TxSenderError::Underpriced),
         // reth
-        x if x.contains("transaction discarded outright due to pool size constraints") => {
-            Some(TxSenderError::Underpriced)
-        }
+        x if x.contains("txpool is full") => Some(TxSenderError::Underpriced),
         // geth. Reth & erigon don't have similar
         x if x.contains("future transaction tries to replace pending") => {
             Some(TxSenderError::Rejected)
         }
-        // geth
+        // geth & reth
         x if x.contains("replacement transaction underpriced") => {
             Some(TxSenderError::ReplacementUnderpriced)
         }
         // erigon
         x if x.contains("could not replace existing tx") => {
-            Some(TxSenderError::ReplacementUnderpriced)
-        }
-        // reth
-        x if x.contains("insufficient gas price to replace existing transaction") => {
             Some(TxSenderError::ReplacementUnderpriced)
         }
         // geth, erigon, reth
