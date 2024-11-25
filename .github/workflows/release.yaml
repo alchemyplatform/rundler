@@ -63,6 +63,9 @@ jobs:
       - name: Foundry install
         if: contains( ${{ matrix.target }}, 'apple')
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "nightly-fe2acca4e379793539db80e032d76ffe0110298b"
+
       - name: Install protobuf
         if: contains( ${{ matrix.target }}, 'apple')
         uses: arduino/setup-protoc@v3
