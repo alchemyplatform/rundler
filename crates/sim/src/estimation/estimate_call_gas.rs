@@ -1,4 +1,4 @@
-use alloy_primitives::{Address, Bytes, B256};
+use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, B256};
 use alloy_sol_types::{Revert, SolError, SolInterface};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -6,7 +6,7 @@ use rundler_contracts::{
     v0_6::CallGasEstimationProxy::TestCallGasResult,
     v0_7::CallGasEstimationProxy::CallGasEstimationProxyErrors,
 };
-use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
+use rundler_provider::{AccountOverride, EntryPoint, SimulationProvider, StateOverride};
 use rundler_types::UserOperation;
 
 use super::Settings;
@@ -68,6 +68,25 @@ pub trait CallGasEstimatorSpecialization: Send + Sync {
     /// Add the required CallGasEstimation proxy to the overrides at the given entrypoint address
     fn add_proxy_to_overrides(&self, ep_to_override: Address, state_override: &mut StateOverride);
 
+    /// Add the required EOA-upgrade to the overrides to simulate an upgrade;
+    fn add_7702_overrides(
+        &self,
+        eoa_to_override: Address,
+        sca_address: Address,
+        state_override: &mut StateOverride,
+    ) {
+        let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
+        let code: FixedBytes<23> = prefix.concat_const(sca_address.into());
+        tracing::debug!("state oveerride code: {}", code);
+        // TODO(andy): if sca_address is 0x0, should remove code there.
+        state_override.insert(
+            eoa_to_override,
+            AccountOverride {
+                code: Some(code.into()),
+                ..Default::default()
+            },
+        );
+    }
     /// Returns the input user operation, modified to have limits but zero for the call gas limits.
     /// The intent is that the modified operation should run its validation but do nothing during execution
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO;
@@ -107,6 +126,14 @@ where
 
         let callless_op = self.specialization.get_op_with_no_call_gas(op.clone());
 
+        if let Some(authrozation_tuple) = op.authorization_tuple().clone() {
+            let contract_address = authrozation_tuple.address;
+            self.specialization.add_7702_overrides(
+                op.sender(),
+                contract_address,
+                &mut state_override,
+            );
+        }
         let mut min_gas = 0;
         let mut max_gas = self.settings.max_call_gas;
         let mut is_continuation = false;

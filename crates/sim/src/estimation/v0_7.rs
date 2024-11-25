@@ -13,7 +13,7 @@
 
 use std::{cmp, ops::Add};
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, B256, U256};
 use alloy_sol_types::SolInterface;
 use rand::Rng;
 use rundler_contracts::v0_7::{
@@ -51,6 +51,22 @@ pub struct GasEstimator<P, E, VGE, CGE, F> {
     call_gas_estimator: CGE,
 }
 
+fn apply_7702_overrides(
+    state_override: &mut StateOverride,
+    sender: Address,
+    contract_address: Address,
+) {
+    let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
+    let code: FixedBytes<23> = prefix.concat_const(contract_address.into());
+    state_override.insert(
+        sender,
+        AccountOverride {
+            code: Some(code.into()),
+            ..Default::default()
+        },
+    );
+}
+
 #[async_trait::async_trait]
 impl<P, E, VGE, CGE, F> super::GasEstimator for GasEstimator<P, E, VGE, CGE, F>
 where
@@ -71,6 +87,10 @@ where
     ) -> Result<GasEstimate, GasEstimationError> {
         self.check_provided_limits(&op)?;
 
+        let mut local_override = state_override.clone();
+        if let Some(au) = &op.contract_address {
+            apply_7702_overrides(&mut local_override, op.sender, *au);
+        }
         let Self {
             provider, settings, ..
         } = self;
@@ -94,15 +114,16 @@ where
             .build();
 
         let verification_gas_future =
-            self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
+            self.estimate_verification_gas(&op, &full_op, block_hash, local_override.clone());
+
         let paymaster_verification_gas_future = self.estimate_paymaster_verification_gas(
             &op,
             &full_op,
             block_hash,
-            state_override.clone(),
+            local_override.clone(),
         );
         let call_gas_future =
-            self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
+            self.estimate_call_gas(&op, full_op.clone(), block_hash, local_override);
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
         let timer = std::time::Instant::now();
@@ -613,7 +634,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
-            authorization_tuple: None,
+            contract_address: None,
         }
     }
 
@@ -846,7 +867,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
-            authorization_tuple: None,
+            contract_address: None,
         };
 
         let estimation = estimator

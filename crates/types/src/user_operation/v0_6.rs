@@ -394,7 +394,7 @@ pub struct UserOperationOptionalGas {
     pub signature: Bytes,
 
     /// eip 7702 - tuple of authority.
-    pub authorization_tuple: Option<Authorization>,
+    pub contract_address: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -475,6 +475,17 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
+        let authorization_tuple = match self.contract_address {
+            Some(address) => Some(Authorization {
+                chain_id: chain_spec.id,
+                address: address,
+                nonce: 0,
+                y_parity: 0,
+                r: U256::from(0),
+                s: U256::from(0),
+            }),
+            None => None,
+        };
         let required = UserOperationRequiredFields {
             sender: self.sender,
             nonce: self.nonce,
@@ -490,7 +501,7 @@ impl UserOperationOptionalGas {
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
         };
         let extended = ExtendedUserOperation {
-            authorization_tuple: self.authorization_tuple,
+            authorization_tuple: authorization_tuple,
         };
 
         UserOperationBuilder::new(chain_spec, required, extended)
@@ -926,7 +937,7 @@ mod tests {
             pre_verification_gas: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            authorization_tuple: None,
+            contract_address: None,
         }
         .max_fill(&ChainSpec::default());
 

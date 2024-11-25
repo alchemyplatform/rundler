@@ -1,7 +1,9 @@
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, B256, U256};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider, StateOverride};
+use rundler_provider::{
+    AccountOverride, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
+};
 use rundler_types::{chain::ChainSpec, UserOperation};
 
 use super::Settings;
@@ -73,12 +75,24 @@ where
         max_guess: u128,
         get_op_with_limit: F,
     ) -> Result<u128, GasEstimationError> {
+        let mut local_state_override = state_override.clone();
         let timer = std::time::Instant::now();
         let paymaster_gas_fee = self.settings.verification_estimation_gas_fee;
-
-        // TODO(andy): apply the authorization fee to pvg.
         let authorization_list_gas = match op.authorization_tuple() {
-            Some(_) => alloy_eips::eip7702::constants::PER_AUTH_BASE_COST,
+            Some(au) => {
+                let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
+                let code: FixedBytes<23> = prefix.concat_const(au.address.into());
+                // TODO(andy): if sca_address is 0x0, should remove code there.
+                local_state_override.insert(
+                    op.sender(),
+                    AccountOverride {
+                        code: Some(code.into()),
+                        ..Default::default()
+                    },
+                );
+                alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
+                    + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
+            }
             None => 0,
         };
 
@@ -107,7 +121,8 @@ where
         let initial_op = get_op(max_guess);
         let call = self
             .entry_point
-            .get_simulate_handle_op_call(initial_op, state_override.clone());
+            .get_simulate_handle_op_call(initial_op, local_state_override.clone());
+
         let gas_used = self
             .provider
             .get_gas_used(call)
@@ -133,7 +148,7 @@ where
                     Address::ZERO,
                     Bytes::new(),
                     block_hash.into(),
-                    state_override,
+                    state_override.clone(),
                 )
                 .await?
                 .err();
@@ -168,7 +183,7 @@ where
             > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
         {
             num_rounds += 1;
-            if run_attempt_returning_error(guess, state_override.clone()).await? {
+            if run_attempt_returning_error(guess, local_state_override.clone()).await? {
                 min_success_gas = guess;
             } else {
                 max_failure_gas = guess;

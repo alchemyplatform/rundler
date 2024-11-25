@@ -335,8 +335,8 @@ pub struct UserOperationOptionalGas {
     pub paymaster_post_op_gas_limit: Option<u128>,
     /// Paymaster data
     pub paymaster_data: Bytes,
-    /// 7702 authorization tuple.
-    pub authorization_tuple: Option<Authorization>,
+    /// 7702 authorization contract address.
+    pub contract_address: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -368,6 +368,17 @@ impl UserOperationOptionalGas {
                 max_4,
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
+        }
+        if self.contract_address.is_some() {
+            builder = builder.authorization_tuple(Some(Authorization {
+                address: self.contract_address.unwrap(),
+                chain_id: chain_spec.id,
+                // fake value for gas estimation.
+                nonce: 0,
+                y_parity: 0,
+                r: U256::from(0),
+                s: U256::from(0),
+            }));
         }
         if self.factory.is_some() {
             builder = builder.factory(
@@ -468,6 +479,16 @@ impl UserOperationOptionalGas {
                 paymaster_post_op_gas_limit,
                 self.paymaster_data,
             );
+        }
+        if let Some(contract) = self.contract_address {
+            builder = builder.authorization_tuple(Some(Authorization {
+                chain_id: chain_spec.id,
+                nonce: 0,
+                address: contract,
+                y_parity: 0,
+                r: U256::from(0),
+                s: U256::from(0),
+            }));
         }
         builder
     }

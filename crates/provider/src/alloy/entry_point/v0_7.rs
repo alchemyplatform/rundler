@@ -16,7 +16,7 @@ use std::vec;
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_json_rpc::ErrorPayload;
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, U256};
 use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
@@ -245,13 +245,19 @@ where
         gas_limit: Option<u64>,
     ) -> ProviderResult<HandleOpsOut> {
         let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_ops_gas);
-        let tx = get_handle_ops_call(
+        let (tx, override_7702) = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             beneficiary,
             gas_limit,
         );
-        let res = self.i_entry_point.provider().call(&tx).await;
+
+        let res = self
+            .i_entry_point
+            .provider()
+            .call(&tx)
+            .overrides(&override_7702)
+            .await;
 
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
@@ -293,7 +299,8 @@ where
         gas: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
+        let (tx, _) =
+            get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
         tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
@@ -352,6 +359,15 @@ where
 
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
+
+        let authorization_tuple = user_op.authorization_tuple.clone();
+        if let Some(authorization) = authorization_tuple {
+            add_simulations_7702_override(
+                &mut override_ep,
+                authorization.address,
+                user_op.sender(),
+            );
+        }
 
         let ep_simulations =
             IEntryPointSimulationsInstance::new(addr, self.i_entry_point.provider());
@@ -424,24 +440,24 @@ where
             .try_into()
             .unwrap_or(u64::MAX);
 
-        let authorization_tuple = op.authorization_tuple.clone();
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
+
+        let authorization_tuple = op.authorization_tuple.clone();
+        if let Some(authorization) = authorization_tuple {
+            add_simulations_7702_override(&mut state_override, authorization.address, op.sender());
+        }
+
         let ep_simulations = IEntryPointSimulations::new(
             *self.i_entry_point.address(),
             self.i_entry_point.provider(),
         );
-        let mut request = ep_simulations
+        let res = ep_simulations
             .simulateHandleOp(op.pack(), target, target_call_data)
             .block(block_id)
             .gas(self.max_simulate_handle_ops_gas.saturating_add(da_gas))
-            .state(state_override);
-        request = request.map(|mut req| {
-            if let Some(authorization) = authorization_tuple {
-                req.set_authorization_list(vec![SignedAuthorization::from(authorization.clone())]);
-            }
-            req
-        });
-        let res = request.call().await;
+            .state(state_override)
+            .call()
+            .await;
 
         match res {
             Ok(output) => Ok(Ok(output._0.try_into()?)),
@@ -486,12 +502,32 @@ fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
         });
 }
 
+fn add_simulations_7702_override(
+    state_override: &mut StateOverride,
+    contract_addr: Address,
+    eoa_addr: Address,
+) {
+    let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
+    let code: FixedBytes<23> = prefix.concat_const(contract_addr.into());
+    // Do nothing if the caller has already overridden the entry point code.
+    // We'll trust they know what they're doing and not replace their code.
+    // This is needed for call gas estimation, where the entry point is
+    // replaced with a proxy and the simulations bytecode is elsewhere.
+    state_override
+        .entry(eoa_addr)
+        .or_insert_with(|| AccountOverride {
+            code: Some(code.into()),
+            ..Default::default()
+        });
+}
+
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     entry_point: &IEntryPointInstance<T, AP>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     beneficiary: Address,
     gas: u64,
-) -> TransactionRequest {
+) -> (TransactionRequest, StateOverride) {
+    let mut override_7702 = StateOverride::default();
     let mut authorization_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
         .into_iter()
@@ -501,7 +537,13 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .into_iter()
                 .map(|op| {
                     if let Some(authorization) = &op.authorization_tuple {
-                        authorization_list.push(SignedAuthorization::from(authorization.clone()))
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                        let contract_address = authorization.address.clone();
+                        add_simulations_7702_override(
+                            &mut override_7702,
+                            contract_address,
+                            op.sender().clone(),
+                        );
                     }
                     op.pack()
                 })
@@ -511,16 +553,25 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
         })
         .collect();
     if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        entry_point
-            .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
-            .gas(gas)
-            .into_transaction_request()
+        (
+            entry_point
+                .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
+                .gas(gas)
+                .into_transaction_request()
+                .transaction_type(alloy_eips::eip7702::constants::EIP7702_TX_TYPE_ID)
+                .with_authorization_list(authorization_list),
+            override_7702,
+        )
     } else {
-        entry_point
-            .handleAggregatedOps(ops_per_aggregator, beneficiary)
-            .gas(gas)
-            .into_transaction_request()
-            .with_authorization_list(authorization_list)
+        (
+            entry_point
+                .handleAggregatedOps(ops_per_aggregator, beneficiary)
+                .gas(gas)
+                .into_transaction_request()
+                .transaction_type(alloy_eips::eip7702::constants::EIP7702_TX_TYPE_ID)
+                .with_authorization_list(authorization_list),
+            override_7702,
+        )
     }
 }
 

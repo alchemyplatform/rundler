@@ -124,7 +124,9 @@ impl FromRpc<RpcUserOperation> for UserOperation {
         if def.factory.is_some() {
             builder = builder.factory(def.factory.unwrap(), def.factory_data.unwrap_or_default());
         }
-
+        if def.authorization_tuple.is_some() {
+            builder = builder.authorization_tuple(def.authorization_tuple);
+        }
         builder.build()
     }
 }
@@ -158,7 +160,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_post_op_gas_limit: Option<U128>,
     paymaster_data: Option<Bytes>,
     signature: Bytes,
-    authorization_tuple: Option<Authorization>,
+    contract_address: Option<Address>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -179,7 +181,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_post_op_gas_limit: def.paymaster_post_op_gas_limit.map(|x| x.to()),
             paymaster_data: def.paymaster_data.unwrap_or_default(),
             signature: def.signature,
-            authorization_tuple: def.authorization_tuple,
+            contract_address: def.contract_address,
         }
     }
 }

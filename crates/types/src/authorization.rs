@@ -12,11 +12,13 @@
 // If not, see https://www.gnu.org/licenses/.
 //! 7702 authorization list suport.
 
-use alloy_primitives::{Address, Parity, Signature, U256};
+use alloy_eips::eip7702::SignedAuthorization;
+use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
 
 /// authorization tuple for 7702 txn support
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Authorization {
     /// The chain ID of the authorization.
     pub chain_id: u64,
@@ -35,11 +37,11 @@ pub struct Authorization {
 impl From<Authorization> for alloy_eips::eip7702::SignedAuthorization {
     fn from(value: Authorization) -> Self {
         let authorization = alloy_eips::eip7702::Authorization {
-            chain_id: U256::from(value.chain_id),
+            chain_id: value.chain_id,
             address: value.address,
             nonce: value.nonce,
         };
-        let signature = Signature::new(value.r, value.s, Parity::Eip155(value.y_parity.into()));
-        authorization.into_signed(signature)
+
+        SignedAuthorization::new_unchecked(authorization, value.y_parity, value.r, value.s)
     }
 }

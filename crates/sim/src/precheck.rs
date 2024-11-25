@@ -228,7 +228,13 @@ where
             sender_exists,
             ..
         } = async_data;
+        // very hacky, should revisit later.
+        let is_7702_uo = op.authorization_tuple().is_some();
         let mut violations = ArrayVec::new();
+
+        if is_7702_uo {
+            return violations;
+        }
         if op.factory().is_none() {
             if !sender_exists {
                 violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
