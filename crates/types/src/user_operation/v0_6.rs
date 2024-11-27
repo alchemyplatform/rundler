@@ -475,17 +475,14 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
-        let authorization_tuple = match self.contract_address {
-            Some(address) => Some(Authorization {
-                chain_id: chain_spec.id,
-                address: address,
-                nonce: 0,
-                y_parity: 0,
-                r: U256::from(0),
-                s: U256::from(0),
-            }),
-            None => None,
-        };
+        let authorization_tuple = self.contract_address.map(|address| Authorization {
+            chain_id: chain_spec.id,
+            address,
+            nonce: 0,
+            y_parity: 0,
+            r: U256::from(0),
+            s: U256::from(0),
+        });
         let required = UserOperationRequiredFields {
             sender: self.sender,
             nonce: self.nonce,
@@ -501,7 +498,7 @@ impl UserOperationOptionalGas {
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
         };
         let extended = ExtendedUserOperation {
-            authorization_tuple: authorization_tuple,
+            authorization_tuple,
         };
 
         UserOperationBuilder::new(chain_spec, required, extended)

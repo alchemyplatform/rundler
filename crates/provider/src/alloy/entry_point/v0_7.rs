@@ -538,11 +538,11 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .map(|op| {
                     if let Some(authorization) = &op.authorization_tuple {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
-                        let contract_address = authorization.address.clone();
+                        let contract_address = authorization.address;
                         add_simulations_7702_override(
                             &mut override_7702,
                             contract_address,
-                            op.sender().clone(),
+                            op.sender(),
                         );
                     }
                     op.pack()
@@ -552,27 +552,22 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
             signature: uoa.signature,
         })
         .collect();
+    let mut txn_request: TransactionRequest;
     if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        (
-            entry_point
-                .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
-                .gas(gas)
-                .into_transaction_request()
-                .transaction_type(alloy_eips::eip7702::constants::EIP7702_TX_TYPE_ID)
-                .with_authorization_list(authorization_list),
-            override_7702,
-        )
+        txn_request = entry_point
+            .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
+            .gas(gas)
+            .into_transaction_request();
     } else {
-        (
-            entry_point
-                .handleAggregatedOps(ops_per_aggregator, beneficiary)
-                .gas(gas)
-                .into_transaction_request()
-                .transaction_type(alloy_eips::eip7702::constants::EIP7702_TX_TYPE_ID)
-                .with_authorization_list(authorization_list),
-            override_7702,
-        )
+        txn_request = entry_point
+            .handleAggregatedOps(ops_per_aggregator, beneficiary)
+            .gas(gas)
+            .into_transaction_request();
     }
+    if !authorization_list.is_empty() {
+        txn_request = txn_request.with_authorization_list(authorization_list);
+    }
+    (txn_request, override_7702)
 }
 
 fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {
