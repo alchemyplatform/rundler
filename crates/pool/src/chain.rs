@@ -409,6 +409,29 @@ impl<P: EvmProvider> Chain<P> {
         Ok(added_blocks)
     }
 
+    async fn fetch_block_with_retries(&self, block_hash: B256) -> Option<Block> {
+        for attempt in 1..=self.settings.max_sync_retries {
+            match self.provider.get_block(block_hash.into()).await {
+                Ok(Some(block)) => return Some(block),
+                Ok(None) => warn!(
+                    "Block with hash {:?} not found. Retrying... (attempt {}/{})",
+                    block_hash, attempt, self.settings.max_sync_retries
+                ),
+                Err(err) => warn!(
+                    "Error fetching block with hash {:?}: {}. Retrying... (attempt {}/{})",
+                    block_hash, err, attempt, self.settings.max_sync_retries
+                ),
+            }
+            time::sleep(self.settings.poll_interval).await;
+        }
+
+        warn!(
+            "Failed to fetch block with hash {:?} after {} attempts.",
+            block_hash, self.settings.max_sync_retries
+        );
+        None
+    }
+
     async fn load_blocks_back_to_number_no_ops(
         &self,
         head: BlockSummary,
@@ -419,16 +442,20 @@ impl<P: EvmProvider> Chain<P> {
         blocks.push_front(head);
         while blocks[0].number > min_block_number {
             let parent_hash = blocks[0].parent_hash;
-            let parent = self
-                .provider
-                .get_block(parent_hash.into())
-                .await
-                .context("should load parent block by hash")?
-                .context("block with parent hash of known block should exist")?;
-            blocks.push_front(BlockSummary::try_from_block_without_ops(
-                parent,
-                Some(blocks[0].number - 1),
-            )?);
+            let parent = self.fetch_block_with_retries(parent_hash).await;
+
+            if let Some(parent) = parent {
+                blocks.push_front(BlockSummary::try_from_block_without_ops(
+                    parent,
+                    Some(blocks[0].number - 1),
+                )?);
+            } else {
+                warn!(
+                "Unable to backtrack chain history beyond block number {} due to missing parent block.",
+                blocks[0].number
+            );
+                break;
+            }
         }
         Ok(blocks)
     }
