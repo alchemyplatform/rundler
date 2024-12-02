@@ -24,6 +24,18 @@ message UserOperation {
   }
 }
 
+// Protocol Buffer representation of an 7702 authorization tuple. See the official 
+// specification at https://eips.ethereum.org/EIPS/eip-7702
+message AuthorizationTuple {
+  bytes chain_id = 1;
+  bytes nonce = 2; 
+  bytes address = 3;
+  // signed authorization tuple.
+  bytes y_parity = 4;
+  bytes r = 5;
+  bytes s = 6;
+}
+
 // Protocol Buffer representation of an ERC-4337 UserOperation. See the official
 // specification at https://eips.ethereum.org/EIPS/eip-4337#definitions
 message UserOperationV06 {
@@ -52,6 +64,8 @@ message UserOperationV06 {
   bytes paymaster_and_data = 10;
   // Signature over the hash of the packed representation of the user operation
   bytes signature = 11;
+  // authorization tuple for 7702 txns
+  AuthorizationTuple authorization_tuple = 12;
 }
 
 message UserOperationV07 {
@@ -90,6 +104,9 @@ message UserOperationV07 {
   // Extra data to compute the hash of the user operation
   bytes entry_point = 16;
   uint64 chain_id = 17;
+
+  // authorization tuple for 7702 txns
+  AuthorizationTuple authorization_tuple = 18;
 }
 
 enum EntityType {

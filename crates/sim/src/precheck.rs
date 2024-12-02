@@ -228,7 +228,13 @@ where
             sender_exists,
             ..
         } = async_data;
+        // very hacky, should revisit later.
+        let is_7702_uo = op.authorization_tuple().is_some();
         let mut violations = ArrayVec::new();
+
+        if is_7702_uo {
+            return violations;
+        }
         if op.factory().is_none() {
             if !sender_exists {
                 violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
@@ -456,7 +462,9 @@ mod tests {
     use gas::MockFeeEstimator;
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider};
     use rundler_types::{
-        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+        v0_6::{
+            ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationRequiredFields,
+        },
         UserOperation as _,
     };
 
@@ -514,6 +522,9 @@ mod tests {
                 paymaster_and_data: Bytes::default(),
                 signature: Bytes::default(),
             },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+            },
         )
         .build();
 
@@ -561,6 +572,9 @@ mod tests {
                 max_priority_fee_per_gas: 2_000,
                 paymaster_and_data: Bytes::default(),
                 signature: Bytes::default(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build();
@@ -610,6 +624,9 @@ mod tests {
                     "a4b2c8f0351d60729e4f0a12345678d9b1c3e5f27890abcdef123456780abcdef1"
                 ),
                 signature: Bytes::default(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build();

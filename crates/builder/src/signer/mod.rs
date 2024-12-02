@@ -40,27 +40,41 @@ pub(crate) trait Signer: Send + Sync {
             .nonce
             .context("nonce should be set when transaction is filled")?;
 
-        let TypedTransaction::Eip1559(mut tx_1559) = tx
-            .build_typed_tx()
-            .expect("should build eip1559 transaction")
-        else {
-            bail!("transaction is not eip1559");
-        };
+        match tx.build_typed_tx().expect("unsupported transaction.") {
+            TypedTransaction::Eip1559(mut tx_1559) => {
+                tx_1559.set_chain_id(self.chain_id());
+                let tx_hash = tx_1559.signature_hash();
 
-        tx_1559.set_chain_id(self.chain_id());
-        let tx_hash = tx_1559.signature_hash();
+                let signature = self
+                    .sign_hash(&tx_hash)
+                    .await
+                    .context("should sign transaction before sending")?;
 
-        let signature = self
-            .sign_hash(&tx_hash)
-            .await
-            .context("should sign transaction before sending")?;
+                let signed: TxEnvelope = tx_1559.into_signed(signature).into();
 
-        let signed: TxEnvelope = tx_1559.into_signed(signature).into();
+                let mut encoded = vec![];
+                signed.encode_2718(&mut encoded);
 
-        let mut encoded = vec![];
-        signed.encode_2718(&mut encoded);
+                return Ok((encoded.into(), nonce));
+            }
+            TypedTransaction::Eip7702(mut tx_7702) => {
+                tracing::info!("{:?}", tx_7702);
+                tx_7702.set_chain_id(self.chain_id());
+                let tx_hash = tx_7702.signature_hash();
+                let signature = self
+                    .sign_hash(&tx_hash)
+                    .await
+                    .context("should sign transaction before sending")?;
 
-        Ok((encoded.into(), nonce))
+                let signed: TxEnvelope = tx_7702.into_signed(signature).into();
+
+                let mut encoded = vec![];
+                signed.encode_2718(&mut encoded);
+
+                return Ok((encoded.into(), nonce));
+            }
+            _ => bail!("transaction is either eip7702 nor eip1559"),
+        }
     }
 }
 

@@ -806,7 +806,6 @@ mod tests {
                     from: Address::ZERO,
                     to: None,
                     contract_address: None,
-                    state_root: None,
                     authorization_list: None,
                 }))
             });
