@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::time::Duration;
+
 use alloy_provider::{Provider as AlloyProvider, ProviderBuilder};
 use alloy_rpc_client::ClientBuilder;
 use alloy_transport::layers::RetryBackoffService;
@@ -18,6 +20,7 @@ use alloy_transport_http::Http;
 use anyhow::Context;
 use evm::AlloyEvmProvider;
 use metrics::{AlloyMetricLayer, AlloyMetricMiddleware};
+use provider_timeout::{ProviderTimeout, ProviderTimeoutLayer};
 use reqwest::Client;
 use url::Url;
 
@@ -28,6 +31,7 @@ pub use da::new_alloy_da_gas_oracle;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
+mod provider_timeout;
 
 /// Create a new alloy evm provider from a given RPC URL
 pub fn new_alloy_evm_provider(rpc_url: &str) -> anyhow::Result<impl EvmProvider + Clone> {
@@ -39,15 +43,19 @@ pub fn new_alloy_evm_provider(rpc_url: &str) -> anyhow::Result<impl EvmProvider 
 pub fn new_alloy_provider(
     rpc_url: &str,
 ) -> anyhow::Result<
-    impl AlloyProvider<RetryBackoffService<AlloyMetricMiddleware<Http<Client>>>> + Clone,
+    impl AlloyProvider<RetryBackoffService<AlloyMetricMiddleware<ProviderTimeout<Http<Client>>>>>
+        + Clone,
 > {
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
     let metric_layer = AlloyMetricLayer::default();
     // TODO: make this configurable: use a large number for CUPS for now
     let retry_layer = alloy_transport::layers::RetryBackoffLayer::new(10, 500, 1_000_000);
+    // add a timeout layer here.
+    let timeout_layer = ProviderTimeoutLayer::new(Duration::from_secs(10));
     let client = ClientBuilder::default()
         .layer(retry_layer)
         .layer(metric_layer)
+        .layer(timeout_layer)
         .http(url);
     let provider = ProviderBuilder::new().on_client(client);
     Ok(provider)
