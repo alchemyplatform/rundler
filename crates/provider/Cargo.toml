@@ -33,6 +33,7 @@ async-trait.workspace = true
 auto_impl.workspace = true
 const-hex.workspace = true
 futures-util.workspace = true
+pin-project.workspace = true
 reqwest.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

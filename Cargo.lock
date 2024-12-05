@@ -4677,6 +4677,7 @@ dependencies = [
  "const-hex",
  "futures-util",
  "mockall",
+ "pin-project",
  "reqwest",
  "reth-tasks",
  "rundler-bindings-fastlz",
