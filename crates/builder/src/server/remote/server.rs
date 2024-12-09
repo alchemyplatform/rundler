@@ -16,6 +16,7 @@ use std::net::SocketAddr;
 use rundler_task::GracefulShutdown;
 use rundler_types::builder::Builder;
 use tonic::{async_trait, transport::Server, Request, Response, Status};
+use tower_http::cors::Any;
 
 use super::protos::{
     builder_server::{Builder as GrpcBuilder, BuilderServer as GrpcBuilderServer},
@@ -42,6 +43,13 @@ pub(crate) async fn remote_builder_server_task(
         .build_v1()
         .expect("should build builder reflection service");
 
+    let cors = tower_http::cors::CorsLayer::new()
+        // allow `GET` and `POST` when accessing the resource
+        .allow_methods([http::Method::GET, http::Method::POST])
+        // allow requests from any origin
+        .allow_origin(Any)
+        .allow_headers([http::header::CONTENT_TYPE]);
+
     // health service
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -49,6 +57,7 @@ pub(crate) async fn remote_builder_server_task(
         .await;
 
     if let Err(e) = Server::builder()
+        .layer(cors)
         .add_service(builder_server)
         .add_service(reflection_service)
         .add_service(health_service)

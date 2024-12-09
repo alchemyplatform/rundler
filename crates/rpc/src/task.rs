@@ -15,6 +15,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use futures_util::FutureExt;
+use http::header::CONTENT_TYPE;
 use jsonrpsee::{
     server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
@@ -29,6 +30,7 @@ use rundler_task::{
     TaskSpawner,
 };
 use rundler_types::{builder::Builder as BuilderT, chain::ChainSpec, pool::Pool as PoolT};
+use tower_http::cors::Any;
 use tracing::info;
 
 use crate::{
@@ -75,6 +77,8 @@ pub struct Args {
     pub entry_point_v0_6_enabled: bool,
     /// Whether to enable entry point v0.7.
     pub entry_point_v0_7_enabled: bool,
+    /// Whether to enable corsdomain
+    pub corsdomain: bool,
 }
 
 /// JSON-RPC server task.
@@ -189,6 +193,16 @@ where
 
         // Set up health check endpoint via GET /health registers the jsonrpc handler
         let http_middleware = tower::ServiceBuilder::new()
+            .option_layer(self.args.corsdomain.then(|| {
+                tower::ServiceBuilder::new().layer(
+                    tower_http::cors::CorsLayer::new()
+                        // allow `GET` and `POST` when accessing the resource
+                        .allow_methods([http::Method::GET, http::Method::POST])
+                        // allow requests from any origin
+                        .allow_origin(Any)
+                        .allow_headers([CONTENT_TYPE]),
+                )
+            }))
             // Proxy `GET /health` requests to internal `system_health` method.
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout)

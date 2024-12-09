@@ -29,6 +29,7 @@ enum_dispatch = "0.3.13"
 futures.workspace = true
 futures-timer = "3.0.3"
 futures-util.workspace = true
+http = "1.1.0"
 jsonrpsee = { workspace = true, features = [ "http-client" ] }
 linked-hash-map = "0.5.6"
 metrics.workspace = true
@@ -49,6 +50,7 @@ tokio-util.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true
 tonic-reflection.workspace = true
+tower-http = { version = "0.6.2", features = ["cors", "timeout"] }
 tracing.workspace = true
 
 mockall = { workspace = true, optional = true }

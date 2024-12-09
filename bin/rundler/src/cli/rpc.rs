@@ -74,6 +74,15 @@ pub struct RpcArgs {
         default_value = "100"
     )]
     max_connections: u32,
+
+    #[arg(
+        long = "rpc.corsdomain",
+        name = "rpc.corsdomain",
+        env = "RPC_CORSDOMAIN",
+        default_value = "false",
+        global = true
+    )]
+    pub corsdomain: bool,
 }
 
 impl RpcArgs {
@@ -109,6 +118,7 @@ impl RpcArgs {
             max_connections: self.max_connections,
             entry_point_v0_6_enabled: !common.disable_entry_point_v0_6,
             entry_point_v0_7_enabled: !common.disable_entry_point_v0_7,
+            corsdomain: common.corsdomain,
         })
     }
 }
