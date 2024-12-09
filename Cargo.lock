@@ -2717,7 +2717,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2 0.4.10",
+ "socket2 0.5.7",
  "tokio",
  "tower-service",
  "tracing",
@@ -3236,7 +3236,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -4573,6 +4573,7 @@ dependencies = [
  "futures",
  "futures-timer",
  "futures-util",
+ "http 1.1.0",
  "jsonrpsee",
  "linked-hash-map",
  "metrics",
@@ -4600,6 +4601,7 @@ dependencies = [
  "tonic-build",
  "tonic-health",
  "tonic-reflection",
+ "tower-http",
  "tracing",
 ]
 
@@ -4626,6 +4628,7 @@ dependencies = [
  "async-trait",
  "futures",
  "futures-util",
+ "http 1.1.0",
  "itertools 0.13.0",
  "metrics",
  "metrics-derive",
@@ -4649,6 +4652,7 @@ dependencies = [
  "tonic-build",
  "tonic-health",
  "tonic-reflection",
+ "tower-http",
  "tracing",
  "url",
 ]
@@ -4721,6 +4725,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tower 0.4.13",
+ "tower-http",
  "tracing",
  "url",
 ]
@@ -5892,6 +5897,22 @@ dependencies = [
  "futures-util",
  "pin-project-lite",
  "sync_wrapper 0.1.2",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "403fa3b783d4b626a8ad51d766ab03cb6d2dbfc46b1c5d4448395e6628dc9697"
+dependencies = [
+ "bitflags 2.6.0",
+ "bytes",
+ "http 1.1.0",
+ "http-body 1.0.1",
+ "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
 ]

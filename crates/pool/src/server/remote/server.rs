@@ -34,6 +34,7 @@ use rundler_types::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tonic::{transport::Server, Request, Response, Result, Status};
+use tower_http::cors::Any;
 
 use super::protos::{
     add_op_response, admin_set_tracking_response, debug_clear_state_response,
@@ -84,7 +85,15 @@ pub(crate) async fn remote_mempool_server_task(
 
     let metrics_layer = GrpcMetricsLayer::new("op_pool_service".to_string());
 
+    let cors = tower_http::cors::CorsLayer::new()
+        // allow `GET` and `POST` when accessing the resource
+        .allow_methods([http::Method::GET, http::Method::POST])
+        // allow requests from any origin
+        .allow_origin(Any)
+        .allow_headers([http::header::CONTENT_TYPE]);
+
     if let Err(e) = Server::builder()
+        .layer(cors)
         .layer(metrics_layer)
         .add_service(op_pool_server)
         .add_service(reflection_service)

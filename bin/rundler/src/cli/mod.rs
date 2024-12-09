@@ -346,6 +346,14 @@ pub struct CommonArgs {
         default_value = "false"
     )]
     pub da_gas_tracking_enabled: bool,
+    #[arg(
+        long = "rpc.corsdomain",
+        name = "rpc.corsdomain",
+        env = "RPC_CORSDOMAIN",
+        default_value = "false",
+        global = true
+    )]
+    pub corsdomain: bool,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
