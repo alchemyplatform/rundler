@@ -280,10 +280,6 @@ fn parse_known_call_execution_failed(message: &str, code: &i64) -> Option<TxSend
         }
         // geth, erigon, reth
         x if x.contains("nonce too low") => Some(TxSenderError::NonceTooLow),
-        // Arbitrum conditional sender error message
-        x if x.contains("storage slot value condition not met") => {
-            Some(TxSenderError::ConditionNotMet)
-        }
         // geth
         x if x.contains("transaction underpriced") => Some(TxSenderError::Underpriced),
         // reth
