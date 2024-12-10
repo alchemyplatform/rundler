@@ -451,11 +451,10 @@ impl<P: EvmProvider> Chain<P> {
                     Some(blocks[0].number - 1),
                 )?);
             } else {
-                warn!(
+                bail!(
                 "Unable to backtrack chain history beyond block number {} due to missing parent block.",
                 blocks[0].number
             );
-                break;
             }
         }
         Ok(blocks)
