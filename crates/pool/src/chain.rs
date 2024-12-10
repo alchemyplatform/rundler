@@ -244,12 +244,13 @@ impl<P: EvmProvider> Chain<P> {
         let current_block_number = current_block.number;
         let new_block_number = new_head.number;
 
-        if self.sync_error_count >= SYNC_ERROR_COUNT_MAX {
-            return self.reset_and_initialize(new_head).await;
-        }
-
         if current_block_number > new_block_number + self.settings.history_size {
             self.sync_error_count += 1;
+
+            if self.sync_error_count >= SYNC_ERROR_COUNT_MAX {
+                return self.reset_and_initialize(new_head).await;
+            }
+
             bail!(
             "new block number {new_block_number} should be greater than start of history (current block: {current_block_number})"
             )
