@@ -810,8 +810,11 @@ mod tests {
             Some(Block {
                 header: BlockHeader {
                     hash,
-                    parent_hash,
-                    number: number as u64,
+                    inner: alloy_consensus::Header {
+                        parent_hash,
+                        number: number as u64,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 ..Default::default()
