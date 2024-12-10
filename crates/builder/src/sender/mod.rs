@@ -258,13 +258,8 @@ impl From<ProviderError> for TxSenderError {
 // Reth: https://github.com/paradigmxyz/reth/blob/8e4a917ec1aa70b3779083454ff2d5ecf6b44168/crates/rpc/rpc-eth-types/src/error/mod.rs#L624
 // Erigon: https://github.com/erigontech/erigon/blob/96fabf3fd1a4ddce26b845ffe2b6cfb50d5b4b2d/txnprovider/txpool/txpoolcfg/txpoolcfg.go#L124
 fn parse_known_call_execution_failed(e: &str) -> Option<TxSenderError> {
+    // DEVELOPER NOTE: ensure to put the most specific matches first
     match &e.to_lowercase() {
-        // geth
-        x if x.contains("transaction underpriced") => Some(TxSenderError::Underpriced),
-        // erigon
-        x if x.contains("underpriced") => Some(TxSenderError::Underpriced),
-        // reth
-        x if x.contains("txpool is full") => Some(TxSenderError::Underpriced),
         // geth. Reth & erigon don't have similar
         x if x.contains("future transaction tries to replace pending") => {
             Some(TxSenderError::Rejected)
@@ -283,6 +278,12 @@ fn parse_known_call_execution_failed(e: &str) -> Option<TxSenderError> {
         x if x.contains("storage slot value condition not met") => {
             Some(TxSenderError::ConditionNotMet)
         }
+        // geth
+        x if x.contains("transaction underpriced") => Some(TxSenderError::Underpriced),
+        // reth
+        x if x.contains("txpool is full") => Some(TxSenderError::Underpriced),
+        // erigon
+        x if x.contains("underpriced") => Some(TxSenderError::Underpriced),
         _ => None,
     }
 }
