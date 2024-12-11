@@ -116,6 +116,8 @@ List of command line options for configuring the RPC API.
   - env: *RPC_TIMEOUT_SECONDS*
 - `--rpc.max_connections`:	Maximum number of concurrent connections (default: `100`)
   - env: *RPC_MAX_CONNECTIONS*
+- `--rpc.corsdomain`: Enable the cors functionality on the server (default: None and therefore corsdomain is disabled).
+  - env: *RPC_CORSDOMAIN*
 - `--rpc.pool_url`:	Pool URL for RPC (default: `http://localhost:50051`)
   - env: *RPC_POOL_URL*
   - *Only required when running in distributed mode* 
