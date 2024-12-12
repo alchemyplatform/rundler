@@ -58,7 +58,6 @@ pub(crate) trait Signer: Send + Sync {
                 return Ok((encoded.into(), nonce));
             }
             TypedTransaction::Eip7702(mut tx_7702) => {
-                tracing::info!("{:?}", tx_7702);
                 tx_7702.set_chain_id(self.chain_id());
                 let tx_hash = tx_7702.signature_hash();
                 let signature = self
@@ -73,7 +72,7 @@ pub(crate) trait Signer: Send + Sync {
 
                 return Ok((encoded.into(), nonce));
             }
-            _ => bail!("transaction is either eip7702 nor eip1559"),
+            _ => bail!("transaction is either eip1559 nor eip7702."),
         }
     }
 }
