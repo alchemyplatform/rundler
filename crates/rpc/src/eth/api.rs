@@ -183,7 +183,8 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy_primitives::{Log as PrimitiveLog, LogData, U256};
+    use alloy_consensus::{Signed, TxEip1559, TxEnvelope::Eip1559};
+    use alloy_primitives::{Log as PrimitiveLog, LogData, PrimitiveSignature, TxKind, U256};
     use alloy_sol_types::SolInterface;
     use mockall::predicate::eq;
     use rundler_contracts::v0_6::IEntryPoint::{handleOpsCall, IEntryPointCalls};
@@ -270,20 +271,33 @@ mod tests {
         })
         .abi_encode();
 
-        let tx = Transaction {
-            to: Some(ep),
+        let inner_txn = TxEip1559 {
+            to: TxKind::Call(ep),
             input: tx_data.into(),
-            block_number: Some(block_number),
-            block_hash: Some(block_hash),
             ..Default::default()
         };
-        let tx_hash = tx.hash;
+
+        let inner = Eip1559(Signed::new_unchecked(
+            inner_txn,
+            PrimitiveSignature::test_signature(),
+            hash,
+        ));
+        let tx = Transaction {
+            inner,
+            block_hash: Some(block_hash),
+            block_number: Some(block_number),
+            transaction_index: None,
+            effective_gas_price: None,
+            from: Address::default(),
+        };
+
+        let tx_hash = *tx.inner.tx_hash();
         let log = Log {
             inner: PrimitiveLog {
                 address: ep,
                 data: LogData::default(),
             },
-            transaction_hash: Some(tx.hash),
+            transaction_hash: Some(tx_hash),
             ..Default::default()
         };
 

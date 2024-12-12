@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+alloy-consensus.workspace = true
 rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-sim.workspace = true
