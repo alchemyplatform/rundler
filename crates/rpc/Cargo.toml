@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+alloy-consensus.workspace = true
 rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-sim.workspace = true
@@ -39,6 +40,7 @@ url.workspace = true
 
 [dev-dependencies]
 alloy-consensus.workspace = true
+alloy-network.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }
