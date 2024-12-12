@@ -74,6 +74,22 @@ pub struct RpcArgs {
         default_value = "100"
     )]
     max_connections: u32,
+
+    /// Cors domains seperated by a comma, * is the wildcard
+    ///
+    /// # Examples
+    ///.env
+    /// ```env
+    /// RPC_CORSDOMAIN=*
+    /// RPC_CORSDOMAIN=https://site1.fake,https:://sub.site1.fake
+    /// ```
+    #[arg(
+        long = "rpc.corsdomain",
+        name = "rpc.corsdomain",
+        env = "RPC_CORSDOMAIN",
+        value_delimiter = ','
+    )]
+    pub corsdomain: Option<Vec<http::HeaderValue>>,
 }
 
 impl RpcArgs {
@@ -109,6 +125,7 @@ impl RpcArgs {
             max_connections: self.max_connections,
             entry_point_v0_6_enabled: !common.disable_entry_point_v0_6,
             entry_point_v0_7_enabled: !common.disable_entry_point_v0_7,
+            corsdomain: self.corsdomain.clone(),
         })
     }
 }
