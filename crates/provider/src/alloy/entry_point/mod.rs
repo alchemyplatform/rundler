@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_consensus::{transaction::SignableTransaction, TxEnvelope, TypedTransaction};
-use alloy_primitives::{address, Address, Bytes, Parity, Signature, U256};
+use alloy_primitives::{address, Address, Bytes, PrimitiveSignature, U256};
 use alloy_rlp::Encodable;
 use alloy_rpc_types_eth::TransactionRequest;
 
@@ -49,11 +49,7 @@ fn max_bundle_transaction_data(to_address: Address, data: Bytes, gas_price: u128
 
     // use a max signature
     let tx_envelope: TxEnvelope = tx_1559
-        .into_signed(Signature::new(
-            U256::MAX,
-            U256::MAX,
-            Parity::Eip155(u64::MAX),
-        ))
+        .into_signed(PrimitiveSignature::new(U256::MAX, U256::MAX, false))
         .into();
     let mut encoded = vec![];
     tx_envelope.encode(&mut encoded);

@@ -63,6 +63,10 @@ build-%:
 fmt: ## format code with nightly rust
 	cargo +nightly fmt
 
+.PHONY: lint
+lint: ## lint and improve code quality 
+	cargo clippy  --all --all-features --tests -- -D warnings
+
 # Note: This requires a buildx builder with emulation support. For example:
 #
 # `docker run --privileged --rm tonistiigi/binfmt --install amd64,arm64`

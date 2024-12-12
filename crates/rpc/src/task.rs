@@ -15,6 +15,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::Context;
 use futures_util::FutureExt;
+use http::{header::CONTENT_TYPE, HeaderValue};
 use jsonrpsee::{
     server::{middleware::http::ProxyGetRequestLayer, RpcServiceBuilder, ServerBuilder},
     RpcModule,
@@ -75,6 +76,8 @@ pub struct Args {
     pub entry_point_v0_6_enabled: bool,
     /// Whether to enable entry point v0.7.
     pub entry_point_v0_7_enabled: bool,
+    /// What domains to use in the corsdomain
+    pub corsdomain: Option<Vec<HeaderValue>>,
 }
 
 /// JSON-RPC server task.
@@ -189,6 +192,26 @@ where
 
         // Set up health check endpoint via GET /health registers the jsonrpc handler
         let http_middleware = tower::ServiceBuilder::new()
+            .option_layer(self.args.corsdomain.map(|layers| {
+                use tower_http::cors::{AllowOrigin, Any};
+                // In the case where we pass '*', I want to be able to test the any domain.
+                // but without this change the list Origins will reject if there is a wildcard present.
+                // So in the case that there is just '*' passed in the args we will treat it like any
+                const WILDCARD: HeaderValue = HeaderValue::from_static("*");
+                let layers: AllowOrigin = if layers.contains(&WILDCARD) && layers.len() == 1 {
+                    Any.into()
+                } else {
+                    layers.into()
+                };
+                tower::ServiceBuilder::new().layer(
+                    tower_http::cors::CorsLayer::new()
+                        // allow `GET` and `POST` when accessing the resource
+                        .allow_methods([http::Method::GET, http::Method::POST])
+                        // allow requests from any origin
+                        .allow_origin(layers)
+                        .allow_headers([CONTENT_TYPE]),
+                )
+            }))
             // Proxy `GET /health` requests to internal `system_health` method.
             .layer(ProxyGetRequestLayer::new("/health", "system_health")?)
             .timeout(self.args.rpc_timeout)

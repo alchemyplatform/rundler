@@ -13,6 +13,7 @@
 
 use std::{collections::VecDeque, marker::PhantomData};
 
+use alloy_consensus::Transaction;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::Context;
@@ -87,12 +88,14 @@ where
             return Ok(None);
         }
         let to = tx
-            .to
-            .context("tx.to should be present on transaction containing user operation event")?;
+            .inner
+            .to()
+            .expect("tx.to should be present on transaction containing user operation event");
 
-        // Find first op matching the hash
+        let input = tx.input();
+
         let user_operation = if E::address(&self.chain_spec) == to {
-            E::get_user_operations_from_tx_data(tx.input, &self.chain_spec)
+            E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
                 .into_iter()
                 .find(|op| op.hash(to, self.chain_spec.id) == hash)
                 .context("matching user operation should be found in tx data")?

@@ -29,6 +29,7 @@ clap = { version = "4.5.16", features = ["derive", "env"] }
 config = "0.14.0"
 dotenv = "0.15.0"
 go-parse-duration = "0.1"
+http = "1.1.0"
 itertools = "0.13.0"
 metrics = "0.23.0"
 metrics-derive.workspace = true
