@@ -9,6 +9,8 @@ publish = false
 
 [dependencies]
 alloy-primitives.workspace = true
+alloy-rpc-types-eth.workspace = true
+
 anyhow.workspace = true
 derive_more = "0.99.18"
 futures.workspace = true

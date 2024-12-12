@@ -16,7 +16,7 @@ use std::vec;
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_json_rpc::ErrorPayload;
-use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
@@ -44,13 +44,13 @@ use rundler_types::{
     v0_7::UserOperation,
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
+use rundler_utils::authoirzation_utils;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
     DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
 };
-
 /// Entry point provider for v0.7
 #[derive(Clone)]
 pub struct EntryPointProvider<AP, T, D> {
@@ -362,10 +362,10 @@ where
 
         let authorization_tuple = user_op.authorization_tuple.clone();
         if let Some(authorization) = authorization_tuple {
-            add_simulations_7702_override(
+            authoirzation_utils::apply_7702_overrides(
                 &mut override_ep,
-                authorization.address,
                 user_op.sender(),
+                authorization.address,
             );
         }
 
@@ -444,7 +444,11 @@ where
 
         let authorization_tuple = op.authorization_tuple.clone();
         if let Some(authorization) = authorization_tuple {
-            add_simulations_7702_override(&mut state_override, authorization.address, op.sender());
+            authoirzation_utils::apply_7702_overrides(
+                &mut state_override,
+                op.sender(),
+                authorization.address,
+            );
         }
 
         let ep_simulations = IEntryPointSimulations::new(
@@ -502,25 +506,6 @@ fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
         });
 }
 
-fn add_simulations_7702_override(
-    state_override: &mut StateOverride,
-    contract_addr: Address,
-    eoa_addr: Address,
-) {
-    let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
-    let code: FixedBytes<23> = prefix.concat_const(contract_addr.into());
-    // Do nothing if the caller has already overridden the entry point code.
-    // We'll trust they know what they're doing and not replace their code.
-    // This is needed for call gas estimation, where the entry point is
-    // replaced with a proxy and the simulations bytecode is elsewhere.
-    state_override
-        .entry(eoa_addr)
-        .or_insert_with(|| AccountOverride {
-            code: Some(code.into()),
-            ..Default::default()
-        });
-}
-
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     entry_point: &IEntryPointInstance<T, AP>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
@@ -539,10 +524,10 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                     if let Some(authorization) = &op.authorization_tuple {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
                         let contract_address = authorization.address;
-                        add_simulations_7702_override(
+                        authoirzation_utils::apply_7702_overrides(
                             &mut override_7702,
-                            contract_address,
                             op.sender(),
+                            contract_address,
                         );
                     }
                     op.pack()

@@ -4954,6 +4954,7 @@ name = "rundler-utils"
 version = "0.4.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-rpc-types-eth",
  "anyhow",
  "derive_more 0.99.18",
  "futures",

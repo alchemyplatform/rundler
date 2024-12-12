@@ -13,7 +13,7 @@
 
 use std::{cmp, ops::Add};
 
-use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolInterface;
 use rand::Rng;
 use rundler_contracts::v0_7::{
@@ -31,7 +31,7 @@ use rundler_types::{
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate, UserOperation as _,
 };
-use rundler_utils::math;
+use rundler_utils::{authoirzation_utils::apply_7702_overrides, math};
 use tokio::join;
 
 use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
@@ -49,22 +49,6 @@ pub struct GasEstimator<P, E, VGE, CGE, F> {
     fee_estimator: F,
     verification_gas_estimator: VGE,
     call_gas_estimator: CGE,
-}
-
-fn apply_7702_overrides(
-    state_override: &mut StateOverride,
-    sender: Address,
-    contract_address: Address,
-) {
-    let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
-    let code: FixedBytes<23> = prefix.concat_const(contract_address.into());
-    state_override.insert(
-        sender,
-        AccountOverride {
-            code: Some(code.into()),
-            ..Default::default()
-        },
-    );
 }
 
 #[async_trait::async_trait]

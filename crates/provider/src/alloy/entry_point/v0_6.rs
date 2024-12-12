@@ -35,6 +35,7 @@ use rundler_types::{
     v0_6::UserOperation,
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
+use rundler_utils::authoirzation_utils;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
@@ -234,13 +235,18 @@ where
         gas_limit: Option<u64>,
     ) -> ProviderResult<HandleOpsOut> {
         let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_op_gas);
-        let tx = get_handle_ops_call(
+        let (tx, override_7702) = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             beneficiary,
             gas_limit,
         );
-        let res = self.i_entry_point.provider().call(&tx).await;
+        let res = self
+            .i_entry_point
+            .provider()
+            .call(&tx)
+            .overrides(&override_7702)
+            .await;
 
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
@@ -298,14 +304,14 @@ where
         gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        get_handle_ops_call(
+        let (tx, _) = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             beneficiary,
             gas_limit,
-        )
-        .max_fee_per_gas(gas_fees.max_fee_per_gas)
-        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+        );
+        tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
+            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
 }
 
@@ -445,26 +451,25 @@ where
             .unwrap_or(u64::MAX);
         let authorization_tuple = op.authorization_tuple.clone();
 
-        let mut request = self
+        let mut local_state = state_override.clone();
+        if let Some(authorization) = authorization_tuple {
+            authoirzation_utils::apply_7702_overrides(
+                &mut local_state,
+                op.sender(),
+                authorization.address,
+            );
+        }
+
+        let contract_error = self
             .i_entry_point
             .simulateHandleOp(op.into(), target, target_call_data)
             .block(block_id)
             .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
-            .state(state_override);
-
-        request = request.map(|mut req| {
-            if let Some(authorization) = authorization_tuple {
-                req.set_authorization_list(vec![SignedAuthorization::from(authorization.clone())]);
-            }
-            req
-        });
-
-        let contract_error = request
+            .state(local_state)
             .call()
             .await
             .err()
             .context("simulateHandleOp succeeded, but should always revert")?;
-
         match contract_error {
             ContractError::TransportError(TransportError::ErrorResp(resp)) => {
                 match resp.as_revert_data() {
@@ -529,9 +534,9 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     beneficiary: Address,
     gas: u64,
-) -> TransactionRequest {
+) -> (TransactionRequest, StateOverride) {
+    let mut override_7702 = StateOverride::default();
     let mut authorization_list: Vec<SignedAuthorization> = vec![];
-
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
         .into_iter()
         .map(|uoa| UserOpsPerAggregatorV0_6 {
@@ -540,7 +545,13 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .into_iter()
                 .map(|op| {
                     if let Some(authorization) = &op.authorization_tuple {
-                        authorization_list.push(SignedAuthorization::from(authorization.clone()))
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                        let contract_address = authorization.address;
+                        authoirzation_utils::apply_7702_overrides(
+                            &mut override_7702,
+                            op.sender(),
+                            contract_address,
+                        );
                     }
                     op.into()
                 })
@@ -550,16 +561,22 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
         })
         .collect();
     if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        entry_point
-            .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
-            .gas(gas)
-            .into_transaction_request()
+        (
+            entry_point
+                .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
+                .gas(gas)
+                .into_transaction_request(),
+            override_7702,
+        )
     } else {
-        entry_point
-            .handleAggregatedOps(ops_per_aggregator, beneficiary)
-            .gas(gas)
-            .into_transaction_request()
-            .with_authorization_list(authorization_list)
+        (
+            entry_point
+                .handleAggregatedOps(ops_per_aggregator, beneficiary)
+                .gas(gas)
+                .into_transaction_request()
+                .with_authorization_list(authorization_list),
+            override_7702,
+        )
     }
 }
 

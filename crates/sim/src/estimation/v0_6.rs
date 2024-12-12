@@ -31,7 +31,7 @@ use rundler_types::{
     v0_6::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate, UserOperation as _,
 };
-use rundler_utils::math;
+use rundler_utils::{authoirzation_utils::apply_7702_overrides, math};
 use tokio::join;
 
 use super::{
@@ -71,6 +71,10 @@ where
         state_override: StateOverride,
     ) -> Result<GasEstimate, GasEstimationError> {
         self.check_provided_limits(&op)?;
+        let mut local_override = state_override.clone();
+        if let Some(au) = &op.contract_address {
+            apply_7702_overrides(&mut local_override, op.sender, *au);
+        }
 
         let (block_hash, _) = self
             .provider
@@ -91,8 +95,8 @@ where
             .build();
 
         let verification_future =
-            self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
-        let call_future = self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
+            self.estimate_verification_gas(&op, &full_op, block_hash, local_override.clone());
+        let call_future = self.estimate_call_gas(&op, full_op.clone(), block_hash, local_override);
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
