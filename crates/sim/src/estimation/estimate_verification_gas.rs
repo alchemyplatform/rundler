@@ -1,10 +1,9 @@
-use alloy_primitives::{fixed_bytes, Address, Bytes, FixedBytes, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use rundler_provider::{
-    AccountOverride, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
-};
+use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider, StateOverride};
 use rundler_types::{chain::ChainSpec, UserOperation};
+use rundler_utils::authorization_utils;
 
 use super::Settings;
 use crate::GasEstimationError;
@@ -78,22 +77,13 @@ where
         let mut local_state_override = state_override.clone();
         let timer = std::time::Instant::now();
         let paymaster_gas_fee = self.settings.verification_estimation_gas_fee;
-        let authorization_list_gas = match op.authorization_tuple() {
-            Some(au) => {
-                let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
-                let code: FixedBytes<23> = prefix.concat_const(au.address.into());
-                local_state_override.insert(
-                    op.sender(),
-                    AccountOverride {
-                        code: Some(code.into()),
-                        ..Default::default()
-                    },
-                );
-                alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
-                    + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
-            }
-            None => 0,
-        };
+        if let Some(au) = &op.authorization_tuple() {
+            authorization_utils::apply_7702_overrides(
+                &mut local_state_override,
+                op.sender(),
+                au.address,
+            );
+        }
 
         // Fee logic for gas estimation:
         //
@@ -201,8 +191,6 @@ where
         if op.paymaster().is_none() {
             min_success_gas += self.chain_spec.deposit_transfer_overhead();
         }
-
-        min_success_gas += authorization_list_gas as u128;
 
         Ok(min_success_gas)
     }

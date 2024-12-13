@@ -23,13 +23,13 @@ pub fn apply_7702_overrides(
     sender: Address,
     contract_address: Address,
 ) {
-    let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
-    let code: FixedBytes<23> = prefix.concat_const(contract_address.into());
-    state_override.insert(
-        sender,
+    state_override.entry(sender).or_insert({
+        let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
+        let code: FixedBytes<23> = prefix.concat_const(contract_address.into());
+
         AccountOverride {
-            code: Some(code.into()),
+            code: Some((code).into()),
             ..Default::default()
-        },
-    );
+        }
+    });
 }

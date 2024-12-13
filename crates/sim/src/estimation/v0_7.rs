@@ -72,9 +72,13 @@ where
         self.check_provided_limits(&op)?;
 
         let mut local_override = state_override.clone();
-        if let Some(au) = &op.contract_address {
+        let authorization_gas = if let Some(au) = &op.contract_address {
             authorization_utils::apply_7702_overrides(&mut local_override, op.sender, *au);
-        }
+            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
+                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
+        } else {
+            0
+        };
         let Self {
             provider, settings, ..
         } = self;
@@ -84,7 +88,8 @@ where
             .await
             .map_err(anyhow::Error::from)?;
 
-        let pre_verification_gas = self.estimate_pre_verification_gas(&op, block_hash).await?;
+        let pre_verification_gas = (self.estimate_pre_verification_gas(&op, block_hash).await?)
+            .saturating_add(authorization_gas as u128);
 
         let full_op = op
             .clone()
