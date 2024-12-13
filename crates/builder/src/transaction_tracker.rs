@@ -296,6 +296,8 @@ where
         );
         let sent_tx = self.sender.send_transaction(tx, expected_storage).await;
 
+        self.update_metrics();
+
         match sent_tx {
             Ok(sent_tx) => {
                 info!(
@@ -495,6 +497,10 @@ where
     async fn reset(&mut self) {
         let nonce = self.get_external_nonce().await.unwrap_or(self.nonce);
         self.set_nonce_and_clear_state(nonce);
+        // reset metrics when tracker reset.
+        self.metrics.num_pending_transactions.set(0);
+        self.metrics.current_max_fee_per_gas.set(0);
+        self.metrics.max_priority_fee_per_gas.set(0);
     }
 
     fn abandon(&mut self) {
