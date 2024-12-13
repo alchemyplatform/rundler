@@ -546,11 +546,11 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .map(|op| {
                     if let Some(authorization) = &op.authorization_tuple {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
-                        let contract_address = authorization.address;
+                        let authorization_contract = authorization.address;
                         authorization_utils::apply_7702_overrides(
                             &mut override_7702,
                             op.sender(),
-                            contract_address,
+                            authorization_contract,
                         );
                     }
                     op.into()

@@ -394,7 +394,7 @@ pub struct UserOperationOptionalGas {
     pub signature: Bytes,
 
     /// eip 7702 - tuple of authority.
-    pub contract_address: Option<Address>,
+    pub authorization_contract: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -475,7 +475,7 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
-        let authorization_tuple = self.contract_address.map(|address| Authorization {
+        let authorization_tuple = self.authorization_contract.map(|address| Authorization {
             address,
             ..Default::default()
         });
@@ -930,7 +930,7 @@ mod tests {
             pre_verification_gas: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            contract_address: None,
+            authorization_contract: None,
         }
         .max_fill(&ChainSpec::default());
 

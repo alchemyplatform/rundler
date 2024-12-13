@@ -336,7 +336,7 @@ pub struct UserOperationOptionalGas {
     /// Paymaster data
     pub paymaster_data: Bytes,
     /// 7702 authorization contract address.
-    pub contract_address: Option<Address>,
+    pub authorization_contract: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -369,9 +369,9 @@ impl UserOperationOptionalGas {
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
         }
-        if self.contract_address.is_some() {
+        if self.authorization_contract.is_some() {
             builder = builder.authorization_tuple(Some(Authorization {
-                address: self.contract_address.unwrap(),
+                address: self.authorization_contract.unwrap(),
                 chain_id: chain_spec.id,
                 // fake value for gas estimation.
                 nonce: 0,
@@ -480,7 +480,7 @@ impl UserOperationOptionalGas {
                 self.paymaster_data,
             );
         }
-        if let Some(contract) = self.contract_address {
+        if let Some(contract) = self.authorization_contract {
             builder = builder.authorization_tuple(Some(Authorization {
                 address: contract,
                 ..Default::default()

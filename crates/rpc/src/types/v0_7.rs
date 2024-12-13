@@ -160,7 +160,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_post_op_gas_limit: Option<U128>,
     paymaster_data: Option<Bytes>,
     signature: Bytes,
-    contract_address: Option<Address>,
+    authorization_contract: Option<Address>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -181,7 +181,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_post_op_gas_limit: def.paymaster_post_op_gas_limit.map(|x| x.to()),
             paymaster_data: def.paymaster_data.unwrap_or_default(),
             signature: def.signature,
-            contract_address: def.contract_address,
+            authorization_contract: def.authorization_contract,
         }
     }
 }

@@ -72,7 +72,7 @@ where
         self.check_provided_limits(&op)?;
 
         let mut local_override = state_override.clone();
-        let authorization_gas = if let Some(au) = &op.contract_address {
+        let authorization_gas = if let Some(au) = &op.authorization_contract {
             authorization_utils::apply_7702_overrides(&mut local_override, op.sender, *au);
             alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
                 + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
@@ -623,7 +623,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
-            contract_address: None,
+            authorization_contract: None,
         }
     }
 
@@ -856,7 +856,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
-            contract_address: None,
+            authorization_contract: None,
         };
 
         let estimation = estimator

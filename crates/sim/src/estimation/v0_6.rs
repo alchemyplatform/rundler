@@ -72,7 +72,7 @@ where
     ) -> Result<GasEstimate, GasEstimationError> {
         self.check_provided_limits(&op)?;
         let mut local_override = state_override.clone();
-        if let Some(au) = &op.contract_address {
+        if let Some(au) = &op.authorization_contract {
             authorization_utils::apply_7702_overrides(&mut local_override, op.sender, *au);
         }
 
@@ -572,7 +572,7 @@ mod tests {
             max_priority_fee_per_gas: None,
             paymaster_and_data: Bytes::new(),
             signature: Bytes::new(),
-            contract_address: None,
+            authorization_contract: None,
         }
     }
 
