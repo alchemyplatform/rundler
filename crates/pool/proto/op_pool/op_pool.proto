@@ -609,6 +609,7 @@ message PrecheckViolationError {
     MaxFeePerGasTooLow max_fee_per_gas_too_low = 10;
     MaxPriorityFeePerGasTooLow max_priority_fee_per_gas_too_low = 11;
     CallGasLimitTooLow call_gas_limit_too_low = 12;
+    FactoryMustBeEmpty factory_must_be_empty = 13;
   }
 }
 
@@ -674,6 +675,10 @@ message MaxPriorityFeePerGasTooLow {
 message CallGasLimitTooLow {
   bytes actual_gas_limit = 1;
   bytes min_gas_limit = 2;
+}
+
+message FactoryMustBeEmpty{
+  bytes factory_address = 1;
 }
 
 // SIMULATION VIOLATIONS

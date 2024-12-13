@@ -20,7 +20,7 @@
 
 //! Rundler utilities
 
-pub mod authoirzation_utils;
+pub mod authorization_utils;
 pub mod cache;
 pub mod emit;
 pub mod eth;

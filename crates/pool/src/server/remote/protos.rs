@@ -83,22 +83,30 @@ pub trait TryUoFromProto<T>: Sized {
     fn try_uo_from_proto(value: T, chain_spec: &ChainSpec) -> Result<Self, ConversionError>;
 }
 
+impl TryFrom<AuthorizationTuple> for Authorization {
+    type Error = ConversionError;
+
+    fn try_from(value: AuthorizationTuple) -> Result<Self, Self::Error> {
+        Ok(Authorization {
+            chain_id: from_bytes(&value.chain_id)?,
+            address: from_bytes(&value.address)?,
+            nonce: from_bytes(&value.nonce)?,
+            y_parity: from_bytes(&value.y_parity)?,
+            r: from_bytes(&value.r)?,
+            s: from_bytes(&value.s)?,
+        })
+    }
+}
 impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
     fn try_uo_from_proto(
         op: UserOperationV06,
         chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
-        let authorization_tuple = match &op.authorization_tuple {
-            Some(authorization) => Some(Authorization {
-                chain_id: from_bytes(&authorization.chain_id)?,
-                address: from_bytes(&authorization.address)?,
-                nonce: from_bytes(&authorization.nonce)?,
-                y_parity: from_bytes(&authorization.y_parity)?,
-                r: from_bytes(&authorization.r)?,
-                s: from_bytes(&authorization.s)?,
-            }),
-            None => None,
-        };
+        let authorization_tuple = op
+            .authorization_tuple
+            .as_ref()
+            .map(|authorization| Authorization::try_from(authorization.clone()).unwrap());
+
         Ok(v0_6::UserOperationBuilder::new(
             chain_spec,
             v0_6::UserOperationRequiredFields {
@@ -155,17 +163,10 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
         op: UserOperationV07,
         chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
-        let authorization_tuple = match &op.authorization_tuple {
-            Some(authorization) => Some(Authorization {
-                chain_id: from_bytes(&authorization.chain_id)?,
-                address: from_bytes(&authorization.address)?,
-                nonce: from_bytes(&authorization.nonce)?,
-                y_parity: from_bytes(&authorization.y_parity)?,
-                r: from_bytes(&authorization.r)?,
-                s: from_bytes(&authorization.s)?,
-            }),
-            None => None,
-        };
+        let authorization_tuple = op
+            .authorization_tuple
+            .as_ref()
+            .map(|authorization| Authorization::try_from(authorization.clone()).unwrap());
 
         let mut builder = v0_7::UserOperationBuilder::new(
             chain_spec,

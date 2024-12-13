@@ -35,7 +35,7 @@ use rundler_types::{
     v0_6::UserOperation,
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
-use rundler_utils::authoirzation_utils;
+use rundler_utils::authorization_utils;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
@@ -453,7 +453,7 @@ where
 
         let mut local_state = state_override.clone();
         if let Some(authorization) = authorization_tuple {
-            authoirzation_utils::apply_7702_overrides(
+            authorization_utils::apply_7702_overrides(
                 &mut local_state,
                 op.sender(),
                 authorization.address,
@@ -547,7 +547,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                     if let Some(authorization) = &op.authorization_tuple {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
                         let contract_address = authorization.address;
-                        authoirzation_utils::apply_7702_overrides(
+                        authorization_utils::apply_7702_overrides(
                             &mut override_7702,
                             op.sender(),
                             contract_address,
@@ -560,24 +560,23 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
             signature: uoa.signature,
         })
         .collect();
+
+    let mut txn_request: TransactionRequest;
     if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        (
-            entry_point
-                .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
-                .gas(gas)
-                .into_transaction_request(),
-            override_7702,
-        )
+        txn_request = entry_point
+            .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
+            .gas(gas)
+            .into_transaction_request();
     } else {
-        (
-            entry_point
-                .handleAggregatedOps(ops_per_aggregator, beneficiary)
-                .gas(gas)
-                .into_transaction_request()
-                .with_authorization_list(authorization_list),
-            override_7702,
-        )
+        txn_request = entry_point
+            .handleAggregatedOps(ops_per_aggregator, beneficiary)
+            .gas(gas)
+            .into_transaction_request();
     }
+    if !authorization_list.is_empty() {
+        txn_request = txn_request.with_authorization_list(authorization_list);
+    }
+    (txn_request, override_7702)
 }
 
 impl TryFrom<ExecutionResultV0_6> for ExecutionResult {

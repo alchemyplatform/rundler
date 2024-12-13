@@ -44,7 +44,7 @@ use rundler_types::{
     v0_7::UserOperation,
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
-use rundler_utils::authoirzation_utils;
+use rundler_utils::authorization_utils;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
@@ -362,7 +362,7 @@ where
 
         let authorization_tuple = user_op.authorization_tuple.clone();
         if let Some(authorization) = authorization_tuple {
-            authoirzation_utils::apply_7702_overrides(
+            authorization_utils::apply_7702_overrides(
                 &mut override_ep,
                 user_op.sender(),
                 authorization.address,
@@ -444,7 +444,7 @@ where
 
         let authorization_tuple = op.authorization_tuple.clone();
         if let Some(authorization) = authorization_tuple {
-            authoirzation_utils::apply_7702_overrides(
+            authorization_utils::apply_7702_overrides(
                 &mut state_override,
                 op.sender(),
                 authorization.address,
@@ -524,7 +524,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                     if let Some(authorization) = &op.authorization_tuple {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
                         let contract_address = authorization.address;
-                        authoirzation_utils::apply_7702_overrides(
+                        authorization_utils::apply_7702_overrides(
                             &mut override_7702,
                             op.sender(),
                             contract_address,

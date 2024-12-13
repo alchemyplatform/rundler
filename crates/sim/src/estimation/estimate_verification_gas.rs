@@ -82,7 +82,6 @@ where
             Some(au) => {
                 let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
                 let code: FixedBytes<23> = prefix.concat_const(au.address.into());
-                // TODO(andy): if sca_address is 0x0, should remove code there.
                 local_state_override.insert(
                     op.sender(),
                     AccountOverride {

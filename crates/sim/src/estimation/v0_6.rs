@@ -31,7 +31,7 @@ use rundler_types::{
     v0_6::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate, UserOperation as _,
 };
-use rundler_utils::{authoirzation_utils::apply_7702_overrides, math};
+use rundler_utils::{authorization_utils, math};
 use tokio::join;
 
 use super::{
@@ -73,7 +73,7 @@ where
         self.check_provided_limits(&op)?;
         let mut local_override = state_override.clone();
         if let Some(au) = &op.contract_address {
-            apply_7702_overrides(&mut local_override, op.sender, *au);
+            authorization_utils::apply_7702_overrides(&mut local_override, op.sender, *au);
         }
 
         let (block_hash, _) = self

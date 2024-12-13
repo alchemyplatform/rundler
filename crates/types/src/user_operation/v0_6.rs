@@ -476,12 +476,8 @@ impl UserOperationOptionalGas {
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
         let authorization_tuple = self.contract_address.map(|address| Authorization {
-            chain_id: chain_spec.id,
             address,
-            nonce: 0,
-            y_parity: 0,
-            r: U256::from(0),
-            s: U256::from(0),
+            ..Default::default()
         });
         let required = UserOperationRequiredFields {
             sender: self.sender,

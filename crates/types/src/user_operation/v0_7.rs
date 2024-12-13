@@ -482,12 +482,8 @@ impl UserOperationOptionalGas {
         }
         if let Some(contract) = self.contract_address {
             builder = builder.authorization_tuple(Some(Authorization {
-                chain_id: chain_spec.id,
-                nonce: 0,
                 address: contract,
-                y_parity: 0,
-                r: U256::from(0),
-                s: U256::from(0),
+                ..Default::default()
             }));
         }
         builder

@@ -8,7 +8,7 @@ use rundler_contracts::{
 };
 use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
 use rundler_types::UserOperation;
-use rundler_utils::authoirzation_utils::apply_7702_overrides;
+use rundler_utils::authorization_utils;
 
 use super::Settings;
 use crate::GasEstimationError;
@@ -109,7 +109,11 @@ where
 
         if let Some(authorization_tuple) = op.authorization_tuple().clone() {
             let contract_address = authorization_tuple.address;
-            apply_7702_overrides(&mut state_override, op.sender(), contract_address);
+            authorization_utils::apply_7702_overrides(
+                &mut state_override,
+                op.sender(),
+                contract_address,
+            );
         }
         let mut min_gas = 0;
         let mut max_gas = self.settings.max_call_gas;

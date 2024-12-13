@@ -17,7 +17,7 @@ use alloy_primitives::{Address, U256};
 use serde::{Deserialize, Serialize};
 
 /// authorization tuple for 7702 txn support
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Authorization {
     /// The chain ID of the authorization.

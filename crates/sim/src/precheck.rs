@@ -228,11 +228,12 @@ where
             sender_exists,
             ..
         } = async_data;
-        // very hacky, should revisit later.
-        let is_7702_uo = op.authorization_tuple().is_some();
         let mut violations = ArrayVec::new();
 
-        if is_7702_uo {
+        if op.authorization_tuple().is_some() {
+            if op.factory().is_some() {
+                violations.push(PrecheckViolation::FactoryMustBeEmpty(op.factory().unwrap()));
+            }
             return violations;
         }
         if op.factory().is_none() {
