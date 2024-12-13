@@ -52,10 +52,10 @@ impl From<&v0_6::UserOperation> for UserOperation {
             op.authorization_tuple
                 .as_ref()
                 .map(|authorization| AuthorizationTuple {
-                    chain_id: authorization.chain_id.to_proto_bytes(),
+                    chain_id: authorization.chain_id,
                     address: authorization.address.to_proto_bytes(),
-                    nonce: authorization.nonce.to_proto_bytes(),
-                    y_parity: authorization.y_parity.to_proto_bytes(),
+                    nonce: authorization.nonce,
+                    y_parity: authorization.y_parity.into(),
                     r: authorization.r.to_proto_bytes(),
                     s: authorization.s.to_proto_bytes(),
                 });
@@ -88,10 +88,10 @@ impl TryFrom<AuthorizationTuple> for Authorization {
 
     fn try_from(value: AuthorizationTuple) -> Result<Self, Self::Error> {
         Ok(Authorization {
-            chain_id: from_bytes(&value.chain_id)?,
+            chain_id: value.chain_id,
             address: from_bytes(&value.address)?,
-            nonce: from_bytes(&value.nonce)?,
-            y_parity: from_bytes(&value.y_parity)?,
+            nonce: value.nonce,
+            y_parity: value.y_parity as u8,
             r: from_bytes(&value.r)?,
             s: from_bytes(&value.s)?,
         })

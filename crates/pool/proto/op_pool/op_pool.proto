@@ -27,11 +27,11 @@ message UserOperation {
 // Protocol Buffer representation of an 7702 authorization tuple. See the official 
 // specification at https://eips.ethereum.org/EIPS/eip-7702
 message AuthorizationTuple {
-  bytes chain_id = 1;
-  bytes nonce = 2; 
+  uint64 chain_id = 1;
+  uint64 nonce = 2; 
   bytes address = 3;
   // signed authorization tuple.
-  bytes y_parity = 4;
+  uint32 y_parity = 4;
   bytes r = 5;
   bytes s = 6;
 }
