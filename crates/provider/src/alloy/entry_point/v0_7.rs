@@ -245,19 +245,13 @@ where
         gas_limit: Option<u64>,
     ) -> ProviderResult<HandleOpsOut> {
         let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_ops_gas);
-        let (tx, override_7702) = get_handle_ops_call(
+        let tx = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             beneficiary,
             gas_limit,
         );
-
-        let res = self
-            .i_entry_point
-            .provider()
-            .call(&tx)
-            .overrides(&override_7702)
-            .await;
+        let res = self.i_entry_point.provider().call(&tx).await;
 
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
@@ -299,8 +293,7 @@ where
         gas: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        let (tx, _) =
-            get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
+        let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
         tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
             .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
@@ -511,8 +504,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     beneficiary: Address,
     gas: u64,
-) -> (TransactionRequest, StateOverride) {
-    let mut override_7702 = StateOverride::default();
+) -> TransactionRequest {
     let mut authorization_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
         .into_iter()
@@ -523,12 +515,6 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .map(|op| {
                     if let Some(authorization) = &op.authorization_tuple {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
-                        let authorization_contract = authorization.address;
-                        authorization_utils::apply_7702_overrides(
-                            &mut override_7702,
-                            op.sender(),
-                            authorization_contract,
-                        );
                     }
                     op.pack()
                 })
@@ -552,7 +538,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     if !authorization_list.is_empty() {
         txn_request = txn_request.with_authorization_list(authorization_list);
     }
-    (txn_request, override_7702)
+    txn_request
 }
 
 fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {
