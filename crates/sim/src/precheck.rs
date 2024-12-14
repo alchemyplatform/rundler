@@ -267,6 +267,13 @@ where
             ..
         } = *async_data;
 
+        let authorization_gas = if op.authorization_tuple().is_some() {
+            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
+                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
+        } else {
+            0
+        };
+
         let mut violations = ArrayVec::new();
         if op.verification_gas_limit() > max_verification_gas {
             violations.push(PrecheckViolation::VerificationGasLimitTooHigh(
@@ -293,6 +300,8 @@ where
                 self.settings.pre_verification_gas_accept_percent,
             );
         }
+        min_pre_verification_gas =
+            min_pre_verification_gas.saturating_add(authorization_gas as u128);
         if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas(),

@@ -438,7 +438,7 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        state_override: StateOverride,
+        mut state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         let da_gas: u64 = op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
@@ -446,10 +446,9 @@ where
             .unwrap_or(u64::MAX);
         let authorization_tuple = op.authorization_tuple.clone();
 
-        let mut local_state = state_override.clone();
         if let Some(authorization) = authorization_tuple {
             authorization_utils::apply_7702_overrides(
-                &mut local_state,
+                &mut state_override,
                 op.sender(),
                 authorization.address,
             );
@@ -460,7 +459,7 @@ where
             .simulateHandleOp(op.into(), target, target_call_data)
             .block(block_id)
             .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
-            .state(local_state)
+            .state(state_override)
             .call()
             .await
             .err()

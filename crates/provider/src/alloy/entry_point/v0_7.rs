@@ -11,8 +11,6 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::vec;
-
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_json_rpc::ErrorPayload;
@@ -314,14 +312,17 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let data = self
+        let au = user_op.authorization_tuple().clone();
+
+        let mut txn_req = self
             .i_entry_point
             .handleOps(vec![user_op.pack()], Address::random())
-            .into_transaction_request()
-            .input
-            .into_input()
-            .unwrap();
+            .into_transaction_request();
+        if let Some(authorization_tuple) = au {
+            txn_req = txn_req.with_authorization_list(vec![authorization_tuple.into()]);
+        }
 
+        let data = txn_req.input.into_input().unwrap();
         let bundle_data =
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
 

@@ -107,6 +107,7 @@ impl FromFixedLengthProtoBytes for u128 {
         u128::from_le_bytes(int_bytes.try_into().unwrap())
     }
 }
+
 /// Trait for a type that can be converted to protobuf bytes.
 pub trait ToProtoBytes {
     /// Convert to protobuf bytes.
