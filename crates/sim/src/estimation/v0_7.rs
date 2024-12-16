@@ -31,7 +31,7 @@ use rundler_types::{
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate, UserOperation as _,
 };
-use rundler_utils::{authorization_utils, math};
+use rundler_utils::math;
 use tokio::join;
 
 use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
@@ -71,14 +71,6 @@ where
     ) -> Result<GasEstimate, GasEstimationError> {
         self.check_provided_limits(&op)?;
 
-        let mut local_override = state_override.clone();
-        let authorization_gas = if let Some(au) = &op.authorization_contract {
-            authorization_utils::apply_7702_overrides(&mut local_override, op.sender, *au);
-            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
-                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
-        } else {
-            0
-        };
         let Self {
             provider, settings, ..
         } = self;
@@ -88,8 +80,7 @@ where
             .await
             .map_err(anyhow::Error::from)?;
 
-        let pre_verification_gas = (self.estimate_pre_verification_gas(&op, block_hash).await?)
-            .saturating_add(authorization_gas as u128);
+        let pre_verification_gas = self.estimate_pre_verification_gas(&op, block_hash).await?;
 
         let full_op = op
             .clone()
@@ -103,16 +94,16 @@ where
             .build();
 
         let verification_gas_future =
-            self.estimate_verification_gas(&op, &full_op, block_hash, local_override.clone());
+            self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
 
         let paymaster_verification_gas_future = self.estimate_paymaster_verification_gas(
             &op,
             &full_op,
             block_hash,
-            local_override.clone(),
+            state_override.clone(),
         );
         let call_gas_future =
-            self.estimate_call_gas(&op, full_op.clone(), block_hash, local_override);
+            self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
         let timer = std::time::Instant::now();

@@ -325,13 +325,16 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let data = self
+        let au = user_op.authorization_tuple();
+        let mut txn_request = self
             .i_entry_point
             .handleOps(vec![user_op.into()], Address::random())
-            .into_transaction_request()
-            .input
-            .into_input()
-            .unwrap();
+            .into_transaction_request();
+        if let Some(authorization) = au {
+            txn_request = txn_request.with_authorization_list(vec![authorization.into()]);
+        }
+
+        let data = txn_request.input.into_input().unwrap();
 
         let bundle_data =
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
@@ -444,9 +447,8 @@ where
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
-        let authorization_tuple = op.authorization_tuple.clone();
 
-        if let Some(authorization) = authorization_tuple {
+        if let Some(authorization) = &op.authorization_tuple {
             authorization_utils::apply_7702_overrides(
                 &mut state_override,
                 op.sender(),

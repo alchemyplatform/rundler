@@ -37,6 +37,7 @@ use rundler_contracts::v0_7::{
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
+    authorization::Authorization,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
     v0_7::UserOperation,
@@ -312,7 +313,7 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let au = user_op.authorization_tuple().clone();
+        let au = user_op.authorization_tuple();
 
         let mut txn_req = self
             .i_entry_point
@@ -354,14 +355,11 @@ where
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
 
-        let authorization_tuple = user_op.authorization_tuple.clone();
-        if let Some(authorization) = authorization_tuple {
-            authorization_utils::apply_7702_overrides(
-                &mut override_ep,
-                user_op.sender(),
-                authorization.address,
-            );
-        }
+        add_authorization_tuple(
+            user_op.sender(),
+            &user_op.authorization_tuple,
+            &mut override_ep,
+        );
 
         let ep_simulations =
             IEntryPointSimulationsInstance::new(addr, self.i_entry_point.provider());
@@ -436,14 +434,7 @@ where
 
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
 
-        let authorization_tuple = op.authorization_tuple.clone();
-        if let Some(authorization) = authorization_tuple {
-            authorization_utils::apply_7702_overrides(
-                &mut state_override,
-                op.sender(),
-                authorization.address,
-            );
-        }
+        add_authorization_tuple(op.sender(), &op.authorization_tuple, &mut state_override);
 
         let ep_simulations = IEntryPointSimulations::new(
             *self.i_entry_point.address(),
@@ -602,5 +593,15 @@ impl TryFrom<ExecutionResultV0_7> for ExecutionResult {
             target_success: result.targetSuccess,
             target_result: result.targetResult,
         })
+    }
+}
+
+fn add_authorization_tuple(
+    sender: Address,
+    authorization: &Option<Authorization>,
+    state_override: &mut StateOverride,
+) {
+    if let Some(authorization) = &authorization {
+        authorization_utils::apply_7702_overrides(state_override, sender, authorization.address);
     }
 }
