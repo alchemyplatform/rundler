@@ -145,6 +145,9 @@ pub enum PrecheckViolation {
     /// The call gas limit is too low to account for any possible call.
     #[display("callGasLimit is {0} but must be at least {1}")]
     CallGasLimitTooLow(u128, u128),
+    /// The Uo contains both factory and authorization tuple.
+    #[display("Factory must be empty when authorization contract is set")]
+    FactoryMustBeEmpty(Address),
 }
 
 /// All possible simulation violations

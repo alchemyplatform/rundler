@@ -95,6 +95,7 @@ where
 
         let verification_gas_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
+
         let paymaster_verification_gas_future = self.estimate_paymaster_verification_gas(
             &op,
             &full_op,
@@ -613,6 +614,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
+            authorization_contract: None,
         }
     }
 
@@ -845,6 +847,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
+            authorization_contract: None,
         };
 
         let estimation = estimator

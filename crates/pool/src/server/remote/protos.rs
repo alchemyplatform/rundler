@@ -15,6 +15,7 @@ use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Context};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
+    authorization::Authorization,
     chain::ChainSpec,
     da::{
         BedrockDAGasUOData as RundlerBedrockDAGasUOData, DAGasUOData as RundlerDAGasUOData,
@@ -25,7 +26,8 @@ use rundler_types::{
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
     },
-    v0_6, v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
+    v0_6::{self, ExtendedUserOperation},
+    v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
     EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
     StakeInfo as RundlerStakeInfo, UserOperationVariant, ValidTimeRange,
 };
@@ -46,6 +48,17 @@ impl From<&UserOperationVariant> for UserOperation {
 
 impl From<&v0_6::UserOperation> for UserOperation {
     fn from(op: &v0_6::UserOperation) -> Self {
+        let authorization_tuple =
+            op.authorization_tuple
+                .as_ref()
+                .map(|authorization| AuthorizationTuple {
+                    chain_id: authorization.chain_id,
+                    address: authorization.address.to_proto_bytes(),
+                    nonce: authorization.nonce,
+                    y_parity: authorization.y_parity.into(),
+                    r: authorization.r.to_proto_bytes(),
+                    s: authorization.s.to_proto_bytes(),
+                });
         let op = UserOperationV06 {
             sender: op.sender.to_proto_bytes(),
             nonce: op.nonce.to_proto_bytes(),
@@ -58,6 +71,7 @@ impl From<&v0_6::UserOperation> for UserOperation {
             max_priority_fee_per_gas: op.max_priority_fee_per_gas.to_proto_bytes(),
             paymaster_and_data: op.paymaster_and_data.to_proto_bytes(),
             signature: op.signature.to_proto_bytes(),
+            authorization_tuple,
         };
         UserOperation {
             uo: Some(user_operation::Uo::V06(op)),
@@ -69,11 +83,28 @@ pub trait TryUoFromProto<T>: Sized {
     fn try_uo_from_proto(value: T, chain_spec: &ChainSpec) -> Result<Self, ConversionError>;
 }
 
+impl From<AuthorizationTuple> for Authorization {
+    fn from(value: AuthorizationTuple) -> Self {
+        Authorization {
+            chain_id: value.chain_id,
+            address: from_bytes(&value.address).unwrap_or_default(),
+            nonce: value.nonce,
+            y_parity: value.y_parity as u8,
+            r: from_bytes(&value.r).unwrap_or_default(),
+            s: from_bytes(&value.s).unwrap_or_default(),
+        }
+    }
+}
 impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
     fn try_uo_from_proto(
         op: UserOperationV06,
         chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
+        let authorization_tuple = op
+            .authorization_tuple
+            .as_ref()
+            .map(|authorization| Authorization::from(authorization.clone()));
+
         Ok(v0_6::UserOperationBuilder::new(
             chain_spec,
             v0_6::UserOperationRequiredFields {
@@ -88,6 +119,9 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
                 max_priority_fee_per_gas: from_bytes(&op.max_priority_fee_per_gas)?,
                 paymaster_and_data: op.paymaster_and_data.into(),
                 signature: op.signature.into(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple,
             },
         )
         .build())
@@ -114,6 +148,7 @@ impl From<&v0_7::UserOperation> for UserOperation {
             factory_data: op.factory_data.to_proto_bytes(),
             entry_point: op.entry_point.to_proto_bytes(),
             chain_id: op.chain_id,
+            authorization_tuple: None,
         };
         UserOperation {
             uo: Some(user_operation::Uo::V07(op)),
@@ -126,6 +161,11 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
         op: UserOperationV07,
         chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
+        let authorization_tuple = op
+            .authorization_tuple
+            .as_ref()
+            .map(|authorization| Authorization::from(authorization.clone()));
+
         let mut builder = v0_7::UserOperationBuilder::new(
             chain_spec,
             v0_7::UserOperationRequiredFields {
@@ -148,6 +188,10 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
                 from_bytes(&op.paymaster_post_op_gas_limit)?,
                 op.paymaster_data.into(),
             );
+        }
+
+        if authorization_tuple.is_some() {
+            builder = builder.authorization_tuple(authorization_tuple);
         }
 
         if !op.factory.is_empty() {

@@ -22,6 +22,7 @@ use super::{
     UserOperationVariant,
 };
 use crate::{
+    authorization::Authorization,
     chain::ChainSpec,
     entity::{Entity, EntityType},
     EntryPointVersion,
@@ -78,6 +79,9 @@ pub struct UserOperation {
     /// Signature
     pub signature: Bytes,
 
+    /// eip 7702 - list of authorities.
+    pub authorization_tuple: Option<Authorization>,
+
     /// Cached calldata gas cost
     pub calldata_gas_cost: u128,
 }
@@ -99,6 +103,9 @@ impl Default for UserOperation {
                 pre_verification_gas: 0,
                 max_fee_per_gas: 0,
                 max_priority_fee_per_gas: 0,
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build()
@@ -272,6 +279,10 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.paymaster_and_data)
             + super::byte_array_abi_len(&self.signature)
     }
+
+    fn authorization_tuple(&self) -> Option<Authorization> {
+        self.authorization_tuple.clone()
+    }
 }
 
 impl From<UserOperation> for ContractUserOperation {
@@ -381,6 +392,9 @@ pub struct UserOperationOptionalGas {
     pub paymaster_and_data: Bytes,
     /// Signature (required, dummy value for gas estimation)
     pub signature: Bytes,
+
+    /// eip 7702 - tuple of authority.
+    pub authorization_contract: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -404,6 +418,9 @@ impl UserOperationOptionalGas {
                 pre_verification_gas: max_4,
                 max_priority_fee_per_gas: max_8,
                 max_fee_per_gas: max_8,
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         );
 
@@ -435,6 +452,9 @@ impl UserOperationOptionalGas {
                 max_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
                 max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
             },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+            },
         );
 
         builder.build()
@@ -455,6 +475,10 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
+        let authorization_tuple = self.authorization_contract.map(|address| Authorization {
+            address,
+            ..Default::default()
+        });
         let required = UserOperationRequiredFields {
             sender: self.sender,
             nonce: self.nonce,
@@ -469,8 +493,11 @@ impl UserOperationOptionalGas {
             max_fee_per_gas: self.max_fee_per_gas.unwrap_or_default(),
             max_priority_fee_per_gas: self.max_priority_fee_per_gas.unwrap_or_default(),
         };
+        let extended = ExtendedUserOperation {
+            authorization_tuple,
+        };
 
-        UserOperationBuilder::new(chain_spec, required)
+        UserOperationBuilder::new(chain_spec, required, extended)
     }
 
     /// Abi encoded size of the user operation (with its dummy fields)
@@ -506,6 +533,16 @@ pub struct UserOperationBuilder<'a> {
 
     // optional fields
     contract_uo: Option<ContractUserOperation>,
+
+    // extended fields
+    extended: ExtendedUserOperation,
+}
+
+/// Extended User Option fields. Fields introduced by other EIPs, not related
+/// to UO directly but included for implementation's sake.
+pub struct ExtendedUserOperation {
+    /// EIP 7702: authorization tuples.
+    pub authorization_tuple: Option<Authorization>,
 }
 
 /// User operation required fields
@@ -556,11 +593,16 @@ impl TryFrom<ContractUserOperation> for UserOperationRequiredFields {
 
 impl<'a> UserOperationBuilder<'a> {
     /// Create a new builder
-    pub fn new(chain_spec: &'a ChainSpec, required: UserOperationRequiredFields) -> Self {
+    pub fn new(
+        chain_spec: &'a ChainSpec,
+        required: UserOperationRequiredFields,
+        extended: ExtendedUserOperation,
+    ) -> Self {
         Self {
             chain_spec,
             required,
             contract_uo: None,
+            extended,
         }
     }
 
@@ -568,17 +610,21 @@ impl<'a> UserOperationBuilder<'a> {
     pub fn from_contract(
         chain_spec: &'a ChainSpec,
         contract_uo: ContractUserOperation,
+        extended: ExtendedUserOperation,
     ) -> Result<Self, FromUintError<u128>> {
         let required = UserOperationRequiredFields::try_from(contract_uo.clone())?;
         Ok(Self {
             chain_spec,
             required,
             contract_uo: Some(contract_uo),
+            extended,
         })
     }
 
     /// Create a builder from a user operation
     pub fn from_uo(uo: UserOperation, chain_spec: &'a ChainSpec) -> Self {
+        let authorization_tuple = uo.authorization_tuple;
+
         Self {
             chain_spec,
             required: UserOperationRequiredFields {
@@ -595,6 +641,9 @@ impl<'a> UserOperationBuilder<'a> {
                 signature: uo.signature,
             },
             contract_uo: None,
+            extended: ExtendedUserOperation {
+                authorization_tuple,
+            },
         }
     }
 
@@ -628,6 +677,11 @@ impl<'a> UserOperationBuilder<'a> {
         self
     }
 
+    /// Sets the authorization tuple.
+    pub fn authorization_tuple(mut self, authorization: Option<Authorization>) -> Self {
+        self.extended.authorization_tuple = authorization;
+        self
+    }
     /// Build the user operation
     pub fn build(self) -> UserOperation {
         let mut uo = UserOperation {
@@ -642,6 +696,7 @@ impl<'a> UserOperationBuilder<'a> {
             max_priority_fee_per_gas: self.required.max_priority_fee_per_gas,
             paymaster_and_data: self.required.paymaster_and_data,
             signature: self.required.signature,
+            authorization_tuple: self.extended.authorization_tuple,
             calldata_gas_cost: 0,
         };
 
@@ -703,6 +758,9 @@ mod tests {
                 paymaster_and_data: Bytes::default(),
                 signature: Bytes::default(),
             },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+            },
         )
         .build();
         let entry_point = address!("66a15edcc3b50a663e72f1457ffd49b9ae284ddc");
@@ -760,6 +818,9 @@ mod tests {
             ),
                 signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
             },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+            },
         )
         .build();
         let entry_point = address!("66a15edcc3b50a663e72f1457ffd49b9ae284ddc");
@@ -809,6 +870,9 @@ mod tests {
             ),
                 signature: bytes!("da0929f527cded8d0a1eaf2e8861d7f7e2d8160b7b13942f99dd367df4473a"),
             },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+            },
         )
         .build();
 
@@ -833,6 +897,9 @@ mod tests {
                 max_priority_fee_per_gas: 0,
                 paymaster_and_data: Bytes::default(),
                 signature: Bytes::default(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build();
@@ -863,6 +930,7 @@ mod tests {
             pre_verification_gas: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
+            authorization_contract: None,
         }
         .max_fill(&ChainSpec::default());
 

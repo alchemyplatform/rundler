@@ -12,9 +12,10 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
+use alloy_eips::eip7702::SignedAuthorization;
 use alloy_json_rpc::ErrorPayload;
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::Provider as AlloyProvider;
+use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
     BlockId, TransactionRequest,
@@ -36,18 +37,19 @@ use rundler_contracts::v0_7::{
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
+    authorization::Authorization,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
     v0_7::UserOperation,
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
+use rundler_utils::authorization_utils;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
     DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
 };
-
 /// Entry point provider for v0.7
 #[derive(Clone)]
 pub struct EntryPointProvider<AP, T, D> {
@@ -311,14 +313,17 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let data = self
+        let au = user_op.authorization_tuple();
+
+        let mut txn_req = self
             .i_entry_point
             .handleOps(vec![user_op.pack()], Address::random())
-            .into_transaction_request()
-            .input
-            .into_input()
-            .unwrap();
+            .into_transaction_request();
+        if let Some(authorization_tuple) = au {
+            txn_req = txn_req.with_authorization_list(vec![authorization_tuple.into()]);
+        }
 
+        let data = txn_req.input.into_input().unwrap();
         let bundle_data =
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
 
@@ -349,6 +354,12 @@ where
 
         let mut override_ep = StateOverride::default();
         add_simulations_override(&mut override_ep, addr);
+
+        add_authorization_tuple(
+            user_op.sender(),
+            &user_op.authorization_tuple,
+            &mut override_ep,
+        );
 
         let ep_simulations =
             IEntryPointSimulationsInstance::new(addr, self.i_entry_point.provider());
@@ -422,6 +433,9 @@ where
             .unwrap_or(u64::MAX);
 
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
+
+        add_authorization_tuple(op.sender(), &op.authorization_tuple, &mut state_override);
+
         let ep_simulations = IEntryPointSimulations::new(
             *self.i_entry_point.address(),
             self.i_entry_point.provider(),
@@ -483,25 +497,40 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     beneficiary: Address,
     gas: u64,
 ) -> TransactionRequest {
+    let mut authorization_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
         .into_iter()
         .map(|uoa| UserOpsPerAggregatorV0_7 {
-            userOps: uoa.user_ops.into_iter().map(|op| op.pack()).collect(),
+            userOps: uoa
+                .user_ops
+                .into_iter()
+                .map(|op| {
+                    if let Some(authorization) = &op.authorization_tuple {
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                    }
+                    op.pack()
+                })
+                .collect(),
             aggregator: uoa.aggregator,
             signature: uoa.signature,
         })
         .collect();
+    let mut txn_request: TransactionRequest;
     if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        entry_point
+        txn_request = entry_point
             .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
             .gas(gas)
-            .into_transaction_request()
+            .into_transaction_request();
     } else {
-        entry_point
+        txn_request = entry_point
             .handleAggregatedOps(ops_per_aggregator, beneficiary)
             .gas(gas)
-            .into_transaction_request()
+            .into_transaction_request();
     }
+    if !authorization_list.is_empty() {
+        txn_request = txn_request.with_authorization_list(authorization_list);
+    }
+    txn_request
 }
 
 fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {
@@ -564,5 +593,15 @@ impl TryFrom<ExecutionResultV0_7> for ExecutionResult {
             target_success: result.targetSuccess,
             target_result: result.targetResult,
         })
+    }
+}
+
+fn add_authorization_tuple(
+    sender: Address,
+    authorization: &Option<Authorization>,
+    state_override: &mut StateOverride,
+) {
+    if let Some(authorization) = &authorization {
+        authorization_utils::apply_7702_overrides(state_override, sender, authorization.address);
     }
 }

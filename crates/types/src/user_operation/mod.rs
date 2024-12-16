@@ -22,7 +22,7 @@ pub mod v0_6;
 /// User Operation types for Entry Point v0.7
 pub mod v0_7;
 
-use crate::{chain::ChainSpec, Entity};
+use crate::{authorization::Authorization, chain::ChainSpec, Entity};
 
 /// A user op must be valid for at least this long into the future to be included.
 pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
@@ -109,6 +109,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         self.max_fee_per_gas()
             .min(base_fee + self.max_priority_fee_per_gas())
     }
+
+    /// Return the authorization list of the UO. empty if it is not 7702 txn.
+    fn authorization_tuple(&self) -> Option<Authorization>;
 
     /*
      * Enhanced functions
@@ -277,9 +280,16 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         bundle_size: usize,
         da_gas: u128,
     ) -> u128 {
+        let authorization_gas = if self.authorization_tuple().is_some() {
+            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
+                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
+        } else {
+            0
+        };
         self.static_pre_verification_gas(chain_spec)
             .saturating_add(bundle_per_uo_shared_gas(chain_spec, bundle_size))
             .saturating_add(da_gas)
+            .saturating_add(authorization_gas as u128)
     }
 
     /// Returns true if the user operation has enough pre-verification gas to be included in a bundle
@@ -474,6 +484,13 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.abi_encoded_size(),
             UserOperationVariant::V0_7(op) => op.abi_encoded_size(),
+        }
+    }
+
+    fn authorization_tuple(&self) -> Option<Authorization> {
+        match self {
+            UserOperationVariant::V0_6(op) => op.authorization_tuple(),
+            UserOperationVariant::V0_7(op) => op.authorization_tuple(),
         }
     }
 }
