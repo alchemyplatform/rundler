@@ -83,18 +83,16 @@ pub trait TryUoFromProto<T>: Sized {
     fn try_uo_from_proto(value: T, chain_spec: &ChainSpec) -> Result<Self, ConversionError>;
 }
 
-impl TryFrom<AuthorizationTuple> for Authorization {
-    type Error = ConversionError;
-
-    fn try_from(value: AuthorizationTuple) -> Result<Self, Self::Error> {
-        Ok(Authorization {
+impl From<AuthorizationTuple> for Authorization {
+    fn from(value: AuthorizationTuple) -> Self {
+        Authorization {
             chain_id: value.chain_id,
-            address: from_bytes(&value.address)?,
+            address: from_bytes(&value.address).unwrap_or_default(),
             nonce: value.nonce,
             y_parity: value.y_parity as u8,
-            r: from_bytes(&value.r)?,
-            s: from_bytes(&value.s)?,
-        })
+            r: from_bytes(&value.r).unwrap_or_default(),
+            s: from_bytes(&value.s).unwrap_or_default(),
+        }
     }
 }
 impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
@@ -105,7 +103,7 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
         let authorization_tuple = op
             .authorization_tuple
             .as_ref()
-            .map(|authorization| Authorization::try_from(authorization.clone()).unwrap());
+            .map(|authorization| Authorization::from(authorization.clone()));
 
         Ok(v0_6::UserOperationBuilder::new(
             chain_spec,
@@ -166,7 +164,7 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
         let authorization_tuple = op
             .authorization_tuple
             .as_ref()
-            .map(|authorization| Authorization::try_from(authorization.clone()).unwrap());
+            .map(|authorization| Authorization::from(authorization.clone()));
 
         let mut builder = v0_7::UserOperationBuilder::new(
             chain_spec,

@@ -299,14 +299,14 @@ where
         gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        let tx = get_handle_ops_call(
+        get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
             beneficiary,
             gas_limit,
-        );
-        tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
-            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+        )
+        .max_fee_per_gas(gas_fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
 }
 
