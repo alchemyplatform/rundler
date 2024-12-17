@@ -15,8 +15,7 @@
 
 use std::{
     error::Error,
-    fmt,
-    fmt::{Debug, Display, Formatter},
+    fmt::{self, Debug, Display, Formatter},
     ops::{Add, AddAssign, Sub, SubAssign},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -67,6 +66,12 @@ impl Timestamp {
 impl From<u64> for Timestamp {
     fn from(value: u64) -> Self {
         Self(value)
+    }
+}
+
+impl From<Duration> for Timestamp {
+    fn from(duration: Duration) -> Self {
+        Self(duration.as_secs())
     }
 }
 
