@@ -13,9 +13,11 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
+    authorization::Authorization,
     chain::ChainSpec,
     v0_6::{
-        UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
+        ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationOptionalGas,
+        UserOperationRequiredFields,
     },
     GasEstimate,
 };
@@ -38,6 +40,7 @@ pub(crate) struct RpcUserOperation {
     max_priority_fee_per_gas: U128,
     paymaster_and_data: Bytes,
     signature: Bytes,
+    authorization_tuple: Option<Authorization>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -54,6 +57,7 @@ impl From<UserOperation> for RpcUserOperation {
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
+            authorization_tuple: op.authorization_tuple,
         }
     }
 }
@@ -75,6 +79,9 @@ impl FromRpc<RpcUserOperation> for UserOperation {
                 paymaster_and_data: def.paymaster_and_data,
                 signature: def.signature,
             },
+            ExtendedUserOperation {
+                authorization_tuple: def.authorization_tuple,
+            },
         )
         .build()
     }
@@ -94,6 +101,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     max_priority_fee_per_gas: Option<U128>,
     paymaster_and_data: Bytes,
     signature: Bytes,
+    authorization_contract: Option<Address>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -110,6 +118,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             max_priority_fee_per_gas: def.max_priority_fee_per_gas.map(|x| x.to()),
             paymaster_and_data: def.paymaster_and_data,
             signature: def.signature,
+            authorization_contract: def.authorization_contract,
         }
     }
 }

@@ -12,8 +12,9 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
+use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::Provider as AlloyProvider;
+use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
 use alloy_transport::{Transport, TransportError};
@@ -34,6 +35,7 @@ use rundler_types::{
     v0_6::UserOperation,
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
+use rundler_utils::authorization_utils;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
@@ -323,13 +325,16 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let data = self
+        let au = user_op.authorization_tuple();
+        let mut txn_request = self
             .i_entry_point
             .handleOps(vec![user_op.into()], Address::random())
-            .into_transaction_request()
-            .input
-            .into_input()
-            .unwrap();
+            .into_transaction_request();
+        if let Some(authorization) = au {
+            txn_request = txn_request.with_authorization_list(vec![authorization.into()]);
+        }
+
+        let data = txn_request.input.into_input().unwrap();
 
         let bundle_data =
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
@@ -436,12 +441,20 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        state_override: StateOverride,
+        mut state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         let da_gas: u64 = op
             .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
             .try_into()
             .unwrap_or(u64::MAX);
+
+        if let Some(authorization) = &op.authorization_tuple {
+            authorization_utils::apply_7702_overrides(
+                &mut state_override,
+                op.sender(),
+                authorization.address,
+            );
+        }
 
         let contract_error = self
             .i_entry_point
@@ -453,7 +466,6 @@ where
             .await
             .err()
             .context("simulateHandleOp succeeded, but should always revert")?;
-
         match contract_error {
             ContractError::TransportError(TransportError::ErrorResp(resp)) => {
                 match resp.as_revert_data() {
@@ -519,25 +531,41 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     beneficiary: Address,
     gas: u64,
 ) -> TransactionRequest {
+    let mut authorization_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
         .into_iter()
         .map(|uoa| UserOpsPerAggregatorV0_6 {
-            userOps: uoa.user_ops.into_iter().map(Into::into).collect(),
+            userOps: uoa
+                .user_ops
+                .into_iter()
+                .map(|op| {
+                    if let Some(authorization) = &op.authorization_tuple {
+                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                    }
+                    op.into()
+                })
+                .collect(),
             aggregator: uoa.aggregator,
             signature: uoa.signature,
         })
         .collect();
+
+    let mut txn_request: TransactionRequest;
     if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        entry_point
+        txn_request = entry_point
             .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
             .gas(gas)
-            .into_transaction_request()
+            .into_transaction_request();
     } else {
-        entry_point
+        txn_request = entry_point
             .handleAggregatedOps(ops_per_aggregator, beneficiary)
             .gas(gas)
-            .into_transaction_request()
+            .into_transaction_request();
     }
+    if !authorization_list.is_empty() {
+        txn_request = txn_request.with_authorization_list(authorization_list);
+    }
+    txn_request
 }
 
 impl TryFrom<ExecutionResultV0_6> for ExecutionResult {

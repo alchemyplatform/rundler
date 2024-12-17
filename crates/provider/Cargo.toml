@@ -15,6 +15,7 @@ rundler-utils.workspace = true
 
 alloy-consensus.workspace = true
 alloy-contract.workspace = true
+alloy-eips.workspace = true
 alloy-json-rpc.workspace = true
 alloy-primitives = { workspace = true, features = ["rand"] }
 alloy-provider = { workspace = true, features = ["debug-api"] }

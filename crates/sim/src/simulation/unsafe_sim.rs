@@ -118,10 +118,12 @@ where
             None
         };
 
-        if validation_result.return_info.account_sig_failed
-            || validation_result.return_info.paymaster_sig_failed
-        {
-            violations.push(SimulationViolation::InvalidSignature);
+        if validation_result.return_info.account_sig_failed {
+            violations.push(SimulationViolation::InvalidAccountSignature);
+        }
+
+        if validation_result.return_info.paymaster_sig_failed {
+            violations.push(SimulationViolation::InvalidPaymasterSignature);
         }
 
         if !violations.is_empty() {
