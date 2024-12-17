@@ -165,6 +165,8 @@ List of command line options for configuring the Pool.
   - env: *POOL_DROP_MIN_NUM_BLOCKS*
 - `--pool.gas_limit_efficiency_reject_threshold`: The ratio of gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
   - env: *POOL_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
+- `--pool.max_time_in_pool_secs`: The maximum amount of time a UO is allowed to be in the mempool, in seconds. (default: `None`)
+  - env: *POOL_MAX_TIME_IN_POOL_SECS*
 
 ## Builder Options
 

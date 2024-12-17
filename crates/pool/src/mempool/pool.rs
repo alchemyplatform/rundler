@@ -15,7 +15,7 @@ use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use alloy_primitives::{Address, B256};
@@ -47,6 +47,7 @@ pub(crate) struct PoolInnerConfig {
     throttled_entity_mempool_count: u64,
     throttled_entity_live_blocks: u64,
     da_gas_tracking_enabled: bool,
+    max_time_in_pool: Option<Duration>,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -59,6 +60,7 @@ impl From<PoolConfig> for PoolInnerConfig {
             throttled_entity_mempool_count: config.throttled_entity_mempool_count,
             throttled_entity_live_blocks: config.throttled_entity_live_blocks,
             da_gas_tracking_enabled: config.da_gas_tracking_enabled,
+            max_time_in_pool: config.max_time_in_pool,
         }
     }
 }
@@ -259,6 +261,18 @@ where
                 });
                 expired.push(*hash);
                 continue;
+            } else if self
+                .config
+                .max_time_in_pool
+                .is_some_and(|m| op.elapsed_time_in_pool() > m)
+            {
+                events.push(PoolEvent::RemovedOp {
+                    op_hash: *hash,
+                    reason: OpRemovalReason::Expired {
+                        valid_until: sys_block_time.into(),
+                    },
+                });
+                expired.push(*hash);
             }
 
             if self.da_gas_oracle.is_some() && block_da_data.is_some() {
@@ -657,6 +671,7 @@ struct OrderedPoolOperation {
     po: Arc<PoolOperation>,
     submission_id: u64,
     eligible: RwLock<bool>,
+    insertion_time: Instant,
 }
 
 impl OrderedPoolOperation {
@@ -665,6 +680,7 @@ impl OrderedPoolOperation {
             po,
             submission_id,
             eligible: RwLock::new(eligible),
+            insertion_time: Instant::now(),
         }
     }
 
@@ -686,6 +702,10 @@ impl OrderedPoolOperation {
 
     fn set_ineligible(&self) {
         *self.eligible.write() = false;
+    }
+
+    fn elapsed_time_in_pool(&self) -> Duration {
+        self.insertion_time.elapsed()
     }
 }
 
@@ -1402,6 +1422,33 @@ mod tests {
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
     }
 
+    #[tokio::test]
+    async fn test_max_time_in_pool() {
+        let mut conf = conf();
+        conf.max_time_in_pool = Some(Duration::from_secs(1));
+        let po = create_op(Address::random(), 0, 10);
+        let mut pool = pool_with_conf(conf.clone());
+
+        let hash = pool.add_operation(po.clone(), 0).unwrap();
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            FeeUpdate::default(),
+        );
+        assert!(pool.get_operation_by_hash(hash).is_some());
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            FeeUpdate::default(),
+        );
+        assert!(pool.get_operation_by_hash(hash).is_none());
+    }
+
     fn conf() -> PoolInnerConfig {
         PoolInnerConfig {
             chain_spec: ChainSpec::default(),
@@ -1411,6 +1458,7 @@ mod tests {
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
             da_gas_tracking_enabled: false,
+            max_time_in_pool: None,
         }
     }
 

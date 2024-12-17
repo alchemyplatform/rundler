@@ -1900,6 +1900,7 @@ mod tests {
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
             gas_limit_efficiency_reject_threshold: 0.0,
+            max_time_in_pool: None,
         }
     }
 
