@@ -133,6 +133,8 @@ The Rundler library (i.e. all code outside of the `bin` directory) is licensed u
 
 The Rundler binaries (i.e. all code inside of the `bin` directory) are licensed under the GNU General Public License v3.0, also included in our repository in the COPYING file.
 
+The Rundler library and binaries are licensed under Unicode License v3.0, also included in the UNICODE file.
+
 Copyright 2023 Alchemy Insights, Inc.
 
 Contact: Alchemy Insights, Inc., 548 Market St., PMB 49099, San Francisco, CA 94104; legal@alchemy.com

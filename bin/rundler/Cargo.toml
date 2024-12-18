@@ -11,14 +11,14 @@ ERC-4337 bundler implementation
 publish = false
 
 [dependencies]
-rundler-builder = { path = "../../crates/builder" }
-rundler-pool = { path = "../../crates/pool" }
-rundler-provider = { path = "../../crates/provider" }
-rundler-rpc = { path = "../../crates/rpc" }
-rundler-sim = { path = "../../crates/sim" }
-rundler-task = { path = "../../crates/task" }
-rundler-types = { path = "../../crates/types" }
-rundler-utils = { path = "../../crates/utils" }
+rundler-builder.workspace = true
+rundler-pool.workspace = true
+rundler-provider.workspace = true
+rundler-rpc.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 
 alloy-primitives.workspace = true
 
@@ -29,9 +29,9 @@ clap = { version = "4.5.16", features = ["derive", "env"] }
 config = "0.14.0"
 dotenv = "0.15.0"
 go-parse-duration = "0.1"
-http = "1.1.0"
-itertools = "0.13.0"
-metrics = "0.23.0"
+http.workspace = true
+itertools.workspace = true
+metrics.workspace = true
 metrics-derive.workspace = true
 metrics-exporter-prometheus = { version = "0.15.3", default-features = false, features = ["http-listener"] }
 metrics-process = "2.1.0"
@@ -44,9 +44,8 @@ sscanf = "0.4.2"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-metrics = "0.3.1"
 tokio-rustls = "0.26.0"
-tokio-util = "0.7.11"
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
-
