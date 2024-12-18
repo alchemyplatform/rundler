@@ -96,7 +96,6 @@ pub trait Mempool: Send + Sync {
     fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>>;
 
     /// Debug methods
-
     /// Clears the mempool of UOs or reputation of all addresses
     fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool);
 

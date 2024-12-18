@@ -183,7 +183,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// If calculating the gas limit value to put on a bundle transaction, use the gas limit functions.
     /// If limiting the size of a bundle transaction to adhere to block gas limit, use the execution gas limit functions.
-
+    ///
     /// Returns the gas limit that applies to bundle's total gas limit
     ///
     /// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential DA costs

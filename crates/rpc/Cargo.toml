@@ -24,7 +24,7 @@ alloy-sol-types.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
-http = "1.1.0"
+http.workspace = true
 jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 metrics.workspace = true
 metrics-derive.workspace = true
