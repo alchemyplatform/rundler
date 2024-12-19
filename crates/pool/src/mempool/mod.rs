@@ -26,6 +26,7 @@ mod uo_pool;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
 use alloy_primitives::{Address, B256};
@@ -170,6 +171,8 @@ pub struct PoolConfig {
     /// Gas limit efficiency is defined as the ratio of the gas limit to the gas used.
     /// This applies to all the verification, call, and paymaster gas limits.
     pub gas_limit_efficiency_reject_threshold: f32,
+    /// Maximum time a UO is allowed in the pool before being dropped
+    pub max_time_in_pool: Option<Duration>,
 }
 
 /// Origin of an operation.

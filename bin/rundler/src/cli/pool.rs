@@ -179,6 +179,13 @@ pub struct PoolArgs {
         default_value = "0.0"
     )]
     pub gas_limit_efficiency_reject_threshold: f32,
+
+    #[arg(
+        long = "pool.max_time_in_pool_secs",
+        name = "pool.max_time_in_pool_secs",
+        env = "POOL_MAX_TIME_IN_POOL_SECS"
+    )]
+    pub max_time_in_pool_secs: Option<u64>,
 }
 
 impl PoolArgs {
@@ -235,6 +242,7 @@ impl PoolArgs {
             drop_min_num_blocks: self.drop_min_num_blocks,
             da_gas_tracking_enabled,
             gas_limit_efficiency_reject_threshold: self.gas_limit_efficiency_reject_threshold,
+            max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
         };
 
         let mut pool_configs = vec![];
