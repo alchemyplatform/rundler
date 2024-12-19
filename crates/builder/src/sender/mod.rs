@@ -240,7 +240,7 @@ impl From<ProviderError> for TxSenderError {
             ProviderError::RPC(e) => {
                 if let Some(e) = e.as_error_resp() {
                     // Client impls use different error codes, just match on the message
-                    if let Some(e) = parse_known_call_execution_failed(&e.message) {
+                    if let Some(e) = parse_known_call_execution_failed(&e.message, e.code) {
                         e
                     } else {
                         TxSenderError::Other(value.into())
@@ -257,33 +257,43 @@ impl From<ProviderError> for TxSenderError {
 // Geth: https://github.com/ethereum/go-ethereum/blob/23800122b37695be50565f8221858a16ce1763db/core/txpool/errors.go#L31
 // Reth: https://github.com/paradigmxyz/reth/blob/8e4a917ec1aa70b3779083454ff2d5ecf6b44168/crates/rpc/rpc-eth-types/src/error/mod.rs#L624
 // Erigon: https://github.com/erigontech/erigon/blob/96fabf3fd1a4ddce26b845ffe2b6cfb50d5b4b2d/txnprovider/txpool/txpoolcfg/txpoolcfg.go#L124
-fn parse_known_call_execution_failed(e: &str) -> Option<TxSenderError> {
-    // DEVELOPER NOTE: ensure to put the most specific matches first
-    match &e.to_lowercase() {
-        // geth. Reth & erigon don't have similar
-        x if x.contains("future transaction tries to replace pending") => {
-            Some(TxSenderError::Rejected)
-        }
-        // geth & reth
-        x if x.contains("replacement transaction underpriced") => {
-            Some(TxSenderError::ReplacementUnderpriced)
-        }
-        // erigon
-        x if x.contains("could not replace existing tx") => {
-            Some(TxSenderError::ReplacementUnderpriced)
-        }
-        // geth, erigon, reth
-        x if x.contains("nonce too low") => Some(TxSenderError::NonceTooLow),
-        // Arbitrum conditional sender error message
-        x if x.contains("storage slot value condition not met") => {
-            Some(TxSenderError::ConditionNotMet)
-        }
-        // geth
-        x if x.contains("transaction underpriced") => Some(TxSenderError::Underpriced),
-        // reth
-        x if x.contains("txpool is full") => Some(TxSenderError::Underpriced),
-        // erigon
-        x if x.contains("underpriced") => Some(TxSenderError::Underpriced),
-        _ => None,
+fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSenderError> {
+    // Check error codes before checking the message
+    // The error code is -32003 or -32005 when condition is not met: https://eips.ethereum.org/EIPS/eip-7796
+    if code == -32003 || code == -32005 {
+        return Some(TxSenderError::ConditionNotMet);
     }
+    // String match on the error message when an error code is not available
+    // DEVELOPER NOTE: ensure to put the most specific matches first
+    let lowercase_message = message.to_lowercase();
+    // geth. Reth & erigon don't have similar
+    if lowercase_message.contains("future transaction tries to replace pending") {
+        return Some(TxSenderError::Rejected);
+    }
+    // geth & reth
+    if lowercase_message.contains("replacement transaction underpriced") {
+        return Some(TxSenderError::ReplacementUnderpriced);
+    }
+    // erigon
+    if lowercase_message.contains("could not replace existing tx") {
+        return Some(TxSenderError::ReplacementUnderpriced);
+    }
+    // geth, erigon, reth
+    if lowercase_message.contains("nonce too low") {
+        return Some(TxSenderError::NonceTooLow);
+    }
+    // geth
+    if lowercase_message.contains("transaction underpriced") {
+        return Some(TxSenderError::Underpriced);
+    }
+    // reth
+    if lowercase_message.contains("txpool is full") {
+        return Some(TxSenderError::Underpriced);
+    }
+    // erigon
+    if lowercase_message.contains("underpriced") {
+        return Some(TxSenderError::Underpriced);
+    }
+    // No known error matched
+    None
 }

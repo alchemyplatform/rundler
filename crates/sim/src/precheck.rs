@@ -43,6 +43,17 @@ pub struct PrecheckReturn {
     pub required_pre_verification_gas: u128,
 }
 
+/// Updated fees from the fee estimator
+#[derive(Copy, Clone, Debug, Default)]
+pub struct FeeUpdate {
+    /// Bundle fees
+    pub bundle_fees: GasFees,
+    /// User operation fees
+    pub uo_fees: GasFees,
+    /// Current base fee
+    pub base_fee: u128,
+}
+
 /// Trait for checking if a user operation is valid before simulation
 /// according to the spec rules.
 #[cfg_attr(feature = "test-utils", automock(type UO = rundler_types::v0_6::UserOperation;))]
@@ -61,7 +72,7 @@ pub trait Prechecker: Send + Sync {
     /// Update and return the bundle fees.
     ///
     /// This MUST be called at block boundaries before checking any operations.
-    async fn update_fees(&self) -> anyhow::Result<(GasFees, u128)>;
+    async fn update_fees(&self) -> anyhow::Result<FeeUpdate>;
 }
 
 /// Precheck error
@@ -145,13 +156,7 @@ struct AsyncData {
 
 #[derive(Copy, Clone, Debug)]
 struct AsyncDataCache {
-    fees: Option<FeeCache>,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct FeeCache {
-    bundle_fees: GasFees,
-    base_fee: u128,
+    fees: Option<FeeUpdate>,
 }
 
 #[async_trait::async_trait]
@@ -183,16 +188,19 @@ where
         })
     }
 
-    async fn update_fees(&self) -> anyhow::Result<(GasFees, u128)> {
+    async fn update_fees(&self) -> anyhow::Result<FeeUpdate> {
         let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
+        let uo_fees = self.fee_estimator.required_op_fees(bundle_fees);
+        let fee_update = FeeUpdate {
+            bundle_fees,
+            uo_fees,
+            base_fee,
+        };
 
         let mut cache = self.cache.write().unwrap();
-        cache.fees = Some(FeeCache {
-            bundle_fees,
-            base_fee,
-        });
+        cache.fees = Some(fee_update);
 
-        Ok((bundle_fees, base_fee))
+        Ok(fee_update)
     }
 }
 
@@ -229,6 +237,13 @@ where
             ..
         } = async_data;
         let mut violations = ArrayVec::new();
+
+        if op.authorization_tuple().is_some() {
+            if op.factory().is_some() {
+                violations.push(PrecheckViolation::FactoryMustBeEmpty(op.factory().unwrap()));
+            }
+            return violations;
+        }
         if op.factory().is_none() {
             if !sender_exists {
                 violations.push(PrecheckViolation::SenderIsNotContractAndNoInitCode(
@@ -358,7 +373,7 @@ where
         op: &UO,
         block: BlockHashOrNumber,
     ) -> anyhow::Result<AsyncData> {
-        let (_, base_fee) = self.get_fees().await?;
+        let FeeUpdate { base_fee, .. } = self.get_fees().await?;
 
         let (
             factory_exists,
@@ -424,9 +439,9 @@ where
             .context("precheck should get sender balance")
     }
 
-    async fn get_fees(&self) -> anyhow::Result<(GasFees, u128)> {
+    async fn get_fees(&self) -> anyhow::Result<FeeUpdate> {
         if let Some(fees) = self.cache.read().unwrap().fees {
-            return Ok((fees.bundle_fees, fees.base_fee));
+            return Ok(fees);
         }
         self.update_fees().await
     }
@@ -456,7 +471,9 @@ mod tests {
     use gas::MockFeeEstimator;
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider};
     use rundler_types::{
-        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+        v0_6::{
+            ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationRequiredFields,
+        },
         UserOperation as _,
     };
 
@@ -514,6 +531,9 @@ mod tests {
                 paymaster_and_data: Bytes::default(),
                 signature: Bytes::default(),
             },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+            },
         )
         .build();
 
@@ -561,6 +581,9 @@ mod tests {
                 max_priority_fee_per_gas: 2_000,
                 paymaster_and_data: Bytes::default(),
                 signature: Bytes::default(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build();
@@ -610,6 +633,9 @@ mod tests {
                     "a4b2c8f0351d60729e4f0a12345678d9b1c3e5f27890abcdef123456780abcdef1"
                 ),
                 signature: Bytes::default(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
             },
         )
         .build();

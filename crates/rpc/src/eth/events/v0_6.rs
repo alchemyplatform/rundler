@@ -19,7 +19,7 @@ use rundler_contracts::v0_6::IEntryPoint::{
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
     chain::ChainSpec,
-    v0_6::{UserOperation, UserOperationBuilder},
+    v0_6::{ExtendedUserOperation, UserOperation, UserOperationBuilder},
 };
 
 use super::common::{EntryPointEvents, UserOperationEventProviderImpl};
@@ -87,9 +87,15 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
                 .ops
                 .into_iter()
                 .filter_map(|op| {
-                    UserOperationBuilder::from_contract(chain_spec, op)
-                        .ok()
-                        .map(|b| b.build())
+                    UserOperationBuilder::from_contract(
+                        chain_spec,
+                        op,
+                        ExtendedUserOperation {
+                            authorization_tuple: None,
+                        },
+                    )
+                    .ok()
+                    .map(|b| b.build())
                 })
                 .collect(),
             IEntryPointCalls::handleAggregatedOps(handle_aggregated_ops_call) => {
@@ -98,9 +104,15 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
                     .into_iter()
                     .flat_map(|ops| {
                         ops.userOps.into_iter().filter_map(|op| {
-                            UserOperationBuilder::from_contract(chain_spec, op)
-                                .ok()
-                                .map(|b| b.build())
+                            UserOperationBuilder::from_contract(
+                                chain_spec,
+                                op,
+                                ExtendedUserOperation {
+                                    authorization_tuple: None,
+                                },
+                            )
+                            .ok()
+                            .map(|b| b.build())
                         })
                     })
                     .collect()

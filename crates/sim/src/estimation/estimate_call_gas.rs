@@ -8,10 +8,10 @@ use rundler_contracts::{
 };
 use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
 use rundler_types::UserOperation;
+use rundler_utils::authorization_utils;
 
 use super::Settings;
 use crate::GasEstimationError;
-
 /// Gas estimates will be rounded up to the next multiple of this. Increasing
 /// this value reduces the number of rounds of `eth_call` needed in binary
 /// search, e.g. a value of 1024 means ten fewer `eth_call`s needed for each of
@@ -107,6 +107,14 @@ where
 
         let callless_op = self.specialization.get_op_with_no_call_gas(op.clone());
 
+        if let Some(authorization_tuple) = op.authorization_tuple().clone() {
+            let authorization_contract = authorization_tuple.address;
+            authorization_utils::apply_7702_overrides(
+                &mut state_override,
+                op.sender(),
+                authorization_contract,
+            );
+        }
         let mut min_gas = 0;
         let mut max_gas = self.settings.max_call_gas;
         let mut is_continuation = false;
@@ -225,7 +233,6 @@ where
 
         let result = TestCallGasResult::abi_decode(&target_revert_data, false)
             .context("should decode revert data as TestCallGasResult")?;
-
         if result.success {
             Ok(())
         } else {

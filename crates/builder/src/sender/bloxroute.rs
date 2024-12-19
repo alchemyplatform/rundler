@@ -157,7 +157,8 @@ struct BloxrouteResponse {
 impl From<jsonrpsee::core::ClientError> for TxSenderError {
     fn from(value: jsonrpsee::core::ClientError) -> Self {
         if let jsonrpsee::core::ClientError::Call(e) = &value {
-            if let Some(e) = super::parse_known_call_execution_failed(e.message()) {
+            if let Some(e) = super::parse_known_call_execution_failed(e.message(), e.code() as i64)
+            {
                 return e;
             }
         }

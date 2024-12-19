@@ -11,6 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_consensus::Transaction;
 use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
@@ -244,7 +245,7 @@ where
             self.provider.get_transaction_by_hash(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
         )?;
-        let gas_limit = tx.map(|t| t.gas).or_else(|| {
+        let gas_limit = tx.map(|t| t.inner.gas_limit()).or_else(|| {
             warn!("failed to fetch transaction data for tx: {}", tx_hash);
             None
         });
@@ -294,6 +295,8 @@ where
             tx.gas.unwrap_or(0),
         );
         let sent_tx = self.sender.send_transaction(tx, expected_storage).await;
+
+        self.update_metrics();
 
         match sent_tx {
             Ok(sent_tx) => {
@@ -494,6 +497,10 @@ where
     async fn reset(&mut self) {
         let nonce = self.get_external_nonce().await.unwrap_or(self.nonce);
         self.set_nonce_and_clear_state(nonce);
+        // reset metrics when tracker reset.
+        self.metrics.num_pending_transactions.set(0);
+        self.metrics.current_max_fee_per_gas.set(0);
+        self.metrics.max_priority_fee_per_gas.set(0);
     }
 
     fn abandon(&mut self) {
@@ -542,7 +549,11 @@ struct TransactionTrackerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::Address;
+    use alloy_consensus::{
+        Signed, TxEip1559,
+        TxEnvelope::{self, Eip1559},
+    };
+    use alloy_primitives::{Address, PrimitiveSignature};
     use mockall::Sequence;
     use rundler_provider::{
         MockEvmProvider, Transaction, TransactionReceipt, TransactionReceiptEnvelope,
@@ -758,6 +769,25 @@ mod tests {
         ));
     }
 
+    fn sign_transaction(hash: B256) -> Transaction {
+        let txn = TxEip1559 {
+            gas_limit: 0,
+            ..Default::default()
+        };
+        let inner = Eip1559(Signed::new_unchecked(
+            txn,
+            PrimitiveSignature::test_signature(),
+            hash,
+        ));
+        Transaction::<TxEnvelope> {
+            inner,
+            block_hash: None,
+            block_number: None,
+            transaction_index: None,
+            effective_gas_price: None,
+            from: Address::default(),
+        }
+    }
     #[tokio::test]
     async fn test_check_for_update_mined() {
         let (mut sender, mut provider) = create_base_config();
@@ -781,12 +811,7 @@ mod tests {
 
         provider
             .expect_get_transaction_by_hash()
-            .returning(|_: B256| {
-                Ok(Some(Transaction {
-                    gas: 0,
-                    ..Default::default()
-                }))
-            });
+            .returning(|hash: B256| Ok(Some(sign_transaction(hash))));
 
         provider
             .expect_get_transaction_receipt()
@@ -806,7 +831,6 @@ mod tests {
                     from: Address::ZERO,
                     to: None,
                     contract_address: None,
-                    state_root: None,
                     authorization_list: None,
                 }))
             });

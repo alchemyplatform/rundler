@@ -28,12 +28,12 @@ use super::protos::{
     CallGasLimitEfficiencyTooLow, CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod,
     CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity, EntityThrottledError,
     EntityType, EntryPointRevert, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
-    FactoryIsNotContract, InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature,
-    InvalidStorageAccess, InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError,
-    MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
-    NotStaked, OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas,
-    PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PreOpGasLimitEfficiencyTooLow, PreVerificationGasTooLow,
+    FactoryIsNotContract, FactoryMustBeEmpty, InvalidAccountSignature, InvalidPaymasterSignature,
+    InvalidSignature, InvalidStorageAccess, InvalidTimeRange, MaxFeePerGasTooLow,
+    MaxOperationsReachedError, MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError,
+    MultipleRolesViolation, NotStaked, OperationAlreadyKnownError, OperationDropTooSoon,
+    OperationRevert, OutOfGas, PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow,
+    PaymasterIsNotContract, PreOpGasLimitEfficiencyTooLow, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
     SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
@@ -364,6 +364,13 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::FactoryMustBeEmpty(addr) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::FactoryMustBeEmpty(
+                    FactoryMustBeEmpty {
+                        factory_address: addr.to_proto_bytes(),
+                    },
+                )),
+            },
         }
     }
 }
@@ -432,6 +439,9 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
                     from_bytes(&e.actual_gas_limit)?,
                     from_bytes(&e.min_gas_limit)?,
                 )
+            }
+            Some(precheck_violation_error::Violation::FactoryMustBeEmpty(e)) => {
+                PrecheckViolation::FactoryMustBeEmpty(from_bytes(&e.factory_address)?)
             }
             None => {
                 bail!("unknown proto mempool precheck violation")

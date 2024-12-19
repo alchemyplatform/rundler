@@ -331,6 +331,7 @@ where
                 error!("Bundle send error {error:?}");
                 self.metrics.bundle_txns_failed.increment(1);
                 state.bundle_error(error);
+                state.transaction_tracker.reset().await;
             }
         }
 

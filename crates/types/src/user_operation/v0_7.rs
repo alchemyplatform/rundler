@@ -19,7 +19,7 @@ use super::{
     random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
     UserOperationVariant,
 };
-use crate::{chain::ChainSpec, Entity, EntryPointVersion};
+use crate::{authorization::Authorization, chain::ChainSpec, Entity, EntryPointVersion};
 
 /// Gas overhead required by the entry point contract for the inner call
 pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 10_000;
@@ -82,6 +82,9 @@ pub struct UserOperation {
     pub paymaster_post_op_gas_limit: u128,
     /// Paymaster data
     pub paymaster_data: Bytes,
+    /// eip 7702 - tuple of authority.
+    pub authorization_tuple: Option<Authorization>,
+
     /*
      * Cached fields, not part of the UO
      */
@@ -231,6 +234,10 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.packed.paymasterAndData)
             + super::byte_array_abi_len(&self.packed.signature)
     }
+
+    fn authorization_tuple(&self) -> Option<Authorization> {
+        self.authorization_tuple.clone()
+    }
 }
 
 impl UserOperation {
@@ -328,6 +335,8 @@ pub struct UserOperationOptionalGas {
     pub paymaster_post_op_gas_limit: Option<u128>,
     /// Paymaster data
     pub paymaster_data: Bytes,
+    /// 7702 authorization contract address.
+    pub authorization_contract: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -359,6 +368,17 @@ impl UserOperationOptionalGas {
                 max_4,
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
+        }
+        if self.authorization_contract.is_some() {
+            builder = builder.authorization_tuple(Some(Authorization {
+                address: self.authorization_contract.unwrap(),
+                chain_id: chain_spec.id,
+                // fake value for gas estimation.
+                nonce: 0,
+                y_parity: 0,
+                r: U256::from(0),
+                s: U256::from(0),
+            }));
         }
         if self.factory.is_some() {
             builder = builder.factory(
@@ -460,6 +480,12 @@ impl UserOperationOptionalGas {
                 self.paymaster_data,
             );
         }
+        if let Some(contract) = self.authorization_contract {
+            builder = builder.authorization_tuple(Some(Authorization {
+                address: contract,
+                ..Default::default()
+            }));
+        }
         builder
     }
 
@@ -510,6 +536,9 @@ pub struct UserOperationBuilder<'a> {
     paymaster_post_op_gas_limit: u128,
     paymaster_data: Bytes,
     packed_uo: Option<PackedUserOperation>,
+
+    /// eip 7702 - tuple of authority.
+    authorization_tuple: Option<Authorization>,
 }
 
 /// Required fields for UserOperation v0.7
@@ -547,6 +576,7 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_post_op_gas_limit: 0,
             paymaster_data: Bytes::new(),
             packed_uo: None,
+            authorization_tuple: None,
         }
     }
 
@@ -619,6 +649,7 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_post_op_gas_limit: uo.paymaster_post_op_gas_limit,
             paymaster_data: uo.paymaster_data,
             packed_uo: None,
+            authorization_tuple: uo.authorization_tuple,
         }
     }
 
@@ -695,6 +726,12 @@ impl<'a> UserOperationBuilder<'a> {
         self
     }
 
+    /// Sets the authorization list
+    pub fn authorization_tuple(mut self, authorization_tuple: Option<Authorization>) -> Self {
+        self.authorization_tuple = authorization_tuple;
+        self
+    }
+
     /// Builds the UserOperation
     pub fn build(self) -> UserOperation {
         let uo = UserOperation {
@@ -712,6 +749,7 @@ impl<'a> UserOperationBuilder<'a> {
             paymaster_verification_gas_limit: self.paymaster_verification_gas_limit,
             paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
             paymaster_data: self.paymaster_data,
+            authorization_tuple: self.authorization_tuple,
             signature: self.required.signature,
             entry_point: self.chain_spec.entry_point_address_v0_7,
             chain_id: self.chain_spec.id,

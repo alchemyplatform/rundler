@@ -3,6 +3,7 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider, StateOverride};
 use rundler_types::{chain::ChainSpec, UserOperation};
+use rundler_utils::authorization_utils;
 
 use super::Settings;
 use crate::GasEstimationError;
@@ -73,8 +74,16 @@ where
         max_guess: u128,
         get_op_with_limit: F,
     ) -> Result<u128, GasEstimationError> {
+        let mut local_state_override = state_override.clone();
         let timer = std::time::Instant::now();
         let paymaster_gas_fee = self.settings.verification_estimation_gas_fee;
+        if let Some(au) = &op.authorization_tuple() {
+            authorization_utils::apply_7702_overrides(
+                &mut local_state_override,
+                op.sender(),
+                au.address,
+            );
+        }
 
         // Fee logic for gas estimation:
         //
@@ -101,7 +110,8 @@ where
         let initial_op = get_op(max_guess);
         let call = self
             .entry_point
-            .get_simulate_handle_op_call(initial_op, state_override.clone());
+            .get_simulate_handle_op_call(initial_op, local_state_override.clone());
+
         let gas_used = self
             .provider
             .get_gas_used(call)
@@ -127,7 +137,7 @@ where
                     Address::ZERO,
                     Bytes::new(),
                     block_hash.into(),
-                    state_override,
+                    state_override.clone(),
                 )
                 .await?
                 .err();
@@ -162,7 +172,7 @@ where
             > (1.0 + GAS_ESTIMATION_ERROR_MARGIN)
         {
             num_rounds += 1;
-            if run_attempt_returning_error(guess, state_override.clone()).await? {
+            if run_attempt_returning_error(guess, local_state_override.clone()).await? {
                 min_success_gas = guess;
             } else {
                 max_failure_gas = guess;

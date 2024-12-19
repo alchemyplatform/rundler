@@ -53,3 +53,5 @@ pub use validation_results::{
 };
 
 pub mod task;
+
+pub mod authorization;
