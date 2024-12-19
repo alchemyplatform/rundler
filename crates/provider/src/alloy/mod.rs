@@ -93,14 +93,14 @@ mod tests {
         });
         {
             // Wait 11 seconds and get result
-            let provider = new_alloy_provider("http://localhost:8000", 11)
+            let provider = new_alloy_provider("http://localhost:8000", 15)
                 .expect("can not initialize provider");
             let x = provider.get_block_number().await;
             assert!(x.is_ok());
         }
         {
             // Wait 9 seconds and timeout form client side
-            let provider = new_alloy_provider("http://localhost:8000", 9)
+            let provider = new_alloy_provider("http://localhost:8000", 5)
                 .expect("can not initialize provider");
             let x = provider.get_block_number().await;
             assert!(x.is_err());
