@@ -23,13 +23,13 @@ use parking_lot::RwLock;
 use rundler_provider::{
     DAGasOracleSync, EvmProvider, ProvidersWithEntryPointT, SimulationProvider, StateOverride,
 };
-use rundler_sim::{Prechecker, Simulator};
+use rundler_sim::{FeeUpdate, Prechecker, Simulator};
 use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
-    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
-    UserOperationId, UserOperationVariant,
+    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, UserOperation, UserOperationId,
+    UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
@@ -67,8 +67,7 @@ struct UoPoolState<D> {
     throttled_ops: HashSet<B256>,
     block_number: u64,
     block_hash: B256,
-    gas_fees: GasFees,
-    base_fee: u128,
+    gas_fees: FeeUpdate,
 }
 
 impl<UP, EP> UoPool<UP, EP>
@@ -95,8 +94,7 @@ where
                 throttled_ops: HashSet::new(),
                 block_number: 0,
                 block_hash: B256::ZERO,
-                gas_fees: GasFees::default(),
-                base_fee: 0,
+                gas_fees: FeeUpdate::default(),
             }),
             reputation,
             paymaster,
@@ -347,15 +345,15 @@ where
 
         // update required bundle fees and update metrics
         match self.pool_providers.prechecker().update_fees().await {
-            Ok((bundle_fees, base_fee)) => {
-                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
+            Ok(fees) => {
+                let max_fee = match format_units(fees.bundle_fees.max_fee_per_gas, "gwei") {
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
                     Err(_) => 0.0,
                 };
                 self.metrics.current_max_fee_gwei.set(max_fee);
 
                 let max_priority_fee =
-                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
+                    match format_units(fees.bundle_fees.max_priority_fee_per_gas, "gwei") {
                         Ok(s) => s.parse::<f64>().unwrap_or_default(),
                         Err(_) => 0.0,
                     };
@@ -363,7 +361,7 @@ where
                     .current_max_priority_fee_gwei
                     .set(max_priority_fee);
 
-                let base_fee_f64 = match format_units(base_fee, "gwei") {
+                let base_fee_f64 = match format_units(fees.base_fee, "gwei") {
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
                     Err(_) => 0.0,
                 };
@@ -374,8 +372,7 @@ where
                     let mut state = self.state.write();
                     state.block_number = update.latest_block_number;
                     state.block_hash = update.latest_block_hash;
-                    state.gas_fees = bundle_fees;
-                    state.base_fee = base_fee;
+                    state.gas_fees = fees;
                 }
             }
             Err(e) => {
@@ -441,13 +438,11 @@ where
 
             // pool maintenance
             let gas_fees = state.gas_fees;
-            let base_fee = state.base_fee;
             state.pool.do_maintenance(
                 update.latest_block_number,
                 update.latest_block_timestamp,
                 da_block_data.as_ref(),
                 gas_fees,
-                base_fee,
             );
         }
         let maintenance_time = start.elapsed();
@@ -935,7 +930,7 @@ mod tests {
         da::DAGasUOData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::UserOperation,
-        EntityInfo, EntityInfos, EntityType, EntryPointVersion, GasFees,
+        EntityInfo, EntityInfos, EntityType, EntryPointVersion,
         UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
@@ -1898,15 +1893,9 @@ mod tests {
             args.allowlist.clone().unwrap_or_default(),
         ));
 
-        prechecker.expect_update_fees().returning(|| {
-            Ok((
-                GasFees {
-                    max_fee_per_gas: 0,
-                    max_priority_fee_per_gas: 0,
-                },
-                0,
-            ))
-        });
+        prechecker
+            .expect_update_fees()
+            .returning(|| Ok(FeeUpdate::default()));
 
         for op in ops {
             prechecker.expect_check().returning(move |_, _| {

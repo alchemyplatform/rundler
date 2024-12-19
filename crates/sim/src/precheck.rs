@@ -43,6 +43,17 @@ pub struct PrecheckReturn {
     pub required_pre_verification_gas: u128,
 }
 
+/// Updated fees from the fee estimator
+#[derive(Copy, Clone, Debug, Default)]
+pub struct FeeUpdate {
+    /// Bundle fees
+    pub bundle_fees: GasFees,
+    /// User operation fees
+    pub uo_fees: GasFees,
+    /// Current base fee
+    pub base_fee: u128,
+}
+
 /// Trait for checking if a user operation is valid before simulation
 /// according to the spec rules.
 #[cfg_attr(feature = "test-utils", automock(type UO = rundler_types::v0_6::UserOperation;))]
@@ -61,7 +72,7 @@ pub trait Prechecker: Send + Sync {
     /// Update and return the bundle fees.
     ///
     /// This MUST be called at block boundaries before checking any operations.
-    async fn update_fees(&self) -> anyhow::Result<(GasFees, u128)>;
+    async fn update_fees(&self) -> anyhow::Result<FeeUpdate>;
 }
 
 /// Precheck error
@@ -145,13 +156,7 @@ struct AsyncData {
 
 #[derive(Copy, Clone, Debug)]
 struct AsyncDataCache {
-    fees: Option<FeeCache>,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct FeeCache {
-    bundle_fees: GasFees,
-    base_fee: u128,
+    fees: Option<FeeUpdate>,
 }
 
 #[async_trait::async_trait]
@@ -183,16 +188,19 @@ where
         })
     }
 
-    async fn update_fees(&self) -> anyhow::Result<(GasFees, u128)> {
+    async fn update_fees(&self) -> anyhow::Result<FeeUpdate> {
         let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
+        let uo_fees = self.fee_estimator.required_op_fees(bundle_fees);
+        let fee_update = FeeUpdate {
+            bundle_fees,
+            uo_fees,
+            base_fee,
+        };
 
         let mut cache = self.cache.write().unwrap();
-        cache.fees = Some(FeeCache {
-            bundle_fees,
-            base_fee,
-        });
+        cache.fees = Some(fee_update);
 
-        Ok((bundle_fees, base_fee))
+        Ok(fee_update)
     }
 }
 
@@ -365,7 +373,7 @@ where
         op: &UO,
         block: BlockHashOrNumber,
     ) -> anyhow::Result<AsyncData> {
-        let (_, base_fee) = self.get_fees().await?;
+        let FeeUpdate { base_fee, .. } = self.get_fees().await?;
 
         let (
             factory_exists,
@@ -431,9 +439,9 @@ where
             .context("precheck should get sender balance")
     }
 
-    async fn get_fees(&self) -> anyhow::Result<(GasFees, u128)> {
+    async fn get_fees(&self) -> anyhow::Result<FeeUpdate> {
         if let Some(fees) = self.cache.read().unwrap().fees {
-            return Ok((fees.bundle_fees, fees.base_fee));
+            return Ok(fees);
         }
         self.update_fees().await
     }
