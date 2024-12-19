@@ -545,8 +545,7 @@ where
                     {
                         // try to use EntityInfos from the latest simulation, but if it doesn't exist use the EntityInfos from the previous simulation
                         let infos = entity_infos.map_or(po.entity_infos, |e| e);
-                        context.process_simulation_violations(violations, infos);
-                        context.rejected_ops.push((op.into(), po.entity_infos));
+                        context.process_simulation_violations(op.into(), violations, infos);
                     }
                     continue;
                 }
@@ -660,7 +659,7 @@ where
                 self.op_hash(&context.get_op_at(index)?.op),
                 OpRejectionReason::ConditionNotMet(reason),
             ));
-            self.reject_index(context, index).await;
+            self.reject_index(context, index, false).await;
         }
 
         Ok(())
@@ -713,8 +712,9 @@ where
         &self,
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
         i: usize,
+        paymaster_amendment: bool,
     ) {
-        let changed_aggregator = context.reject_index(i);
+        let changed_aggregator = context.reject_index(i, paymaster_amendment);
         self.compute_aggregator_signatures(context, &changed_aggregator)
             .await;
     }
@@ -922,7 +922,7 @@ where
                 info!(
                     "Rejected op because it failed during gas estimation with message {message}."
                 );
-                self.reject_index(context, index).await;
+                self.reject_index(context, index, true).await;
                 return Ok(());
             }
         };
@@ -981,7 +981,7 @@ where
                     message: Arc::new("post op reverted leading to entry point revert".to_owned()),
                 },
             ));
-            self.reject_index(context, index).await;
+            self.reject_index(context, index, true).await;
         }
 
         Ok(())
@@ -1244,18 +1244,25 @@ impl<UO: UserOperation> ProposalContext<UO> {
     /// Returns the address of the op's aggregator if the aggregator's signature
     /// may need to be recomputed.
     #[must_use = "rejected op but did not update aggregator signatures"]
-    fn reject_index(&mut self, i: usize) -> Option<Address> {
+    fn reject_index(&mut self, i: usize, paymaster_amendment: bool) -> Option<Address> {
         let mut remaining_i = i;
         let mut found_aggregator: Option<Option<Address>> = None;
+        let mut paymaster_to_amend = None;
         for (&aggregator, group) in &mut self.groups_by_aggregator {
             if remaining_i < group.ops_with_simulations.len() {
                 let rejected = group.ops_with_simulations.remove(remaining_i);
+                paymaster_to_amend = rejected.op.paymaster();
                 self.rejected_ops
                     .push((rejected.op, rejected.simulation.entity_infos));
                 found_aggregator = Some(aggregator);
                 break;
             }
             remaining_i -= group.ops_with_simulations.len();
+        }
+        if paymaster_amendment {
+            if let Some(paymaster) = paymaster_to_amend {
+                self.add_erep_015_paymaster_amendment(paymaster, 1);
+            }
         }
         let Some(found_aggregator) = found_aggregator else {
             error!("The entry point indicated a failed op at index {i}, but the bundle size is only {}", i - remaining_i);
@@ -1284,7 +1291,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             }
             EntityType::Paymaster => self.reject_paymaster(entity.address),
             EntityType::Factory => self.reject_factory(entity.address),
-            _ => vec![],
+            EntityType::Account => self.reject_sender(entity.address),
         };
         self.entity_updates.insert(
             entity.address,
@@ -1302,22 +1309,40 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn reject_aggregator(&mut self, address: Address) {
-        self.groups_by_aggregator.remove(&Some(address));
+        if let Some(group) = self.groups_by_aggregator.remove(&Some(address)) {
+            for op in group.ops_with_simulations {
+                if let Some(paymaster) = op.op.paymaster() {
+                    self.add_erep_015_paymaster_amendment(paymaster, 1);
+                }
+                self.rejected_ops.push((op.op, op.simulation.entity_infos));
+            }
+        }
     }
 
     fn reject_paymaster(&mut self, address: Address) -> Vec<Address> {
-        self.filter_reject(|op| op.paymaster() == Some(address))
+        self.filter_reject(false, |op| op.paymaster() == Some(address))
     }
 
+    // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the factory or account.
+    // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
     fn reject_factory(&mut self, address: Address) -> Vec<Address> {
-        self.filter_reject(|op| op.factory() == Some(address))
+        self.filter_reject(true, |op| op.factory() == Some(address))
+    }
+
+    fn reject_sender(&mut self, address: Address) -> Vec<Address> {
+        self.filter_reject(true, |op| op.sender() == address)
     }
 
     /// Reject all ops that match the filter, and return the addresses of any aggregators
     /// whose signature may need to be recomputed.
-    fn filter_reject(&mut self, filter: impl Fn(&UO) -> bool) -> Vec<Address> {
+    fn filter_reject(
+        &mut self,
+        paymaster_amendment: bool,
+        filter: impl Fn(&UO) -> bool,
+    ) -> Vec<Address> {
         let mut changed_aggregators: Vec<Address> = vec![];
         let mut aggregators_to_remove: Vec<Option<Address>> = vec![];
+        let mut paymasters_to_amend: HashMap<Address, u64> = HashMap::new();
         for (&aggregator, group) in &mut self.groups_by_aggregator {
             // I sure wish `Vec::drain_filter` were stable.
             let group_uses_rejected_entity =
@@ -1326,6 +1351,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 for op in mem::take(&mut group.ops_with_simulations) {
                     if !filter(&op.op) {
                         group.ops_with_simulations.push(op);
+                    } else {
+                        if paymaster_amendment {
+                            if let Some(paymaster) = op.op.paymaster() {
+                                *paymasters_to_amend.entry(paymaster).or_default() += 1;
+                            }
+                        }
+                        self.rejected_ops.push((op.op, op.simulation.entity_infos));
                     }
                 }
                 if group.ops_with_simulations.is_empty() {
@@ -1337,6 +1369,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
         for aggregator in aggregators_to_remove {
             self.groups_by_aggregator.remove(&aggregator);
+        }
+        for (paymaster, count) in paymasters_to_amend {
+            self.add_erep_015_paymaster_amendment(paymaster, count);
         }
         changed_aggregators
     }
@@ -1384,9 +1419,12 @@ impl<UO: UserOperation> ProposalContext<UO> {
     // Go through the simulation violations for a given op and add all entity updates to pass to the mempool in entity_updates
     fn process_simulation_violations(
         &mut self,
+        op: UO,
         violations: Vec<SimulationViolation>,
         entity_infos: EntityInfos,
     ) {
+        self.rejected_ops.push((op, entity_infos));
+
         // If a staked factory or sender is present, we attribute errors to them directly.
 
         // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the staked factory or account.
@@ -1395,7 +1433,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         let is_staked_sender = entity_infos.sender.is_staked;
         if is_staked_factory || is_staked_sender {
             if let Some(paymaster) = entity_infos.paymaster {
-                self.add_erep_015_paymaster_amendment(paymaster.address())
+                self.add_erep_015_paymaster_amendment(paymaster.address(), 1)
             }
         }
 
@@ -1498,7 +1536,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         if paymaster_amendment_required {
             if let Some(paymaster) = entity_infos.paymaster {
-                self.add_erep_015_paymaster_amendment(paymaster.address())
+                self.add_erep_015_paymaster_amendment(paymaster.address(), 1)
             };
         }
     }
@@ -1564,13 +1602,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
     }
 
-    fn add_erep_015_paymaster_amendment(&mut self, address: Address) {
-        // Insert to entity_updates if entry is vacant, otherwise increment the value (precicely EntityUpdate.value)
+    fn add_erep_015_paymaster_amendment(&mut self, address: Address, to_add: u64) {
+        // Insert to entity_updates if entry is vacant, otherwise increment the value (precisely EntityUpdate.value)
         self.entity_updates
             .entry(address)
             .and_modify(|e| {
                 if let Some(value) = &mut e.value {
-                    *value += 1;
+                    *value += to_add;
                 }
             })
             .or_insert_with(|| EntityUpdate {
@@ -2065,7 +2103,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![op1, op2, op4, op5]);
         assert_eq!(
             bundle.ops_per_aggregator,
             vec![UserOpsPerAggregator {
