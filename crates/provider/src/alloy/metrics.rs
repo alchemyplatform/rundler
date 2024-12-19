@@ -126,6 +126,11 @@ where
                             method_logger.record_http(HttpCode::TwoHundreds);
                             method_logger.record_rpc(RpcCode::Success);
                         }
+                        // for timeout error
+                        alloy_json_rpc::RpcError::LocalUsageError(_) => {
+                            method_logger.record_http(HttpCode::FourHundreds);
+                            method_logger.record_rpc(RpcCode::ClientSideTimeout);
+                        }
                         _ => {}
                     }
                 }
