@@ -346,6 +346,14 @@ pub struct CommonArgs {
         default_value = "false"
     )]
     pub da_gas_tracking_enabled: bool,
+
+    #[arg(
+        long = "provider_client_timeout_seconds",
+        name = "provider_client_timeout_seconds",
+        env = "PROVIDER_CLIENT_TIMEOUT_SECONDS",
+        default_value = "10"
+    )]
+    pub provider_client_timeout_seconds: u64,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
@@ -594,6 +602,7 @@ pub fn construct_providers(
 ) -> anyhow::Result<impl Providers> {
     let provider = Arc::new(rundler_provider::new_alloy_provider(
         args.node_http.as_ref().context("must provide node_http")?,
+        args.provider_client_timeout_seconds,
     )?);
     let (da_gas_oracle, da_gas_oracle_sync) =
         rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
