@@ -94,3 +94,4 @@ tower-http = { version = "0.6.2", features = ["cors"] }
 tracing = "0.1.40"
 strum = { version = "0.26.3", features = ["derive"] }
 url = "2.5.2"
+tiny_http = "0.12.0"

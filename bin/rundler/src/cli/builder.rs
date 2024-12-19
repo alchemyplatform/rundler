@@ -336,6 +336,8 @@ impl BuilderArgs {
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
 
+        let provider_client_timeout_seconds = common.provider_client_timeout_seconds;
+
         Ok(BuilderTaskArgs {
             entry_points,
             chain_spec,
@@ -358,6 +360,7 @@ impl BuilderArgs {
             max_replacement_underpriced_blocks: self.max_replacement_underpriced_blocks,
             remote_address,
             da_gas_tracking_enabled,
+            provider_client_timeout_seconds,
         })
     }
 
