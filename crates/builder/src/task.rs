@@ -89,6 +89,8 @@ pub struct Args {
     pub entry_points: Vec<EntryPointBuilderSettings>,
     /// Enable DA tracking
     pub da_gas_tracking_enabled: bool,
+    /// Provider client timeout
+    pub provider_client_timeout_seconds: u64,
 }
 
 /// Builder settings for an entrypoint
@@ -355,11 +357,11 @@ where
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
         };
 
-        let transaction_sender = self
-            .args
-            .sender_args
-            .clone()
-            .into_sender(&self.args.rpc_url, signer)?;
+        let transaction_sender = self.args.sender_args.clone().into_sender(
+            &self.args.rpc_url,
+            signer,
+            self.args.provider_client_timeout_seconds,
+        )?;
 
         let tracker_settings = transaction_tracker::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,

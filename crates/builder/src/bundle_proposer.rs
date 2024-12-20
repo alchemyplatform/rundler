@@ -1287,6 +1287,11 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     fn reject_aggregator(&mut self, address: Address) {
         self.groups_by_aggregator.remove(&Some(address));
+        if let Some(group) = self.groups_by_aggregator.remove(&Some(address)) {
+            for op in group.ops_with_simulations {
+                self.rejected_ops.push((op.op, op.simulation.entity_infos));
+            }
+        }
     }
 
     fn reject_paymaster(&mut self, address: Address) -> Vec<Address> {
@@ -1310,6 +1315,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 for op in mem::take(&mut group.ops_with_simulations) {
                     if !filter(&op.op) {
                         group.ops_with_simulations.push(op);
+                    } else {
+                        self.rejected_ops.push((op.op, op.simulation.entity_infos));
                     }
                 }
                 if group.ops_with_simulations.is_empty() {
@@ -1998,7 +2005,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![op1, op2, op4, op5]);
         assert_eq!(
             bundle.ops_per_aggregator,
             vec![UserOpsPerAggregator {
