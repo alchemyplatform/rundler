@@ -4628,37 +4628,26 @@ dependencies = [
 
 [[package]]
 name = "reth-metrics"
-version = "1.0.7"
-source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.0.7#75b7172cf77eb4fd65fe1a6924f75066fb09fcd1"
+version = "1.1.4"
+source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.1.4#15fac0873e91ea29ab2e605bfba17bedcd7a6084"
 dependencies = [
- "metrics 0.23.0",
- "reth-metrics-derive",
-]
-
-[[package]]
-name = "reth-metrics-derive"
-version = "1.0.7"
-source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.0.7#75b7172cf77eb4fd65fe1a6924f75066fb09fcd1"
-dependencies = [
- "proc-macro2",
- "quote",
- "regex",
- "syn 2.0.90",
+ "metrics 0.24.1",
+ "metrics-derive",
 ]
 
 [[package]]
 name = "reth-tasks"
-version = "1.0.7"
-source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.0.7#75b7172cf77eb4fd65fe1a6924f75066fb09fcd1"
+version = "1.1.4"
+source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.1.4#15fac0873e91ea29ab2e605bfba17bedcd7a6084"
 dependencies = [
  "auto_impl",
  "dyn-clone",
  "futures-util",
- "metrics 0.23.0",
+ "metrics 0.24.1",
  "pin-project",
  "rayon",
  "reth-metrics",
- "thiserror 1.0.69",
+ "thiserror 2.0.8",
  "tokio",
  "tracing",
  "tracing-futures",
