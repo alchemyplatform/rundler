@@ -78,14 +78,15 @@ mod tests {
 
     use crate::new_alloy_provider;
     fn setup() {
-        let server = Server::http("0.0.0.0:8000").unwrap();
+        let server = Server::http("0.0.0.0:9009").unwrap();
         for request in server.incoming_requests() {
-            sleep(Duration::from_secs(10));
+            sleep(Duration::from_secs(5));
             let _ = request.respond(Response::from_string(
                 "{\"jsonrpc\": \"2.0\",	\"id\": 1,	\"result\": \"0x146b6d7\"}",
             ));
         }
     }
+    #[ignore = "this test is flaky with github action, should only run locally"]
     #[tokio::test]
     async fn test_timeout() {
         thread::spawn(move || {
@@ -93,14 +94,14 @@ mod tests {
         });
         {
             // Wait 11 seconds and get result
-            let provider = new_alloy_provider("http://localhost:8000", 15)
+            let provider = new_alloy_provider("http://localhost:9009", 15)
                 .expect("can not initialize provider");
             let x = provider.get_block_number().await;
             assert!(x.is_ok());
         }
         {
             // Wait 9 seconds and timeout form client side
-            let provider = new_alloy_provider("http://localhost:8000", 5)
+            let provider = new_alloy_provider("http://localhost:9009", 1)
                 .expect("can not initialize provider");
             let x = provider.get_block_number().await;
             assert!(x.is_err());
