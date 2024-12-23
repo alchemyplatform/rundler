@@ -120,8 +120,8 @@ impl AddressReputation {
         self.state.write().add_seen(address);
     }
 
-    pub(crate) fn remove_seen(&self, address: Address, value: u64) {
-        self.state.write().remove_seen(address, value);
+    pub(crate) fn dec_seen(&self, address: Address) {
+        self.state.write().dec_seen(address);
     }
 
     pub(crate) fn handle_urep_030_penalty(&self, address: Address) {
@@ -132,6 +132,10 @@ impl AddressReputation {
         self.state.write().handle_srep_050_penalty(address);
     }
 
+    pub(crate) fn handle_erep_015_amendment(&self, address: Address, value: u64) {
+        self.state.write().handle_erep_015_amendment(address, value);
+    }
+
     pub(crate) fn dump_reputation(&self) -> Vec<Reputation> {
         self.state.read().dump_reputation()
     }
@@ -140,8 +144,8 @@ impl AddressReputation {
         self.state.write().add_included(address);
     }
 
-    pub(crate) fn remove_included(&self, address: Address) {
-        self.state.write().remove_included(address);
+    pub(crate) fn dec_included(&self, address: Address) {
+        self.state.write().dec_included(address);
     }
 
     pub(crate) fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64) {
@@ -222,9 +226,9 @@ impl AddressReputationInner {
         count.ops_seen += 1;
     }
 
-    fn remove_seen(&mut self, address: Address, value: u64) {
+    fn dec_seen(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
-        count.ops_seen = count.ops_seen.saturating_sub(value);
+        count.ops_seen = count.ops_seen.saturating_sub(1);
     }
 
     fn handle_urep_030_penalty(&mut self, address: Address) {
@@ -236,6 +240,11 @@ impl AddressReputationInner {
         let count = self.counts.entry(address).or_default();
         // According to the spec we set ops_seen here instead of incrementing it
         count.ops_seen = self.params.bundle_invalidation_ops_seen_staked_penalty;
+    }
+
+    pub(crate) fn handle_erep_015_amendment(&mut self, address: Address, value: u64) {
+        let count = self.counts.entry(address).or_default();
+        count.ops_seen = count.ops_seen.saturating_sub(value);
     }
 
     fn dump_reputation(&self) -> Vec<Reputation> {
@@ -254,7 +263,7 @@ impl AddressReputationInner {
         count.ops_included += 1;
     }
 
-    fn remove_included(&mut self, address: Address) {
+    fn dec_included(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_included = count.ops_included.saturating_sub(1)
     }
@@ -325,8 +334,8 @@ mod tests {
         assert_eq!(counts.ops_seen, 1000);
         assert_eq!(counts.ops_included, 1000);
 
-        reputation.remove_seen(addr, 1);
-        reputation.remove_included(addr);
+        reputation.dec_seen(addr);
+        reputation.dec_included(addr);
         let counts = reputation.counts.get(&addr).unwrap();
         assert_eq!(counts.ops_seen, 999);
         assert_eq!(counts.ops_included, 999);
