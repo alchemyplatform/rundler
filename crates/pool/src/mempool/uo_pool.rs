@@ -292,7 +292,7 @@ where
 
             if let Some(po) = pool_op {
                 for entity_addr in po.entities().map(|e| e.address).unique() {
-                    self.reputation.remove_included(entity_addr);
+                    self.reputation.dec_included(entity_addr);
                 }
 
                 unmined_op_count += 1;
@@ -468,8 +468,19 @@ where
         origin: OperationOrigin,
         op: UserOperationVariant,
     ) -> MempoolResult<B256> {
-        // TODO(danc) aggregator reputation is not implemented
-        // TODO(danc) catch ops with aggregators prior to simulation and reject
+        // Initial state checks
+        let to_replace = {
+            let state = self.state.read();
+
+            // Check if op violates the STO-040 spec rule
+            state.pool.check_multiple_roles_violation(&op)?;
+
+            // Check if op is already known or replacing another, and if so, ensure its fees are high enough
+            state
+                .pool
+                .check_replacement(&op)?
+                .and_then(|r| self.state.read().pool.get_operation_by_hash(r))
+        };
 
         // Check reputation of entities in involved in the operation
         // If throttled, entity can have THROTTLED_ENTITY_MEMPOOL_COUNT inflight operation at a time, else reject
@@ -517,12 +528,6 @@ where
             .get_latest_block_hash_and_number()
             .await
             .map_err(anyhow::Error::from)?;
-
-        // Check if op is already known or replacing another, and if so, ensure its fees are high enough
-        // do this before simulation to save resources
-        let replacement = self.state.read().pool.check_replacement(&op)?;
-        // Check if op violates the STO-040 spec rule
-        self.state.read().pool.check_multiple_roles_violation(&op)?;
 
         // check if paymaster is present and exists in pool
         // this is optimistic and could potentially lead to
@@ -587,6 +592,7 @@ where
         {
             let state = self.state.read();
             if !pool_op.account_is_staked
+                && to_replace.is_none()
                 && state.pool.address_count(&pool_op.uo.sender())
                     >= self.config.same_sender_mempool_count
             {
@@ -599,9 +605,16 @@ where
             // Check unstaked non-sender entity counts in the mempool
             for entity in pool_op
                 .unstaked_entities()
+                .unique()
                 .filter(|e| e.address != pool_op.entity_infos.sender.address())
             {
-                let ops_allowed = self.reputation.get_ops_allowed(entity.address);
+                let mut ops_allowed = self.reputation.get_ops_allowed(entity.address);
+                if let Some(to_replace) = &to_replace {
+                    if to_replace.entities().contains(&entity) {
+                        ops_allowed += 1;
+                    }
+                }
+
                 if state.pool.address_count(&entity.address) >= ops_allowed as usize {
                     return Err(MempoolError::MaxOperationsReached(
                         ops_allowed as usize,
@@ -628,17 +641,20 @@ where
         // once the operation has been added to the pool
         self.paymaster.add_or_update_balance(&pool_op).await?;
 
-        // Update reputation
-        if replacement.is_none() {
-            pool_op.entities().unique().for_each(|e| {
-                self.reputation.add_seen(e.address);
-                if self.reputation.status(e.address) == ReputationStatus::Throttled {
-                    self.throttle_entity(e);
-                } else if self.reputation.status(e.address) == ReputationStatus::Banned {
-                    self.remove_entity(e);
-                }
+        // Update reputation, handling replacement if needed
+        if let Some(to_replace) = to_replace {
+            to_replace.entities().unique().for_each(|e| {
+                self.reputation.dec_seen(e.address);
             });
         }
+        pool_op.entities().unique().for_each(|e| {
+            self.reputation.add_seen(e.address);
+            if self.reputation.status(e.address) == ReputationStatus::Throttled {
+                self.throttle_entity(e);
+            } else if self.reputation.status(e.address) == ReputationStatus::Banned {
+                self.remove_entity(e);
+            }
+        });
 
         // Emit event
         let op_hash = pool_op
@@ -734,6 +750,8 @@ where
 
         if self.reputation.status(entity.address) == ReputationStatus::Banned {
             self.remove_entity(entity);
+        } else if self.reputation.status(entity.address) == ReputationStatus::Throttled {
+            self.throttle_entity(entity);
         }
     }
 
@@ -775,7 +793,7 @@ where
     }
 
     fn all_operations(&self, max: usize) -> Vec<Arc<PoolOperation>> {
-        self.state.read().pool.best_operations().take(max).collect()
+        self.state.read().pool.all_operations().take(max).collect()
     }
 
     fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>> {
@@ -989,6 +1007,25 @@ mod tests {
         check_ops(pool.best_operations(3, 0).unwrap(), uos);
         pool.clear_state(true, true, true);
         assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn all_operations() {
+        let ops = vec![
+            create_op(Address::random(), 0, 3, None),
+            create_op(Address::random(), 0, 2, None),
+            create_op(Address::random(), 0, 1, None),
+        ];
+        let uos = ops.iter().map(|op| op.op.clone()).collect::<Vec<_>>();
+        let pool = create_pool(ops);
+
+        for op in &uos {
+            let _ = pool
+                .add_operation(OperationOrigin::Local, op.clone())
+                .await
+                .unwrap();
+        }
+        check_ops_unordered(&pool.all_operations(16), &uos, pool.config.entry_point);
     }
 
     #[tokio::test]
@@ -1276,7 +1313,7 @@ mod tests {
         }
 
         check_ops(
-            pool.all_operations(4),
+            pool.best_operations(4, 0).unwrap(),
             vec![
                 uos[0].clone(),
                 uos[1].clone(),
@@ -1326,7 +1363,7 @@ mod tests {
             .await
             .unwrap();
         check_ops(
-            pool.all_operations(4),
+            pool.best_operations(4, 0).unwrap(),
             vec![
                 uos[1].clone(),
                 uos[2].clone(),
@@ -1666,6 +1703,33 @@ mod tests {
             .add_operation(OperationOrigin::Local, ops[4].op.clone())
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_replacement_max_ops_for_unstaked_sender() {
+        let mut ops = vec![];
+        let addr = Address::random();
+        for i in 0..4 {
+            ops.push(create_op(addr, i, 1, None))
+        }
+        // replacement op for first op
+        ops.push(create_op(addr, 0, 2, None));
+
+        let pool = create_pool(ops.clone());
+
+        for op in ops.iter().take(4) {
+            pool.add_operation(OperationOrigin::Local, op.op.clone())
+                .await
+                .unwrap();
+        }
+
+        pool.add_operation(OperationOrigin::Local, ops[4].op.clone())
+            .await
+            .unwrap();
+
+        let uos = ops.into_iter().skip(1).map(|op| op.op).collect::<Vec<_>>();
+
+        check_ops_unordered(&pool.all_operations(16), &uos, pool.config.entry_point);
     }
 
     #[tokio::test]
@@ -2030,5 +2094,21 @@ mod tests {
         for (actual, expected) in ops.into_iter().zip(expected) {
             assert_eq!(actual.uo, expected);
         }
+    }
+
+    fn check_ops_unordered(
+        actual: &[Arc<PoolOperation>],
+        expected: &[UserOperationVariant],
+        entry_point: Address,
+    ) {
+        let actual_hashes = actual
+            .iter()
+            .map(|op| op.uo.hash(entry_point, 0))
+            .collect::<HashSet<_>>();
+        let expected_hashes = expected
+            .iter()
+            .map(|op| op.hash(entry_point, 0))
+            .collect::<HashSet<_>>();
+        assert_eq!(actual_hashes, expected_hashes);
     }
 }
