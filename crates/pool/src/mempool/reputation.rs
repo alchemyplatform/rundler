@@ -120,6 +120,10 @@ impl AddressReputation {
         self.state.write().add_seen(address);
     }
 
+    pub(crate) fn dec_seen(&self, address: Address) {
+        self.state.write().dec_seen(address);
+    }
+
     pub(crate) fn handle_urep_030_penalty(&self, address: Address) {
         self.state.write().handle_urep_030_penalty(address);
     }
@@ -136,8 +140,8 @@ impl AddressReputation {
         self.state.write().add_included(address);
     }
 
-    pub(crate) fn remove_included(&self, address: Address) {
-        self.state.write().remove_included(address);
+    pub(crate) fn dec_included(&self, address: Address) {
+        self.state.write().dec_included(address);
     }
 
     pub(crate) fn set_reputation(&self, address: Address, ops_seen: u64, ops_included: u64) {
@@ -218,6 +222,11 @@ impl AddressReputationInner {
         count.ops_seen += 1;
     }
 
+    fn dec_seen(&mut self, address: Address) {
+        let count = self.counts.entry(address).or_default();
+        count.ops_seen = count.ops_seen.saturating_sub(1);
+    }
+
     fn handle_urep_030_penalty(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_seen += self.params.bundle_invalidation_ops_seen_unstaked_penalty;
@@ -245,7 +254,7 @@ impl AddressReputationInner {
         count.ops_included += 1;
     }
 
-    fn remove_included(&mut self, address: Address) {
+    fn dec_included(&mut self, address: Address) {
         let count = self.counts.entry(address).or_default();
         count.ops_included = count.ops_included.saturating_sub(1)
     }
@@ -315,6 +324,12 @@ mod tests {
         let counts = reputation.counts.get(&addr).unwrap();
         assert_eq!(counts.ops_seen, 1000);
         assert_eq!(counts.ops_included, 1000);
+
+        reputation.dec_seen(addr);
+        reputation.dec_included(addr);
+        let counts = reputation.counts.get(&addr).unwrap();
+        assert_eq!(counts.ops_seen, 999);
+        assert_eq!(counts.ops_included, 999);
     }
 
     #[test]

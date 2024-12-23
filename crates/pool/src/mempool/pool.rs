@@ -221,6 +221,10 @@ where
         })
     }
 
+    pub(crate) fn all_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
+        self.by_hash.values().map(|o| o.po.clone())
+    }
+
     /// Does maintenance on the pool.
     ///
     /// 1) Removes all operations using the given entity, returning the hashes of the removed operations.
@@ -825,6 +829,33 @@ mod tests {
         check_map_entry(pool.best.iter().next(), Some(&ops[2]));
         check_map_entry(pool.best.iter().nth(1), Some(&ops[1]));
         check_map_entry(pool.best.iter().nth(2), Some(&ops[0]));
+    }
+
+    #[test]
+    fn add_operations() {
+        let mut pool = pool();
+        let addr_a = Address::random();
+        let addr_b = Address::random();
+        let ops = vec![
+            create_op(addr_a, 0, 1),
+            create_op(addr_a, 1, 2),
+            create_op(addr_b, 0, 3),
+        ];
+
+        let mut hashes = HashSet::new();
+        for op in ops.iter() {
+            hashes.insert(pool.add_operation(op.clone(), 0).unwrap());
+        }
+
+        let all = pool
+            .all_operations()
+            .map(|op| {
+                op.uo
+                    .hash(pool.config.entry_point, pool.config.chain_spec.id)
+            })
+            .collect::<HashSet<_>>();
+
+        assert_eq!(all, hashes);
     }
 
     #[test]

@@ -12,6 +12,9 @@ jobs:
       - run: curl -sSL https://raw.githubusercontent.com/pdm-project/pdm/main/install-pdm.py | python3 -
       - run: pip install jq yq
       - run: sudo apt install -y libxml2-utils
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
 
       - name: Checkout Rundler
         uses: actions/checkout@v4
