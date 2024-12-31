@@ -150,7 +150,7 @@ where
         self.ep_specific_metrics.removed_entities.increment(1);
     }
 
-    async fn check_call_gas_limit_efficiency(
+    async fn check_execution_gas_limit_efficiency(
         &self,
         op: UserOperationVariant,
         block_hash: B256,
@@ -168,8 +168,8 @@ where
                 return Ok(());
             }
 
-            let call_gas_limit = op.call_gas_limit();
-            if call_gas_limit == 0 {
+            let execution_gas_limit = op.execution_gas_limit();
+            if execution_gas_limit == 0 {
                 return Ok(()); // No call gas limit, not useful, but not a failure here.
             }
 
@@ -199,13 +199,15 @@ where
                         .try_into()
                         .context("total gas used should fit in u128")?;
 
-                    let call_gas_used = total_gas_used - execution_res.pre_op_gas;
+                    let execution_gas_used = total_gas_used - execution_res.pre_op_gas;
 
-                    let call_gas_efficiency = call_gas_used as f32 / call_gas_limit as f32;
-                    if call_gas_efficiency < self.config.gas_limit_efficiency_reject_threshold {
-                        return Err(MempoolError::CallGasLimitEfficiencyTooLow(
+                    let execution_gas_efficiency =
+                        execution_gas_used as f32 / execution_gas_limit as f32;
+                    if execution_gas_efficiency < self.config.gas_limit_efficiency_reject_threshold
+                    {
+                        return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
                             self.config.gas_limit_efficiency_reject_threshold,
-                            call_gas_efficiency,
+                            execution_gas_efficiency,
                         ));
                     }
                 }
@@ -551,8 +553,9 @@ where
             .simulator()
             .simulate_validation(versioned_op, block_hash, None)
             .map_err(Into::into);
-        let call_gas_check_future = self.check_call_gas_limit_efficiency(op.clone(), block_hash);
-        let (sim_result, _) = tokio::try_join!(sim_fut, call_gas_check_future)?;
+        let execution_gas_check_future =
+            self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
+        let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
 
         // No aggregators supported for now
         if let Some(agg) = &sim_result.aggregator {
@@ -1821,11 +1824,11 @@ mod tests {
         let actual_eff = 10_000_f32 / 50_000_f32;
 
         match ret.err().unwrap() {
-            MempoolError::CallGasLimitEfficiencyTooLow(eff, actual) => {
+            MempoolError::ExecutionGasLimitEfficiencyTooLow(eff, actual) => {
                 assert_eq!(eff, 0.25);
                 assert_eq!(actual, actual_eff);
             }
-            _ => panic!("Expected CallGasLimitEfficiencyTooLow error"),
+            _ => panic!("Expected ExecutionGasLimitEfficiencyTooLow error"),
         }
     }
 

@@ -194,6 +194,10 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit + self.paymaster_verification_gas_limit
     }
 
+    fn paymaster_post_op_gas_limit(&self) -> u128 {
+        self.paymaster_post_op_gas_limit
+    }
+
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
         self.calldata_gas_cost
             + chain_spec.per_user_op_v0_7_gas()
