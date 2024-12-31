@@ -630,9 +630,12 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
-            let hash = state
-                .pool
-                .add_operation(pool_op.clone(), precheck_ret.required_pre_verification_gas)?;
+            let base_fee = state.gas_fees.base_fee;
+            let hash = state.pool.add_operation(
+                pool_op.clone(),
+                base_fee,
+                precheck_ret.required_pre_verification_gas,
+            )?;
 
             if throttled {
                 state.throttled_ops.insert(hash);
