@@ -304,7 +304,7 @@ impl<'a> MaxOracle<'a> {
 }
 
 #[async_trait::async_trait]
-impl<'a> FeeOracle for MaxOracle<'a> {
+impl FeeOracle for MaxOracle<'_> {
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let futures = self
             .oracles

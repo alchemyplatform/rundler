@@ -24,10 +24,10 @@ use rundler_types::{
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
     AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorValidationFailed,
-    AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
-    CallGasLimitEfficiencyTooLow, CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod,
-    CodeHashChanged, DidNotRevert, DiscardedOnInsertError, Entity, EntityThrottledError,
-    EntityType, EntryPointRevert, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
+    AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender, CallGasLimitTooLow,
+    CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
+    DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
+    ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
     FactoryIsNotContract, InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature,
     InvalidStorageAccess, InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError,
     MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError, MultipleRolesViolation,
@@ -130,8 +130,8 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::PreOpGasLimitEfficiencyTooLow(e)) => {
                 MempoolError::PreOpGasLimitEfficiencyTooLow(e.required, e.actual)
             }
-            Some(mempool_error::Error::CallGasLimitEfficiencyTooLow(e)) => {
-                MempoolError::CallGasLimitEfficiencyTooLow(e.required, e.actual)
+            Some(mempool_error::Error::ExecutionGasLimitEfficiencyTooLow(e)) => {
+                MempoolError::ExecutionGasLimitEfficiencyTooLow(e.required, e.actual)
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -242,11 +242,13 @@ impl From<MempoolError> for ProtoMempoolError {
                     PreOpGasLimitEfficiencyTooLow { required, actual },
                 )),
             },
-            MempoolError::CallGasLimitEfficiencyTooLow(required, actual) => ProtoMempoolError {
-                error: Some(mempool_error::Error::CallGasLimitEfficiencyTooLow(
-                    CallGasLimitEfficiencyTooLow { required, actual },
-                )),
-            },
+            MempoolError::ExecutionGasLimitEfficiencyTooLow(required, actual) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::ExecutionGasLimitEfficiencyTooLow(
+                        ExecutionGasLimitEfficiencyTooLow { required, actual },
+                    )),
+                }
+            }
         }
     }
 }

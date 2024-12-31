@@ -243,6 +243,14 @@ impl UserOperationTrait for UserOperation {
         self.verification_gas_limit * mul
     }
 
+    fn paymaster_post_op_gas_limit(&self) -> u128 {
+        if self.paymaster().is_some() {
+            self.verification_gas_limit * 2
+        } else {
+            0
+        }
+    }
+
     fn required_pre_execution_buffer(&self) -> u128 {
         self.verification_gas_limit + ENTRY_POINT_INNER_GAS_OVERHEAD
     }
