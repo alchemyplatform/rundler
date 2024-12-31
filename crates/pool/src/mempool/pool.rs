@@ -181,6 +181,7 @@ where
     pub(crate) fn add_operation(
         &mut self,
         op: PoolOperation,
+        base_fee: u128,
         required_pvg: u128,
     ) -> MempoolResult<B256> {
         // only eligibility criteria is required PVG which is enabled when da_gas_tracking is enabled
@@ -207,6 +208,7 @@ where
             Arc::new(op),
             self.next_submission_id(),
             is_eligible,
+            base_fee,
         ));
 
         let hash = self.add_operation_internal(pool_op)?;
@@ -214,13 +216,7 @@ where
     }
 
     pub(crate) fn best_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
-        self.best.iter().filter_map(|p| {
-            if p.eligible() {
-                Some(p.po.clone())
-            } else {
-                None
-            }
-        })
+        self.best.iter().map(|o| o.po.clone())
     }
 
     pub(crate) fn all_operations(&self) -> impl Iterator<Item = Arc<PoolOperation>> + '_ {
@@ -251,7 +247,13 @@ where
         let mut num_candidates = 0;
         let mut events = vec![];
 
+        // clear best operations to update price and resort
+        self.best.clear();
+
         for (hash, op) in &mut self.by_hash {
+            op.update_gas_price(gas_fees.base_fee);
+
+            // check for expiry
             if op.po.valid_time_range.valid_until < block_timestamp {
                 events.push(PoolEvent::RemovedOp {
                     op_hash: *hash,
@@ -275,6 +277,7 @@ where
                 expired.push(*hash);
             }
 
+            // check for eligibility
             if self.da_gas_oracle.is_some() && block_da_data.is_some() {
                 let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
                 let block_da_data = block_da_data.unwrap();
@@ -313,14 +316,16 @@ where
                     });
                 }
             }
+            // UO is eligible, insert into best
+            self.best.insert(op.clone());
 
+            // Check candidate status
             if op.uo().max_fee_per_gas() < gas_fees.uo_fees.max_fee_per_gas
                 || op.uo().max_priority_fee_per_gas() < gas_fees.uo_fees.max_priority_fee_per_gas
             {
                 // don't mark as ineligible, but also not a candidate
                 continue;
             }
-
             // Op is a candidate, update time to mine and candidate count
             if let Some(ttm) = self.time_to_mine.get_mut(hash) {
                 ttm.increase(block_delta_time, block_delta_height);
@@ -577,8 +582,11 @@ where
         self.pool_size += pool_op.mem_size();
         self.by_hash.insert(hash, pool_op.clone());
         self.by_id.insert(pool_op.uo().id(), pool_op.clone());
-        self.best.insert(pool_op);
         self.time_to_mine.insert(hash, TimeToMineInfo::new());
+
+        if pool_op.eligible() {
+            self.best.insert(pool_op);
+        }
 
         let removed = self
             .enforce_size()
@@ -672,11 +680,13 @@ struct OrderedPoolOperation {
     submission_id: u64,
     eligible: RwLock<bool>,
     insertion_time: Instant,
+    gas_price: RwLock<u128>,
 }
 
 impl OrderedPoolOperation {
-    fn new(po: Arc<PoolOperation>, submission_id: u64, eligible: bool) -> Self {
+    fn new(po: Arc<PoolOperation>, submission_id: u64, eligible: bool, base_fee: u128) -> Self {
         Self {
+            gas_price: RwLock::new(po.uo.gas_price(base_fee)),
             po,
             submission_id,
             eligible: RwLock::new(eligible),
@@ -707,6 +717,16 @@ impl OrderedPoolOperation {
     fn elapsed_time_in_pool(&self) -> Duration {
         self.insertion_time.elapsed()
     }
+
+    // NOTE: This will not automatically update the `best` sorted set
+    // The UO should be removed and reinserted into the set to update the sort order
+    fn update_gas_price(&self, base_fee: u128) {
+        *self.gas_price.write() = self.po.uo.gas_price(base_fee);
+    }
+
+    fn gas_price(&self) -> u128 {
+        *self.gas_price.read()
+    }
 }
 
 impl Eq for OrderedPoolOperation {}
@@ -715,9 +735,8 @@ impl Ord for OrderedPoolOperation {
     fn cmp(&self, other: &Self) -> Ordering {
         // Sort by gas price descending then by id ascending
         other
-            .uo()
-            .max_fee_per_gas()
-            .cmp(&self.uo().max_fee_per_gas())
+            .gas_price()
+            .cmp(&self.gas_price())
             .then_with(|| self.submission_id.cmp(&other.submission_id))
     }
 }
@@ -778,7 +797,7 @@ mod tests {
     use alloy_primitives::U256;
     use rundler_provider::MockDAGasOracleSync;
     use rundler_types::{
-        v0_6::UserOperation, EntityInfo, EntityInfos, UserOperation as UserOperationTrait,
+        v0_6::UserOperation, EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait,
         ValidTimeRange,
     };
 
@@ -788,7 +807,7 @@ mod tests {
     fn add_single_op() {
         let mut pool = pool();
         let op = create_op(Address::random(), 0, 1);
-        let hash = pool.add_operation(op.clone(), 0).unwrap();
+        let hash = pool.add_operation(op.clone(), 0, 0).unwrap();
 
         check_map_entry(pool.by_hash.get(&hash), Some(&op));
         check_map_entry(pool.by_id.get(&op.uo.id()), Some(&op));
@@ -799,7 +818,7 @@ mod tests {
     fn test_get_by_hash() {
         let mut pool = pool();
         let op = create_op(Address::random(), 0, 1);
-        let hash = pool.add_operation(op.clone(), 0).unwrap();
+        let hash = pool.add_operation(op.clone(), 0, 0).unwrap();
 
         let get_op = pool.get_operation_by_hash(hash).unwrap();
         assert_eq!(op, *get_op);
@@ -811,7 +830,7 @@ mod tests {
     fn test_get_by_id() {
         let mut pool = pool();
         let op = create_op(Address::random(), 0, 1);
-        pool.add_operation(op.clone(), 0).unwrap();
+        pool.add_operation(op.clone(), 0, 0).unwrap();
         let id = op.uo.id();
 
         let get_op = pool.get_operation_by_id(&id).unwrap();
@@ -836,7 +855,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone(), 0).unwrap());
+            hashes.push(pool.add_operation(op.clone(), 0, 0).unwrap());
         }
 
         for (hash, op) in hashes.iter().zip(&ops) {
@@ -864,7 +883,7 @@ mod tests {
 
         let mut hashes = HashSet::new();
         for op in ops.iter() {
-            hashes.insert(pool.add_operation(op.clone(), 0).unwrap());
+            hashes.insert(pool.add_operation(op.clone(), 0, 0).unwrap());
         }
 
         let all = pool
@@ -889,7 +908,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone(), 0).unwrap());
+            hashes.push(pool.add_operation(op.clone(), 0, 0).unwrap());
         }
 
         // best should be sorted by gas, then by submission id
@@ -910,7 +929,7 @@ mod tests {
 
         let mut hashes = vec![];
         for op in ops.iter() {
-            hashes.push(pool.add_operation(op.clone(), 0).unwrap());
+            hashes.push(pool.add_operation(op.clone(), 0, 0).unwrap());
         }
 
         assert!(pool.remove_operation_by_hash(hashes[0]).is_some());
@@ -941,7 +960,7 @@ mod tests {
         ];
         for mut op in ops.into_iter() {
             op.aggregator = Some(account);
-            pool.add_operation(op.clone(), 0).unwrap();
+            pool.add_operation(op.clone(), 0, 0).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -963,7 +982,7 @@ mod tests {
             .uo
             .hash(pool.config.entry_point, pool.config.chain_spec.id);
 
-        pool.add_operation(op, 0).unwrap();
+        pool.add_operation(op, 0, 0).unwrap();
 
         let mined_op = MinedOp {
             paymaster: None,
@@ -988,14 +1007,16 @@ mod tests {
         let nonce = 0;
 
         let op = create_op(sender, nonce, 1);
-        let op_2 = create_op(sender, nonce, 2);
+        let mut op_2 = create_op(sender, nonce, 2);
+        let uo2: &mut UserOperation = op_2.uo.as_mut();
+        uo2.max_fee_per_gas *= 2;
 
         let hash = op_2
             .uo
             .hash(pool.config.entry_point, pool.config.chain_spec.id);
 
-        pool.add_operation(op, 0).unwrap();
-        pool.add_operation(op_2, 0).unwrap();
+        pool.add_operation(op, 0, 0).unwrap();
+        pool.add_operation(op_2, 0, 0).unwrap();
 
         let mined_op = MinedOp {
             paymaster: None,
@@ -1028,7 +1049,7 @@ mod tests {
                 entity: Entity::aggregator(agg),
                 is_staked: false,
             });
-            pool.add_operation(op.clone(), 0).unwrap();
+            pool.add_operation(op.clone(), 0, 0).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -1055,7 +1076,7 @@ mod tests {
                 entity: Entity::paymaster(paymaster),
                 is_staked: false,
             });
-            pool.add_operation(op.clone(), 0).unwrap();
+            pool.add_operation(op.clone(), 0, 0).unwrap();
         }
         assert_eq!(pool.by_hash.len(), 3);
 
@@ -1097,7 +1118,7 @@ mod tests {
             let mut op = op.clone();
             let uo: &mut UserOperation = op.uo.as_mut();
             uo.nonce = U256::from(i);
-            hashes.push(pool.add_operation(op, 0).unwrap());
+            hashes.push(pool.add_operation(op, 0, 0).unwrap());
         }
 
         assert_eq!(pool.address_count(&sender), 5);
@@ -1119,31 +1140,31 @@ mod tests {
     fn pool_full_new_replaces_worst() {
         let args = conf();
         let mut pool = pool();
-        for i in 0..20 {
+        for i in 0..MAX_POOL_SIZE_OPS {
             let op = create_op(Address::random(), i, (i + 1) as u128);
-            pool.add_operation(op, 0).unwrap();
+            pool.add_operation(op, 0, 0).unwrap();
         }
 
         // on greater gas, new op should win
         let op = create_op(Address::random(), args.max_size_of_pool_bytes, 2);
-        let result = pool.add_operation(op, 0);
+        let result = pool.add_operation(op, 0, 0);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
     #[test]
     fn pool_full_worst_remains() {
         let mut pool = pool();
-        for i in 0..20 {
+        for i in 0..MAX_POOL_SIZE_OPS {
             let op = create_op(Address::random(), i, (i + 1) as u128);
-            pool.add_operation(op, 0).unwrap();
+            pool.add_operation(op, 0, 0).unwrap();
         }
 
         let op = create_op(Address::random(), 4, 1);
-        assert!(pool.add_operation(op, 0).is_err());
+        assert!(pool.add_operation(op, 0, 0).is_err());
 
         // on equal gas, worst should remain because it came first
         let op = create_op(Address::random(), 4, 2);
-        let result = pool.add_operation(op, 0);
+        let result = pool.add_operation(op, 0, 0);
         assert!(result.is_ok(), "{:?}", result.err());
     }
 
@@ -1151,15 +1172,11 @@ mod tests {
     fn replace_op_underpriced() {
         let mut pool = pool();
         let sender = Address::random();
-        let mut po1 = create_op(sender, 0, 100);
-        let uo1: &mut UserOperation = po1.uo.as_mut();
-        uo1.max_priority_fee_per_gas = 100;
-        let _ = pool.add_operation(po1.clone(), 0).unwrap();
+        let po1 = create_op(sender, 0, 100);
+        let _ = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
-        let mut po2 = create_op(sender, 0, 101);
-        let uo2: &mut UserOperation = po2.uo.as_mut();
-        uo2.max_priority_fee_per_gas = 101;
-        let res = pool.add_operation(po2, 0);
+        let po2 = create_op(sender, 0, 101);
+        let res = pool.add_operation(po2, 0, 0);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::ReplacementUnderpriced(a, b) => {
@@ -1172,7 +1189,7 @@ mod tests {
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(
             pool.pool_size,
-            OrderedPoolOperation::new(Arc::new(po1), 0, true).mem_size(),
+            OrderedPoolOperation::new(Arc::new(po1), 0, true, 0).mem_size(),
         );
     }
 
@@ -1183,32 +1200,30 @@ mod tests {
         let paymaster1 = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         let uo1: &mut UserOperation = po1.uo.as_mut();
-        uo1.max_priority_fee_per_gas = 10;
         uo1.paymaster_and_data = paymaster1.to_vec().into();
         po1.entity_infos.paymaster = Some(EntityInfo {
             entity: Entity::paymaster(paymaster1),
             is_staked: false,
         });
-        let _ = pool.add_operation(po1, 0).unwrap();
+        let _ = pool.add_operation(po1, 0, 0).unwrap();
         assert_eq!(pool.address_count(&paymaster1), 1);
 
         let paymaster2 = Address::random();
         let mut po2 = create_op(sender, 0, 11);
         let uo2: &mut UserOperation = po2.uo.as_mut();
-        uo2.max_priority_fee_per_gas = 11;
         uo2.paymaster_and_data = paymaster2.to_vec().into();
         po2.entity_infos.paymaster = Some(EntityInfo {
             entity: Entity::paymaster(paymaster2),
             is_staked: false,
         });
-        let _ = pool.add_operation(po2.clone(), 0).unwrap();
+        let _ = pool.add_operation(po2.clone(), 0, 0).unwrap();
 
         assert_eq!(pool.address_count(&sender), 1);
         assert_eq!(pool.address_count(&paymaster1), 0);
         assert_eq!(pool.address_count(&paymaster2), 1);
         assert_eq!(
             pool.pool_size,
-            OrderedPoolOperation::new(Arc::new(po2), 0, true).mem_size()
+            OrderedPoolOperation::new(Arc::new(po2), 0, true, 0).mem_size()
         );
     }
 
@@ -1216,12 +1231,10 @@ mod tests {
     fn test_already_known() {
         let mut pool = pool();
         let sender = Address::random();
-        let mut po1 = create_op(sender, 0, 10);
-        let uo1: &mut UserOperation = po1.uo.as_mut();
-        uo1.max_priority_fee_per_gas = 10;
-        let _ = pool.add_operation(po1.clone(), 0).unwrap();
+        let po1 = create_op(sender, 0, 10);
+        let _ = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
-        let res = pool.add_operation(po1, 0);
+        let res = pool.add_operation(po1, 0, 0);
         assert!(res.is_err());
         match res.err().unwrap() {
             MempoolError::OperationAlreadyKnown => (),
@@ -1236,7 +1249,7 @@ mod tests {
         let sender = Address::random();
         let mut po1 = create_op(sender, 0, 10);
         po1.valid_time_range.valid_until = Timestamp::from(1);
-        let hash = pool.add_operation(po1.clone(), 0).unwrap();
+        let hash = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
         pool.do_maintenance(0, Timestamp::from(2), None, FeeUpdate::default());
         assert_eq!(None, pool.get_operation_by_hash(hash));
@@ -1249,14 +1262,14 @@ mod tests {
 
         let mut po1 = create_op(Address::random(), 0, 10);
         po1.valid_time_range.valid_until = 5.into();
-        let hash1 = pool.add_operation(po1.clone(), 0).unwrap();
+        let hash1 = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
         let mut po2 = create_op(Address::random(), 0, 10);
         po2.valid_time_range.valid_until = 10.into();
-        let hash2 = pool.add_operation(po2.clone(), 0).unwrap();
+        let hash2 = pool.add_operation(po2.clone(), 0, 0).unwrap();
         let mut po3 = create_op(Address::random(), 0, 10);
         po3.valid_time_range.valid_until = 9.into();
-        let hash3 = pool.add_operation(po3.clone(), 0).unwrap();
+        let hash3 = pool.add_operation(po3.clone(), 0, 0).unwrap();
 
         pool.do_maintenance(0, Timestamp::from(10), None, FeeUpdate::default());
 
@@ -1273,7 +1286,7 @@ mod tests {
 
         let po1 = create_op(Address::random(), 0, 10);
 
-        let hash = pool.add_operation(po1, 50_001).unwrap();
+        let hash = pool.add_operation(po1, 0, 50_001).unwrap();
 
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0); // UO is ineligible due to pvg
@@ -1299,7 +1312,7 @@ mod tests {
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
-        let hash = pool.add_operation(po1, pvg + 1).unwrap();
+        let hash = pool.add_operation(po1, 0, pvg + 1).unwrap();
 
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0); // UO is ineligible due to pvg
@@ -1334,7 +1347,7 @@ mod tests {
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
-        let hash = pool.add_operation(po1, pvg).unwrap();
+        let hash = pool.add_operation(po1, 0, pvg).unwrap();
 
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
@@ -1369,7 +1382,7 @@ mod tests {
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
-        let hash = pool.add_operation(po1, pvg).unwrap();
+        let hash = pool.add_operation(po1, 0, pvg).unwrap();
 
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
@@ -1407,7 +1420,7 @@ mod tests {
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
-        let hash = pool.add_operation(po1, pvg + 1).unwrap();
+        let hash = pool.add_operation(po1, 0, pvg + 1).unwrap();
 
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
@@ -1429,7 +1442,7 @@ mod tests {
         let po = create_op(Address::random(), 0, 10);
         let mut pool = pool_with_conf(conf.clone());
 
-        let hash = pool.add_operation(po.clone(), 0).unwrap();
+        let hash = pool.add_operation(po.clone(), 0, 0).unwrap();
         assert!(pool.get_operation_by_hash(hash).is_some());
         pool.do_maintenance(
             0,
@@ -1449,12 +1462,61 @@ mod tests {
         assert!(pool.get_operation_by_hash(hash).is_none());
     }
 
+    #[test]
+    fn test_update_best_price() {
+        let mut pool = pool();
+
+        let mut po1 = create_op(Address::random(), 0, 0);
+        let uo1: &mut UserOperation = po1.uo.as_mut();
+        uo1.max_fee_per_gas = 20;
+        uo1.max_priority_fee_per_gas = 10;
+        let _ = pool.add_operation(po1.clone(), 10, 0).unwrap();
+
+        let mut po2 = create_op(Address::random(), 0, 0);
+        let uo2: &mut UserOperation = po2.uo.as_mut();
+        uo2.max_fee_per_gas = 30;
+        uo2.max_priority_fee_per_gas = 10;
+
+        let _ = pool.add_operation(po2.clone(), 10, 0).unwrap();
+
+        let po1 = Arc::new(po1);
+        let po2 = Arc::new(po2);
+
+        // initially same price, break tie by submission order
+        assert_eq!(
+            pool.best_operations().collect::<Vec<_>>(),
+            vec![po1.clone(), po2.clone()]
+        );
+
+        pool.do_maintenance(
+            0,
+            0.into(),
+            Some(&DAGasBlockData::default()),
+            FeeUpdate {
+                bundle_fees: GasFees {
+                    max_fee_per_gas: 21,
+                    max_priority_fee_per_gas: 10,
+                },
+                uo_fees: GasFees {
+                    max_fee_per_gas: 21,
+                    max_priority_fee_per_gas: 10,
+                },
+                base_fee: 11,
+            },
+        );
+
+        // order swaps after base fee update
+        assert_eq!(pool.best_operations().collect::<Vec<_>>(), vec![po2, po1]);
+    }
+
+    const MAX_POOL_SIZE_OPS: usize = 20;
+
     fn conf() -> PoolInnerConfig {
         PoolInnerConfig {
             chain_spec: ChainSpec::default(),
             entry_point: Address::random(),
             min_replacement_fee_increase_percentage: 10,
-            max_size_of_pool_bytes: 20 * mem_size_of_ordered_pool_op(),
+            max_size_of_pool_bytes: MAX_POOL_SIZE_OPS * mem_size_of_ordered_pool_op(),
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
             da_gas_tracking_enabled: false,
@@ -1478,15 +1540,17 @@ mod tests {
     }
 
     fn mem_size_of_ordered_pool_op() -> usize {
-        OrderedPoolOperation::new(Arc::new(create_op(Address::random(), 1, 1)), 1, true).mem_size()
+        OrderedPoolOperation::new(Arc::new(create_op(Address::random(), 1, 1)), 1, true, 0)
+            .mem_size()
     }
 
-    fn create_op(sender: Address, nonce: usize, max_fee_per_gas: u128) -> PoolOperation {
+    fn create_op(sender: Address, nonce: usize, gas_fee: u128) -> PoolOperation {
         PoolOperation {
             uo: UserOperation {
                 sender,
                 nonce: U256::from(nonce),
-                max_fee_per_gas,
+                max_fee_per_gas: gas_fee,
+                max_priority_fee_per_gas: gas_fee,
                 pre_verification_gas: 50_000,
                 ..UserOperation::default()
             }
