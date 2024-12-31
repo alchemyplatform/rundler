@@ -97,9 +97,9 @@ pub enum MempoolError {
     /// Pre-op gas limit efficiency too low
     #[error("Pre-op gas limit efficiency too low. Required: {0}, Actual: {1}")]
     PreOpGasLimitEfficiencyTooLow(f32, f32),
-    /// Call gas limit efficiency too low
-    #[error("Call gas limit efficiency too low. Required: {0}, Actual: {1}")]
-    CallGasLimitEfficiencyTooLow(f32, f32),
+    /// Execution gas limit efficiency too low
+    #[error("Execution gas limit efficiency too low. Required: {0}, Actual: {1}")]
+    ExecutionGasLimitEfficiencyTooLow(f32, f32),
 }
 
 /// Precheck violation enumeration

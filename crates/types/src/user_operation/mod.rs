@@ -132,21 +132,6 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Returns the heap size of the user operation
     fn heap_size(&self) -> usize;
 
-    /// Returns the total verification gas limit
-    fn total_verification_gas_limit(&self) -> u128;
-
-    /// Returns the required pre-execution buffer
-    ///
-    /// This should capture all of the gas that is needed to execute the user operation,
-    /// minus the call gas limit. The entry point will check for this buffer before
-    /// executing the user operation.
-    fn required_pre_execution_buffer(&self) -> u128;
-
-    /// Returns the limit of gas that may be used used prior to the execution of the user operation
-    fn pre_op_gas_limit(&self) -> u128 {
-        self.pre_verification_gas() + self.total_verification_gas_limit()
-    }
-
     /// Returns the pre-verification gas
     fn pre_verification_gas(&self) -> u128;
 
@@ -199,14 +184,14 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             + self.call_gas_limit()
     }
 
-    /// Returns the gas limit that applies to the execution portion of a bundle's gas limit
+    /// Returns the gas limit that applies to the computation portion of a bundle's gas limit
     ///
     /// On an L2 this is the total gas limit for the bundle transaction ~excluding~ any potential DA costs.
     ///
     /// This is needed to limit the size of the bundle transaction to adhere to the block gas limit.
     ///
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
-    fn execution_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+    fn computation_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
         self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
             + self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
@@ -305,6 +290,30 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         self.pre_verification_gas()
             > self.required_pre_verification_gas(chain_spec, bundle_size, da_gas)
     }
+
+    /// Returns the total verification gas limit
+    fn total_verification_gas_limit(&self) -> u128;
+
+    /// Returns the required pre-execution buffer
+    ///
+    /// This should capture all of the gas that is needed to execute the user operation,
+    /// minus the call gas limit. The entry point will check for this buffer before
+    /// executing the user operation.
+    fn required_pre_execution_buffer(&self) -> u128;
+
+    /// Returns the limit of gas that may be used used prior to the execution of the user operation
+    fn pre_op_gas_limit(&self) -> u128 {
+        self.pre_verification_gas() + self.total_verification_gas_limit()
+    }
+
+    /// Returns the limit of gas that may be used during the execution of a user operation, including
+    /// the paymaster post operation
+    fn execution_gas_limit(&self) -> u128 {
+        self.call_gas_limit() + self.paymaster_post_op_gas_limit()
+    }
+
+    /// Returns the limit of gas that may be used during the paymaster post operation
+    fn paymaster_post_op_gas_limit(&self) -> u128;
 }
 
 /// Returns the total shared gas for a bundle
@@ -435,6 +444,13 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.total_verification_gas_limit(),
             UserOperationVariant::V0_7(op) => op.total_verification_gas_limit(),
+        }
+    }
+
+    fn paymaster_post_op_gas_limit(&self) -> u128 {
+        match self {
+            UserOperationVariant::V0_6(op) => op.paymaster_post_op_gas_limit(),
+            UserOperationVariant::V0_7(op) => op.paymaster_post_op_gas_limit(),
         }
     }
 
