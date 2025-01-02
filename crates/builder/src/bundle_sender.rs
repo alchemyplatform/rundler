@@ -65,7 +65,7 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     builder_index: u64,
     bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
-    beneficiary: Address,
+    sender_eoa: Address,
     proposer: P,
     entry_point: E,
     transaction_tracker: Option<T>,
@@ -180,7 +180,7 @@ where
         builder_index: u64,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
-        beneficiary: Address,
+        sender_eoa: Address,
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
@@ -192,7 +192,7 @@ where
             builder_index,
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
-            beneficiary,
+            sender_eoa,
             proposer,
             transaction_tracker: Some(transaction_tracker),
             pool,
@@ -682,7 +682,7 @@ where
         let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
-            self.beneficiary,
+            self.sender_eoa,
             bundle.gas_estimate,
             bundle.gas_fees,
         );

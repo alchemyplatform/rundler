@@ -148,7 +148,7 @@ pub(crate) struct Settings {
     pub(crate) chain_spec: ChainSpec,
     pub(crate) max_bundle_size: u64,
     pub(crate) max_bundle_gas: u128,
-    pub(crate) beneficiary: Address,
+    pub(crate) sender_eoa: Address,
     pub(crate) bundle_base_fee_overhead_percent: u32,
     pub(crate) bundle_priority_fee_overhead_percent: u32,
     pub(crate) priority_fee_mode: PriorityFeeMode,
@@ -280,7 +280,9 @@ where
             .assemble_context(ops_with_simulations, balances_by_paymaster)
             .await;
         while !context.is_empty() {
-            let gas_estimate = self.estimate_gas_rejecting_failed_ops(&mut context).await?;
+            let gas_estimate = self
+                .estimate_gas_rejecting_failed_ops(&mut context, bundle_fees)
+                .await?;
             if let Some(gas_estimate) = gas_estimate {
                 tracing::debug!(
                     "Bundle proposal succeeded with {} ops and {:?} gas limit",
@@ -752,6 +754,7 @@ where
     async fn estimate_gas_rejecting_failed_ops(
         &self,
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        bundle_fees: GasFees,
     ) -> BundleProposerResult<Option<u64>> {
         // sum up the gas needed for all the ops in the bundle
         // and apply an overhead multiplier
@@ -760,7 +763,7 @@ where
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         );
 
-        let gas: u64 = gas
+        let gas_limit: u64 = gas
             .try_into()
             .context("estimated bundle gas limit is larger than u64::MAX")?;
 
@@ -770,13 +773,15 @@ where
             .entry_point()
             .call_handle_ops(
                 context.to_ops_per_aggregator(),
-                self.settings.beneficiary,
-                Some(gas),
+                self.settings.sender_eoa,
+                gas_limit,
+                bundle_fees,
             )
             .await
             .context("should call handle ops with candidate bundle")?;
+
         match handle_ops_out {
-            HandleOpsOut::Success => Ok(Some(gas)),
+            HandleOpsOut::Success => Ok(Some(gas_limit)),
             HandleOpsOut::FailedOp(index, message) => {
                 self.emit(BuilderEvent::rejected_op(
                     self.builder_index,
@@ -796,7 +801,8 @@ where
             }
             HandleOpsOut::PostOpRevert => {
                 warn!("PostOpShortRevert error during gas estimation due to bug in the 0.6 entry point contract. Removing the offending op from the bundle.");
-                self.process_post_op_revert(context).await?;
+                self.process_post_op_revert(context, gas_limit, bundle_fees)
+                    .await?;
                 Ok(None)
             }
         }
@@ -923,6 +929,8 @@ where
     async fn process_post_op_revert(
         &self,
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        gas_limit: u64,
+        bundle_fees: GasFees,
     ) -> anyhow::Result<()> {
         let agg_groups = context.to_ops_per_aggregator();
         let mut op_index = 0;
@@ -932,17 +940,23 @@ where
             // For non-aggregated ops, re-simulate each op individually
             if agg_group.aggregator.is_zero() {
                 for op in agg_group.user_ops {
-                    futures.push(Box::pin(
-                        self.check_for_post_op_revert_single_op(op, op_index),
-                    ));
+                    futures.push(Box::pin(self.check_for_post_op_revert_single_op(
+                        op,
+                        op_index,
+                        gas_limit,
+                        bundle_fees,
+                    )));
                     op_index += 1;
                 }
             } else {
                 // For aggregated ops, re-simulate the group
                 let len = agg_group.user_ops.len();
-                futures.push(Box::pin(
-                    self.check_for_post_op_revert_agg_ops(agg_group, op_index),
-                ));
+                futures.push(Box::pin(self.check_for_post_op_revert_agg_ops(
+                    agg_group,
+                    op_index,
+                    gas_limit,
+                    bundle_fees,
+                )));
                 op_index += len;
             }
         }
@@ -976,6 +990,8 @@ where
         &self,
         op: <Self as BundleProposer>::UO,
         op_index: usize,
+        gas_limit: u64,
+        bundle_fees: GasFees,
     ) -> Vec<usize> {
         let op_hash = self.op_hash(&op);
         let bundle = vec![UserOpsPerAggregator {
@@ -986,7 +1002,7 @@ where
         let ret = self
             .ep_providers
             .entry_point()
-            .call_handle_ops(bundle, self.settings.beneficiary, None)
+            .call_handle_ops(bundle, self.settings.sender_eoa, gas_limit, bundle_fees)
             .await;
         match ret {
             Ok(out) => {
@@ -1012,6 +1028,8 @@ where
         &self,
         group: UserOpsPerAggregator<<Self as BundleProposer>::UO>,
         start_index: usize,
+        gas_limit: u64,
+        bundle_fees: GasFees,
     ) -> Vec<usize> {
         let len = group.user_ops.len();
         let agg = group.aggregator;
@@ -1019,7 +1037,7 @@ where
         let ret = self
             .ep_providers
             .entry_point()
-            .call_handle_ops(bundle, self.settings.beneficiary, None)
+            .call_handle_ops(bundle, self.settings.sender_eoa, gas_limit, bundle_fees)
             .await;
         match ret {
             Ok(out) => {
@@ -2407,7 +2425,7 @@ mod tests {
         da_gas_tracking_enabled: bool,
     ) -> Bundle<UserOperation> {
         let entry_point_address = address(123);
-        let beneficiary = address(124);
+        let sender_eoa = address(124);
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
         let max_bundle_size = mock_ops.len() as u64;
@@ -2451,8 +2469,8 @@ mod tests {
             entry_point
                 .expect_call_handle_ops()
                 .times(..=1)
-                .withf(move |_, &b, _| b == beneficiary)
-                .return_once(|_, _, _| Ok(call_res));
+                .withf(move |_, &b, _, _| b == sender_eoa)
+                .return_once(|_, _, _, _| Ok(call_res));
         }
         for deposit in mock_paymaster_deposits {
             entry_point
@@ -2539,7 +2557,7 @@ mod tests {
                 },
                 max_bundle_size,
                 max_bundle_gas: 10_000_000,
-                beneficiary,
+                sender_eoa,
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 bundle_base_fee_overhead_percent: 27,
                 bundle_priority_fee_overhead_percent: 0,
