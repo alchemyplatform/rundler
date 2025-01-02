@@ -63,6 +63,7 @@ pub async fn run() -> anyhow::Result<()> {
         metrics_addr,
         &opt.metrics.tags,
         &opt.metrics.buckets,
+        &opt.thresholds,
     )
     .context("metrics server should start")?;
 
@@ -543,6 +544,32 @@ pub struct LogsArgs {
     json: bool,
 }
 
+/// CLI options for logging
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Threshold")]
+pub struct ThresholdArgs {
+    /// Maxmium block lag threshold.
+    #[arg(
+        long = "threshold.block_lag_threshold",
+        name = "threshold.block_lag_threshold",
+        env = "THRESHOLD_BLOCK_LAG_THRESHOLD",
+        default_value = "25",
+        global = true
+    )]
+    block_lag_threshold: u8,
+
+    /// Rundler's minimum balance in eth.
+    #[arg(
+        long = "threshold.min_rundler_balance_in_eth",
+        name = "threshold.min_rundler_balance_in_eth",
+        env = "THRESHOLD_MIN_RUNDLER_BALANCE_IN_ETH",
+        required = true,
+        default_value = "0.01",
+        global = true
+    )]
+    min_rundler_balance: f64,
+}
+
 /// CLI options
 #[derive(Debug, Parser)]
 pub struct Cli {
@@ -557,6 +584,9 @@ pub struct Cli {
 
     #[clap(flatten)]
     logs: LogsArgs,
+
+    #[clap(flatten)]
+    thresholds: ThresholdArgs,
 }
 
 #[derive(Clone)]

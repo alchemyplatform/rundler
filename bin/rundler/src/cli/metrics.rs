@@ -21,12 +21,15 @@ use metrics_process::Collector;
 use metrics_util::layers::{PrefixLayer, Stack};
 use rundler_task::TaskSpawner;
 
+use super::ThresholdArgs;
+
 pub fn initialize<'a, T: TaskSpawner>(
     task_spawner: &T,
     sample_interval_millis: u64,
     listen_addr: SocketAddr,
     tags: impl IntoIterator<Item = &'a String>,
     buckets: &[f64],
+    thresholds: &ThresholdArgs,
 ) -> anyhow::Result<()> {
     let mut builder = PrometheusBuilder::new().with_http_listener(listen_addr);
 
@@ -68,6 +71,14 @@ pub fn initialize<'a, T: TaskSpawner>(
     let runtime_metrics = handle.metrics();
     let runtime_monitor = tokio_metrics::RuntimeMonitor::new(&handle);
     let tokio_runtime_metrics = TokioMetrics::default();
+    let threshold_metrics = ThresholdMetrics::default();
+
+    threshold_metrics
+        .block_lag_threshold
+        .set(thresholds.block_lag_threshold);
+    threshold_metrics
+        .min_rundler_balance
+        .set(thresholds.min_rundler_balance);
 
     task_spawner.spawn_critical(
         "tokio metrics collector",
@@ -80,6 +91,15 @@ pub fn initialize<'a, T: TaskSpawner>(
     );
 
     Ok(())
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "runtime_threshold")]
+pub(crate) struct ThresholdMetrics {
+    #[metric(describe = "the maximum lag of blocks delayed")]
+    block_lag_threshold: Gauge,
+    #[metric(describe = "the minimum balance of rundler signer")]
+    min_rundler_balance: Gauge,
 }
 
 #[allow(dead_code)]
