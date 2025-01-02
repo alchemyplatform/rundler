@@ -231,15 +231,16 @@ where
     async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
-        beneficiary: Address,
-        gas_limit: Option<u64>,
+        sender_eoa: Address,
+        gas_limit: u64,
+        gas_fees: GasFees,
     ) -> ProviderResult<HandleOpsOut> {
-        let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_op_gas);
         let tx = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
-            beneficiary,
+            sender_eoa,
             gas_limit,
+            gas_fees,
         );
         let res = self.i_entry_point.provider().call(&tx).await;
 
@@ -295,18 +296,17 @@ where
     fn get_send_bundle_transaction(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
-        beneficiary: Address,
+        sender_eoa: Address,
         gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
         get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
-            beneficiary,
+            sender_eoa,
             gas_limit,
+            gas_fees,
         )
-        .max_fee_per_gas(gas_fees.max_fee_per_gas)
-        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
     }
 }
 
@@ -528,8 +528,9 @@ where
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     entry_point: &IEntryPointInstance<T, AP>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
-    beneficiary: Address,
-    gas: u64,
+    sender_eoa: Address,
+    gas_limit: u64,
+    gas_fees: GasFees,
 ) -> TransactionRequest {
     let mut authorization_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
@@ -550,21 +551,26 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
         })
         .collect();
 
-    let mut txn_request: TransactionRequest;
-    if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        txn_request = entry_point
-            .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
-            .gas(gas)
-            .into_transaction_request();
-    } else {
-        txn_request = entry_point
-            .handleAggregatedOps(ops_per_aggregator, beneficiary)
-            .gas(gas)
-            .into_transaction_request();
-    }
+    let mut txn_request =
+        if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
+            entry_point
+                .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
+                .into_transaction_request()
+        } else {
+            entry_point
+                .handleAggregatedOps(ops_per_aggregator, sender_eoa)
+                .into_transaction_request()
+        };
+
+    txn_request = txn_request
+        .from(sender_eoa)
+        .gas_limit(gas_limit)
+        .max_fee_per_gas(gas_fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
     if !authorization_list.is_empty() {
         txn_request = txn_request.with_authorization_list(authorization_list);
     }
+
     txn_request
 }
 
