@@ -345,12 +345,12 @@ where
             info!("Created AWS KMS signer");
             ret
         };
-        let beneficiary = signer.address();
+        let sender_eoa = signer.address();
         let proposer_settings = bundle_proposer::Settings {
             chain_spec: self.args.chain_spec.clone(),
             max_bundle_size: self.args.max_bundle_size,
             max_bundle_gas: self.args.max_bundle_gas,
-            beneficiary,
+            sender_eoa,
             priority_fee_mode: self.args.priority_fee_mode,
             bundle_base_fee_overhead_percent: self.args.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
@@ -402,7 +402,7 @@ where
             index,
             send_bundle_rx,
             self.args.chain_spec.clone(),
-            beneficiary,
+            sender_eoa,
             proposer,
             ep_providers.entry_point().clone(),
             transaction_tracker,
