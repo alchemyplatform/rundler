@@ -59,7 +59,7 @@ This method gets the stake status of a certain address with a particular entry p
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "debug_bundler_clearMempool",
+  "method": "debug_bundler_getStakeStatus",
   "params": ["0x...", "0x..."] // address, entry point address 
 }
 
@@ -120,7 +120,7 @@ Dump the paymaster balances from the paymaster tracker in the mempool for a give
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "method": "debug_bundler_clearMempool",
+  "method": "debug_bundler_dumpPaymasterBalances",
   "params": ["0x...."] // entry point address 
 }
 
