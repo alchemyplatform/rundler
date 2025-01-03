@@ -112,6 +112,7 @@ pub(crate) enum TrackerUpdate {
         gas_limit: Option<u64>,
         gas_used: Option<u128>,
         gas_price: Option<u128>,
+        is_success: bool,
     },
     LatestTxDropped {
         nonce: u64,
@@ -240,7 +241,7 @@ where
     async fn get_mined_tx_gas_info(
         &self,
         tx_hash: B256,
-    ) -> anyhow::Result<(Option<u64>, Option<u128>, Option<u128>)> {
+    ) -> anyhow::Result<(Option<u64>, Option<u128>, Option<u128>, bool)> {
         let (tx, tx_receipt) = tokio::try_join!(
             self.provider.get_transaction_by_hash(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
@@ -249,14 +250,14 @@ where
             warn!("failed to fetch transaction data for tx: {}", tx_hash);
             None
         });
-        let (gas_used, gas_price) = match tx_receipt {
-            Some(r) => (Some(r.gas_used), Some(r.effective_gas_price)),
+        let (gas_used, gas_price, is_success) = match tx_receipt {
+            Some(r) => (Some(r.gas_used), Some(r.effective_gas_price), r.status()),
             None => {
                 warn!("failed to fetch transaction receipt for tx: {}", tx_hash);
-                (None, None)
+                (None, None, false)
             }
         };
-        Ok((gas_limit, gas_used, gas_price))
+        Ok((gas_limit, gas_used, gas_price, is_success))
     }
 }
 
@@ -439,7 +440,7 @@ where
                     .context("tracker should check transaction status when the nonce changes")?;
                 info!("Status of tx {:?}: {:?}", tx.tx_hash, status);
                 if let TxStatus::Mined { block_number } = status {
-                    let (gas_limit, gas_used, gas_price) =
+                    let (gas_limit, gas_used, gas_price, is_success) =
                         self.get_mined_tx_gas_info(tx.tx_hash).await?;
                     out = TrackerUpdate::Mined {
                         tx_hash: tx.tx_hash,
@@ -449,6 +450,7 @@ where
                         gas_limit,
                         gas_used,
                         gas_price,
+                        is_success,
                     };
                     break;
                 }
@@ -478,7 +480,7 @@ where
             TxStatus::Mined { block_number } => {
                 let nonce = self.nonce;
                 self.set_nonce_and_clear_state(nonce + 1);
-                let (gas_limit, gas_used, gas_price) =
+                let (gas_limit, gas_used, gas_price, is_success) =
                     self.get_mined_tx_gas_info(last_tx.tx_hash).await?;
                 Some(TrackerUpdate::Mined {
                     tx_hash: last_tx.tx_hash,
@@ -488,6 +490,7 @@ where
                     gas_limit,
                     gas_used,
                     gas_price,
+                    is_success,
                 })
             }
             TxStatus::Dropped => Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce }),
