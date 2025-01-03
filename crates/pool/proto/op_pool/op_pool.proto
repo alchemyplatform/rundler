@@ -531,7 +531,7 @@ message MempoolError {
     PaymasterBalanceTooLow paymaster_balance_too_low = 15;
     OperationDropTooSoon operation_drop_too_soon = 16;
     PreOpGasLimitEfficiencyTooLow pre_op_gas_limit_efficiency_too_low = 17;
-    CallGasLimitEfficiencyTooLow call_gas_limit_efficiency_too_low = 18;
+    ExecutionGasLimitEfficiencyTooLow execution_gas_limit_efficiency_too_low = 18;
   }
 }
 
@@ -589,7 +589,7 @@ message PreOpGasLimitEfficiencyTooLow {
   float actual = 2;
 }
 
-message CallGasLimitEfficiencyTooLow {
+message ExecutionGasLimitEfficiencyTooLow {
   float required = 1;
   float actual = 2;
 }
