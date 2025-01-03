@@ -238,15 +238,16 @@ where
     async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
-        beneficiary: Address,
-        gas_limit: Option<u64>,
+        sender_eoa: Address,
+        gas_limit: u64,
+        gas_fees: GasFees,
     ) -> ProviderResult<HandleOpsOut> {
-        let gas_limit = gas_limit.unwrap_or(self.max_simulate_handle_ops_gas);
         let tx = get_handle_ops_call(
             &self.i_entry_point,
             ops_per_aggregator,
-            beneficiary,
+            sender_eoa,
             gas_limit,
+            gas_fees,
         );
         let res = self.i_entry_point.provider().call(&tx).await;
 
@@ -286,13 +287,17 @@ where
     fn get_send_bundle_transaction(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
-        beneficiary: Address,
-        gas: u64,
+        sender_eoa: Address,
+        gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest {
-        let tx = get_handle_ops_call(&self.i_entry_point, ops_per_aggregator, beneficiary, gas);
-        tx.max_fee_per_gas(gas_fees.max_fee_per_gas)
-            .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+        get_handle_ops_call(
+            &self.i_entry_point,
+            ops_per_aggregator,
+            sender_eoa,
+            gas_limit,
+            gas_fees,
+        )
     }
 }
 
@@ -480,8 +485,9 @@ fn add_simulations_override(state_override: &mut StateOverride, addr: Address) {
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     entry_point: &IEntryPointInstance<T, AP>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
-    beneficiary: Address,
-    gas: u64,
+    sender_eoa: Address,
+    gas_limit: u64,
+    gas_fees: GasFees,
 ) -> TransactionRequest {
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
         .into_iter()
@@ -491,17 +497,23 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
             signature: uoa.signature,
         })
         .collect();
-    if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
-        entry_point
-            .handleOps(ops_per_aggregator.swap_remove(0).userOps, beneficiary)
-            .gas(gas)
-            .into_transaction_request()
-    } else {
-        entry_point
-            .handleAggregatedOps(ops_per_aggregator, beneficiary)
-            .gas(gas)
-            .into_transaction_request()
-    }
+
+    let txn_request =
+        if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
+            entry_point
+                .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
+                .into_transaction_request()
+        } else {
+            entry_point
+                .handleAggregatedOps(ops_per_aggregator, sender_eoa)
+                .into_transaction_request()
+        };
+
+    txn_request
+        .from(sender_eoa)
+        .gas_limit(gas_limit)
+        .max_fee_per_gas(gas_fees.max_fee_per_gas)
+        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
 }
 
 fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {

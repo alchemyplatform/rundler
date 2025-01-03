@@ -89,6 +89,8 @@ pub struct Args {
     pub entry_points: Vec<EntryPointBuilderSettings>,
     /// Enable DA tracking
     pub da_gas_tracking_enabled: bool,
+    /// Provider client timeout
+    pub provider_client_timeout_seconds: u64,
 }
 
 /// Builder settings for an entrypoint
@@ -343,23 +345,23 @@ where
             info!("Created AWS KMS signer");
             ret
         };
-        let beneficiary = signer.address();
+        let sender_eoa = signer.address();
         let proposer_settings = bundle_proposer::Settings {
             chain_spec: self.args.chain_spec.clone(),
             max_bundle_size: self.args.max_bundle_size,
             max_bundle_gas: self.args.max_bundle_gas,
-            beneficiary,
+            sender_eoa,
             priority_fee_mode: self.args.priority_fee_mode,
             bundle_base_fee_overhead_percent: self.args.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
         };
 
-        let transaction_sender = self
-            .args
-            .sender_args
-            .clone()
-            .into_sender(&self.args.rpc_url, signer)?;
+        let transaction_sender = self.args.sender_args.clone().into_sender(
+            &self.args.rpc_url,
+            signer,
+            self.args.provider_client_timeout_seconds,
+        )?;
 
         let tracker_settings = transaction_tracker::Settings {
             replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
@@ -400,7 +402,7 @@ where
             index,
             send_bundle_rx,
             self.args.chain_spec.clone(),
-            beneficiary,
+            sender_eoa,
             proposer,
             ep_providers.entry_point().clone(),
             transaction_tracker,

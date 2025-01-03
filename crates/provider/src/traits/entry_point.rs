@@ -140,15 +140,16 @@ pub trait BundleHandler: Send + Sync {
     async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<Self::UO>>,
-        beneficiary: Address,
-        gas_limit: Option<u64>,
+        sender_eoa: Address,
+        gas_limit: u64,
+        gas_fees: GasFees,
     ) -> ProviderResult<HandleOpsOut>;
 
     /// Construct the transaction to send a bundle of operations to the entry point contract
     fn get_send_bundle_transaction(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<Self::UO>>,
-        beneficiary: Address,
+        sender_eoa: Address,
         gas_limit: u64,
         gas_fees: GasFees,
     ) -> TransactionRequest;

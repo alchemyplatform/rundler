@@ -24,6 +24,7 @@ pub enum RpcCode {
     Other,
     InvalidParams,
     DeadlineExceed,
+    ClientSideTimeout,
     MethodNotFound,
     AlreadyExist,
     PermissionDenied,

@@ -186,8 +186,9 @@ mockall::mock! {
         async fn call_handle_ops(
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_6::UserOperation>>,
-            beneficiary: Address,
-            gas_limit: Option<u64>,
+            sender_eoa: Address,
+            gas_limit: u64,
+            gas_fees: GasFees,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
@@ -276,8 +277,9 @@ mockall::mock! {
         async fn call_handle_ops(
             &self,
             ops_per_aggregator: Vec<UserOpsPerAggregator<v0_7::UserOperation>>,
-            beneficiary: Address,
-            gas_limit: Option<u64>,
+            sender_eoa: Address,
+            gas_limit: u64,
+            gas_fees: GasFees,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,

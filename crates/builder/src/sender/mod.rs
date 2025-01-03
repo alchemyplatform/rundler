@@ -171,12 +171,17 @@ impl TransactionSenderArgs {
         self,
         rpc_url: &str,
         signer: S,
+        provider_client_timeout_seconds: u64,
     ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider, S>, SenderConstructorErrors>
     {
-        let provider = rundler_provider::new_alloy_evm_provider(rpc_url)?;
+        let provider =
+            rundler_provider::new_alloy_evm_provider(rpc_url, provider_client_timeout_seconds)?;
         let sender = match self {
             Self::Raw(args) => {
-                let submitter = rundler_provider::new_alloy_evm_provider(&args.submit_url)?;
+                let submitter = rundler_provider::new_alloy_evm_provider(
+                    &args.submit_url,
+                    provider_client_timeout_seconds,
+                )?;
 
                 if args.use_submit_for_status {
                     TransactionSenderEnum::Raw(RawTransactionSender::new(
