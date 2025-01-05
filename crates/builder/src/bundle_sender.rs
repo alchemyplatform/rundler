@@ -65,7 +65,7 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     builder_index: u64,
     bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
-    beneficiary: Address,
+    sender_eoa: Address,
     proposer: P,
     entry_point: E,
     transaction_tracker: Option<T>,
@@ -180,7 +180,7 @@ where
         builder_index: u64,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
-        beneficiary: Address,
+        sender_eoa: Address,
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
@@ -192,7 +192,7 @@ where
             builder_index,
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
-            beneficiary,
+            sender_eoa,
             proposer,
             transaction_tracker: Some(transaction_tracker),
             pool,
@@ -353,11 +353,19 @@ where
                     gas_used,
                     tx_hash,
                     nonce,
+                    is_success,
                     ..
                 } => {
-                    info!("Bundle transaction mined");
+                    info!("Bundle transaction mined: block number {block_number}, attempt number {attempt_number}, gas limit {gas_limit:?}, gas used {gas_used:?}, tx hash {tx_hash}, nonce {nonce}, success {is_success}");
 
-                    self.metrics.process_bundle_txn_success(gas_limit, gas_used);
+                    self.metrics
+                        .process_bundle_txn_mined(gas_limit, gas_used, is_success);
+
+                    if !is_success {
+                        error!("Bundle transaction {tx_hash:?} reverted onchain");
+                        // TODO(danc): handle this case by removing the operations from the pool and updating reputation
+                    }
+
                     self.emit(BuilderEvent::transaction_mined(
                         self.builder_index,
                         tx_hash,
@@ -685,7 +693,7 @@ where
         let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
-            self.beneficiary,
+            self.sender_eoa,
             bundle.gas_estimate,
             bundle.gas_fees,
         );
@@ -1201,8 +1209,10 @@ impl BundleSenderTrigger {
 struct BuilderMetric {
     #[metric(describe = "the count of bundle transactions already sent.")]
     bundle_txns_sent: Counter,
-    #[metric(describe = "the count of bundle transactions successed.")]
+    #[metric(describe = "the count of successful bundle transactions.")]
     bundle_txns_success: Counter,
+    #[metric(describe = "the count of reverted bundle transactions.")]
+    bundle_txns_reverted: Counter,
     #[metric(describe = "the count of bundle gas limit.")]
     bundle_gas_limit: Counter,
     #[metric(describe = "the count of bundle gas used.")]
@@ -1246,8 +1256,18 @@ struct BuilderMetric {
 }
 
 impl BuilderMetric {
-    fn process_bundle_txn_success(&self, gas_limit: Option<u64>, gas_used: Option<u128>) {
-        self.bundle_txns_success.increment(1);
+    fn process_bundle_txn_mined(
+        &self,
+        gas_limit: Option<u64>,
+        gas_used: Option<u128>,
+        is_success: bool,
+    ) {
+        if is_success {
+            self.bundle_txns_success.increment(1);
+        } else {
+            self.bundle_txns_reverted.increment(1);
+        }
+
         if let Some(limit) = gas_limit {
             self.bundle_gas_limit.increment(limit);
         }
@@ -1420,6 +1440,7 @@ mod tests {
                         gas_price: None,
                         tx_hash: B256::ZERO,
                         attempt_number: 0,
+                        is_success: true,
                     }))
                 })
             });
