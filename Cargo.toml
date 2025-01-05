@@ -59,7 +59,7 @@ alloy-network = { version = "0.7.3" }
 alloy-rlp = "0.3.8"
 
 # reth
-reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.0.7" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v1.1.4" }
 
 anyhow = "1.0.89"
 async-trait = "0.1.83"
