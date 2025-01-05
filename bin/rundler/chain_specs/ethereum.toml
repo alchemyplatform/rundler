@@ -5,6 +5,6 @@ flashbots_enabled = true
 flashbots_relay_url = "https://relay.flashbots.net"
 flashbots_status_url = "https://protect.flashbots.net/tx/"
 
-max_bundle_size_bytes = 131072
+max_transaction_size_bytes = 131072
 
 min_max_priority_fee_per_gas = 50000000
