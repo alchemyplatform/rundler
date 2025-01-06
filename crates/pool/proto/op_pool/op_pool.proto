@@ -532,6 +532,7 @@ message MempoolError {
     OperationDropTooSoon operation_drop_too_soon = 16;
     PreOpGasLimitEfficiencyTooLow pre_op_gas_limit_efficiency_too_low = 17;
     ExecutionGasLimitEfficiencyTooLow execution_gas_limit_efficiency_too_low = 18;
+    TooManyExpectedStorageSlots too_many_expected_storage_slots = 19;
   }
 }
 
@@ -592,6 +593,11 @@ message PreOpGasLimitEfficiencyTooLow {
 message ExecutionGasLimitEfficiencyTooLow {
   float required = 1;
   float actual = 2;
+}
+
+message TooManyExpectedStorageSlots {
+  uint64 max_slots = 1;
+  uint64 expected_slots = 2;
 }
 
 // PRECHECK VIOLATIONS

@@ -77,6 +77,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *NUM_BUILDERS_V0_7*
 - `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
   - env: *DA_GAS_TRACKING_ENABLED*
+- `--max_expected_storage_slots`: Optionally set the maximum number of expected storage slots to submit with a conditional transaction. (default: `None`)
+  - env: *MAX_EXPECTED_STORAGE_SLOTS*
 
 ## Metrics Options
 
@@ -218,11 +220,11 @@ List of command line options for configuring the Builder.
 - `--builder.flashbots_relay_auth_key`: Only used/required if builder.sender == "flashbots." Authorization key to use with the flashbots relay. See [here](https://docs.flashbots.net/flashbots-auction/advanced/rpc-endpoint#authentication) for more info. (default: None)
   - env: *BUILDER_FLASHBOTS_RELAY_AUTH_KEY*
 - `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "polygon_bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
-  - env: `BUILDER_BLOXROUTE_AUTH_HEADER`
+  - env: *BUILDER_BLOXROUTE_AUTH_HEADER*
 - `--builder.index_offset`: If running multiple builder processes, this is the index offset to assign unique indexes to each bundle sender. (default: 0)
-  - env: `BUILDER_INDEX_OFFSET`
+  - env: *BUILDER_INDEX_OFFSET*
 - `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
-  - env: `BUILDER_POOL_URL`
+  - env: *BUILDER_POOL_URL*
   - *Only required when running in distributed mode*
 
 ### Key management

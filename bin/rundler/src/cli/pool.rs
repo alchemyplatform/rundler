@@ -243,6 +243,7 @@ impl PoolArgs {
             da_gas_tracking_enabled,
             gas_limit_efficiency_reject_threshold: self.gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
+            max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
         };
 
         let mut pool_configs = vec![];

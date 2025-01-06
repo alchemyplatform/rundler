@@ -186,6 +186,12 @@ pub enum SkipReason {
     },
     /// Bundle ran out of space by gas limit to include the operation
     GasLimit,
+    /// Expected storage conflict
+    ExpectedStorageConflict(String),
+    /// Expected storage limit reached
+    ExpectedStorageLimit,
+    /// Transaction size limit reached
+    TransactionSizeLimit,
     /// Other reason, typically internal errors
     Other { reason: Arc<String> },
 }

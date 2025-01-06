@@ -156,6 +156,7 @@ pub(crate) struct Settings {
     pub(crate) bundle_priority_fee_overhead_percent: u32,
     pub(crate) priority_fee_mode: PriorityFeeMode,
     pub(crate) da_gas_tracking_enabled: bool,
+    pub(crate) max_expected_storage_slots: usize,
 }
 
 #[async_trait]
@@ -303,15 +304,11 @@ where
                     }
                 }
 
-                let mut expected_storage = ExpectedStorage::default();
-                for op in context.iter_ops_with_simulations() {
-                    expected_storage.merge(&op.simulation.expected_storage)?;
-                }
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
                     gas_fees: bundle_fees,
-                    expected_storage,
+                    expected_storage: context.expected_storage,
                     rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
                     entity_updates: context.entity_updates.into_values().collect(),
                 });
@@ -528,6 +525,7 @@ where
 
         let mut gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
+
         for (po, simulation) in ops_with_simulations {
             let op = po.clone().uo;
             let simulation = match simulation {
@@ -569,13 +567,17 @@ where
                 continue;
             }
 
+            // Limit by transaction size
             let op_size_bytes: usize = op.abi_encoded_size();
-
             let op_size_with_offset_word = op_size_bytes.saturating_add(USER_OP_OFFSET_WORD_SIZE);
-
             if op_size_with_offset_word.saturating_add(constructed_bundle_size)
                 >= self.settings.chain_spec.max_transaction_size_bytes
             {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op),
+                    SkipReason::TransactionSizeLimit,
+                ));
                 continue;
             }
 
@@ -583,8 +585,32 @@ where
             let required_gas =
                 gas_spent + op.computation_gas_limit(&self.settings.chain_spec, None);
             if required_gas > self.settings.max_bundle_gas {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op),
+                    SkipReason::GasLimit,
+                ));
                 continue;
             }
+
+            // Merge the expected storage and skip if there is a conflict or if the storage is over max
+            let mut new_expected_storage = context.expected_storage.clone();
+            if let Err(e) = new_expected_storage.merge(&simulation.expected_storage) {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op),
+                    SkipReason::ExpectedStorageConflict(e.to_string()),
+                ));
+                continue;
+            } else if new_expected_storage.num_slots() > self.settings.max_expected_storage_slots {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_index,
+                    self.op_hash(&op),
+                    SkipReason::ExpectedStorageLimit,
+                ));
+                continue;
+            }
+            context.expected_storage = new_expected_storage;
 
             if let Some(&other_sender) = simulation
                 .accessed_addresses
@@ -601,6 +627,7 @@ where
                 ));
                 continue;
             }
+
             if let Some(paymaster) = op.paymaster() {
                 let Some(balance) = balances_by_paymaster.get_mut(&paymaster) else {
                     error!("Op had paymaster with unknown balance, but balances should have been loaded for all paymasters in bundle.");
@@ -632,11 +659,14 @@ where
                     simulation,
                 });
         }
+
         for paymaster in paymasters_to_reject {
             // No need to update aggregator signatures because we haven't computed them yet.
             let _ = context.reject_entity(paymaster.entity, paymaster.is_staked);
         }
+
         self.compute_all_aggregator_signatures(&mut context).await;
+
         context
     }
 
@@ -1204,6 +1234,7 @@ struct ProposalContext<UO> {
     rejected_ops: Vec<(UO, EntityInfos)>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
     entity_updates: BTreeMap<Address, EntityUpdate>,
+    expected_storage: ExpectedStorage,
 }
 
 #[derive(Debug)]
@@ -1227,6 +1258,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup<UO>>::new(),
             rejected_ops: Vec::<(UO, EntityInfos)>::new(),
             entity_updates: BTreeMap::new(),
+            expected_storage: ExpectedStorage::default(),
         }
     }
 
@@ -2433,6 +2465,7 @@ mod tests {
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
+            expected_storage: ExpectedStorage::default(),
         };
 
         let expected_gas_limit = op1.gas_limit(&cs, None)
@@ -2474,6 +2507,7 @@ mod tests {
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
+            expected_storage: ExpectedStorage::default(),
         };
         let gas_limit = context.get_bundle_gas_limit(&cs);
 
@@ -2692,6 +2726,90 @@ mod tests {
         assert_eq!(bundle.rejected_ops, vec![op]);
     }
 
+    #[tokio::test]
+    async fn test_single_uo_max_expected_storage_slots() {
+        let op = default_op();
+        let mut expected_storage = ExpectedStorage::default();
+        for _ in 0..=MAX_EXPECTED_STORAGE_SLOTS {
+            expected_storage.insert(Address::random(), U256::ZERO, U256::ZERO);
+        }
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op,
+                simulation_result: Box::new(move || {
+                    Ok(SimulationResult {
+                        expected_storage: expected_storage.clone(),
+                        ..Default::default()
+                    })
+                }),
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+        )
+        .await;
+
+        assert!(bundle.is_empty())
+    }
+
+    #[tokio::test]
+    async fn test_skip_max_expected_storage_slots() {
+        let op0 = op_with_sender(address(1));
+        let op1 = op_with_sender(address(2));
+        let mut expected_storage0 = ExpectedStorage::default();
+        for _ in 0..MAX_EXPECTED_STORAGE_SLOTS {
+            expected_storage0.insert(Address::random(), U256::ZERO, U256::ZERO);
+        }
+        let mut expected_storage1 = ExpectedStorage::default();
+        expected_storage1.insert(Address::random(), U256::ZERO, U256::ZERO);
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(move || {
+                        Ok(SimulationResult {
+                            expected_storage: expected_storage0.clone(),
+                            ..Default::default()
+                        })
+                    }),
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(move || {
+                        Ok(SimulationResult {
+                            expected_storage: expected_storage1.clone(),
+                            ..Default::default()
+                        })
+                    }),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op0],
+                ..Default::default()
+            }]
+        );
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
@@ -2716,6 +2834,8 @@ mod tests {
         )
         .await
     }
+
+    const MAX_EXPECTED_STORAGE_SLOTS: usize = 100;
 
     #[allow(clippy::too_many_arguments)]
     async fn mock_make_bundle(
@@ -2867,6 +2987,7 @@ mod tests {
                 bundle_base_fee_overhead_percent: 27,
                 bundle_priority_fee_overhead_percent: 0,
                 da_gas_tracking_enabled,
+                max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
             },
             event_sender,
         );

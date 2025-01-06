@@ -354,6 +354,13 @@ pub struct CommonArgs {
         default_value = "10"
     )]
     pub provider_client_timeout_seconds: u64,
+
+    #[arg(
+        long = "max_expected_storage_slots",
+        name = "max_expected_storage_slots",
+        env = "MAX_EXPECTED_STORAGE_SLOTS"
+    )]
+    pub max_expected_storage_slots: Option<usize>,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;

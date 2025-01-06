@@ -173,6 +173,8 @@ pub struct PoolConfig {
     pub gas_limit_efficiency_reject_threshold: f32,
     /// Maximum time a UO is allowed in the pool before being dropped
     pub max_time_in_pool: Option<Duration>,
+    /// The maximum number of storage slots that can be expected to be used by a user operation during validation
+    pub max_expected_storage_slots: usize,
 }
 
 /// Origin of an operation.
