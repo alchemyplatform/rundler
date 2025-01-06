@@ -317,6 +317,9 @@ impl From<MempoolError> for EthRpcError {
             MempoolError::ExecutionGasLimitEfficiencyTooLow(_, _) => {
                 Self::InvalidParams(value.to_string())
             }
+            MempoolError::TooManyExpectedStorageSlots(_, _) => {
+                Self::InvalidParams(value.to_string())
+            }
         }
     }
 }

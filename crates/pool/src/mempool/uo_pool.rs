@@ -562,6 +562,15 @@ where
             return Err(MempoolError::UnsupportedAggregator(agg.address));
         }
 
+        // Check if op has more than the maximum allowed expected storage slots
+        let expected_slots = sim_result.expected_storage.num_slots();
+        if expected_slots > self.config.max_expected_storage_slots {
+            return Err(MempoolError::TooManyExpectedStorageSlots(
+                self.config.max_expected_storage_slots,
+                expected_slots,
+            ));
+        }
+
         // Check if op violates the STO-041 spec rule
         self.state
             .read()
@@ -1907,6 +1916,7 @@ mod tests {
             drop_min_num_blocks: 10,
             gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
+            max_expected_storage_slots: usize::MAX,
         }
     }
 

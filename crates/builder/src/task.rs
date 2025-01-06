@@ -91,6 +91,8 @@ pub struct Args {
     pub da_gas_tracking_enabled: bool,
     /// Provider client timeout
     pub provider_client_timeout_seconds: u64,
+    /// Maximum number of expected storage slots in a bundle
+    pub max_expected_storage_slots: usize,
 }
 
 /// Builder settings for an entrypoint
@@ -355,6 +357,7 @@ where
             bundle_base_fee_overhead_percent: self.args.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
+            max_expected_storage_slots: self.args.max_expected_storage_slots,
         };
 
         let transaction_sender = self.args.sender_args.clone().into_sender(

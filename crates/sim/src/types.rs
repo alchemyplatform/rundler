@@ -54,6 +54,11 @@ impl ExpectedStorage {
             .or_default()
             .insert(B256::from(slot), B256::from(value));
     }
+
+    /// Size of the storage map.
+    pub fn num_slots(&self) -> usize {
+        self.0.values().map(|slots| slots.len()).sum()
+    }
 }
 
 use std::fmt::{Display, Formatter};

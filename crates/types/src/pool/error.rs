@@ -100,6 +100,9 @@ pub enum MempoolError {
     /// Execution gas limit efficiency too low
     #[error("Execution gas limit efficiency too low. Required: {0}, Actual: {1}")]
     ExecutionGasLimitEfficiencyTooLow(f32, f32),
+    /// Too many expected storage slots
+    #[error("Too many expected storage slots. Maximum: {0}, Actual: {1}")]
+    TooManyExpectedStorageSlots(usize, usize),
 }
 
 /// Precheck violation enumeration

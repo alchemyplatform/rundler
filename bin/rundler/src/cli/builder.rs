@@ -361,6 +361,7 @@ impl BuilderArgs {
             remote_address,
             da_gas_tracking_enabled,
             provider_client_timeout_seconds,
+            max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
         })
     }
 
