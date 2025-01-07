@@ -412,7 +412,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
 ///
 /// The easiest way to get the updated value is to run this module's tests. The
 /// failure will tell you the new value.
-const PROXY_TARGET_OFFSET: usize = 163;
+const PROXY_TARGET_OFFSET: usize = 159;
 
 // Replaces the address of the proxy target where it appears in the proxy
 // bytecode so we don't need the same fixed address every time.

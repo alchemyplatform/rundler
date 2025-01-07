@@ -35,7 +35,7 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: "nightly-fe2acca4e379793539db80e032d76ffe0110298b"
+          version: "v0.3.0"
 
       - name: Install latest nextest release
         uses: taiki-e/install-action@nextest
