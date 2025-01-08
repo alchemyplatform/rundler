@@ -362,7 +362,7 @@ where
                         .process_bundle_txn_mined(gas_limit, gas_used, is_success);
 
                     if !is_success {
-                        error!("Bundle transaction {tx_hash:?} reverted onchain");
+                        warn!("Bundle transaction {tx_hash:?} reverted onchain");
                         // TODO(danc): handle this case by removing the operations from the pool and updating reputation
                     }
 
