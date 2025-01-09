@@ -21,7 +21,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{rpc_authorization::RpcAuthorization, FromRpc, RpcAddress};
+use super::{rpc_authorization::RpcEip7702Auth, FromRpc, RpcAddress};
 
 /// User operation definition for RPC inputs
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub(crate) struct RpcUserOperation {
     paymaster_data: Option<Bytes>,
     signature: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
-    eip7702_auth: Option<RpcAuthorization>,
+    eip7702_auth: Option<RpcEip7702Auth>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -159,7 +159,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_post_op_gas_limit: Option<U128>,
     paymaster_data: Option<Bytes>,
     signature: Bytes,
-    eip7702_auth: Option<RpcAuthorization>,
+    eip7702_auth: Option<RpcEip7702Auth>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -180,7 +180,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_post_op_gas_limit: def.paymaster_post_op_gas_limit.map(|x| x.to()),
             paymaster_data: def.paymaster_data.unwrap_or_default(),
             signature: def.signature,
-            authorization_contract: def.eip7702_auth.map(|a| a.address),
+            eip7702_auth_address: def.eip7702_auth.map(|a| a.address),
         }
     }
 }

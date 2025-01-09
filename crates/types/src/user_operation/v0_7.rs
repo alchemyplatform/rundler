@@ -19,7 +19,7 @@ use super::{
     random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
     UserOperationVariant,
 };
-use crate::{authorization::Authorization, chain::ChainSpec, Entity, EntryPointVersion};
+use crate::{authorization::Eip7702Auth, chain::ChainSpec, Entity, EntryPointVersion};
 
 /// Gas overhead required by the entry point contract for the inner call
 pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 10_000;
@@ -83,7 +83,7 @@ pub struct UserOperation {
     /// Paymaster data
     pub paymaster_data: Bytes,
     /// eip 7702 - tuple of authority.
-    pub authorization_tuple: Option<Authorization>,
+    pub authorization_tuple: Option<Eip7702Auth>,
 
     /*
      * Cached fields, not part of the UO
@@ -239,7 +239,7 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.packed.signature)
     }
 
-    fn authorization_tuple(&self) -> Option<Authorization> {
+    fn authorization_tuple(&self) -> Option<Eip7702Auth> {
         self.authorization_tuple.clone()
     }
 }
@@ -340,7 +340,7 @@ pub struct UserOperationOptionalGas {
     /// Paymaster data
     pub paymaster_data: Bytes,
     /// 7702 authorization contract address.
-    pub authorization_contract: Option<Address>,
+    pub eip7702_auth_address: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -373,9 +373,9 @@ impl UserOperationOptionalGas {
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
         }
-        if self.authorization_contract.is_some() {
-            builder = builder.authorization_tuple(Some(Authorization {
-                address: self.authorization_contract.unwrap(),
+        if self.eip7702_auth_address.is_some() {
+            builder = builder.authorization_tuple(Some(Eip7702Auth {
+                address: self.eip7702_auth_address.unwrap(),
                 chain_id: chain_spec.id,
                 // fake value for gas estimation.
                 nonce: 0,
@@ -484,8 +484,8 @@ impl UserOperationOptionalGas {
                 self.paymaster_data,
             );
         }
-        if let Some(contract) = self.authorization_contract {
-            builder = builder.authorization_tuple(Some(Authorization {
+        if let Some(contract) = self.eip7702_auth_address {
+            builder = builder.authorization_tuple(Some(Eip7702Auth {
                 address: contract,
                 ..Default::default()
             }));
@@ -542,7 +542,7 @@ pub struct UserOperationBuilder<'a> {
     packed_uo: Option<PackedUserOperation>,
 
     /// eip 7702 - tuple of authority.
-    authorization_tuple: Option<Authorization>,
+    authorization_tuple: Option<Eip7702Auth>,
 }
 
 /// Required fields for UserOperation v0.7
@@ -731,7 +731,7 @@ impl<'a> UserOperationBuilder<'a> {
     }
 
     /// Sets the authorization list
-    pub fn authorization_tuple(mut self, authorization_tuple: Option<Authorization>) -> Self {
+    pub fn authorization_tuple(mut self, authorization_tuple: Option<Eip7702Auth>) -> Self {
         self.authorization_tuple = authorization_tuple;
         self
     }

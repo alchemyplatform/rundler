@@ -15,7 +15,7 @@ use alloy_primitives::{Address, B256};
 use anyhow::{anyhow, Context};
 use rundler_task::grpc::protos::{from_bytes, ConversionError, ToProtoBytes};
 use rundler_types::{
-    authorization::Authorization,
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{
         BedrockDAGasUOData as RundlerBedrockDAGasUOData, DAGasUOData as RundlerDAGasUOData,
@@ -83,9 +83,9 @@ pub trait TryUoFromProto<T>: Sized {
     fn try_uo_from_proto(value: T, chain_spec: &ChainSpec) -> Result<Self, ConversionError>;
 }
 
-impl From<AuthorizationTuple> for Authorization {
+impl From<AuthorizationTuple> for Eip7702Auth {
     fn from(value: AuthorizationTuple) -> Self {
-        Authorization {
+        Eip7702Auth {
             chain_id: value.chain_id,
             address: from_bytes(&value.address).unwrap_or_default(),
             nonce: value.nonce,
@@ -103,7 +103,7 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
         let authorization_tuple = op
             .authorization_tuple
             .as_ref()
-            .map(|authorization| Authorization::from(authorization.clone()));
+            .map(|authorization| Eip7702Auth::from(authorization.clone()));
 
         Ok(v0_6::UserOperationBuilder::new(
             chain_spec,
@@ -164,7 +164,7 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
         let authorization_tuple = op
             .authorization_tuple
             .as_ref()
-            .map(|authorization| Authorization::from(authorization.clone()));
+            .map(|authorization| Eip7702Auth::from(authorization.clone()));
 
         let mut builder = v0_7::UserOperationBuilder::new(
             chain_spec,

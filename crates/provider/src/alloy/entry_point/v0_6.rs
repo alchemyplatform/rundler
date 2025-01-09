@@ -532,7 +532,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     gas_limit: u64,
     gas_fees: GasFees,
 ) -> TransactionRequest {
-    let mut authorization_list: Vec<SignedAuthorization> = vec![];
+    let mut eip7702_auth_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
         .into_iter()
         .map(|uoa| UserOpsPerAggregatorV0_6 {
@@ -541,7 +541,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .into_iter()
                 .map(|op| {
                     if let Some(authorization) = &op.authorization_tuple {
-                        authorization_list.push(SignedAuthorization::from(authorization.clone()));
+                        eip7702_auth_list.push(SignedAuthorization::from(authorization.clone()));
                     }
                     op.into()
                 })
@@ -567,8 +567,8 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
         .gas_limit(gas_limit)
         .max_fee_per_gas(gas_fees.max_fee_per_gas)
         .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
-    if !authorization_list.is_empty() {
-        txn_request = txn_request.with_authorization_list(authorization_list);
+    if !eip7702_auth_list.is_empty() {
+        txn_request = txn_request.with_authorization_list(eip7702_auth_list);
     }
 
     txn_request
