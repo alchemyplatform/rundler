@@ -13,7 +13,6 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
-    authorization::Authorization,
     chain::ChainSpec,
     v0_6::{
         ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationOptionalGas,
@@ -23,8 +22,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{FromRpc, RpcAddress};
-
+use super::{rpc_authorization::RpcAuthorization, FromRpc, RpcAddress};
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +38,7 @@ pub(crate) struct RpcUserOperation {
     max_priority_fee_per_gas: U128,
     paymaster_and_data: Bytes,
     signature: Bytes,
-    authorization_tuple: Option<Authorization>,
+    authorization_tuple: Option<RpcAuthorization>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -57,7 +55,7 @@ impl From<UserOperation> for RpcUserOperation {
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
-            authorization_tuple: op.authorization_tuple,
+            authorization_tuple: op.authorization_tuple.map(|a| a.into()),
         }
     }
 }
@@ -80,7 +78,7 @@ impl FromRpc<RpcUserOperation> for UserOperation {
                 signature: def.signature,
             },
             ExtendedUserOperation {
-                authorization_tuple: def.authorization_tuple,
+                authorization_tuple: def.authorization_tuple.map(|a| a.into()),
             },
         )
         .build()

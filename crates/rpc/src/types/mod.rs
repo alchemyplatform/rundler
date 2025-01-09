@@ -33,6 +33,8 @@ pub(crate) use v0_7::{
     RpcUserOperationOptionalGas as RpcUserOperationOptionalGasV0_7,
 };
 
+mod rpc_authorization;
+
 /// API namespace
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::EnumString)]
 #[strum(serialize_all = "lowercase", ascii_case_insensitive)]
