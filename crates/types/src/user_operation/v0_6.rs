@@ -20,6 +20,7 @@ use strum::IntoEnumIterator;
 
 use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{
+    aggregator::AggregatorCosts,
     authorization::Eip7702Auth,
     chain::ChainSpec,
     entity::{Entity, EntityType},
@@ -77,11 +78,19 @@ pub struct UserOperation {
     /// Signature
     pub signature: Bytes,
 
-    /// eip 7702 - list of authorities.
-    pub authorization_tuple: Option<Eip7702Auth>,
-
     /// Cached calldata gas cost
     pub calldata_gas_cost: u128,
+
+    /// eip 7702 - list of authorities.
+    pub authorization_tuple: Option<Eip7702Auth>,
+    /// Aggregator
+    pub aggregator: Option<Address>,
+    /// The full original signature, after the `signature` field is modified post-aggregation
+    pub original_signature: Bytes,
+    /// The original calldata cost
+    pub original_calldata_cost: u128,
+    /// The costs associated with the aggregator
+    pub aggregator_costs: AggregatorCosts,
 }
 
 #[cfg(feature = "test-utils")]
@@ -104,6 +113,7 @@ impl Default for UserOperation {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build()
@@ -193,6 +203,10 @@ impl UserOperationTrait for UserOperation {
         Self::get_address_from_field(&self.paymaster_and_data)
     }
 
+    fn aggregator(&self) -> Option<Address> {
+        self.aggregator
+    }
+
     fn call_data(&self) -> &Bytes {
         &self.call_data
     }
@@ -261,12 +275,8 @@ impl UserOperationTrait for UserOperation {
     }
 
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128 {
-        super::op_calldata_gas_cost(
-            ContractUserOperation::from(self.clone()),
-            chain_spec.calldata_zero_byte_gas(),
-            chain_spec.calldata_non_zero_byte_gas(),
-            chain_spec.per_user_op_word_gas(),
-        ) + chain_spec.per_user_op_v0_6_gas()
+        self.calldata_gas_cost
+            + chain_spec.per_user_op_v0_6_gas()
             + (if self.factory().is_some() {
                 chain_spec.per_user_op_deploy_overhead_gas()
             } else {
@@ -274,8 +284,53 @@ impl UserOperationTrait for UserOperation {
             })
     }
 
-    fn clear_signature(&mut self) {
-        self.signature = Bytes::default();
+    fn aggregator_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+        if self.aggregator.is_none() {
+            return 0;
+        }
+        super::aggregator_gas_limit(chain_spec, &self.aggregator_costs, bundle_size)
+    }
+
+    fn transform_for_aggregator(
+        mut self,
+        chain_spec: &ChainSpec,
+        aggregator: Address,
+        aggregator_costs: AggregatorCosts,
+        new_signature: Bytes,
+    ) -> Self {
+        self.aggregator = Some(aggregator);
+        self.aggregator_costs = aggregator_costs;
+        self.original_calldata_cost = self.calldata_gas_cost;
+        self.original_signature = self.signature;
+        self.signature = new_signature;
+
+        let cuo = ContractUserOperation::from(self.clone());
+        self.calldata_gas_cost = super::op_calldata_gas_cost(
+            &cuo,
+            chain_spec.calldata_zero_byte_gas(),
+            chain_spec.calldata_non_zero_byte_gas(),
+            chain_spec.per_user_op_word_gas(),
+        );
+
+        self
+    }
+
+    fn original_signature(&self) -> &Bytes {
+        &self.original_signature
+    }
+
+    fn with_original_signature(mut self) -> Self {
+        self.signature = self.original_signature.clone();
+        self.calldata_gas_cost = self.original_calldata_cost;
+        self
+    }
+
+    fn extra_data_len(&self, bundle_size: usize) -> usize {
+        if self.aggregator.is_some() {
+            super::extra_data_len(&self.aggregator_costs, bundle_size)
+        } else {
+            0
+        }
     }
 
     fn abi_encoded_size(&self) -> usize {
@@ -399,13 +454,17 @@ pub struct UserOperationOptionalGas {
     /// Signature (required, dummy value for gas estimation)
     pub signature: Bytes,
 
-    /// eip 7702 - tuple of authority.
+    /// eip 7702 - authorized address
     pub eip7702_auth_address: Option<Address>,
+    /// Signature aggregator, if any
+    pub aggregator: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
     /// Fill in the optional and dummy fields of the user operation with values
     /// that will cause the maximum possible calldata gas cost.
+    ///
+    /// PANICS: if the aggregator on the user operation is not found in chain spec. Check this before calling this function.
     pub fn max_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
         let max_4 = u32::MAX as u128;
         let max_8 = u64::MAX as u128;
@@ -436,10 +495,17 @@ impl UserOperationOptionalGas {
                 } else {
                     None
                 },
+                aggregator: self.aggregator,
             },
         );
 
-        builder.build()
+        let uo = builder.build();
+
+        if let Some(agg) = uo.aggregator {
+            super::transform_for_aggregator(uo, agg, chain_spec)
+        } else {
+            uo
+        }
     }
 
     /// Fill in the optional and dummy fields of the user operation with random values.
@@ -451,6 +517,8 @@ impl UserOperationOptionalGas {
     //
     /// Note that this will slightly overestimate the calldata gas needed as it uses
     /// the worst case scenario for the unknown gas values and paymaster_and_data.
+    ///
+    /// PANICS: if the aggregator on the user operation is not found in chain spec. Check this before calling this function.
     pub fn random_fill(&self, chain_spec: &ChainSpec) -> UserOperation {
         let builder = UserOperationBuilder::new(
             chain_spec,
@@ -478,10 +546,17 @@ impl UserOperationOptionalGas {
                 } else {
                     None
                 },
+                aggregator: self.aggregator,
             },
         );
 
-        builder.build()
+        let uo = builder.build();
+
+        if let Some(agg) = uo.aggregator {
+            super::transform_for_aggregator(uo, agg, chain_spec)
+        } else {
+            uo
+        }
     }
 
     /// Convert into a user operation builder.
@@ -519,6 +594,7 @@ impl UserOperationOptionalGas {
         };
         let extended = ExtendedUserOperation {
             authorization_tuple,
+            aggregator: self.aggregator,
         };
 
         UserOperationBuilder::new(chain_spec, required, extended)
@@ -567,6 +643,8 @@ pub struct UserOperationBuilder<'a> {
 pub struct ExtendedUserOperation {
     /// EIP 7702: authorization tuples.
     pub authorization_tuple: Option<Eip7702Auth>,
+    /// Signature aggregator, if any
+    pub aggregator: Option<Address>,
 }
 
 /// User operation required fields
@@ -647,8 +725,6 @@ impl<'a> UserOperationBuilder<'a> {
 
     /// Create a builder from a user operation
     pub fn from_uo(uo: UserOperation, chain_spec: &'a ChainSpec) -> Self {
-        let authorization_tuple = uo.authorization_tuple;
-
         Self {
             chain_spec,
             required: UserOperationRequiredFields {
@@ -666,7 +742,8 @@ impl<'a> UserOperationBuilder<'a> {
             },
             contract_uo: None,
             extended: ExtendedUserOperation {
-                authorization_tuple,
+                authorization_tuple: uo.authorization_tuple,
+                aggregator: uo.aggregator,
             },
         }
     }
@@ -720,8 +797,12 @@ impl<'a> UserOperationBuilder<'a> {
             max_priority_fee_per_gas: self.required.max_priority_fee_per_gas,
             paymaster_and_data: self.required.paymaster_and_data,
             signature: self.required.signature,
+            aggregator: None,
             authorization_tuple: self.extended.authorization_tuple,
             calldata_gas_cost: 0,
+            original_calldata_cost: 0,
+            original_signature: Bytes::default(),
+            aggregator_costs: AggregatorCosts::default(),
         };
 
         let cuo = self
@@ -729,7 +810,7 @@ impl<'a> UserOperationBuilder<'a> {
             .unwrap_or_else(|| ContractUserOperation::from(uo.clone()));
 
         uo.calldata_gas_cost = super::op_calldata_gas_cost(
-            cuo,
+            &cuo,
             self.chain_spec.calldata_zero_byte_gas(),
             self.chain_spec.calldata_non_zero_byte_gas(),
             self.chain_spec.per_user_op_word_gas(),
@@ -784,6 +865,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
@@ -844,6 +926,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
@@ -896,6 +979,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
@@ -924,6 +1008,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
@@ -955,11 +1040,58 @@ mod tests {
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
             eip7702_auth_address: None,
+            aggregator: None,
         }
         .max_fill(&ChainSpec::default());
 
         let size = max_op.abi_encoded_size();
         let cuo = ContractUserOperation::from(max_op).abi_encode();
         assert_eq!(size, cuo.len());
+    }
+
+    #[test]
+    fn test_aggregator() {
+        let cs = ChainSpec::default();
+        let aggregator = Address::random();
+        let orig_sig = bytes!("deadbeef");
+        let new_sig = bytes!("1234123412341234"); // calldata costs more
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: address!("0000000000000000000000000000000000000000"),
+                nonce: U256::ZERO,
+                init_code: Bytes::default(),
+                call_data: Bytes::default(),
+                call_gas_limit: 0,
+                verification_gas_limit: 0,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                paymaster_and_data: Bytes::default(),
+                signature: orig_sig.clone(),
+            },
+            ExtendedUserOperation {
+                authorization_tuple: None,
+                aggregator: Some(aggregator),
+            },
+        )
+        .build();
+
+        let orig_calldata_cost = uo.calldata_gas_cost;
+
+        let uo = uo.transform_for_aggregator(
+            &cs,
+            aggregator,
+            AggregatorCosts::default(),
+            new_sig.clone(),
+        );
+
+        assert_eq!(uo.signature, new_sig);
+        assert_eq!(uo.original_signature, orig_sig);
+        assert!(uo.calldata_gas_cost > orig_calldata_cost);
+
+        let uo = uo.with_original_signature();
+        assert_eq!(uo.signature, orig_sig);
+        assert_eq!(uo.calldata_gas_cost, orig_calldata_cost);
     }
 }

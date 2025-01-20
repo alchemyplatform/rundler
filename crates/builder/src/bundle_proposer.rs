@@ -31,13 +31,14 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_provider::{
     BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
-    ProvidersWithEntryPointT, SignatureAggregator,
+    ProvidersWithEntryPointT,
 };
 use rundler_sim::{
     ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator,
     ViolationError,
 };
 use rundler_types::{
+    aggregator::SignatureAggregatorResult,
     chain::ChainSpec,
     da::DAGasBlockData,
     pool::{Pool, PoolOperation, SimulationViolation},
@@ -397,16 +398,22 @@ where
             return Some(op);
         }
 
+        // TODO(bundle): assuming a bundle size of 1
+        let bundle_size = 1;
+
         let required_da_gas = if self.settings.da_gas_tracking_enabled
             && da_block_data.is_some()
             && self.ep_providers.da_gas_oracle_sync().is_some()
         {
             let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
             let da_block_data = da_block_data.unwrap();
+            let extra_data_len = op.uo.extra_data_len(bundle_size);
+
             da_gas_oracle.calc_da_gas_sync(
                 &op.da_gas_data,
                 da_block_data,
                 op.uo.gas_price(base_fee),
+                extra_data_len,
             )
         } else {
             match self
@@ -416,6 +423,7 @@ where
                     op.uo.clone().into(),
                     block_hash.into(),
                     op.uo.gas_price(base_fee),
+                    bundle_size,
                 )
                 .await
             {
@@ -438,10 +446,11 @@ where
             }
         };
 
-        // This assumes a bundle size of 1
-        let required_pvg =
-            op.uo
-                .required_pre_verification_gas(&self.settings.chain_spec, 1, required_da_gas);
+        let required_pvg = op.uo.required_pre_verification_gas(
+            &self.settings.chain_spec,
+            bundle_size,
+            required_da_gas,
+        );
 
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
@@ -651,7 +660,7 @@ where
 
             context
                 .groups_by_aggregator
-                .entry(simulation.aggregator_address())
+                .entry(op.aggregator())
                 .or_default()
                 .ops_with_simulations
                 .push(OpWithSimulation {
@@ -897,19 +906,31 @@ where
         &self,
         aggregator: Address,
         group: &AggregatorGroup<<Self as BundleProposer>::UO>,
-    ) -> (Address, anyhow::Result<Option<Bytes>>) {
-        let ops = group
+    ) -> (Address, SignatureAggregatorResult<Bytes>) {
+        let Some(agg) = self
+            .settings
+            .chain_spec
+            .get_signature_aggregator(&aggregator)
+        else {
+            // this should be checked prior to calling this function
+            panic!("BUG: aggregator {aggregator:?} not found in chain spec");
+        };
+
+        let uos = group
             .ops_with_simulations
             .iter()
-            .map(|op_with_simulation| op_with_simulation.op.clone())
-            .collect();
-        let result = self
-            .ep_providers
-            .entry_point()
-            .aggregate_signatures(aggregator, ops)
-            .await
-            .map_err(anyhow::Error::from);
-        (aggregator, result)
+            // Mempool ops are transformed during insertion - use the original signature to aggregate
+            .map(|op| op.op.clone().with_original_signature().into())
+            .collect::<Vec<_>>();
+
+        let aggregated = match agg.aggregate_signatures(uos).await {
+            Ok(aggregated) => aggregated,
+            Err(e) => {
+                return (aggregator, Err(e));
+            }
+        };
+
+        (aggregator, Ok(aggregated))
     }
 
     async fn process_failed_op(
@@ -1113,6 +1134,23 @@ where
         let mut gas_left = math::increase_by_percent(self.settings.max_bundle_gas, 10);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
+            // if the op has an aggregator, check if the aggregator is supported, if not skip
+            if let Some(agg) = op.uo.aggregator() {
+                if self
+                    .settings
+                    .chain_spec
+                    .get_signature_aggregator(&agg)
+                    .is_none()
+                {
+                    self.emit(BuilderEvent::skipped_op(
+                        self.builder_index,
+                        self.op_hash(&op.uo),
+                        SkipReason::UnsupportedAggregator(agg),
+                    ));
+                    continue;
+                }
+            }
+
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
             let gas = op.uo.computation_gas_limit(&self.settings.chain_spec, None);
@@ -1213,17 +1251,6 @@ struct OpWithSimulation<UO> {
     simulation: SimulationResult,
 }
 
-impl<UO: UserOperation> OpWithSimulation<UO> {
-    fn op_with_replaced_sig(&self) -> UO {
-        let mut op = self.op.clone();
-        if self.simulation.aggregator.is_some() {
-            // if using an aggregator, clear out the user op signature
-            op.clear_signature();
-        }
-        op
-    }
-}
-
 /// A struct used internally to represent the current state of a proposed bundle
 /// as it goes through iterations. Contains similar data to the
 /// `Vec<UserOpsPerAggregator>` that will eventually be passed to the entry
@@ -1269,11 +1296,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
     fn apply_aggregation_signature_result(
         &mut self,
         aggregator: Address,
-        result: anyhow::Result<Option<Bytes>>,
+        result: SignatureAggregatorResult<Bytes>,
     ) {
         match result {
-            Ok(Some(sig)) => self.groups_by_aggregator[&Some(aggregator)].signature = sig,
-            Ok(None) => self.reject_aggregator(aggregator),
+            Ok(sig) => self.groups_by_aggregator[&Some(aggregator)].signature = sig,
             Err(error) => {
                 error!("Failed to compute aggregator signature: {error}");
                 self.groups_by_aggregator.remove(&Some(aggregator));
@@ -1336,13 +1362,13 @@ impl<UO: UserOperation> ProposalContext<UO> {
     #[must_use = "rejected entity but did not update aggregator signatures"]
     fn reject_entity(&mut self, entity: Entity, is_staked: bool) -> Vec<Address> {
         let ret = match entity.kind {
-            EntityType::Aggregator => {
-                self.reject_aggregator(entity.address);
-                vec![]
-            }
             EntityType::Paymaster => self.reject_paymaster(entity.address),
             EntityType::Factory => self.reject_factory(entity.address),
             EntityType::Account => self.reject_sender(entity.address),
+            _ => {
+                error!("Cannot reject entity of type {}", entity.kind);
+                vec![]
+            }
         };
         self.entity_updates.insert(
             entity.address,
@@ -1357,17 +1383,6 @@ impl<UO: UserOperation> ProposalContext<UO> {
             },
         );
         ret
-    }
-
-    fn reject_aggregator(&mut self, address: Address) {
-        if let Some(group) = self.groups_by_aggregator.remove(&Some(address)) {
-            for op in group.ops_with_simulations {
-                if let Some(paymaster) = op.op.paymaster() {
-                    self.add_erep_015_paymaster_amendment(paymaster, 1);
-                }
-                self.rejected_ops.push((op.op, op.simulation.entity_infos));
-            }
-        }
     }
 
     fn reject_paymaster(&mut self, address: Address) -> Vec<Address> {
@@ -1434,7 +1449,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 user_ops: group
                     .ops_with_simulations
                     .iter()
-                    .map(|op| op.op_with_replaced_sig())
+                    .map(|op| op.op.clone())
                     .collect(),
                 aggregator: aggregator.unwrap_or_default(),
                 signature: group.signature.clone(),
@@ -1443,18 +1458,33 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn get_bundle_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
-        // TODO(danc): in the 0.7 entrypoint we could optimize this by removing the need for
-        // the 10K gas and 63/64 gas overheads for each op in the bundle and instead calculate exactly
-        // the limit needed to include that overhead for each op.
-        //
-        // In the 0.6 entrypoint we're assuming that we need 1 verification gas buffer for each op in the bundle
-        // regardless of if it uses a post op or not. We can optimize to calculate the exact gas overhead
-        // needed to have the buffer for each op.
+        // Bundle overhead
+        let mut gas_limit = rundler_types::bundle_shared_gas(chain_spec);
 
-        self.iter_ops_with_simulations()
+        // Per aggregator fixed gas
+        for agg in self.groups_by_aggregator.keys().flatten() {
+            if agg.is_zero() {
+                continue;
+            }
+
+            let Some(agg) = chain_spec.get_signature_aggregator(agg) else {
+                // this should be checked prior to calling this function
+                panic!("BUG: aggregator {agg:?} not found in chain spec");
+            };
+
+            gas_limit += agg.costs().execution_fixed_gas;
+
+            // NOTE: this assumes that the DA cost for the aggregated signature is covered by the gas limits
+            // from the UOs (on chains that have DA gas in gas limit). This is enforced during fee check phase.
+        }
+
+        // per UO gas, bundle_size == None to signal to exclude shared gas
+        gas_limit += self
+            .iter_ops_with_simulations()
             .map(|sim_op| sim_op.op.gas_limit(chain_spec, None))
-            .sum::<u128>()
-            + rundler_types::bundle_shared_gas(chain_spec)
+            .sum::<u128>();
+
+        gas_limit
     }
 
     fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
@@ -1680,11 +1710,11 @@ mod tests {
     use alloy_primitives::{utils::parse_units, Address, B256};
     use anyhow::anyhow;
     use rundler_provider::{
-        AggregatorSimOut, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
-        ProvidersWithEntryPoint,
+        MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, ProvidersWithEntryPoint,
     };
     use rundler_sim::{MockFeeEstimator, MockSimulator};
     use rundler_types::{
+        aggregator::{AggregatorCosts, MockSignatureAggregator, SignatureAggregatorRegistry},
         da::BedrockDAGasBlockData,
         pool::{MockPool, SimulationViolation},
         v0_6::UserOperation,
@@ -1866,6 +1896,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
         assert_eq!(
@@ -1903,6 +1934,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
         assert_eq!(
@@ -1951,6 +1983,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             true,
+            vec![],
         )
         .await;
         assert_eq!(
@@ -1974,17 +2007,21 @@ mod tests {
     async fn test_aggregators() {
         // One op with no aggregator, two from aggregator A, and one from
         // aggregator B.
-        let unaggregated_op = op_with_sender(address(1));
-        let aggregated_op_a1 = op_with_sender(address(2));
-        let aggregated_op_a2 = op_with_sender(address(3));
-        let aggregated_op_b = op_with_sender(address(4));
         let aggregator_a_address = address(10);
         let aggregator_b_address = address(11);
-        let op_a1_aggregated_sig = 11;
-        let op_a2_aggregated_sig = 12;
-        let op_b_aggregated_sig = 21;
+        let unaggregated_op = op_with_sender(address(1));
+        let mut aggregated_op_a1 = op_with_sender(address(2));
+        aggregated_op_a1.aggregator = Some(aggregator_a_address);
+        let mut aggregated_op_a2 = op_with_sender(address(3));
+        aggregated_op_a2.aggregator = Some(aggregator_a_address);
+        let mut aggregated_op_b = op_with_sender(address(4));
+        aggregated_op_b.aggregator = Some(aggregator_b_address);
         let aggregator_a_signature = 101;
         let aggregator_b_signature = 102;
+
+        let agg_a = mock_signature_aggregator(aggregator_a_address, bytes(aggregator_a_signature));
+        let agg_b = mock_signature_aggregator(aggregator_b_address, bytes(aggregator_b_signature));
+
         let mut bundle = mock_make_bundle(
             vec![
                 MockOp {
@@ -1993,39 +2030,15 @@ mod tests {
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
-                    simulation_result: Box::new(move || {
-                        Ok(SimulationResult {
-                            aggregator: Some(AggregatorSimOut {
-                                address: aggregator_a_address,
-                                signature: bytes(op_a1_aggregated_sig),
-                            }),
-                            ..Default::default()
-                        })
-                    }),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
-                    simulation_result: Box::new(move || {
-                        Ok(SimulationResult {
-                            aggregator: Some(AggregatorSimOut {
-                                address: aggregator_a_address,
-                                signature: bytes(op_a2_aggregated_sig),
-                            }),
-                            ..Default::default()
-                        })
-                    }),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
-                    simulation_result: Box::new(move || {
-                        Ok(SimulationResult {
-                            aggregator: Some(AggregatorSimOut {
-                                address: aggregator_b_address,
-                                signature: bytes(op_b_aggregated_sig),
-                            }),
-                            ..Default::default()
-                        })
-                    }),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![
@@ -2045,6 +2058,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![agg_a, agg_b],
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -2136,6 +2150,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2200,6 +2215,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2259,6 +2275,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2357,6 +2374,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2408,6 +2426,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2534,6 +2553,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2569,6 +2589,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2584,13 +2605,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_post_op_revert_agg() {
-        let unaggregated_op = op_with_sender(address(1));
-        let aggregated_op_a1 = op_with_sender(address(2));
-        let aggregated_op_a2 = op_with_sender(address(3));
         let aggregator_a_address = address(10);
-        let op_a1_aggregated_sig = 11;
-        let op_a2_aggregated_sig = 12;
+        let unaggregated_op = op_with_sender(address(1));
+        let mut aggregated_op_a1 = op_with_sender(address(2));
+        aggregated_op_a1.aggregator = Some(aggregator_a_address);
+        let mut aggregated_op_a2 = op_with_sender(address(3));
+        aggregated_op_a2.aggregator = Some(aggregator_a_address);
         let aggregator_a_signature = 101;
+
+        let agg_a = mock_signature_aggregator(aggregator_a_address, bytes(aggregator_a_signature));
+
         let bundle = mock_make_bundle(
             vec![
                 MockOp {
@@ -2599,27 +2623,11 @@ mod tests {
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
-                    simulation_result: Box::new(move || {
-                        Ok(SimulationResult {
-                            aggregator: Some(AggregatorSimOut {
-                                address: aggregator_a_address,
-                                signature: bytes(op_a1_aggregated_sig),
-                            }),
-                            ..Default::default()
-                        })
-                    }),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
-                    simulation_result: Box::new(move || {
-                        Ok(SimulationResult {
-                            aggregator: Some(AggregatorSimOut {
-                                address: aggregator_a_address,
-                                signature: bytes(op_a2_aggregated_sig),
-                            }),
-                            ..Default::default()
-                        })
-                    }),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
                 },
             ],
             vec![MockAggregator {
@@ -2638,6 +2646,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![agg_a],
         )
         .await;
 
@@ -2680,6 +2689,7 @@ mod tests {
             true,
             actual_storage,
             false,
+            vec![],
         )
         .await;
 
@@ -2719,6 +2729,7 @@ mod tests {
             true,
             actual_storage,
             false,
+            vec![],
         )
         .await;
 
@@ -2752,6 +2763,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2798,6 +2810,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await;
 
@@ -2831,6 +2844,7 @@ mod tests {
             false,
             ExpectedStorage::default(),
             false,
+            vec![],
         )
         .await
     }
@@ -2848,6 +2862,7 @@ mod tests {
         notify_condition_not_met: bool,
         actual_storage: ExpectedStorage,
         da_gas_tracking_enabled: bool,
+        aggregators: Vec<MockSignatureAggregator>,
     ) -> Bundle<UserOperation> {
         let entry_point_address = address(123);
         let sender_eoa = address(124);
@@ -2962,10 +2977,20 @@ mod tests {
             .returning(move |_| Ok(bd_cloned.clone()));
         da_oracle
             .expect_calc_da_gas_sync()
-            .returning(move |_, bd, _| {
+            .returning(move |_, bd, _, _| {
                 assert_eq!(*bd, block_data);
                 100_000
             });
+
+        let mut chain_spec = ChainSpec {
+            da_pre_verification_gas: da_gas_tracking_enabled,
+            ..Default::default()
+        };
+        let mut agg_registry = SignatureAggregatorRegistry::default();
+        for agg in aggregators {
+            agg_registry.register(Arc::new(agg));
+        }
+        chain_spec.set_signature_aggregators(Arc::new(agg_registry));
 
         let mut proposer = BundleProposerImpl::new(
             0,
@@ -2976,10 +3001,7 @@ mod tests {
             ),
             BundleProposerProviders::new(pool_client, simulator, fee_estimator),
             Settings {
-                chain_spec: ChainSpec {
-                    da_pre_verification_gas: da_gas_tracking_enabled,
-                    ..Default::default()
-                },
+                chain_spec,
                 max_bundle_size,
                 max_bundle_gas: 10_000_000,
                 sender_eoa,
@@ -3108,5 +3130,14 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    fn mock_signature_aggregator(address: Address, signature: Bytes) -> MockSignatureAggregator {
+        let mut agg = MockSignatureAggregator::default();
+        agg.expect_address().return_const(address);
+        agg.expect_costs().return_const(AggregatorCosts::default());
+        agg.expect_aggregate_signatures()
+            .returning(move |_| Ok(signature.clone()));
+        agg
     }
 }

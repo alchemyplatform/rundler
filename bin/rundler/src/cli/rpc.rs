@@ -17,6 +17,7 @@ use anyhow::Context;
 use clap::Args;
 use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
+use rundler_provider::Providers;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_sim::{EstimationSettings, PrecheckSettings};
 use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
@@ -160,6 +161,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     chain_spec: ChainSpec,
     rpc_args: RpcCliArgs,
     common_args: CommonArgs,
+    providers: impl Providers + 'static,
 ) -> anyhow::Result<()> {
     let RpcCliArgs {
         rpc: rpc_args,
@@ -192,14 +194,9 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    RpcTask::new(
-        task_args,
-        pool,
-        builder,
-        super::construct_providers(&common_args, &chain_spec)?,
-    )
-    .spawn(task_spawner)
-    .await?;
+    RpcTask::new(task_args, pool, builder, providers)
+        .spawn(task_spawner)
+        .await?;
 
     Ok(())
 }

@@ -473,7 +473,7 @@ where
     async fn add_operation(
         &self,
         origin: OperationOrigin,
-        op: UserOperationVariant,
+        mut op: UserOperationVariant,
     ) -> MempoolResult<B256> {
         // Initial state checks
         let to_replace = {
@@ -545,9 +545,36 @@ where
         // added to the pool and can lead to an overdraft
         self.paymaster.check_operation_cost(&op).await?;
 
-        // Prechecks
-        let versioned_op = op.clone().into();
+        // If using an aggregator, transform with calculated signature
+        if let Some(aggregator) = op.aggregator() {
+            let Some(agg) = self.config.chain_spec.get_signature_aggregator(&aggregator) else {
+                return Err(MempoolError::AggregatorError(format!(
+                    "Unsupported aggregator {:?}",
+                    aggregator
+                )));
+            };
 
+            let signature = match agg.validate_user_op_signature(&op).await {
+                Ok(sig) => sig,
+                Err(e) => {
+                    return Err(MempoolError::AggregatorError(format!(
+                        "Error validating signature: {:?}",
+                        e
+                    )));
+                }
+            };
+
+            op = op.transform_for_aggregator(
+                &self.config.chain_spec,
+                aggregator,
+                agg.costs().clone(),
+                signature,
+            );
+        }
+
+        let versioned_op: UP::UO = op.clone().into();
+
+        // Prechecks
         let precheck_ret = self
             .pool_providers
             .prechecker()
@@ -564,11 +591,6 @@ where
         let execution_gas_check_future =
             self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
         let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
-
-        // No aggregators supported for now
-        if let Some(agg) = &sim_result.aggregator {
-            return Err(MempoolError::UnsupportedAggregator(agg.address));
-        }
 
         // Check if op has more than the maximum allowed expected storage slots
         let expected_slots = sim_result.expected_storage.num_slots();
@@ -944,7 +966,7 @@ struct UoPoolMetrics {
 mod tests {
     use std::{collections::HashMap, str::FromStr, vec};
 
-    use alloy_primitives::{uint, Bytes};
+    use alloy_primitives::{bytes, uint, Bytes};
     use alloy_signer::SignerSync;
     use alloy_signer_local::PrivateKeySigner;
     use mockall::Sequence;
@@ -957,6 +979,10 @@ mod tests {
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
+        aggregator::{
+            AggregatorCosts, MockSignatureAggregator, SignatureAggregatorError,
+            SignatureAggregatorRegistry,
+        },
         authorization::Eip7702Auth,
         chain::ChainSpec,
         da::DAGasUOData,
@@ -1942,6 +1968,103 @@ mod tests {
 
         let best = pool.best_operations(10000, 0).unwrap();
         assert_eq!(best.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_unsupported_aggregator() {
+        let unsupported = Address::random();
+        let op = create_op_from_op_v0_6(UserOperation {
+            aggregator: Some(unsupported), // unsupported aggregator
+            ..Default::default()
+        });
+
+        let ops = vec![op.clone()];
+        let pool = create_pool(ops);
+        let err = pool
+            .add_operation(OperationOrigin::Local, op.op)
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(err, MempoolError::AggregatorError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_aggregator_transform() {
+        let mut config = default_config();
+        let agg_address = Address::random();
+        let agg_sig = bytes!("deadbeef");
+        let org_sig = bytes!("012345");
+
+        let mut agg = MockSignatureAggregator::default();
+        let agg_sig_clone = agg_sig.clone();
+        agg.expect_address().return_const(agg_address);
+        agg.expect_costs().return_const(AggregatorCosts::default());
+        agg.expect_validate_user_op_signature()
+            .returning(move |_| Ok(agg_sig_clone.clone()));
+
+        let mut registry = SignatureAggregatorRegistry::default();
+        registry.register(Arc::new(agg));
+
+        config
+            .chain_spec
+            .set_signature_aggregators(Arc::new(registry));
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            aggregator: Some(agg_address),
+            signature: org_sig.clone(),
+            ..Default::default()
+        });
+
+        let ops = vec![op.clone()];
+        let pool = create_pool_with_config(config, ops);
+        let hash = pool
+            .add_operation(OperationOrigin::Local, op.op)
+            .await
+            .unwrap();
+
+        let pool_op = pool.get_user_operation_by_hash(hash).unwrap();
+
+        if let UserOperationVariant::V0_6(uo) = &pool_op.uo {
+            assert_eq!(uo.signature, agg_sig);
+            assert_eq!(uo.original_signature, org_sig);
+        } else {
+            panic!("Expected V0_6 variant");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_aggregator_fail() {
+        let mut config = default_config();
+        let agg_address = Address::random();
+
+        let mut agg = MockSignatureAggregator::default();
+        agg.expect_address().return_const(agg_address);
+        agg.expect_costs().return_const(AggregatorCosts::default());
+        agg.expect_validate_user_op_signature()
+            .returning(move |_| Err(SignatureAggregatorError::ValidationReverted));
+
+        let mut registry = SignatureAggregatorRegistry::default();
+        registry.register(Arc::new(agg));
+
+        config
+            .chain_spec
+            .set_signature_aggregators(Arc::new(registry));
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            aggregator: Some(agg_address),
+            ..Default::default()
+        });
+
+        let ops = vec![op.clone()];
+        let pool = create_pool_with_config(config, ops);
+        let err = pool
+            .add_operation(OperationOrigin::Local, op.op)
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(err, MempoolError::AggregatorError(_)));
     }
 
     #[derive(Clone, Debug)]

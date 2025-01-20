@@ -65,6 +65,10 @@ impl From<&v0_6::UserOperation> for UserOperation {
             paymaster_and_data: op.paymaster_and_data.to_proto_bytes(),
             signature: op.signature.to_proto_bytes(),
             authorization_tuple,
+            aggregator: op
+                .aggregator
+                .map(|a| a.to_proto_bytes())
+                .unwrap_or_default(),
         };
         UserOperation {
             uo: Some(user_operation::Uo::V06(op)),
@@ -110,6 +114,11 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
             .authorization_tuple
             .as_ref()
             .map(|authorization| Eip7702Auth::from(authorization.clone()));
+        let aggregator = if !op.aggregator.is_empty() {
+            Some(from_bytes(&op.aggregator)?)
+        } else {
+            None
+        };
 
         Ok(v0_6::UserOperationBuilder::new(
             chain_spec,
@@ -128,6 +137,7 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
             },
             ExtendedUserOperation {
                 authorization_tuple,
+                aggregator,
             },
         )
         .build())
@@ -158,6 +168,10 @@ impl From<&v0_7::UserOperation> for UserOperation {
                 .authorization_tuple
                 .as_ref()
                 .map(|authorization| AuthorizationTuple::from(authorization.clone())),
+            aggregator: op
+                .aggregator
+                .map(|a| a.to_proto_bytes())
+                .unwrap_or_default(),
         };
         UserOperation {
             uo: Some(user_operation::Uo::V07(op)),
@@ -198,13 +212,14 @@ impl TryUoFromProto<UserOperationV07> for v0_7::UserOperation {
                 op.paymaster_data.into(),
             );
         }
-
-        if authorization_tuple.is_some() {
-            builder = builder.authorization_tuple(authorization_tuple);
-        }
-
         if !op.factory.is_empty() {
             builder = builder.factory(from_bytes(&op.factory)?, op.factory_data.into());
+        }
+        if let Some(auth) = authorization_tuple {
+            builder = builder.authorization_tuple(auth);
+        }
+        if !op.aggregator.is_empty() {
+            builder = builder.aggregator(from_bytes(&op.aggregator)?);
         }
 
         Ok(builder.build())

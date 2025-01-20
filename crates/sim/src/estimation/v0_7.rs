@@ -75,6 +75,15 @@ where
             provider, settings, ..
         } = self;
 
+        let agg = op
+            .aggregator
+            .map(|agg| {
+                self.chain_spec
+                    .get_signature_aggregator(&agg)
+                    .ok_or(GasEstimationError::UnsupportedAggregator(agg))
+            })
+            .transpose()?;
+
         let (block_hash, _) = provider
             .get_latest_block_hash_and_number()
             .await
@@ -82,7 +91,7 @@ where
 
         let pre_verification_gas = self.estimate_pre_verification_gas(&op, block_hash).await?;
 
-        let full_op = op
+        let mut full_op = op
             .clone()
             .into_user_operation_builder(
                 &self.chain_spec,
@@ -92,6 +101,14 @@ where
             )
             .pre_verification_gas(pre_verification_gas)
             .build();
+        if let Some(agg) = agg {
+            full_op = full_op.transform_for_aggregator(
+                &self.chain_spec,
+                agg.address(),
+                agg.costs().clone(),
+                agg.dummy_uo_signature().clone(),
+            );
+        }
 
         let verification_gas_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
@@ -265,9 +282,9 @@ where
             let GetOpWithLimitArgs { gas, fee } = args;
             // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
             UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .verification_gas_limit(gas)
                 .max_fee_per_gas(fee)
                 .max_priority_fee_per_gas(fee)
+                .verification_gas_limit(gas)
                 .call_gas_limit(0)
                 .build()
         };
@@ -615,6 +632,7 @@ mod tests {
             factory: None,
             factory_data: Bytes::new(),
             eip7702_auth_address: None,
+            aggregator: None,
         }
     }
 
@@ -848,6 +866,7 @@ mod tests {
             factory: None,
             factory_data: Bytes::new(),
             eip7702_auth_address: None,
+            aggregator: None,
         };
 
         let estimation = estimator
@@ -859,6 +878,26 @@ mod tests {
         assert!(matches!(
             estimation,
             GasEstimationError::GasTotalTooLarge(_, TEST_MAX_GAS_LIMITS)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_unsupported_aggregator() {
+        let (entry, provider) = create_base_config();
+        let (estimator, _) = create_estimator(entry, provider);
+        let mut op = demo_user_op_optional_gas(None);
+        let unsupported = Address::random();
+        op.aggregator = Some(unsupported);
+
+        let err = estimator
+            .estimate_op_gas(op, StateOverride::default())
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(
+            err,
+            GasEstimationError::UnsupportedAggregator(x) if x == unsupported,
         ));
     }
 

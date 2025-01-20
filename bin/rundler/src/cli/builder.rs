@@ -21,6 +21,7 @@ use rundler_builder::{
     TransactionSenderArgs, TransactionSenderKind,
 };
 use rundler_pool::RemotePoolClient;
+use rundler_provider::Providers;
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
@@ -433,6 +434,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     chain_spec: ChainSpec,
     builder_args: BuilderCliArgs,
     common_args: CommonArgs,
+    providers: impl Providers + 'static,
 ) -> anyhow::Result<()> {
     let BuilderCliArgs {
         builder: builder_args,
@@ -469,7 +471,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         event_sender,
         LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY),
         pool,
-        super::construct_providers(&common_args, &chain_spec)?,
+        providers,
     )
     .spawn(task_spawner)
     .await?;
