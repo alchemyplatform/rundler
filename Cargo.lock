@@ -4781,6 +4781,7 @@ dependencies = [
  "metrics-util",
  "paste",
  "reth-tasks",
+ "rundler-bls",
  "rundler-builder",
  "rundler-pool",
  "rundler-provider",
@@ -4808,6 +4809,16 @@ version = "0.4.0"
 dependencies = [
  "bindgen 0.70.1",
  "cc",
+]
+
+[[package]]
+name = "rundler-bls"
+version = "0.4.0"
+dependencies = [
+ "alloy-primitives",
+ "async-trait",
+ "rundler-provider",
+ "rundler-types",
 ]
 
 [[package]]
@@ -5049,6 +5060,7 @@ dependencies = [
  "alloy-sol-types",
  "anyhow",
  "async-trait",
+ "auto_impl",
  "cargo-husky",
  "chrono",
  "const-hex",

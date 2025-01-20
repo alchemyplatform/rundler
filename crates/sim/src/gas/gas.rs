@@ -11,13 +11,15 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use anyhow::Context;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, EvmProvider};
-use rundler_types::{chain::ChainSpec, da::DAGasUOData, GasFees, UserOperation};
+use rundler_types::{
+    aggregator::SignatureAggregator, chain::ChainSpec, da::DAGasUOData, GasFees, UserOperation,
+};
 use rundler_utils::math;
 use tokio::try_join;
 
@@ -43,6 +45,7 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<U
     random_op: &UO,
     block: BlockHashOrNumber,
     gas_price: u128,
+    aggregator: Option<&Arc<dyn SignatureAggregator>>,
 ) -> anyhow::Result<u128> {
     let da_gas = if chain_spec.da_pre_verification_gas {
         entry_point
@@ -54,7 +57,19 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<U
     };
 
     // Currently assume 1 op bundle
-    Ok(full_op.required_pre_verification_gas(chain_spec, 1, da_gas))
+    if let Some(agg) = aggregator {
+        let new_op = full_op.clone().transform_for_aggregator(
+            chain_spec,
+            agg.address(),
+            agg.costs().clone(),
+            agg.dummy_uo_signature(),
+        );
+        Ok(new_op.required_pre_verification_gas(chain_spec, 1, da_gas))
+
+        // TODO(danc): figure out DA gas for shared aggregated signature portion
+    } else {
+        Ok(full_op.required_pre_verification_gas(chain_spec, 1, da_gas))
+    }
 }
 
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.

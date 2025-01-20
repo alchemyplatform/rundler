@@ -17,13 +17,9 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256, U256};
-use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::TryFutureExt;
-use rundler_provider::{
-    AggregatorOut, AggregatorSimOut, EntryPoint, EvmProvider, SignatureAggregator,
-    SimulationProvider,
-};
+use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider};
 use rundler_types::{
     pool::{NeedsStakeInformation, SimulationViolation},
     v0_6::UserOperation as UserOperationV0_6,
@@ -55,10 +51,7 @@ pub fn new_v0_6_simulator<P, E>(
 ) -> impl Simulator<UO = UserOperationV0_6>
 where
     P: EvmProvider + Clone,
-    E: EntryPoint
-        + SignatureAggregator<UO = UserOperationV0_6>
-        + SimulationProvider<UO = UserOperationV0_6>
-        + Clone,
+    E: EntryPoint + SimulationProvider<UO = UserOperationV0_6> + Clone,
 {
     SimulatorImpl::new(
         provider.clone(),
@@ -78,10 +71,7 @@ pub fn new_v0_7_simulator<P, E>(
 ) -> impl Simulator<UO = UserOperationV0_7>
 where
     P: EvmProvider + Clone,
-    E: EntryPoint
-        + SignatureAggregator<UO = UserOperationV0_7>
-        + SimulationProvider<UO = UserOperationV0_7>
-        + Clone,
+    E: EntryPoint + SimulationProvider<UO = UserOperationV0_7> + Clone,
 {
     SimulatorImpl::new(
         provider.clone(),
@@ -118,7 +108,7 @@ impl<UO, P, E, V> SimulatorImpl<UO, P, E, V>
 where
     UO: UserOperation,
     P: EvmProvider,
-    E: EntryPoint + SignatureAggregator<UO = UO>,
+    E: EntryPoint,
     V: ValidationContextProvider<UO = UO>,
 {
     /// Create a new simulator
@@ -154,22 +144,6 @@ where
             allow_unstaked_addresses,
             _uo_type: PhantomData,
         }
-    }
-
-    async fn validate_aggregator_signature(
-        &self,
-        op: UO,
-        aggregator_address: Option<Address>,
-    ) -> Result<AggregatorOut, SimulationError> {
-        let Some(aggregator_address) = aggregator_address else {
-            return Ok(AggregatorOut::NotNeeded);
-        };
-
-        Ok(self
-            .entry_point
-            .validate_user_op_signature(aggregator_address, op)
-            .await
-            .context("should call validate user op signature")?)
     }
 
     // Parse the output from tracing and return a list of violations.
@@ -346,10 +320,16 @@ where
             ));
         }
 
-        if let Some(aggregator_info) = entry_point_out.aggregator_info {
-            if !context::is_staked(aggregator_info.stake_info, &self.sim_settings) {
-                // [EREP-040]
-                violations.push(SimulationViolation::UnstakedAggregator)
+        if let Some(agg) = context.op.aggregator() {
+            if let Some(agg_info) = entry_point_out.aggregator_info {
+                if agg_info.address != agg {
+                    violations.push(SimulationViolation::AggregatorMismatch(
+                        agg,
+                        agg_info.address,
+                    ));
+                }
+            } else {
+                violations.push(SimulationViolation::AggregatorMismatch(agg, Address::ZERO));
             }
         }
 
@@ -393,38 +373,29 @@ where
     }
 
     // Check the code hash of the entities associated with the user operation
-    // if needed, validate that the signature is valid for the aggregator.
     // Violations during this stage are always errors.
-    async fn check_contracts(
+    async fn check_code_hash(
         &self,
-        op: UO,
         context: &mut ValidationContext<UO>,
         expected_code_hash: Option<B256>,
-    ) -> Result<(B256, Option<AggregatorSimOut>), SimulationError> {
+    ) -> Result<B256, SimulationError> {
         let &mut ValidationContext {
             block_id,
             ref mut tracer_out,
-            ref entry_point_out,
             ..
         } = context;
 
         // collect a vector of violations to ensure a deterministic error message
         let mut violations = vec![];
 
-        let aggregator_address = entry_point_out.aggregator_info.map(|info| info.address);
-        let code_hash_future = self
+        let code_hash = self
             .provider
             .get_code_hash(
                 tracer_out.accessed_contracts.keys().cloned().collect(),
                 Some(block_id),
             )
-            .map_err(|e| SimulationError::from(anyhow::anyhow!("should call get_code_hash {e:?}")));
-
-        let aggregator_signature_future =
-            self.validate_aggregator_signature(op, aggregator_address);
-
-        let (code_hash, aggregator_out) =
-            tokio::try_join!(code_hash_future, aggregator_signature_future)?;
+            .map_err(|e| SimulationError::from(anyhow::anyhow!("should call get_code_hash {e:?}")))
+            .await?;
 
         if let Some(expected_code_hash) = expected_code_hash {
             // [COD-010]
@@ -432,14 +403,6 @@ where
                 violations.push(SimulationViolation::CodeHashChanged)
             }
         }
-        let aggregator = match aggregator_out {
-            AggregatorOut::NotNeeded => None,
-            AggregatorOut::SuccessWithInfo(info) => Some(info),
-            AggregatorOut::ValidationReverted => {
-                violations.push(SimulationViolation::AggregatorValidationFailed);
-                None
-            }
-        };
 
         if !violations.is_empty() {
             return Err(SimulationError {
@@ -448,7 +411,7 @@ where
             });
         }
 
-        Ok((code_hash, aggregator))
+        Ok(code_hash)
     }
 }
 
@@ -457,7 +420,7 @@ impl<UO, P, E, V> Simulator for SimulatorImpl<UO, P, E, V>
 where
     UO: UserOperation,
     P: EvmProvider,
-    E: EntryPoint + SignatureAggregator<UO = UO>,
+    E: EntryPoint,
     V: ValidationContextProvider<UO = UO>,
 {
     type UO = UO;
@@ -496,9 +459,8 @@ where
             }
         };
 
-        // Check code hash and aggregator signature, these can't fail
-        let (code_hash, aggregator) = self
-            .check_contracts(op, &mut context, expected_code_hash)
+        let code_hash = self
+            .check_code_hash(&mut context, expected_code_hash)
             .await?;
 
         // Transform outputs into success struct
@@ -530,7 +492,6 @@ where
             mempools,
             pre_op_gas,
             valid_time_range: ValidTimeRange::new(valid_after, valid_until),
-            aggregator,
             code_hash,
             account_is_staked,
             accessed_addresses,
@@ -666,9 +627,7 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 mod tests {
     use alloy_primitives::{address, b256, bytes, uint, Bytes};
     use context::ContractInfo;
-    use rundler_provider::{
-        AggregatorOut, BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider,
-    };
+    use rundler_provider::{BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider};
     use rundler_types::{
         chain::ChainSpec,
         v0_6::{
@@ -854,7 +813,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_simulate_validation() {
-        let (mut provider, mut entry_point, mut context) = create_base_config();
+        let (mut provider, entry_point, mut context) = create_base_config();
 
         provider
             .expect_get_latest_block_hash_and_number()
@@ -877,10 +836,6 @@ mod tests {
         context
             .expect_get_specific_violations()
             .returning(|_| Ok(vec![]));
-
-        entry_point
-            .expect_validate_user_op_signature()
-            .returning(|_, _| Ok(AggregatorOut::NotNeeded));
 
         let user_operation = UserOperationBuilder::new(&ChainSpec::default(),UserOperationRequiredFields {
             sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),

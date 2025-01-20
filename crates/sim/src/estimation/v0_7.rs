@@ -364,6 +364,15 @@ where
             }
         };
 
+        let aggregator = if let Some(agg) = &optional_op.aggregator {
+            let Some(agg) = self.chain_spec.get_signature_aggregator(agg) else {
+                return Err(GasEstimationError::UnsupportedAggregator(*agg));
+            };
+            Some(agg)
+        } else {
+            None
+        };
+
         Ok(gas::estimate_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
@@ -371,6 +380,7 @@ where
             &optional_op.random_fill(&self.chain_spec),
             block_hash.into(),
             gas_price,
+            aggregator,
         )
         .await?)
     }
@@ -615,6 +625,7 @@ mod tests {
             factory: None,
             factory_data: Bytes::new(),
             authorization_contract: None,
+            aggregator: None,
         }
     }
 
@@ -848,6 +859,7 @@ mod tests {
             factory: None,
             factory_data: Bytes::new(),
             authorization_contract: None,
+            aggregator: None,
         };
 
         let estimation = estimator

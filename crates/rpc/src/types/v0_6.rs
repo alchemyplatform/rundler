@@ -38,7 +38,10 @@ pub(crate) struct RpcUserOperation {
     max_priority_fee_per_gas: U128,
     paymaster_and_data: Bytes,
     signature: Bytes,
+    #[serde(skip_serializing_if = "Option::is_none")]
     authorization_tuple: Option<RpcAuthorization>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregator: Option<Address>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -56,6 +59,7 @@ impl From<UserOperation> for RpcUserOperation {
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
             authorization_tuple: op.authorization_tuple.map(|a| a.into()),
+            aggregator: op.aggregator,
         }
     }
 }
@@ -100,6 +104,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_and_data: Bytes,
     signature: Bytes,
     authorization_contract: Option<Address>,
+    aggregator: Option<Address>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -117,6 +122,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_and_data: def.paymaster_and_data,
             signature: def.signature,
             authorization_contract: def.authorization_contract,
+            aggregator: def.aggregator,
         }
     }
 }

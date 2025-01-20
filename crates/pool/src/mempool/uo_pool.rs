@@ -468,7 +468,7 @@ where
     async fn add_operation(
         &self,
         origin: OperationOrigin,
-        op: UserOperationVariant,
+        mut op: UserOperationVariant,
     ) -> MempoolResult<B256> {
         // Initial state checks
         let to_replace = {
@@ -537,9 +537,36 @@ where
         // added to the pool and can lead to an overdraft
         self.paymaster.check_operation_cost(&op).await?;
 
-        // Prechecks
-        let versioned_op = op.clone().into();
+        // If using an aggregator, transform with calculated signature
+        if let Some(aggregator) = op.aggregator() {
+            let Some(agg) = self.config.chain_spec.get_signature_aggregator(&aggregator) else {
+                return Err(MempoolError::AggregatorError(format!(
+                    "Unsupported aggregator {:?}",
+                    aggregator
+                )));
+            };
 
+            let signature = match agg.validate_user_op_signature(&op).await {
+                Ok(sig) => sig,
+                Err(e) => {
+                    return Err(MempoolError::AggregatorError(format!(
+                        "Error validating signature: {:?}",
+                        e
+                    )));
+                }
+            };
+
+            op = op.transform_for_aggregator(
+                &self.config.chain_spec,
+                aggregator,
+                agg.costs().clone(),
+                signature,
+            );
+        }
+
+        let versioned_op: UP::UO = op.clone().into();
+
+        // Prechecks
         let precheck_ret = self
             .pool_providers
             .prechecker()
@@ -556,11 +583,6 @@ where
         let execution_gas_check_future =
             self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
         let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
-
-        // No aggregators supported for now
-        if let Some(agg) = &sim_result.aggregator {
-            return Err(MempoolError::UnsupportedAggregator(agg.address));
-        }
 
         // Check if op has more than the maximum allowed expected storage slots
         let expected_slots = sim_result.expected_storage.num_slots();

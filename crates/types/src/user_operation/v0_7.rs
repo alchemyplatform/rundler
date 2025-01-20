@@ -19,7 +19,10 @@ use super::{
     random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
     UserOperationVariant,
 };
-use crate::{authorization::Authorization, chain::ChainSpec, Entity, EntryPointVersion};
+use crate::{
+    aggregator::AggregatorCosts, authorization::Authorization, chain::ChainSpec, Entity,
+    EntryPointVersion,
+};
 
 /// Gas overhead required by the entry point contract for the inner call
 pub const ENTRY_POINT_INNER_GAS_OVERHEAD: u128 = 10_000;
@@ -98,6 +101,16 @@ pub struct UserOperation {
     pub packed: PackedUserOperation,
     /// The gas cost of the calldata
     pub calldata_gas_cost: u128,
+
+    /*
+     * Signature aggregator fields
+     */
+    /// Signature aggregator address
+    pub aggregator: Option<Address>,
+    /// The full original signature, after the `signature` field is modified post-aggregation
+    pub original_signature: Bytes,
+    /// The costs associated with the aggregator
+    pub aggregator_costs: AggregatorCosts,
 }
 
 impl UserOperationTrait for UserOperation {
@@ -132,6 +145,10 @@ impl UserOperationTrait for UserOperation {
 
     fn factory(&self) -> Option<Address> {
         self.factory
+    }
+
+    fn aggregator(&self) -> Option<Address> {
+        self.aggregator
     }
 
     fn call_data(&self) -> &Bytes {
@@ -225,10 +242,54 @@ impl UserOperationTrait for UserOperation {
                 / 63)
     }
 
-    fn clear_signature(&mut self) {
-        self.signature = Bytes::new();
+    // TODO DRY this with v0.6
+    fn aggregator_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+        if self.aggregator.is_none() {
+            return 0;
+        }
+
+        let shared_portion = if let Some(size) = bundle_size {
+            (self.aggregator_costs.execution_fixed_gas
+                + self.aggregator_costs.sig_fixed_length * chain_spec.calldata_non_zero_byte_gas())
+            .div_ceil(size as u128)
+        } else {
+            0
+        };
+
+        let variable_portion = self.aggregator_costs.execution_variable_gas
+            + self.aggregator_costs.sig_variable_length * chain_spec.calldata_non_zero_byte_gas();
+
+        shared_portion + variable_portion
+    }
+
+    fn transform_for_aggregator(
+        mut self,
+        chain_spec: &ChainSpec,
+        aggregator: Address,
+        aggregator_costs: AggregatorCosts,
+        new_signature: Bytes,
+    ) -> Self {
+        self.original_signature = self.signature;
+        self.aggregator = Some(aggregator);
+        self.aggregator_costs = aggregator_costs;
+
+        self.signature = new_signature;
+
+        // re-pack, hash stays the same as only signature changed
         self.packed = pack_user_operation(self.clone());
-        self.hash = hash_packed_user_operation(&self.packed, self.entry_point, self.chain_id);
+        // recalculate calldata gas cost
+        self.calldata_gas_cost = super::op_calldata_gas_cost(
+            &self.packed,
+            chain_spec.calldata_zero_byte_gas(),
+            chain_spec.calldata_non_zero_byte_gas(),
+            chain_spec.per_user_op_word_gas(),
+        );
+
+        self
+    }
+
+    fn original_signature(&self) -> &Bytes {
+        &self.original_signature
     }
 
     fn abi_encoded_size(&self) -> usize {
@@ -339,8 +400,10 @@ pub struct UserOperationOptionalGas {
     pub paymaster_post_op_gas_limit: Option<u128>,
     /// Paymaster data
     pub paymaster_data: Bytes,
-    /// 7702 authorization contract address.
+    /// 7702 authorization contract address
     pub authorization_contract: Option<Address>,
+    /// Signature aggregator address
+    pub aggregator: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -760,6 +823,9 @@ impl<'a> UserOperationBuilder<'a> {
             hash: B256::ZERO,
             packed: PackedUserOperation::default(),
             calldata_gas_cost: 0,
+            aggregator: None,
+            original_signature: Bytes::new(),
+            aggregator_costs: AggregatorCosts::default(),
         };
 
         let packed = self
@@ -771,7 +837,7 @@ impl<'a> UserOperationBuilder<'a> {
             self.chain_spec.id,
         );
         let calldata_gas_cost = super::op_calldata_gas_cost(
-            packed.clone(),
+            &packed,
             self.chain_spec.calldata_zero_byte_gas(),
             self.chain_spec.calldata_non_zero_byte_gas(),
             self.chain_spec.per_user_op_word_gas(),
