@@ -33,8 +33,6 @@ pub struct AggregatorSimOut {
 /// Result of a signature aggregator call
 #[derive(Debug)]
 pub enum AggregatorOut {
-    /// No aggregator used
-    NotNeeded,
     /// Successful call
     SuccessWithInfo(AggregatorSimOut),
     /// Aggregator validation function reverted
@@ -176,6 +174,7 @@ pub trait DAGasProvider: Send + Sync {
         uo: Self::UO,
         block: BlockHashOrNumber,
         gas_price: u128,
+        bundle_size: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
 }
 

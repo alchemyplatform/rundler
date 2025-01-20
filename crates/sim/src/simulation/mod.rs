@@ -18,7 +18,7 @@ use alloy_primitives::uint;
 use alloy_primitives::{Address, B256, U256};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
-use rundler_provider::{AggregatorSimOut, ProviderError};
+use rundler_provider::ProviderError;
 use rundler_types::{
     pool::{MempoolError, SimulationViolation},
     EntityInfos, UserOperation, ValidTimeRange,
@@ -53,9 +53,6 @@ pub struct SimulationResult {
     pub pre_op_gas: u128,
     /// The time range for which this operation is valid
     pub valid_time_range: ValidTimeRange,
-    /// If using an aggregator, the result of the aggregation
-    /// simulation
-    pub aggregator: Option<AggregatorSimOut>,
     /// Code hash of all accessed contracts
     pub code_hash: B256,
     /// Whether the sender account is staked
@@ -71,13 +68,6 @@ pub struct SimulationResult {
     pub requires_post_op: bool,
     /// All the entities used in this operation and their staking state
     pub entity_infos: EntityInfos,
-}
-
-impl SimulationResult {
-    /// Get the aggregator address if one was used
-    pub fn aggregator_address(&self) -> Option<Address> {
-        self.aggregator.as_ref().map(|agg| agg.address)
-    }
 }
 
 /// The result of a failed simulation. We return a list of the violations that ocurred during the failed simulation
