@@ -192,6 +192,8 @@ pub enum SkipReason {
     ExpectedStorageLimit,
     /// Transaction size limit reached
     TransactionSizeLimit,
+    /// UO uses an unsupported aggregator
+    UnsupportedAggregator(Address),
     /// Other reason, typically internal errors
     Other { reason: Arc<String> },
 }

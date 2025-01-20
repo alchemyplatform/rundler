@@ -14,6 +14,7 @@
 use clap::Args;
 use rundler_builder::{BuilderEvent, BuilderTask, LocalBuilderBuilder};
 use rundler_pool::{LocalPoolBuilder, PoolEvent, PoolTask};
+use rundler_provider::Providers;
 use rundler_rpc::RpcTask;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
@@ -49,6 +50,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     chain_spec: ChainSpec,
     bundler_args: NodeCliArgs,
     common_args: CommonArgs,
+    providers: impl Providers + 'static,
 ) -> anyhow::Result<()> {
     let NodeCliArgs {
         pool: pool_args,
@@ -108,8 +110,6 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
 
     let builder_builder = LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY);
     let builder_handle = builder_builder.get_handle();
-
-    let providers = super::construct_providers(&common_args, &chain_spec)?;
 
     PoolTask::new(
         pool_task_args,

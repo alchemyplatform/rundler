@@ -92,6 +92,7 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
                         op,
                         ExtendedUserOperation {
                             authorization_tuple: None,
+                            aggregator: None,
                         },
                     )
                     .ok()
@@ -103,12 +104,13 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
                     .opsPerAggregator
                     .into_iter()
                     .flat_map(|ops| {
-                        ops.userOps.into_iter().filter_map(|op| {
+                        ops.userOps.into_iter().filter_map(move |op| {
                             UserOperationBuilder::from_contract(
                                 chain_spec,
                                 op,
                                 ExtendedUserOperation {
                                     authorization_tuple: None,
+                                    aggregator: Some(ops.aggregator),
                                 },
                             )
                             .ok()

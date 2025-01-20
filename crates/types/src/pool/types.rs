@@ -15,8 +15,8 @@ use alloy_primitives::{Address, B256, U256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    da::DAGasUOData, entity::EntityInfos, Entity, StakeInfo, UserOperation, UserOperationVariant,
-    ValidTimeRange,
+    da::DAGasUOData, entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation,
+    UserOperationVariant, ValidTimeRange,
 };
 
 /// The new head of the chain, as viewed by the pool
@@ -144,7 +144,7 @@ impl PoolOperation {
     /// Return all the unstaked entities that are used in this operation.
     pub fn unstaked_entities(&'_ self) -> impl Iterator<Item = Entity> + '_ {
         self.entity_infos.entities().filter_map(|(t, ei)| {
-            if ei.is_staked {
+            if ei.is_staked || ei.kind() == EntityType::Aggregator {
                 None
             } else {
                 Entity::new(t, ei.entity.address).into()

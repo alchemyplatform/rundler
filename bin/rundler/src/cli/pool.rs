@@ -17,6 +17,7 @@ use alloy_primitives::Address;
 use anyhow::Context;
 use clap::Args;
 use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
+use rundler_provider::Providers;
 use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
@@ -305,6 +306,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     chain_spec: ChainSpec,
     pool_args: PoolCliArgs,
     common_args: CommonArgs,
+    providers: impl Providers + 'static,
 ) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -325,7 +327,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         task_args,
         event_sender,
         LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
-        super::construct_providers(&common_args, &chain_spec)?,
+        providers,
     )
     .spawn(task_spawner)
     .await?;

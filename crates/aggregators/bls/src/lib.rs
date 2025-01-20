@@ -18,42 +18,9 @@
     attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
 ))]
 
-//! Rundler common types
+//! BLS signature aggregation for Rundler
+//!
+//! Contracts found here: https://github.com/eth-infinitism/account-abstraction-samples/tree/master/contracts/bls
 
-pub mod aggregator;
-
-pub mod builder;
-
-pub mod chain;
-
-pub mod da;
-
-mod entity;
-pub use entity::{Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType};
-
-mod opcode;
-pub use opcode::{Opcode, ViolationOpCode};
-
-mod gas;
-pub use gas::GasFees;
-
-pub mod pool;
-
-mod timestamp;
-pub use timestamp::{Timestamp, ValidTimeRange};
-
-mod user_operation;
-pub use user_operation::*;
-
-mod storage;
-pub use storage::StorageSlot;
-
-mod validation_results;
-pub use validation_results::{
-    parse_validation_data, AggregatorInfo, StakeInfo, ValidationOutput, ValidationReturnInfo,
-    ValidationRevert,
-};
-
-pub mod task;
-
-pub mod authorization;
+mod bls;
+pub use bls::BlsSignatureAggregatorV0_7;

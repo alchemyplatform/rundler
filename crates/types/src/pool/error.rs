@@ -85,9 +85,9 @@ pub enum MempoolError {
     /// Operation was rejected due to a simulation violation
     #[error("Operation violation during simulation {0}")]
     SimulationViolation(SimulationViolation),
-    /// Operation was rejected because it used an unsupported aggregator
-    #[error("Unsupported aggregator {0}")]
-    UnsupportedAggregator(Address),
+    /// Operation was rejected because of an aggregator error
+    #[error("Aggregator error {0}")]
+    AggregatorError(String),
     /// An unknown entry point was specified
     #[error("Unknown entry point {0}")]
     UnknownEntryPoint(Address),
@@ -213,9 +213,6 @@ pub enum SimulationViolation {
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[display("Unstaked paymaster must not return context")]
     UnstakedPaymasterContext,
-    /// The user operation uses an aggregator entity and it is not staked
-    #[display("An aggregator must be staked, regardless of storager usage")]
-    UnstakedAggregator,
     /// Simulation reverted with an unintended reason, containing a message
     #[display("reverted while simulating {0} validation: {1}")]
     UnintendedRevertWithMessage(EntityType, String, Option<Address>),
@@ -234,9 +231,9 @@ pub enum SimulationViolation {
     /// The user operation ran out of gas during validation
     #[display("ran out of gas during {0.kind} validation")]
     OutOfGas(Entity),
-    /// The user operation aggregator signature validation failed
-    #[display("aggregator signature validation failed")]
-    AggregatorValidationFailed,
+    /// The returned signature aggregator did not match the expected one
+    #[display("signature aggregator mismatch. Expected: {0:?}, Actual: {1:?}")]
+    AggregatorMismatch(Address, Address),
     /// Verification gas limit doesn't have the required buffer on the measured gas
     #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]
     VerificationGasLimitBufferTooLow(u128, u128),

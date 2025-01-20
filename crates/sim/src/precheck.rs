@@ -533,6 +533,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
@@ -584,6 +585,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
@@ -636,6 +638,7 @@ mod tests {
             },
             ExtendedUserOperation {
                 authorization_tuple: None,
+                aggregator: None,
             },
         )
         .build();
