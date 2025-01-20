@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "bin/rundler/",
+    "crates/aggregators/bls/",
     "crates/bindings/fastlz/",
     "crates/builder/",
     "crates/contracts/",
@@ -24,6 +25,7 @@ repository = "https://github.com/alchemyplatform/rundler"
 
 [workspace.dependencies]
 # rundler crates
+rundler-bls = { path = "crates/aggregators/bls" }
 rundler-contracts = { path = "crates/contracts" }
 rundler-provider = { path = "crates/provider" }
 rundler-sim = { path = "crates/sim" }

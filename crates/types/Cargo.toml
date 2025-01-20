@@ -17,6 +17,7 @@ alloy-sol-types.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
+auto_impl.workspace = true
 chrono = "0.4.38"
 const-hex.workspace = true
 constcat = "0.5.0"

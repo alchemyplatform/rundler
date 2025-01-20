@@ -11,6 +11,7 @@ ERC-4337 bundler implementation
 publish = false
 
 [dependencies]
+rundler-bls.workspace = true
 rundler-builder.workspace = true
 rundler-pool.workspace = true
 rundler-provider.workspace = true

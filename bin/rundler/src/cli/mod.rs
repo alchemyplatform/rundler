@@ -17,6 +17,7 @@ use alloy_primitives::U256;
 use anyhow::{bail, Context};
 use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
 
+mod aggregator;
 mod builder;
 mod chain_spec;
 mod json;
@@ -66,19 +67,24 @@ pub async fn run() -> anyhow::Result<()> {
     )
     .context("metrics server should start")?;
 
-    let cs = chain_spec::resolve_chain_spec(&opt.common.network, &opt.common.chain_spec);
+    let mut cs = chain_spec::resolve_chain_spec(&opt.common.network, &opt.common.chain_spec);
     tracing::info!("Chain spec: {:#?}", cs);
+
+    let providers = construct_providers(&opt.common, &cs)?;
+    aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
     match opt.command {
         Command::Node(args) => {
-            node::spawn_tasks(task_spawner.clone(), cs, *args, opt.common).await?
+            node::spawn_tasks(task_spawner.clone(), cs, *args, opt.common, providers).await?
         }
         Command::Pool(args) => {
-            pool::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?
+            pool::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
         }
-        Command::Rpc(args) => rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?,
+        Command::Rpc(args) => {
+            rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
+        }
         Command::Builder(args) => {
-            builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common).await?
+            builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
         }
     }
 
@@ -361,6 +367,13 @@ pub struct CommonArgs {
         env = "MAX_EXPECTED_STORAGE_SLOTS"
     )]
     pub max_expected_storage_slots: Option<usize>,
+
+    #[arg(
+        long = "bls_aggregation_enabled",
+        name = "bls_aggregation_enabled",
+        env = "BLS_AGGREGATION_ENABLED"
+    )]
+    pub bls_aggregation_enabled: bool,
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
@@ -606,7 +619,7 @@ where
 pub fn construct_providers(
     args: &CommonArgs,
     chain_spec: &ChainSpec,
-) -> anyhow::Result<impl Providers> {
+) -> anyhow::Result<impl Providers + 'static> {
     let provider = Arc::new(rundler_provider::new_alloy_provider(
         args.node_http.as_ref().context("must provide node_http")?,
         args.provider_client_timeout_seconds,

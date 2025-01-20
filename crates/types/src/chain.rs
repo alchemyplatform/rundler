@@ -13,12 +13,15 @@
 
 //! Chain specification for Rundler
 
-use std::str::FromStr;
+use std::{str::FromStr, sync::Arc};
 
 use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
-use crate::da::DAGasOracleType;
+use crate::{
+    aggregator::{SignatureAggregator, SignatureAggregatorRegistry},
+    da::DAGasOracleType,
+};
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -118,6 +121,13 @@ pub struct ChainSpec {
      */
     /// Size of the chain history to keep to handle reorgs
     pub chain_history_size: u64,
+
+    /*
+     * Signature Aggregators
+     */
+    /// Registry of signature aggregators
+    #[serde(skip)]
+    pub signature_aggregators: Arc<SignatureAggregatorRegistry>,
 }
 
 /// Type of oracle for estimating priority fees
@@ -162,6 +172,7 @@ impl Default for ChainSpec {
             flashbots_status_url: None,
             bloxroute_enabled: false,
             chain_history_size: 64,
+            signature_aggregators: Arc::new(SignatureAggregatorRegistry::default()),
         }
     }
 }
@@ -215,5 +226,21 @@ impl ChainSpec {
     /// Get the per user operation deploy overhead gas
     pub fn per_user_op_deploy_overhead_gas(&self) -> u128 {
         self.per_user_op_deploy_overhead_gas as u128
+    }
+
+    /// Set the signature aggregator registry
+    pub fn set_signature_aggregators(
+        &mut self,
+        signature_aggregators: Arc<SignatureAggregatorRegistry>,
+    ) {
+        self.signature_aggregators = signature_aggregators;
+    }
+
+    /// Get a signature aggregator from the registry
+    pub fn get_signature_aggregator(
+        &self,
+        address: &Address,
+    ) -> Option<&Arc<dyn SignatureAggregator>> {
+        self.signature_aggregators.get(address)
     }
 }
