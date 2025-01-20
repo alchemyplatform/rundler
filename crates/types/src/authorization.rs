@@ -27,11 +27,11 @@ pub struct Eip7702Auth {
     pub address: Address,
     /// The nonce for the authorization.
     pub nonce: u64,
-    /// signed authorizzation tuple.
+    /// signed authorization tuple.
     pub y_parity: u8,
-    /// signed authorizzation tuple.
+    /// signed authorization tuple.
     pub r: U256,
-    /// signed authorizzation tuple.
+    /// signed authorization tuple.
     pub s: U256,
 }
 

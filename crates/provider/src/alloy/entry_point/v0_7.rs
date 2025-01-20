@@ -184,8 +184,12 @@ where
         match result {
             Ok(ret) => Ok(Some(ret.aggregatedSignature)),
             Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
-                if resp.as_revert_data().is_some() {
-                    Ok(None)
+                if let Some(revert) = resp.as_revert_data() {
+                    let msg = format!(
+                        "Aggregator contract should aggregate signatures. Revert: {revert}",
+                    );
+                    tracing::error!(msg);
+                    Err(anyhow::anyhow!(msg).into())
                 } else {
                     Err(TransportError::ErrorResp(resp).into())
                 }
@@ -317,8 +321,10 @@ where
         user_op: UserOperation,
         block: BlockHashOrNumber,
         gas_price: u128,
+        bundle_size: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         let au = user_op.authorization_tuple();
+        let extra_data_len = user_op.extra_data_len(bundle_size);
 
         let txn_req = self
             .i_entry_point
@@ -326,11 +332,19 @@ where
             .into_transaction_request();
 
         let data = txn_req.input.into_input().unwrap();
+
+        // TODO(bundle): assuming a bundle size of 1
         let bundle_data =
             super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price, au);
 
         self.da_gas_oracle
-            .estimate_da_gas(bundle_data, *self.i_entry_point.address(), block, gas_price)
+            .estimate_da_gas(
+                bundle_data,
+                *self.i_entry_point.address(),
+                block,
+                gas_price,
+                extra_data_len,
+            )
             .await
     }
 }

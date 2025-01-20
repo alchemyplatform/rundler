@@ -78,10 +78,11 @@ where
         to: Address,
         block: BlockHashOrNumber,
         gas_price: u128,
+        extra_bytes_len: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         let block_data = self.block_data(block).await?;
         let uo_data = self.uo_data(data, to, block).await?;
-        let da_gas = self.calc_da_gas_sync(&uo_data, &block_data, gas_price);
+        let da_gas = self.calc_da_gas_sync(&uo_data, &block_data, gas_price, extra_bytes_len);
         Ok((da_gas, uo_data, block_data))
     }
 }
@@ -119,6 +120,7 @@ where
         uo_data: &DAGasUOData,
         block_data: &DAGasBlockData,
         gas_price: u128,
+        extra_data_len: usize,
     ) -> u128 {
         let block_da_data = match block_data {
             DAGasBlockData::Bedrock(block_da_data) => block_da_data,
@@ -132,7 +134,10 @@ where
         let fee_scaled = (block_da_data.base_fee_scalar * 16 * block_da_data.l1_base_fee
             + block_da_data.blob_base_fee_scalar * block_da_data.blob_base_fee)
             as u128;
-        let l1_fee = (uo_data.uo_units as u128 * fee_scaled) / DECIMAL_SCALAR;
+
+        let units = uo_data.uo_units + extra_data_to_units(extra_data_len);
+
+        let l1_fee = (units as u128 * fee_scaled) / DECIMAL_SCALAR;
         l1_fee.checked_div(gas_price).unwrap_or(u128::MAX)
     }
 }
@@ -248,4 +253,10 @@ where
             uo_units: uo_units as u64,
         })
     }
+}
+
+fn extra_data_to_units(extra_data_len: usize) -> u64 {
+    // https://github.com/ethereum-optimism/optimism/blob/d39eb247e60584c87b75baec937ddd20701225a5/packages/contracts-bedrock/src/L2/GasPriceOracle.sol#L239
+    // bytes are all scaled up by 1e6
+    (extra_data_len * 1_000_000) as u64
 }

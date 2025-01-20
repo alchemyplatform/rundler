@@ -40,6 +40,7 @@ impl DAGasOracle for ZeroDAGasOracle {
         _to: Address,
         _block: BlockHashOrNumber,
         _gas_price: u128,
+        _extra_data_len: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         Ok((0, DAGasUOData::Empty, DAGasBlockData::Empty))
     }
@@ -88,6 +89,12 @@ where
         }
         DAGasOracleType::None => (Arc::new(ZeroDAGasOracle), None),
     }
+}
+
+fn extend_bytes_with_random(data: Bytes, len: usize) -> Bytes {
+    let mut new_data = data.to_vec();
+    new_data.extend((0..len).map(|_| rand::random::<u8>()));
+    new_data.into()
 }
 
 #[cfg(test)]
@@ -184,7 +191,7 @@ mod tests {
 
         let cached_res = cached_e2e(cached_oracle, block, to, uo.clone()).await;
         let contract_res = contract_oracle
-            .estimate_da_gas(uo, to, block.into(), 1)
+            .estimate_da_gas(uo, to, block.into(), 1, 0)
             .await
             .unwrap()
             .0;
@@ -206,7 +213,7 @@ mod tests {
 
         let cached_res = cached_e2e(cached_oracle, block, to, uo.clone()).await;
         let contract_res = contract_oracle
-            .estimate_da_gas(uo, to, block.into(), 1)
+            .estimate_da_gas(uo, to, block.into(), 1, 0)
             .await
             .unwrap()
             .0;
@@ -277,11 +284,11 @@ mod tests {
         let to = Address::random();
 
         let (gas_a, _, _) = cached_oracle
-            .estimate_da_gas(data.clone(), to, block, gas_price)
+            .estimate_da_gas(data.clone(), to, block, gas_price, 0)
             .await
             .unwrap();
         let (gas_b, _, _) = contract_oracle
-            .estimate_da_gas(data, to, block, gas_price)
+            .estimate_da_gas(data, to, block, gas_price, 0)
             .await
             .unwrap();
 
@@ -317,7 +324,7 @@ mod tests {
     ) -> u128 {
         let block_data = oracle.block_data(block.into()).await.unwrap();
         let uo_data = oracle.uo_data(data, to, block.into()).await.unwrap();
-        oracle.calc_da_gas_sync(&uo_data, &block_data, 1)
+        oracle.calc_da_gas_sync(&uo_data, &block_data, 1, 0)
     }
 
     fn opt_provider() -> impl AlloyProvider + Clone {
