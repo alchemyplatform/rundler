@@ -103,6 +103,9 @@ pub enum MempoolError {
     /// Too many expected storage slots
     #[error("Too many expected storage slots. Maximum: {0}, Actual: {1}")]
     TooManyExpectedStorageSlots(usize, usize),
+    /// Use unsupported EIP
+    #[error("{0} is not supported")]
+    EIPNotSupported(String),
 }
 
 /// Precheck violation enumeration

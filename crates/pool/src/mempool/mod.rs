@@ -175,6 +175,8 @@ pub struct PoolConfig {
     pub max_time_in_pool: Option<Duration>,
     /// The maximum number of storage slots that can be expected to be used by a user operation during validation
     pub max_expected_storage_slots: usize,
+    /// Whether to enable UO with 7702 auth
+    pub support_7702: bool,
 }
 
 /// Origin of an operation.

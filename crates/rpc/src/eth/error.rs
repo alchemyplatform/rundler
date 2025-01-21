@@ -320,6 +320,7 @@ impl From<MempoolError> for EthRpcError {
             MempoolError::TooManyExpectedStorageSlots(_, _) => {
                 Self::InvalidParams(value.to_string())
             }
+            MempoolError::EIPNotSupported(_) => Self::InvalidParams(value.to_string()),
         }
     }
 }

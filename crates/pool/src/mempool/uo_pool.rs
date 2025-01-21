@@ -477,6 +477,9 @@ where
             // Check if op violates the STO-040 spec rule
             state.pool.check_multiple_roles_violation(&op)?;
 
+            // Check if op use 7702
+            state.pool.check_eip7702(&op)?;
+
             // Check if op is already known or replacing another, and if so, ensure its fees are high enough
             state
                 .pool
@@ -959,6 +962,7 @@ mod tests {
         SimulationError, SimulationResult, SimulationSettings, ViolationError,
     };
     use rundler_types::{
+        authorization::Eip7702Auth,
         chain::ChainSpec,
         da::DAGasUOData,
         pool::{PrecheckViolation, SimulationViolation},
@@ -1863,6 +1867,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_eip_support() {
+        let mut config = default_config();
+        let op = create_op_from_op_v0_6(UserOperation {
+            call_gas_limit: 50_000,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            authorization_tuple: Some(Eip7702Auth::default()),
+            ..Default::default()
+        });
+        {
+            let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
+            assert!(pool
+                .add_operation(OperationOrigin::Local, op.clone().op)
+                .await
+                .is_err());
+        }
+        {
+            config.support_7702 = true;
+            let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
+            assert!(pool
+                .add_operation(OperationOrigin::Local, op.clone().op)
+                .await
+                .is_ok());
+        }
+    }
+
+    #[tokio::test]
     async fn test_da_gas_ineligible() {
         let mut config = default_config();
         config.da_gas_tracking_enabled = true;
@@ -1917,6 +1948,7 @@ mod tests {
             gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
+            support_7702: false,
         }
     }
 
