@@ -124,7 +124,7 @@ where
         op_with_gas.verification_gas_limit = verification_gas_limit;
         op_with_gas.paymaster_verification_gas_limit = paymaster_verification_gas_limit;
         // require that this can fit in a bundle of size 1
-        let gas_limit = op_with_gas.execution_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op_with_gas.computation_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > self.settings.max_total_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
@@ -262,11 +262,11 @@ where
 
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
+            // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
             UserOperationBuilder::from_uo(op, &self.chain_spec)
                 .verification_gas_limit(gas)
                 .max_fee_per_gas(fee)
                 .max_priority_fee_per_gas(fee)
-                .paymaster_post_op_gas_limit(0)
                 .call_gas_limit(0)
                 .build()
         };
@@ -307,11 +307,11 @@ where
 
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
+            // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
             UserOperationBuilder::from_uo(op, &self.chain_spec)
                 .max_fee_per_gas(fee)
                 .max_priority_fee_per_gas(fee)
                 .paymaster_verification_gas_limit(gas)
-                .paymaster_post_op_gas_limit(0)
                 .call_gas_limit(0)
                 .build()
         };

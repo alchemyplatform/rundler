@@ -278,7 +278,7 @@ where
 
         // Compute the worst case total gas limit by assuming the UO is in its own bundle.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = op.execution_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op.computation_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > max_total_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,

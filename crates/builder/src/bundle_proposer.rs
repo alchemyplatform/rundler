@@ -566,7 +566,8 @@ where
             }
 
             // Skip this op if the bundle does not have enough remaining gas to execute it.
-            let required_gas = gas_spent + op.execution_gas_limit(&self.settings.chain_spec, None);
+            let required_gas =
+                gas_spent + op.computation_gas_limit(&self.settings.chain_spec, None);
             if required_gas > self.settings.max_bundle_gas {
                 continue;
             }
@@ -602,7 +603,7 @@ where
             }
 
             // Update the running gas that would need to be be spent to execute the bundle so far.
-            gas_spent += op.execution_gas_limit(&self.settings.chain_spec, None);
+            gas_spent += op.computation_gas_limit(&self.settings.chain_spec, None);
 
             constructed_bundle_size =
                 constructed_bundle_size.saturating_add(op_size_with_offset_word);
@@ -1069,7 +1070,7 @@ where
         for op in ops {
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = op.uo.execution_gas_limit(&self.settings.chain_spec, None);
+            let gas = op.uo.computation_gas_limit(&self.settings.chain_spec, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_index,
