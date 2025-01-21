@@ -36,10 +36,10 @@ use super::protos::{
     PaymasterIsNotContract, PreOpGasLimitEfficiencyTooLow, PreVerificationGasTooLow,
     PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
     SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TotalGasLimitTooHigh,
-    UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert,
-    UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
+    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
+    UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
+    UsedForbiddenOpcode, UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
     VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
@@ -132,6 +132,12 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             }
             Some(mempool_error::Error::ExecutionGasLimitEfficiencyTooLow(e)) => {
                 MempoolError::ExecutionGasLimitEfficiencyTooLow(e.required, e.actual)
+            }
+            Some(mempool_error::Error::TooManyExpectedStorageSlots(e)) => {
+                MempoolError::TooManyExpectedStorageSlots(
+                    e.max_slots.try_into()?,
+                    e.expected_slots.try_into()?,
+                )
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -246,6 +252,16 @@ impl From<MempoolError> for ProtoMempoolError {
                 ProtoMempoolError {
                     error: Some(mempool_error::Error::ExecutionGasLimitEfficiencyTooLow(
                         ExecutionGasLimitEfficiencyTooLow { required, actual },
+                    )),
+                }
+            }
+            MempoolError::TooManyExpectedStorageSlots(max_slots, expected_slots) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::TooManyExpectedStorageSlots(
+                        TooManyExpectedStorageSlots {
+                            max_slots: max_slots as u64,
+                            expected_slots: expected_slots as u64,
+                        },
                     )),
                 }
             }
