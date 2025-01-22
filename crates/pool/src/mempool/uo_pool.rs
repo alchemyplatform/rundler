@@ -168,7 +168,12 @@ where
                 return Ok(());
             }
 
-            let execution_gas_limit = op.execution_gas_limit();
+            let execution_gas_limit = match &op {
+                // For v0.6 only use the call gas limit as post op gas limit is always set to VGL*2
+                // whether or not the UO is using a post op. Can cause the efficiency check to fail.
+                UserOperationVariant::V0_6(op) => op.call_gas_limit(),
+                UserOperationVariant::V0_7(op) => op.execution_gas_limit(),
+            };
             if execution_gas_limit == 0 {
                 return Ok(()); // No call gas limit, not useful, but not a failure here.
             }
