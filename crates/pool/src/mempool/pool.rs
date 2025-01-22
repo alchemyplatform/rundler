@@ -420,12 +420,17 @@ where
     }
 
     pub(crate) fn check_eip7702(&self, uo: &UserOperationVariant) -> MempoolResult<()> {
-        if uo.authorization_tuple().is_some() && self.config.support_7702 {
-            return Ok(());
+        if uo.authorization_tuple().is_some() {
+            if self.config.support_7702 {
+                Ok(())
+            } else {
+                Err(MempoolError::EIPNotSupported(
+                    "EIP 7702 is not supported".to_string(),
+                ))
+            }
+        } else {
+            Ok(())
         }
-        Err(MempoolError::EIPNotSupported(
-            "EIP 7702 is not supported".to_string(),
-        ))
     }
 
     pub(crate) fn mine_operation(
