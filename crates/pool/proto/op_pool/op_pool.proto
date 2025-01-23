@@ -601,7 +601,7 @@ message TooManyExpectedStorageSlots {
   uint64 expected_slots = 2;
 }
 
-message UseUnsupportedEIP{
+message UseUnsupportedEIP {
   string eip_name = 1;
 }
 

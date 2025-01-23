@@ -373,15 +373,12 @@ impl UserOperationOptionalGas {
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
         }
-        if self.eip7702_auth_address.is_some() {
+        if let Some(eip_7702_auth_address) = self.eip7702_auth_address {
             builder = builder.authorization_tuple(Some(Eip7702Auth {
-                address: self.eip7702_auth_address.unwrap(),
+                address: eip_7702_auth_address,
                 chain_id: chain_spec.id,
                 // fake value for gas estimation.
-                nonce: 0,
-                y_parity: 0,
-                r: U256::from(0),
-                s: U256::from(0),
+                ..Default::default()
             }));
         }
         if self.factory.is_some() {
