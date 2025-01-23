@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// authorization tuple for 7702 txn support
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct Authorization {
+pub struct Eip7702Auth {
     /// The chain ID of the authorization.
     pub chain_id: u64,
     /// The address of the authorization.
@@ -34,8 +34,8 @@ pub struct Authorization {
     pub s: U256,
 }
 
-impl From<Authorization> for alloy_eips::eip7702::SignedAuthorization {
-    fn from(value: Authorization) -> Self {
+impl From<Eip7702Auth> for alloy_eips::eip7702::SignedAuthorization {
+    fn from(value: Eip7702Auth) -> Self {
         let authorization = alloy_eips::eip7702::Authorization {
             chain_id: value.chain_id,
             address: value.address,

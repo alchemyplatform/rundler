@@ -22,7 +22,7 @@ use super::{
     UserOperationVariant,
 };
 use crate::{
-    authorization::Authorization,
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     entity::{Entity, EntityType},
     EntryPointVersion,
@@ -80,7 +80,7 @@ pub struct UserOperation {
     pub signature: Bytes,
 
     /// eip 7702 - list of authorities.
-    pub authorization_tuple: Option<Authorization>,
+    pub authorization_tuple: Option<Eip7702Auth>,
 
     /// Cached calldata gas cost
     pub calldata_gas_cost: u128,
@@ -288,7 +288,7 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.signature)
     }
 
-    fn authorization_tuple(&self) -> Option<Authorization> {
+    fn authorization_tuple(&self) -> Option<Eip7702Auth> {
         self.authorization_tuple.clone()
     }
 }
@@ -402,7 +402,7 @@ pub struct UserOperationOptionalGas {
     pub signature: Bytes,
 
     /// eip 7702 - tuple of authority.
-    pub authorization_contract: Option<Address>,
+    pub eip7702_auth_address: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -483,7 +483,7 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
-        let authorization_tuple = self.authorization_contract.map(|address| Authorization {
+        let authorization_tuple = self.eip7702_auth_address.map(|address| Eip7702Auth {
             address,
             ..Default::default()
         });
@@ -550,7 +550,7 @@ pub struct UserOperationBuilder<'a> {
 /// to UO directly but included for implementation's sake.
 pub struct ExtendedUserOperation {
     /// EIP 7702: authorization tuples.
-    pub authorization_tuple: Option<Authorization>,
+    pub authorization_tuple: Option<Eip7702Auth>,
 }
 
 /// User operation required fields
@@ -686,7 +686,7 @@ impl<'a> UserOperationBuilder<'a> {
     }
 
     /// Sets the authorization tuple.
-    pub fn authorization_tuple(mut self, authorization: Option<Authorization>) -> Self {
+    pub fn authorization_tuple(mut self, authorization: Option<Eip7702Auth>) -> Self {
         self.extended.authorization_tuple = authorization;
         self
     }
@@ -938,7 +938,7 @@ mod tests {
             pre_verification_gas: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            authorization_contract: None,
+            eip7702_auth_address: None,
         }
         .max_fill(&ChainSpec::default());
 

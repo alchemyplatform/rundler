@@ -22,7 +22,7 @@ pub mod v0_6;
 /// User Operation types for Entry Point v0.7
 pub mod v0_7;
 
-use crate::{authorization::Authorization, chain::ChainSpec, Entity};
+use crate::{authorization::Eip7702Auth, chain::ChainSpec, Entity};
 
 /// A user op must be valid for at least this long into the future to be included.
 pub const TIME_RANGE_BUFFER: Duration = Duration::from_secs(60);
@@ -111,7 +111,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     }
 
     /// Return the authorization list of the UO. empty if it is not 7702 txn.
-    fn authorization_tuple(&self) -> Option<Authorization>;
+    fn authorization_tuple(&self) -> Option<Eip7702Auth>;
 
     /*
      * Enhanced functions
@@ -503,7 +503,7 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn authorization_tuple(&self) -> Option<Authorization> {
+    fn authorization_tuple(&self) -> Option<Eip7702Auth> {
         match self {
             UserOperationVariant::V0_6(op) => op.authorization_tuple(),
             UserOperationVariant::V0_7(op) => op.authorization_tuple(),

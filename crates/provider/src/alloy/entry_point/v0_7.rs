@@ -37,7 +37,7 @@ use rundler_contracts::v0_7::{
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_types::{
-    authorization::Authorization,
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
     v0_7::UserOperation,
@@ -609,7 +609,7 @@ impl TryFrom<ExecutionResultV0_7> for ExecutionResult {
 
 fn add_authorization_tuple(
     sender: Address,
-    authorization: &Option<Authorization>,
+    authorization: &Option<Eip7702Auth>,
     state_override: &mut StateOverride,
 ) {
     if let Some(authorization) = &authorization {

@@ -21,11 +21,11 @@ use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 pub fn apply_7702_overrides(
     state_override: &mut StateOverride,
     sender: Address,
-    authorization_contract: Address,
+    eip7702_auth_address: Address,
 ) {
     state_override.entry(sender).or_insert({
         let prefix: FixedBytes<3> = fixed_bytes!("ef0100");
-        let code: FixedBytes<23> = prefix.concat_const(authorization_contract.into());
+        let code: FixedBytes<23> = prefix.concat_const(eip7702_auth_address.into());
 
         AccountOverride {
             code: Some((code).into()),

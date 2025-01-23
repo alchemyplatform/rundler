@@ -48,6 +48,7 @@ pub(crate) struct PoolInnerConfig {
     throttled_entity_live_blocks: u64,
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
+    support_7702: bool,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -61,6 +62,7 @@ impl From<PoolConfig> for PoolInnerConfig {
             throttled_entity_live_blocks: config.throttled_entity_live_blocks,
             da_gas_tracking_enabled: config.da_gas_tracking_enabled,
             max_time_in_pool: config.max_time_in_pool,
+            support_7702: config.support_7702,
         }
     }
 }
@@ -415,6 +417,20 @@ where
         }
 
         Ok(())
+    }
+
+    pub(crate) fn check_eip7702(&self, uo: &UserOperationVariant) -> MempoolResult<()> {
+        if uo.authorization_tuple().is_some() {
+            if self.config.support_7702 {
+                Ok(())
+            } else {
+                Err(MempoolError::EIPNotSupported(
+                    "EIP 7702 is not supported".to_string(),
+                ))
+            }
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn mine_operation(
@@ -1521,6 +1537,7 @@ mod tests {
             throttled_entity_live_blocks: 10,
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
+            support_7702: false,
         }
     }
 

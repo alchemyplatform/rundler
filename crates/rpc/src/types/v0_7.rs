@@ -21,7 +21,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{rpc_authorization::RpcAuthorization, FromRpc, RpcAddress};
+use super::{rpc_authorization::RpcEip7702Auth, FromRpc, RpcAddress};
 
 /// User operation definition for RPC inputs
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub(crate) struct RpcUserOperation {
     paymaster_data: Option<Bytes>,
     signature: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
-    authorization_tuple: Option<RpcAuthorization>,
+    eip7702_auth: Option<RpcEip7702Auth>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -87,7 +87,7 @@ impl From<UserOperation> for RpcUserOperation {
             paymaster_post_op_gas_limit: paymaster_post_op_gas_limit.map(|x| U128::from(x)),
             paymaster_data,
             signature: op.signature,
-            authorization_tuple: op.authorization_tuple.map(|a| a.into()),
+            eip7702_auth: op.authorization_tuple.map(|a| a.into()),
         }
     }
 }
@@ -123,8 +123,8 @@ impl FromRpc<RpcUserOperation> for UserOperation {
         if def.factory.is_some() {
             builder = builder.factory(def.factory.unwrap(), def.factory_data.unwrap_or_default());
         }
-        if def.authorization_tuple.is_some() {
-            builder = builder.authorization_tuple(def.authorization_tuple.map(|a| a.into()));
+        if def.eip7702_auth.is_some() {
+            builder = builder.authorization_tuple(def.eip7702_auth.map(|a| a.into()));
         }
         builder.build()
     }
@@ -159,7 +159,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_post_op_gas_limit: Option<U128>,
     paymaster_data: Option<Bytes>,
     signature: Bytes,
-    authorization_contract: Option<Address>,
+    eip7702_auth: Option<RpcEip7702Auth>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -180,7 +180,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_post_op_gas_limit: def.paymaster_post_op_gas_limit.map(|x| x.to()),
             paymaster_data: def.paymaster_data.unwrap_or_default(),
             signature: def.signature,
-            authorization_contract: def.authorization_contract,
+            eip7702_auth_address: def.eip7702_auth.map(|a| a.address),
         }
     }
 }

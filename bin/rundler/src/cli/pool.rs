@@ -186,6 +186,14 @@ pub struct PoolArgs {
         env = "POOL_MAX_TIME_IN_POOL_SECS"
     )]
     pub max_time_in_pool_secs: Option<u64>,
+
+    #[arg(
+        long = "pool.support_7702",
+        name = "pool.support_7702",
+        env = "POOL_SUPPORT_7702",
+        default_value = "false"
+    )]
+    pub support_7702: bool,
 }
 
 impl PoolArgs {
@@ -244,6 +252,7 @@ impl PoolArgs {
             gas_limit_efficiency_reject_threshold: self.gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            support_7702: self.support_7702,
         };
 
         let mut pool_configs = vec![];
@@ -255,6 +264,8 @@ impl PoolArgs {
                 num_shards: common.num_builders_v0_6,
                 mempool_channel_configs: mempool_channel_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_6),
+                // always disable 7702 for EP v06.
+                support_7702: false,
                 ..pool_config_base.clone()
             });
         }

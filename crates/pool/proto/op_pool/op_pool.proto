@@ -533,6 +533,7 @@ message MempoolError {
     PreOpGasLimitEfficiencyTooLow pre_op_gas_limit_efficiency_too_low = 17;
     ExecutionGasLimitEfficiencyTooLow execution_gas_limit_efficiency_too_low = 18;
     TooManyExpectedStorageSlots too_many_expected_storage_slots = 19;
+    UseUnsupportedEIP use_unsupported_eip= 20;
   }
 }
 
@@ -598,6 +599,10 @@ message ExecutionGasLimitEfficiencyTooLow {
 message TooManyExpectedStorageSlots {
   uint64 max_slots = 1;
   uint64 expected_slots = 2;
+}
+
+message UseUnsupportedEIP {
+  string eip_name = 1;
 }
 
 // PRECHECK VIOLATIONS

@@ -39,8 +39,9 @@ use super::protos::{
     SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
     TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
     UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
-    UsedForbiddenOpcode, UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
-    VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
+    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
+    VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -138,6 +139,9 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
                     e.max_slots.try_into()?,
                     e.expected_slots.try_into()?,
                 )
+            }
+            Some(mempool_error::Error::UseUnsupportedEip(e)) => {
+                MempoolError::EIPNotSupported(e.eip_name)
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -265,6 +269,11 @@ impl From<MempoolError> for ProtoMempoolError {
                     )),
                 }
             }
+            MempoolError::EIPNotSupported(msg) => ProtoMempoolError {
+                error: Some(mempool_error::Error::UseUnsupportedEip(UseUnsupportedEip {
+                    eip_name: msg,
+                })),
+            },
         }
     }
 }
