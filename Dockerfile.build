@@ -1,6 +1,6 @@
 ARG CROSS_BASE_IMAGE
 
-FROM ghcr.io/foundry-rs/foundry:nightly-fe2acca4e379793539db80e032d76ffe0110298b as foundry
+FROM ghcr.io/foundry-rs/foundry:v0.3.0 as foundry
 
 FROM $CROSS_BASE_IMAGE
 COPY --from=foundry /usr/local/bin/forge /usr/local/bin/forge
@@ -19,4 +19,3 @@ RUN apt-get update && apt-get install -y unzip
 RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v3.15.8/protoc-3.15.8-linux-x86_64.zip \
     && unzip protoc-3.15.8-linux-x86_64.zip -d /usr/local \
     && chmod +x /usr/local/bin/protoc
-
