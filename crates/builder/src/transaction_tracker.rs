@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_consensus::Transaction;
-use alloy_primitives::{Address, B256};
+use alloy_primitives::B256;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use metrics::Gauge;
@@ -57,7 +57,6 @@ pub(crate) trait TransactionTracker: Send + Sync {
     /// is empty, then either no transaction was cancelled or the cancellation was a "soft-cancel."
     async fn cancel_transaction(
         &mut self,
-        to: Address,
         estimated_fees: GasFees,
     ) -> TransactionTrackerResult<Option<B256>>;
 
@@ -347,7 +346,6 @@ where
 
     async fn cancel_transaction(
         &mut self,
-        to: Address,
         estimated_fees: GasFees,
     ) -> TransactionTrackerResult<Option<B256>> {
         let (tx_hash, gas_fees) = match self.transactions.last() {
@@ -370,7 +368,7 @@ where
 
         let cancel_res = self
             .sender
-            .cancel_transaction(tx_hash, self.nonce, to, gas_fees)
+            .cancel_transaction(tx_hash, self.nonce, gas_fees)
             .await;
 
         match cancel_res {

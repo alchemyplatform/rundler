@@ -95,6 +95,15 @@ pub struct Args {
     pub max_expected_storage_slots: usize,
 }
 
+/// Builder settings
+#[derive(Debug, Clone)]
+pub struct BuilderSettings {
+    /// Index of this builder
+    pub index: u64,
+    /// Optional submitter proxy to use for this builder
+    pub submitter_proxy: Option<Address>,
+}
+
 /// Builder settings for an entrypoint
 #[derive(Debug)]
 pub struct EntryPointBuilderSettings {
@@ -102,12 +111,10 @@ pub struct EntryPointBuilderSettings {
     pub address: Address,
     /// Entry point version
     pub version: EntryPointVersion,
-    /// Number of bundle builders to start
-    pub num_bundle_builders: u64,
-    /// Index offset for bundle builders
-    pub bundle_builder_index_offset: u64,
     /// Mempool configs
     pub mempool_configs: HashMap<B256, MempoolConfig>,
+    /// Builder settings
+    pub builders: Vec<BuilderSettings>,
 }
 
 /// Builder task
@@ -217,11 +224,11 @@ where
             .clone()
             .context("entry point v0.6 not supplied")?;
         let mut bundle_sender_actions = vec![];
-        for i in 0..ep.num_bundle_builders {
+        for settings in &ep.builders {
             let bundle_sender_action = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     task_spawner,
-                    i + ep.bundle_builder_index_offset,
+                    settings,
                     ep_providers.clone(),
                     UnsafeSimulator::new(
                         ep_providers.entry_point().clone(),
@@ -233,7 +240,7 @@ where
             } else {
                 self.create_bundle_builder(
                     task_spawner,
-                    i + ep.bundle_builder_index_offset,
+                    settings,
                     ep_providers.clone(),
                     simulation::new_v0_6_simulator(
                         ep_providers.evm().clone(),
@@ -267,11 +274,11 @@ where
             .clone()
             .context("entry point v0.7 not supplied")?;
         let mut bundle_sender_actions = vec![];
-        for i in 0..ep.num_bundle_builders {
+        for settings in &ep.builders {
             let bundle_sender_action = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     task_spawner,
-                    i + ep.bundle_builder_index_offset,
+                    settings,
                     ep_providers.clone(),
                     UnsafeSimulator::new(
                         ep_providers.entry_point().clone(),
@@ -283,7 +290,7 @@ where
             } else {
                 self.create_bundle_builder(
                     task_spawner,
-                    i + ep.bundle_builder_index_offset,
+                    settings,
                     ep_providers.clone(),
                     simulation::new_v0_7_simulator(
                         ep_providers.evm().clone(),
@@ -303,7 +310,7 @@ where
     async fn create_bundle_builder<T, UO, EP, S, I>(
         &self,
         task_spawner: &T,
-        index: u64,
+        builder_settings: &BuilderSettings,
         ep_providers: EP,
         simulator: S,
         pk_iter: &mut I,
@@ -378,11 +385,11 @@ where
             ep_providers.evm().clone(),
             transaction_sender,
             tracker_settings,
-            index,
+            builder_settings.index,
         )
         .await?;
 
-        let builder_settings = bundle_sender::Settings {
+        let sender_settings = bundle_sender::Settings {
             max_replacement_underpriced_blocks: self.args.max_replacement_underpriced_blocks,
             max_cancellation_fee_increases: self.args.max_cancellation_fee_increases,
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
@@ -398,7 +405,7 @@ where
         );
 
         let proposer = BundleProposerImpl::new(
-            index,
+            builder_settings.index,
             ep_providers.clone(),
             BundleProposerProviders::new(self.pool.clone(), simulator, fee_estimator),
             proposer_settings,
@@ -406,15 +413,16 @@ where
         );
 
         let builder = BundleSenderImpl::new(
-            index,
+            builder_settings.index,
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
+            builder_settings.submitter_proxy,
             proposer,
             ep_providers.entry_point().clone(),
             transaction_tracker,
             self.pool.clone(),
-            builder_settings,
+            sender_settings,
             self.event_sender.clone(),
         );
 

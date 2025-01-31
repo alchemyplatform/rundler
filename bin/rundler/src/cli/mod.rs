@@ -27,7 +27,8 @@ mod pool;
 mod rpc;
 mod tracing;
 
-use builder::BuilderCliArgs;
+use builder::{BuilderCliArgs, EntryPointBuilderConfigs};
+use json::get_json_config;
 use node::NodeCliArgs;
 use pool::PoolCliArgs;
 use reth_tasks::TaskManager;
@@ -38,7 +39,8 @@ use rundler_provider::{
 };
 use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
-    EstimationSettings, PrecheckSettings, PriorityFeeMode, SimulationSettings, MIN_CALL_GAS_LIMIT,
+    EstimationSettings, MempoolConfigs, PrecheckSettings, PriorityFeeMode, SimulationSettings,
+    MIN_CALL_GAS_LIMIT,
 };
 use rundler_types::{
     chain::ChainSpec, da::DAGasOracleType, v0_6::UserOperation as UserOperationV0_6,
@@ -68,17 +70,40 @@ pub async fn run() -> anyhow::Result<()> {
     .context("metrics server should start")?;
 
     let mut cs = chain_spec::resolve_chain_spec(&opt.common.network, &opt.common.chain_spec);
-    tracing::info!("Chain spec: {:#?}", cs);
+
+    let (mempool_configs, entry_point_builders) = load_configs(&opt.common).await?;
+    if let Some(entry_point_builders) = &entry_point_builders {
+        entry_point_builders.set_known_proxies(&mut cs);
+    }
 
     let providers = construct_providers(&opt.common, &cs)?;
     aggregator::instantiate_aggregators(&opt.common, &mut cs, &providers);
 
+    tracing::info!("Chain spec: {:#?}", cs);
+
     match opt.command {
         Command::Node(args) => {
-            node::spawn_tasks(task_spawner.clone(), cs, *args, opt.common, providers).await?
+            node::spawn_tasks(
+                task_spawner.clone(),
+                cs,
+                *args,
+                opt.common,
+                providers,
+                mempool_configs,
+                entry_point_builders,
+            )
+            .await?
         }
         Command::Pool(args) => {
-            pool::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
+            pool::spawn_tasks(
+                task_spawner.clone(),
+                cs,
+                args,
+                opt.common,
+                providers,
+                mempool_configs,
+            )
+            .await?
         }
         Command::Rpc(args) => {
             rpc::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
@@ -307,6 +332,15 @@ pub struct CommonArgs {
     )]
     pub mempool_config_path: Option<String>,
 
+    /// Config path for entrypoint builders
+    #[arg(
+        long = "entry_point_builders_path",
+        name = "entry_point_builders_path",
+        env = "ENTRY_POINT_BUILDERS_PATH",
+        global = true
+    )]
+    entry_point_builders_path: Option<String>,
+
     #[arg(
         long = "disable_entry_point_v0_6",
         name = "disable_entry_point_v0_6",
@@ -315,16 +349,6 @@ pub struct CommonArgs {
         global = true
     )]
     pub disable_entry_point_v0_6: bool,
-
-    // Ignored if entry_point_v0_6_enabled is false
-    #[arg(
-        long = "num_builders_v0_6",
-        name = "num_builders_v0_6",
-        env = "NUM_BUILDERS_V0_6",
-        default_value = "1",
-        global = true
-    )]
-    pub num_builders_v0_6: u64,
 
     #[arg(
         long = "disable_entry_point_v0_7",
@@ -335,7 +359,31 @@ pub struct CommonArgs {
     )]
     pub disable_entry_point_v0_7: bool,
 
+    // Ignored if entry_point_v0_6_enabled is false
+    // Ignored if entry_point_builders_path is set
+    #[arg(
+        long = "num_builders_v0_6",
+        name = "num_builders_v0_6",
+        env = "NUM_BUILDERS_V0_6",
+        default_value = "1",
+        global = true
+    )]
+    pub num_builders_v0_6: u64,
+
+    // Ignored if entry_point_v0_6_enabled is false
+    // Ignored if entry_point_builders_path is set
+    // The index offset to apply to the builder index
+    #[arg(
+        long = "builder_index_offset_v0_6",
+        name = "builder_index_offset_v0_6",
+        env = "BUILDER_INDEX_OFFSET_V0_6",
+        default_value = "0",
+        global = true
+    )]
+    pub builder_index_offset_v0_6: u64,
+
     // Ignored if entry_point_v0_7_enabled is false
+    // Ignored if entry_point_builders_path is set
     #[arg(
         long = "num_builders_v0_7",
         name = "num_builders_v0_7",
@@ -345,11 +393,24 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_7: u64,
 
+    // Ignored if entry_point_v0_7_enabled is false
+    // Ignored if entry_point_builders_path is set
+    // The index offset to apply to the builder index
+    #[arg(
+        long = "builder_index_offset_v0_7",
+        name = "builder_index_offset_v0_7",
+        env = "BUILDER_INDEX_OFFSET_V0_7",
+        default_value = "0",
+        global = true
+    )]
+    pub builder_index_offset_v0_7: u64,
+
     #[arg(
         long = "da_gas_tracking_enabled",
         name = "da_gas_tracking_enabled",
         env = "DA_GAS_TRACKING_ENABLED",
-        default_value = "false"
+        default_value = "false",
+        global = true
     )]
     pub da_gas_tracking_enabled: bool,
 
@@ -357,21 +418,24 @@ pub struct CommonArgs {
         long = "provider_client_timeout_seconds",
         name = "provider_client_timeout_seconds",
         env = "PROVIDER_CLIENT_TIMEOUT_SECONDS",
-        default_value = "10"
+        default_value = "10",
+        global = true
     )]
     pub provider_client_timeout_seconds: u64,
 
     #[arg(
         long = "max_expected_storage_slots",
         name = "max_expected_storage_slots",
-        env = "MAX_EXPECTED_STORAGE_SLOTS"
+        env = "MAX_EXPECTED_STORAGE_SLOTS",
+        global = true
     )]
     pub max_expected_storage_slots: Option<usize>,
 
     #[arg(
         long = "bls_aggregation_enabled",
         name = "bls_aggregation_enabled",
-        env = "BLS_AGGREGATION_ENABLED"
+        env = "BLS_AGGREGATION_ENABLED",
+        global = true
     )]
     pub bls_aggregation_enabled: bool,
 }
@@ -677,4 +741,38 @@ fn lint_da_gas_tracking(da_gas_tracking_enabled: bool, chain_spec: &ChainSpec) -
     } else {
         true
     }
+}
+
+async fn load_configs(
+    args: &CommonArgs,
+) -> anyhow::Result<(Option<MempoolConfigs>, Option<EntryPointBuilderConfigs>)> {
+    let mempool_configs = if let Some(mempool_config_path) = &args.mempool_config_path {
+        let mempool_configs = get_json_config::<MempoolConfigs>(mempool_config_path)
+            .await
+            .with_context(|| format!("should load mempool config from {mempool_config_path}"))?;
+
+        tracing::info!("Mempool configs: {:?}", mempool_configs);
+
+        Some(mempool_configs)
+    } else {
+        None
+    };
+
+    let entry_point_builders =
+        if let Some(entry_point_builders_path) = &args.entry_point_builders_path {
+            let entry_point_builders =
+                get_json_config::<EntryPointBuilderConfigs>(entry_point_builders_path)
+                    .await
+                    .with_context(|| {
+                        format!("should load entry point builders from {entry_point_builders_path}")
+                    })?;
+
+            tracing::info!("Entry point builders: {:?}", entry_point_builders);
+
+            Some(entry_point_builders)
+        } else {
+            None
+        };
+
+    Ok((mempool_configs, entry_point_builders))
 }
