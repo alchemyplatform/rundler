@@ -802,25 +802,13 @@ where
         // get the best operations from the pool
         let state = self.state.read();
         let ordered_ops = state.pool.best_operations();
-        // keep track of senders to avoid sending multiple ops from the same sender
-        let mut senders = HashSet::<Address>::new();
 
         Ok(ordered_ops
             .into_iter()
             .filter(|op| {
                 let sender_num = U256::from_be_bytes(op.uo.sender().into_word().into());
-
-                // short-circuit the mod if there is only 1 shard
-                ((self.config.num_shards == 1) ||
-                (sender_num
-                        % U256::from(self.config.num_shards)
-                        == U256::from(shard_index))) &&
-                // filter out ops from unstaked senders we've already seen
-                if !op.account_is_staked {
-                    senders.insert(op.uo.sender())
-                } else {
-                    true
-                }
+                (self.config.num_shards == 1)
+                    || (sender_num % U256::from(self.config.num_shards) == U256::from(shard_index))
             })
             .take(max)
             .map(Into::into)
