@@ -94,17 +94,20 @@ where
 
         let input = tx.input();
 
-        let user_operation = if E::address(&self.chain_spec) == to {
-            E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
-                .into_iter()
-                .find(|op| op.hash(to, self.chain_spec.id) == hash)
-                .context("matching user operation should be found in tx data")?
-        } else {
-            self.trace_find_user_operation(transaction_hash, hash)
-                .await
-                .context("error running trace")?
-                .context("should have found user operation in trace")?
-        };
+        let ep_address = E::address(&self.chain_spec);
+        let user_operation =
+            if ep_address == to || self.chain_spec.known_entry_point_proxies.contains(&to) {
+                E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
+                    .into_iter()
+                    .find(|op| op.hash(ep_address, self.chain_spec.id) == hash)
+                    .context("matching user operation should be found in tx data")?
+            } else {
+                tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
+                self.trace_find_user_operation(transaction_hash, hash)
+                    .await
+                    .context("error running trace")?
+                    .context("should have found user operation in trace")?
+            };
 
         Ok(Some(RpcUserOperationByHash {
             user_operation: user_operation.into().into(),

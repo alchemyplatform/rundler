@@ -135,3 +135,36 @@ stateDiagram-v2
   CancelPending --> Cancelling: Cancellation dropped/abandoned
   CancelPending --> Building: Cancellation mined/aborted
 ```
+
+## Builders Configuration
+
+Rundler supports running multiple builder instances per entry point, per node. To configure set `--num_builders_v0_7` (or corresponding for other entry point) to the number of builders the node should run. Ensure that you have provisioned enough private or KMS keys such that at each builder has access to a distinct key.
+
+If deploying multiple builder nodes all targeting the same mempool, users must ensure that each builder has a distinct index. To control this, set the `--builder_index_offset_v0_7` (or corresponding for other entry point) such that there are no overlaps or gaps in the builder indexes.
+
+### Custom
+
+Most deployments of Rundler should be able to use the configuration above. Rundler does support more detailed configuration for certain use cases. See [`EntryPointBuilderConfigs`](../../bin/rundler/src/cli/builder.rs) for the exact schema of the custom configuration file. Set the path for this file via `--entry_point_builders_path`. When this feature is used the normal CLI-based configuration options are ignored and Rundler will configure builders according to the file.
+
+Currently, this covers the following use cases:
+
+* Entry point submission proxies: Set a separate contract address that the builder should submit bundles through. The contract at this address MUST have the same ABI as `IEntryPoint` for all methods used: `handleOps` and `handleAggregatedOps` if using non-aggregated/aggregated ops respectively.
+
+Example:
+
+```
+{
+    "entryPoints": [
+        {
+            "address": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
+            "indexOffset": 0,
+            "builders": [
+                {
+                    "count": 1,
+                    "proxy": "0xA7BD3A9Eb1238842DDB86458aF7dd2a9e166747A"
+                }
+            ]
+        }
+    ]
+}
+```

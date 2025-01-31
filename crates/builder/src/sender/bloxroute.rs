@@ -56,13 +56,12 @@ where
         &self,
         _tx_hash: B256,
         nonce: u64,
-        to: Address,
         gas_fees: GasFees,
     ) -> Result<CancelTxInfo> {
         // Cannot cancel transactions on polygon bloxroute private, however, the transaction may have been
         // propagated to the public network, and can be cancelled via a public transaction.
 
-        let tx = create_hard_cancel_tx(to, nonce, gas_fees);
+        let tx = create_hard_cancel_tx(self.signer.address(), nonce, gas_fees);
 
         let (raw_tx, _) = self.signer.fill_and_sign(tx).await?;
 

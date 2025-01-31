@@ -13,12 +13,13 @@
 
 use std::net::SocketAddr;
 
+use alloy_primitives::Address;
 use anyhow::{bail, Context};
 use clap::Args;
 use rundler_builder::{
-    self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderTask, BuilderTaskArgs,
-    EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder, RawSenderArgs,
-    TransactionSenderArgs, TransactionSenderKind,
+    self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderSettings, BuilderTask,
+    BuilderTaskArgs, EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder,
+    RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
 };
 use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
@@ -29,9 +30,10 @@ use rundler_task::{
 };
 use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
+use serde::Deserialize;
 use tokio::sync::broadcast;
 
-use super::{json::get_json_config, CommonArgs};
+use super::CommonArgs;
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
 
@@ -245,15 +247,6 @@ pub struct BuilderArgs {
         default_value = "20"
     )]
     max_replacement_underpriced_blocks: u64,
-
-    /// The index offset to apply to the builder index
-    #[arg(
-        long = "builder_index_offset",
-        name = "builder_index_offset",
-        env = "BUILDER_INDEX_OFFSET",
-        default_value = "0"
-    )]
-    pub builder_index_offset: u64,
 }
 
 impl BuilderArgs {
@@ -264,6 +257,8 @@ impl BuilderArgs {
         chain_spec: ChainSpec,
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
+        mempool_configs: Option<MempoolConfigs>,
+        entry_point_builders: Option<EntryPointBuilderConfigs>,
     ) -> anyhow::Result<BuilderTaskArgs> {
         let priority_fee_mode = PriorityFeeMode::try_from(
             common.priority_fee_mode_kind.as_str(),
@@ -272,36 +267,58 @@ impl BuilderArgs {
 
         let rpc_url = common.node_http.clone().context("must provide node_http")?;
 
-        let mempool_configs = match &common.mempool_config_path {
-            Some(path) => get_json_config::<MempoolConfigs>(path)
-                .await
-                .with_context(|| format!("should load mempool configurations from {path}"))?,
-            None => MempoolConfigs::default(),
-        };
-
+        let mempool_configs = mempool_configs.unwrap_or_default();
         let mut entry_points = vec![];
         let mut num_builders = 0;
 
         if !common.disable_entry_point_v0_6 {
+            let builders = if let Some(ep_builder_configs) = &entry_point_builders {
+                ep_builder_configs
+                    .entry_points
+                    .iter()
+                    .find(|ep| ep.address == chain_spec.entry_point_address_v0_6)
+                    .map(|ep| ep.builders())
+                    .expect("should find entry point v0.6 builders")
+            } else {
+                builder_settings_from_cli(
+                    common.builder_index_offset_v0_6,
+                    common.num_builders_v0_6,
+                )
+            };
+
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_6,
                 version: EntryPointVersion::V0_6,
-                num_bundle_builders: common.num_builders_v0_6,
-                bundle_builder_index_offset: self.builder_index_offset,
                 mempool_configs: mempool_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_6),
+                builders,
             });
+
             num_builders += common.num_builders_v0_6;
         }
         if !common.disable_entry_point_v0_7 {
+            let builders = if let Some(ep_builder_configs) = &entry_point_builders {
+                ep_builder_configs
+                    .entry_points
+                    .iter()
+                    .find(|ep| ep.address == chain_spec.entry_point_address_v0_7)
+                    .map(|ep| ep.builders())
+                    .expect("should find entry point v0.7 builders")
+            } else {
+                builder_settings_from_cli(
+                    common.builder_index_offset_v0_7,
+                    common.num_builders_v0_7,
+                )
+            };
+
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_7,
                 version: EntryPointVersion::V0_7,
-                num_bundle_builders: common.num_builders_v0_7,
-                bundle_builder_index_offset: self.builder_index_offset,
                 mempool_configs: mempool_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_7),
+                builders,
             });
+
             num_builders += common.num_builders_v0_7;
         }
 
@@ -413,6 +430,69 @@ impl BuilderArgs {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EntryPointBuilderConfigs {
+    // Builder configs per entry point
+    entry_points: Vec<EntryPointBuilderConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EntryPointBuilderConfig {
+    // Entry point address
+    address: Address,
+    // Index offset for builders
+    index_offset: u64,
+    // Builder configs
+    builders: Vec<BuilderConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BuilderConfig {
+    // Number of builders using this config
+    count: u64,
+    // Submitter proxy to use for builders
+    proxy: Option<Address>,
+}
+
+impl EntryPointBuilderConfigs {
+    pub(crate) fn set_known_proxies(&self, chain_spec: &mut ChainSpec) {
+        for entry_point in &self.entry_points {
+            for builder in &entry_point.builders {
+                if let Some(proxy) = builder.proxy {
+                    chain_spec.known_entry_point_proxies.push(proxy);
+                }
+            }
+        }
+    }
+}
+
+impl EntryPointBuilderConfig {
+    pub fn builders(&self) -> Vec<BuilderSettings> {
+        let mut index = self.index_offset;
+        let mut builders = vec![];
+        for builder in &self.builders {
+            builders.extend((0..builder.count).map(|i| BuilderSettings {
+                index: index + i,
+                submitter_proxy: builder.proxy,
+            }));
+            index += builder.count;
+        }
+        builders
+    }
+}
+
+fn builder_settings_from_cli(index_offset: u64, count: u64) -> Vec<BuilderSettings> {
+    (0..count)
+        .map(|i| BuilderSettings {
+            index: index_offset + i,
+            submitter_proxy: None,
+        })
+        .collect()
+}
+
 /// CLI options for the Builder server standalone
 #[derive(Args, Debug)]
 pub struct BuilderCliArgs {
@@ -450,11 +530,15 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         )),
     );
 
+    let (mempool_config, entry_point_builders) = super::load_configs(&common_args).await?;
+
     let task_args = builder_args
         .to_args(
             chain_spec.clone(),
             &common_args,
             Some(format_socket_addr(&builder_args.host, builder_args.port).parse()?),
+            mempool_config,
+            entry_point_builders,
         )
         .await?;
 
