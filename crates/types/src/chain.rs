@@ -128,6 +128,14 @@ pub struct ChainSpec {
     /// Registry of signature aggregators
     #[serde(skip)]
     pub signature_aggregators: Arc<SignatureAggregatorRegistry>,
+
+    /*
+     * Proxies
+     */
+    /// A list of known entry point proxies - these have the same interface as the
+    /// entry point, and are used to proxy bundles to the entry point.
+    #[serde(skip)]
+    pub known_entry_point_proxies: Vec<Address>,
 }
 
 /// Type of oracle for estimating priority fees
@@ -173,6 +181,7 @@ impl Default for ChainSpec {
             bloxroute_enabled: false,
             chain_history_size: 64,
             signature_aggregators: Arc::new(SignatureAggregatorRegistry::default()),
+            known_entry_point_proxies: vec![],
         }
     }
 }

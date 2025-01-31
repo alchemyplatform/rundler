@@ -205,6 +205,7 @@ impl PoolArgs {
         chain_spec: ChainSpec,
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
+        mempool_configs: Option<MempoolConfigs>,
     ) -> anyhow::Result<PoolTaskArgs> {
         let blocklist = match &self.blocklist_path {
             Some(blocklist) => Some(get_json_config(blocklist).await?),
@@ -217,13 +218,7 @@ impl PoolArgs {
         tracing::info!("blocklist: {:?}", blocklist);
         tracing::info!("allowlist: {:?}", allowlist);
 
-        let mempool_channel_configs = match &common.mempool_config_path {
-            Some(path) => get_json_config::<MempoolConfigs>(path)
-                .await
-                .with_context(|| format!("should load mempool configurations from {path}"))?,
-            None => MempoolConfigs::default(),
-        };
-        tracing::info!("Mempool channel configs: {:?}", mempool_channel_configs);
+        let mempool_channel_configs = mempool_configs.unwrap_or_default();
 
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
@@ -307,6 +302,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     pool_args: PoolCliArgs,
     common_args: CommonArgs,
     providers: impl Providers + 'static,
+    mempool_configs: Option<MempoolConfigs>,
 ) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -315,6 +311,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
             chain_spec.clone(),
             &common_args,
             Some(format!("{}:{}", pool_args.host, pool_args.port).parse()?),
+            mempool_configs,
         )
         .await?;
 
