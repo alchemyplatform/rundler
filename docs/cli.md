@@ -63,18 +63,31 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - (*Only required if using other AWS features*)
 - `--unsafe`: Flag for unsafe bundling mode. When set Rundler will skip checking simulation rules (and any `debug_traceCall`). (default: `false`).
   - env: *UNSAFE*
-- `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`)
+- `--mempool_config_path`: Path to the mempool configuration file. (example: `mempool-config.json`, `s3://my-bucket/mempool-config.json`). (default: `None`)
   - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file. 
   - env: *MEMPOOL_CONFIG_PATH*
   - See [here](./architecture/pool.md#alternative-mempools-in-preview) for details.
+- `--entry_point_builders_path`: Path to the entry point builders configuration file (example: `builders.json`, `s3://my-bucket/builders.json`). (default: `None`)
+  - This path can either be a local file path or an S3 url. If using an S3 url, Make sure your machine has access to this file.
+  - env: *ENTRY_POINT_BUILDERS_PATH*
+  - NOTE: most deployments can ignore this and use the settings below.
+  - See [here](./architecture/builder.md#custom) for details.
 - `--disable_entry_point_v0_6`: Disable entry point v0.6 support. (default: `false`).
   - env: *DISABLE_ENTRY_POINT_V0_6*
 - `--num_builders_v0_6`: The number of bundle builders to run on entry point v0.6 (default: `1`)
   - env: *NUM_BUILDERS_V0_6*
+  - NOTE: ignored if `entry_point_builders_path` is set
+- `--builder_index_offset_v0_6`: If running multiple builder processes, this is the index offset to assign unique indexes to each bundle sender. (default: 0)
+  - env: *BUILDER_INDEX_OFFSET_V0_6*
+  - NOTE: ignored if `entry_point_builders_path` is set
 - `--disable_entry_point_v0_7`: Disable entry point v0.7 support. (default: `false`).
   - env: *DISABLE_ENTRY_POINT_V0_7*
 - `--num_builders_v0_7`: The number of bundle builders to run on entry point v0.7 (default: `1`)
   - env: *NUM_BUILDERS_V0_7*
+  - NOTE: ignored if `entry_point_builders_path` is set
+- `--builder_index_offset_v0_7`: If running multiple builder processes, this is the index offset to assign unique indexes to each bundle sender. (default: 0)
+  - env: *BUILDER_INDEX_OFFSET_V0_7*
+  - NOTE: ignored if `entry_point_builders_path` is set
 - `--da_gas_tracking_enabled`: Enable the DA gas tracking feature of the mempool (default: `false`)
   - env: *DA_GAS_TRACKING_ENABLED*
 - `--max_expected_storage_slots`: Optionally set the maximum number of expected storage slots to submit with a conditional transaction. (default: `None`)
@@ -223,8 +236,6 @@ List of command line options for configuring the Builder.
   - env: *BUILDER_FLASHBOTS_RELAY_AUTH_KEY*
 - `--builder.bloxroute_auth_header`: Only used/required if builder.sender == "polygon_bloxroute." If using the bloxroute transaction sender on Polygon, this is the auth header to supply with the requests. (default: None)
   - env: *BUILDER_BLOXROUTE_AUTH_HEADER*
-- `--builder.index_offset`: If running multiple builder processes, this is the index offset to assign unique indexes to each bundle sender. (default: 0)
-  - env: *BUILDER_INDEX_OFFSET*
 - `--builder.pool_url`: If running in distributed mode, the URL of the pool server to use.
   - env: *BUILDER_POOL_URL*
   - *Only required when running in distributed mode*
