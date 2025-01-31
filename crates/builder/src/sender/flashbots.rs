@@ -63,7 +63,6 @@ where
         &self,
         tx_hash: B256,
         _nonce: u64,
-        _to: Address,
         _gas_fees: GasFees,
     ) -> Result<CancelTxInfo> {
         let success = self

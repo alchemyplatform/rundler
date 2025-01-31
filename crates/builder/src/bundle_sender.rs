@@ -66,6 +66,8 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
     sender_eoa: Address,
+    // Optional submitter proxy - bundles are sent to this address instead of the entry point
+    submitter_proxy: Option<Address>,
     proposer: P,
     entry_point: E,
     transaction_tracker: Option<T>,
@@ -181,6 +183,7 @@ where
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
         sender_eoa: Address,
+        submitter_proxy: Option<Address>,
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
@@ -193,6 +196,7 @@ where
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
             sender_eoa,
+            submitter_proxy,
             proposer,
             transaction_tracker: Some(transaction_tracker),
             pool,
@@ -428,7 +432,7 @@ where
 
         let cancel_res = state
             .transaction_tracker
-            .cancel_transaction(*self.entry_point.address(), estimated_fees)
+            .cancel_transaction(estimated_fees)
             .await;
 
         match cancel_res {
@@ -691,12 +695,18 @@ where
             bundle.entity_updates.len()
         );
         let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
+
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
             self.sender_eoa,
             bundle.gas_estimate,
             bundle.gas_fees,
         );
+
+        if let Some(submitter_proxy) = self.submitter_proxy {
+            tx = tx.to(submitter_proxy);
+        }
+
         tx = tx.nonce(nonce);
         Ok(Some(BundleTx {
             tx,
@@ -1602,7 +1612,7 @@ mod tests {
         mock_tracker
             .expect_cancel_transaction()
             .once()
-            .returning(|_, _| Box::pin(async { Ok(Some(B256::ZERO)) }));
+            .returning(|_| Box::pin(async { Ok(Some(B256::ZERO)) }));
 
         mock_trigger.expect_last_block().return_const(NewHead {
             block_number: 0,
@@ -1785,6 +1795,7 @@ mod tests {
             mpsc::channel(1000).1,
             ChainSpec::default(),
             Address::default(),
+            None,
             mock_proposer,
             mock_entry_point,
             MockTransactionTracker::new(),
