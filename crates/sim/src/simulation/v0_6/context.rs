@@ -342,6 +342,7 @@ mod tests {
         },
         ExtendedUserOperation {
             authorization_tuple: None,
+            aggregator: None,
         },
         ).build();
 

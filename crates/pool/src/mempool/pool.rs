@@ -281,6 +281,9 @@ where
 
             // check for eligibility
             if self.da_gas_oracle.is_some() && block_da_data.is_some() {
+                // TODO(bundle): assuming a bundle size of 1
+                let bundle_size = 1;
+
                 let da_gas_oracle = self.da_gas_oracle.as_ref().unwrap();
                 let block_da_data = block_da_data.unwrap();
 
@@ -288,11 +291,12 @@ where
                     &op.po.da_gas_data,
                     block_da_data,
                     op.uo().gas_price(gas_fees.base_fee),
+                    op.uo().extra_data_len(bundle_size),
                 );
 
                 let required_pvg = op.uo().required_pre_verification_gas(
                     &self.config.chain_spec,
-                    1,
+                    bundle_size,
                     required_da_gas,
                 );
                 let actual_pvg = op.uo().pre_verification_gas();
@@ -1324,7 +1328,7 @@ mod tests {
         let mut oracle = MockDAGasOracleSync::default();
         oracle
             .expect_calc_da_gas_sync()
-            .returning(move |_, _, _| da_pvg - 1);
+            .returning(move |_, _, _, _| da_pvg - 1);
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
@@ -1359,7 +1363,7 @@ mod tests {
         let mut oracle = MockDAGasOracleSync::default();
         oracle
             .expect_calc_da_gas_sync()
-            .returning(move |_, _, _| da_pvg + 1);
+            .returning(move |_, _, _, _| da_pvg + 1);
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
@@ -1394,7 +1398,7 @@ mod tests {
         let mut oracle = MockDAGasOracleSync::default();
         oracle
             .expect_calc_da_gas_sync()
-            .returning(move |_, _, _| da_pvg);
+            .returning(move |_, _, _, _| da_pvg);
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 
@@ -1429,10 +1433,12 @@ mod tests {
             .pre_verification_da_gas_limit(&conf.chain_spec, Some(1));
 
         let mut oracle = MockDAGasOracleSync::default();
-        oracle.expect_calc_da_gas_sync().returning(move |_, _, gp| {
-            assert_eq!(gp, po1_gas_price);
-            da_pvg + 1
-        });
+        oracle
+            .expect_calc_da_gas_sync()
+            .returning(move |_, _, gp, _| {
+                assert_eq!(gp, po1_gas_price);
+                da_pvg + 1
+            });
 
         let mut pool = pool_with_conf_oracle(conf.clone(), oracle);
 

@@ -105,12 +105,15 @@ pub enum EthRpcError {
     /// The user operation uses a paymaster that returns a context while being unstaked
     #[error("Unstaked paymaster must not return context")]
     UnstakedPaymasterContext,
-    /// The user operation uses an aggregator entity and it is not staked
-    #[error("An aggregator must be staked, regardless of storager usage")]
-    UnstakedAggregator,
     /// Unsupported aggregator
     #[error("unsupported aggregator")]
     UnsupportedAggregator(UnsupportedAggregatorData),
+    /// Aggregator error
+    #[error("signature aggregator error: {0}")]
+    AggregatorError(String),
+    /// Aggregator mismatch
+    #[error("signature aggregator mismatch. Expected: {0:?}, got: {1:?}")]
+    AggregatorMismatch(Address, Address),
     /// Replacement underpriced
     #[error("replacement underpriced")]
     ReplacementUnderpriced(ReplacementUnderpricedData),
@@ -304,9 +307,7 @@ impl From<MempoolError> for EthRpcError {
             }
             MempoolError::PrecheckViolation(violation) => violation.into(),
             MempoolError::SimulationViolation(violation) => violation.into(),
-            MempoolError::UnsupportedAggregator(a) => {
-                Self::UnsupportedAggregator(UnsupportedAggregatorData { aggregator: a })
-            }
+            MempoolError::AggregatorError(a) => Self::AggregatorError(a),
             MempoolError::UnknownEntryPoint(a) => {
                 Self::EntryPointValidationRejected(format!("unknown entry point: {}", a))
             }
@@ -377,7 +378,7 @@ impl From<SimulationViolation> for EthRpcError {
                     U32::from(stake_data.min_unstake_delay),
                 )))
             }
-            SimulationViolation::AggregatorValidationFailed => Self::SignatureCheckFailed,
+            SimulationViolation::AggregatorMismatch(e, a) => Self::AggregatorMismatch(e, a),
             SimulationViolation::OutOfGas(entity) => Self::OutOfGas(entity),
             SimulationViolation::ValidationRevert(revert) => Self::ValidationRevert(revert.into()),
             _ => Self::SimulationFailed(value),
@@ -402,7 +403,6 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::OpcodeViolation(_, _)
             | EthRpcError::OpcodeViolationMap(_)
             | EthRpcError::OutOfGas(_)
-            | EthRpcError::UnstakedAggregator
             | EthRpcError::MultipleRolesViolation(_)
             | EthRpcError::UnstakedPaymasterContext
             | EthRpcError::SenderAddressUsedAsAlternateEntity(_)
@@ -426,9 +426,9 @@ impl From<EthRpcError> for ErrorObjectOwned {
             EthRpcError::MaxOperationsReached(_, _) => rpc_err(STAKE_TOO_LOW_CODE, msg),
             EthRpcError::SignatureCheckFailed
             | EthRpcError::AccountSignatureCheckFailed
-            | EthRpcError::PaymasterSignatureCheckFailed => {
-                rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg)
-            }
+            | EthRpcError::PaymasterSignatureCheckFailed
+            | EthRpcError::AggregatorError(_)
+            | EthRpcError::AggregatorMismatch(_, _) => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
             EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
             EthRpcError::ExecutionRevertedWithBytes(data) => {
@@ -526,6 +526,9 @@ impl From<GasEstimationError> for EthRpcError {
             }
             GasEstimationError::ProviderError(provider_error) => {
                 EthRpcError::from(ProviderErrorWithContext::from(provider_error))
+            }
+            GasEstimationError::UnsupportedAggregator(aggregator) => {
+                Self::UnsupportedAggregator(UnsupportedAggregatorData { aggregator })
             }
             GasEstimationError::Other(error) => {
                 let context = error.to_string();

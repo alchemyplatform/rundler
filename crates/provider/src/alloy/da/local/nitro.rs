@@ -60,7 +60,8 @@ where
         data: Bytes,
         to: Address,
         block: BlockHashOrNumber,
-        _gas_price: u128,
+        gas_price: u128,
+        extra_bytes_len: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
@@ -72,7 +73,8 @@ where
                 let uo_data = self.get_uo_data(to, data, block).await?;
                 let uo_data = DAGasUOData::Nitro(uo_data);
                 let block_data = DAGasBlockData::Nitro(block_da_data);
-                let l1_gas_estimate = self.calc_da_gas_sync(&uo_data, &block_data, _gas_price);
+                let l1_gas_estimate =
+                    self.calc_da_gas_sync(&uo_data, &block_data, gas_price, extra_bytes_len);
 
                 Ok((l1_gas_estimate, uo_data, block_data))
             }
@@ -128,6 +130,7 @@ where
         uo_data: &DAGasUOData,
         block_data: &DAGasBlockData,
         _gas_price: u128,
+        extra_data_len: usize,
     ) -> u128 {
         let uo_units = match uo_data {
             DAGasUOData::Nitro(uo_data) => uo_data.uo_units,
@@ -138,7 +141,9 @@ where
             _ => panic!("NitroDAGasOracle only supports Nitro DAGasBlockData"),
         };
 
-        calculate_da_fee(uo_units, block_data)
+        let units = uo_units + extra_data_to_units(extra_data_len);
+
+        calculate_da_fee(units, block_data)
     }
 }
 
@@ -240,4 +245,15 @@ fn calculate_uo_units(da_fee: u128, block_da_data: &NitroDAGasBlockData) -> u128
     } else {
         b.saturating_div(block_da_data.l1_base_fee)
     }
+}
+
+// https://github.com/ethereum/go-ethereum/blob/52766bedb9316cd6cddacbb282809e3bdfba143e/params/protocol_params.go#L94
+const TX_NON_ZERO_GAS_EIP_2028: u128 = 16;
+
+fn extra_data_to_units(extra_data_len: usize) -> u128 {
+    (extra_data_len as u128)
+        .saturating_mul(TX_NON_ZERO_GAS_EIP_2028)
+        .saturating_mul(CACHE_UNITS_SCALAR)
+        .saturating_mul(101)
+        .saturating_div(100)
 }

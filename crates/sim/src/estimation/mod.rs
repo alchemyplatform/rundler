@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::Bytes;
+use alloy_primitives::{Address, Bytes};
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{ProviderError, StateOverride};
@@ -58,6 +58,9 @@ pub enum GasEstimationError {
     /// The total amount of gas used by the UO is greater than allowed
     #[error("total gas used by the user operation {0} is greater than the allowed limit: {1}")]
     GasTotalTooLarge(u128, u128),
+    /// Unsupported signature aggregator
+    #[error("unsupported signature aggregator: {0:?}")]
+    UnsupportedAggregator(Address),
     /// Error from provider
     #[error(transparent)]
     ProviderError(#[from] ProviderError),

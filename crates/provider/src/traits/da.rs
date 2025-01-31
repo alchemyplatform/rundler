@@ -31,6 +31,7 @@ pub trait DAGasOracle: Send + Sync {
         to: Address,
         block: BlockHashOrNumber,
         gas_price: u128,
+        extra_data_len: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
 }
 
@@ -67,5 +68,6 @@ pub trait DAGasOracleSync: DAGasOracle {
         uo_data: &DAGasUOData,
         block_data: &DAGasBlockData,
         gas_price: u128,
+        extra_data_len: usize,
     ) -> u128;
 }

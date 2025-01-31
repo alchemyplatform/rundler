@@ -50,6 +50,8 @@ pub(crate) struct RpcUserOperation {
     signature: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
     eip7702_auth: Option<RpcEip7702Auth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    aggregator: Option<Address>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -88,6 +90,7 @@ impl From<UserOperation> for RpcUserOperation {
             paymaster_data,
             signature: op.signature,
             eip7702_auth: op.authorization_tuple.map(|a| a.into()),
+            aggregator: op.aggregator,
         }
     }
 }
@@ -126,6 +129,10 @@ impl FromRpc<RpcUserOperation> for UserOperation {
         if def.eip7702_auth.is_some() {
             builder = builder.authorization_tuple(def.eip7702_auth.map(|a| a.into()));
         }
+        if def.aggregator.is_some() {
+            builder = builder.aggregator(def.aggregator.unwrap());
+        }
+
         builder.build()
     }
 }
@@ -160,6 +167,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     paymaster_data: Option<Bytes>,
     signature: Bytes,
     eip7702_auth: Option<RpcEip7702Auth>,
+    aggregator: Option<Address>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -181,6 +189,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             paymaster_data: def.paymaster_data.unwrap_or_default(),
             signature: def.signature,
             eip7702_auth_address: def.eip7702_auth.map(|a| a.address),
+            aggregator: def.aggregator,
         }
     }
 }

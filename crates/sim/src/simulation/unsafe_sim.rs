@@ -13,8 +13,8 @@
 
 use std::marker::PhantomData;
 
-use alloy_primitives::B256;
-use rundler_provider::{AggregatorOut, EntryPoint, SignatureAggregator, SimulationProvider};
+use alloy_primitives::{Address, B256};
+use rundler_provider::{EntryPoint, SignatureAggregator, SimulationProvider};
 use rundler_types::{pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange};
 
 use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
@@ -100,23 +100,18 @@ where
 
         let mut violations = vec![];
 
-        let aggregator = if let Some(aggregator_info) = validation_result.aggregator_info {
-            let agg_out = self
-                .entry_point
-                .validate_user_op_signature(aggregator_info.address, op)
-                .await?;
-
-            match agg_out {
-                AggregatorOut::NotNeeded => None,
-                AggregatorOut::SuccessWithInfo(info) => Some(info),
-                AggregatorOut::ValidationReverted => {
-                    violations.push(SimulationViolation::AggregatorValidationFailed);
-                    None
+        if let Some(agg) = op.aggregator() {
+            if let Some(agg_info) = validation_result.aggregator_info {
+                if agg_info.address != agg {
+                    violations.push(SimulationViolation::AggregatorMismatch(
+                        agg,
+                        agg_info.address,
+                    ));
                 }
+            } else {
+                violations.push(SimulationViolation::AggregatorMismatch(agg, Address::ZERO));
             }
-        } else {
-            None
-        };
+        }
 
         if validation_result.return_info.account_sig_failed {
             violations.push(SimulationViolation::InvalidAccountSignature);
@@ -138,7 +133,6 @@ where
                 valid_time_range,
                 requires_post_op,
                 entity_infos,
-                aggregator,
                 ..Default::default()
             })
         }

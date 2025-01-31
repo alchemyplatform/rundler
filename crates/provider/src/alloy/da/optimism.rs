@@ -64,10 +64,17 @@ where
         _to: Address,
         block: BlockHashOrNumber,
         gas_price: u128,
+        extra_data_len: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         if gas_price == 0 {
             Err(anyhow::anyhow!("gas price cannot be zero"))?;
         }
+
+        let data = if extra_data_len > 0 {
+            super::extend_bytes_with_random(data, extra_data_len)
+        } else {
+            data
+        };
 
         let l1_fee: u128 = self
             .oracle

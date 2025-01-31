@@ -177,6 +177,7 @@ mockall::mock! {
             op: v0_6::UserOperation,
             block: BlockHashOrNumber,
             gas_price: u128,
+            bundle_size: usize,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
     }
 
@@ -268,6 +269,7 @@ mockall::mock! {
             op: v0_7::UserOperation,
             block: BlockHashOrNumber,
             gas_price: u128,
+            bundle_size: usize,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
     }
 
@@ -310,6 +312,7 @@ mockall::mock! {
             uo_data: &DAGasUOData,
             block_data: &DAGasBlockData,
             gas_price: u128,
+            extra_bytes_len: usize,
         ) -> u128;
     }
 
@@ -321,6 +324,7 @@ mockall::mock! {
             to: Address,
             block: BlockHashOrNumber,
             gas_price: u128,
+            extra_data_len: usize,
         ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
     }
 }

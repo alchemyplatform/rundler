@@ -68,10 +68,17 @@ where
         to: Address,
         block: BlockHashOrNumber,
         _gas_price: u128,
+        extra_data_len: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
+        let data = if extra_data_len > 0 {
+            super::extend_bytes_with_random(uo_data, extra_data_len)
+        } else {
+            uo_data
+        };
+
         let ret = self
             .node_interface
-            .gasEstimateL1Component(to, true, uo_data)
+            .gasEstimateL1Component(to, true, data)
             .block(block.into())
             .call()
             .await?;

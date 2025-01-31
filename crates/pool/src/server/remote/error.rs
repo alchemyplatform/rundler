@@ -23,9 +23,9 @@ use rundler_types::{
 
 use super::protos::{
     mempool_error, precheck_violation_error, simulation_violation_error, validation_revert,
-    AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorValidationFailed,
-    AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender, CallGasLimitTooLow,
-    CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
+    AccessedUndeployedContract, AccessedUnsupportedContractType, AggregatorError,
+    AggregatorMismatch, AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
+    CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
     DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
     ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
     FactoryIsNotContract, FactoryMustBeEmpty, InvalidAccountSignature, InvalidPaymasterSignature,
@@ -38,10 +38,9 @@ use super::protos::{
     SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
     SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
     TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnknownRevert, UnstakedAggregator, UnstakedPaymasterContext, UnsupportedAggregatorError,
-    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
-    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
-    VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    UnknownRevert, UnstakedPaymasterContext, UseUnsupportedEip, UsedForbiddenOpcode,
+    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -99,9 +98,7 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::SimulationViolation(e)) => {
                 MempoolError::SimulationViolation(e.try_into()?)
             }
-            Some(mempool_error::Error::UnsupportedAggregator(e)) => {
-                MempoolError::UnsupportedAggregator(from_bytes(&e.aggregator_address)?)
-            }
+            Some(mempool_error::Error::Aggregator(e)) => MempoolError::AggregatorError(e.reason),
             Some(mempool_error::Error::UnknownEntryPoint(e)) => {
                 MempoolError::UnknownEntryPoint(from_bytes(&e.entry_point)?)
             }
@@ -222,12 +219,8 @@ impl From<MempoolError> for ProtoMempoolError {
             MempoolError::SimulationViolation(violation) => ProtoMempoolError {
                 error: Some(mempool_error::Error::SimulationViolation(violation.into())),
             },
-            MempoolError::UnsupportedAggregator(agg) => ProtoMempoolError {
-                error: Some(mempool_error::Error::UnsupportedAggregator(
-                    UnsupportedAggregatorError {
-                        aggregator_address: agg.to_proto_bytes(),
-                    },
-                )),
+            MempoolError::AggregatorError(reason) => ProtoMempoolError {
+                error: Some(mempool_error::Error::Aggregator(AggregatorError { reason })),
             },
             MempoolError::UnknownEntryPoint(entry_point) => ProtoMempoolError {
                 error: Some(mempool_error::Error::UnknownEntryPoint(
@@ -616,11 +609,6 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     DidNotRevert {},
                 )),
             },
-            SimulationViolation::UnstakedAggregator => ProtoSimulationViolationError {
-                violation: Some(simulation_violation_error::Violation::UnstakedAggregator(
-                    UnstakedAggregator {},
-                )),
-            },
             SimulationViolation::WrongNumberOfPhases(num_phases) => ProtoSimulationViolationError {
                 violation: Some(simulation_violation_error::Violation::WrongNumberOfPhases(
                     WrongNumberOfPhases { num_phases },
@@ -676,13 +664,16 @@ impl From<SimulationViolation> for ProtoSimulationViolationError {
                     )),
                 }
             }
-            SimulationViolation::AggregatorValidationFailed => ProtoSimulationViolationError {
-                violation: Some(
-                    simulation_violation_error::Violation::AggregatorValidationFailed(
-                        AggregatorValidationFailed {},
-                    ),
-                ),
-            },
+            SimulationViolation::AggregatorMismatch(expected, actual) => {
+                ProtoSimulationViolationError {
+                    violation: Some(simulation_violation_error::Violation::AggregatorMismatch(
+                        AggregatorMismatch {
+                            expected: expected.to_proto_bytes(),
+                            actual: actual.to_proto_bytes(),
+                        },
+                    )),
+                }
+            }
             SimulationViolation::VerificationGasLimitBufferTooLow(limit, needed) => {
                 ProtoSimulationViolationError {
                     violation: Some(
@@ -828,9 +819,6 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             Some(simulation_violation_error::Violation::DidNotRevert(_)) => {
                 SimulationViolation::DidNotRevert
             }
-            Some(simulation_violation_error::Violation::UnstakedAggregator(_)) => {
-                SimulationViolation::UnstakedAggregator
-            }
             Some(simulation_violation_error::Violation::WrongNumberOfPhases(e)) => {
                 SimulationViolation::WrongNumberOfPhases(e.num_phases)
             }
@@ -858,8 +846,11 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
             Some(simulation_violation_error::Violation::CodeHashChanged(_)) => {
                 SimulationViolation::CodeHashChanged
             }
-            Some(simulation_violation_error::Violation::AggregatorValidationFailed(_)) => {
-                SimulationViolation::AggregatorValidationFailed
+            Some(simulation_violation_error::Violation::AggregatorMismatch(e)) => {
+                SimulationViolation::AggregatorMismatch(
+                    from_bytes(&e.expected)?,
+                    from_bytes(&e.actual)?,
+                )
             }
             Some(simulation_violation_error::Violation::VerificationGasLimitBufferTooLow(e)) => {
                 SimulationViolation::VerificationGasLimitBufferTooLow(

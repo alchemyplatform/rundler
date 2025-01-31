@@ -44,17 +44,19 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<U
     block: BlockHashOrNumber,
     gas_price: u128,
 ) -> anyhow::Result<u128> {
+    // TODO(bundle): assuming a bundle size of 1
+    let bundle_size = 1;
+
     let da_gas = if chain_spec.da_pre_verification_gas {
         entry_point
-            .calc_da_gas(random_op.clone(), block, gas_price)
+            .calc_da_gas(random_op.clone(), block, gas_price, bundle_size)
             .await?
             .0
     } else {
         0
     };
 
-    // Currently assume 1 op bundle
-    Ok(full_op.required_pre_verification_gas(chain_spec, 1, da_gas))
+    Ok(full_op.required_pre_verification_gas(chain_spec, bundle_size, da_gas))
 }
 
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
@@ -67,18 +69,20 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
     block: BlockHashOrNumber,
     base_fee: u128,
 ) -> anyhow::Result<(u128, DAGasUOData)> {
+    // TODO(bundle): assuming a bundle size of 1
+    let bundle_size = 1;
+
     let (da_gas, uo_data) = if chain_spec.da_pre_verification_gas {
         let (da_gas, uo_data, _) = entry_point
-            .calc_da_gas(op.clone(), block, op.gas_price(base_fee))
+            .calc_da_gas(op.clone(), block, op.gas_price(base_fee), bundle_size)
             .await?;
         (da_gas, uo_data)
     } else {
         (0, DAGasUOData::Empty)
     };
 
-    // Currently assume 1 op bundle
     Ok((
-        op.required_pre_verification_gas(chain_spec, 1, da_gas),
+        op.required_pre_verification_gas(chain_spec, bundle_size, da_gas),
         uo_data,
     ))
 }
