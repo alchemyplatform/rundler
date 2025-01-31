@@ -94,7 +94,6 @@ pub(crate) trait TransactionSender: Send + Sync {
         &self,
         tx_hash: B256,
         nonce: u64,
-        to: Address,
         gas_fees: GasFees,
     ) -> Result<CancelTxInfo>;
 
