@@ -43,6 +43,7 @@ pub trait Pool: Send + Sync {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
+        filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>>;
 
     /// Get an operation from the pool by hash

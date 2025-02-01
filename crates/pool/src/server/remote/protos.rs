@@ -438,6 +438,7 @@ impl From<&PoolOperation> for MempoolOp {
             sim_block_hash: op.sim_block_hash.to_proto_bytes(),
             account_is_staked: op.account_is_staked,
             da_gas_data: Some(DaGasUoData::from(&op.da_gas_data)),
+            filter_id: op.filter_id.clone().unwrap_or_default(),
         }
     }
 }
@@ -503,6 +504,11 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
 
         let expected_code_hash = B256::from_slice(&op.expected_code_hash);
         let sim_block_hash = B256::from_slice(&op.sim_block_hash);
+        let filter_id = if op.filter_id.is_empty() {
+            None
+        } else {
+            Some(op.filter_id)
+        };
 
         Ok(PoolOperation {
             uo,
@@ -518,6 +524,7 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
                 .da_gas_data
                 .context("DA gas data should be set")?
                 .try_into()?,
+            filter_id,
         })
     }
 }

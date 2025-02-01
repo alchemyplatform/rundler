@@ -23,7 +23,7 @@ use parking_lot::RwLock;
 use rundler_provider::{
     DAGasOracleSync, EvmProvider, ProvidersWithEntryPointT, SimulationProvider, StateOverride,
 };
-use rundler_sim::{FeeUpdate, Prechecker, Simulator};
+use rundler_sim::{FeeUpdate, MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
@@ -60,6 +60,7 @@ pub(crate) struct UoPool<UP: UoPoolProvidersT, EP: ProvidersWithEntryPointT> {
     event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
     ep_specific_metrics: UoPoolMetricsEPSpecific,
     metrics: UoPoolMetrics,
+    mempool_config: MempoolConfig,
 }
 
 struct UoPoolState<D> {
@@ -82,6 +83,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
         paymaster: PaymasterTracker<EP::EntryPoint>,
         reputation: Arc<AddressReputation>,
+        mempool_config: MempoolConfig,
     ) -> Self {
         let ep = config.entry_point.to_string();
         Self {
@@ -104,6 +106,7 @@ where
             metrics: UoPoolMetrics::default(),
             ep_providers,
             pool_providers,
+            mempool_config,
         }
     }
 
@@ -616,6 +619,7 @@ where
             ));
         }
 
+        let filter_id = self.mempool_config.match_filter(&op);
         let valid_time_range = sim_result.valid_time_range;
         let pool_op = PoolOperation {
             uo: op,
@@ -628,6 +632,7 @@ where
             account_is_staked: sim_result.account_is_staked,
             entity_infos: sim_result.entity_infos,
             da_gas_data: precheck_ret.da_gas_data,
+            filter_id,
         };
 
         // Check sender count in mempool. If sender has too many operations, must be staked
@@ -816,6 +821,7 @@ where
         &self,
         max: usize,
         shard_index: u64,
+        filter_id: Option<String>,
     ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
         if shard_index >= self.config.num_shards {
             Err(anyhow::anyhow!("Invalid shard ID"))?;
@@ -829,8 +835,10 @@ where
             .into_iter()
             .filter(|op| {
                 let sender_num = U256::from_be_bytes(op.uo.sender().into_word().into());
-                (self.config.num_shards == 1)
-                    || (sender_num % U256::from(self.config.num_shards) == U256::from(shard_index))
+                (filter_id == op.filter_id)
+                    && ((self.config.num_shards == 1)
+                        || (sender_num % U256::from(self.config.num_shards)
+                            == U256::from(shard_index)))
             })
             .take(max)
             .map(Into::into)
@@ -966,7 +974,7 @@ struct UoPoolMetrics {
 mod tests {
     use std::{collections::HashMap, str::FromStr, vec};
 
-    use alloy_primitives::{bytes, uint, Bytes};
+    use alloy_primitives::{address, bytes, uint, Bytes};
     use alloy_signer::SignerSync;
     use alloy_signer_local::PrivateKeySigner;
     use mockall::Sequence;
@@ -1011,9 +1019,9 @@ mod tests {
             .add_operation(OperationOrigin::Local, op.op)
             .await
             .unwrap();
-        check_ops(pool.best_operations(1, 0).unwrap(), uos);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), uos);
         pool.remove_operations(&[hash]);
-        assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(1, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1034,9 +1042,9 @@ mod tests {
                 .unwrap();
             hashes.push(hash);
         }
-        check_ops(pool.best_operations(3, 0).unwrap(), uos);
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
         pool.remove_operations(&hashes);
-        assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(3, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1055,9 +1063,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        check_ops(pool.best_operations(3, 0).unwrap(), uos);
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
         pool.clear_state(true, true, true);
-        assert_eq!(pool.best_operations(3, 0).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(3, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1102,7 +1110,7 @@ mod tests {
             entrypoint,
         )
         .await;
-        check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -1135,7 +1143,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(3, 0).unwrap(), uos[1..].to_vec());
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos[1..].to_vec());
 
         let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.confirmed_balance, U256::from(1110));
@@ -1186,7 +1194,7 @@ mod tests {
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
 
         assert_eq!(metadata.pending_balance, U256::from(850));
-        check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos.clone());
 
         // mine the first op with actual gas cost of 10
         pool.on_chain_update(&ChainUpdate {
@@ -1221,7 +1229,7 @@ mod tests {
         .await;
 
         check_ops(
-            pool.best_operations(3, 0).unwrap(),
+            pool.best_operations(3, 0, None).unwrap(),
             uos.clone()[1..].to_vec(),
         );
 
@@ -1254,7 +1262,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(3, 0).unwrap(), uos);
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
 
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(metadata.pending_balance, U256::from(840));
@@ -1268,7 +1276,7 @@ mod tests {
             create_op(Address::random(), 0, 1, None),
         ])
         .await;
-        check_ops(pool.best_operations(3, 0).unwrap(), uos.clone());
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -1291,7 +1299,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(3, 0).unwrap(), uos);
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -1304,7 +1312,10 @@ mod tests {
         ])
         .await;
         // staked, so include all ops
-        check_ops(pool.best_operations(3, 0).unwrap(), uos[0..2].to_vec());
+        check_ops(
+            pool.best_operations(3, 0, None).unwrap(),
+            uos[0..2].to_vec(),
+        );
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -1364,7 +1375,7 @@ mod tests {
         }
 
         check_ops(
-            pool.best_operations(4, 0).unwrap(),
+            pool.best_operations(4, 0, None).unwrap(),
             vec![
                 uos[0].clone(),
                 uos[1].clone(),
@@ -1414,7 +1425,7 @@ mod tests {
             .await
             .unwrap();
         check_ops(
-            pool.best_operations(4, 0).unwrap(),
+            pool.best_operations(4, 0, None).unwrap(),
             vec![
                 uos[1].clone(),
                 uos[2].clone(),
@@ -1495,7 +1506,7 @@ mod tests {
             )) => {}
             _ => panic!("Expected InitCodeTooShort error"),
         }
-        assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(1, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1515,7 +1526,7 @@ mod tests {
             Err(MempoolError::SimulationViolation(SimulationViolation::DidNotRevert)) => {}
             _ => panic!("Expected DidNotRevert error"),
         }
-        assert_eq!(pool.best_operations(1, 0).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(1, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1534,7 +1545,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, MempoolError::OperationAlreadyKnown));
 
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1558,7 +1569,7 @@ mod tests {
 
         assert!(matches!(err, MempoolError::ReplacementUnderpriced(_, _)));
 
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1614,7 +1625,7 @@ mod tests {
             .await
             .unwrap();
 
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![replacement]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![replacement]);
 
         let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.pending_balance, U256::from(900));
@@ -1639,7 +1650,10 @@ mod tests {
             .await
             .unwrap();
 
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op.clone()]);
+        check_ops(
+            pool.best_operations(1, 0, None).unwrap(),
+            vec![op.op.clone()],
+        );
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_timestamp: 11.into(),
@@ -1647,7 +1661,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1678,7 +1692,7 @@ mod tests {
             pool.remove_op_by_id(&op.op.id()),
             Err(MempoolError::OperationDropTooSoon(_, _, _))
         ));
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1698,7 +1712,7 @@ mod tests {
             }),
             Ok(None)
         ));
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1719,7 +1733,7 @@ mod tests {
         .await;
 
         assert_eq!(pool.remove_op_by_id(&op.op.id()).unwrap().unwrap(), hash);
-        check_ops(pool.best_operations(1, 0).unwrap(), vec![]);
+        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1793,7 +1807,7 @@ mod tests {
         ])
         .await;
         // staked, so include all ops
-        check_ops(pool.best_operations(3, 0).unwrap(), uos);
+        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -1820,7 +1834,12 @@ mod tests {
             }))
         });
 
-        let pool = create_pool_with_entry_point_config(config, vec![op.clone()], ep);
+        let pool = create_pool_with_entry_point_config(
+            config,
+            vec![op.clone()],
+            ep,
+            MempoolConfig::default(),
+        );
         let ret = pool.add_operation(OperationOrigin::Local, op.op).await;
         let actual_eff = 100_000_f32 / 550_000_f32;
 
@@ -1855,7 +1874,12 @@ mod tests {
             }))
         });
 
-        let pool = create_pool_with_entry_point_config(config, vec![op.clone()], ep);
+        let pool = create_pool_with_entry_point_config(
+            config,
+            vec![op.clone()],
+            ep,
+            MempoolConfig::default(),
+        );
         let ret = pool.add_operation(OperationOrigin::Local, op.op).await;
         let actual_eff = 10_000_f32 / 50_000_f32;
 
@@ -1966,7 +1990,7 @@ mod tests {
             .await
             .unwrap();
 
-        let best = pool.best_operations(10000, 0).unwrap();
+        let best = pool.best_operations(10000, 0, None).unwrap();
         assert_eq!(best.len(), 0);
     }
 
@@ -2067,6 +2091,99 @@ mod tests {
         assert!(matches!(err, MempoolError::AggregatorError(_)));
     }
 
+    #[tokio::test]
+    async fn test_filter_id_miss() {
+        let mut config = default_config();
+        let agg_address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+
+        let mut agg = MockSignatureAggregator::default();
+        agg.expect_address().return_const(agg_address);
+        agg.expect_costs().return_const(AggregatorCosts::default());
+        agg.expect_validate_user_op_signature()
+            .returning(move |_| Ok(bytes!("deadbeef")));
+
+        let mut registry = SignatureAggregatorRegistry::default();
+        registry.register(Arc::new(agg));
+
+        config
+            .chain_spec
+            .set_signature_aggregators(Arc::new(registry));
+
+        let mempool_config = r#"{
+            "entryPoint": "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
+            "filters": [
+                {
+                    "id": "1",
+                    "filter": {
+                        "aggregator": "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+                    }
+                }
+            ]
+        }"#;
+
+        let mempool_config = serde_json::from_str::<MempoolConfig>(mempool_config).unwrap();
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            aggregator: Some(agg_address),
+            ..Default::default()
+        });
+
+        let pool = create_pool_with_mempool_config(config, vec![op.clone()], mempool_config);
+        pool.add_operation(OperationOrigin::Local, op.op)
+            .await
+            .unwrap();
+
+        let best = pool.best_operations(10000, 0, None).unwrap();
+        assert_eq!(best.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_filter_id_match() {
+        let mut config = default_config();
+        let agg_address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+
+        let mut agg = MockSignatureAggregator::default();
+        agg.expect_address().return_const(agg_address);
+        agg.expect_costs().return_const(AggregatorCosts::default());
+        agg.expect_validate_user_op_signature()
+            .returning(move |_| Ok(bytes!("deadbeef")));
+
+        let mut registry = SignatureAggregatorRegistry::default();
+        registry.register(Arc::new(agg));
+
+        config
+            .chain_spec
+            .set_signature_aggregators(Arc::new(registry));
+
+        let mempool_config = r#"{
+            "entryPoint": "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
+            "filters": [
+                {
+                    "id": "1",
+                    "filter": {
+                        "aggregator": "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
+                    }
+                }
+            ]
+        }"#;
+
+        let mempool_config = serde_json::from_str::<MempoolConfig>(mempool_config).unwrap();
+
+        let op = create_op_from_op_v0_6(UserOperation {
+            aggregator: Some(agg_address),
+            ..Default::default()
+        });
+
+        let pool = create_pool_with_mempool_config(config, vec![op.clone()], mempool_config);
+        pool.add_operation(OperationOrigin::Local, op.op)
+            .await
+            .unwrap();
+
+        let best = pool
+            .best_operations(10000, 0, Some("1".to_string()))
+            .unwrap();
+        assert_eq!(best.len(), 1);
+    }
     #[derive(Clone, Debug)]
     struct OpWithErrors {
         op: UserOperationVariant,
@@ -2107,16 +2224,19 @@ mod tests {
     fn create_pool(
         ops: Vec<OpWithErrors>,
     ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
-        let entrypoint = MockEntryPointV0_6::new();
-        create_pool_with_entry_point(ops, entrypoint)
+        create_pool_with_entry_point(ops, MockEntryPointV0_6::new())
     }
 
     fn create_pool_with_config(
         args: PoolConfig,
         ops: Vec<OpWithErrors>,
     ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
-        let entrypoint = MockEntryPointV0_6::new();
-        create_pool_with_entry_point_config(args, ops, entrypoint)
+        create_pool_with_entry_point_config(
+            args,
+            ops,
+            MockEntryPointV0_6::new(),
+            MempoolConfig::default(),
+        )
     }
 
     fn create_pool_with_entry_point(
@@ -2124,13 +2244,22 @@ mod tests {
         entrypoint: MockEntryPointV0_6,
     ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
         let config = default_config();
-        create_pool_with_entry_point_config(config, ops, entrypoint)
+        create_pool_with_entry_point_config(config, ops, entrypoint, MempoolConfig::default())
+    }
+
+    fn create_pool_with_mempool_config(
+        args: PoolConfig,
+        ops: Vec<OpWithErrors>,
+        mempool_config: MempoolConfig,
+    ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
+        create_pool_with_entry_point_config(args, ops, MockEntryPointV0_6::new(), mempool_config)
     }
 
     fn create_pool_with_entry_point_config(
         args: PoolConfig,
         ops: Vec<OpWithErrors>,
         entrypoint: MockEntryPointV0_6,
+        mempool_config: MempoolConfig,
     ) -> UoPool<impl UoPoolProvidersT, impl ProvidersWithEntryPointT> {
         let entrypoint = Arc::new(entrypoint);
 
@@ -2209,6 +2338,7 @@ mod tests {
             event_sender,
             paymaster,
             reputation,
+            mempool_config,
         )
     }
 

@@ -178,9 +178,15 @@ impl OpPool for OpPoolImpl {
         let req = request.into_inner();
         let ep = self.get_entry_point(&req.entry_point)?;
 
+        let filter_id = if req.filter_id.is_empty() {
+            None
+        } else {
+            Some(req.filter_id)
+        };
+
         let resp = match self
             .local_pool
-            .get_ops(ep, req.max_ops, req.shard_index)
+            .get_ops(ep, req.max_ops, req.shard_index, filter_id)
             .await
         {
             Ok(ops) => GetOpsResponse {

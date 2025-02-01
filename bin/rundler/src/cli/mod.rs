@@ -753,6 +753,16 @@ async fn load_configs(
 
         tracing::info!("Mempool configs: {:?}", mempool_configs);
 
+        // For now only allow one mempool defined per entry point
+        let mut entry_points = vec![];
+        for mempool_config in mempool_configs.0.values() {
+            let ep = mempool_config.entry_point();
+            if entry_points.contains(&ep) {
+                bail!("multiple mempool configs defined for entry point {:?}", ep);
+            }
+            entry_points.push(ep);
+        }
+
         Some(mempool_configs)
     } else {
         None

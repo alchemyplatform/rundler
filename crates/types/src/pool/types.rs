@@ -122,6 +122,8 @@ pub struct PoolOperation {
     pub entity_infos: EntityInfos,
     /// The DA gas data for this operation
     pub da_gas_data: DAGasUOData,
+    /// The matched filter ID for this operation
+    pub filter_id: Option<String>,
 }
 
 impl PoolOperation {
