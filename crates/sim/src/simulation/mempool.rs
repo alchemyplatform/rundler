@@ -14,7 +14,7 @@
 use std::{collections::HashMap, str::FromStr};
 
 use alloy_primitives::{Address, B256, U256};
-use rundler_types::{Entity, EntityType, Opcode};
+use rundler_types::{Entity, EntityType, Opcode, UserOperation, UserOperationVariant};
 use serde::Deserialize;
 use serde_with::{serde_as, DisplayFromStr};
 
@@ -29,7 +29,11 @@ pub struct MempoolConfig {
     /// Entry point address this mempool is associated with.
     pub(crate) entry_point: Address,
     /// Allowlist to match violations against.
+    #[serde(default)]
     pub(crate) allowlist: Vec<AllowlistEntry>,
+    /// Mempool filters to tag operations
+    #[serde(default)]
+    filters: Vec<MempoolFilter>,
 }
 
 impl MempoolConfig {
@@ -37,11 +41,19 @@ impl MempoolConfig {
     pub fn entry_point(&self) -> Address {
         self.entry_point
     }
+
+    /// Match an operation against the mempool filters, returning the first ID that matches, or None
+    pub fn match_filter(&self, operation: &UserOperationVariant) -> Option<String> {
+        self.filters
+            .iter()
+            .find(|f| f.apply(operation))
+            .map(|f| f.id.clone())
+    }
 }
 
 /// A collection of mempool configurations keyed by their ID.
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct MempoolConfigs(HashMap<B256, MempoolConfig>);
+pub struct MempoolConfigs(pub HashMap<B256, MempoolConfig>);
 
 impl MempoolConfigs {
     /// Get the mempool configs for a specific entry point address
@@ -89,6 +101,33 @@ impl AllowEntity {
             AllowEntity::Address(address) => entity.address == *address,
         }
     }
+}
+
+/// A mempool filter
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MempoolFilter {
+    /// The filter ID
+    id: String,
+    /// The filter to apply
+    filter: Filter,
+}
+
+impl MempoolFilter {
+    /// Apply the filter to an operation
+    fn apply(&self, operation: &UserOperationVariant) -> bool {
+        match &self.filter {
+            Filter::Aggregator(address) => operation.aggregator().is_some_and(|a| a == *address),
+        }
+    }
+}
+
+/// A filter kind
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Filter {
+    /// Filter operations by aggregator address
+    Aggregator(Address),
 }
 
 /// An allowlist rule.
@@ -501,6 +540,7 @@ mod tests {
                             opcode: Opcode::GAS,
                         },
                     )],
+                    filters: vec![],
                 },
             ),
         ]);
@@ -534,6 +574,7 @@ mod tests {
                             opcode: Opcode::GAS,
                         },
                     )],
+                    filters: vec![],
                 },
             ),
         ]);
@@ -579,6 +620,7 @@ mod tests {
                             opcode: Opcode::GAS,
                         },
                     )],
+                    filters: vec![],
                 },
             ),
         ]);
@@ -624,6 +666,7 @@ mod tests {
                             },
                         ),
                     ],
+                    filters: vec![],
                 },
             ),
             (
@@ -653,6 +696,7 @@ mod tests {
                             },
                         ),
                     ],
+                    filters: vec![],
                 },
             ),
         ]);

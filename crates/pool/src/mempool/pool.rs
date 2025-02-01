@@ -1596,6 +1596,7 @@ mod tests {
             sim_block_number: 0,
             account_is_staked: false,
             da_gas_data: Default::default(),
+            filter_id: None,
         }
     }
 

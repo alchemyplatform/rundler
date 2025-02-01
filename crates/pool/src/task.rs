@@ -15,7 +15,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{bail, Context};
 use futures::FutureExt;
-use rundler_provider::{Providers, ProvidersWithEntryPointT};
+use rundler_provider::{EntryPoint, Providers, ProvidersWithEntryPointT};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
@@ -332,6 +332,14 @@ where
             ),
         );
 
+        // There should only be one mempool config per entry point
+        let mempool_config = pool_config
+            .mempool_channel_configs
+            .values()
+            .find(|c| c.entry_point() == *ep_providers.entry_point().address())
+            .cloned()
+            .unwrap_or_default();
+
         let uo_pool = UoPool::new(
             pool_config.clone(),
             ep_providers,
@@ -339,6 +347,7 @@ where
             event_sender,
             paymaster,
             reputation,
+            mempool_config,
         );
 
         Ok(Arc::new(uo_pool))
