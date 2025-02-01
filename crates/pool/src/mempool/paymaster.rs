@@ -530,6 +530,7 @@ mod tests {
             account_is_staked: true,
             entity_infos: EntityInfos::default(),
             da_gas_data: rundler_types::da::DAGasUOData::Empty,
+            filter_id: None,
         }
     }
 

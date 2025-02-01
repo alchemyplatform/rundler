@@ -442,8 +442,6 @@ pub(crate) struct EntryPointBuilderConfigs {
 pub(crate) struct EntryPointBuilderConfig {
     // Entry point address
     address: Address,
-    // Index offset for builders
-    index_offset: u64,
     // Builder configs
     builders: Vec<BuilderConfig>,
 }
@@ -453,8 +451,12 @@ pub(crate) struct EntryPointBuilderConfig {
 pub(crate) struct BuilderConfig {
     // Number of builders using this config
     count: u64,
+    // Builder index offset - defaults to 0
+    index_offset: Option<u64>,
     // Submitter proxy to use for builders
     proxy: Option<Address>,
+    // Optional filter to apply to the builders
+    filter_id: Option<String>,
 }
 
 impl EntryPointBuilderConfigs {
@@ -471,14 +473,13 @@ impl EntryPointBuilderConfigs {
 
 impl EntryPointBuilderConfig {
     pub fn builders(&self) -> Vec<BuilderSettings> {
-        let mut index = self.index_offset;
         let mut builders = vec![];
         for builder in &self.builders {
             builders.extend((0..builder.count).map(|i| BuilderSettings {
-                index: index + i,
+                index: builder.index_offset.unwrap_or(0) + i,
                 submitter_proxy: builder.proxy,
+                filter_id: builder.filter_id.clone(),
             }));
-            index += builder.count;
         }
         builders
     }
@@ -489,6 +490,7 @@ fn builder_settings_from_cli(index_offset: u64, count: u64) -> Vec<BuilderSettin
         .map(|i| BuilderSettings {
             index: index_offset + i,
             submitter_proxy: None,
+            filter_id: None,
         })
         .collect()
 }

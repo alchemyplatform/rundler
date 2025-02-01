@@ -179,6 +179,7 @@ impl Pool for RemotePoolClient {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
+        filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>> {
         let res = self
             .op_pool_client
@@ -187,6 +188,7 @@ impl Pool for RemotePoolClient {
                 entry_point: entry_point.to_vec(),
                 max_ops,
                 shard_index,
+                filter_id: filter_id.unwrap_or_default(),
             })
             .await
             .map_err(anyhow::Error::from)?

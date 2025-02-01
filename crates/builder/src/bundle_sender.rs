@@ -62,7 +62,7 @@ pub(crate) struct Settings {
 
 #[derive(Debug)]
 pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
-    builder_index: u64,
+    builder_tag: String,
     bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
     sender_eoa: Address,
@@ -143,7 +143,7 @@ where
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
-    #[instrument(skip_all, fields(entry_point = self.entry_point.address().to_string(), builder_index = self.builder_index))]
+    #[instrument(skip_all, fields(entry_point = self.entry_point.address().to_string(), tag = self.builder_tag))]
     async fn send_bundles_in_loop<TS: TaskSpawner>(mut self, task_spawner: TS) {
         // trigger for sending bundles
         let sender_trigger = BundleSenderTrigger::new(
@@ -179,7 +179,7 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        builder_index: u64,
+        builder_tag: String,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
         sender_eoa: Address,
@@ -192,7 +192,7 @@ where
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     ) -> Self {
         Self {
-            builder_index,
+            builder_tag: builder_tag.clone(),
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
             sender_eoa,
@@ -204,7 +204,7 @@ where
             event_sender,
             metrics: BuilderMetric::new_with_labels(&[
                 ("entry_point", entry_point.address().to_string()),
-                ("builder_index", builder_index.to_string()),
+                ("builder_tag", builder_tag),
             ]),
             entry_point,
             _uo_type: PhantomData,
@@ -371,7 +371,7 @@ where
                     }
 
                     self.emit(BuilderEvent::transaction_mined(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         tx_hash,
                         nonce,
                         block_number,
@@ -381,7 +381,7 @@ where
                 TrackerUpdate::LatestTxDropped { nonce } => {
                     info!("Latest transaction dropped, starting new bundle attempt");
                     self.emit(BuilderEvent::latest_transaction_dropped(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         nonce,
                     ));
                     self.metrics.bundle_txns_dropped.increment(1);
@@ -391,7 +391,7 @@ where
                 TrackerUpdate::NonceUsedForOtherTx { nonce } => {
                     info!("Nonce used externally, starting new bundle attempt");
                     self.emit(BuilderEvent::nonce_used_for_other_transaction(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         nonce,
                     ));
                     self.metrics.bundle_txns_nonce_used.increment(1);
@@ -578,7 +578,7 @@ where
 
         let Some(bundle_tx) = self.get_bundle_tx(nonce, bundle).await? else {
             self.emit(BuilderEvent::formed_bundle(
-                self.builder_index,
+                self.builder_tag.clone(),
                 None,
                 nonce,
                 fee_increase_count,
@@ -602,7 +602,7 @@ where
         match send_result {
             Ok(tx_hash) => {
                 self.emit(BuilderEvent::formed_bundle(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     Some(BundleTxDetails {
                         tx_hash,
                         tx,
@@ -1791,7 +1791,7 @@ mod tests {
         MockPool,
     > {
         BundleSenderImpl::new(
-            0,
+            "any:0".to_string(),
             mpsc::channel(1000).1,
             ChainSpec::default(),
             Address::default(),
