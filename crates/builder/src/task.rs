@@ -102,6 +102,19 @@ pub struct BuilderSettings {
     pub index: u64,
     /// Optional submitter proxy to use for this builder
     pub submitter_proxy: Option<Address>,
+    /// Optional filter id to apply to this builder
+    pub filter_id: Option<String>,
+}
+
+impl BuilderSettings {
+    /// Unique string tag for this builder
+    pub fn tag(&self) -> String {
+        format!(
+            "{}:{}",
+            self.filter_id.as_ref().map_or("any", |v| v),
+            self.index
+        )
+    }
 }
 
 /// Builder settings for an entrypoint
@@ -406,14 +419,16 @@ where
 
         let proposer = BundleProposerImpl::new(
             builder_settings.index,
+            builder_settings.tag(),
             ep_providers.clone(),
             BundleProposerProviders::new(self.pool.clone(), simulator, fee_estimator),
             proposer_settings,
             self.event_sender.clone(),
+            builder_settings.filter_id.clone(),
         );
 
         let builder = BundleSenderImpl::new(
-            builder_settings.index,
+            builder_settings.tag(),
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,

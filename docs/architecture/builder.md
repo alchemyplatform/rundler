@@ -157,14 +157,18 @@ Example:
     "entryPoints": [
         {
             "address": "0x0000000071727De22E5E9d8BAf0edAc6f37da032",
-            "indexOffset": 0,
             "builders": [
                 {
                     "count": 1,
                     "proxy": "0xA7BD3A9Eb1238842DDB86458aF7dd2a9e166747A"
+                    "filterId": "my-mempool-filter"
                 }
             ]
         }
     ]
 }
 ```
+
+#### Affinity
+
+Builders may specify a `filterId` in their custom configuration in order to only receive user operations that match a [mempool filter](./pool.md#filtering). Each mempool filter that is defined must have a matching builder - else the user operations matching that filter will not be mined.

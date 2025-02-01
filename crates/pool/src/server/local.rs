@@ -148,11 +148,13 @@ impl Pool for LocalPoolHandle {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
+        filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>> {
         let req = ServerRequestKind::GetOps {
             entry_point,
             max_ops,
             shard_index,
+            filter_id,
         };
         let resp = self.send(req).await?;
         match resp {
@@ -388,10 +390,11 @@ impl LocalPoolServerRunner {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
+        filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool
-            .best_operations(max_ops as usize, shard_index)?
+            .best_operations(max_ops as usize, shard_index, filter_id)?
             .iter()
             .map(|op| (**op).clone())
             .collect())
@@ -608,8 +611,8 @@ impl LocalPoolServerRunner {
                                 entry_points: self.mempools.keys().copied().collect()
                             })
                         },
-                        ServerRequestKind::GetOps { entry_point, max_ops, shard_index } => {
-                            match self.get_ops(entry_point, max_ops, shard_index) {
+                        ServerRequestKind::GetOps { entry_point, max_ops, shard_index, filter_id } => {
+                            match self.get_ops(entry_point, max_ops, shard_index, filter_id) {
                                 Ok(ops) => Ok(ServerResponse::GetOps { ops }),
                                 Err(e) => Err(e),
                             }
@@ -711,6 +714,7 @@ enum ServerRequestKind {
         entry_point: Address,
         max_ops: u64,
         shard_index: u64,
+        filter_id: Option<String>,
     },
     GetOpByHash {
         hash: B256,

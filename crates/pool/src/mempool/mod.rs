@@ -88,6 +88,7 @@ pub trait Mempool: Send + Sync {
         &self,
         max: usize,
         shard_index: u64,
+        filter_id: Option<String>,
     ) -> MempoolResult<Vec<Arc<PoolOperation>>>;
 
     /// Returns the all operations from the pool up to a max size
@@ -241,6 +242,7 @@ mod tests {
                 }),
             },
             da_gas_data: Default::default(),
+            filter_id: None,
         };
 
         let entities = po.entities().collect::<Vec<_>>();

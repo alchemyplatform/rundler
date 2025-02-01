@@ -139,12 +139,14 @@ pub(crate) enum BundleProposerError {
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
     builder_index: u64,
+    builder_tag: String,
     settings: Settings,
     ep_providers: EP,
     bundle_providers: BP,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
     metric: BuilderProposerMetric,
+    filter_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -341,19 +343,23 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_index: u64,
+        builder_tag: String,
         ep_providers: EP,
         bundle_providers: BP,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
+        filter_id: Option<String>,
     ) -> Self {
         Self {
             builder_index,
+            builder_tag,
             ep_providers,
             bundle_providers,
             settings,
             event_sender,
             condition_not_met_notified: false,
             metric: BuilderProposerMetric::default(),
+            filter_id,
         }
     }
 
@@ -378,7 +384,7 @@ where
             || op.uo.max_priority_fee_per_gas() < required_op_fees.max_priority_fee_per_gas
         {
             self.emit(BuilderEvent::skipped_op(
-                self.builder_index,
+                self.builder_tag.clone(),
                 self.op_hash(&op.uo),
                 SkipReason::InsufficientFees {
                     required_fees: required_op_fees,
@@ -431,7 +437,7 @@ where
                         "Failed to calculate required pre-verification gas for op: {e:?}, skipping"
                     );
                     self.emit(BuilderEvent::skipped_op(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         op_hash,
                         SkipReason::Other {
                             reason: Arc::new(format!(
@@ -452,7 +458,7 @@ where
 
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
-                self.builder_index,
+                self.builder_tag.clone(),
                 op_hash,
                 SkipReason::InsufficientPreVerificationGas {
                     base_fee,
@@ -504,7 +510,7 @@ where
                     entity_infos: _,
                 } => {
                     self.emit(BuilderEvent::skipped_op(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         op_hash,
                         SkipReason::Other {
                             reason: Arc::new(format!("Failed to simulate op: {error:?}, skipping")),
@@ -539,7 +545,7 @@ where
                 Ok(simulation) => simulation,
                 Err(error) => {
                     self.emit(BuilderEvent::rejected_op(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         self.op_hash(&op),
                         OpRejectionReason::FailedRevalidation {
                             error: error.clone(),
@@ -564,7 +570,7 @@ where
                 .contains(Timestamp::now(), TIME_RANGE_BUFFER)
             {
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::InvalidTimeRange {
                         valid_range: simulation.valid_time_range,
@@ -581,7 +587,7 @@ where
                 >= self.settings.chain_spec.max_transaction_size_bytes
             {
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::TransactionSizeLimit,
                 ));
@@ -593,7 +599,7 @@ where
                 gas_spent + op.computation_gas_limit(&self.settings.chain_spec, None);
             if required_gas > self.settings.max_bundle_gas {
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::GasLimit,
                 ));
@@ -604,14 +610,14 @@ where
             let mut new_expected_storage = context.expected_storage.clone();
             if let Err(e) = new_expected_storage.merge(&simulation.expected_storage) {
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::ExpectedStorageConflict(e.to_string()),
                 ));
                 continue;
             } else if new_expected_storage.num_slots() > self.settings.max_expected_storage_slots {
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::ExpectedStorageLimit,
                 ));
@@ -628,7 +634,7 @@ where
                 // batch, but don't reject them (remove them from pool).
                 info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender());
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::AccessedOtherSender { other_sender },
                 ));
@@ -695,7 +701,7 @@ where
 
         for (index, reason) in to_reject {
             self.emit(BuilderEvent::rejected_op(
-                self.builder_index,
+                self.builder_tag.clone(),
                 self.op_hash(&context.get_op_at(index)?.op),
                 OpRejectionReason::ConditionNotMet(reason),
             ));
@@ -837,7 +843,7 @@ where
             HandleOpsOut::Success => Ok(Some(gas_limit)),
             HandleOpsOut::FailedOp(index, message) => {
                 self.emit(BuilderEvent::rejected_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&context.get_op_at(index)?.op),
                     OpRejectionReason::FailedInBundle {
                         message: Arc::new(message.clone()),
@@ -874,6 +880,7 @@ where
                 *self.ep_providers.entry_point().address(),
                 self.settings.max_bundle_size,
                 self.builder_index,
+                self.filter_id.clone(),
             )
             .await
             .context("should get ops from pool")?
@@ -1039,7 +1046,7 @@ where
         // iterate in reverse so that we can remove ops without affecting the index of the next op to remove
         for index in to_remove.into_iter().rev() {
             self.emit(BuilderEvent::rejected_op(
-                self.builder_index,
+                self.builder_tag.clone(),
                 self.op_hash(&context.get_op_at(index)?.op),
                 OpRejectionReason::FailedInBundle {
                     message: Arc::new("post op reverted leading to entry point revert".to_owned()),
@@ -1141,7 +1148,7 @@ where
                     .is_none()
                 {
                     self.emit(BuilderEvent::skipped_op(
-                        self.builder_index,
+                        self.builder_tag.clone(),
                         self.op_hash(&op.uo),
                         SkipReason::UnsupportedAggregator(agg),
                     ));
@@ -1154,7 +1161,7 @@ where
             let gas = op.uo.computation_gas_limit(&self.settings.chain_spec, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
-                    self.builder_index,
+                    self.builder_tag.clone(),
                     self.op_hash(&op.uo),
                     SkipReason::GasLimit,
                 ));
@@ -2880,13 +2887,14 @@ mod tests {
                 entity_infos: EntityInfos::default(),
                 aggregator: None,
                 da_gas_data: Default::default(),
+                filter_id: None,
             })
             .collect();
 
         let mut pool_client = MockPool::new();
         pool_client
             .expect_get_ops()
-            .returning(move |_, _, _| Ok(ops.clone()));
+            .returning(move |_, _, _, _| Ok(ops.clone()));
 
         let simulations_by_op: HashMap<_, _> = mock_ops
             .into_iter()
@@ -2992,6 +3000,7 @@ mod tests {
 
         let mut proposer = BundleProposerImpl::new(
             0,
+            "test".to_string(),
             ProvidersWithEntryPoint::new(
                 Arc::new(provider),
                 Arc::new(entry_point),
@@ -3008,6 +3017,7 @@ mod tests {
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
             },
             event_sender,
+            None,
         );
 
         if notify_condition_not_met {

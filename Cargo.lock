@@ -4921,6 +4921,7 @@ dependencies = [
  "rundler-types",
  "rundler-utils",
  "serde",
+ "serde_json",
  "strum",
  "thiserror 1.0.69",
  "tokio",

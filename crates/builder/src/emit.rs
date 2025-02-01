@@ -22,29 +22,26 @@ use rundler_utils::strs;
 /// Builder event
 #[derive(Clone, Debug)]
 pub struct BuilderEvent {
-    /// Builder index that emitted the event
-    pub builder_index: u64,
+    /// Builder tag that emitted the event
+    pub tag: String,
     /// Event kind
     pub kind: BuilderEventKind,
 }
 
 impl BuilderEvent {
-    pub(crate) fn new(builder_index: u64, kind: BuilderEventKind) -> Self {
-        Self {
-            builder_index,
-            kind,
-        }
+    pub(crate) fn new(tag: String, kind: BuilderEventKind) -> Self {
+        Self { tag, kind }
     }
 
     pub(crate) fn formed_bundle(
-        builder_index: u64,
+        tag: String,
         tx_details: Option<BundleTxDetails>,
         nonce: u64,
         fee_increase_count: u64,
         required_fees: Option<GasFees>,
     ) -> Self {
         Self::new(
-            builder_index,
+            tag,
             BuilderEventKind::FormedBundle {
                 tx_details,
                 nonce,
@@ -55,13 +52,13 @@ impl BuilderEvent {
     }
 
     pub(crate) fn transaction_mined(
-        builder_index: u64,
+        tag: String,
         tx_hash: B256,
         nonce: u64,
         block_number: u64,
     ) -> Self {
         Self::new(
-            builder_index,
+            tag,
             BuilderEventKind::TransactionMined {
                 tx_hash,
                 nonce,
@@ -70,36 +67,23 @@ impl BuilderEvent {
         )
     }
 
-    pub(crate) fn latest_transaction_dropped(builder_index: u64, nonce: u64) -> Self {
-        Self::new(
-            builder_index,
-            BuilderEventKind::LatestTransactionDropped { nonce },
-        )
+    pub(crate) fn latest_transaction_dropped(tag: String, nonce: u64) -> Self {
+        Self::new(tag, BuilderEventKind::LatestTransactionDropped { nonce })
     }
 
-    pub(crate) fn nonce_used_for_other_transaction(builder_index: u64, nonce: u64) -> Self {
+    pub(crate) fn nonce_used_for_other_transaction(tag: String, nonce: u64) -> Self {
         Self::new(
-            builder_index,
+            tag,
             BuilderEventKind::NonceUsedForOtherTransaction { nonce },
         )
     }
 
-    pub(crate) fn skipped_op(builder_index: u64, op_hash: B256, reason: SkipReason) -> Self {
-        Self::new(
-            builder_index,
-            BuilderEventKind::SkippedOp { op_hash, reason },
-        )
+    pub(crate) fn skipped_op(tag: String, op_hash: B256, reason: SkipReason) -> Self {
+        Self::new(tag, BuilderEventKind::SkippedOp { op_hash, reason })
     }
 
-    pub(crate) fn rejected_op(
-        builder_index: u64,
-        op_hash: B256,
-        reason: OpRejectionReason,
-    ) -> Self {
-        Self::new(
-            builder_index,
-            BuilderEventKind::RejectedOp { op_hash, reason },
-        )
+    pub(crate) fn rejected_op(tag: String, op_hash: B256, reason: OpRejectionReason) -> Self {
+        Self::new(tag, BuilderEventKind::RejectedOp { op_hash, reason })
     }
 }
 
@@ -245,7 +229,7 @@ impl Display for BuilderEvent {
                             f,
                             concat!(
                                 "Bundle transaction sent!",
-                                "    Builder index: {:?}",
+                                "    Builder tag: {}",
                                 "    Transaction hash: {:?}",
                                 "    Nonce: {}",
                                 "    Fee increases: {}",
@@ -253,7 +237,7 @@ impl Display for BuilderEvent {
                                 "    Required maxPriorityFeePerGas: {}",
                                 "    Op hashes: {}",
                             ),
-                            self.builder_index,
+                            self.tag,
                             tx_details.tx_hash,
                             nonce,
                             fee_increase_count,
@@ -266,13 +250,13 @@ impl Display for BuilderEvent {
                         f,
                         concat!(
                             "Bundle was empty.",
-                            "    Builder index: {:?}",
+                            "    Builder tag: {}",
                             "    Nonce: {}",
                             "    Fee increases: {}",
                             "    Required maxFeePerGas: {}",
                             "    Required maxPriorityFeePerGas: {}",
                         ),
-                        self.builder_index,
+                        self.tag,
                         nonce,
                         fee_increase_count,
                         required_max_fee_per_gas,
@@ -288,28 +272,40 @@ impl Display for BuilderEvent {
                 f,
                 concat!(
                     "Transaction mined!",
-                    "    Builder index: {:?}",
+                    "    Builder tag: {}",
                     "    Transaction hash: {:?}",
                     "    Nonce: {}",
                     "    Block number: {}",
                 ),
-                self.builder_index, tx_hash, nonce, block_number,
+                self.tag, tx_hash, nonce, block_number,
             ),
             BuilderEventKind::LatestTransactionDropped { nonce } => {
                 write!(
                     f,
-                    "Latest transaction dropped. Higher fees are needed.   Builder index: {:?}    Nonce: {nonce}",
-                    self.builder_index
+                    "Latest transaction dropped. Higher fees are needed.   Builder tag: {}    Nonce: {nonce}",
+                    self.tag
                 )
             }
             BuilderEventKind::NonceUsedForOtherTransaction { nonce } => {
-                write!(f, "Transaction failed because nonce was used by another transaction outside of this Rundler.   Builder index: {:?}    Nonce: {nonce}", self.builder_index)
+                write!(
+                    f,
+                    "Transaction failed because nonce was used by another transaction outside of this Rundler.   Builder tag: {}    Nonce: {nonce}",
+                    self.tag
+                )
             }
             BuilderEventKind::SkippedOp { op_hash, reason } => {
-                write!(f, "Op skipped in bundle (but remains in pool).   Builder index: {:?}    Op hash: {op_hash:?}    Reason: {reason:?}", self.builder_index)
+                write!(
+                    f,
+                    "Op skipped in bundle (but remains in pool).   Builder tag: {}    Op hash: {op_hash:?}    Reason: {reason:?}",
+                    self.tag
+                )
             }
             BuilderEventKind::RejectedOp { op_hash, reason } => {
-                write!(f, "Op rejected from bundle and removed from pool.   Builder index: {:?}    Op hash: {op_hash:?}    Reason: {reason:?}", self.builder_index)
+                write!(
+                    f,
+                    "Op rejected from bundle and removed from pool.   Builder tag: {}    Op hash: {op_hash:?}    Reason: {reason:?}",
+                    self.tag
+                )
             }
         }
     }
