@@ -324,8 +324,8 @@ where
             .i_entry_point
             .handleOps(vec![user_op.pack()], Address::random())
             .into_transaction_request();
-        if let Some(authorization_tuple) = au {
-            txn_req = txn_req.with_authorization_list(vec![authorization_tuple.into()]);
+        if au.is_some() {
+            txn_req = txn_req.with_authorization_list(vec![Eip7702Auth::random_fill().into()]);
         }
 
         let data = txn_req.input.into_input().unwrap();

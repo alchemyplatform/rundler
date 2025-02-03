@@ -28,6 +28,7 @@ http.workspace = true
 jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 metrics.workspace = true
 metrics-derive.workspace = true
+rand.workspace = true
 serde.workspace = true
 strum.workspace = true
 thiserror.workspace = true

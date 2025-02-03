@@ -428,7 +428,11 @@ impl UserOperationOptionalGas {
                 max_fee_per_gas: max_8,
             },
             ExtendedUserOperation {
-                authorization_tuple: None,
+                authorization_tuple: if self.eip7702_auth_address.is_some() {
+                    Some(Eip7702Auth::max_fill())
+                } else {
+                    None
+                },
             },
         );
 
@@ -461,7 +465,11 @@ impl UserOperationOptionalGas {
                 max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
             },
             ExtendedUserOperation {
-                authorization_tuple: None,
+                authorization_tuple: if self.eip7702_auth_address.is_some() {
+                    Some(Eip7702Auth::random_fill())
+                } else {
+                    None
+                },
             },
         );
 

@@ -30,6 +30,7 @@ use rundler_contracts::v0_6::{
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
 };
 use rundler_types::{
+    authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
     v0_6::UserOperation,
@@ -330,8 +331,9 @@ where
             .i_entry_point
             .handleOps(vec![user_op.into()], Address::random())
             .into_transaction_request();
-        if let Some(authorization) = au {
-            txn_request = txn_request.with_authorization_list(vec![authorization.into()]);
+        if au.is_some() {
+            txn_request =
+                txn_request.with_authorization_list(vec![Eip7702Auth::random_fill().into()]);
         }
 
         let data = txn_request.input.into_input().unwrap();

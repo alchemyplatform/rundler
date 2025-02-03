@@ -144,6 +144,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "derive_more 1.0.0",
+ "k256",
  "serde",
 ]
 
@@ -4765,6 +4766,7 @@ name = "rundler"
 version = "0.4.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-signer-local",
  "anyhow",
  "aws-config",
  "aws-sdk-s3",
@@ -4875,7 +4877,10 @@ name = "rundler-pool"
 version = "0.4.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
+ "alloy-signer",
+ "alloy-signer-local",
  "alloy-sol-types",
  "anyhow",
  "async-stream",
@@ -4968,6 +4973,7 @@ dependencies = [
  "metrics 0.23.0",
  "metrics-derive",
  "mockall",
+ "rand",
  "rundler-contracts",
  "rundler-provider",
  "rundler-sim",

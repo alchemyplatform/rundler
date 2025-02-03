@@ -373,13 +373,8 @@ impl UserOperationOptionalGas {
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
         }
-        if let Some(eip_7702_auth_address) = self.eip7702_auth_address {
-            builder = builder.authorization_tuple(Some(Eip7702Auth {
-                address: eip_7702_auth_address,
-                chain_id: chain_spec.id,
-                // fake value for gas estimation.
-                ..Default::default()
-            }));
+        if self.eip7702_auth_address.is_some() {
+            builder = builder.authorization_tuple(Some(Eip7702Auth::max_fill()));
         }
         if self.factory.is_some() {
             builder = builder.factory(
@@ -426,6 +421,9 @@ impl UserOperationOptionalGas {
         }
         if self.factory.is_some() {
             builder = builder.factory(self.factory.unwrap(), random_bytes(self.factory_data.len()))
+        }
+        if self.eip7702_auth_address.is_some() {
+            builder = builder.authorization_tuple(Some(Eip7702Auth::random_fill()));
         }
 
         builder.build()

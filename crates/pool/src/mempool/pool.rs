@@ -420,8 +420,9 @@ where
     }
 
     pub(crate) fn check_eip7702(&self, uo: &UserOperationVariant) -> MempoolResult<()> {
-        if uo.authorization_tuple().is_some() {
+        if let Some(auth) = uo.authorization_tuple() {
             if self.config.support_7702 {
+                auth.validate()?;
                 Ok(())
             } else {
                 Err(MempoolError::EIPNotSupported(

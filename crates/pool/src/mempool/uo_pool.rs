@@ -942,9 +942,11 @@ struct UoPoolMetrics {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, vec};
+    use std::{collections::HashMap, str::FromStr, vec};
 
     use alloy_primitives::{uint, Bytes};
+    use alloy_signer::SignerSync;
+    use alloy_signer_local::PrivateKeySigner;
     use mockall::Sequence;
     use rundler_provider::{
         DepositInfo, ExecutionResult, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
@@ -969,7 +971,6 @@ mod tests {
         chain::{BalanceUpdate, MinedOp},
         mempool::{PaymasterConfig, ReputationParams},
     };
-
     const THROTTLE_SLACK: u64 = 5;
     const BAN_SLACK: u64 = 10;
 
@@ -1881,6 +1882,40 @@ mod tests {
             let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
             assert!(pool
                 .add_operation(OperationOrigin::Local, op.clone().op)
+                .await
+                .is_err());
+        }
+        {
+            config.support_7702 = true;
+            let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+            let signer: PrivateKeySigner = PrivateKeySigner::from_str(private_key).unwrap();
+            let authorization = alloy_eips::eip7702::Authorization {
+                chain_id: 11011,
+                address: Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap(),
+                nonce: 1,
+            };
+            let signature = signer
+                .sign_hash_sync(&authorization.signature_hash())
+                .unwrap();
+            let signed_authorization = authorization.into_signed(signature);
+            let signed_op = create_op_from_op_v0_6(UserOperation {
+                call_gas_limit: 50_000,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                authorization_tuple: Some(Eip7702Auth {
+                    address: signed_authorization.address,
+                    chain_id: signed_authorization.chain_id,
+                    nonce: signed_authorization.nonce,
+                    y_parity: signed_authorization.y_parity(),
+                    r: signed_authorization.r(),
+                    s: signed_authorization.s(),
+                }),
+                ..Default::default()
+            });
+
+            let pool = create_pool_with_config(config.clone(), vec![signed_op.clone()]);
+            assert!(pool
+                .add_operation(OperationOrigin::Local, signed_op.clone().op)
                 .await
                 .is_ok());
         }
