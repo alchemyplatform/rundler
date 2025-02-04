@@ -40,6 +40,7 @@ static BLS_AGGREGATOR_COSTS: AggregatorCosts = AggregatorCosts {
 /// BLS signature aggregator
 pub struct BlsSignatureAggregatorV0_7<EP> {
     entry_point: EP,
+    address: Address,
 }
 
 #[async_trait::async_trait]
@@ -48,7 +49,7 @@ where
     EP: EpSignatureAggregator<UO = UserOperation>,
 {
     fn address(&self) -> Address {
-        BLS_AGGREGATOR_ADDRESS
+        self.address
     }
 
     fn costs(&self) -> &AggregatorCosts {
@@ -72,7 +73,7 @@ where
         let uo = user_op.clone().into();
         match self
             .entry_point
-            .validate_user_op_signature(BLS_AGGREGATOR_ADDRESS, uo)
+            .validate_user_op_signature(self.address, uo)
             .await
         {
             Ok(sig) => match sig {
@@ -104,7 +105,7 @@ where
 
         match self
             .entry_point
-            .aggregate_signatures(BLS_AGGREGATOR_ADDRESS, uos)
+            .aggregate_signatures(self.address, uos)
             .await
         {
             Ok(sig) => Ok(sig.unwrap_or_default()),
@@ -115,13 +116,20 @@ where
 
 impl<EP> BlsSignatureAggregatorV0_7<EP> {
     /// Create a new BLS signature aggregator
-    pub fn new(entry_point: EP) -> Self {
-        Self { entry_point }
+    pub fn new(entry_point: EP, address_override: Option<Address>) -> Self {
+        let address = address_override.unwrap_or(BLS_AGGREGATOR_ADDRESS);
+
+        Self {
+            entry_point,
+            address,
+        }
     }
 }
 
 impl<EP> Debug for BlsSignatureAggregatorV0_7<EP> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BlsSignatureAggregator").finish()
+        f.debug_struct("BlsSignatureAggregator")
+            .field("address", &self.address)
+            .finish()
     }
 }

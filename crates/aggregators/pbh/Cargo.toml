@@ -1,0 +1,15 @@
+[package]
+name = "rundler-pbh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+rundler-provider.workspace = true
+rundler-types.workspace = true
+
+alloy-primitives.workspace = true
+async-trait.workspace = true

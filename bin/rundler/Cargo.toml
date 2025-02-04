@@ -13,6 +13,7 @@ publish = false
 [dependencies]
 rundler-bls.workspace = true
 rundler-builder.workspace = true
+rundler-pbh.workspace = true
 rundler-pool.workspace = true
 rundler-provider.workspace = true
 rundler-rpc.workspace = true

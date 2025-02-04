@@ -13,9 +13,13 @@
 
 use std::{sync::Arc, time::Duration};
 
+use aggregator::AggregatorType;
 use alloy_primitives::U256;
 use anyhow::{bail, Context};
-use clap::{builder::PossibleValuesParser, Args, Parser, Subcommand};
+use clap::{
+    builder::{PossibleValuesParser, ValueParser},
+    Args, Parser, Subcommand,
+};
 
 mod aggregator;
 mod builder;
@@ -432,12 +436,29 @@ pub struct CommonArgs {
     pub max_expected_storage_slots: Option<usize>,
 
     #[arg(
-        long = "bls_aggregation_enabled",
-        name = "bls_aggregation_enabled",
-        env = "BLS_AGGREGATION_ENABLED",
-        global = true
+        long = "enabled_aggregators",
+        name = "enabled_aggregators",
+        env = "ENABLED_AGGREGATORS",
+        global = true,
+        value_delimiter = ','
     )]
-    pub bls_aggregation_enabled: bool,
+    pub enabled_aggregators: Vec<AggregatorType>,
+
+    #[arg(
+        long = "aggregator_options",
+        env = "AGGREGATOR_OPTIONS",
+        global = true,
+        value_delimiter = ',',
+        value_parser = ValueParser::new(parse_key_val)
+    )]
+    pub aggregator_options: Vec<(String, String)>,
+}
+
+fn parse_key_val(s: &str) -> Result<(String, String), anyhow::Error> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| anyhow::anyhow!(format!("invalid KEY=value: no `=` found in `{}`", s)))?;
+    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
 }
 
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
