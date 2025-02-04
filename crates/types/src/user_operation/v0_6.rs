@@ -426,8 +426,13 @@ impl UserOperationOptionalGas {
                 max_fee_per_gas: max_8,
             },
             ExtendedUserOperation {
-                authorization_tuple: if self.eip7702_auth_address.is_some() {
-                    Some(Eip7702Auth::max_fill())
+                authorization_tuple: if let Some(address) = self.eip7702_auth_address {
+                    let auth = Eip7702Auth {
+                        address,
+                        chain_id: chain_spec.id,
+                        ..Default::default()
+                    };
+                    Some(auth.max_fill())
                 } else {
                     None
                 },

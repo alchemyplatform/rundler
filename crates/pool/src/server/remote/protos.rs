@@ -48,17 +48,10 @@ impl From<&UserOperationVariant> for UserOperation {
 
 impl From<&v0_6::UserOperation> for UserOperation {
     fn from(op: &v0_6::UserOperation) -> Self {
-        let authorization_tuple =
-            op.authorization_tuple
-                .as_ref()
-                .map(|authorization| AuthorizationTuple {
-                    chain_id: authorization.chain_id,
-                    address: authorization.address.to_proto_bytes(),
-                    nonce: authorization.nonce,
-                    y_parity: authorization.y_parity.into(),
-                    r: authorization.r.to_proto_bytes(),
-                    s: authorization.s.to_proto_bytes(),
-                });
+        let authorization_tuple = op
+            .authorization_tuple
+            .as_ref()
+            .map(|authorization| AuthorizationTuple::from(authorization.clone()));
         let op = UserOperationV06 {
             sender: op.sender.to_proto_bytes(),
             nonce: op.nonce.to_proto_bytes(),

@@ -42,8 +42,8 @@ fn max_bundle_transaction_data(
         .value(U256::ZERO)
         .input(data.into())
         .nonce(nonce);
-    if au.is_some() {
-        tx = tx.with_authorization_list(vec![Eip7702Auth::max_fill().into()])
+    if let Some(auth) = au {
+        tx = tx.with_authorization_list(vec![auth.max_fill().into()])
     }
 
     // these conversions should not fail.

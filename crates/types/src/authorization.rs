@@ -60,10 +60,10 @@ impl Eip7702Auth {
         }
     }
     /// Generate a maxfilled Eip7702Auth entity.
-    pub fn max_fill() -> Eip7702Auth {
+    pub fn max_fill(&self) -> Eip7702Auth {
         Self {
-            chain_id: u64::MAX,
-            address: Address::repeat_byte(0xf),
+            chain_id: self.chain_id,
+            address: self.address,
             nonce: u64::MAX,
             y_parity: 27,
             r: U256::MAX,
