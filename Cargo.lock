@@ -4794,6 +4794,7 @@ dependencies = [
  "reth-tasks",
  "rundler-bls",
  "rundler-builder",
+ "rundler-pbh",
  "rundler-pool",
  "rundler-provider",
  "rundler-rpc",
@@ -4890,6 +4891,16 @@ dependencies = [
  "alloy-sol-types",
  "const-hex",
  "serde_json",
+]
+
+[[package]]
+name = "rundler-pbh"
+version = "0.4.0"
+dependencies = [
+ "alloy-primitives",
+ "async-trait",
+ "rundler-provider",
+ "rundler-types",
 ]
 
 [[package]]

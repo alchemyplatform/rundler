@@ -96,11 +96,12 @@ Implementations can be found [here](../../crates/aggregators/). Each implementat
 
 ### [BLS](../../crates/aggregators/bls/)
 
-The BLS aggregator adds support for the BLS aggregator contracts from [eth-infinitism](https://github.com/eth-infinitism/account-abstraction-samples/tree/master/contracts/bls).
+The BLS aggregator has support for the BLS aggregator contracts from [eth-infinitism](https://github.com/eth-infinitism/account-abstraction-samples/tree/master/contracts/bls).
 
 Currently, all aggregator functions are implemented using entrypoint calls, as opposed to local BLS logic. A future update may improve this.
 
-Enabling the BLS aggregator is controlled by the `--bls_aggregation_enabled` CLI flag.
-
 NOTE: This is implemented mostly as a POC of aggregation in Rundler. Due to the bundle size [limitations](#dynamic-bundle-size) this aggregator has little practical use and is not recommended for production.
 
+### [PBH](../../crates/aggregators/pbh/)
+
+The PBH aggregator has support for the World Chain Priority Blockspace for Humans signature aggregator. More info can be found [here](https://github.com/worldcoin/world-chain/tree/main/contracts).

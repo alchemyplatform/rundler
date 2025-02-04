@@ -34,6 +34,7 @@ rundler-types = { path = "crates/types" }
 rundler-utils = { path = "crates/utils" }
 rundler-bindings-fastlz = { path = "crates/bindings/fastlz" }
 rundler-builder = { path = "crates/builder" }
+rundler-pbh = { path = "crates/aggregators/pbh" }
 rundler-pool = { path = "crates/pool" }
 rundler-rpc = { path = "crates/rpc" }
 

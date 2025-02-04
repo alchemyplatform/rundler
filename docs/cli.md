@@ -92,8 +92,13 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *DA_GAS_TRACKING_ENABLED*
 - `--max_expected_storage_slots`: Optionally set the maximum number of expected storage slots to submit with a conditional transaction. (default: `None`)
   - env: *MAX_EXPECTED_STORAGE_SLOTS*
-- `--bls_aggregation_enabled`: Enable BLS signature aggregation (default: `false`)
-  - env: *BLS_AGGREGATION_ENABLED*
+- `--enabled_aggregators`: List of enabled aggregators.
+  - env: *ENABLED_AGGREGATORS*
+  - Types: see [aggregator.rs](../bin/rundler/src/cli/aggregator.rs)
+- `--aggregator_options`: List of aggregator specific options
+  - env: *ENABLED_AGGREGATORS*
+  - List of KEY=VALUE delimited by ',': i.e. `ENABLED_AGGREGATORS="KEY1=VALUE1,KEY2=VALUE2"`
+  - Options: see [aggregator.rs](../bin/rundler/src/cli/aggregator.rs)
 
 ## Metrics Options
 
