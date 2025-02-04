@@ -420,8 +420,13 @@ impl UserOperationOptionalGas {
         if self.factory.is_some() {
             builder = builder.factory(self.factory.unwrap(), random_bytes(self.factory_data.len()))
         }
-        if self.eip7702_auth_address.is_some() {
-            builder = builder.authorization_tuple(Some(Eip7702Auth::random_fill()));
+        if let Some(address) = self.eip7702_auth_address {
+            let auth = Eip7702Auth {
+                address,
+                chain_id: chain_spec.id,
+                ..Default::default()
+            };
+            builder = builder.authorization_tuple(Some(auth.random_fill()));
         }
 
         builder.build()

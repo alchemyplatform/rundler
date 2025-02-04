@@ -320,17 +320,14 @@ where
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
         let au = user_op.authorization_tuple();
 
-        let mut txn_req = self
+        let txn_req = self
             .i_entry_point
             .handleOps(vec![user_op.pack()], Address::random())
             .into_transaction_request();
-        if au.is_some() {
-            txn_req = txn_req.with_authorization_list(vec![Eip7702Auth::random_fill().into()]);
-        }
 
         let data = txn_req.input.into_input().unwrap();
         let bundle_data =
-            super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price);
+            super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price, au);
 
         self.da_gas_oracle
             .estimate_da_gas(bundle_data, *self.i_entry_point.address(), block, gas_price)

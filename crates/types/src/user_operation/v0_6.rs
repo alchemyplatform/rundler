@@ -463,8 +463,13 @@ impl UserOperationOptionalGas {
                 max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
             },
             ExtendedUserOperation {
-                authorization_tuple: if self.eip7702_auth_address.is_some() {
-                    Some(Eip7702Auth::random_fill())
+                authorization_tuple: if let Some(address) = self.eip7702_auth_address {
+                    let auth = Eip7702Auth {
+                        address,
+                        chain_id: chain_spec.id,
+                        ..Default::default()
+                    };
+                    Some(auth.random_fill())
                 } else {
                     None
                 },

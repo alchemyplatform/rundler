@@ -49,10 +49,10 @@ impl From<Eip7702Auth> for alloy_eips::eip7702::SignedAuthorization {
 
 impl Eip7702Auth {
     /// Genreate a random filled Eip7702Auth entity.
-    pub fn random_fill() -> Eip7702Auth {
+    pub fn random_fill(&self) -> Eip7702Auth {
         Self {
-            chain_id: u64::from_le_bytes(random_bytes_array::<8, 4>()),
-            address: Address::random(),
+            chain_id: self.chain_id,
+            address: self.address,
             nonce: u64::from_le_bytes(random_bytes_array::<8, 4>()),
             y_parity: 27,
             r: U256::from_le_bytes(random_bytes_array::<64, 32>()),
@@ -79,7 +79,7 @@ impl Eip7702Auth {
                 if address == self.address {
                     Ok(())
                 } else {
-                    Err(anyhow::anyhow!("Invalid Signature"))
+                    Err(anyhow::anyhow!("Invalid signature for EIP-7702 authorization tuple - expected {:?} recovered {:?}", self.address, address))
                 }
             }
             Err(e) => Err(anyhow::anyhow!(e.to_string())),

@@ -4766,7 +4766,6 @@ name = "rundler"
 version = "0.4.0"
 dependencies = [
  "alloy-primitives",
- "alloy-signer-local",
  "anyhow",
  "aws-config",
  "aws-sdk-s3",
@@ -4973,7 +4972,6 @@ dependencies = [
  "metrics 0.23.0",
  "metrics-derive",
  "mockall",
- "rand",
  "rundler-contracts",
  "rundler-provider",
  "rundler-sim",

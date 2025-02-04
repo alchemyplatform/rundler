@@ -43,7 +43,7 @@ alloy-sol-types =  "0.8.15"
 # alloy
 alloy-consensus = "0.7.3"
 alloy-contract = "0.7.3"
-alloy-eips = { version = "0.7.3", features = ["k256","serde", "std", ] }
+alloy-eips = { version = "0.7.3", features = ["k256","serde", "std"] }
 alloy-json-rpc = "0.7.3"
 alloy-provider = { version = "0.7.3", default-features = false, features = ["reqwest", "reqwest-rustls-tls"] }
 alloy-rpc-client = "0.7.3"
