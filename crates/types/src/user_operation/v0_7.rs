@@ -14,11 +14,9 @@
 use alloy_primitives::{ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256};
 use alloy_sol_types::{sol, SolValue};
 use rundler_contracts::v0_7::PackedUserOperation;
+use rundler_utils::random::{random_bytes, random_bytes_array};
 
-use super::{
-    random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
-    UserOperationVariant,
-};
+use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{authorization::Eip7702Auth, chain::ChainSpec, Entity, EntryPointVersion};
 
 /// Gas overhead required by the entry point contract for the inner call

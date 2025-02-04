@@ -14,13 +14,11 @@
 use alloy_primitives::{ruint::FromUintError, Address, Bytes, B256, U256};
 use alloy_sol_types::{sol, SolValue};
 pub use rundler_contracts::v0_6::UserOperation as ContractUserOperation;
+use rundler_utils::random::{random_bytes, random_bytes_array};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
-use super::{
-    random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
-    UserOperationVariant,
-};
+use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{
     authorization::Eip7702Auth,
     chain::ChainSpec,

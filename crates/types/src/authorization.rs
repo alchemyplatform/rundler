@@ -14,7 +14,7 @@
 
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, U256};
-use rand::{self, RngCore};
+use rundler_utils::random::random_bytes_array;
 use serde::{Deserialize, Serialize};
 
 /// authorization tuple for 7702 txn support
@@ -45,13 +45,6 @@ impl From<Eip7702Auth> for alloy_eips::eip7702::SignedAuthorization {
 
         SignedAuthorization::new_unchecked(authorization, value.y_parity, value.r, value.s)
     }
-}
-
-pub(crate) fn random_bytes_array<const ARR_SIZE: usize, const FILL_SIZE: usize>() -> [u8; ARR_SIZE]
-{
-    let mut bytes = [0_u8; ARR_SIZE];
-    rand::thread_rng().fill_bytes(&mut bytes[..FILL_SIZE]);
-    bytes
 }
 
 impl Eip7702Auth {

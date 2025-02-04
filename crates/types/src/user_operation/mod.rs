@@ -15,7 +15,6 @@ use std::{fmt::Debug, time::Duration};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
-use rand::{self, RngCore};
 
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;
@@ -618,21 +617,6 @@ pub(crate) fn default_if_none_or_equal<V: Copy + PartialEq>(
     equal: V,
 ) -> V {
     v.filter(|v| v != &equal).unwrap_or(default)
-}
-
-/// Fills a bytes array of size ARR_SIZE with FILL_SIZE random bytes starting
-/// at the beginning
-fn random_bytes_array<const ARR_SIZE: usize, const FILL_SIZE: usize>() -> [u8; ARR_SIZE] {
-    let mut bytes = [0_u8; ARR_SIZE];
-    rand::thread_rng().fill_bytes(&mut bytes[..FILL_SIZE]);
-    bytes
-}
-
-/// Fills a bytes object with fill_size random bytes
-fn random_bytes(fill_size: usize) -> Bytes {
-    let mut bytes = vec![0_u8; fill_size];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    bytes.into()
 }
 
 #[cfg(test)]
