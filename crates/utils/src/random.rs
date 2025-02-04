@@ -10,23 +10,21 @@
 //
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
+//! Random fill utility functions
+use alloy_primitives::Bytes;
+use rand::RngCore;
 
-#![warn(missing_docs, unreachable_pub)]
-#![deny(unused_must_use, rust_2018_idioms)]
-#![doc(test(
-    no_crate_inject,
-    attr(deny(warnings, rust_2018_idioms), allow(dead_code, unused_variables))
-))]
+/// Fills a bytes array of size ARR_SIZE with FILL_SIZE random bytes starting
+/// at the beginning
+pub fn random_bytes_array<const ARR_SIZE: usize, const FILL_SIZE: usize>() -> [u8; ARR_SIZE] {
+    let mut bytes = [0_u8; ARR_SIZE];
+    rand::thread_rng().fill_bytes(&mut bytes[..FILL_SIZE]);
+    bytes
+}
 
-//! Rundler utilities
-
-pub mod authorization_utils;
-pub mod cache;
-pub mod emit;
-pub mod eth;
-pub mod guard_timer;
-pub mod log;
-pub mod math;
-pub mod random;
-pub mod retry;
-pub mod strs;
+/// Fills a bytes object with fill_size random bytes
+pub fn random_bytes(fill_size: usize) -> Bytes {
+    let mut bytes = vec![0_u8; fill_size];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.into()
+}

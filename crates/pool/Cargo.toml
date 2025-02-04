@@ -44,6 +44,9 @@ url.workspace = true
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+alloy-eips.workspace = true
+alloy-signer.workspace = true
+alloy-signer-local.workspace = true
 mockall.workspace = true
 reth-tasks.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }

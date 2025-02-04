@@ -48,17 +48,10 @@ impl From<&UserOperationVariant> for UserOperation {
 
 impl From<&v0_6::UserOperation> for UserOperation {
     fn from(op: &v0_6::UserOperation) -> Self {
-        let authorization_tuple =
-            op.authorization_tuple
-                .as_ref()
-                .map(|authorization| AuthorizationTuple {
-                    chain_id: authorization.chain_id,
-                    address: authorization.address.to_proto_bytes(),
-                    nonce: authorization.nonce,
-                    y_parity: authorization.y_parity.into(),
-                    r: authorization.r.to_proto_bytes(),
-                    s: authorization.s.to_proto_bytes(),
-                });
+        let authorization_tuple = op
+            .authorization_tuple
+            .as_ref()
+            .map(|authorization| AuthorizationTuple::from(authorization.clone()));
         let op = UserOperationV06 {
             sender: op.sender.to_proto_bytes(),
             nonce: op.nonce.to_proto_bytes(),
@@ -92,6 +85,19 @@ impl From<AuthorizationTuple> for Eip7702Auth {
             y_parity: value.y_parity as u8,
             r: from_bytes(&value.r).unwrap_or_default(),
             s: from_bytes(&value.s).unwrap_or_default(),
+        }
+    }
+}
+
+impl From<Eip7702Auth> for AuthorizationTuple {
+    fn from(value: Eip7702Auth) -> Self {
+        AuthorizationTuple {
+            chain_id: value.chain_id,
+            address: value.address.to_proto_bytes(),
+            nonce: value.nonce,
+            y_parity: value.y_parity.into(),
+            r: value.r.to_proto_bytes(),
+            s: value.s.to_proto_bytes(),
         }
     }
 }
@@ -148,7 +154,10 @@ impl From<&v0_7::UserOperation> for UserOperation {
             factory_data: op.factory_data.to_proto_bytes(),
             entry_point: op.entry_point.to_proto_bytes(),
             chain_id: op.chain_id,
-            authorization_tuple: None,
+            authorization_tuple: op
+                .authorization_tuple
+                .as_ref()
+                .map(|authorization| AuthorizationTuple::from(authorization.clone())),
         };
         UserOperation {
             uo: Some(user_operation::Uo::V07(op)),

@@ -14,6 +14,7 @@
 
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, U256};
+use rundler_utils::random::random_bytes_array;
 use serde::{Deserialize, Serialize};
 
 /// authorization tuple for 7702 txn support
@@ -43,5 +44,45 @@ impl From<Eip7702Auth> for alloy_eips::eip7702::SignedAuthorization {
         };
 
         SignedAuthorization::new_unchecked(authorization, value.y_parity, value.r, value.s)
+    }
+}
+
+impl Eip7702Auth {
+    /// Genreate a random filled Eip7702Auth entity.
+    pub fn random_fill(&self) -> Eip7702Auth {
+        Self {
+            chain_id: self.chain_id,
+            address: self.address,
+            nonce: u64::from_le_bytes(random_bytes_array::<8, 4>()),
+            y_parity: 27,
+            r: U256::from_le_bytes(random_bytes_array::<64, 32>()),
+            s: U256::from_le_bytes(random_bytes_array::<64, 32>()),
+        }
+    }
+    /// Generate a maxfilled Eip7702Auth entity.
+    pub fn max_fill(&self) -> Eip7702Auth {
+        Self {
+            chain_id: self.chain_id,
+            address: self.address,
+            nonce: u64::MAX,
+            y_parity: 27,
+            r: U256::MAX,
+            s: U256::MAX,
+        }
+    }
+
+    /// validate a Eip7702Auth's signature.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let signed_auth = SignedAuthorization::from(self.clone());
+        match signed_auth.recover_authority() {
+            Ok(address) => {
+                if address == self.address {
+                    Ok(())
+                } else {
+                    Err(anyhow::anyhow!("Invalid signature for EIP-7702 authorization tuple - expected {:?} recovered {:?}", self.address, address))
+                }
+            }
+            Err(e) => Err(anyhow::anyhow!(e.to_string())),
+        }
     }
 }

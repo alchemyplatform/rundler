@@ -14,11 +14,9 @@
 use alloy_primitives::{ruint::FromUintError, Address, Bytes, FixedBytes, B256, U256};
 use alloy_sol_types::{sol, SolValue};
 use rundler_contracts::v0_7::PackedUserOperation;
+use rundler_utils::random::{random_bytes, random_bytes_array};
 
-use super::{
-    random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
-    UserOperationVariant,
-};
+use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{authorization::Eip7702Auth, chain::ChainSpec, Entity, EntryPointVersion};
 
 /// Gas overhead required by the entry point contract for the inner call
@@ -373,14 +371,16 @@ impl UserOperationOptionalGas {
                 vec![255_u8; self.paymaster_data.len()].into(),
             );
         }
-        if let Some(eip_7702_auth_address) = self.eip7702_auth_address {
-            builder = builder.authorization_tuple(Some(Eip7702Auth {
-                address: eip_7702_auth_address,
+
+        if let Some(address) = self.eip7702_auth_address {
+            let auth = Eip7702Auth {
+                address,
                 chain_id: chain_spec.id,
-                // fake value for gas estimation.
                 ..Default::default()
-            }));
+            };
+            builder = builder.authorization_tuple(Some(auth.max_fill()));
         }
+
         if self.factory.is_some() {
             builder = builder.factory(
                 self.factory.unwrap(),
@@ -426,6 +426,14 @@ impl UserOperationOptionalGas {
         }
         if self.factory.is_some() {
             builder = builder.factory(self.factory.unwrap(), random_bytes(self.factory_data.len()))
+        }
+        if let Some(address) = self.eip7702_auth_address {
+            let auth = Eip7702Auth {
+                address,
+                chain_id: chain_spec.id,
+                ..Default::default()
+            };
+            builder = builder.authorization_tuple(Some(auth.random_fill()));
         }
 
         builder.build()

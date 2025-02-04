@@ -15,7 +15,6 @@ use std::{fmt::Debug, time::Duration};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
-use rand::{self, RngCore};
 
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;
@@ -239,6 +238,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         // Thus, only consider the static portion of the pre_verification_gas in the gas limit.
         self.static_pre_verification_gas(chain_spec)
             .saturating_add(optional_bundle_per_uo_shared_gas(chain_spec, bundle_size))
+            .saturating_add(self.authorization_gas_limit())
     }
 
     /// Returns the portion of pre-verification gas that applies to a bundle's total gas limit
@@ -265,16 +265,10 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         bundle_size: usize,
         da_gas: u128,
     ) -> u128 {
-        let authorization_gas = if self.authorization_tuple().is_some() {
-            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST
-                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST
-        } else {
-            0
-        };
         self.static_pre_verification_gas(chain_spec)
             .saturating_add(bundle_per_uo_shared_gas(chain_spec, bundle_size))
             .saturating_add(da_gas)
-            .saturating_add(authorization_gas as u128)
+            .saturating_add(self.authorization_gas_limit())
     }
 
     /// Returns true if the user operation has enough pre-verification gas to be included in a bundle
@@ -314,6 +308,16 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
 
     /// Returns the limit of gas that may be used during the paymaster post operation
     fn paymaster_post_op_gas_limit(&self) -> u128;
+
+    /// Returns the gas limit for the authorization
+    fn authorization_gas_limit(&self) -> u128 {
+        if self.authorization_tuple().is_some() {
+            alloy_eips::eip7702::constants::PER_AUTH_BASE_COST as u128
+                + alloy_eips::eip7702::constants::PER_EMPTY_ACCOUNT_COST as u128
+        } else {
+            0
+        }
+    }
 }
 
 /// Returns the total shared gas for a bundle
@@ -618,21 +622,6 @@ pub(crate) fn default_if_none_or_equal<V: Copy + PartialEq>(
     equal: V,
 ) -> V {
     v.filter(|v| v != &equal).unwrap_or(default)
-}
-
-/// Fills a bytes array of size ARR_SIZE with FILL_SIZE random bytes starting
-/// at the beginning
-fn random_bytes_array<const ARR_SIZE: usize, const FILL_SIZE: usize>() -> [u8; ARR_SIZE] {
-    let mut bytes = [0_u8; ARR_SIZE];
-    rand::thread_rng().fill_bytes(&mut bytes[..FILL_SIZE]);
-    bytes
-}
-
-/// Fills a bytes object with fill_size random bytes
-fn random_bytes(fill_size: usize) -> Bytes {
-    let mut bytes = vec![0_u8; fill_size];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    bytes.into()
 }
 
 #[cfg(test)]

@@ -14,13 +14,11 @@
 use alloy_primitives::{ruint::FromUintError, Address, Bytes, B256, U256};
 use alloy_sol_types::{sol, SolValue};
 pub use rundler_contracts::v0_6::UserOperation as ContractUserOperation;
+use rundler_utils::random::{random_bytes, random_bytes_array};
 use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 
-use super::{
-    random_bytes, random_bytes_array, UserOperation as UserOperationTrait, UserOperationId,
-    UserOperationVariant,
-};
+use super::{UserOperation as UserOperationTrait, UserOperationId, UserOperationVariant};
 use crate::{
     authorization::Eip7702Auth,
     chain::ChainSpec,
@@ -428,7 +426,16 @@ impl UserOperationOptionalGas {
                 max_fee_per_gas: max_8,
             },
             ExtendedUserOperation {
-                authorization_tuple: None,
+                authorization_tuple: if let Some(address) = self.eip7702_auth_address {
+                    let auth = Eip7702Auth {
+                        address,
+                        chain_id: chain_spec.id,
+                        ..Default::default()
+                    };
+                    Some(auth.max_fill())
+                } else {
+                    None
+                },
             },
         );
 
@@ -461,7 +468,16 @@ impl UserOperationOptionalGas {
                 max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
             },
             ExtendedUserOperation {
-                authorization_tuple: None,
+                authorization_tuple: if let Some(address) = self.eip7702_auth_address {
+                    let auth = Eip7702Auth {
+                        address,
+                        chain_id: chain_spec.id,
+                        ..Default::default()
+                    };
+                    Some(auth.random_fill())
+                } else {
+                    None
+                },
             },
         );
 
