@@ -360,8 +360,6 @@ where
             max_bundle_gas: self.args.max_bundle_gas,
             sender_eoa,
             priority_fee_mode: self.args.priority_fee_mode,
-            bundle_base_fee_overhead_percent: self.args.bundle_base_fee_overhead_percent,
-            bundle_priority_fee_overhead_percent: self.args.bundle_priority_fee_overhead_percent,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
             max_expected_storage_slots: self.args.max_expected_storage_slots,
         };
@@ -395,8 +393,8 @@ where
             ep_providers.evm().clone(),
             fee_oracle,
             proposer_settings.priority_fee_mode,
-            proposer_settings.bundle_base_fee_overhead_percent,
-            proposer_settings.bundle_priority_fee_overhead_percent,
+            self.args.bundle_base_fee_overhead_percent,
+            self.args.bundle_priority_fee_overhead_percent,
         );
 
         let proposer = BundleProposerImpl::new(

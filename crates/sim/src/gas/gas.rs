@@ -133,14 +133,16 @@ impl PriorityFeeMode {
         base_fee: u128,
         base_fee_accept_percent: u32,
         min_max_priority_fee_per_gas: u128,
+        bundle_priority_fee_overhead_percent: u32,
     ) -> u128 {
         match *self {
             PriorityFeeMode::BaseFeePercent(percent) => {
                 math::percent(math::percent(base_fee, base_fee_accept_percent), percent)
             }
-            PriorityFeeMode::PriorityFeeIncreasePercent(percent) => {
-                math::increase_by_percent(min_max_priority_fee_per_gas, percent)
-            }
+            PriorityFeeMode::PriorityFeeIncreasePercent(percent) => math::increase_by_percent(
+                min_max_priority_fee_per_gas,
+                percent + bundle_priority_fee_overhead_percent,
+            ),
         }
     }
 }
