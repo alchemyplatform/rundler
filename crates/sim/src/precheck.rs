@@ -314,6 +314,7 @@ where
             base_fee,
             self.settings.base_fee_accept_percent,
             self.chain_spec.min_max_priority_fee_per_gas(),
+            self.settings.bundle_priority_fee_overhead_percent,
         );
         let min_max_fee = min_base_fee + min_priority_fee;
 
