@@ -15,9 +15,10 @@ use std::marker::PhantomData;
 
 use alloy_primitives::B256;
 use rundler_provider::{AggregatorOut, EntryPoint, SignatureAggregator, SimulationProvider};
-use rundler_types::{pool::SimulationViolation, EntityInfos, UserOperation, ValidTimeRange};
+use rundler_types::{pool::SimulationViolation, UserOperation, ValidTimeRange};
 
-use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
+use super::Settings;
+use crate::{simulation::context, SimulationError, SimulationResult, Simulator, ViolationError};
 
 /// An unsafe simulator that can be used in place of a regular simulator
 /// to extract the information needed from simulation while avoiding the use
@@ -27,14 +28,16 @@ use crate::{SimulationError, SimulationResult, Simulator, ViolationError};
 /// performed.
 pub struct UnsafeSimulator<UO, E> {
     entry_point: E,
+    settings: Settings,
     _uo_type: PhantomData<UO>,
 }
 
 impl<UO, E> UnsafeSimulator<UO, E> {
     /// Creates a new unsafe simulator
-    pub fn new(entry_point: E) -> Self {
+    pub fn new(entry_point: E, settings: Settings) -> Self {
         Self {
             entry_point,
+            settings,
             _uo_type: PhantomData,
         }
     }
@@ -86,17 +89,13 @@ where
             ValidTimeRange::new(validation_result.return_info.valid_after, valid_until);
         let requires_post_op = !validation_result.return_info.paymaster_context.is_empty();
 
-        let mut entity_infos = EntityInfos::default();
-        entity_infos.set_sender(op.sender(), false);
-        if let Some(f) = op.factory() {
-            entity_infos.set_factory(f, false);
-        }
-        if let Some(p) = op.paymaster() {
-            entity_infos.set_paymaster(p, false);
-        }
-        if let Some(a) = validation_result.aggregator_info {
-            entity_infos.set_aggregator(a.address, false);
-        }
+        let entity_infos = context::infos_from_validation_output(
+            op.factory(),
+            op.sender(),
+            op.paymaster(),
+            &validation_result,
+            &self.settings,
+        );
 
         let mut violations = vec![];
 

@@ -223,7 +223,10 @@ where
                     task_spawner,
                     i + ep.bundle_builder_index_offset,
                     ep_providers.clone(),
-                    UnsafeSimulator::new(ep_providers.entry_point().clone()),
+                    UnsafeSimulator::new(
+                        ep_providers.entry_point().clone(),
+                        self.args.sim_settings.clone(),
+                    ),
                     pk_iter,
                 )
                 .await?
@@ -270,7 +273,10 @@ where
                     task_spawner,
                     i + ep.bundle_builder_index_offset,
                     ep_providers.clone(),
-                    UnsafeSimulator::new(ep_providers.entry_point().clone()),
+                    UnsafeSimulator::new(
+                        ep_providers.entry_point().clone(),
+                        self.args.sim_settings.clone(),
+                    ),
                     pk_iter,
                 )
                 .await?
