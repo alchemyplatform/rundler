@@ -4,4 +4,3 @@ name = "Base Sepolia"
 id = 84532
 
 min_max_priority_fee_per_gas = 100000
-congestion_trigger_usage_ratio_threshold = 0.55
