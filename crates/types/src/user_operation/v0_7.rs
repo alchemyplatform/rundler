@@ -338,7 +338,7 @@ pub struct UserOperationOptionalGas {
     /// Paymaster data
     pub paymaster_data: Bytes,
     /// 7702 authorization contract address.
-    pub eip7702_auth_address: Option<Address>,
+    pub eip7702auth_address: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -372,7 +372,7 @@ impl UserOperationOptionalGas {
             );
         }
 
-        if let Some(address) = self.eip7702_auth_address {
+        if let Some(address) = self.eip7702auth_address {
             let auth = Eip7702Auth {
                 address,
                 chain_id: chain_spec.id,
@@ -427,7 +427,7 @@ impl UserOperationOptionalGas {
         if self.factory.is_some() {
             builder = builder.factory(self.factory.unwrap(), random_bytes(self.factory_data.len()))
         }
-        if let Some(address) = self.eip7702_auth_address {
+        if let Some(address) = self.eip7702auth_address {
             let auth = Eip7702Auth {
                 address,
                 chain_id: chain_spec.id,
@@ -489,7 +489,7 @@ impl UserOperationOptionalGas {
                 self.paymaster_data,
             );
         }
-        if let Some(contract) = self.eip7702_auth_address {
+        if let Some(contract) = self.eip7702auth_address {
             builder = builder.authorization_tuple(Some(Eip7702Auth {
                 address: contract,
                 ..Default::default()

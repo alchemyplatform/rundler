@@ -614,7 +614,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
-            eip7702_auth_address: None,
+            eip7702auth_address: None,
         }
     }
 
@@ -847,7 +847,7 @@ mod tests {
 
             factory: None,
             factory_data: Bytes::new(),
-            eip7702_auth_address: None,
+            eip7702auth_address: None,
         };
 
         let estimation = estimator

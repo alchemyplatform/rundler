@@ -38,7 +38,7 @@ pub(crate) struct RpcUserOperation {
     max_priority_fee_per_gas: U128,
     paymaster_and_data: Bytes,
     signature: Bytes,
-    eip7702_auth: Option<RpcEip7702Auth>,
+    eip7702auth: Option<RpcEip7702Auth>,
 }
 
 impl From<UserOperation> for RpcUserOperation {
@@ -55,7 +55,7 @@ impl From<UserOperation> for RpcUserOperation {
             max_priority_fee_per_gas: U128::from(op.max_priority_fee_per_gas),
             paymaster_and_data: op.paymaster_and_data,
             signature: op.signature,
-            eip7702_auth: op.authorization_tuple.map(|a| a.into()),
+            eip7702auth: op.authorization_tuple.map(|a| a.into()),
         }
     }
 }
@@ -78,7 +78,7 @@ impl FromRpc<RpcUserOperation> for UserOperation {
                 signature: def.signature,
             },
             ExtendedUserOperation {
-                authorization_tuple: def.eip7702_auth.map(|a| a.into()),
+                authorization_tuple: def.eip7702auth.map(|a| a.into()),
             },
         )
         .build()
@@ -99,7 +99,7 @@ pub(crate) struct RpcUserOperationOptionalGas {
     max_priority_fee_per_gas: Option<U128>,
     paymaster_and_data: Bytes,
     signature: Bytes,
-    eip7702_auth_address: Option<Address>,
+    eip7702auth_address: Option<Address>,
 }
 
 impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
@@ -116,7 +116,7 @@ impl From<RpcUserOperationOptionalGas> for UserOperationOptionalGas {
             max_priority_fee_per_gas: def.max_priority_fee_per_gas.map(|x| x.to()),
             paymaster_and_data: def.paymaster_and_data,
             signature: def.signature,
-            eip7702_auth_address: def.eip7702_auth_address,
+            eip7702auth_address: def.eip7702auth_address,
         }
     }
 }

@@ -568,7 +568,7 @@ mod tests {
             max_priority_fee_per_gas: None,
             paymaster_and_data: Bytes::new(),
             signature: Bytes::new(),
-            eip7702_auth_address: None,
+            eip7702auth_address: None,
         }
     }
 

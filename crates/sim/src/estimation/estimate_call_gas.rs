@@ -108,11 +108,11 @@ where
         let callless_op = self.specialization.get_op_with_no_call_gas(op.clone());
 
         if let Some(authorization_tuple) = op.authorization_tuple().clone() {
-            let eip7702_auth_address = authorization_tuple.address;
+            let eip7702auth_address = authorization_tuple.address;
             authorization_utils::apply_7702_overrides(
                 &mut state_override,
                 op.sender(),
-                eip7702_auth_address,
+                eip7702auth_address,
             );
         }
         let mut min_gas = 0;

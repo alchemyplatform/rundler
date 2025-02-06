@@ -400,7 +400,7 @@ pub struct UserOperationOptionalGas {
     pub signature: Bytes,
 
     /// eip 7702 - tuple of authority.
-    pub eip7702_auth_address: Option<Address>,
+    pub eip7702auth_address: Option<Address>,
 }
 
 impl UserOperationOptionalGas {
@@ -426,7 +426,7 @@ impl UserOperationOptionalGas {
                 max_fee_per_gas: max_8,
             },
             ExtendedUserOperation {
-                authorization_tuple: if let Some(address) = self.eip7702_auth_address {
+                authorization_tuple: if let Some(address) = self.eip7702auth_address {
                     let auth = Eip7702Auth {
                         address,
                         chain_id: chain_spec.id,
@@ -468,7 +468,7 @@ impl UserOperationOptionalGas {
                 max_priority_fee_per_gas: u128::from_le_bytes(random_bytes_array::<16, 8>()), // 2^64 max
             },
             ExtendedUserOperation {
-                authorization_tuple: if let Some(address) = self.eip7702_auth_address {
+                authorization_tuple: if let Some(address) = self.eip7702auth_address {
                     let auth = Eip7702Auth {
                         address,
                         chain_id: chain_spec.id,
@@ -499,7 +499,7 @@ impl UserOperationOptionalGas {
             super::default_if_none_or_equal(self.verification_gas_limit, max_verification_gas, 0);
         let pvg = super::default_if_none_or_equal(self.pre_verification_gas, max_call_gas, 0);
 
-        let authorization_tuple = self.eip7702_auth_address.map(|address| Eip7702Auth {
+        let authorization_tuple = self.eip7702auth_address.map(|address| Eip7702Auth {
             address,
             ..Default::default()
         });
@@ -954,7 +954,7 @@ mod tests {
             pre_verification_gas: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            eip7702_auth_address: None,
+            eip7702auth_address: None,
         }
         .max_fill(&ChainSpec::default());
 
