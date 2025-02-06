@@ -184,10 +184,8 @@ pub(crate) struct TokioMetrics {
     #[metric(describe = "the minimum amount of time a worker thread was busy.")]
     min_busy_duration: Gauge,
 
-    #[metric(
-        describe = "the number of tasks currently scheduled in the runtime's injection queue."
-    )]
-    injection_queue_depth: Gauge,
+    #[metric(describe = "the number of tasks currently scheduled in the runtime's global queue.")]
+    global_queue_depth: Gauge,
     #[metric(describe = "the total number of tasks currently scheduled in workers' local queues.")]
     total_local_queue_depth: Gauge,
     #[metric(
@@ -272,7 +270,7 @@ fn collect_tokio(
     log_wm_metric!(tm, wm, max_busy_duration, as_secs_f64);
     log_wm_metric!(tm, wm, min_busy_duration, as_secs_f64);
 
-    log_wm_metric!(tm, wm, injection_queue_depth);
+    log_wm_metric!(tm, wm, global_queue_depth);
 
     log_wm_metric!(tm, wm, total_local_queue_depth);
     log_wm_metric!(tm, wm, max_local_queue_depth);
