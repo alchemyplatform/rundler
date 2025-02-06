@@ -3607,16 +3607,6 @@ checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
 
 [[package]]
 name = "metrics"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "884adb57038347dfbaf2d5065887b6cf4312330dc8e94bc30a1a839bd79d3261"
-dependencies = [
- "ahash",
- "portable-atomic",
-]
-
-[[package]]
-name = "metrics"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a7deb012b3b2767169ff203fadb4c6b0b82b947512e5eb9e0b78c2e186ad9e3"
@@ -3649,7 +3639,7 @@ dependencies = [
  "hyper-util",
  "indexmap 2.7.0",
  "ipnet",
- "metrics 0.24.1",
+ "metrics",
  "metrics-util",
  "quanta",
  "thiserror 1.0.69",
@@ -3666,7 +3656,7 @@ dependencies = [
  "libc",
  "libproc",
  "mach2",
- "metrics 0.24.1",
+ "metrics",
  "once_cell",
  "procfs",
  "rlimit",
@@ -3684,7 +3674,7 @@ dependencies = [
  "crossbeam-utils",
  "hashbrown 0.15.2",
  "indexmap 2.7.0",
- "metrics 0.24.1",
+ "metrics",
  "ordered-float",
  "quanta",
  "radix_trie",
@@ -4642,7 +4632,7 @@ name = "reth-metrics"
 version = "1.1.4"
 source = "git+https://github.com/paradigmxyz/reth.git?tag=v1.1.4#15fac0873e91ea29ab2e605bfba17bedcd7a6084"
 dependencies = [
- "metrics 0.24.1",
+ "metrics",
  "metrics-derive",
 ]
 
@@ -4654,7 +4644,7 @@ dependencies = [
  "auto_impl",
  "dyn-clone",
  "futures-util",
- "metrics 0.24.1",
+ "metrics",
  "pin-project",
  "rayon",
  "reth-metrics",
@@ -4785,7 +4775,7 @@ dependencies = [
  "go-parse-duration",
  "http 1.2.0",
  "itertools 0.13.0",
- "metrics 0.23.0",
+ "metrics",
  "metrics-derive",
  "metrics-exporter-prometheus",
  "metrics-process",
@@ -4841,7 +4831,7 @@ dependencies = [
  "futures-util",
  "jsonrpsee",
  "linked-hash-map",
- "metrics 0.23.0",
+ "metrics",
  "metrics-derive",
  "mockall",
  "num-traits",
@@ -4897,7 +4887,7 @@ dependencies = [
  "futures",
  "futures-util",
  "itertools 0.13.0",
- "metrics 0.23.0",
+ "metrics",
  "metrics-derive",
  "mockall",
  "parking_lot",
@@ -4979,7 +4969,7 @@ dependencies = [
  "futures-util",
  "http 1.2.0",
  "jsonrpsee",
- "metrics 0.23.0",
+ "metrics",
  "metrics-derive",
  "mockall",
  "rundler-contracts",
@@ -5040,7 +5030,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
- "metrics 0.23.0",
+ "metrics",
  "pin-project",
  "reth-tasks",
  "rundler-provider",
@@ -5068,7 +5058,7 @@ dependencies = [
  "const-hex",
  "constcat",
  "futures-util",
- "metrics 0.23.0",
+ "metrics",
  "metrics-derive",
  "mockall",
  "num_enum",
@@ -5093,7 +5083,7 @@ dependencies = [
  "derive_more 0.99.18",
  "futures",
  "itertools 0.13.0",
- "metrics 0.23.0",
+ "metrics",
  "rand",
  "schnellru",
  "tokio",
