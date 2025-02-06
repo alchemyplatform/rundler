@@ -60,7 +60,7 @@ where
         block_hash: B256,
         _expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {
-        tracing::info!("Performing unsafe simulation");
+        tracing::debug!("Performing unsafe simulation");
 
         // simulate the validation
         let validation_result = self
