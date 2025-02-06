@@ -55,8 +55,8 @@ impl Eip7702Auth {
             address: self.address,
             nonce: u64::from_le_bytes(random_bytes_array::<8, 4>()),
             y_parity: 27,
-            r: U256::from_le_bytes(random_bytes_array::<64, 32>()),
-            s: U256::from_le_bytes(random_bytes_array::<64, 32>()),
+            r: U256::from_le_bytes(random_bytes_array::<32, 8>()),
+            s: U256::from_le_bytes(random_bytes_array::<32, 8>()),
         }
     }
     /// Generate a maxfilled Eip7702Auth entity.
