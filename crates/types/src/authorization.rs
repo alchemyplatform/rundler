@@ -72,14 +72,14 @@ impl Eip7702Auth {
     }
 
     /// validate a Eip7702Auth's signature.
-    pub fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self, signer: Address) -> anyhow::Result<()> {
         let signed_auth = SignedAuthorization::from(self.clone());
         match signed_auth.recover_authority() {
             Ok(address) => {
-                if address == self.address {
+                if address == signer {
                     Ok(())
                 } else {
-                    Err(anyhow::anyhow!("Invalid signature for EIP-7702 authorization tuple - expected {:?} recovered {:?}", self.address, address))
+                    Err(anyhow::anyhow!("Invalid signature for EIP-7702 authorization tuple - expected {:?} recovered {:?}", signer, address))
                 }
             }
             Err(e) => Err(anyhow::anyhow!(e.to_string())),
