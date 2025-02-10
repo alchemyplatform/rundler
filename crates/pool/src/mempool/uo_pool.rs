@@ -1891,7 +1891,7 @@ mod tests {
             let signer: PrivateKeySigner = PrivateKeySigner::from_str(private_key).unwrap();
             let authorization = alloy_eips::eip7702::Authorization {
                 chain_id: 11011,
-                address: Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap(),
+                address: Address::from_str("0x1234123412341234123412341234123412341234").unwrap(),
                 nonce: 1,
             };
             let signature = signer
@@ -1899,6 +1899,7 @@ mod tests {
                 .unwrap();
             let signed_authorization = authorization.into_signed(signature);
             let signed_op = create_op_from_op_v0_6(UserOperation {
+                sender: Address::from_str("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266").unwrap(),
                 call_gas_limit: 50_000,
                 max_fee_per_gas: 0,
                 max_priority_fee_per_gas: 0,
