@@ -232,7 +232,7 @@ pub enum SimulationViolation {
     #[display("ran out of gas during {0.kind} validation")]
     OutOfGas(Entity),
     /// The returned signature aggregator did not match the expected one
-    #[display("signature aggregator mismatch. Expected: {0:?}, Actual: {1:?}")]
+    #[display("signature aggregator mismatch. RPC: {0:?}, Simulated: {1:?}")]
     AggregatorMismatch(Address, Address),
     /// Verification gas limit doesn't have the required buffer on the measured gas
     #[display("verification gas limit doesn't have the required buffer on the measured gas, limit: {0}, needed: {1}")]

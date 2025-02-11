@@ -112,7 +112,7 @@ pub enum EthRpcError {
     #[error("signature aggregator error: {0}")]
     AggregatorError(String),
     /// Aggregator mismatch
-    #[error("signature aggregator mismatch. Expected: {0:?}, got: {1:?}")]
+    #[error("signature aggregator mismatch. RPC: {0:?}, Simulated: {1:?}")]
     AggregatorMismatch(Address, Address),
     /// Replacement underpriced
     #[error("replacement underpriced")]
