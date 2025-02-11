@@ -99,8 +99,8 @@ where
 
         let mut violations = vec![];
 
-        if let Some(agg) = op.aggregator() {
-            if let Some(agg_info) = validation_result.aggregator_info {
+        if let Some(agg_info) = validation_result.aggregator_info {
+            if let Some(agg) = op.aggregator() {
                 if agg_info.address != agg {
                     violations.push(SimulationViolation::AggregatorMismatch(
                         agg,
@@ -108,7 +108,10 @@ where
                     ));
                 }
             } else {
-                violations.push(SimulationViolation::AggregatorMismatch(agg, Address::ZERO));
+                violations.push(SimulationViolation::AggregatorMismatch(
+                    Address::ZERO,
+                    agg_info.address,
+                ));
             }
         }
 
