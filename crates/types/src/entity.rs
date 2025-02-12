@@ -291,10 +291,10 @@ impl EntityInfos {
     }
 
     /// Set the aggregator info
-    pub fn set_aggregator(&mut self, addr: Address, is_staked: bool) {
+    pub fn set_aggregator(&mut self, addr: Address) {
         self.aggregator = Some(EntityInfo {
             entity: Entity::aggregator(addr),
-            is_staked,
+            is_staked: true, // aggregators are always treated as staked due to whitelist
         });
     }
 }
