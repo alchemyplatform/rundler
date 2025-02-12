@@ -155,10 +155,7 @@ pub(crate) fn infos_from_validation_output(
         );
     }
     if let Some(aggregator_info) = entry_point_out.aggregator_info {
-        ei.set_aggregator(
-            aggregator_info.address,
-            is_staked(aggregator_info.stake_info, sim_settings),
-        );
+        ei.set_aggregator(aggregator_info.address);
     }
 
     ei

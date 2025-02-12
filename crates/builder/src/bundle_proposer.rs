@@ -856,7 +856,7 @@ where
             }
             HandleOpsOut::SignatureValidationFailed(aggregator) => {
                 info!("Rejected aggregator {aggregator:?} because its signature validation failed during gas estimation.");
-                self.reject_entity(context, Entity::aggregator(aggregator), false)
+                self.reject_entity(context, Entity::aggregator(aggregator), true)
                     .await;
                 Ok(None)
             }
@@ -1320,8 +1320,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
         match result {
             Ok(sig) => self.groups_by_aggregator[&Some(aggregator)].signature = sig,
             Err(error) => {
-                error!("Failed to compute aggregator signature: {error}");
-                self.groups_by_aggregator.remove(&Some(aggregator));
+                error!("Failed to compute aggregator signature, rejecting aggregator {aggregator:?}: {error}");
+                self.reject_aggregator(aggregator);
             }
         }
     }
@@ -1384,10 +1384,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             EntityType::Paymaster => self.reject_paymaster(entity.address),
             EntityType::Factory => self.reject_factory(entity.address),
             EntityType::Account => self.reject_sender(entity.address),
-            _ => {
-                error!("Cannot reject entity of type {}", entity.kind);
-                vec![]
-            }
+            EntityType::Aggregator => self.reject_aggregator(entity.address),
         };
         self.entity_updates.insert(
             entity.address,
@@ -1410,12 +1407,17 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the factory or account.
     // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
+    // Paymaster amendment is required for all other entities rejections.
     fn reject_factory(&mut self, address: Address) -> Vec<Address> {
         self.filter_reject(true, |op| op.factory() == Some(address))
     }
 
     fn reject_sender(&mut self, address: Address) -> Vec<Address> {
         self.filter_reject(true, |op| op.sender() == address)
+    }
+
+    fn reject_aggregator(&mut self, address: Address) -> Vec<Address> {
+        self.filter_reject(true, |op| op.aggregator() == Some(address))
     }
 
     /// Reject all ops that match the filter, and return the addresses of any aggregators
@@ -1733,7 +1735,10 @@ mod tests {
     };
     use rundler_sim::{MockFeeEstimator, MockSimulator};
     use rundler_types::{
-        aggregator::{AggregatorCosts, MockSignatureAggregator, SignatureAggregatorRegistry},
+        aggregator::{
+            AggregatorCosts, MockSignatureAggregator, SignatureAggregatorError,
+            SignatureAggregatorRegistry,
+        },
         da::BedrockDAGasBlockData,
         pool::{MockPool, SimulationViolation},
         v0_6::UserOperation,
@@ -2122,6 +2127,106 @@ mod tests {
                 },
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn test_reject_aggregator() {
+        // One op with no aggregator, two from aggregator A, and one from
+        // aggregator B.
+        let aggregator_a_address = address(10);
+        let aggregator_b_address = address(11);
+        let unaggregated_op = op_with_sender(address(1));
+        let mut aggregated_op_a1 = op_with_sender(address(2));
+        aggregated_op_a1.aggregator = Some(aggregator_a_address);
+        let mut aggregated_op_a2 = op_with_sender(address(3));
+        aggregated_op_a2.aggregator = Some(aggregator_a_address);
+        let mut aggregated_op_b = op_with_sender(address(4));
+        aggregated_op_b.aggregator = Some(aggregator_b_address);
+        let aggregator_a_signature = 101;
+        let aggregator_b_signature = 102;
+
+        let agg_a = mock_signature_aggregator(aggregator_a_address, bytes(aggregator_a_signature));
+
+        // Aggregator B fails validation and should be rejected with its ops
+        let mut agg_b = MockSignatureAggregator::default();
+        agg_b.expect_address().return_const(aggregator_b_address);
+        agg_b
+            .expect_costs()
+            .return_const(AggregatorCosts::default());
+        agg_b
+            .expect_aggregate_signatures()
+            .returning(move |_| Err(SignatureAggregatorError::ValidationReverted));
+
+        let mut bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: unaggregated_op.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                },
+                MockOp {
+                    op: aggregated_op_a1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                },
+                MockOp {
+                    op: aggregated_op_a2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                },
+                MockOp {
+                    op: aggregated_op_b.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                },
+            ],
+            vec![
+                MockAggregator {
+                    address: aggregator_a_address,
+                    signature: Box::new(move || Ok(Some(bytes(aggregator_a_signature)))),
+                },
+                MockAggregator {
+                    address: aggregator_b_address,
+                    signature: Box::new(move || Ok(Some(bytes(aggregator_b_signature)))),
+                },
+            ],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![agg_a, agg_b],
+            None,
+        )
+        .await;
+
+        bundle
+            .ops_per_aggregator
+            .sort_by(|a, b| a.aggregator.cmp(&b.aggregator));
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![
+                UserOpsPerAggregator {
+                    user_ops: vec![unaggregated_op],
+                    ..Default::default()
+                },
+                UserOpsPerAggregator {
+                    user_ops: vec![
+                        UserOperation {
+                            signature: Bytes::new(),
+                            ..aggregated_op_a1
+                        },
+                        UserOperation {
+                            signature: Bytes::new(),
+                            ..aggregated_op_a2
+                        }
+                    ],
+                    aggregator: aggregator_a_address,
+                    signature: bytes(aggregator_a_signature)
+                },
+            ],
+        );
+
+        assert_eq!(bundle.rejected_ops, vec![aggregated_op_b]);
     }
 
     #[tokio::test]
