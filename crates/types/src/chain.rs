@@ -13,15 +13,12 @@
 
 //! Chain specification for Rundler
 
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
 use alloy_primitives::Address;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    aggregator::{SignatureAggregator, SignatureAggregatorRegistry},
-    da::DAGasOracleType,
-};
+use crate::{aggregator::SignatureAggregator, da::DAGasOracleType, proxy::SubmissionProxy};
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
@@ -123,19 +120,18 @@ pub struct ChainSpec {
     pub chain_history_size: u64,
 
     /*
-     * Signature Aggregators
+     * Contracts
      */
     /// Registry of signature aggregators
     #[serde(skip)]
-    pub signature_aggregators: Arc<SignatureAggregatorRegistry>,
+    pub signature_aggregators: Arc<ContractRegistry<Arc<dyn SignatureAggregator>>>,
 
     /*
-     * Proxies
+     * Submission Proxies
      */
-    /// A list of known entry point proxies - these have the same interface as the
-    /// entry point, and are used to proxy bundles to the entry point.
+    /// Registry of submission proxies
     #[serde(skip)]
-    pub known_entry_point_proxies: Vec<Address>,
+    pub submission_proxies: Arc<ContractRegistry<Arc<dyn SubmissionProxy>>>,
 }
 
 /// Type of oracle for estimating priority fees
@@ -180,8 +176,8 @@ impl Default for ChainSpec {
             flashbots_status_url: None,
             bloxroute_enabled: false,
             chain_history_size: 64,
-            signature_aggregators: Arc::new(SignatureAggregatorRegistry::default()),
-            known_entry_point_proxies: vec![],
+            signature_aggregators: Arc::new(ContractRegistry::default()),
+            submission_proxies: Arc::new(ContractRegistry::default()),
         }
     }
 }
@@ -237,10 +233,10 @@ impl ChainSpec {
         self.per_user_op_deploy_overhead_gas as u128
     }
 
-    /// Set the signature aggregator registry
+    /// Set signature aggregators
     pub fn set_signature_aggregators(
         &mut self,
-        signature_aggregators: Arc<SignatureAggregatorRegistry>,
+        signature_aggregators: Arc<ContractRegistry<Arc<dyn SignatureAggregator>>>,
     ) {
         self.signature_aggregators = signature_aggregators;
     }
@@ -251,5 +247,49 @@ impl ChainSpec {
         address: &Address,
     ) -> Option<&Arc<dyn SignatureAggregator>> {
         self.signature_aggregators.get(address)
+    }
+
+    /// Set submission proxies
+    pub fn set_submission_proxies(
+        &mut self,
+        submission_proxies: Arc<ContractRegistry<Arc<dyn SubmissionProxy>>>,
+    ) {
+        self.submission_proxies = submission_proxies;
+    }
+
+    /// Get a submission proxy from the registry
+    pub fn get_submission_proxy(&self, address: &Address) -> Option<&Arc<dyn SubmissionProxy>> {
+        self.submission_proxies.get(address)
+    }
+
+    /// Get all known proxy addresses
+    pub fn known_proxy_addresses(&self) -> impl Iterator<Item = &Address> {
+        self.submission_proxies.contracts.keys()
+    }
+}
+
+/// Registry of contracts
+#[derive(Debug)]
+pub struct ContractRegistry<T> {
+    contracts: HashMap<Address, T>,
+}
+
+impl<T> ContractRegistry<T> {
+    /// Register a contract in the registry
+    pub fn register(&mut self, address: Address, contract: T) {
+        self.contracts.insert(address, contract);
+    }
+
+    /// Get a contract from the registry
+    pub fn get(&self, address: &Address) -> Option<&T> {
+        self.contracts.get(address)
+    }
+}
+
+impl<T> Default for ContractRegistry<T> {
+    fn default() -> Self {
+        Self {
+            contracts: HashMap::new(),
+        }
     }
 }

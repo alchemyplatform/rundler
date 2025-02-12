@@ -24,3 +24,6 @@
 
 mod pbh;
 pub use pbh::PbhSignatureAggregator;
+
+mod proxy;
+pub use proxy::PbhSubmissionProxy;

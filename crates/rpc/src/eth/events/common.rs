@@ -17,6 +17,7 @@ use alloy_consensus::Transaction;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::Context;
+use itertools::Itertools;
 use rundler_provider::{
     EvmProvider, Filter, GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingOptions,
     GethTrace, Log, TransactionReceipt,
@@ -96,7 +97,7 @@ where
 
         let ep_address = E::address(&self.chain_spec);
         let user_operation =
-            if ep_address == to || self.chain_spec.known_entry_point_proxies.contains(&to) {
+            if ep_address == to || self.chain_spec.known_proxy_addresses().contains(&to) {
                 E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
                     .into_iter()
                     .find(|op| op.hash(ep_address, self.chain_spec.id) == hash)

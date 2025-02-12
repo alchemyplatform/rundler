@@ -100,8 +100,8 @@ pub struct Args {
 pub struct BuilderSettings {
     /// Index of this builder
     pub index: u64,
-    /// Optional submitter proxy to use for this builder
-    pub submitter_proxy: Option<Address>,
+    /// Optional submission proxy to use for this builder
+    pub submission_proxy: Option<Address>,
     /// Optional filter id to apply to this builder
     pub filter_id: Option<String>,
 }
@@ -373,6 +373,19 @@ where
             info!("Created AWS KMS signer");
             ret
         };
+
+        let submission_proxy = if let Some(proxy) = &builder_settings.submission_proxy {
+            let Some(proxy) = self.args.chain_spec.get_submission_proxy(proxy) else {
+                return Err(anyhow::anyhow!(
+                    "Proxy {} is not in the known submission proxies",
+                    proxy
+                ));
+            };
+            Some(proxy)
+        } else {
+            None
+        };
+
         let sender_eoa = signer.address();
         let proposer_settings = bundle_proposer::Settings {
             chain_spec: self.args.chain_spec.clone(),
@@ -382,7 +395,7 @@ where
             priority_fee_mode: self.args.priority_fee_mode,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
             max_expected_storage_slots: self.args.max_expected_storage_slots,
-            submitter_proxy: builder_settings.submitter_proxy,
+            submission_proxy: submission_proxy.cloned(),
         };
 
         let transaction_sender = self.args.sender_args.clone().into_sender(
@@ -433,7 +446,7 @@ where
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
-            builder_settings.submitter_proxy,
+            submission_proxy.cloned(),
             proposer,
             ep_providers.entry_point().clone(),
             transaction_tracker,

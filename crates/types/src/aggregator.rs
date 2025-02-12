@@ -13,7 +13,7 @@
 
 //! Signature aggregator types and registry
 
-use std::{collections::HashMap, fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 use alloy_primitives::{Address, Bytes};
 
@@ -76,24 +76,6 @@ pub trait SignatureAggregator: Sync + Send + Debug {
         &self,
         uos: Vec<UserOperationVariant>,
     ) -> SignatureAggregatorResult<Bytes>;
-}
-
-/// Registry of signature aggregators
-#[derive(Default, Debug)]
-pub struct SignatureAggregatorRegistry {
-    aggregators: HashMap<Address, Arc<dyn SignatureAggregator>>,
-}
-
-impl SignatureAggregatorRegistry {
-    /// Register an aggregator
-    pub fn register(&mut self, aggregator: Arc<dyn SignatureAggregator>) {
-        self.aggregators.insert(aggregator.address(), aggregator);
-    }
-
-    /// Get an aggregator by address
-    pub fn get(&self, address: &Address) -> Option<&Arc<dyn SignatureAggregator>> {
-        self.aggregators.get(address)
-    }
 }
 
 #[cfg(feature = "test-utils")]

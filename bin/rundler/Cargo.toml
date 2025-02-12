@@ -43,6 +43,7 @@ reth-tasks.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sscanf = "0.4.2"
+strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-metrics = "0.4.0"
 tokio-rustls = "0.26.0"

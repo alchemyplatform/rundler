@@ -16,7 +16,10 @@ use std::sync::Arc;
 use rundler_bls::BlsSignatureAggregatorV0_7;
 use rundler_pbh::PbhSignatureAggregator;
 use rundler_provider::Providers;
-use rundler_types::{aggregator::SignatureAggregatorRegistry, chain::ChainSpec};
+use rundler_types::{
+    aggregator::SignatureAggregator,
+    chain::{ChainSpec, ContractRegistry},
+};
 
 use super::CommonArgs;
 
@@ -33,7 +36,7 @@ pub fn instantiate_aggregators(
     chain_spec: &mut ChainSpec,
     providers: &(impl Providers + 'static),
 ) {
-    let mut registry = SignatureAggregatorRegistry::default();
+    let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
 
     if args.enabled_aggregators.contains(&AggregatorType::Bls) {
         let bls_address = get_option_value(&args.aggregator_options, "BLS_ADDRESS")
@@ -44,7 +47,7 @@ pub fn instantiate_aggregators(
             .as_ref()
             .expect("BLS aggregator requires entry point v0.7");
         let bls_aggregator = BlsSignatureAggregatorV0_7::new(ep_v0_7.clone(), bls_address);
-        registry.register(Arc::new(bls_aggregator));
+        registry.register(bls_aggregator.address(), Arc::new(bls_aggregator));
     }
 
     if args.enabled_aggregators.contains(&AggregatorType::Pbh) {
@@ -56,7 +59,7 @@ pub fn instantiate_aggregators(
             .as_ref()
             .expect("PBH aggregator requires entry point v0.7");
         let pbh_aggregator = PbhSignatureAggregator::new(ep_v0_7.clone(), pbh_address);
-        registry.register(Arc::new(pbh_aggregator));
+        registry.register(pbh_aggregator.address(), Arc::new(pbh_aggregator));
     }
 
     chain_spec.set_signature_aggregators(Arc::new(registry));
