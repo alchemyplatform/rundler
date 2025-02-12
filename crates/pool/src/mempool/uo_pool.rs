@@ -988,11 +988,10 @@ mod tests {
     };
     use rundler_types::{
         aggregator::{
-            AggregatorCosts, MockSignatureAggregator, SignatureAggregatorError,
-            SignatureAggregatorRegistry,
+            AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
         authorization::Eip7702Auth,
-        chain::ChainSpec,
+        chain::{ChainSpec, ContractRegistry},
         da::DAGasUOData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::UserOperation,
@@ -2027,8 +2026,8 @@ mod tests {
         agg.expect_validate_user_op_signature()
             .returning(move |_| Ok(agg_sig_clone.clone()));
 
-        let mut registry = SignatureAggregatorRegistry::default();
-        registry.register(Arc::new(agg));
+        let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
+        registry.register(agg_address, Arc::new(agg));
 
         config
             .chain_spec
@@ -2068,8 +2067,8 @@ mod tests {
         agg.expect_validate_user_op_signature()
             .returning(move |_| Err(SignatureAggregatorError::ValidationReverted));
 
-        let mut registry = SignatureAggregatorRegistry::default();
-        registry.register(Arc::new(agg));
+        let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
+        registry.register(agg_address, Arc::new(agg));
 
         config
             .chain_spec
@@ -2102,8 +2101,8 @@ mod tests {
         agg.expect_validate_user_op_signature()
             .returning(move |_| Ok(bytes!("deadbeef")));
 
-        let mut registry = SignatureAggregatorRegistry::default();
-        registry.register(Arc::new(agg));
+        let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
+        registry.register(agg_address, Arc::new(agg));
 
         config
             .chain_spec
@@ -2148,8 +2147,8 @@ mod tests {
         agg.expect_validate_user_op_signature()
             .returning(move |_| Ok(bytes!("deadbeef")));
 
-        let mut registry = SignatureAggregatorRegistry::default();
-        registry.register(Arc::new(agg));
+        let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
+        registry.register(agg_address, Arc::new(agg));
 
         config
             .chain_spec

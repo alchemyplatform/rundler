@@ -39,6 +39,8 @@ pub use gas::GasFees;
 
 pub mod pool;
 
+pub mod proxy;
+
 mod timestamp;
 pub use timestamp::{Timestamp, ValidTimeRange};
 

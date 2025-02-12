@@ -42,6 +42,7 @@ use rundler_types::{
     chain::ChainSpec,
     da::DAGasBlockData,
     pool::{Pool, PoolOperation, SimulationViolation},
+    proxy::SubmissionProxy,
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
     Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidationRevert,
     BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
@@ -158,7 +159,7 @@ pub(crate) struct Settings {
     pub(crate) priority_fee_mode: PriorityFeeMode,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
-    pub(crate) submitter_proxy: Option<Address>,
+    pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
 }
 
 #[async_trait]
@@ -836,7 +837,7 @@ where
                 self.settings.sender_eoa,
                 gas_limit,
                 bundle_fees,
-                self.settings.submitter_proxy,
+                self.settings.submission_proxy.as_ref().map(|p| p.address()),
             )
             .await
             .context("should call handle ops with candidate bundle")?;
@@ -1081,7 +1082,7 @@ where
                 self.settings.sender_eoa,
                 gas_limit,
                 bundle_fees,
-                self.settings.submitter_proxy,
+                self.settings.submission_proxy.as_ref().map(|p| p.address()),
             )
             .await;
         match ret {
@@ -1122,7 +1123,7 @@ where
                 self.settings.sender_eoa,
                 gas_limit,
                 bundle_fees,
-                self.settings.submitter_proxy,
+                self.settings.submission_proxy.as_ref().map(|p| p.address()),
             )
             .await;
         match ret {
@@ -1736,11 +1737,12 @@ mod tests {
     use rundler_sim::{MockFeeEstimator, MockSimulator};
     use rundler_types::{
         aggregator::{
-            AggregatorCosts, MockSignatureAggregator, SignatureAggregatorError,
-            SignatureAggregatorRegistry,
+            AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
+        chain::ContractRegistry,
         da::BedrockDAGasBlockData,
         pool::{MockPool, SimulationViolation},
+        proxy::MockSubmissionProxy,
         v0_6::UserOperation,
         UserOperation as _, ValidTimeRange,
     };
@@ -2966,7 +2968,11 @@ mod tests {
     #[tokio::test]
     async fn test_submitter_proxy() {
         let op = default_op();
-        let proxy = address(1);
+        let proxy_address = address(1);
+
+        let mut proxy = MockSubmissionProxy::new();
+        proxy.expect_address().returning(move || proxy_address);
+
         // will throw if proxy doesn't match
         let bundle = mock_make_bundle(
             vec![MockOp {
@@ -3036,13 +3042,14 @@ mod tests {
         actual_storage: ExpectedStorage,
         da_gas_tracking_enabled: bool,
         aggregators: Vec<MockSignatureAggregator>,
-        proxy: Option<Address>,
+        proxy: Option<MockSubmissionProxy>,
     ) -> Bundle<UserOperation> {
         let entry_point_address = address(123);
         let sender_eoa = address(124);
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
         let max_bundle_size = mock_ops.len() as u64;
+        let proxy_address = proxy.as_ref().map(|p| p.address());
         let ops: Vec<_> = mock_ops
             .iter()
             .map(|MockOp { op, .. }| PoolOperation {
@@ -3084,7 +3091,7 @@ mod tests {
             entry_point
                 .expect_call_handle_ops()
                 .times(..=1)
-                .withf(move |_, &b, _, _, &p| b == sender_eoa && p == proxy)
+                .withf(move |_, &b, _, _, &p| b == sender_eoa && p == proxy_address)
                 .return_once(|_, _, _, _, _| Ok(call_res));
         }
         for deposit in mock_paymaster_deposits {
@@ -3161,11 +3168,14 @@ mod tests {
             da_pre_verification_gas: da_gas_tracking_enabled,
             ..Default::default()
         };
-        let mut agg_registry = SignatureAggregatorRegistry::default();
+        let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
         for agg in aggregators {
-            agg_registry.register(Arc::new(agg));
+            registry.register(agg.address(), Arc::new(agg));
         }
-        chain_spec.set_signature_aggregators(Arc::new(agg_registry));
+        chain_spec.set_signature_aggregators(Arc::new(registry));
+
+        let submission_proxy: Option<Arc<dyn SubmissionProxy>> =
+            proxy.map(|p| Arc::new(p) as Arc<dyn SubmissionProxy>);
 
         let mut proposer = BundleProposerImpl::new(
             0,
@@ -3184,7 +3194,7 @@ mod tests {
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 da_gas_tracking_enabled,
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
-                submitter_proxy: proxy,
+                submission_proxy,
             },
             event_sender,
             None,

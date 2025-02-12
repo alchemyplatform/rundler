@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use alloy_primitives::Address;
 use anyhow::{bail, Context};
@@ -21,6 +21,7 @@ use rundler_builder::{
     BuilderTaskArgs, EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder,
     RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
 };
+use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
@@ -28,12 +29,19 @@ use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
     TaskSpawnerExt,
 };
-use rundler_types::{chain::ChainSpec, EntryPointVersion};
+use rundler_types::{
+    chain::{ChainSpec, ContractRegistry},
+    proxy::SubmissionProxy,
+    EntryPointVersion,
+};
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
 use serde::Deserialize;
 use tokio::sync::broadcast;
 
-use super::CommonArgs;
+use super::{
+    proxy::{PassThroughProxy, SubmissionProxyType},
+    CommonArgs,
+};
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
 
@@ -455,19 +463,39 @@ pub(crate) struct BuilderConfig {
     index_offset: Option<u64>,
     // Submitter proxy to use for builders
     proxy: Option<Address>,
+    // Type of proxy to use for builders
+    proxy_type: Option<String>,
     // Optional filter to apply to the builders
     filter_id: Option<String>,
 }
 
 impl EntryPointBuilderConfigs {
-    pub(crate) fn set_known_proxies(&self, chain_spec: &mut ChainSpec) {
+    pub(crate) fn set_proxies(&self, chain_spec: &mut ChainSpec) {
+        let mut registry = ContractRegistry::<Arc<dyn SubmissionProxy>>::default();
+
         for entry_point in &self.entry_points {
             for builder in &entry_point.builders {
                 if let Some(proxy) = builder.proxy {
-                    chain_spec.known_entry_point_proxies.push(proxy);
+                    let proxy_type = if let Some(proxy_type) = &builder.proxy_type {
+                        SubmissionProxyType::from_str(proxy_type)
+                            .unwrap_or_else(|_| panic!("proxyType not supported: {}", proxy_type))
+                    } else {
+                        SubmissionProxyType::PassThrough
+                    };
+
+                    match proxy_type {
+                        SubmissionProxyType::PassThrough => {
+                            registry.register(proxy, Arc::new(PassThroughProxy::new(proxy)));
+                        }
+                        SubmissionProxyType::Pbh => {
+                            registry.register(proxy, Arc::new(PbhSubmissionProxy::new(proxy)));
+                        }
+                    }
                 }
             }
         }
+
+        chain_spec.set_submission_proxies(Arc::new(registry));
     }
 }
 
@@ -477,7 +505,7 @@ impl EntryPointBuilderConfig {
         for builder in &self.builders {
             builders.extend((0..builder.count).map(|i| BuilderSettings {
                 index: builder.index_offset.unwrap_or(0) + i,
-                submitter_proxy: builder.proxy,
+                submission_proxy: builder.proxy,
                 filter_id: builder.filter_id.clone(),
             }));
         }
@@ -489,7 +517,7 @@ fn builder_settings_from_cli(index_offset: u64, count: u64) -> Vec<BuilderSettin
     (0..count)
         .map(|i| BuilderSettings {
             index: index_offset + i,
-            submitter_proxy: None,
+            submission_proxy: None,
             filter_id: None,
         })
         .collect()

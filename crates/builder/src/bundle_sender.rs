@@ -29,6 +29,7 @@ use rundler_types::{
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{NewHead, Pool},
+    proxy::SubmissionProxy,
     EntityUpdate, UserOperation,
 };
 use rundler_utils::emit::WithEntryPoint;
@@ -66,8 +67,8 @@ pub(crate) struct BundleSenderImpl<UO, P, E, T, C> {
     bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
     sender_eoa: Address,
-    // Optional submitter proxy - bundles are sent to this address instead of the entry point
-    submitter_proxy: Option<Address>,
+    // Optional submission proxy - bundles are sent through this contract
+    submission_proxy: Option<Arc<dyn SubmissionProxy>>,
     proposer: P,
     entry_point: E,
     transaction_tracker: Option<T>,
@@ -183,7 +184,7 @@ where
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
         sender_eoa: Address,
-        submitter_proxy: Option<Address>,
+        submission_proxy: Option<Arc<dyn SubmissionProxy>>,
         proposer: P,
         entry_point: E,
         transaction_tracker: T,
@@ -196,7 +197,7 @@ where
             bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
             sender_eoa,
-            submitter_proxy,
+            submission_proxy,
             proposer,
             transaction_tracker: Some(transaction_tracker),
             pool,
@@ -701,7 +702,7 @@ where
             self.sender_eoa,
             bundle.gas_estimate,
             bundle.gas_fees,
-            self.submitter_proxy,
+            self.submission_proxy.as_ref().map(|p| p.address()),
         );
 
         tx = tx.nonce(nonce);

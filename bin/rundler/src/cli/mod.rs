@@ -28,6 +28,7 @@ mod json;
 mod metrics;
 mod node;
 mod pool;
+mod proxy;
 mod rpc;
 mod tracing;
 
@@ -77,7 +78,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let (mempool_configs, entry_point_builders) = load_configs(&opt.common).await?;
     if let Some(entry_point_builders) = &entry_point_builders {
-        entry_point_builders.set_known_proxies(&mut cs);
+        entry_point_builders.set_proxies(&mut cs);
     }
 
     let providers = construct_providers(&opt.common, &cs)?;

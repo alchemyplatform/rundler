@@ -25,6 +25,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 futures-util.workspace = true
 http.workspace = true
+itertools.workspace = true
 jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 metrics.workspace = true
 metrics-derive.workspace = true
