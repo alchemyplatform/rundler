@@ -13,7 +13,8 @@
 
 use std::fmt::Debug;
 
-use alloy_primitives::{address, bytes, Address, Bytes, U256};
+use alloy_primitives::{address, bytes, Address, Bytes};
+use alloy_sol_types::{sol, SolValue};
 use rundler_provider::{AggregatorOut, SignatureAggregator as EpSignatureAggregator};
 use rundler_types::{
     aggregator::{
@@ -22,6 +23,15 @@ use rundler_types::{
     v0_7::UserOperation,
     UserOperationVariant,
 };
+
+sol! {
+    struct PBHPayload {
+        uint256 root;
+        uint256 pbhExternalNullifier;
+        uint256 nullifierHash;
+        uint256[8] proof;
+    }
+}
 
 const PBH_AGGREGATOR_ADDRESS: Address = address!("8c7b929F59267DfF86392F08D03DF40F04cf50b3");
 // TODO(pbh): verify these values with onchain data
@@ -97,11 +107,7 @@ where
         &self,
         uos: Vec<UserOperationVariant>,
     ) -> SignatureAggregatorResult<Bytes> {
-        let mut agg_proofs = Vec::with_capacity(uos.len() * PBH_PROOF_LENGTH + 32);
-
-        // ABI encoded array starts with the length of the array
-        let count = U256::from(uos.len());
-        agg_proofs.extend_from_slice(&count.to_be_bytes::<32>());
+        let mut agg_proofs = Vec::new();
 
         for user_op in uos {
             if !user_op.is_v0_7() {
@@ -120,10 +126,17 @@ where
             }
 
             let proof_start = uo.signature.len() - PBH_PROOF_LENGTH;
-            agg_proofs.extend_from_slice(&uo.signature[proof_start..]);
+            agg_proofs.push(
+                PBHPayload::abi_decode(&uo.signature[proof_start..], true).map_err(|e| {
+                    SignatureAggregatorError::InvalidUserOperation(format!(
+                        "Malformed PBH proof: {}",
+                        e
+                    ))
+                })?,
+            );
         }
 
-        Ok(agg_proofs.into())
+        Ok(agg_proofs.abi_encode().into())
     }
 }
 
