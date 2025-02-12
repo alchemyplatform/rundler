@@ -158,6 +158,7 @@ pub(crate) struct Settings {
     pub(crate) priority_fee_mode: PriorityFeeMode,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
+    pub(crate) submitter_proxy: Option<Address>,
 }
 
 #[async_trait]
@@ -835,6 +836,7 @@ where
                 self.settings.sender_eoa,
                 gas_limit,
                 bundle_fees,
+                self.settings.submitter_proxy,
             )
             .await
             .context("should call handle ops with candidate bundle")?;
@@ -1074,7 +1076,13 @@ where
         let ret = self
             .ep_providers
             .entry_point()
-            .call_handle_ops(bundle, self.settings.sender_eoa, gas_limit, bundle_fees)
+            .call_handle_ops(
+                bundle,
+                self.settings.sender_eoa,
+                gas_limit,
+                bundle_fees,
+                self.settings.submitter_proxy,
+            )
             .await;
         match ret {
             Ok(out) => {
@@ -1109,7 +1117,13 @@ where
         let ret = self
             .ep_providers
             .entry_point()
-            .call_handle_ops(bundle, self.settings.sender_eoa, gas_limit, bundle_fees)
+            .call_handle_ops(
+                bundle,
+                self.settings.sender_eoa,
+                gas_limit,
+                bundle_fees,
+                self.settings.submitter_proxy,
+            )
             .await;
         match ret {
             Ok(out) => {
@@ -1902,6 +1916,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
         assert_eq!(
@@ -1940,6 +1955,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
         assert_eq!(
@@ -1989,6 +2005,7 @@ mod tests {
             ExpectedStorage::default(),
             true,
             vec![],
+            None,
         )
         .await;
         assert_eq!(
@@ -2064,6 +2081,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![agg_a, agg_b],
+            None,
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -2156,6 +2174,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2221,6 +2240,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2281,6 +2301,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2380,6 +2401,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2432,6 +2454,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2559,6 +2582,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2595,6 +2619,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2652,6 +2677,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![agg_a],
+            None,
         )
         .await;
 
@@ -2695,6 +2721,7 @@ mod tests {
             actual_storage,
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2735,6 +2762,7 @@ mod tests {
             actual_storage,
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2769,6 +2797,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2816,6 +2845,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await;
 
@@ -2823,6 +2853,38 @@ mod tests {
             bundle.ops_per_aggregator,
             vec![UserOpsPerAggregator {
                 user_ops: vec![op0],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submitter_proxy() {
+        let op = default_op();
+        let proxy = address(1);
+        // will throw if proxy doesn't match
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            Some(proxy),
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
                 ..Default::default()
             }]
         );
@@ -2850,6 +2912,7 @@ mod tests {
             ExpectedStorage::default(),
             false,
             vec![],
+            None,
         )
         .await
     }
@@ -2868,6 +2931,7 @@ mod tests {
         actual_storage: ExpectedStorage,
         da_gas_tracking_enabled: bool,
         aggregators: Vec<MockSignatureAggregator>,
+        proxy: Option<Address>,
     ) -> Bundle<UserOperation> {
         let entry_point_address = address(123);
         let sender_eoa = address(124);
@@ -2915,8 +2979,8 @@ mod tests {
             entry_point
                 .expect_call_handle_ops()
                 .times(..=1)
-                .withf(move |_, &b, _, _| b == sender_eoa)
-                .return_once(|_, _, _, _| Ok(call_res));
+                .withf(move |_, &b, _, _, &p| b == sender_eoa && p == proxy)
+                .return_once(|_, _, _, _, _| Ok(call_res));
         }
         for deposit in mock_paymaster_deposits {
             entry_point
@@ -3015,6 +3079,7 @@ mod tests {
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 da_gas_tracking_enabled,
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                submitter_proxy: proxy,
             },
             event_sender,
             None,

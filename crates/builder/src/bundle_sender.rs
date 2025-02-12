@@ -701,11 +701,8 @@ where
             self.sender_eoa,
             bundle.gas_estimate,
             bundle.gas_fees,
+            self.submitter_proxy,
         );
-
-        if let Some(submitter_proxy) = self.submitter_proxy {
-            tx = tx.to(submitter_proxy);
-        }
 
         tx = tx.nonce(nonce);
         Ok(Some(BundleTx {
@@ -1381,7 +1378,7 @@ mod tests {
         // should create the bundle txn
         mock_entry_point
             .expect_get_send_bundle_transaction()
-            .returning(|_, _, _, _| TransactionRequest::default());
+            .returning(|_, _, _, _, _| TransactionRequest::default());
 
         // should send the bundle txn
         mock_tracker
@@ -1719,7 +1716,7 @@ mod tests {
         // should create the bundle txn
         mock_entry_point
             .expect_get_send_bundle_transaction()
-            .returning(|_, _, _, _| TransactionRequest::default());
+            .returning(|_, _, _, _, _| TransactionRequest::default());
 
         // should send the bundle txn, returns condition not met
         mock_tracker

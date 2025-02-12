@@ -190,6 +190,7 @@ mockall::mock! {
             sender_eoa: Address,
             gas_limit: u64,
             gas_fees: GasFees,
+            proxy: Option<Address>,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
@@ -197,6 +198,7 @@ mockall::mock! {
             beneficiary: Address,
             gas_limit: u64,
             gas_fees: GasFees,
+            proxy: Option<Address>,
         ) -> TransactionRequest;
     }
 
@@ -282,6 +284,7 @@ mockall::mock! {
             sender_eoa: Address,
             gas_limit: u64,
             gas_fees: GasFees,
+            proxy: Option<Address>,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
@@ -289,6 +292,7 @@ mockall::mock! {
             beneficiary: Address,
             gas_limit: u64,
             gas_fees: GasFees,
+            proxy: Option<Address>,
         ) -> TransactionRequest;
     }
 
