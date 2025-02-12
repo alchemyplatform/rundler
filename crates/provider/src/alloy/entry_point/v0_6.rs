@@ -238,6 +238,7 @@ where
         sender_eoa: Address,
         gas_limit: u64,
         gas_fees: GasFees,
+        proxy: Option<Address>,
     ) -> ProviderResult<HandleOpsOut> {
         let tx = get_handle_ops_call(
             &self.i_entry_point,
@@ -245,6 +246,7 @@ where
             sender_eoa,
             gas_limit,
             gas_fees,
+            proxy,
         );
         let res = self.i_entry_point.provider().call(&tx).await;
 
@@ -303,6 +305,7 @@ where
         sender_eoa: Address,
         gas_limit: u64,
         gas_fees: GasFees,
+        proxy: Option<Address>,
     ) -> TransactionRequest {
         get_handle_ops_call(
             &self.i_entry_point,
@@ -310,6 +313,7 @@ where
             sender_eoa,
             gas_limit,
             gas_fees,
+            proxy,
         )
     }
 }
@@ -542,6 +546,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     sender_eoa: Address,
     gas_limit: u64,
     gas_fees: GasFees,
+    proxy: Option<Address>,
 ) -> TransactionRequest {
     let mut eip7702_auth_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_6> = ops_per_aggregator
@@ -578,8 +583,12 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
         .gas_limit(gas_limit)
         .max_fee_per_gas(gas_fees.max_fee_per_gas)
         .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
+
     if !eip7702_auth_list.is_empty() {
         txn_request = txn_request.with_authorization_list(eip7702_auth_list);
+    }
+    if let Some(proxy) = proxy {
+        txn_request = txn_request.to(proxy);
     }
 
     txn_request

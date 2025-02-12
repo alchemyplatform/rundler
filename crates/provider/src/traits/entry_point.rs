@@ -141,6 +141,7 @@ pub trait BundleHandler: Send + Sync {
         sender_eoa: Address,
         gas_limit: u64,
         gas_fees: GasFees,
+        proxy: Option<Address>,
     ) -> ProviderResult<HandleOpsOut>;
 
     /// Construct the transaction to send a bundle of operations to the entry point contract
@@ -150,6 +151,7 @@ pub trait BundleHandler: Send + Sync {
         sender_eoa: Address,
         gas_limit: u64,
         gas_fees: GasFees,
+        proxy: Option<Address>,
     ) -> TransactionRequest;
 }
 

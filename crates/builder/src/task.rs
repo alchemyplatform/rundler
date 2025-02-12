@@ -382,6 +382,7 @@ where
             priority_fee_mode: self.args.priority_fee_mode,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
             max_expected_storage_slots: self.args.max_expected_storage_slots,
+            submitter_proxy: builder_settings.submitter_proxy,
         };
 
         let transaction_sender = self.args.sender_args.clone().into_sender(
