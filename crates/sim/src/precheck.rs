@@ -276,9 +276,9 @@ where
         } = *async_data;
 
         let mut violations = ArrayVec::new();
-        if op.verification_gas_limit() > max_verification_gas {
+        if op.total_verification_gas_limit() > max_verification_gas {
             violations.push(PrecheckViolation::VerificationGasLimitTooHigh(
-                op.verification_gas_limit(),
+                op.total_verification_gas_limit(),
                 max_verification_gas,
             ));
         }
