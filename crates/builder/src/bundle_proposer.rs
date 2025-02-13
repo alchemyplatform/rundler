@@ -25,7 +25,7 @@ use async_trait::async_trait;
 use futures::future;
 use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
-use metrics::Histogram;
+use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
@@ -316,6 +316,8 @@ where
                     entity_updates: context.entity_updates.into_values().collect(),
                 });
             }
+
+            self.metric.bundle_simulation_failures.increment(1);
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
 
@@ -335,6 +337,8 @@ struct BuilderProposerMetric {
     bundle_build_ms: Histogram,
     #[metric(describe = "the distribution of op simulation time of a bundle.")]
     op_simulation_ms: Histogram,
+    #[metric(describe = "the number of bundle simulation failures.")]
+    bundle_simulation_failures: Counter,
 }
 
 impl<EP, BP> BundleProposerImpl<EP, BP>
