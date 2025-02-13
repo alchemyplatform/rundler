@@ -51,6 +51,8 @@ pub enum HandleOpsOut {
     /// Call failed due to a bug in the 0.6 entry point contract https://github.com/eth-infinitism/account-abstraction/pull/325.
     /// Special handling is required to remove the offending operation from the bundle.
     PostOpRevert,
+    /// Call reverted
+    Revert(Bytes),
 }
 
 /// Deposit info for an address from the entry point contract

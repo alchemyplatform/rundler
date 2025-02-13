@@ -728,6 +728,17 @@ pub struct UserOpsPerAggregator<UO: UserOperation> {
     pub signature: Bytes,
 }
 
+impl<UO: UserOperation + Into<UserOperationVariant>> UserOpsPerAggregator<UO> {
+    /// Convert the user operations to a vector of user operation variants
+    pub fn into_uo_variants(self) -> UserOpsPerAggregator<UserOperationVariant> {
+        UserOpsPerAggregator {
+            user_ops: self.user_ops.into_iter().map(|uo| uo.into()).collect(),
+            aggregator: self.aggregator,
+            signature: self.signature,
+        }
+    }
+}
+
 pub(crate) fn op_calldata_gas_cost<UO: SolValue>(
     uo: &UO,
     zero_byte_cost: u128,

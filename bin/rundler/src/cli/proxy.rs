@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, B256};
 use rundler_types::{proxy::SubmissionProxy, UserOperationVariant, UserOpsPerAggregator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString)]
@@ -26,16 +26,17 @@ pub(crate) struct PassThroughProxy {
     address: Address,
 }
 
+#[async_trait::async_trait]
 impl SubmissionProxy for PassThroughProxy {
     fn address(&self) -> Address {
         self.address
     }
 
-    fn process_revert(
+    async fn process_revert(
         &self,
         _revert_data: Bytes,
-        _ops: UserOpsPerAggregator<UserOperationVariant>,
-    ) -> Vec<U256> {
+        _ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+    ) -> Vec<B256> {
         vec![]
     }
 }

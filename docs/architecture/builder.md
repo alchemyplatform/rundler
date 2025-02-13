@@ -146,10 +146,6 @@ If deploying multiple builder nodes all targeting the same mempool, users must e
 
 Most deployments of Rundler should be able to use the configuration above. Rundler does support more detailed configuration for certain use cases. See [`EntryPointBuilderConfigs`](../../bin/rundler/src/cli/builder.rs) for the exact schema of the custom configuration file. Set the path for this file via `--entry_point_builders_path`. When this feature is used the normal CLI-based configuration options are ignored and Rundler will configure builders according to the file.
 
-Currently, this covers the following use cases:
-
-* Entry point submission proxies: Set a separate contract address that the builder should submit bundles through. The contract at this address MUST have the same ABI as `IEntryPoint` for all methods used: `handleOps` and `handleAggregatedOps` if using non-aggregated/aggregated ops respectively.
-
 Example:
 
 ```
@@ -172,3 +168,13 @@ Example:
 #### Affinity
 
 Builders may specify a `filterId` in their custom configuration in order to only receive user operations that match a [mempool filter](./pool.md#filtering). Each mempool filter that is defined must have a matching builder - else the user operations matching that filter will not be mined.
+
+#### Proxies
+
+Set a separate contract address, via the `proxy` config, that the builder should submit bundles through. The contract at this address MUST have the same ABI as `IEntryPoint` for all methods used: `handleOps` and `handleAggregatedOps` if using non-aggregated/aggregated ops respectively.
+
+If the proxy contract has custom errors that need to be handled during bundle simulation, a `SubmissionProxy` implementation must be supported. To associate the `proxy` with its implementation, use the configuration `proxyType`.
+
+Supported types:
+* `passthrough` (default): no logic
+* `pbh`: support for the PBH entrypoint proxy. Implements special handling for its revert reasons.

@@ -756,6 +756,27 @@ where
         None
     }
 
+    async fn reject_bundle(&self, context: &mut ProposalContext<<Self as BundleProposer>::UO>) {
+        context.reject_all();
+    }
+
+    async fn reject_hash(
+        &self,
+        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        hash: B256,
+    ) -> bool {
+        let Some(index) = context.get_op_index(
+            hash,
+            *self.ep_providers.entry_point().address(),
+            self.settings.chain_spec.id,
+        ) else {
+            return false;
+        };
+
+        self.reject_index(context, index, false).await;
+        true
+    }
+
     async fn reject_index(
         &self,
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
@@ -865,6 +886,35 @@ where
                 warn!("PostOpShortRevert error during gas estimation due to bug in the 0.6 entry point contract. Removing the offending op from the bundle.");
                 self.process_post_op_revert(context, gas_limit, bundle_fees)
                     .await?;
+                Ok(None)
+            }
+            HandleOpsOut::Revert(revert_data) => {
+                // Process the revert.
+                // If we can't identify the offending op, reject the full bundle to avoid infinite failure loops.
+
+                if let Some(proxy) = self.settings.submission_proxy.as_ref() {
+                    let ops = context
+                        .to_ops_per_aggregator()
+                        .into_iter()
+                        .map(|uo| uo.into_uo_variants())
+                        .collect();
+                    let to_remove = proxy.process_revert(revert_data.clone(), ops).await;
+                    let mut removed = false;
+                    for hash in to_remove {
+                        removed |= self.reject_hash(context, hash).await;
+                    }
+
+                    if !removed {
+                        warn!("HandleOps reverted during gas estimation, proxy {proxy:?} returned no hashes to remove. Rejecting full bundle. revert data: {revert_data:?}");
+                        self.reject_bundle(context).await;
+                    }
+                } else {
+                    warn!(
+                        "HandleOps reverted during gas estimation. Rejecting full bundle. revert data: {revert_data:?}"
+                    );
+                    self.reject_bundle(context).await;
+                }
+
                 Ok(None)
             }
         }
@@ -1336,6 +1386,17 @@ impl<UO: UserOperation> ProposalContext<UO> {
             remaining_i -= group.ops_with_simulations.len();
         }
         anyhow::bail!("op at {index} out of bounds")
+    }
+
+    fn get_op_index(&self, hash: B256, entry_point: Address, chain_id: u64) -> Option<usize> {
+        self.iter_ops_with_simulations()
+            .position(|op| op.op.hash(entry_point, chain_id) == *hash)
+    }
+
+    fn reject_all(&mut self) {
+        for _ in 0..self.iter_ops_with_simulations().count() {
+            let _ = self.reject_index(0, true);
+        }
     }
 
     /// Returns the address of the op's aggregator if the aggregator's signature
@@ -2999,6 +3060,42 @@ mod tests {
                 ..Default::default()
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn test_submitter_proxy_revert() {
+        let op = default_op();
+        let op_hash = op.hash(address(123), 0);
+        let proxy_address = address(1);
+        let bytes = bytes(1);
+        let cloned_bytes = bytes.clone();
+
+        let mut proxy = MockSubmissionProxy::new();
+        proxy.expect_address().returning(move || proxy_address);
+        proxy
+            .expect_process_revert()
+            .withf(move |b, _| *b == cloned_bytes)
+            .returning(move |_, _| vec![op_hash]);
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+            }],
+            vec![],
+            vec![HandleOpsOut::Revert(bytes)],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            Some(proxy),
+        )
+        .await;
+
+        assert_eq!(bundle.ops_per_aggregator, vec![]);
     }
 
     struct MockOp {

@@ -14,4 +14,4 @@ rundler-types.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 async-trait.workspace = true
-
+tracing.workspace = true
