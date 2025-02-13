@@ -15,13 +15,14 @@ use alloy_consensus::Transaction;
 use alloy_primitives::B256;
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use metrics::Gauge;
+use metrics::{Gauge, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
+use tokio::time::Instant;
 use tracing::{info, warn};
 
 use crate::sender::{TransactionSender, TxSenderError, TxStatus};
@@ -49,6 +50,7 @@ pub(crate) trait TransactionTracker: Send + Sync {
         &mut self,
         tx: TransactionRequest,
         expected_stroage: &ExpectedStorage,
+        block_number: u64,
     ) -> TransactionTrackerResult<B256>;
 
     /// Cancel the abandoned transaction in the tracker.
@@ -143,6 +145,8 @@ struct PendingTransaction {
     tx_hash: B256,
     gas_fees: GasFees,
     attempt_number: u64,
+    sent_at_block: Option<u64>,
+    sent_at_time: Option<Instant>,
 }
 
 impl<P, T> TransactionTrackerImpl<P, T>
@@ -282,6 +286,7 @@ where
         &mut self,
         tx: TransactionRequest,
         expected_storage: &ExpectedStorage,
+        block_number: u64,
     ) -> TransactionTrackerResult<B256> {
         self.validate_transaction(&tx)?;
         let gas_fees = GasFees {
@@ -308,6 +313,8 @@ where
                     tx_hash: sent_tx.tx_hash,
                     gas_fees,
                     attempt_number: self.attempt_count,
+                    sent_at_block: Some(block_number),
+                    sent_at_time: Some(Instant::now()),
                 });
                 self.has_abandoned = false;
                 self.attempt_count += 1;
@@ -332,6 +339,8 @@ where
                         tx_hash: B256::ZERO,
                         gas_fees,
                         attempt_number: self.attempt_count,
+                        sent_at_block: None,
+                        sent_at_time: None,
                     });
                 };
 
@@ -388,6 +397,8 @@ where
                     tx_hash: cancel_info.tx_hash,
                     gas_fees,
                     attempt_number: self.attempt_count,
+                    sent_at_block: None,
+                    sent_at_time: None,
                 });
 
                 self.attempt_count += 1;
@@ -410,6 +421,8 @@ where
                         tx_hash: B256::ZERO,
                         gas_fees,
                         attempt_number: self.attempt_count,
+                        sent_at_block: None,
+                        sent_at_time: None,
                     });
                 };
 
@@ -450,6 +463,19 @@ where
                         gas_price,
                         is_success,
                     };
+
+                    if let Some(sent_at_time) = tx.sent_at_time {
+                        let elapsed = Instant::now().duration_since(sent_at_time);
+                        self.metrics
+                            .txn_time_to_mine_ms
+                            .record(elapsed.as_millis() as f64);
+                    }
+                    if let Some(sent_at_block) = tx.sent_at_block {
+                        self.metrics
+                            .txn_blocks_to_mine
+                            .record((block_number - sent_at_block) as f64);
+                    }
+
                     break;
                 }
             }
@@ -546,6 +572,10 @@ struct TransactionTrackerMetrics {
     current_max_fee_per_gas: Gauge,
     #[metric(describe = "the maximum priority fee per gas of current transaction.")]
     max_priority_fee_per_gas: Gauge,
+    #[metric(describe = "the blocks it takes for a transaction to mine.")]
+    txn_blocks_to_mine: Histogram,
+    #[metric(describe = "the time it takes for a transaction to mine in ms.")]
+    txn_time_to_mine_ms: Histogram,
 }
 
 #[cfg(test)]
@@ -613,7 +643,7 @@ mod tests {
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = tracker.send_transaction(tx, &exp).await;
+        let _sent = tracker.send_transaction(tx, &exp, 0).await;
         let nonce_and_fees = tracker.get_nonce_and_required_fees().unwrap();
 
         assert_eq!(
@@ -659,7 +689,7 @@ mod tests {
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = tracker.send_transaction(tx, &exp).await;
+        let _sent = tracker.send_transaction(tx, &exp, 0).await;
         let _tracker_update = tracker.check_for_update().await.unwrap();
 
         tracker.abandon();
@@ -690,7 +720,7 @@ mod tests {
 
         let tx = TransactionRequest::default();
         let exp = ExpectedStorage::default();
-        let sent_transaction = tracker.send_transaction(tx, &exp).await;
+        let sent_transaction = tracker.send_transaction(tx, &exp, 0).await;
 
         assert!(sent_transaction.is_err());
     }
@@ -717,7 +747,7 @@ mod tests {
 
         let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
-        let sent_transaction = tracker.send_transaction(tx, &exp).await;
+        let sent_transaction = tracker.send_transaction(tx, &exp, 0).await;
 
         assert!(sent_transaction.is_err());
     }
@@ -743,7 +773,7 @@ mod tests {
 
         let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
-        tracker.send_transaction(tx, &exp).await.unwrap();
+        tracker.send_transaction(tx, &exp, 0).await.unwrap();
     }
 
     #[tokio::test]
@@ -842,7 +872,7 @@ mod tests {
         let exp = ExpectedStorage::default();
 
         // send dummy transaction
-        let _sent = tracker.send_transaction(tx, &exp).await;
+        let _sent = tracker.send_transaction(tx, &exp, 0).await;
         let tracker_update = tracker.check_for_update().await.unwrap().unwrap();
 
         assert!(matches!(tracker_update, TrackerUpdate::Mined { .. }));

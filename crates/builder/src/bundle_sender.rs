@@ -18,7 +18,7 @@ use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::StreamExt;
-use metrics::{Counter, Histogram};
+use metrics::Counter;
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
@@ -558,9 +558,16 @@ where
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
         let (nonce, required_fees) = state.transaction_tracker.get_nonce_and_required_fees()?;
-        let _timer_guard = rundler_utils::guard_timer::CustomTimerGuard::new(
-            self.metrics.bundle_build_time_ms.clone(),
-        );
+
+        let mut update_idle = |metrics: &BuilderMetric| {
+            let block_number = state.block_number();
+            if let Some(last_idle_block) = state.last_idle_block {
+                metrics
+                    .builder_idle_blocks
+                    .increment(block_number - last_idle_block);
+            }
+            state.last_idle_block = Some(block_number);
+        };
 
         let bundle = match self
             .proposer
@@ -569,9 +576,11 @@ where
         {
             Ok(bundle) => bundle,
             Err(BundleProposerError::NoOperationsInitially) => {
+                update_idle(&self.metrics);
                 return Ok(SendBundleAttemptResult::NoOperationsInitially);
             }
             Err(BundleProposerError::NoOperationsAfterFeeFilter) => {
+                update_idle(&self.metrics);
                 return Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter);
             }
             Err(e) => bail!("Failed to make bundle: {e:?}"),
@@ -585,20 +594,23 @@ where
                 fee_increase_count,
                 required_fees,
             ));
+            update_idle(&self.metrics);
             return Ok(SendBundleAttemptResult::NoOperationsAfterSimulation);
         };
+
+        state.last_idle_block = None;
+
         let BundleTx {
             tx,
             expected_storage,
             op_hashes,
         } = bundle_tx;
 
-        self.metrics.bundle_txns_sent.increment(1);
-
         let send_result = state
             .transaction_tracker
-            .send_transaction(tx.clone(), &expected_storage)
+            .send_transaction(tx.clone(), &expected_storage, state.block_number())
             .await;
+        self.metrics.bundle_txns_sent.increment(1);
 
         match send_result {
             Ok(tx_hash) => {
@@ -750,6 +762,7 @@ struct SenderMachineState<T, TRIG> {
     send_bundle_response: Option<oneshot::Sender<SendBundleResult>>,
     inner: InnerState,
     requires_reset: bool,
+    pub last_idle_block: Option<u64>,
 }
 
 impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
@@ -760,6 +773,7 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             send_bundle_response: None,
             inner: InnerState::new(),
             requires_reset: false,
+            last_idle_block: None,
         }
     }
 
@@ -1259,8 +1273,8 @@ struct BuilderMetric {
     cancellation_txns_failed: Counter,
     #[metric(describe = "the count of state machine errors.")]
     state_machine_errors: Counter,
-    #[metric(describe = "the timespan a bundle is build.")]
-    bundle_build_time_ms: Histogram,
+    #[metric(describe = "the count of blocks this builder has been idle.")]
+    builder_idle_blocks: Counter,
 }
 
 impl BuilderMetric {
@@ -1384,7 +1398,7 @@ mod tests {
         // should send the bundle txn
         mock_tracker
             .expect_send_transaction()
-            .returning(|_, _| Box::pin(async { Ok(B256::ZERO) }));
+            .returning(|_, _, _| Box::pin(async { Ok(B256::ZERO) }));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point);
 
@@ -1465,6 +1479,7 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
+            last_idle_block: None,
         };
 
         // first step has no update
@@ -1517,6 +1532,7 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
+            last_idle_block: None,
         };
 
         // first and second step has no update
@@ -1581,6 +1597,7 @@ mod tests {
                 }),
             }),
             requires_reset: false,
+            last_idle_block: None,
         };
 
         // step state, block number should trigger move to cancellation
@@ -1625,6 +1642,7 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
+            last_idle_block: None,
         };
 
         let mut sender = new_sender(mock_proposer, mock_entry_point);
@@ -1667,6 +1685,7 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
+            last_idle_block: None,
         };
 
         let mut sender = new_sender(mock_proposer, mock_entry_point);
@@ -1722,7 +1741,7 @@ mod tests {
         // should send the bundle txn, returns condition not met
         mock_tracker
             .expect_send_transaction()
-            .returning(|_, _| Box::pin(async { Err(TransactionTrackerError::ConditionNotMet) }));
+            .returning(|_, _, _| Box::pin(async { Err(TransactionTrackerError::ConditionNotMet) }));
 
         // should notify proposer that condition was not met
         mock_proposer
@@ -1740,6 +1759,7 @@ mod tests {
                 underpriced_info: None,
             }),
             requires_reset: false,
+            last_idle_block: None,
         };
 
         let mut sender = new_sender(mock_proposer, mock_entry_point);
@@ -1821,14 +1841,10 @@ mod tests {
         mock_tracker
             .expect_check_for_update()
             .returning(|| Box::pin(async { Ok(None) }));
-        mock_trigger
-            .expect_last_block()
-            .once()
-            .in_sequence(seq)
-            .return_const(NewHead {
-                block_number,
-                block_hash: B256::ZERO,
-            });
+        mock_trigger.expect_last_block().return_const(NewHead {
+            block_number,
+            block_hash: B256::ZERO,
+        });
     }
 
     fn add_trigger_wait_for_block_last_block(
