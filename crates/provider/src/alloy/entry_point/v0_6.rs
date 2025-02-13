@@ -291,6 +291,8 @@ where
                         }
                         _ => Err(TransportError::ErrorResp(resp).into()),
                     }
+                } else if let Some(revert_data) = resp.as_revert_data() {
+                    Ok(HandleOpsOut::Revert(revert_data))
                 } else {
                     Err(TransportError::ErrorResp(resp).into())
                 }

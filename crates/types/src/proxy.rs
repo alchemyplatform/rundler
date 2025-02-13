@@ -15,7 +15,7 @@
 
 use std::fmt::Debug;
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, B256};
 
 use crate::{UserOperationVariant, UserOpsPerAggregator};
 
@@ -27,11 +27,11 @@ pub trait SubmissionProxy: Sync + Send + Debug {
     fn address(&self) -> Address;
 
     /// Process a revert from a submission proxy and return the hashes of ops that should be rejected
-    fn process_revert(
+    async fn process_revert(
         &self,
         revert_data: Bytes,
-        ops: UserOpsPerAggregator<UserOperationVariant>,
-    ) -> Vec<U256>;
+        ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+    ) -> Vec<B256>;
 }
 
 #[cfg(feature = "test-utils")]
@@ -43,10 +43,10 @@ mockall::mock! {
     impl SubmissionProxy for SubmissionProxy {
         fn address(&self) -> Address;
 
-        fn process_revert(
+        async fn process_revert(
             &self,
             revert_data: Bytes,
-            ops: UserOpsPerAggregator<UserOperationVariant>,
-        ) -> Vec<U256>;
+            ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+        ) -> Vec<B256>;
     }
 }

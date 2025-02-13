@@ -25,6 +25,7 @@ rundler-utils.workspace = true
 alloy-primitives.workspace = true
 
 anyhow.workspace = true
+async-trait.workspace = true
 aws-config.workspace = true
 aws-sdk-s3 = { version = "1.52", default-features = false }
 clap = { version = "4.5.16", features = ["derive", "env"] }
