@@ -34,8 +34,8 @@ use rundler_provider::{
     ProvidersWithEntryPointT,
 };
 use rundler_sim::{
-    ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator,
-    ViolationError,
+    BundleExpectedStorage, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
+    SimulationResult, Simulator, ViolationError,
 };
 use rundler_types::{
     aggregator::SignatureAggregatorResult,
@@ -311,7 +311,7 @@ where
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
                     gas_fees: bundle_fees,
-                    expected_storage: context.expected_storage,
+                    expected_storage: context.bundle_expected_storage.inner,
                     rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
                     entity_updates: context.entity_updates.into_values().collect(),
                 });
@@ -613,15 +613,19 @@ where
             }
 
             // Merge the expected storage and skip if there is a conflict or if the storage is over max
-            let mut new_expected_storage = context.expected_storage.clone();
-            if let Err(e) = new_expected_storage.merge(&simulation.expected_storage) {
+            if let Err(e) = context
+                .bundle_expected_storage
+                .add(&simulation.expected_storage)
+            {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     self.op_hash(&op),
                     SkipReason::ExpectedStorageConflict(e.to_string()),
                 ));
                 continue;
-            } else if new_expected_storage.num_slots() > self.settings.max_expected_storage_slots {
+            } else if context.bundle_expected_storage.inner.num_slots()
+                > self.settings.max_expected_storage_slots
+            {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     self.op_hash(&op),
@@ -629,7 +633,6 @@ where
                 ));
                 continue;
             }
-            context.expected_storage = new_expected_storage;
 
             if let Some(&other_sender) = simulation
                 .accessed_addresses
@@ -1335,7 +1338,7 @@ struct ProposalContext<UO> {
     rejected_ops: Vec<(UO, EntityInfos)>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
     entity_updates: BTreeMap<Address, EntityUpdate>,
-    expected_storage: ExpectedStorage,
+    bundle_expected_storage: BundleExpectedStorage,
 }
 
 #[derive(Debug)]
@@ -1359,7 +1362,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup<UO>>::new(),
             rejected_ops: Vec::<(UO, EntityInfos)>::new(),
             entity_updates: BTreeMap::new(),
-            expected_storage: ExpectedStorage::default(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
         }
     }
 
@@ -1409,22 +1412,14 @@ impl<UO: UserOperation> ProposalContext<UO> {
     fn reject_index(&mut self, i: usize, paymaster_amendment: bool) -> Option<Address> {
         let mut remaining_i = i;
         let mut found_aggregator: Option<Option<Address>> = None;
-        let mut paymaster_to_amend = None;
         for (&aggregator, group) in &mut self.groups_by_aggregator {
             if remaining_i < group.ops_with_simulations.len() {
                 let rejected = group.ops_with_simulations.remove(remaining_i);
-                paymaster_to_amend = rejected.op.paymaster();
-                self.rejected_ops
-                    .push((rejected.op, rejected.simulation.entity_infos));
+                self.reject_op(rejected, paymaster_amendment);
                 found_aggregator = Some(aggregator);
                 break;
             }
             remaining_i -= group.ops_with_simulations.len();
-        }
-        if paymaster_amendment {
-            if let Some(paymaster) = paymaster_to_amend {
-                self.add_erep_015_paymaster_amendment(paymaster, 1);
-            }
         }
         let Some(found_aggregator) = found_aggregator else {
             error!("The entry point indicated a failed op at index {i}, but the bundle size is only {}", i - remaining_i);
@@ -1495,38 +1490,54 @@ impl<UO: UserOperation> ProposalContext<UO> {
     ) -> Vec<Address> {
         let mut changed_aggregators: Vec<Address> = vec![];
         let mut aggregators_to_remove: Vec<Option<Address>> = vec![];
-        let mut paymasters_to_amend: HashMap<Address, u64> = HashMap::new();
-        for (&aggregator, group) in &mut self.groups_by_aggregator {
-            // I sure wish `Vec::drain_filter` were stable.
+        let mut new_groups = LinkedHashMap::new();
+        let old_groups = mem::take(&mut self.groups_by_aggregator);
+
+        for (aggregator, group) in old_groups {
             let group_uses_rejected_entity =
                 group.ops_with_simulations.iter().any(|op| filter(&op.op));
+
             if group_uses_rejected_entity {
-                for op in mem::take(&mut group.ops_with_simulations) {
+                let mut new_group = AggregatorGroup::default();
+                for op in group.ops_with_simulations {
                     if !filter(&op.op) {
-                        group.ops_with_simulations.push(op);
+                        new_group.ops_with_simulations.push(op);
                     } else {
-                        if paymaster_amendment {
-                            if let Some(paymaster) = op.op.paymaster() {
-                                *paymasters_to_amend.entry(paymaster).or_default() += 1;
-                            }
-                        }
-                        self.rejected_ops.push((op.op, op.simulation.entity_infos));
+                        self.reject_op(op, paymaster_amendment);
                     }
                 }
-                if group.ops_with_simulations.is_empty() {
+                if new_group.ops_with_simulations.is_empty() {
                     aggregators_to_remove.push(aggregator);
-                } else if let Some(aggregator) = aggregator {
-                    changed_aggregators.push(aggregator);
+                } else {
+                    new_groups.insert(aggregator, new_group);
+
+                    if let Some(aggregator) = aggregator {
+                        changed_aggregators.push(aggregator);
+                    }
                 }
+            } else {
+                new_groups.insert(aggregator, group);
             }
         }
         for aggregator in aggregators_to_remove {
             self.groups_by_aggregator.remove(&aggregator);
         }
-        for (paymaster, count) in paymasters_to_amend {
-            self.add_erep_015_paymaster_amendment(paymaster, count);
-        }
+        self.groups_by_aggregator = new_groups;
         changed_aggregators
+    }
+
+    fn reject_op(&mut self, rejected: OpWithSimulation<UO>, paymaster_amendment: bool) {
+        if paymaster_amendment {
+            if let Some(paymaster) = rejected.op.paymaster() {
+                self.add_erep_015_paymaster_amendment(paymaster, 1);
+            }
+        }
+        self.rejected_ops
+            .push((rejected.op, rejected.simulation.entity_infos));
+
+        // remove associated storage slots
+        self.bundle_expected_storage
+            .remove(&rejected.simulation.expected_storage);
     }
 
     fn to_ops_per_aggregator(&self) -> Vec<UserOpsPerAggregator<UO>> {
@@ -2684,7 +2695,7 @@ mod tests {
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
-            expected_storage: ExpectedStorage::default(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
         };
 
         let expected_gas_limit = op1.gas_limit(&cs, None)
@@ -2726,7 +2737,7 @@ mod tests {
             groups_by_aggregator,
             rejected_ops: vec![],
             entity_updates: BTreeMap::new(),
-            expected_storage: ExpectedStorage::default(),
+            bundle_expected_storage: BundleExpectedStorage::default(),
         };
         let gas_limit = context.get_bundle_gas_limit(&cs);
 
@@ -3100,6 +3111,68 @@ mod tests {
         .await;
 
         assert_eq!(bundle.ops_per_aggregator, vec![]);
+    }
+
+    #[tokio::test]
+    async fn test_bundle_expected_storage_remove() {
+        let op0 = op_with_sender(address(1));
+        let op1 = op_with_sender(address(2));
+
+        let address0 = Address::random();
+        let mut expected_storage0 = ExpectedStorage::default();
+        expected_storage0.insert(address0, U256::ZERO, U256::ZERO);
+        expected_storage0.insert(address0, U256::from(1), U256::ZERO);
+        let mut expected_storage1 = ExpectedStorage::default();
+        expected_storage1.insert(address0, U256::ZERO, U256::ZERO);
+        expected_storage1.insert(address0, U256::from(2), U256::ZERO);
+        let expected_storage1_clone = expected_storage1.clone();
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(move || {
+                        Ok(SimulationResult {
+                            expected_storage: expected_storage0.clone(),
+                            ..Default::default()
+                        })
+                    }),
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(move || {
+                        Ok(SimulationResult {
+                            expected_storage: expected_storage1.clone(),
+                            ..Default::default()
+                        })
+                    }),
+                },
+            ],
+            vec![],
+            vec![
+                HandleOpsOut::FailedOp(0, "AA25: invalid nonce".to_string()),
+                HandleOpsOut::Success,
+            ],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+        )
+        .await;
+
+        assert_eq!(bundle.rejected_ops, vec![op0]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op1],
+                ..Default::default()
+            }]
+        );
+        assert_eq!(bundle.expected_storage.0, expected_storage1_clone.0);
     }
 
     struct MockOp {
