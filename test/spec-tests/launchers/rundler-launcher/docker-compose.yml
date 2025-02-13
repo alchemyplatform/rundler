@@ -15,6 +15,7 @@ services:
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
       - PRIORITY_FEE_MODE_VALUE=0
       - POOL_THROTTLED_ENTITY_LIVE_BLOCKS=20
+      - MAX_VERIFICATION_GAS=10000000
     healthcheck:
       test: curl --fail http://rundler:3000/health || exit 1
       interval: 1s

@@ -31,6 +31,7 @@ services:
       - POOL_HOST=0.0.0.0
       - DISABLE_ENTRY_POINT_V0_6=${DISABLE_ENTRY_POINT_V0_6}
       - DISABLE_ENTRY_POINT_V0_7=${DISABLE_ENTRY_POINT_V0_7}
+      - MAX_VERIFICATION_GAS=10000000
 
   rundler-builder:
     image: alchemy-platform/rundler:latest
@@ -51,6 +52,7 @@ services:
       - BUILDER_PORT=50051
       - DISABLE_ENTRY_POINT_V0_6=${DISABLE_ENTRY_POINT_V0_6}
       - DISABLE_ENTRY_POINT_V0_7=${DISABLE_ENTRY_POINT_V0_7}
+      - MAX_VERIFICATION_GAS=10000000
 
   rundler-rpc:
     image: alchemy-platform/rundler:latest
@@ -71,6 +73,7 @@ services:
       - RPC_BUILDER_URL=https://rundler-builder:50051
       - DISABLE_ENTRY_POINT_V0_6=${DISABLE_ENTRY_POINT_V0_6}
       - DISABLE_ENTRY_POINT_V0_7=${DISABLE_ENTRY_POINT_V0_7}
+      - MAX_VERIFICATION_GAS=10000000
     healthcheck:
       test: curl --fail http://localhost:3000/health || exit 1
       interval: 1s
