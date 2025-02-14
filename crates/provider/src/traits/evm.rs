@@ -13,6 +13,8 @@
 
 //! Trait for interacting with chain data and contracts.
 
+use std::fmt::Display;
+
 use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
 
 use crate::{
@@ -23,7 +25,7 @@ use crate::{
 
 /// An EVM call, a subset of a transaction that is not meant to be executed onchain, but
 /// can be simulated via an eth_call, debug_traceCall, or similar.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EvmCall {
     /// The address to call
     pub to: Address,
@@ -33,6 +35,16 @@ pub struct EvmCall {
     pub value: U256,
     /// State overrides
     pub state_override: StateOverride,
+}
+
+impl Display for EvmCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "to: {:?}, data: {:?}, value: {:?}, state_override: {:?} ",
+            self.to, self.data, self.value, self.state_override
+        )
+    }
 }
 
 /// Trait for interacting with chain data and contracts.

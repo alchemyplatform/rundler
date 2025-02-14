@@ -286,6 +286,7 @@ where
                             if r.reason.contains("return data out of bounds") {
                                 Ok(HandleOpsOut::PostOpRevert)
                             } else {
+                                tracing::debug!("handle_ops failed with request: {:?}", tx);
                                 Err(TransportError::ErrorResp(resp).into())
                             }
                         }
@@ -294,10 +295,14 @@ where
                 } else if let Some(revert_data) = resp.as_revert_data() {
                     Ok(HandleOpsOut::Revert(revert_data))
                 } else {
+                    tracing::debug!("handle_ops failed with request: {:?}", tx);
                     Err(TransportError::ErrorResp(resp).into())
                 }
             }
-            Err(error) => Err(error.into()),
+            Err(error) => {
+                tracing::debug!("handle_ops failed with request: {:?}", tx);
+                Err(error.into())
+            }
         }
     }
 
