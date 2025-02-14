@@ -24,8 +24,12 @@
 mod alloy;
 pub use alloy::{
     entry_point::{
-        v0_6::EntryPointProvider as AlloyEntryPointV0_6,
+        v0_6::{
+            decode_ops_from_calldata as decode_v0_6_ops_from_calldata,
+            EntryPointProvider as AlloyEntryPointV0_6,
+        },
         v0_7::{
+            decode_ops_from_calldata as decode_v0_7_ops_from_calldata,
             decode_validation_revert as decode_v0_7_validation_revert,
             EntryPointProvider as AlloyEntryPointV0_7,
         },
@@ -47,8 +51,8 @@ pub use alloy_rpc_types_eth::{
     TransactionRequest,
 };
 pub use alloy_rpc_types_trace::geth::{
-    GethDebugBuiltInTracerType, GethDebugTracerType, GethDebugTracingCallOptions,
-    GethDebugTracingOptions, GethTrace,
+    CallConfig as GethDebugTracerCallConfig, GethDebugBuiltInTracerType, GethDebugTracerType,
+    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
 // re-export contract types
 pub use rundler_contracts::utils::GetGasUsed::GasUsedResult;

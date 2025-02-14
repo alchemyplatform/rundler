@@ -29,7 +29,9 @@ use rundler_contracts::v0_7::{
     DepositInfo as DepositInfoV0_7,
     GetBalances::{self, GetBalancesResult},
     IAggregator,
-    IEntryPoint::{FailedOp, IEntryPointErrors, IEntryPointInstance},
+    IEntryPoint::{
+        FailedOp, FailedOpWithRevert, IEntryPointCalls, IEntryPointErrors, IEntryPointInstance,
+    },
     IEntryPointSimulations::{
         self, ExecutionResult as ExecutionResultV0_7, IEntryPointSimulationsInstance,
     },
@@ -40,7 +42,7 @@ use rundler_types::{
     authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
-    v0_7::UserOperation,
+    v0_7::{UserOperation, UserOperationBuilder},
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::authorization_utils;
@@ -262,30 +264,8 @@ where
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
             Err(TransportError::ErrorResp(resp)) => {
-                if let Some(err) = resp.as_decoded_error::<IEntryPointErrors>(false) {
-                    match err {
-                        IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
-                            match &reason[..4] {
-                                // This revert is a bundler issue, not a user op issue, handle it differently
-                                "AA95" => {
-                                    Err(anyhow::anyhow!("Handle ops called with insufficient gas")
-                                        .into())
-                                }
-                                _ => Ok(HandleOpsOut::FailedOp(
-                                    opIndex
-                                        .try_into()
-                                        .context("returned opIndex out of bounds")?,
-                                    reason,
-                                )),
-                            }
-                        }
-                        IEntryPointErrors::SignatureValidationFailed(failure) => {
-                            Ok(HandleOpsOut::SignatureValidationFailed(failure.aggregator))
-                        }
-                        _ => Err(TransportError::ErrorResp(resp).into()),
-                    }
-                } else if let Some(revert_data) = resp.as_revert_data() {
-                    Ok(HandleOpsOut::Revert(revert_data))
+                if let Some(revert_data) = resp.as_revert_data() {
+                    Ok(Self::decode_handle_ops_revert(&resp.message, &revert_data))
                 } else {
                     Err(TransportError::ErrorResp(resp).into())
                 }
@@ -310,6 +290,36 @@ where
             gas_fees,
             proxy,
         )
+    }
+
+    fn decode_handle_ops_revert(_message: &str, revert_data: &Bytes) -> HandleOpsOut {
+        if let Ok(err) = IEntryPointErrors::abi_decode(revert_data, false) {
+            match err {
+                IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
+                    HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
+                }
+                IEntryPointErrors::FailedOpWithRevert(FailedOpWithRevert {
+                    opIndex,
+                    reason,
+                    inner,
+                }) => HandleOpsOut::FailedOp(
+                    opIndex.try_into().unwrap_or(usize::MAX),
+                    format!("{}:{}", reason, inner),
+                ),
+                IEntryPointErrors::SignatureValidationFailed(failure) => {
+                    HandleOpsOut::SignatureValidationFailed(failure.aggregator)
+                }
+            }
+        } else {
+            HandleOpsOut::Revert(revert_data.clone())
+        }
+    }
+
+    fn decode_ops_from_calldata(
+        chain_spec: &ChainSpec,
+        calldata: &Bytes,
+    ) -> Vec<UserOpsPerAggregator<UserOperation>> {
+        decode_ops_from_calldata(chain_spec, calldata)
     }
 }
 
@@ -595,6 +605,57 @@ pub fn decode_validation_revert(err_bytes: &Bytes) -> ValidationRevert {
         }
     } else {
         ValidationRevert::Unknown(err_bytes.clone())
+    }
+}
+
+/// Decode user ops from calldata
+pub fn decode_ops_from_calldata(
+    chain_spec: &ChainSpec,
+    calldata: &Bytes,
+) -> Vec<UserOpsPerAggregator<UserOperation>> {
+    let entry_point_calls = match IEntryPointCalls::abi_decode(calldata, false) {
+        Ok(entry_point_calls) => entry_point_calls,
+        Err(_) => return vec![],
+    };
+
+    match entry_point_calls {
+        IEntryPointCalls::handleOps(handle_ops_call) => {
+            let ops = handle_ops_call
+                .ops
+                .into_iter()
+                .filter_map(|op| {
+                    UserOperationBuilder::from_packed(op, chain_spec)
+                        .ok()
+                        .map(|uo| uo.build())
+                })
+                .collect();
+
+            vec![UserOpsPerAggregator {
+                user_ops: ops,
+                aggregator: Address::ZERO,
+                signature: Bytes::new(),
+            }]
+        }
+        IEntryPointCalls::handleAggregatedOps(handle_aggregated_ops_call) => {
+            handle_aggregated_ops_call
+                .opsPerAggregator
+                .into_iter()
+                .map(|ops| UserOpsPerAggregator {
+                    user_ops: ops
+                        .userOps
+                        .into_iter()
+                        .filter_map(|op| {
+                            UserOperationBuilder::from_packed(op, chain_spec)
+                                .ok()
+                                .map(|uo| uo.build())
+                        })
+                        .collect(),
+                    aggregator: ops.aggregator,
+                    signature: ops.signature,
+                })
+                .collect()
+        }
+        _ => vec![],
     }
 }
 

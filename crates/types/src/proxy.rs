@@ -29,8 +29,8 @@ pub trait SubmissionProxy: Sync + Send + Debug {
     /// Process a revert from a submission proxy and return the hashes of ops that should be rejected
     async fn process_revert(
         &self,
-        revert_data: Bytes,
-        ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+        revert_data: &Bytes,
+        ops: &[UserOpsPerAggregator<UserOperationVariant>],
     ) -> Vec<B256>;
 }
 
@@ -45,8 +45,8 @@ mockall::mock! {
 
         async fn process_revert(
             &self,
-            revert_data: Bytes,
-            ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+            revert_data: &Bytes,
+            ops: &[UserOpsPerAggregator<UserOperationVariant>],
         ) -> Vec<B256>;
     }
 }

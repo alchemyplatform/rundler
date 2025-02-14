@@ -22,6 +22,7 @@ use alloy_rpc_types_trace::geth::{
 };
 use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
+    chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
     v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
@@ -200,6 +201,11 @@ mockall::mock! {
             gas_fees: GasFees,
             proxy: Option<Address>,
         ) -> TransactionRequest;
+        fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut;
+        fn decode_ops_from_calldata(
+            chain_spec: &ChainSpec,
+            calldata: &Bytes,
+        ) -> Vec<UserOpsPerAggregator<v0_6::UserOperation>>;
     }
 
     impl EntryPointProvider<v0_6::UserOperation> for EntryPointV0_6 {}
@@ -294,6 +300,11 @@ mockall::mock! {
             gas_fees: GasFees,
             proxy: Option<Address>,
         ) -> TransactionRequest;
+        fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut;
+        fn decode_ops_from_calldata(
+            chain_spec: &ChainSpec,
+            calldata: &Bytes,
+        ) -> Vec<UserOpsPerAggregator<v0_7::UserOperation>>;
     }
 
     impl EntryPointProvider<v0_7::UserOperation> for EntryPointV0_7 {}

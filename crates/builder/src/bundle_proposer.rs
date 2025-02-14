@@ -899,8 +899,8 @@ where
                         .to_ops_per_aggregator()
                         .into_iter()
                         .map(|uo| uo.into_uo_variants())
-                        .collect();
-                    let to_remove = proxy.process_revert(revert_data.clone(), ops).await;
+                        .collect::<Vec<_>>();
+                    let to_remove = proxy.process_revert(&revert_data, &ops).await;
                     let mut removed = false;
                     for hash in to_remove {
                         removed |= self.reject_hash(context, hash).await;

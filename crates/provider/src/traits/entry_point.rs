@@ -13,6 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
+    chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
     GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
@@ -155,6 +156,15 @@ pub trait BundleHandler: Send + Sync {
         gas_fees: GasFees,
         proxy: Option<Address>,
     ) -> TransactionRequest;
+
+    /// Decode the revert data from a call to `handleOps`
+    fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut;
+
+    /// Decode user ops from calldata
+    fn decode_ops_from_calldata(
+        chain_spec: &ChainSpec,
+        calldata: &Bytes,
+    ) -> Vec<UserOpsPerAggregator<Self::UO>>;
 }
 
 /// Trait for calculating Data Availability (DA) gas costs for user operations

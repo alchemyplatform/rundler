@@ -28,8 +28,8 @@ impl SubmissionProxy for PbhSubmissionProxy {
 
     async fn process_revert(
         &self,
-        revert_data: Bytes,
-        _ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+        revert_data: &Bytes,
+        _ops: &[UserOpsPerAggregator<UserOperationVariant>],
     ) -> Vec<B256> {
         tracing::info!(
             "PBH submission proxy received revert data, processing unimplemented: {revert_data:?}"
