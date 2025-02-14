@@ -15,8 +15,7 @@ use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
     chain::ChainSpec,
     v0_6::{
-        ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationOptionalGas,
-        UserOperationRequiredFields,
+        UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
     },
     GasEstimate,
 };
@@ -46,6 +45,7 @@ pub(crate) struct RpcUserOperation {
 
 impl From<UserOperation> for RpcUserOperation {
     fn from(op: UserOperation) -> Self {
+        let op = op.into_unstructured();
         RpcUserOperation {
             sender: op.sender.into(),
             nonce: op.nonce,
@@ -66,7 +66,7 @@ impl From<UserOperation> for RpcUserOperation {
 
 impl FromRpc<RpcUserOperation> for UserOperation {
     fn from_rpc(def: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
-        UserOperationBuilder::new(
+        let mut builder = UserOperationBuilder::new(
             chain_spec,
             UserOperationRequiredFields {
                 sender: def.sender.into(),
@@ -81,12 +81,17 @@ impl FromRpc<RpcUserOperation> for UserOperation {
                 paymaster_and_data: def.paymaster_and_data,
                 signature: def.signature,
             },
-            ExtendedUserOperation {
-                authorization_tuple: def.eip7702_auth.map(|a| a.into()),
-                aggregator: def.aggregator,
-            },
-        )
-        .build()
+        );
+
+        if let Some(auth) = def.eip7702_auth {
+            builder = builder.authorization_tuple(auth.into());
+        }
+
+        if let Some(agg) = def.aggregator {
+            builder = builder.aggregator(agg);
+        }
+
+        builder.build()
     }
 }
 

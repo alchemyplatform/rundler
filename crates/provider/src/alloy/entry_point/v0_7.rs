@@ -329,7 +329,7 @@ where
         gas_price: u128,
         bundle_size: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let au = user_op.authorization_tuple();
+        let au = user_op.authorization_tuple().cloned();
         let extra_data_len = user_op.extra_data_len(bundle_size);
 
         let txn_req = self
@@ -340,8 +340,12 @@ where
         let data = txn_req.input.into_input().unwrap();
 
         // TODO(bundle): assuming a bundle size of 1
-        let bundle_data =
-            super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price, au);
+        let bundle_data = super::max_bundle_transaction_data(
+            *self.i_entry_point.address(),
+            data,
+            gas_price,
+            au.as_ref(),
+        );
 
         self.da_gas_oracle
             .estimate_da_gas(
@@ -379,7 +383,7 @@ where
 
         add_authorization_tuple(
             user_op.sender(),
-            &user_op.authorization_tuple,
+            user_op.authorization_tuple(),
             &mut override_ep,
         );
 
@@ -456,7 +460,7 @@ where
 
         add_simulations_override(&mut state_override, *self.i_entry_point.address());
 
-        add_authorization_tuple(op.sender(), &op.authorization_tuple, &mut state_override);
+        add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
 
         let ep_simulations = IEntryPointSimulations::new(
             *self.i_entry_point.address(),
@@ -529,7 +533,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .user_ops
                 .into_iter()
                 .map(|op| {
-                    if let Some(authorization) = &op.authorization_tuple {
+                    if let Some(authorization) = op.authorization_tuple() {
                         authorization_list.push(SignedAuthorization::from(authorization.clone()));
                     }
                     op.pack()
@@ -632,10 +636,10 @@ impl TryFrom<ExecutionResultV0_7> for ExecutionResult {
 
 fn add_authorization_tuple(
     sender: Address,
-    authorization: &Option<Eip7702Auth>,
+    authorization: Option<&Eip7702Auth>,
     state_override: &mut StateOverride,
 ) {
-    if let Some(authorization) = &authorization {
+    if let Some(authorization) = authorization {
         authorization_utils::apply_7702_overrides(state_override, sender, authorization.address);
     }
 }

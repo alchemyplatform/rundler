@@ -25,7 +25,7 @@ fn max_bundle_transaction_data(
     to_address: Address,
     data: Bytes,
     gas_price: u128,
-    au: Option<Eip7702Auth>,
+    au: Option<&Eip7702Auth>,
 ) -> Bytes {
     // Fill in max values for unknown or varying fields
     let gas_price_ceil = gas_price.next_power_of_two() - 1; // max out bits of gas price, assume same power of 2

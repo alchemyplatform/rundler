@@ -136,11 +136,13 @@ where
         let call_gas_limit = call_gas_limit?;
 
         // check the total gas limit
-        let mut op_with_gas = full_op;
-        op_with_gas.pre_verification_gas = pre_verification_gas;
-        op_with_gas.call_gas_limit = call_gas_limit;
-        op_with_gas.verification_gas_limit = verification_gas_limit;
-        op_with_gas.paymaster_verification_gas_limit = paymaster_verification_gas_limit;
+        let op_with_gas = UserOperationBuilder::from_uo(full_op, &self.chain_spec)
+            .pre_verification_gas(pre_verification_gas)
+            .call_gas_limit(call_gas_limit)
+            .verification_gas_limit(verification_gas_limit)
+            .paymaster_verification_gas_limit(paymaster_verification_gas_limit)
+            .build();
+
         // require that this can fit in a bundle of size 1
         let gas_limit = op_with_gas.computation_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > self.settings.max_total_execution_gas {

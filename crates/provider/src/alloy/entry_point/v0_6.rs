@@ -336,7 +336,7 @@ where
         gas_price: u128,
         bundle_size: usize,
     ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        let au = user_op.authorization_tuple();
+        let au = user_op.authorization_tuple().cloned();
         let extra_data_len = user_op.extra_data_len(bundle_size);
 
         let txn_request = self
@@ -347,8 +347,12 @@ where
         let data = txn_request.input.into_input().unwrap();
 
         // TODO(bundle): assuming a bundle size of 1
-        let bundle_data =
-            super::max_bundle_transaction_data(*self.i_entry_point.address(), data, gas_price, au);
+        let bundle_data = super::max_bundle_transaction_data(
+            *self.i_entry_point.address(),
+            data,
+            gas_price,
+            au.as_ref(),
+        );
 
         self.da_gas_oracle
             .estimate_da_gas(
@@ -465,7 +469,7 @@ where
             .try_into()
             .unwrap_or(u64::MAX);
 
-        if let Some(authorization) = &op.authorization_tuple {
+        if let Some(authorization) = op.authorization_tuple() {
             authorization_utils::apply_7702_overrides(
                 &mut state_override,
                 op.sender(),
@@ -558,7 +562,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
                 .user_ops
                 .into_iter()
                 .map(|op| {
-                    if let Some(authorization) = &op.authorization_tuple {
+                    if let Some(authorization) = op.authorization_tuple() {
                         eip7702_auth_list.push(SignedAuthorization::from(authorization.clone()));
                     }
                     op.into()
