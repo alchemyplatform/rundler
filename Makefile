@@ -2,7 +2,7 @@
 
 ##@ Test
 
-UNIT_TEST_ARGS := --locked --workspace --all-features
+UNIT_TEST_ARGS := --locked --workspace --all-features --no-fail-fast
 PROFILE ?= release
 DOCKER_IMAGE_NAME ?= alchemyplatform/rundler
 BIN_DIR = "dist/bin"

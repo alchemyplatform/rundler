@@ -632,11 +632,10 @@ mod tests {
     use context::ContractInfo;
     use rundler_provider::{BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider};
     use rundler_types::{
+        aggregator::AggregatorCosts,
         chain::ChainSpec,
-        v0_6::{
-            ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationRequiredFields,
-        },
-        AggregatorInfo, Opcode, StakeInfo,
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
+        AggregatorInfo, Opcode, StakeInfo, UserOperation as _,
     };
 
     use self::context::{Phase, TracerOutput};
@@ -758,11 +757,15 @@ mod tests {
         };
 
         ValidationContext {
-            op: UserOperation {
-                verification_gas_limit: 2000,
-                pre_verification_gas: 1000,
-                ..Default::default()
-            },
+            op: UserOperationBuilder::new(
+                &ChainSpec::default(),
+                UserOperationRequiredFields {
+                    verification_gas_limit: 2000,
+                    pre_verification_gas: 1000,
+                    ..Default::default()
+                },
+            )
+            .build(),
             has_factory: true,
             associated_addresses: HashSet::new(),
             block_id: BlockId::Number(BlockNumberOrTag::Latest),
@@ -840,23 +843,21 @@ mod tests {
             .expect_get_specific_violations()
             .returning(|_| Ok(vec![]));
 
-        let user_operation = UserOperationBuilder::new(&ChainSpec::default(),UserOperationRequiredFields {
-            sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
-            nonce: U256::from(264),
-            init_code: Bytes::default(),
-            call_data: bytes!("b61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
-            call_gas_limit: 9100,
-            verification_gas_limit: 64805,
-            pre_verification_gas: 46128,
-            max_fee_per_gas: 105000100,
-            max_priority_fee_per_gas: 105000000,
-            paymaster_and_data: Bytes::default(),
-            signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
-        },
-        ExtendedUserOperation{
-            authorization_tuple: None,
-            aggregator: None,
-        },
+        let user_operation = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
+                nonce: U256::from(264),
+                init_code: Bytes::default(),
+                call_data: bytes!("b61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
+                call_gas_limit: 9100,
+                verification_gas_limit: 64805,
+                pre_verification_gas: 46128,
+                max_fee_per_gas: 105000100,
+                max_priority_fee_per_gas: 105000000,
+                paymaster_and_data: Bytes::default(),
+                signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
+            }
         ).build();
 
         let simulator = create_simulator(provider, entry_point, context);
@@ -1140,7 +1141,12 @@ mod tests {
         let bad_agg = Address::random();
 
         let mut context = get_test_context();
-        context.op.aggregator = Some(actual_agg);
+        context.op = context.op.transform_for_aggregator(
+            &ChainSpec::default(),
+            actual_agg,
+            AggregatorCosts::default(),
+            Bytes::new(),
+        );
         context.entry_point_out.aggregator_info = Some(AggregatorInfo {
             address: bad_agg,
             stake_info: StakeInfo::default(),

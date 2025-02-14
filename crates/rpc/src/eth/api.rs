@@ -192,7 +192,7 @@ mod tests {
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
         pool::{MockPool, PoolOperation},
-        v0_6::UserOperation,
+        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
         EntityInfos, UserOperation as UserOperationTrait, ValidTimeRange,
     };
 
@@ -204,8 +204,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_user_op_by_hash_pending() {
         let ep = Address::random();
-        let uo = UserOperation::default();
-        let hash = uo.hash(ep, 1);
+        let cs = ChainSpec {
+            entry_point_address_v0_6: ep,
+            ..Default::default()
+        };
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
 
         let po = PoolOperation {
             uo: uo.clone().into(),
@@ -253,8 +257,8 @@ mod tests {
             ..Default::default()
         };
         let ep = cs.entry_point_address_v0_6;
-        let uo = UserOperation::default();
-        let hash = uo.hash(ep, 1);
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
         let block_number = 1000;
         let block_hash = B256::random();
 
@@ -327,9 +331,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_user_op_by_hash_not_found() {
-        let ep = Address::random();
-        let uo = UserOperation::default();
-        let hash = uo.hash(ep, 1);
+        let cs = ChainSpec {
+            id: 1,
+            ..Default::default()
+        };
+        let ep = cs.entry_point_address_v0_6;
+        let uo = UserOperationBuilder::new(&cs, UserOperationRequiredFields::default()).build();
+        let hash = uo.hash();
 
         let mut pool = MockPool::default();
         pool.expect_get_op_by_hash()
