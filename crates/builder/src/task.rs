@@ -448,7 +448,7 @@ where
             sender_eoa,
             submission_proxy.cloned(),
             proposer,
-            ep_providers.entry_point().clone(),
+            ep_providers.clone(),
             transaction_tracker,
             self.pool.clone(),
             sender_settings,
