@@ -24,15 +24,15 @@ use rundler_contracts::v0_6::{
     GetBalances::{self, GetBalancesResult},
     IAggregator,
     IEntryPoint::{
-        self, ExecutionResult as ExecutionResultV0_6, FailedOp, IEntryPointErrors,
-        IEntryPointInstance,
+        self, ExecutionResult as ExecutionResultV0_6, FailedOp, IEntryPointCalls,
+        IEntryPointErrors, IEntryPointInstance,
     },
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
 };
 use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
-    v0_6::UserOperation,
+    v0_6::{UserOperation, UserOperationBuilder},
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::authorization_utils;
@@ -253,46 +253,8 @@ where
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
             Err(TransportError::ErrorResp(resp)) => {
-                if let Some(err) =
-                    resp.as_decoded_error::<SolContractError<IEntryPointErrors>>(false)
-                {
-                    match err {
-                        SolContractError::CustomError(IEntryPointErrors::FailedOp(FailedOp {
-                            opIndex,
-                            reason,
-                        })) => {
-                            match &reason[..4] {
-                                // This revert is a bundler issue, not a user op issue, handle it differently
-                                "AA95" => {
-                                    Err(anyhow::anyhow!("Handle ops called with insufficient gas")
-                                        .into())
-                                }
-                                _ => Ok(HandleOpsOut::FailedOp(
-                                    opIndex
-                                        .try_into()
-                                        .context("returned opIndex out of bounds")?,
-                                    reason,
-                                )),
-                            }
-                        }
-                        SolContractError::CustomError(
-                            IEntryPointErrors::SignatureValidationFailed(err),
-                        ) => Ok(HandleOpsOut::SignatureValidationFailed(err.aggregator)),
-                        SolContractError::Revert(r) => {
-                            // Special handling for a bug in the 0.6 entry point contract to detect the bug where
-                            // the `returndatacopy` opcode reverts due to a postOp revert and the revert data is too short.
-                            // See https://github.com/eth-infinitism/account-abstraction/pull/325 for more details.
-                            // NOTE: this error message is copied directly from Geth and assumes it will not change.
-                            if r.reason.contains("return data out of bounds") {
-                                Ok(HandleOpsOut::PostOpRevert)
-                            } else {
-                                Err(TransportError::ErrorResp(resp).into())
-                            }
-                        }
-                        _ => Err(TransportError::ErrorResp(resp).into()),
-                    }
-                } else if let Some(revert_data) = resp.as_revert_data() {
-                    Ok(HandleOpsOut::Revert(revert_data))
+                if let Some(revert) = resp.as_revert_data() {
+                    Ok(Self::decode_handle_ops_revert(&resp.message, &revert))
                 } else {
                     Err(TransportError::ErrorResp(resp).into())
                 }
@@ -317,6 +279,39 @@ where
             gas_fees,
             proxy,
         )
+    }
+
+    fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut {
+        if let Ok(err) = IEntryPointErrors::abi_decode(revert_data, false) {
+            match err {
+                IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
+                    HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
+                }
+                IEntryPointErrors::SignatureValidationFailed(err) => {
+                    HandleOpsOut::SignatureValidationFailed(err.aggregator)
+                }
+                IEntryPointErrors::ValidationResult(_)
+                | IEntryPointErrors::ValidationResultWithAggregation(_)
+                | IEntryPointErrors::ExecutionResult(_) => {
+                    HandleOpsOut::Revert(revert_data.clone())
+                }
+            }
+        } else if message.contains("return data out of bounds") {
+            // Special handling for a bug in the 0.6 entry point contract to detect the bug where
+            // the `returndatacopy` opcode reverts due to a postOp revert and the revert data is too short.
+            // See https://github.com/eth-infinitism/account-abstraction/pull/325 for more details.
+            // NOTE: this error message is copied directly from Geth and assumes it will not change.
+            HandleOpsOut::PostOpRevert
+        } else {
+            HandleOpsOut::Revert(revert_data.clone())
+        }
+    }
+
+    fn decode_ops_from_calldata(
+        chain_spec: &ChainSpec,
+        calldata: &Bytes,
+    ) -> Vec<UserOpsPerAggregator<UserOperation>> {
+        decode_ops_from_calldata(chain_spec, calldata)
     }
 }
 
@@ -598,6 +593,57 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     }
 
     txn_request
+}
+
+/// Decode user ops from calldata
+pub fn decode_ops_from_calldata(
+    chain_spec: &ChainSpec,
+    calldata: &Bytes,
+) -> Vec<UserOpsPerAggregator<UserOperation>> {
+    let entry_point_calls = match IEntryPointCalls::abi_decode(calldata, false) {
+        Ok(entry_point_calls) => entry_point_calls,
+        Err(_) => return vec![],
+    };
+
+    match entry_point_calls {
+        IEntryPointCalls::handleOps(handle_ops_call) => {
+            let ops = handle_ops_call
+                .ops
+                .into_iter()
+                .filter_map(|op| {
+                    UserOperationBuilder::from_contract(chain_spec, op)
+                        .ok()
+                        .map(|b| b.build())
+                })
+                .collect();
+
+            vec![UserOpsPerAggregator {
+                user_ops: ops,
+                aggregator: Address::ZERO,
+                signature: Bytes::new(),
+            }]
+        }
+        IEntryPointCalls::handleAggregatedOps(handle_aggregated_ops_call) => {
+            handle_aggregated_ops_call
+                .opsPerAggregator
+                .into_iter()
+                .map(|ops| UserOpsPerAggregator {
+                    user_ops: ops
+                        .userOps
+                        .into_iter()
+                        .filter_map(move |op| {
+                            UserOperationBuilder::from_contract(chain_spec, op)
+                                .ok()
+                                .map(|b| b.aggregator(ops.aggregator).build())
+                        })
+                        .collect(),
+                    aggregator: ops.aggregator,
+                    signature: ops.signature,
+                })
+                .collect()
+        }
+        _ => vec![],
+    }
 }
 
 impl TryFrom<ExecutionResultV0_6> for ExecutionResult {

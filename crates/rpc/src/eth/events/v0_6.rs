@@ -12,15 +12,9 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{ruint::UintTryFrom, Address, Bytes, B256, U128};
-use alloy_sol_types::SolInterface;
-use rundler_contracts::v0_6::IEntryPoint::{
-    IEntryPointCalls, UserOperationEvent, UserOperationRevertReason,
-};
+use rundler_contracts::v0_6::IEntryPoint::{UserOperationEvent, UserOperationRevertReason};
 use rundler_provider::{Log, TransactionReceipt};
-use rundler_types::{
-    chain::ChainSpec,
-    v0_6::{UserOperation, UserOperationBuilder},
-};
+use rundler_types::{chain::ChainSpec, v0_6::UserOperation};
 
 use super::common::{EntryPointEvents, UserOperationEventProviderImpl};
 use crate::types::RpcUserOperationReceipt;
@@ -77,36 +71,12 @@ impl EntryPointEvents for EntryPointFiltersV0_6 {
     }
 
     fn get_user_operations_from_tx_data(tx_data: Bytes, chain_spec: &ChainSpec) -> Vec<Self::UO> {
-        let entry_point_calls = match IEntryPointCalls::abi_decode(&tx_data, false) {
-            Ok(entry_point_calls) => entry_point_calls,
-            Err(_) => return vec![],
-        };
+        let uos_per_agg = rundler_provider::decode_v0_6_ops_from_calldata(chain_spec, &tx_data);
 
-        match entry_point_calls {
-            IEntryPointCalls::handleOps(handle_ops_call) => handle_ops_call
-                .ops
-                .into_iter()
-                .filter_map(|op| {
-                    UserOperationBuilder::from_contract(chain_spec, op)
-                        .ok()
-                        .map(|b| b.build())
-                })
-                .collect(),
-            IEntryPointCalls::handleAggregatedOps(handle_aggregated_ops_call) => {
-                handle_aggregated_ops_call
-                    .opsPerAggregator
-                    .into_iter()
-                    .flat_map(|ops| {
-                        ops.userOps.into_iter().filter_map(move |op| {
-                            UserOperationBuilder::from_contract(chain_spec, op)
-                                .ok()
-                                .map(|b| b.aggregator(ops.aggregator).build())
-                        })
-                    })
-                    .collect()
-            }
-            _ => vec![],
-        }
+        uos_per_agg
+            .into_iter()
+            .flat_map(|uos_per_agg| uos_per_agg.user_ops)
+            .collect()
     }
 
     fn address(chain_spec: &ChainSpec) -> Address {
