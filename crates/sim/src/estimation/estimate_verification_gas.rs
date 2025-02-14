@@ -114,7 +114,7 @@ where
 
         let gas_used = self
             .provider
-            .get_gas_used(call)
+            .get_gas_used(call.clone())
             .await
             .context("failed to run initial guess")?;
 
@@ -125,6 +125,11 @@ where
                 ))?;
             }
         } else if let Some(revert) = E::decode_simulate_handle_ops_revert(&gas_used.result)?.err() {
+            tracing::debug!(
+                " simulation reverted with evm call: {}, error: {}",
+                call,
+                revert
+            );
             return Err(GasEstimationError::RevertInValidation(revert));
         }
 
