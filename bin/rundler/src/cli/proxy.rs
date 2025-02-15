@@ -34,8 +34,8 @@ impl SubmissionProxy for PassThroughProxy {
 
     async fn process_revert(
         &self,
-        _revert_data: Bytes,
-        _ops: Vec<UserOpsPerAggregator<UserOperationVariant>>,
+        _revert_data: &Bytes,
+        _ops: &[UserOpsPerAggregator<UserOperationVariant>],
     ) -> Vec<B256> {
         vec![]
     }

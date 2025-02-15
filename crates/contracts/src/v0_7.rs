@@ -126,7 +126,7 @@ sol!(
 
         event BeforeExecution();
 
-    event SignatureAggregatorChanged(address indexed aggregator);
+        event SignatureAggregatorChanged(address indexed aggregator);
 
         error FailedOp(uint256 opIndex, string reason);
 
