@@ -100,7 +100,7 @@ where
             if ep_address == to || self.chain_spec.known_proxy_addresses().contains(&to) {
                 E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
                     .into_iter()
-                    .find(|op| op.hash(ep_address, self.chain_spec.id) == hash)
+                    .find(|op| op.hash() == hash)
                     .context("matching user operation should be found in tx data")?
             } else {
                 tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
@@ -233,15 +233,15 @@ where
 
         while let Some(call_frame) = frame_queue.pop_front() {
             // check if the call is to an entrypoint, if not enqueue the child calls if any
-            if let Some(to) = call_frame
+            if call_frame
                 .to
-                .filter(|to| *to == E::address(&self.chain_spec))
+                .is_some_and(|to| to == E::address(&self.chain_spec))
             {
                 // check if the user operation is in the call frame
                 if let Some(uo) =
                     E::get_user_operations_from_tx_data(call_frame.input, &self.chain_spec)
                         .into_iter()
-                        .find(|op| op.hash(to, self.chain_spec.id) == user_op_hash)
+                        .find(|op| op.hash() == user_op_hash)
                 {
                     return Ok(Some(uo));
                 }

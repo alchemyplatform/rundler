@@ -54,7 +54,7 @@ where
         block_id: BlockId,
     ) -> Result<ValidationContext<Self::UO>, ViolationError<SimulationViolation>> {
         let factory_address = op.factory();
-        let sender_address = op.sender;
+        let sender_address = op.sender();
         let paymaster_address = op.paymaster();
         let tracer_out = self
             .simulate_validation_tracer
@@ -202,9 +202,7 @@ mod tests {
     use rundler_contracts::v0_6::IEntryPoint::FailedOp;
     use rundler_types::{
         chain::ChainSpec,
-        v0_6::{
-            ExtendedUserOperation, UserOperation, UserOperationBuilder, UserOperationRequiredFields,
-        },
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
         Opcode,
     };
     use sim_context::ContractInfo;
@@ -327,23 +325,21 @@ mod tests {
             Ok(tracer_output)
         });
 
-        let user_operation = UserOperationBuilder::new(&ChainSpec::default(),UserOperationRequiredFields {
-            sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
-            nonce: U256::from(264),
-            init_code: Bytes::default(),
-            call_data: bytes!("b61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
-            call_gas_limit: 9100,
-            verification_gas_limit: 64805,
-            pre_verification_gas: 46128,
-            max_fee_per_gas: 105000100,
-            max_priority_fee_per_gas: 105000000,
-            paymaster_and_data: Bytes::default(),
-            signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
-        },
-        ExtendedUserOperation {
-            authorization_tuple: None,
-            aggregator: None,
-        },
+        let user_operation = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: address!("b856dbd4fa1a79a46d426f537455e7d3e79ab7c4"),
+                nonce: U256::from(264),
+                init_code: Bytes::default(),
+                call_data: bytes!("b61d27f6000000000000000000000000b856dbd4fa1a79a46d426f537455e7d3e79ab7c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000004d087d28800000000000000000000000000000000000000000000000000000000"),
+                call_gas_limit: 9100,
+                verification_gas_limit: 64805,
+                pre_verification_gas: 46128,
+                max_fee_per_gas: 105000100,
+                max_priority_fee_per_gas: 105000000,
+                paymaster_and_data: Bytes::default(),
+                signature: bytes!("98f89993ce573172635b44ef3b0741bd0c19dd06909d3539159f6d66bef8c0945550cc858b1cf5921dfce0986605097ba34c2cf3fc279154dd25e161ea7b3d0f1c"),
+            }
         ).build();
 
         let context = ValidationContextProvider {

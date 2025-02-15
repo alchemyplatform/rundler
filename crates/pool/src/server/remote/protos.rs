@@ -26,10 +26,9 @@ use rundler_types::{
         Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
         StakeStatus as RundlerStakeStatus,
     },
-    v0_6::{self, ExtendedUserOperation},
-    v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
+    v0_6, v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
     EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
-    StakeInfo as RundlerStakeInfo, UserOperationVariant, ValidTimeRange,
+    StakeInfo as RundlerStakeInfo, UserOperation as _, UserOperationVariant, ValidTimeRange,
 };
 
 tonic::include_proto!("op_pool");
@@ -49,24 +48,23 @@ impl From<&UserOperationVariant> for UserOperation {
 impl From<&v0_6::UserOperation> for UserOperation {
     fn from(op: &v0_6::UserOperation) -> Self {
         let authorization_tuple = op
-            .authorization_tuple
-            .as_ref()
+            .authorization_tuple()
             .map(|authorization| AuthorizationTuple::from(authorization.clone()));
         let op = UserOperationV06 {
-            sender: op.sender.to_proto_bytes(),
-            nonce: op.nonce.to_proto_bytes(),
-            init_code: op.init_code.to_proto_bytes(),
-            call_data: op.call_data.to_proto_bytes(),
-            call_gas_limit: op.call_gas_limit.to_proto_bytes(),
-            verification_gas_limit: op.verification_gas_limit.to_proto_bytes(),
-            pre_verification_gas: op.pre_verification_gas.to_proto_bytes(),
-            max_fee_per_gas: op.max_fee_per_gas.to_proto_bytes(),
-            max_priority_fee_per_gas: op.max_priority_fee_per_gas.to_proto_bytes(),
-            paymaster_and_data: op.paymaster_and_data.to_proto_bytes(),
-            signature: op.signature.to_proto_bytes(),
+            sender: op.sender().to_proto_bytes(),
+            nonce: op.nonce().to_proto_bytes(),
+            init_code: op.init_code().to_proto_bytes(),
+            call_data: op.call_data().to_proto_bytes(),
+            call_gas_limit: op.call_gas_limit().to_proto_bytes(),
+            verification_gas_limit: op.verification_gas_limit().to_proto_bytes(),
+            pre_verification_gas: op.pre_verification_gas().to_proto_bytes(),
+            max_fee_per_gas: op.max_fee_per_gas().to_proto_bytes(),
+            max_priority_fee_per_gas: op.max_priority_fee_per_gas().to_proto_bytes(),
+            paymaster_and_data: op.paymaster_and_data().to_proto_bytes(),
+            signature: op.signature().to_proto_bytes(),
             authorization_tuple,
             aggregator: op
-                .aggregator
+                .aggregator()
                 .map(|a| a.to_proto_bytes())
                 .unwrap_or_default(),
         };
@@ -110,17 +108,7 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
         op: UserOperationV06,
         chain_spec: &ChainSpec,
     ) -> Result<Self, ConversionError> {
-        let authorization_tuple = op
-            .authorization_tuple
-            .as_ref()
-            .map(|authorization| Eip7702Auth::from(authorization.clone()));
-        let aggregator = if !op.aggregator.is_empty() {
-            Some(from_bytes(&op.aggregator)?)
-        } else {
-            None
-        };
-
-        Ok(v0_6::UserOperationBuilder::new(
+        let mut builder = v0_6::UserOperationBuilder::new(
             chain_spec,
             v0_6::UserOperationRequiredFields {
                 sender: from_bytes(&op.sender)?,
@@ -135,41 +123,50 @@ impl TryUoFromProto<UserOperationV06> for v0_6::UserOperation {
                 paymaster_and_data: op.paymaster_and_data.into(),
                 signature: op.signature.into(),
             },
-            ExtendedUserOperation {
-                authorization_tuple,
-                aggregator,
-            },
-        )
-        .build())
+        );
+
+        if let Some(auth) = &op.authorization_tuple {
+            builder = builder.authorization_tuple(Eip7702Auth::from(auth.clone()));
+        }
+
+        if !op.aggregator.is_empty() {
+            builder = builder.aggregator(from_bytes(&op.aggregator)?);
+        }
+
+        Ok(builder.build())
     }
 }
 
 impl From<&v0_7::UserOperation> for UserOperation {
     fn from(op: &v0_7::UserOperation) -> Self {
         let op = UserOperationV07 {
-            sender: op.sender.to_proto_bytes(),
-            nonce: op.nonce.to_proto_bytes(),
-            call_data: op.call_data.to_proto_bytes(),
-            call_gas_limit: op.call_gas_limit.to_proto_bytes(),
-            verification_gas_limit: op.verification_gas_limit.to_proto_bytes(),
-            pre_verification_gas: op.pre_verification_gas.to_proto_bytes(),
-            max_fee_per_gas: op.max_fee_per_gas.to_proto_bytes(),
-            max_priority_fee_per_gas: op.max_priority_fee_per_gas.to_proto_bytes(),
-            signature: op.signature.to_proto_bytes(),
-            paymaster: op.paymaster.map(|p| p.to_proto_bytes()).unwrap_or_default(),
-            paymaster_data: op.paymaster_data.to_proto_bytes(),
-            paymaster_verification_gas_limit: op.paymaster_verification_gas_limit.to_proto_bytes(),
-            paymaster_post_op_gas_limit: op.paymaster_post_op_gas_limit.to_proto_bytes(),
-            factory: op.factory.map(|f| f.to_proto_bytes()).unwrap_or_default(),
-            factory_data: op.factory_data.to_proto_bytes(),
-            entry_point: op.entry_point.to_proto_bytes(),
-            chain_id: op.chain_id,
+            sender: op.sender().to_proto_bytes(),
+            nonce: op.nonce().to_proto_bytes(),
+            call_data: op.call_data().to_proto_bytes(),
+            call_gas_limit: op.call_gas_limit().to_proto_bytes(),
+            verification_gas_limit: op.verification_gas_limit().to_proto_bytes(),
+            pre_verification_gas: op.pre_verification_gas().to_proto_bytes(),
+            max_fee_per_gas: op.max_fee_per_gas().to_proto_bytes(),
+            max_priority_fee_per_gas: op.max_priority_fee_per_gas().to_proto_bytes(),
+            signature: op.signature().to_proto_bytes(),
+            paymaster: op
+                .paymaster()
+                .map(|p| p.to_proto_bytes())
+                .unwrap_or_default(),
+            paymaster_data: op.paymaster_data().to_proto_bytes(),
+            paymaster_verification_gas_limit: op
+                .paymaster_verification_gas_limit()
+                .to_proto_bytes(),
+            paymaster_post_op_gas_limit: op.paymaster_post_op_gas_limit().to_proto_bytes(),
+            factory: op.factory().map(|f| f.to_proto_bytes()).unwrap_or_default(),
+            factory_data: op.factory_data().to_proto_bytes(),
+            entry_point: op.entry_point().to_proto_bytes(),
+            chain_id: op.chain_id(),
             authorization_tuple: op
-                .authorization_tuple
-                .as_ref()
+                .authorization_tuple()
                 .map(|authorization| AuthorizationTuple::from(authorization.clone())),
             aggregator: op
-                .aggregator
+                .aggregator()
                 .map(|a| a.to_proto_bytes())
                 .unwrap_or_default(),
         };

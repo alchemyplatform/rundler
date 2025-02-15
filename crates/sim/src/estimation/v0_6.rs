@@ -121,9 +121,11 @@ where
         let call_gas_limit = call_gas_limit?;
 
         // Verify total gas limit
-        let mut op_with_gas = full_op;
-        op_with_gas.verification_gas_limit = verification_gas_limit;
-        op_with_gas.call_gas_limit = call_gas_limit;
+        let op_with_gas = UserOperationBuilder::from_uo(full_op, &self.chain_spec)
+            .verification_gas_limit(verification_gas_limit)
+            .call_gas_limit(call_gas_limit)
+            .build();
+
         // require that this can fit in a bundle of size 1
         let gas_limit = op_with_gas.computation_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > self.settings.max_total_execution_gas {
@@ -405,10 +407,11 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
         rounding: u128,
         is_continuation: bool,
     ) -> Bytes {
+        let op = callless_op.into_unstructured();
         let call = CallGasEstimationProxyCalls::estimateCallGas(estimateCallGasCall {
             args: EstimateCallGasArgs {
-                callData: callless_op.call_data,
-                sender: callless_op.sender,
+                callData: op.call_data,
+                sender: op.sender,
                 minGas: U256::from(min_gas),
                 maxGas: U256::from(max_gas),
                 rounding: U256::from(rounding),
@@ -420,9 +423,10 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
     }
 
     fn get_test_call_gas_calldata(&self, callless_op: Self::UO, call_gas_limit: u128) -> Bytes {
+        let op = callless_op.into_unstructured();
         let call = CallGasEstimationProxyCalls::testCallGas(testCallGasCall {
-            sender: callless_op.sender,
-            callData: callless_op.call_data,
+            sender: op.sender,
+            callData: op.call_data,
             callGasLimit: U256::from(call_gas_limit),
         });
 
@@ -460,10 +464,7 @@ mod tests {
     };
     use rundler_types::{
         da::DAGasOracleType,
-        v0_6::{
-            ExtendedUserOperation, UserOperation, UserOperationOptionalGas,
-            UserOperationRequiredFields,
-        },
+        v0_6::{UserOperation, UserOperationOptionalGas, UserOperationRequiredFields},
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
     use CallGasEstimationProxy::{
@@ -611,10 +612,6 @@ mod tests {
                 max_priority_fee_per_gas: 1000,
                 paymaster_and_data: Bytes::new(),
                 signature: Bytes::new(),
-            },
-            ExtendedUserOperation {
-                authorization_tuple: None,
-                aggregator: None,
             },
         )
         .build()

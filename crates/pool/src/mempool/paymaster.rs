@@ -510,8 +510,9 @@ mod tests {
     use alloy_primitives::{Address, B256, U256};
     use rundler_provider::{DepositInfo, MockEntryPointV0_6};
     use rundler_types::{
+        chain::ChainSpec,
         pool::{PaymasterMetadata, PoolOperation},
-        v0_6::UserOperation,
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
         EntityInfos, UserOperation as UserOperationTrait, UserOperationId, ValidTimeRange,
     };
 
@@ -540,15 +541,20 @@ mod tests {
 
         let paymaster = Address::random();
         let sender = Address::random();
-        let uo = UserOperation {
-            sender,
-            call_gas_limit: 10,
-            pre_verification_gas: 10,
-            paymaster_and_data: paymaster.to_vec().into(),
-            verification_gas_limit: 10,
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
+
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit: 10,
+                pre_verification_gas: 10,
+                paymaster_and_data: paymaster.to_vec().into(),
+                verification_gas_limit: 10,
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
 
         let uo_max_cost = uo.clone().max_gas_cost();
 
@@ -580,15 +586,19 @@ mod tests {
 
         paymaster_tracker.add_new_paymaster(paymaster, confirmed_balance, paymaster_balance);
 
-        let uo = UserOperation {
-            sender,
-            call_gas_limit: 10,
-            paymaster_and_data: paymaster.to_vec().into(),
-            pre_verification_gas: 10,
-            verification_gas_limit: 10,
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit: 10,
+                paymaster_and_data: paymaster.to_vec().into(),
+                pre_verification_gas: 10,
+                verification_gas_limit: 10,
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
 
         let po = demo_pool_op(uo);
 
@@ -606,14 +616,19 @@ mod tests {
         let sender = Address::random();
         let pending_op_cost = U256::from(5);
         let confirmed_balance = U256::from(5);
-        let uo = UserOperation {
-            sender,
-            call_gas_limit: 10,
-            pre_verification_gas: 10,
-            verification_gas_limit: 10,
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
+
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit: 10,
+                pre_verification_gas: 10,
+                verification_gas_limit: 10,
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
 
         let po = demo_pool_op(uo);
 
@@ -638,15 +653,19 @@ mod tests {
             pending_paymaster_balance,
         );
 
-        let uo = UserOperation {
-            sender,
-            call_gas_limit: 100,
-            paymaster_and_data: paymaster.to_vec().into(),
-            pre_verification_gas: 100,
-            verification_gas_limit: 100,
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit: 100,
+                paymaster_and_data: paymaster.to_vec().into(),
+                pre_verification_gas: 100,
+                verification_gas_limit: 100,
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
 
         let po = demo_pool_op(uo);
 
@@ -722,15 +741,20 @@ mod tests {
         );
 
         let sender = Address::random();
-        let uo = UserOperation {
-            sender,
-            call_gas_limit: 10,
-            pre_verification_gas: 10,
-            verification_gas_limit: 10,
-            paymaster_and_data: paymaster.to_vec().into(),
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
+
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit: 10,
+                pre_verification_gas: 10,
+                verification_gas_limit: 10,
+                paymaster_and_data: paymaster.to_vec().into(),
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
 
         let uo_max_cost = uo.clone().max_gas_cost();
 
@@ -763,19 +787,25 @@ mod tests {
         let paymaster_balance_1 = U256::from(200000000);
 
         let sender = Address::random();
-        let uo = UserOperation {
-            sender,
-            call_gas_limit: 10,
-            pre_verification_gas: 10,
-            paymaster_and_data: paymaster_0.to_vec().into(),
-            verification_gas_limit: 10,
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
 
-        let mut uo_1 = uo.clone();
-        uo_1.max_fee_per_gas = 2;
-        uo_1.paymaster_and_data = paymaster_1.to_vec().into();
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                call_gas_limit: 10,
+                pre_verification_gas: 10,
+                paymaster_and_data: paymaster_0.to_vec().into(),
+                verification_gas_limit: 10,
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
+
+        let uo_1 = UserOperationBuilder::from_uo(uo.clone(), &ChainSpec::default())
+            .max_fee_per_gas(2)
+            .paymaster_and_data(paymaster_1.to_vec().into())
+            .build();
 
         let max_op_cost_0 = uo.max_gas_cost();
         let max_op_cost_1 = uo_1.max_gas_cost();
@@ -863,16 +893,20 @@ mod tests {
         paymaster_tracker.add_new_user_op(&existing_id, &meta, U256::from(30));
 
         // replacement_uo
-        let uo = UserOperation {
-            sender,
-            nonce,
-            call_gas_limit: 100,
-            pre_verification_gas: 100,
-            verification_gas_limit: 100,
-            paymaster_and_data: paymaster.to_vec().into(),
-            max_fee_per_gas: 1,
-            ..Default::default()
-        };
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender,
+                nonce,
+                call_gas_limit: 100,
+                pre_verification_gas: 100,
+                verification_gas_limit: 100,
+                paymaster_and_data: paymaster.to_vec().into(),
+                max_fee_per_gas: 1,
+                ..Default::default()
+            },
+        )
+        .build();
 
         let max_op_cost = uo.clone().max_gas_cost();
 

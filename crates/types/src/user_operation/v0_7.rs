@@ -49,10 +49,77 @@ pub struct UserOperation {
      * Required fields
      */
     /// Sender
-    pub sender: Address,
+    sender: Address,
     /// Semi-abstracted nonce
     ///
     /// The first 192 bits are the nonce key, the last 64 bits are the nonce value
+    nonce: U256,
+    /// Calldata
+    call_data: Bytes,
+    /// Call gas limit
+    call_gas_limit: u128,
+    /// Verification gas limit
+    verification_gas_limit: u128,
+    /// Pre-verification gas
+    pre_verification_gas: u128,
+    /// Max priority fee per gas
+    max_priority_fee_per_gas: u128,
+    /// Max fee per gas
+    max_fee_per_gas: u128,
+    /// Signature
+    signature: Bytes,
+    /*
+     * Optional fields
+     */
+    /// Factory, populated if deploying a new sender contract
+    factory: Option<Address>,
+    /// Factory data
+    factory_data: Bytes,
+    /// Paymaster, populated if using a paymaster
+    paymaster: Option<Address>,
+    /// Paymaster verification gas limit
+    paymaster_verification_gas_limit: u128,
+    /// Paymaster post-op gas limit
+    paymaster_post_op_gas_limit: u128,
+    /// Paymaster data
+    paymaster_data: Bytes,
+    /// eip 7702 - tuple of authority.
+    authorization_tuple: Option<Eip7702Auth>,
+
+    /*
+     * Cached fields, not part of the UO
+     */
+    /// Entry point address
+    entry_point: Address,
+    /// Chain id
+    chain_id: u64,
+    /// The hash of the user operation
+    hash: B256,
+    /// The packed user operation
+    packed: PackedUserOperation,
+    /// The gas cost of the calldata
+    calldata_gas_cost: u128,
+
+    /*
+     * Signature aggregator fields
+     */
+    /// Signature aggregator address
+    aggregator: Option<Address>,
+    /// The full original signature, after the `signature` field is modified post-aggregation
+    original_signature: Bytes,
+    /// The original calldata costs
+    original_calldata_cost: u128,
+    /// The costs associated with the aggregator
+    aggregator_costs: AggregatorCosts,
+}
+
+/// Unstructured User Operation
+///
+/// Provides mutable access to the user operation fields for type conversions and modifications
+pub struct UnstructuredUserOperation {
+    /// Sender
+    pub sender: Address,
+    /// Nonce
     pub nonce: U256,
     /// Calldata
     pub call_data: Bytes,
@@ -68,9 +135,6 @@ pub struct UserOperation {
     pub max_fee_per_gas: u128,
     /// Signature
     pub signature: Bytes,
-    /*
-     * Optional fields
-     */
     /// Factory, populated if deploying a new sender contract
     pub factory: Option<Address>,
     /// Factory data
@@ -85,32 +149,8 @@ pub struct UserOperation {
     pub paymaster_data: Bytes,
     /// eip 7702 - tuple of authority.
     pub authorization_tuple: Option<Eip7702Auth>,
-
-    /*
-     * Cached fields, not part of the UO
-     */
-    /// Entry point address
-    pub entry_point: Address,
-    /// Chain id
-    pub chain_id: u64,
-    /// The hash of the user operation
-    pub hash: B256,
-    /// The packed user operation
-    pub packed: PackedUserOperation,
-    /// The gas cost of the calldata
-    pub calldata_gas_cost: u128,
-
-    /*
-     * Signature aggregator fields
-     */
     /// Signature aggregator address
     pub aggregator: Option<Address>,
-    /// The full original signature, after the `signature` field is modified post-aggregation
-    pub original_signature: Bytes,
-    /// The original calldata costs
-    pub original_calldata_cost: u128,
-    /// The costs associated with the aggregator
-    pub aggregator_costs: AggregatorCosts,
 }
 
 impl UserOperationTrait for UserOperation {
@@ -120,7 +160,15 @@ impl UserOperationTrait for UserOperation {
         EntryPointVersion::V0_7
     }
 
-    fn hash(&self, _entry_point: Address, _chain_id: u64) -> B256 {
+    fn entry_point(&self) -> Address {
+        self.entry_point
+    }
+
+    fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
+    fn hash(&self) -> B256 {
         self.hash
     }
 
@@ -193,6 +241,10 @@ impl UserOperationTrait for UserOperation {
 
     fn max_priority_fee_per_gas(&self) -> u128 {
         self.max_priority_fee_per_gas
+    }
+
+    fn signature(&self) -> &Bytes {
+        &self.signature
     }
 
     fn pre_verification_gas(&self) -> u128 {
@@ -302,8 +354,8 @@ impl UserOperationTrait for UserOperation {
             + super::byte_array_abi_len(&self.packed.signature)
     }
 
-    fn authorization_tuple(&self) -> Option<Eip7702Auth> {
-        self.authorization_tuple.clone()
+    fn authorization_tuple(&self) -> Option<&Eip7702Auth> {
+        self.authorization_tuple.as_ref()
     }
 }
 
@@ -316,6 +368,49 @@ impl UserOperation {
     /// Returns a reference to the packed user operation
     pub fn packed(&self) -> &PackedUserOperation {
         &self.packed
+    }
+
+    /// Converts the user operation into an unstructured user operation
+    pub fn into_unstructured(self) -> UnstructuredUserOperation {
+        UnstructuredUserOperation {
+            sender: self.sender,
+            nonce: self.nonce,
+            call_data: self.call_data,
+            call_gas_limit: self.call_gas_limit,
+            verification_gas_limit: self.verification_gas_limit,
+            pre_verification_gas: self.pre_verification_gas,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas,
+            max_fee_per_gas: self.max_fee_per_gas,
+            signature: self.signature,
+            factory: self.factory,
+            factory_data: self.factory_data,
+            paymaster: self.paymaster,
+            paymaster_verification_gas_limit: self.paymaster_verification_gas_limit,
+            paymaster_post_op_gas_limit: self.paymaster_post_op_gas_limit,
+            paymaster_data: self.paymaster_data,
+            authorization_tuple: self.authorization_tuple,
+            aggregator: self.aggregator,
+        }
+    }
+
+    /// Get the paymaster data
+    pub fn paymaster_data(&self) -> &Bytes {
+        &self.paymaster_data
+    }
+
+    /// Get the factory data
+    pub fn factory_data(&self) -> &Bytes {
+        &self.factory_data
+    }
+
+    /// Get the paymaster verification gas limit
+    pub fn paymaster_verification_gas_limit(&self) -> u128 {
+        self.paymaster_verification_gas_limit
+    }
+
+    /// Get the paymaster post-op gas limit
+    pub fn paymaster_post_op_gas_limit(&self) -> u128 {
+        self.paymaster_post_op_gas_limit
     }
 }
 
@@ -468,7 +563,7 @@ impl UserOperationOptionalGas {
         let uo = builder.build();
 
         if let Some(agg) = uo.aggregator {
-            super::transform_for_aggregator(uo, agg, chain_spec)
+            super::dummy_transform_for_aggregator(uo, agg, chain_spec)
         } else {
             uo
         }
@@ -527,7 +622,7 @@ impl UserOperationOptionalGas {
         let uo = builder.build();
 
         if let Some(agg) = uo.aggregator {
-            super::transform_for_aggregator(uo, agg, chain_spec)
+            super::dummy_transform_for_aggregator(uo, agg, chain_spec)
         } else {
             uo
         }
@@ -1091,7 +1186,7 @@ mod tests {
 
         let hash = b256!("e486401370d145766c3cf7ba089553214a1230d38662ae532c9b62eb6dadcf7e");
         let uo = UserOperationBuilder::from_packed(puo, &cs).unwrap().build();
-        assert_eq!(uo.hash(cs.entry_point_address_v0_7, cs.id), hash);
+        assert_eq!(uo.hash(), hash);
     }
 
     #[test]

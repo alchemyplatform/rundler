@@ -69,6 +69,12 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// Get the entry point version for this UO
     fn entry_point_version() -> EntryPointVersion;
 
+    /// Get the entry point address
+    fn entry_point(&self) -> Address;
+
+    /// Get the chain id
+    fn chain_id(&self) -> u64;
+
     /*
      * Getters
      */
@@ -112,18 +118,21 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             .min(base_fee + self.max_priority_fee_per_gas())
     }
 
+    /// Returns the signature of the user operation
+    fn signature(&self) -> &Bytes;
+
     /// Return the authorization list of the UO. empty if it is not 7702 txn.
-    fn authorization_tuple(&self) -> Option<Eip7702Auth>;
+    fn authorization_tuple(&self) -> Option<&Eip7702Auth>;
 
     /*
      * Enhanced functions
      */
 
-    /// Hash a user operation with the given entry point and chain ID.
+    /// Hash a user operation.
     ///
-    /// The hash is used to uniquely identify a user operation in the entry point.
+    /// The hash is used to uniquely identify a user operation in the entry point & chain.
     /// It does not include the signature field.
-    fn hash(&self, entry_point: Address, chain_id: u64) -> B256;
+    fn hash(&self) -> B256;
 
     /// Get the user operation id
     fn id(&self) -> UserOperationId;
@@ -400,7 +409,7 @@ fn extra_data_len(agg_costs: &AggregatorCosts, bundle_size: usize) -> usize {
 }
 
 // PANICS: if the aggregator is not found in the chain spec
-fn transform_for_aggregator<UO: UserOperation>(
+fn dummy_transform_for_aggregator<UO: UserOperation>(
     uo: UO,
     aggregator: Address,
     chain_spec: &ChainSpec,
@@ -432,10 +441,24 @@ impl UserOperation for UserOperationVariant {
         EntryPointVersion::Unspecified
     }
 
-    fn hash(&self, entry_point: Address, chain_id: u64) -> B256 {
+    fn entry_point(&self) -> Address {
         match self {
-            UserOperationVariant::V0_6(op) => op.hash(entry_point, chain_id),
-            UserOperationVariant::V0_7(op) => op.hash(entry_point, chain_id),
+            UserOperationVariant::V0_6(op) => op.entry_point(),
+            UserOperationVariant::V0_7(op) => op.entry_point(),
+        }
+    }
+
+    fn chain_id(&self) -> u64 {
+        match self {
+            UserOperationVariant::V0_6(op) => op.chain_id(),
+            UserOperationVariant::V0_7(op) => op.chain_id(),
+        }
+    }
+
+    fn hash(&self) -> B256 {
+        match self {
+            UserOperationVariant::V0_6(op) => op.hash(),
+            UserOperationVariant::V0_7(op) => op.hash(),
         }
     }
 
@@ -572,6 +595,13 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
+    fn signature(&self) -> &Bytes {
+        match self {
+            UserOperationVariant::V0_6(op) => op.signature(),
+            UserOperationVariant::V0_7(op) => op.signature(),
+        }
+    }
+
     fn aggregator_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.aggregator_gas_limit(chain_spec, bundle_size),
@@ -638,7 +668,7 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
-    fn authorization_tuple(&self) -> Option<Eip7702Auth> {
+    fn authorization_tuple(&self) -> Option<&Eip7702Auth> {
         match self {
             UserOperationVariant::V0_6(op) => op.authorization_tuple(),
             UserOperationVariant::V0_7(op) => op.authorization_tuple(),

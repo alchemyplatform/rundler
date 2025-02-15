@@ -196,7 +196,8 @@ pub enum OperationOrigin {
 #[cfg(test)]
 mod tests {
     use rundler_types::{
-        v0_6::UserOperation, Entity, EntityInfo, EntityInfos, EntityType, ValidTimeRange,
+        v0_6::{UserOperationBuilder, UserOperationRequiredFields},
+        Entity, EntityInfo, EntityInfos, EntityType, ValidTimeRange,
     };
 
     use super::*;
@@ -209,12 +210,16 @@ mod tests {
         let factory = Address::random();
 
         let po = PoolOperation {
-            uo: UserOperation {
-                sender,
-                paymaster_and_data: paymaster.to_vec().into(),
-                init_code: factory.to_vec().into(),
-                ..Default::default()
-            }
+            uo: UserOperationBuilder::new(
+                &ChainSpec::default(),
+                UserOperationRequiredFields {
+                    sender,
+                    paymaster_and_data: paymaster.to_vec().into(),
+                    init_code: factory.to_vec().into(),
+                    ..Default::default()
+                },
+            )
+            .build()
             .into(),
             entry_point: Address::random(),
             aggregator: Some(aggregator),

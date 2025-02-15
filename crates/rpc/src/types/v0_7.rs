@@ -56,6 +56,8 @@ pub(crate) struct RpcUserOperation {
 
 impl From<UserOperation> for RpcUserOperation {
     fn from(op: UserOperation) -> Self {
+        let op = op.into_unstructured();
+
         let factory_data = if op.factory.is_some() {
             Some(op.factory_data)
         } else {

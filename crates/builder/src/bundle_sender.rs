@@ -707,7 +707,7 @@ where
             bundle.rejected_ops.len(),
             bundle.entity_updates.len()
         );
-        let op_hashes: Vec<_> = bundle.iter_ops().map(|op| self.op_hash(op)).collect();
+        let op_hashes: Vec<_> = bundle.iter_ops().map(|op| op.hash()).collect();
 
         let mut tx = self.entry_point.get_send_bundle_transaction(
             bundle.ops_per_aggregator,
@@ -729,9 +729,7 @@ where
         self.pool
             .remove_ops(
                 *self.entry_point.address(),
-                ops.iter()
-                    .map(|op| op.hash(*self.entry_point.address(), self.chain_spec.id))
-                    .collect(),
+                ops.iter().map(|op| op.hash()).collect(),
             )
             .await
             .context("builder should remove rejected ops from pool")
@@ -749,10 +747,6 @@ where
             entry_point: *self.entry_point.address(),
             event,
         });
-    }
-
-    fn op_hash(&self, op: &UO) -> B256 {
-        op.hash(*self.entry_point.address(), self.chain_spec.id)
     }
 }
 

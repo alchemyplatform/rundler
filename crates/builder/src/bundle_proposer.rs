@@ -383,15 +383,14 @@ where
         base_fee: u128,
         required_op_fees: GasFees,
     ) -> Option<PoolOperation> {
-        let op_hash = self.op_hash(&op.uo);
-
+        let op_hash = op.uo.hash();
         // filter by fees
         if op.uo.max_fee_per_gas() < required_op_fees.max_fee_per_gas
             || op.uo.max_priority_fee_per_gas() < required_op_fees.max_priority_fee_per_gas
         {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
-                self.op_hash(&op.uo),
+                op_hash,
                 SkipReason::InsufficientFees {
                     required_fees: required_op_fees,
                     actual_fees: GasFees {
@@ -492,7 +491,7 @@ where
     ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
         let _timer_guard =
             rundler_utils::guard_timer::CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
-        let op_hash = self.op_hash(&op.uo);
+        let op_hash = op.uo.hash();
 
         // Simulate
         let result = self
@@ -552,7 +551,7 @@ where
                 Err(error) => {
                     self.emit(BuilderEvent::rejected_op(
                         self.builder_tag.clone(),
-                        self.op_hash(&op),
+                        op.hash(),
                         OpRejectionReason::FailedRevalidation {
                             error: error.clone(),
                         },
@@ -577,7 +576,7 @@ where
             {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op),
+                    op.hash(),
                     SkipReason::InvalidTimeRange {
                         valid_range: simulation.valid_time_range,
                     },
@@ -594,7 +593,7 @@ where
             {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op),
+                    op.hash(),
                     SkipReason::TransactionSizeLimit,
                 ));
                 continue;
@@ -606,7 +605,7 @@ where
             if required_gas > self.settings.max_bundle_gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op),
+                    op.hash(),
                     SkipReason::GasLimit,
                 ));
                 continue;
@@ -619,7 +618,7 @@ where
             {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op),
+                    op.hash(),
                     SkipReason::ExpectedStorageConflict(e.to_string()),
                 ));
                 continue;
@@ -628,7 +627,7 @@ where
             {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op),
+                    op.hash(),
                     SkipReason::ExpectedStorageLimit,
                 ));
                 continue;
@@ -644,7 +643,7 @@ where
                 info!("Excluding op from {:?} because it accessed the address of another sender in the bundle.", op.sender());
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op),
+                    op.hash(),
                     SkipReason::AccessedOtherSender { other_sender },
                 ));
                 continue;
@@ -711,7 +710,7 @@ where
         for (index, reason) in to_reject {
             self.emit(BuilderEvent::rejected_op(
                 self.builder_tag.clone(),
-                self.op_hash(&context.get_op_at(index)?.op),
+                context.get_op_at(index)?.op.hash(),
                 OpRejectionReason::ConditionNotMet(reason),
             ));
             self.reject_index(context, index, false).await;
@@ -772,11 +771,7 @@ where
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
         hash: B256,
     ) -> bool {
-        let Some(index) = context.get_op_index(
-            hash,
-            *self.ep_providers.entry_point().address(),
-            self.settings.chain_spec.id,
-        ) else {
+        let Some(index) = context.get_op_index(hash) else {
             return false;
         };
 
@@ -875,7 +870,7 @@ where
             HandleOpsOut::FailedOp(index, message) => {
                 self.emit(BuilderEvent::rejected_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&context.get_op_at(index)?.op),
+                    context.get_op_at(index)?.op.hash(),
                     OpRejectionReason::FailedInBundle {
                         message: Arc::new(message.clone()),
                     },
@@ -1107,7 +1102,7 @@ where
         for index in to_remove.into_iter().rev() {
             self.emit(BuilderEvent::rejected_op(
                 self.builder_tag.clone(),
-                self.op_hash(&context.get_op_at(index)?.op),
+                context.get_op_at(index)?.op.hash(),
                 OpRejectionReason::FailedInBundle {
                     message: Arc::new("post op reverted leading to entry point revert".to_owned()),
                 },
@@ -1125,7 +1120,7 @@ where
         gas_limit: u64,
         bundle_fees: GasFees,
     ) -> Vec<usize> {
-        let op_hash = self.op_hash(&op);
+        let op_hash = op.hash();
         let bundle = vec![UserOpsPerAggregator {
             aggregator: Address::ZERO,
             signature: Bytes::new(),
@@ -1221,7 +1216,7 @@ where
                 {
                     self.emit(BuilderEvent::skipped_op(
                         self.builder_tag.clone(),
-                        self.op_hash(&op.uo),
+                        op.uo.hash(),
                         SkipReason::UnsupportedAggregator(agg),
                     ));
                     continue;
@@ -1234,7 +1229,7 @@ where
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    self.op_hash(&op.uo),
+                    op.uo.hash(),
                     SkipReason::GasLimit,
                 ));
                 continue;
@@ -1253,16 +1248,6 @@ where
             entry_point: *self.ep_providers.entry_point().address(),
             event,
         });
-    }
-
-    fn op_hash<T>(&self, op: &T) -> B256
-    where
-        T: UserOperation,
-    {
-        op.hash(
-            *self.ep_providers.entry_point().address(),
-            self.settings.chain_spec.id,
-        )
     }
 }
 
@@ -1395,9 +1380,9 @@ impl<UO: UserOperation> ProposalContext<UO> {
         anyhow::bail!("op at {index} out of bounds")
     }
 
-    fn get_op_index(&self, hash: B256, entry_point: Address, chain_id: u64) -> Option<usize> {
+    fn get_op_index(&self, hash: B256) -> Option<usize> {
         self.iter_ops_with_simulations()
-            .position(|op| op.op.hash(entry_point, chain_id) == *hash)
+            .position(|op| op.op.hash() == *hash)
     }
 
     fn reject_all(&mut self) {
@@ -1819,7 +1804,7 @@ mod tests {
         da::BedrockDAGasBlockData,
         pool::{MockPool, SimulationViolation},
         proxy::MockSubmissionProxy,
-        v0_6::UserOperation,
+        v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
         UserOperation as _, ValidTimeRange,
     };
 
@@ -1827,12 +1812,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_singleton_valid_bundle() {
-        let op = UserOperation {
+        let op = op_from_required(UserOperationRequiredFields {
             pre_verification_gas: DEFAULT_PVG,
             verification_gas_limit: 10000,
             call_gas_limit: 100000,
             ..Default::default()
-        };
+        });
 
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
@@ -1977,8 +1962,8 @@ mod tests {
         // but op2 accepted.
         let base_fee = 1000;
         let max_priority_fee_per_gas = 50;
-        let op1 = op_with_sender_and_fees(address(1), 2049, 49);
-        let op2 = op_with_sender_and_fees(address(2), 2050, 50);
+        let op1 = op_with_sender_and_fees(address(1), 2049, 49, DEFAULT_PVG);
+        let op2 = op_with_sender_and_fees(address(2), 2050, 50, DEFAULT_PVG);
         let bundle = mock_make_bundle(
             vec![
                 MockOp {
@@ -2016,8 +2001,8 @@ mod tests {
     async fn test_skips_but_not_rejects_op_with_too_low_max_fee_per_gas() {
         let base_fee = 1000;
         let max_priority_fee_per_gas = 50;
-        let op1 = op_with_sender_and_fees(address(1), 1049, 49);
-        let op2 = op_with_sender_and_fees(address(2), 1050, 50);
+        let op1 = op_with_sender_and_fees(address(1), 1049, 49, DEFAULT_PVG);
+        let op2 = op_with_sender_and_fees(address(2), 1050, 50, DEFAULT_PVG);
         let bundle = mock_make_bundle(
             vec![
                 MockOp {
@@ -2062,11 +2047,10 @@ mod tests {
     async fn test_skips_but_not_rejects_op_with_too_low_pvg() {
         let base_fee = 1000;
         let max_priority_fee_per_gas = 50;
-
-        let mut op1 = op_with_sender_and_fees(address(1), 1054, 55);
-        op1.pre_verification_gas = 0; // Should be skipped but not rejected
-        let mut op2 = op_with_sender_and_fees(address(2), 1055, 55);
-        op2.pre_verification_gas = DEFAULT_PVG; // Should be included
+        // Should be skipped but not rejected
+        let op1 = op_with_sender_and_fees(address(1), 1054, 55, 0);
+        // Should be included
+        let op2 = op_with_sender_and_fees(address(2), 1055, 55, DEFAULT_PVG);
 
         let bundle = mock_make_bundle(
             vec![
@@ -2115,12 +2099,12 @@ mod tests {
         let aggregator_a_address = address(10);
         let aggregator_b_address = address(11);
         let unaggregated_op = op_with_sender(address(1));
-        let mut aggregated_op_a1 = op_with_sender(address(2));
-        aggregated_op_a1.aggregator = Some(aggregator_a_address);
-        let mut aggregated_op_a2 = op_with_sender(address(3));
-        aggregated_op_a2.aggregator = Some(aggregator_a_address);
-        let mut aggregated_op_b = op_with_sender(address(4));
-        aggregated_op_b.aggregator = Some(aggregator_b_address);
+        let aggregated_op_a1 =
+            op_with_sender_aggregator(address(2), aggregator_a_address, Bytes::new());
+        let aggregated_op_a2 =
+            op_with_sender_aggregator(address(3), aggregator_a_address, Bytes::new());
+        let aggregated_op_b =
+            op_with_sender_aggregator(address(4), aggregator_b_address, Bytes::new());
         let aggregator_a_signature = 101;
         let aggregator_b_signature = 102;
 
@@ -2182,24 +2166,12 @@ mod tests {
                     ..Default::default()
                 },
                 UserOpsPerAggregator {
-                    user_ops: vec![
-                        UserOperation {
-                            signature: Bytes::new(),
-                            ..aggregated_op_a1
-                        },
-                        UserOperation {
-                            signature: Bytes::new(),
-                            ..aggregated_op_a2
-                        }
-                    ],
+                    user_ops: vec![aggregated_op_a1, aggregated_op_a2,],
                     aggregator: aggregator_a_address,
                     signature: bytes(aggregator_a_signature)
                 },
                 UserOpsPerAggregator {
-                    user_ops: vec![UserOperation {
-                        signature: Bytes::new(),
-                        ..aggregated_op_b
-                    }],
+                    user_ops: vec![aggregated_op_b],
                     aggregator: aggregator_b_address,
                     signature: bytes(aggregator_b_signature)
                 },
@@ -2214,12 +2186,13 @@ mod tests {
         let aggregator_a_address = address(10);
         let aggregator_b_address = address(11);
         let unaggregated_op = op_with_sender(address(1));
-        let mut aggregated_op_a1 = op_with_sender(address(2));
-        aggregated_op_a1.aggregator = Some(aggregator_a_address);
-        let mut aggregated_op_a2 = op_with_sender(address(3));
-        aggregated_op_a2.aggregator = Some(aggregator_a_address);
-        let mut aggregated_op_b = op_with_sender(address(4));
-        aggregated_op_b.aggregator = Some(aggregator_b_address);
+        let aggregated_op_a1 =
+            op_with_sender_aggregator(address(2), aggregator_a_address, Bytes::new());
+        let aggregated_op_a2 =
+            op_with_sender_aggregator(address(3), aggregator_a_address, Bytes::new());
+        let aggregated_op_b =
+            op_with_sender_aggregator(address(4), aggregator_b_address, Bytes::new());
+
         let aggregator_a_signature = 101;
         let aggregator_b_signature = 102;
 
@@ -2288,16 +2261,7 @@ mod tests {
                     ..Default::default()
                 },
                 UserOpsPerAggregator {
-                    user_ops: vec![
-                        UserOperation {
-                            signature: Bytes::new(),
-                            ..aggregated_op_a1
-                        },
-                        UserOperation {
-                            signature: Bytes::new(),
-                            ..aggregated_op_a2
-                        }
-                    ],
+                    user_ops: vec![aggregated_op_a1, aggregated_op_a2,],
                     aggregator: aggregator_a_address,
                     signature: bytes(aggregator_a_signature)
                 },
@@ -2820,10 +2784,11 @@ mod tests {
     async fn test_post_op_revert_agg() {
         let aggregator_a_address = address(10);
         let unaggregated_op = op_with_sender(address(1));
-        let mut aggregated_op_a1 = op_with_sender(address(2));
-        aggregated_op_a1.aggregator = Some(aggregator_a_address);
-        let mut aggregated_op_a2 = op_with_sender(address(3));
-        aggregated_op_a2.aggregator = Some(aggregator_a_address);
+        let aggregated_op_a1 =
+            op_with_sender_aggregator(address(2), aggregator_a_address, Bytes::new());
+        let aggregated_op_a2 =
+            op_with_sender_aggregator(address(3), aggregator_a_address, Bytes::new());
+
         let aggregator_a_signature = 101;
 
         let agg_a = mock_signature_aggregator(aggregator_a_address, bytes(aggregator_a_signature));
@@ -3080,7 +3045,7 @@ mod tests {
     #[tokio::test]
     async fn test_submitter_proxy_revert() {
         let op = default_op();
-        let op_hash = op.hash(address(123), 0);
+        let op_hash = op.hash();
         let proxy_address = address(1);
         let bytes = bytes(1);
         let cloned_bytes = bytes.clone();
@@ -3218,7 +3183,10 @@ mod tests {
         aggregators: Vec<MockSignatureAggregator>,
         proxy: Option<MockSubmissionProxy>,
     ) -> Bundle<UserOperation> {
-        let entry_point_address = address(123);
+        let mut chain_spec = ChainSpec {
+            da_pre_verification_gas: da_gas_tracking_enabled,
+            ..Default::default()
+        };
         let sender_eoa = address(124);
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
@@ -3229,7 +3197,7 @@ mod tests {
             .map(|MockOp { op, .. }| PoolOperation {
                 uo: op.clone().into(),
                 expected_code_hash,
-                entry_point: entry_point_address,
+                entry_point: chain_spec.entry_point_address_v0_6,
                 sim_block_hash: current_block_hash,
                 sim_block_number: 0,
                 account_is_staked: false,
@@ -3248,7 +3216,7 @@ mod tests {
 
         let simulations_by_op: HashMap<_, _> = mock_ops
             .into_iter()
-            .map(|op| (op.op.hash(entry_point_address, 0), op.simulation_result))
+            .map(|op| (op.op.hash(), op.simulation_result))
             .collect();
         let mut simulator = MockSimulator::new();
         simulator
@@ -3256,11 +3224,11 @@ mod tests {
             .withf(move |_, &block_hash, &code_hash| {
                 block_hash == current_block_hash && code_hash == Some(expected_code_hash)
             })
-            .returning(move |op, _, _| simulations_by_op[&op.hash(entry_point_address, 0)]());
+            .returning(move |op, _, _| simulations_by_op[&op.hash()]());
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
             .expect_address()
-            .return_const(entry_point_address);
+            .return_const(chain_spec.entry_point_address_v0_6);
         for call_res in mock_handle_ops_call_results {
             entry_point
                 .expect_call_handle_ops()
@@ -3338,10 +3306,6 @@ mod tests {
                 100_000
             });
 
-        let mut chain_spec = ChainSpec {
-            da_pre_verification_gas: da_gas_tracking_enabled,
-            ..Default::default()
-        };
         let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
         for agg in aggregators {
             registry.register(agg.address(), Arc::new(agg));
@@ -3404,29 +3368,48 @@ mod tests {
     const DEFAULT_PVG: u128 = 1_000_000;
 
     fn op_with_sender(sender: Address) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             sender,
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
-        }
+        })
     }
 
     fn op_with_sender_paymaster(sender: Address, paymaster: Address) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             sender,
             paymaster_and_data: paymaster.to_vec().into(),
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
-        }
+        })
     }
 
     fn op_with_sender_factory(sender: Address, factory: Address) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             sender,
             init_code: factory.to_vec().into(),
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
-        }
+        })
+    }
+
+    fn op_with_sender_aggregator(
+        sender: Address,
+        aggregator: Address,
+        new_signature: Bytes,
+    ) -> UserOperation {
+        let mut op = op_from_required(UserOperationRequiredFields {
+            sender,
+            pre_verification_gas: DEFAULT_PVG,
+            ..Default::default()
+        });
+        op = op.transform_for_aggregator(
+            &ChainSpec::default(),
+            aggregator,
+            AggregatorCosts::default(),
+            new_signature,
+        );
+        op
     }
 
     fn op_with_sender_factory_paymaster(
@@ -3434,43 +3417,44 @@ mod tests {
         factory: Address,
         paymaster: Address,
     ) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             sender,
             init_code: factory.to_vec().into(),
             paymaster_and_data: paymaster.to_vec().into(),
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
-        }
+        })
     }
 
     fn op_with_sender_and_fees(
         sender: Address,
         max_fee_per_gas: u128,
         max_priority_fee_per_gas: u128,
+        pre_verification_gas: u128,
     ) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             sender,
             max_fee_per_gas,
             max_priority_fee_per_gas,
-            pre_verification_gas: DEFAULT_PVG,
+            pre_verification_gas,
             ..Default::default()
-        }
+        })
     }
 
     fn default_op() -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
-        }
+        })
     }
 
     fn op_with_sender_call_gas_limit(sender: Address, call_gas_limit: u128) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             sender,
             call_gas_limit,
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
-        }
+        })
     }
 
     fn op_with_gas(
@@ -3479,7 +3463,7 @@ mod tests {
         verification_gas_limit: u128,
         with_paymaster: bool,
     ) -> UserOperation {
-        UserOperation {
+        op_from_required(UserOperationRequiredFields {
             pre_verification_gas,
             call_gas_limit,
             verification_gas_limit,
@@ -3489,7 +3473,11 @@ mod tests {
                 Default::default()
             },
             ..Default::default()
-        }
+        })
+    }
+
+    fn op_from_required(required: UserOperationRequiredFields) -> UserOperation {
+        UserOperationBuilder::new(&ChainSpec::default(), required).build()
     }
 
     fn mock_signature_aggregator(address: Address, signature: Bytes) -> MockSignatureAggregator {
