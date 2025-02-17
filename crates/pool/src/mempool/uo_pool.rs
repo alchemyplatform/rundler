@@ -2088,7 +2088,7 @@ mod tests {
         agg.expect_address().return_const(agg_address);
         agg.expect_costs().return_const(AggregatorCosts::default());
         agg.expect_validate_user_op_signature()
-            .returning(move |_| Err(SignatureAggregatorError::ValidationReverted));
+            .returning(move |_| Err(SignatureAggregatorError::ValidationReverted(Bytes::new())));
 
         let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
         registry.register(agg_address, Arc::new(agg));

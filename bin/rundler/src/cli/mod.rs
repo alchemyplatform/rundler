@@ -337,14 +337,13 @@ pub struct CommonArgs {
     )]
     pub mempool_config_path: Option<String>,
 
-    /// Config path for entrypoint builders
     #[arg(
-        long = "entry_point_builders_path",
-        name = "entry_point_builders_path",
-        env = "ENTRY_POINT_BUILDERS_PATH",
+        long = "builders_config_path",
+        name = "builders_config_path",
+        env = "BUILDERS_CONFIG_PATH",
         global = true
     )]
-    entry_point_builders_path: Option<String>,
+    builders_config_path: Option<String>,
 
     #[arg(
         long = "disable_entry_point_v0_6",
@@ -790,21 +789,17 @@ async fn load_configs(
         None
     };
 
-    let entry_point_builders =
-        if let Some(entry_point_builders_path) = &args.entry_point_builders_path {
-            let entry_point_builders =
-                get_json_config::<EntryPointBuilderConfigs>(entry_point_builders_path)
-                    .await
-                    .with_context(|| {
-                        format!("should load entry point builders from {entry_point_builders_path}")
-                    })?;
+    let builders_config = if let Some(builders_config_path) = &args.builders_config_path {
+        let builders_config = get_json_config::<EntryPointBuilderConfigs>(builders_config_path)
+            .await
+            .with_context(|| format!("should load builders config from {builders_config_path}"))?;
 
-            tracing::info!("Entry point builders: {:?}", entry_point_builders);
+        tracing::info!("Entry point builders: {:?}", builders_config);
 
-            Some(entry_point_builders)
-        } else {
-            None
-        };
+        Some(builders_config)
+    } else {
+        None
+    };
 
-    Ok((mempool_configs, entry_point_builders))
+    Ok((mempool_configs, builders_config))
 }
