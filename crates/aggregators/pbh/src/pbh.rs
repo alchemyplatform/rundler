@@ -33,7 +33,7 @@ sol! {
     }
 }
 
-const PBH_AGGREGATOR_ADDRESS: Address = address!("5fc8d32690cc91d4c39d9d3abcbd16989f875707");
+const PBH_AGGREGATOR_ADDRESS: Address = address!("Cf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9");
 // TODO(pbh): verify these values with onchain data
 const PBH_AGGREGATOR_FIXED_GAS: u128 = 50_000;
 const PBH_AGGREGATOR_VARIABLE_GAS: u128 = 200_000;
@@ -94,8 +94,8 @@ where
             .await
         {
             Ok(sig) => match sig {
-                AggregatorOut::ValidationReverted => {
-                    Err(SignatureAggregatorError::ValidationReverted)
+                AggregatorOut::ValidationReverted(revert) => {
+                    Err(SignatureAggregatorError::ValidationReverted(revert))
                 }
                 AggregatorOut::SuccessWithInfo(into) => Ok(into.signature),
             },
