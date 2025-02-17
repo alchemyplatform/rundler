@@ -37,7 +37,7 @@ pub enum AggregatorOut {
     /// Successful call
     SuccessWithInfo(AggregatorSimOut),
     /// Aggregator validation function reverted
-    ValidationReverted,
+    ValidationReverted(Bytes),
 }
 
 /// Result of an entry point handle ops call

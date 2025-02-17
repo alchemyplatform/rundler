@@ -2206,7 +2206,7 @@ mod tests {
             .return_const(AggregatorCosts::default());
         agg_b
             .expect_aggregate_signatures()
-            .returning(move |_| Err(SignatureAggregatorError::ValidationReverted));
+            .returning(move |_| Err(SignatureAggregatorError::ValidationReverted(Bytes::new())));
 
         let mut bundle = mock_make_bundle(
             vec![

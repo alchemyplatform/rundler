@@ -280,19 +280,21 @@ impl BuilderArgs {
         let mut num_builders = 0;
 
         if !common.disable_entry_point_v0_6 {
-            let builders = if let Some(ep_builder_configs) = &entry_point_builders {
-                ep_builder_configs
-                    .entry_points
-                    .iter()
-                    .find(|ep| ep.address == chain_spec.entry_point_address_v0_6)
-                    .map(|ep| ep.builders())
-                    .expect("should find entry point v0.6 builders")
-            } else {
-                builder_settings_from_cli(
-                    common.builder_index_offset_v0_6,
-                    common.num_builders_v0_6,
-                )
-            };
+            let builders = entry_point_builders
+                .as_ref()
+                .and_then(|builder_configs| {
+                    builder_configs
+                        .entry_points
+                        .iter()
+                        .find(|ep| ep.address == chain_spec.entry_point_address_v0_6)
+                        .map(|ep| ep.builders())
+                })
+                .unwrap_or_else(|| {
+                    builder_settings_from_cli(
+                        common.builder_index_offset_v0_6,
+                        common.num_builders_v0_6,
+                    )
+                });
 
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_6,
@@ -305,19 +307,21 @@ impl BuilderArgs {
             num_builders += common.num_builders_v0_6;
         }
         if !common.disable_entry_point_v0_7 {
-            let builders = if let Some(ep_builder_configs) = &entry_point_builders {
-                ep_builder_configs
-                    .entry_points
-                    .iter()
-                    .find(|ep| ep.address == chain_spec.entry_point_address_v0_7)
-                    .map(|ep| ep.builders())
-                    .expect("should find entry point v0.7 builders")
-            } else {
-                builder_settings_from_cli(
-                    common.builder_index_offset_v0_7,
-                    common.num_builders_v0_7,
-                )
-            };
+            let builders = entry_point_builders
+                .as_ref()
+                .and_then(|builder_configs| {
+                    builder_configs
+                        .entry_points
+                        .iter()
+                        .find(|ep| ep.address == chain_spec.entry_point_address_v0_7)
+                        .map(|ep| ep.builders())
+                })
+                .unwrap_or_else(|| {
+                    builder_settings_from_cli(
+                        common.builder_index_offset_v0_7,
+                        common.num_builders_v0_7,
+                    )
+                });
 
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_7,

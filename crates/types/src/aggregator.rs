@@ -39,8 +39,8 @@ pub enum SignatureAggregatorError {
     #[error("Unsupported aggregator: {0}")]
     UnsupportedAggregator(Address),
     /// Signature validation reverted
-    #[error("Signature validation reverted")]
-    ValidationReverted,
+    #[error("Signature validation reverted: {0}")]
+    ValidationReverted(Bytes),
     /// Invalid user operation
     #[error("Invalid user operation: {0}")]
     InvalidUserOperation(String),

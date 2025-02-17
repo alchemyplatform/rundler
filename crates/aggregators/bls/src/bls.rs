@@ -77,8 +77,8 @@ where
             .await
         {
             Ok(sig) => match sig {
-                AggregatorOut::ValidationReverted => {
-                    Err(SignatureAggregatorError::ValidationReverted)
+                AggregatorOut::ValidationReverted(revert) => {
+                    Err(SignatureAggregatorError::ValidationReverted(revert))
                 }
                 AggregatorOut::SuccessWithInfo(into) => Ok(into.signature),
             },

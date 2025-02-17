@@ -212,8 +212,8 @@ where
                 signature: ret.sigForUserOp,
             })),
             Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
-                if resp.as_revert_data().is_some() {
-                    Ok(AggregatorOut::ValidationReverted)
+                if let Some(revert) = resp.as_revert_data() {
+                    Ok(AggregatorOut::ValidationReverted(revert))
                 } else {
                     Err(TransportError::ErrorResp(resp).into())
                 }
