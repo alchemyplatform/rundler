@@ -8,7 +8,7 @@ on:
         type: string
   push:
     tags:
-      - v*.*.*
+      - v(\d+)\.(\d+)\.(\d+)(-.*)?
 
 env:
   CARGO_TERM_COLOR: always
@@ -57,6 +57,8 @@ jobs:
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
             sudo -E env "PATH=$PATH" make GIT_TAG="${{ github.event.inputs.version }}" docker-build 
-          else
+          elif [[ "${{ github.ref_name }}" =~ ^v(\d+)\.(\d+)\.(\d+)$ ]]
             sudo -E env "PATH=$PATH" make docker-build-latest
+          else 
+            sudo -E env "PATH=$PATH" make GIT_TAG="${{ github.ref_name }}" docker-build 
           fi
