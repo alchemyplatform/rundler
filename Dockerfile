@@ -1,7 +1,7 @@
 # Adapted from https://github.com/paradigmxyz/reth/blob/main/Dockerfile
 # syntax=docker/dockerfile:1.4
 
-FROM --platform=$TARGETPLATFORM rust:1.83.0 AS chef-builder
+FROM rust:1.83.0 AS chef-builder
 
 # Install system dependencies
 RUN curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - && echo "deb https://dl.yarnpkg.com/debian/ stable main" | tee /etc/apt/sources.list.d/yarn.list
@@ -29,7 +29,7 @@ COPY --from=planner /app/recipe.json recipe.json
 
 # Set the build profile to be release
 ARG BUILD_PROFILE=release
-ENV BUILD_PROFILE $BUILD_PROFILE
+ENV BUILD_PROFILE=$BUILD_PROFILE
 
 # Builds dependencies
 RUN cargo chef cook --profile $BUILD_PROFILE --recipe-path recipe.json
