@@ -185,7 +185,6 @@ where
     }
 
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>> {
-        println!("{:?}", filter);
         Ok(self.inner.get_logs(filter).await?)
     }
 
