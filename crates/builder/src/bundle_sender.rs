@@ -271,7 +271,7 @@ where
                 if let Some(underpriced_info) = inner.underpriced_info {
                     // If we are here, there are UOs in the pool that may be correctly priced, but are being blocked by an underpriced replacement
                     // after a fee increase. If we repeatedly get into this state, initiate a cancellation.
-                    if block_number - underpriced_info.since_block
+                    if block_number.saturating_sub(underpriced_info.since_block)
                         >= self.settings.max_replacement_underpriced_blocks
                     {
                         warn!("No operations available, but last replacement underpriced, moving to cancelling state. Round: {}. Since block {}. Current block {}. Max underpriced blocks: {}", underpriced_info.rounds, underpriced_info.since_block, block_number, self.settings.max_replacement_underpriced_blocks);
@@ -564,7 +564,7 @@ where
             if let Some(last_idle_block) = state.last_idle_block {
                 metrics
                     .builder_idle_blocks
-                    .increment(block_number - last_idle_block);
+                    .increment(block_number.saturating_sub(last_idle_block));
             }
             state.last_idle_block = Some(block_number);
         };
