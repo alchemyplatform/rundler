@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use alloy_provider::{Provider as AlloyProvider, ProviderBuilder};
 use alloy_rpc_client::ClientBuilder;
@@ -28,6 +28,7 @@ use crate::EvmProvider;
 
 mod da;
 pub use da::new_alloy_da_gas_oracle;
+pub(crate) mod cache;
 pub(crate) mod entry_point;
 pub(crate) mod evm;
 pub(crate) mod metrics;
@@ -38,7 +39,10 @@ pub fn new_alloy_evm_provider(
     rpc_url: &str,
     provider_client_timeout_seconds: u64,
 ) -> anyhow::Result<impl EvmProvider + Clone> {
-    let provider = new_alloy_provider(rpc_url, provider_client_timeout_seconds)?;
+    let provider = Arc::new(new_alloy_provider(
+        rpc_url,
+        provider_client_timeout_seconds,
+    )?);
     Ok(AlloyEvmProvider::new(provider))
 }
 

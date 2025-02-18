@@ -11,14 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::{collections::HashMap, sync::Arc};
+
 use alloy_contract::Error as ContractError;
-use alloy_eips::eip7702::SignedAuthorization;
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_eips::{eip7702::SignedAuthorization, BlockNumberOrTag};
+use alloy_primitives::{Address, Bytes, FixedBytes, U256};
 use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
 use alloy_transport::{Transport, TransportError};
 use anyhow::Context;
+use parking_lot::RwLock;
 use rundler_contracts::v0_6::{
     DepositInfo as DepositInfoV0_6,
     GetBalances::{self, GetBalancesResult},
@@ -38,9 +41,10 @@ use rundler_types::{
 use rundler_utils::authorization_utils;
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
-    DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
-    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
+    alloy::cache::BlockNumberCache, AggregatorOut, AggregatorSimOut, BlockHashOrNumber,
+    BundleHandler, DAGasOracle, DAGasProvider, DepositInfo, EntryPoint,
+    EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult, HandleOpsOut,
+    ProviderResult, SignatureAggregator, SimulationProvider,
 };
 
 /// Entry point provider for v0.6
@@ -52,6 +56,7 @@ pub struct EntryPointProvider<AP, T, D> {
     max_simulate_handle_op_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
+    block_number_cache: BlockNumberCache<AP, T>,
 }
 
 impl<AP, T, D> EntryPointProvider<AP, T, D>
@@ -79,6 +84,7 @@ where
             max_simulate_handle_op_gas,
             max_aggregation_gas,
             chain_spec,
+            block_number_cache: BlockNumberCache::new(Arc::new(provider)),
         }
     }
 }
@@ -99,16 +105,24 @@ where
         address: Address,
         block_id: Option<BlockId>,
     ) -> ProviderResult<U256> {
-        let ret = block_id
-            .map_or(self.i_entry_point.balanceOf(address), |bid| {
-                self.i_entry_point.balanceOf(address).block(bid)
-            })
+        let block_number = match block_id {
+            Some(bid) => {
+                self.block_number_cache
+                    .get_block_number_from_id(bid)
+                    .await?
+            }
+            None => BlockId::latest(),
+        };
+
+        let ret = self
+            .i_entry_point
+            .balanceOf(address)
+            .block(block_number)
             .call()
             .await?;
 
         Ok(ret._0)
     }
-
     async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo> {
         self.i_entry_point
             .getDepositInfo(address)

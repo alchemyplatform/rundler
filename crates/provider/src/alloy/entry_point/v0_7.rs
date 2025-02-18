@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_json_rpc::ErrorPayload;
@@ -46,9 +48,10 @@ use rundler_types::{
 use rundler_utils::authorization_utils;
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
-    DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
-    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
+    alloy::cache::BlockNumberCache, AggregatorOut, AggregatorSimOut, BlockHashOrNumber,
+    BundleHandler, DAGasOracle, DAGasProvider, DepositInfo, EntryPoint,
+    EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult, HandleOpsOut,
+    ProviderResult, SignatureAggregator, SimulationProvider,
 };
 /// Entry point provider for v0.7
 #[derive(Clone)]
@@ -59,6 +62,7 @@ pub struct EntryPointProvider<AP, T, D> {
     max_simulate_handle_ops_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
+    block_number_cache: BlockNumberCache<AP, T>,
 }
 
 impl<AP, T, D> EntryPointProvider<AP, T, D>
@@ -85,6 +89,7 @@ where
             max_simulate_handle_ops_gas,
             max_aggregation_gas,
             chain_spec,
+            block_number_cache: BlockNumberCache::new(Arc::new(provider)),
         }
     }
 }
