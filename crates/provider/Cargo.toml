@@ -34,6 +34,7 @@ async-trait.workspace = true
 auto_impl.workspace = true
 const-hex.workspace = true
 futures-util.workspace = true
+parking_lot.workspace = true
 pin-project.workspace = true
 rand.workspace = true
 reqwest.workspace = true

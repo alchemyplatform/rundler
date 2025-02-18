@@ -83,12 +83,14 @@ where
 
     fn call(&mut self, request: RequestPacket) -> Self::Future {
         let method_name = get_method_name(&request);
+        let req_clone = request.clone();
         let method_logger = MethodSessionLogger::start(
             "alloy_provider_client".to_string(),
             method_name.clone(),
             "rpc".to_string(),
         );
         let fut = self.service.call(request);
+
         async move {
             let response = fut.await;
             method_logger.done();
@@ -98,6 +100,10 @@ where
                     method_logger.record_rpc(get_rpc_status_code(resp));
                     if resp.is_error() {
                         let error = resp.as_error().unwrap();
+                        if get_method_name(&req_clone) == "eth_getLogs" {
+                            println!("{:?}", req_clone.serialize());
+                            println!("{:?}", error);
+                        }
                         if error.code < 0 {
                             tracing::warn!(
                                 "alloy provider of method {} response with error: {}",

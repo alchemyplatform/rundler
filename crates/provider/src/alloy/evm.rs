@@ -11,10 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::marker::PhantomData;
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
+use alloy_consensus::BlockHeader;
+use alloy_eips::RpcBlockHash;
 use alloy_json_rpc::{RpcParam, RpcReturn};
-use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
+use alloy_primitives::{Address, Bytes, FixedBytes, TxHash, B256, U256};
 use alloy_provider::{ext::DebugApi, network::TransactionBuilder, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
@@ -26,6 +28,7 @@ use alloy_rpc_types_trace::geth::{
 };
 use alloy_transport::Transport;
 use anyhow::Context;
+use parking_lot::RwLock;
 use rundler_contracts::utils::{
     GetCodeHashes::{self, GetCodeHashesInstance},
     GetGasUsed::{self, GasUsedResult},
@@ -36,6 +39,7 @@ use crate::{EvmCall, EvmProvider, ProviderResult};
 
 /// Evm Provider implementation using [alloy-provider](https://github.com/alloy-rs/alloy-rs)
 pub struct AlloyEvmProvider<AP, T> {
+    block_hash_cache: Arc<RwLock<HashMap<FixedBytes<32>, BlockNumberOrTag>>>,
     inner: AP,
     _marker: PhantomData<T>,
 }
@@ -45,8 +49,40 @@ impl<AP, T> AlloyEvmProvider<AP, T> {
     pub fn new(inner: AP) -> Self {
         Self {
             inner,
+            block_hash_cache: Arc::new(RwLock::new(HashMap::new())),
             _marker: PhantomData,
         }
+    }
+}
+
+impl<AP, T> AlloyEvmProvider<AP, T>
+where
+    T: Transport + Clone,
+    AP: AlloyProvider<T>,
+{
+    async fn get_block_number_from_hash(
+        &self,
+        block: RpcBlockHash,
+    ) -> ProviderResult<BlockNumberOrTag> {
+        if let Some(&block_number) = self.block_hash_cache.read().get(&block.block_hash) {
+            return Ok(block_number);
+        }
+
+        let bd = self
+            .inner
+            .get_block_by_hash(block.block_hash, BlockTransactionsKind::Hashes)
+            .await?;
+
+        if let Some(block_data) = bd {
+            let block_number = BlockNumberOrTag::Number(block_data.header.number());
+
+            self.block_hash_cache
+                .write()
+                .insert(block.block_hash, block_number);
+            return Ok(block_number);
+        }
+
+        Ok(BlockNumberOrTag::Latest)
     }
 }
 
@@ -56,6 +92,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            block_hash_cache: self.block_hash_cache.clone(),
             inner: self.inner.clone(),
             _marker: PhantomData,
         }
@@ -105,11 +142,16 @@ where
         state_overrides: &StateOverride,
     ) -> ProviderResult<Bytes> {
         let mut call = self.inner.call(tx);
-        if let Some(block) = block {
-            call = call.block(block);
-        }
-        call = call.overrides(state_overrides);
 
+        if let Some(block_id) = block {
+            let block_number = match block_id {
+                BlockId::Hash(hash) => self.get_block_number_from_hash(hash).await?,
+                BlockId::Number(num) => num,
+            };
+            call = call.block(BlockId::Number(block_number));
+        }
+
+        call = call.overrides(state_overrides);
         Ok(call.await?)
     }
 
@@ -226,6 +268,7 @@ where
         let ret = helper
             .getGas(to, value, data)
             .state(state_override)
+            .block(BlockId::Number(BlockNumberOrTag::Latest))
             .call()
             .await?
             ._0;
@@ -255,7 +298,12 @@ where
             .to(address)
             .with_input(slot_data);
 
-        let result_bytes = self.inner.call(&tx).overrides(&overrides).await?;
+        let result_bytes = self
+            .inner
+            .call(&tx)
+            .block(BlockId::Number(BlockNumberOrTag::Latest))
+            .overrides(&overrides)
+            .await?;
 
         if result_bytes.len() != expected_ret_size {
             return Err(anyhow::anyhow!(
@@ -291,7 +339,11 @@ where
         addresses.sort();
         let mut call = helper.getCodeHashes(addresses).state(overrides);
         if let Some(block) = block {
-            call = call.block(block);
+            let block_number = match block {
+                BlockId::Hash(hash) => self.get_block_number_from_hash(hash).await?,
+                BlockId::Number(num) => num,
+            };
+            call = call.block(BlockId::Number(block_number));
         }
 
         let ret = call.call().await?;
