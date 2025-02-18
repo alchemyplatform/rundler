@@ -18,6 +18,7 @@ use alloy_rpc_client::ClientBuilder;
 use alloy_transport::layers::RetryBackoffService;
 use alloy_transport_http::Http;
 use anyhow::Context;
+use cache::BlockNumberCache;
 use evm::AlloyEvmProvider;
 use metrics::{AlloyMetricLayer, AlloyMetricMiddleware};
 use provider_timeout::{ProviderTimeout, ProviderTimeoutLayer};
@@ -43,7 +44,9 @@ pub fn new_alloy_evm_provider(
         rpc_url,
         provider_client_timeout_seconds,
     )?);
-    Ok(AlloyEvmProvider::new(provider))
+
+    let block_number_cache = Arc::new(BlockNumberCache::new(provider.clone()));
+    Ok(AlloyEvmProvider::new(provider, block_number_cache))
 }
 
 /// Create a new alloy provider from a given RPC URL

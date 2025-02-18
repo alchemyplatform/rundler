@@ -11,17 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use alloy_contract::Error as ContractError;
-use alloy_eips::{eip7702::SignedAuthorization, BlockNumberOrTag};
-use alloy_primitives::{Address, Bytes, FixedBytes, U256};
+use alloy_eips::eip7702::SignedAuthorization;
+use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
 use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
 use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
 use alloy_transport::{Transport, TransportError};
 use anyhow::Context;
-use parking_lot::RwLock;
 use rundler_contracts::v0_6::{
     DepositInfo as DepositInfoV0_6,
     GetBalances::{self, GetBalancesResult},
@@ -56,7 +55,7 @@ pub struct EntryPointProvider<AP, T, D> {
     max_simulate_handle_op_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
-    block_number_cache: BlockNumberCache<AP, T>,
+    block_number_cache: Arc<BlockNumberCache<AP, T>>,
 }
 
 impl<AP, T, D> EntryPointProvider<AP, T, D>
@@ -73,6 +72,7 @@ where
         max_aggregation_gas: u64,
         provider: AP,
         da_gas_oracle: D,
+        block_number_cache: Arc<BlockNumberCache<AP, T>>,
     ) -> Self {
         Self {
             i_entry_point: IEntryPointInstance::new(
@@ -84,7 +84,7 @@ where
             max_simulate_handle_op_gas,
             max_aggregation_gas,
             chain_spec,
-            block_number_cache: BlockNumberCache::new(Arc::new(provider)),
+            block_number_cache,
         }
     }
 }
@@ -419,7 +419,13 @@ where
             .simulateValidation(user_op.into())
             .gas(self.max_verification_gas.saturating_add(da_gas));
         let call = match block_id {
-            Some(block_id) => blockless.block(block_id),
+            Some(block_id) => {
+                let block_data = self
+                    .block_number_cache
+                    .get_block_number_from_id(block_id)
+                    .await?;
+                blockless.block(block_data)
+            }
             None => blockless,
         };
 
@@ -491,10 +497,15 @@ where
             );
         }
 
+        let block_data = self
+            .block_number_cache
+            .get_block_number_from_id(block_id)
+            .await?;
+
         let contract_error = self
             .i_entry_point
             .simulateHandleOp(op.into(), target, target_call_data)
-            .block(block_id)
+            .block(block_data)
             .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
             .state(state_override)
             .call()

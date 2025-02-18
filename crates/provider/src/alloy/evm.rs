@@ -37,16 +37,16 @@ use crate::{EvmCall, EvmProvider, ProviderResult};
 
 /// Evm Provider implementation using [alloy-provider](https://github.com/alloy-rs/alloy-rs)
 pub struct AlloyEvmProvider<AP, T> {
-    block_number_cache: BlockNumberCache<AP, T>,
-    inner: Arc<AP>,
+    block_number_cache: Arc<BlockNumberCache<AP, T>>,
+    inner: AP,
     _marker: PhantomData<T>,
 }
 
 impl<AP, T> AlloyEvmProvider<AP, T> {
     /// Create a new `AlloyEvmProvider`
-    pub fn new(inner: Arc<AP>) -> Self {
+    pub fn new(inner: AP, block_number_cache: Arc<BlockNumberCache<AP, T>>) -> Self {
         Self {
-            block_number_cache: BlockNumberCache::new(inner.clone()),
+            block_number_cache,
             inner,
             _marker: PhantomData,
         }
@@ -69,10 +69,10 @@ where
 impl<AP, T> From<AP> for AlloyEvmProvider<AP, T>
 where
     T: Transport + Clone,
-    AP: AlloyProvider<T>,
+    AP: AlloyProvider<T> + Clone,
 {
     fn from(inner: AP) -> Self {
-        Self::new(Arc::new(inner))
+        Self::new(inner.clone(), Arc::new(BlockNumberCache::new(inner)))
     }
 }
 
@@ -185,6 +185,7 @@ where
     }
 
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>> {
+        println!("{:?}", filter);
         Ok(self.inner.get_logs(filter).await?)
     }
 
@@ -325,7 +326,7 @@ mod tests {
     use alloy_provider::ProviderBuilder;
     use alloy_sol_macro::sol;
 
-    use crate::{AlloyEvmProvider, EvmProvider};
+    use crate::{AlloyEvmProvider, BlockNumberCache, EvmProvider};
 
     sol!(
         #[allow(missing_docs)]
@@ -388,7 +389,10 @@ mod tests {
         let get_code_hashes_contract = GetCodeHashes::deploy(alloy_provider.clone()).await.unwrap();
         let get_gas_used_contract = GetGasUsed::deploy(alloy_provider.clone()).await.unwrap();
 
-        let emv_provider = AlloyEvmProvider::new(alloy_provider);
+        let emv_provider = AlloyEvmProvider::new(
+            alloy_provider.clone(),
+            Arc::new(BlockNumberCache::new(alloy_provider)),
+        );
         let address_1 = get_code_hashes_contract.address();
         let address_2 = get_gas_used_contract.address();
 
@@ -412,7 +416,10 @@ mod tests {
         let get_code_hashes_contract = GetCodeHashes::deploy(alloy_provider.clone()).await.unwrap();
         let get_gas_used_contract = GetGasUsed::deploy(alloy_provider.clone()).await.unwrap();
 
-        let emv_provider = AlloyEvmProvider::new(alloy_provider);
+        let emv_provider = AlloyEvmProvider::new(
+            alloy_provider.clone(),
+            Arc::new(BlockNumberCache::new(alloy_provider)),
+        );
         let address_1 = get_code_hashes_contract.address();
         let address_2 = get_gas_used_contract.address();
 

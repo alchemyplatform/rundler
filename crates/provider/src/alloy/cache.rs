@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData};
 
 use alloy_eips::BlockId;
 use alloy_primitives::BlockHash;
@@ -23,17 +23,30 @@ use parking_lot::RwLock;
 use crate::ProviderResult;
 
 struct BlockNumberCacheInner<AP, T> {
-    inner: Arc<AP>,
+    inner: AP,
     block_hash_cache: RwLock<HashMap<BlockHash, BlockNumberOrTag>>,
     _marker: PhantomData<T>,
 }
 
+impl<AP, T> Clone for BlockNumberCacheInner<AP, T>
+where
+    AP: Clone,
+{
+    fn clone(&self) -> Self {
+        BlockNumberCacheInner {
+            inner: self.inner.clone(),
+            block_hash_cache: RwLock::new(self.block_hash_cache.read().clone()),
+            _marker: PhantomData,
+        }
+    }
+}
+
 impl<AP, T> BlockNumberCacheInner<AP, T> {
-    fn new(provider: Arc<AP>) -> Self {
+    fn new(provider: AP) -> Self {
         BlockNumberCacheInner {
             inner: provider,
             block_hash_cache: RwLock::new(HashMap::new()),
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         }
     }
 }
@@ -72,17 +85,22 @@ where
     }
 }
 
-pub(crate) struct BlockNumberCache<AP, T>(Arc<BlockNumberCacheInner<AP, T>>);
+/// Cache to map block hash to the block number
+pub struct BlockNumberCache<AP, T>(BlockNumberCacheInner<AP, T>);
 
-impl<AP, T> BlockNumberCache<AP, T> {
-    pub(crate) fn new(provider: Arc<AP>) -> Self {
-        BlockNumberCache(Arc::new(BlockNumberCacheInner::new(provider)))
+impl<AP, T> Clone for BlockNumberCache<AP, T>
+where
+    AP: Clone,
+{
+    fn clone(&self) -> Self {
+        BlockNumberCache(self.0.clone())
     }
 }
 
-impl<AP, T> Clone for BlockNumberCache<AP, T> {
-    fn clone(&self) -> Self {
-        BlockNumberCache(Arc::clone(&self.0))
+impl<AP, T> BlockNumberCache<AP, T> {
+    /// Initializer function for the cache
+    pub fn new(provider: AP) -> Self {
+        BlockNumberCache(BlockNumberCacheInner::new(provider))
     }
 }
 

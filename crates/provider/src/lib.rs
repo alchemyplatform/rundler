@@ -23,6 +23,7 @@
 
 mod alloy;
 pub use alloy::{
+    cache::BlockNumberCache,
     entry_point::{
         v0_6::EntryPointProvider as AlloyEntryPointV0_6,
         v0_7::{
