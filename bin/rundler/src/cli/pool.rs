@@ -24,7 +24,7 @@ use rundler_types::{chain::ChainSpec, EntryPointVersion};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
-use super::CommonArgs;
+use super::{builder::EntryPointBuilderConfigs, CommonArgs};
 use crate::cli::json::get_json_config;
 
 const REQUEST_CHANNEL_CAPACITY: usize = 1024;
@@ -206,6 +206,7 @@ impl PoolArgs {
         common: &CommonArgs,
         remote_address: Option<SocketAddr>,
         mempool_configs: Option<MempoolConfigs>,
+        builder_configs: Option<EntryPointBuilderConfigs>,
     ) -> anyhow::Result<PoolTaskArgs> {
         let blocklist = match &self.blocklist_path {
             Some(blocklist) => Some(get_json_config(blocklist).await?),
@@ -227,7 +228,7 @@ impl PoolArgs {
             // update per entry point
             entry_point: Address::ZERO,
             entry_point_version: EntryPointVersion::Unspecified,
-            num_shards: 0,
+            num_shards_by_filter_id: HashMap::new(),
             mempool_channel_configs: HashMap::new(),
             // Base config
             chain_spec: chain_spec.clone(),
@@ -257,7 +258,11 @@ impl PoolArgs {
             pool_configs.push(PoolConfig {
                 entry_point: chain_spec.entry_point_address_v0_6,
                 entry_point_version: EntryPointVersion::V0_6,
-                num_shards: common.num_builders_v0_6,
+                num_shards_by_filter_id: get_num_shards_by_filter_id(
+                    chain_spec.entry_point_address_v0_6,
+                    common.num_builders_v0_6,
+                    builder_configs.as_ref(),
+                ),
                 mempool_channel_configs: mempool_channel_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_6),
                 // always disable 7702 for EP v06.
@@ -269,7 +274,11 @@ impl PoolArgs {
             pool_configs.push(PoolConfig {
                 entry_point: chain_spec.entry_point_address_v0_7,
                 entry_point_version: EntryPointVersion::V0_7,
-                num_shards: common.num_builders_v0_7,
+                num_shards_by_filter_id: get_num_shards_by_filter_id(
+                    chain_spec.entry_point_address_v0_7,
+                    common.num_builders_v0_7,
+                    builder_configs.as_ref(),
+                ),
                 mempool_channel_configs: mempool_channel_configs
                     .get_for_entry_point(chain_spec.entry_point_address_v0_7),
                 ..pool_config_base.clone()
@@ -303,6 +312,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     common_args: CommonArgs,
     providers: impl Providers + 'static,
     mempool_configs: Option<MempoolConfigs>,
+    builder_configs: Option<EntryPointBuilderConfigs>,
 ) -> anyhow::Result<()> {
     let PoolCliArgs { pool: pool_args } = pool_args;
     let (event_sender, event_rx) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
@@ -312,6 +322,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
             &common_args,
             Some(format!("{}:{}", pool_args.host, pool_args.port).parse()?),
             mempool_configs,
+            builder_configs,
         )
         .await?;
 
@@ -330,4 +341,24 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     .await?;
 
     Ok(())
+}
+
+fn get_num_shards_by_filter_id(
+    entry_point: Address,
+    default_num_shards: u64,
+    builder_configs: Option<&EntryPointBuilderConfigs>,
+) -> HashMap<String, u64> {
+    if let Some(builder_configs) = builder_configs {
+        if let Some(config) = builder_configs.get_for_entry_point(entry_point) {
+            config
+                .builders
+                .iter()
+                .map(|builder| (builder.filter_id.clone().unwrap_or_default(), builder.count))
+                .collect()
+        } else {
+            HashMap::from([("".to_string(), default_num_shards)])
+        }
+    } else {
+        HashMap::from([("".to_string(), default_num_shards)])
+    }
 }

@@ -819,8 +819,16 @@ where
         shard_index: u64,
         filter_id: Option<String>,
     ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
-        if shard_index >= self.config.num_shards {
-            Err(anyhow::anyhow!("Invalid shard ID"))?;
+        let Some(&num_shards) = self
+            .config
+            .num_shards_by_filter_id
+            .get(filter_id.as_ref().unwrap_or(&"".to_string()))
+        else {
+            return Err(anyhow::anyhow!("Invalid filter ID").into());
+        };
+
+        if shard_index >= num_shards {
+            return Err(anyhow::anyhow!("Invalid shard ID").into());
         }
 
         // get the best operations from the pool
@@ -832,9 +840,8 @@ where
             .filter(|op| {
                 let sender_num = U256::from_be_bytes(op.uo.sender().into_word().into());
                 (filter_id == op.filter_id)
-                    && ((self.config.num_shards == 1)
-                        || (sender_num % U256::from(self.config.num_shards)
-                            == U256::from(shard_index)))
+                    && ((num_shards == 1)
+                        || (sender_num % U256::from(num_shards) == U256::from(shard_index)))
             })
             .take(max)
             .map(Into::into)
@@ -2157,6 +2164,7 @@ mod tests {
     async fn test_filter_id_match() {
         let mut config = default_config();
         let agg_address = address!("0000000071727De22E5E9d8BAf0edAc6f37da032");
+        let filter_id = "1".to_string();
 
         let mut agg = MockSignatureAggregator::default();
         agg.expect_address().return_const(agg_address);
@@ -2170,6 +2178,7 @@ mod tests {
         config
             .chain_spec
             .set_signature_aggregators(Arc::new(registry));
+        config.num_shards_by_filter_id = HashMap::from([(filter_id.clone(), 1)]);
 
         let mempool_config = r#"{
             "entryPoint": "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
@@ -2192,9 +2201,7 @@ mod tests {
             .await
             .unwrap();
 
-        let best = pool
-            .best_operations(10000, 0, Some("1".to_string()))
-            .unwrap();
+        let best = pool.best_operations(10000, 0, Some(filter_id)).unwrap();
         assert_eq!(best.len(), 1);
     }
     #[derive(Clone, Debug)]
@@ -2218,7 +2225,7 @@ mod tests {
             precheck_settings: PrecheckSettings::default(),
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
-            num_shards: 1,
+            num_shards_by_filter_id: HashMap::from([("".to_string(), 1)]),
             same_sender_mempool_count: 4,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
