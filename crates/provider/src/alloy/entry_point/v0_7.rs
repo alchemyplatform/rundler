@@ -267,10 +267,14 @@ where
                 if let Some(revert_data) = resp.as_revert_data() {
                     Ok(Self::decode_handle_ops_revert(&resp.message, &revert_data))
                 } else {
+                    tracing::error!("handle_ops failed with request: {:?}", tx);
                     Err(TransportError::ErrorResp(resp).into())
                 }
             }
-            Err(error) => Err(error.into()),
+            Err(error) => {
+                tracing::error!("handle_ops failed with request: {:?}", tx);
+                Err(error.into())
+            }
         }
     }
 
