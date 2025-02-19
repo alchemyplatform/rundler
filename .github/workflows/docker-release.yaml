@@ -8,7 +8,7 @@ on:
         type: string
   push:
     tags:
-      - v(\d+)\.(\d+)\.(\d+)(-.*)?
+      - v*.*.*
 
 env:
   CARGO_TERM_COLOR: always
