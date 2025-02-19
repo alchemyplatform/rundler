@@ -284,9 +284,7 @@ impl BuilderArgs {
                 .as_ref()
                 .and_then(|builder_configs| {
                     builder_configs
-                        .entry_points
-                        .iter()
-                        .find(|ep| ep.address == chain_spec.entry_point_address_v0_6)
+                        .get_for_entry_point(chain_spec.entry_point_address_v0_6)
                         .map(|ep| ep.builders())
                 })
                 .unwrap_or_else(|| {
@@ -311,9 +309,7 @@ impl BuilderArgs {
                 .as_ref()
                 .and_then(|builder_configs| {
                     builder_configs
-                        .entry_points
-                        .iter()
-                        .find(|ep| ep.address == chain_spec.entry_point_address_v0_7)
+                        .get_for_entry_point(chain_spec.entry_point_address_v0_7)
                         .map(|ep| ep.builders())
                 })
                 .unwrap_or_else(|| {
@@ -453,27 +449,31 @@ pub(crate) struct EntryPointBuilderConfigs {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EntryPointBuilderConfig {
     // Entry point address
-    address: Address,
+    pub(crate) address: Address,
     // Builder configs
-    builders: Vec<BuilderConfig>,
+    pub(crate) builders: Vec<BuilderConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BuilderConfig {
     // Number of builders using this config
-    count: u64,
+    pub(crate) count: u64,
     // Builder index offset - defaults to 0
-    index_offset: Option<u64>,
+    pub(crate) index_offset: Option<u64>,
     // Submitter proxy to use for builders
-    proxy: Option<Address>,
+    pub(crate) proxy: Option<Address>,
     // Type of proxy to use for builders
-    proxy_type: Option<String>,
+    pub(crate) proxy_type: Option<String>,
     // Optional filter to apply to the builders
-    filter_id: Option<String>,
+    pub(crate) filter_id: Option<String>,
 }
 
 impl EntryPointBuilderConfigs {
+    pub(crate) fn get_for_entry_point(&self, address: Address) -> Option<&EntryPointBuilderConfig> {
+        self.entry_points.iter().find(|ep| ep.address == address)
+    }
+
     pub(crate) fn set_proxies(&self, chain_spec: &mut ChainSpec) {
         let mut registry = ContractRegistry::<Arc<dyn SubmissionProxy>>::default();
 
