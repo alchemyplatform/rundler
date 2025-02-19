@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, sync::Arc};
 
 use alloy_json_rpc::{RpcParam, RpcReturn};
 use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
@@ -32,18 +32,21 @@ use rundler_contracts::utils::{
     StorageLoader,
 };
 
+use super::cache::BlockNumberCache;
 use crate::{EvmCall, EvmProvider, ProviderResult};
 
 /// Evm Provider implementation using [alloy-provider](https://github.com/alloy-rs/alloy-rs)
 pub struct AlloyEvmProvider<AP, T> {
+    block_number_cache: Arc<BlockNumberCache<AP, T>>,
     inner: AP,
     _marker: PhantomData<T>,
 }
 
 impl<AP, T> AlloyEvmProvider<AP, T> {
     /// Create a new `AlloyEvmProvider`
-    pub fn new(inner: AP) -> Self {
+    pub fn new(inner: AP, block_number_cache: Arc<BlockNumberCache<AP, T>>) -> Self {
         Self {
+            block_number_cache,
             inner,
             _marker: PhantomData,
         }
@@ -56,6 +59,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            block_number_cache: self.block_number_cache.clone(),
             inner: self.inner.clone(),
             _marker: PhantomData,
         }
@@ -65,10 +69,10 @@ where
 impl<AP, T> From<AP> for AlloyEvmProvider<AP, T>
 where
     T: Transport + Clone,
-    AP: AlloyProvider<T>,
+    AP: AlloyProvider<T> + Clone,
 {
     fn from(inner: AP) -> Self {
-        Self::new(inner)
+        Self::new(inner.clone(), Arc::new(BlockNumberCache::new(inner)))
     }
 }
 
@@ -105,11 +109,16 @@ where
         state_overrides: &StateOverride,
     ) -> ProviderResult<Bytes> {
         let mut call = self.inner.call(tx);
-        if let Some(block) = block {
-            call = call.block(block);
-        }
-        call = call.overrides(state_overrides);
 
+        if let Some(block) = block {
+            let block_number = self
+                .block_number_cache
+                .get_block_number_from_id(block)
+                .await?;
+            call = call.block(block_number);
+        }
+
+        call = call.overrides(state_overrides);
         Ok(call.await?)
     }
 
@@ -226,6 +235,7 @@ where
         let ret = helper
             .getGas(to, value, data)
             .state(state_override)
+            .block(BlockId::Number(BlockNumberOrTag::Latest))
             .call()
             .await?
             ._0;
@@ -255,7 +265,12 @@ where
             .to(address)
             .with_input(slot_data);
 
-        let result_bytes = self.inner.call(&tx).overrides(&overrides).await?;
+        let result_bytes = self
+            .inner
+            .call(&tx)
+            .block(BlockId::Number(BlockNumberOrTag::Latest))
+            .overrides(&overrides)
+            .await?;
 
         if result_bytes.len() != expected_ret_size {
             return Err(anyhow::anyhow!(
@@ -291,7 +306,11 @@ where
         addresses.sort();
         let mut call = helper.getCodeHashes(addresses).state(overrides);
         if let Some(block) = block {
-            call = call.block(block);
+            let block_number = self
+                .block_number_cache
+                .get_block_number_from_id(block)
+                .await?;
+            call = call.block(block_number);
         }
 
         let ret = call.call().await?;
@@ -301,10 +320,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy_provider::ProviderBuilder;
     use alloy_sol_macro::sol;
 
-    use crate::{AlloyEvmProvider, EvmProvider};
+    use crate::{AlloyEvmProvider, BlockNumberCache, EvmProvider};
 
     sol!(
         #[allow(missing_docs)]
@@ -362,12 +383,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_code_hash_unorder_equal() {
-        let alloy_provider = ProviderBuilder::new().on_anvil();
+        let alloy_provider = Arc::new(ProviderBuilder::new().on_anvil());
 
         let get_code_hashes_contract = GetCodeHashes::deploy(alloy_provider.clone()).await.unwrap();
         let get_gas_used_contract = GetGasUsed::deploy(alloy_provider.clone()).await.unwrap();
 
-        let emv_provider = AlloyEvmProvider::new(alloy_provider);
+        let emv_provider = AlloyEvmProvider::new(
+            alloy_provider.clone(),
+            Arc::new(BlockNumberCache::new(alloy_provider)),
+        );
         let address_1 = get_code_hashes_contract.address();
         let address_2 = get_gas_used_contract.address();
 
@@ -386,12 +410,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_code_hash_unequal() {
-        let alloy_provider = ProviderBuilder::new().on_anvil();
+        let alloy_provider = Arc::new(ProviderBuilder::new().on_anvil());
 
         let get_code_hashes_contract = GetCodeHashes::deploy(alloy_provider.clone()).await.unwrap();
         let get_gas_used_contract = GetGasUsed::deploy(alloy_provider.clone()).await.unwrap();
 
-        let emv_provider = AlloyEvmProvider::new(alloy_provider);
+        let emv_provider = AlloyEvmProvider::new(
+            alloy_provider.clone(),
+            Arc::new(BlockNumberCache::new(alloy_provider)),
+        );
         let address_1 = get_code_hashes_contract.address();
         let address_2 = get_gas_used_contract.address();
 

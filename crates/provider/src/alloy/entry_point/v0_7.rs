@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_json_rpc::ErrorPayload;
@@ -46,9 +48,10 @@ use rundler_types::{
 use rundler_utils::authorization_utils;
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
-    DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
-    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
+    alloy::cache::BlockNumberCache, AggregatorOut, AggregatorSimOut, BlockHashOrNumber,
+    BundleHandler, DAGasOracle, DAGasProvider, DepositInfo, EntryPoint,
+    EntryPointProvider as EntryPointProviderTrait, EvmCall, ExecutionResult, HandleOpsOut,
+    ProviderResult, SignatureAggregator, SimulationProvider,
 };
 /// Entry point provider for v0.7
 #[derive(Clone)]
@@ -59,6 +62,7 @@ pub struct EntryPointProvider<AP, T, D> {
     max_simulate_handle_ops_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
+    block_number_cache: Arc<BlockNumberCache<AP, T>>,
 }
 
 impl<AP, T, D> EntryPointProvider<AP, T, D>
@@ -74,6 +78,7 @@ where
         max_aggregation_gas: u64,
         provider: AP,
         da_gas_oracle: D,
+        block_number_cache: Arc<BlockNumberCache<AP, T>>,
     ) -> Self {
         Self {
             i_entry_point: IEntryPointInstance::new(
@@ -85,6 +90,7 @@ where
             max_simulate_handle_ops_gas,
             max_aggregation_gas,
             chain_spec,
+            block_number_cache,
         }
     }
 }
@@ -105,10 +111,15 @@ where
         address: Address,
         block_id: Option<BlockId>,
     ) -> ProviderResult<U256> {
-        let ret = block_id
-            .map_or(self.i_entry_point.balanceOf(address), |bid| {
-                self.i_entry_point.balanceOf(address).block(bid)
-            })
+        let block = match block_id {
+            Some(b) => self.block_number_cache.get_block_number_from_id(b).await?,
+            None => BlockId::latest(),
+        };
+
+        let ret = self
+            .i_entry_point
+            .balanceOf(address)
+            .block(block)
             .call()
             .await?;
 
@@ -406,7 +417,11 @@ where
         let (tx, overrides) = self.get_tracer_simulate_validation_call(user_op)?;
         let mut call = self.i_entry_point.provider().call(&tx);
         if let Some(block_id) = block_id {
-            call = call.block(block_id);
+            let block_data = self
+                .block_number_cache
+                .get_block_number_from_id(block_id)
+                .await?;
+            call = call.block(block_data);
         }
 
         let result = call.overrides(&overrides).await;
@@ -466,9 +481,14 @@ where
             *self.i_entry_point.address(),
             self.i_entry_point.provider(),
         );
+
+        let block_data = self
+            .block_number_cache
+            .get_block_number_from_id(block_id)
+            .await?;
         let res = ep_simulations
             .simulateHandleOp(op.pack(), target, target_call_data)
-            .block(block_id)
+            .block(block_data)
             .gas(self.max_simulate_handle_ops_gas.saturating_add(da_gas))
             .state(state_override)
             .call()

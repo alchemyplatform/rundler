@@ -89,6 +89,7 @@ where
             "rpc".to_string(),
         );
         let fut = self.service.call(request);
+
         async move {
             let response = fut.await;
             method_logger.done();

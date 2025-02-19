@@ -4965,6 +4965,7 @@ dependencies = [
  "const-hex",
  "futures-util",
  "mockall",
+ "parking_lot",
  "pin-project",
  "rand",
  "reqwest",
