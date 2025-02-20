@@ -72,9 +72,11 @@ where
 {
     #[instrument(name = "RundlerApiServer::max_priority_fee_per_gas", skip(self))]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
+        let span = info_span!("max_priority_fee_per_gas api");
+        let x = span.in_scope(|| self);
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
-            RundlerApi::max_priority_fee_per_gas(self),
+            RundlerApi::max_priority_fee_per_gas(x),
         )
         .await
     }
@@ -112,9 +114,12 @@ where
     }
 
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
+        let span = info_span!("max_priority_fee_per_gas impl");
+        let x = span.in_scope(|| None);
+        info!("here is a log");
         let (bundle_fees, _) = self
             .fee_estimator
-            .required_bundle_fees(None)
+            .required_bundle_fees(x)
             .await
             .context("should get required fees")?;
         Ok(U128::from(
