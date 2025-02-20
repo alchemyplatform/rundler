@@ -15,8 +15,10 @@ use alloy_primitives::{Address, B256, U128};
 use anyhow::Context;
 use async_trait::async_trait;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+use opentelemetry::{global, InstrumentationScope, KeyValue};
 use rundler_sim::{gas, FeeEstimator};
 use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
+use tracing::{instrument, span, Level};
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
@@ -69,10 +71,15 @@ where
     P: Pool + 'static,
     F: FeeEstimator + 'static,
 {
+    #[instrument(skip_all, fields(my_test = "this is my test"))]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
+        let span = span!(Level::TRACE, "my_span_1");
+        let _enter = span.enter();
+        let value = span.in_scope(|| self);
+
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
-            RundlerApi::max_priority_fee_per_gas(self),
+            RundlerApi::max_priority_fee_per_gas(value),
         )
         .await
     }
@@ -109,7 +116,19 @@ where
         }
     }
 
+    #[instrument(skip_all, fields(my_test_2 = "one more level"))]
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
+        // let common_scope_attributes = vec![KeyValue::new("scope-key", "scope-value")];
+
+        // let scope = InstrumentationScope::builder("basic")
+        //     .with_version("1.0")
+        //     .with_attributes(common_scope_attributes)
+        //     .build();
+
+        // let _tracer = global::tracer_with_scope(scope.clone());
+
+        // let span = span!(Level::TRACE, "my_span_2");
+        // let x = span.in_scope(|| None);
         let (bundle_fees, _) = self
             .fee_estimator
             .required_bundle_fees(None)

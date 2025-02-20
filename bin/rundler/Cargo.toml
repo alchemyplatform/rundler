@@ -53,3 +53,10 @@ tracing.workspace = true
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }
+tracing-opentelemetry = "0.29.0"
+opentelemetry_sdk = "0.28.0"
+opentelemetry = "0.28.0"
+opentelemetry-stdout = "0.28.0"
+opentelemetry-otlp = "0.28.0"
+opentelemetry-appender-tracing = "0.28.1"
+opentelemetry-appender-log = "0.28.0"
