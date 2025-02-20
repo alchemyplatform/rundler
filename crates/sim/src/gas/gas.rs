@@ -20,6 +20,7 @@ use rundler_provider::{BlockHashOrNumber, DAGasProvider, EvmProvider};
 use rundler_types::{chain::ChainSpec, da::DAGasUOData, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
+use tracing::info_span;
 
 use super::oracle::FeeOracle;
 
@@ -218,6 +219,8 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
         &self,
         min_fees: Option<GasFees>,
     ) -> anyhow::Result<(GasFees, u128)> {
+        let span = info_span!("max_priority_fee_per_gas innner ");
+
         let (base_fee, priority_fee) =
             try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
 

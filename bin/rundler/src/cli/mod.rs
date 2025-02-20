@@ -58,6 +58,7 @@ use rundler_types::{
 /// Listens for a ctrl-c signal and shuts down all components when received.
 pub async fn run() -> anyhow::Result<()> {
     let opt = Cli::parse();
+    // let tracer = tracing::init_tracer();
     let _guard = tracing::configure_logging(&opt.logs)?;
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
@@ -133,6 +134,7 @@ pub async fn run() -> anyhow::Result<()> {
     task_manager.graceful_shutdown_with_timeout(Duration::from_secs(10));
 
     tracing::info!("Shutdown, goodbye");
+    // tracer.shutdown()?;
     Ok(())
 }
 
