@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_sim::{gas, FeeEstimator};
 use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
-use tracing::{info, info_span};
+use tracing::instrument;
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
@@ -70,12 +70,15 @@ where
     P: Pool + 'static,
     F: FeeEstimator + 'static,
 {
+    #[instrument(
+        name = "RundlerApiServer::max_priority_fee_per_gas",
+        skip(self),
+        fields(force_trace_sample = true)
+    )]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
-        let span = info_span!("max_priority_fee_per_gas api");
-        let x = span.in_scope(|| self);
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
-            RundlerApi::max_priority_fee_per_gas(x),
+            RundlerApi::max_priority_fee_per_gas(self),
         )
         .await
     }
@@ -112,13 +115,11 @@ where
         }
     }
 
-    async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
-        let span = info_span!("max_priority_fee_per_gas impl");
-        let x = span.in_scope(|| None);
-        info!("here is a log");
+    #[instrument(skip(self))]
+    async fn simple_wrapper(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator
-            .required_bundle_fees(x)
+            .required_bundle_fees(None)
             .await
             .context("should get required fees")?;
         Ok(U128::from(
@@ -126,6 +127,11 @@ where
                 .required_op_fees(bundle_fees)
                 .max_priority_fee_per_gas,
         ))
+    }
+
+    #[instrument(name = "RundlerApi::max_priority_fee_per_gas", skip(self))]
+    async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
+        self.simple_wrapper().await
     }
 
     async fn drop_local_user_operation(
