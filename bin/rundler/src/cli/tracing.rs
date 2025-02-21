@@ -21,7 +21,6 @@ pub use tracing::*;
 use tracing::{subscriber, subscriber::Interest, Metadata, Subscriber};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_log::LogTracer;
-use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter, FmtSubscriber, Layer};
 
 use super::LogsArgs;
@@ -33,37 +32,37 @@ pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
         tracing_appender::non_blocking(io::stdout())
     };
 
-    let metadata = MetadataMap::new();
-
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint("http://127.0.0.1:4317")
-        .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-        .with_timeout(Duration::from_secs(3))
-        .with_metadata(metadata)
-        .build()?;
-    // let exporter = opentelemetry_stdout::SpanExporter::default();
-    let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .with_resource(Resource::builder().with_service_name("rundler").build())
-        .build();
-
-    global::set_tracer_provider(tracer_provider.clone());
-    let tracer = tracer_provider.tracer("rundler-tracer");
-    let otel_layer = OpenTelemetryLayer::new(tracer);
-
     let subscriber_builder = FmtSubscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(appender);
 
     if config.json {
-        subscriber::set_global_default(
-            subscriber_builder
-                .json()
-                .finish()
-                .with(TargetBlacklistLayer)
-                .with(otel_layer),
-        )?;
+        let subscriber = subscriber_builder
+            .json()
+            .finish()
+            .with(TargetBlacklistLayer);
+        if let Some(endpoint) = &config.otlp_grpc_endpoint {
+            let exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint)
+                .with_timeout(Duration::from_secs(3))
+                .with_metadata(MetadataMap::new())
+                .build()?;
+
+            let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_batch_exporter(exporter)
+                .with_resource(Resource::builder().with_service_name("rundler").build())
+                .build();
+
+            global::set_tracer_provider(tracer_provider.clone());
+            let tracer = tracer_provider.tracer("rundler-tracer");
+
+            let otlp_subscriber =
+                subscriber.with(tracing_opentelemetry::layer().with_tracer(tracer));
+            subscriber::set_global_default(otlp_subscriber)?;
+        } else {
+            subscriber::set_global_default(subscriber)?;
+        };
     } else {
         subscriber::set_global_default(
             subscriber_builder
