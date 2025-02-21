@@ -111,8 +111,7 @@ where
         }
     }
 
-    #[instrument(skip(self))]
-    async fn simple_wrapper(&self) -> EthResult<U128> {
+    async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator
             .required_bundle_fees(None)
@@ -123,11 +122,6 @@ where
                 .required_op_fees(bundle_fees)
                 .max_priority_fee_per_gas,
         ))
-    }
-
-    #[instrument(name = "RundlerApi::max_priority_fee_per_gas", skip(self))]
-    async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
-        self.simple_wrapper().await
     }
 
     async fn drop_local_user_operation(
