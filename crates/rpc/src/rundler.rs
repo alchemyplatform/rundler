@@ -110,7 +110,7 @@ where
             fee_estimator,
         }
     }
-
+    #[instrument(name = "RundlerApi::max_priority_fee_per_gas", skip(self))]
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator
