@@ -35,14 +35,14 @@ pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
 
     let metadata = MetadataMap::new();
 
-    // let exporter = opentelemetry_otlp::SpanExporter::builder()
-    //     .with_http()
-    //     .with_endpoint("http://127.0.0.1:4318")
-    //     .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
-    //     .with_timeout(Duration::from_secs(3))
-    //     // .with_metadata(metadata)
-    //     .build()?;
-    let exporter = opentelemetry_stdout::SpanExporter::default();
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint("http://127.0.0.1:4317")
+        .with_protocol(opentelemetry_otlp::Protocol::HttpBinary)
+        .with_timeout(Duration::from_secs(3))
+        .with_metadata(metadata)
+        .build()?;
+    // let exporter = opentelemetry_stdout::SpanExporter::default();
     let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
         .with_resource(Resource::builder().with_service_name("rundler").build())

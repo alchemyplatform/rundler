@@ -225,8 +225,6 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
         &self,
         min_fees: Option<GasFees>,
     ) -> anyhow::Result<(GasFees, u128)> {
-        let span = info_span!("max_priority_fee_per_gas innner ");
-
         let (base_fee, priority_fee) =
             try_join!(self.get_pending_base_fee(), self.get_priority_fee())?;
 
