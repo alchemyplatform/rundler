@@ -18,6 +18,7 @@ use anyhow::Context;
 use rundler_types::da::{DAGasBlockData, DAGasUOData, NitroDAGasBlockData, NitroDAGasUOData};
 use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
+use tracing::instrument;
 
 use crate::{
     alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance, BlockHashOrNumber, DAGasOracle,
@@ -55,6 +56,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
+    #[instrument(skip(self))]
     async fn estimate_da_gas(
         &self,
         data: Bytes,
@@ -103,6 +105,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
+    #[instrument(skip(self))]
     async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
@@ -115,6 +118,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     async fn uo_data(
         &self,
         uo_data: Bytes,
