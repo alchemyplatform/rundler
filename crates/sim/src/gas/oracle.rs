@@ -17,6 +17,7 @@ use std::fmt::Debug;
 use futures_util::future::join_all;
 use rundler_provider::{BlockNumberOrTag, EvmProvider};
 use rundler_types::chain::{ChainSpec, PriorityFeeOracleType};
+use tracing::instrument;
 
 pub(crate) type Result<T, E = FeeOracleError> = std::result::Result<T, E>;
 
@@ -121,6 +122,7 @@ impl<P> FeeOracle for UsageBasedFeeOracle<P>
 where
     P: EvmProvider,
 {
+    #[instrument(skip(self))]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let fee_history = self
             .provider
@@ -206,6 +208,7 @@ impl<P> FeeOracle for FeeHistoryOracle<P>
 where
     P: EvmProvider,
 {
+    #[instrument(skip(self))]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let fee_history = self
             .provider
@@ -278,6 +281,7 @@ impl<P> FeeOracle for ProviderOracle<P>
 where
     P: EvmProvider,
 {
+    #[instrument(skip(self))]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         Ok(self
             .provider
@@ -305,6 +309,7 @@ impl<'a> MaxOracle<'a> {
 
 #[async_trait::async_trait]
 impl FeeOracle for MaxOracle<'_> {
+    #[instrument(skip(self))]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let futures = self
             .oracles
@@ -334,6 +339,7 @@ impl ConstantOracle {
 
 #[async_trait::async_trait]
 impl FeeOracle for ConstantOracle {
+    #[instrument(skip(self))]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         Ok(self.fee)
     }

@@ -41,7 +41,7 @@ use tokio::{
     sync::{broadcast, Semaphore},
     time,
 };
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 const MAX_LOAD_OPS_CONCURRENCY: usize = 64;
 const SYNC_ERROR_COUNT_MAX: usize = 50;
@@ -197,6 +197,7 @@ impl<P: EvmProvider> Chain<P> {
         }
     }
 
+    #[instrument(skip(self))]
     async fn wait_for_update(&mut self) -> ChainUpdate {
         let mut block_hash = self
             .blocks
@@ -236,6 +237,7 @@ impl<P: EvmProvider> Chain<P> {
         }
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn sync_to_block(&mut self, new_head: Block) -> anyhow::Result<ChainUpdate> {
         let new_head = BlockSummary::try_from_block_without_ops(new_head, None)?;
         let Some(current_block) = self.blocks.back() else {
@@ -359,6 +361,7 @@ impl<P: EvmProvider> Chain<P> {
         )
     }
 
+    #[instrument(skip(self))]
     async fn load_added_blocks_connecting_to_existing_chain(
         &self,
         current_block_number: u64,
@@ -433,6 +436,7 @@ impl<P: EvmProvider> Chain<P> {
         None
     }
 
+    #[instrument(skip(self))]
     async fn load_blocks_back_to_number_no_ops(
         &self,
         head: BlockSummary,
@@ -460,6 +464,7 @@ impl<P: EvmProvider> Chain<P> {
         Ok(blocks)
     }
 
+    #[instrument(skip(self))]
     async fn load_ops_into_block_summaries(
         &self,
         blocks: &mut VecDeque<BlockSummary>,
@@ -481,6 +486,7 @@ impl<P: EvmProvider> Chain<P> {
         Ok(())
     }
 
+    #[instrument(skip(self))]
     async fn load_ops_in_block_with_hash(
         &self,
         block_hash: B256,

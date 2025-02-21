@@ -24,6 +24,7 @@ use rundler_provider::{
 };
 use rundler_types::{chain::ChainSpec, UserOperation, UserOperationVariant};
 use rundler_utils::log::LogOnError;
+use tracing::instrument;
 
 use super::UserOperationEventProvider;
 use crate::types::{RpcUserOperationByHash, RpcUserOperationReceipt};
@@ -60,6 +61,7 @@ where
     P: EvmProvider,
     E: EntryPointEvents,
 {
+    #[instrument(skip(self))]
     async fn get_mined_by_hash(
         &self,
         hash: B256,
@@ -119,6 +121,7 @@ where
         }))
     }
 
+    #[instrument(skip(self))]
     async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
         let event = self
             .get_event_by_hash(hash)
@@ -177,6 +180,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     async fn get_event_by_hash(&self, hash: B256) -> anyhow::Result<Option<Log>> {
         let to_block = self.provider.get_block_number().await?;
 
@@ -206,6 +210,7 @@ where
     /// This is meant to be used when a user operation event is found in the logs of a transaction, but the top level call
     /// wasn't to an entrypoint, so we need to trace the transaction to find the user operation by inspecting each call frame
     /// and returning the user operation that matches the hash.
+    #[instrument(skip(self))]
     async fn trace_find_user_operation(
         &self,
         tx_hash: B256,

@@ -36,6 +36,7 @@ use rundler_types::{
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::authorization_utils;
+use tracing::instrument;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
@@ -94,6 +95,7 @@ where
         self.i_entry_point.address()
     }
 
+    #[instrument(skip(self))]
     async fn balance_of(
         &self,
         address: Address,
@@ -109,6 +111,7 @@ where
         Ok(ret._0)
     }
 
+    #[instrument(skip(self))]
     async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo> {
         self.i_entry_point
             .getDepositInfo(address)
@@ -118,6 +121,7 @@ where
             .map(|r| r.info.into())
     }
 
+    #[instrument(skip(self))]
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>> {
         let provider = self.i_entry_point.provider();
         let call = GetBalances::deploy_builder(provider, *self.address(), addresses)
@@ -232,6 +236,7 @@ where
 {
     type UO = UserOperation;
 
+    #[instrument(skip(self))]
     async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
@@ -328,6 +333,7 @@ where
 {
     type UO = UserOperation;
 
+    #[instrument(skip(self))]
     async fn calc_da_gas(
         &self,
         user_op: UserOperation,
@@ -390,6 +396,7 @@ where
         Ok((call, StateOverride::default()))
     }
 
+    #[instrument(skip(self))]
     async fn simulate_validation(
         &self,
         user_op: UserOperation,
@@ -455,6 +462,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     async fn simulate_handle_op(
         &self,
         op: Self::UO,
