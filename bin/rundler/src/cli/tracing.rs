@@ -11,8 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::io;
+use std::{io, time::Duration};
 
+use opentelemetry::{global, trace::TracerProvider};
+use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
+use opentelemetry_sdk::Resource;
+use tonic::metadata::MetadataMap;
 pub use tracing::*;
 use tracing::{subscriber, subscriber::Interest, Metadata, Subscriber};
 use tracing_appender::non_blocking::WorkerGuard;
@@ -31,13 +35,34 @@ pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
     let subscriber_builder = FmtSubscriber::builder()
         .with_env_filter(EnvFilter::from_default_env())
         .with_writer(appender);
+
     if config.json {
-        subscriber::set_global_default(
-            subscriber_builder
-                .json()
-                .finish()
-                .with(TargetBlacklistLayer),
-        )?;
+        let subscriber = subscriber_builder
+            .json()
+            .finish()
+            .with(TargetBlacklistLayer);
+        if let Some(endpoint) = &config.otlp_grpc_endpoint {
+            let exporter = opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint)
+                .with_timeout(Duration::from_secs(3))
+                .with_metadata(MetadataMap::new())
+                .build()?;
+
+            let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_batch_exporter(exporter)
+                .with_resource(Resource::builder().with_service_name("rundler").build())
+                .build();
+
+            global::set_tracer_provider(tracer_provider.clone());
+            let tracer = tracer_provider.tracer("rundler-tracer");
+
+            let otlp_subscriber =
+                subscriber.with(tracing_opentelemetry::layer().with_tracer(tracer));
+            subscriber::set_global_default(otlp_subscriber)?;
+        } else {
+            subscriber::set_global_default(subscriber)?;
+        };
     } else {
         subscriber::set_global_default(
             subscriber_builder
@@ -47,7 +72,6 @@ pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
         )?;
     }
 
-    // Redirect logs from external crates using `log` to the tracing subscriber
     LogTracer::init()?;
 
     Ok(guard)

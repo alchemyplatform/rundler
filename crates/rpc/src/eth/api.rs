@@ -62,7 +62,7 @@ where
         }
     }
 
-    #[instrument(skip(self), fields(force_trace_sample = "true"))]
+    #[instrument(skip(self))]
     pub(crate) async fn send_user_operation(
         &self,
         op: UserOperationVariant,
@@ -85,7 +85,7 @@ where
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")
     }
 
-    #[instrument(skip(self, state_override), fields(force_trace_sample = "true"))]
+    #[instrument(skip(self, state_override))]
     pub(crate) async fn estimate_user_operation_gas(
         &self,
         op: UserOperationOptionalGas,

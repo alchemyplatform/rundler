@@ -11,7 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{fmt::Debug, marker::PhantomData, sync::Arc};
+use std::{
+    fmt::{self, Debug},
+    marker::PhantomData,
+    sync::Arc,
+};
 
 use alloy_primitives::{Address, B256};
 use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
@@ -83,6 +87,14 @@ pub(crate) struct EntryPointRouter {
     entry_points: Vec<Address>,
     v0_6: Option<(Address, Arc<dyn EntryPointRoute>)>,
     v0_7: Option<(Address, Arc<dyn EntryPointRoute>)>,
+}
+
+impl fmt::Debug for EntryPointRouter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EntryPointRouter")
+            .field("entry_points", &self.entry_points)
+            .finish()
+    }
 }
 
 impl EntryPointRouter {

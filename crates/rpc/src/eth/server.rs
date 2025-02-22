@@ -15,6 +15,7 @@ use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_provider::StateOverride;
 use rundler_types::{pool::Pool, UserOperationVariant};
+use tracing::instrument;
 
 use super::{api::EthApi, EthApiServer};
 use crate::{
@@ -46,6 +47,7 @@ where
         .await
     }
 
+    #[instrument(name = "EthApiServer::estimate_user_operation_gas", skip(self))]
     async fn estimate_user_operation_gas(
         &self,
         op: RpcUserOperationOptionalGas,
