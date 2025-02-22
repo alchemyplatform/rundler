@@ -17,6 +17,7 @@ use alloy_sol_types::sol;
 use alloy_transport::Transport;
 use anyhow::Context;
 use rundler_types::da::{DAGasBlockData, DAGasUOData};
+use tracing::instrument;
 use GasPriceOracle::GasPriceOracleInstance;
 
 use super::DAGasOracle;
@@ -58,6 +59,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
+    #[instrument(skip(self))]
     async fn estimate_da_gas(
         &self,
         data: Bytes,

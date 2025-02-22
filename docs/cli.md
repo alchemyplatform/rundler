@@ -123,6 +123,8 @@ Only `level` is supported.
   - env: *LOG_FILE*
 - `--log.json`: If set, logs will be written in JSON format.
   - env: *LOG_JSON*
+ - `--log.otlp_grpc_endpoint`: If set, tracing spans will be forwarded to the provided gRPC OTLP endpoint.
+  - env: *LOG_OTLP_GRPC_ENDPOINT*
 
 ## RPC Options
 

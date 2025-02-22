@@ -33,6 +33,7 @@ use rundler_types::{
 };
 use rundler_utils::math;
 use tokio::join;
+use tracing::instrument;
 
 use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
 use crate::{
@@ -64,6 +65,8 @@ where
 
     /// Returns a gas estimate or a revert message, or an anyhow error on any
     /// other error.
+
+    #[instrument(skip_all)]
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,
@@ -264,6 +267,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn estimate_verification_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
@@ -311,6 +315,7 @@ where
         Ok(verification_gas_limit)
     }
 
+    #[instrument(skip_all)]
     async fn estimate_paymaster_verification_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
@@ -356,6 +361,7 @@ where
         Ok(paymaster_verification_gas_limit)
     }
 
+    #[instrument(skip_all)]
     async fn estimate_pre_verification_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
@@ -394,6 +400,7 @@ where
         .await?)
     }
 
+    #[instrument(skip_all)]
     async fn estimate_call_gas(
         &self,
         optional_op: &UserOperationOptionalGas,

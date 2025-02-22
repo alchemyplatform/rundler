@@ -24,6 +24,7 @@ use rundler_types::{
     StakeInfo, UserOperation, UserOperationId, UserOperationVariant,
 };
 use rundler_utils::cache::LruMap;
+use tracing::instrument;
 
 use super::MempoolResult;
 use crate::chain::MinedOp;
@@ -75,6 +76,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
         let deposit_info = self
             .entry_point
@@ -98,6 +100,7 @@ where
         Ok(stake_status)
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn paymaster_balance(
         &self,
         paymaster: Address,
@@ -132,6 +135,7 @@ where
         Ok(paymaster_meta)
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn check_operation_cost(
         &self,
         op: &UserOperationVariant,
@@ -156,6 +160,7 @@ where
         self.state.write().set_tracking(tracking_enabled);
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn reset_confirmed_balances_for(
         &self,
         addresses: &[Address],
@@ -173,6 +178,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn reset_confirmed_balances(&self) -> MempoolResult<()> {
         let paymaster_addresses = self.paymaster_addresses();
 
@@ -209,6 +215,7 @@ where
             .unmine_actual_cost(paymaster, actual_cost);
     }
 
+    #[instrument(skip(self))]
     pub(crate) async fn add_or_update_balance(&self, po: &PoolOperation) -> MempoolResult<()> {
         if let Some(paymaster) = po.uo.paymaster() {
             let paymaster_metadata = self.paymaster_balance(paymaster).await?;

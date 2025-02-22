@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use rundler_provider::{EntryPoint, EvmProvider, SimulationProvider, StateOverride};
 use rundler_types::{chain::ChainSpec, UserOperation};
 use rundler_utils::authorization_utils;
+use tracing::instrument;
 
 use super::Settings;
 use crate::GasEstimationError;
@@ -66,6 +67,7 @@ where
 {
     type UO = UO;
 
+    #[instrument(skip_all)]
     async fn estimate_verification_gas<F: Send + Sync + Fn(UO, GetOpWithLimitArgs) -> UO>(
         &self,
         op: &UO,

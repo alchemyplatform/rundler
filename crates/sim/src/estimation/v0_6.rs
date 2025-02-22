@@ -33,6 +33,7 @@ use rundler_types::{
 };
 use rundler_utils::math;
 use tokio::join;
+use tracing::instrument;
 
 use super::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
@@ -65,6 +66,7 @@ where
 {
     type UserOperationOptionalGas = UserOperationOptionalGas;
 
+    #[instrument(skip(self, state_override))]
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,
@@ -229,6 +231,7 @@ where
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn estimate_verification_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
@@ -281,6 +284,7 @@ where
         Ok(verification_gas_limit)
     }
 
+    #[instrument(skip_all)]
     async fn estimate_pre_verification_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
@@ -325,6 +329,7 @@ where
         .await?)
     }
 
+    #[instrument(skip_all)]
     async fn estimate_call_gas(
         &self,
         optional_op: &UserOperationOptionalGas,
