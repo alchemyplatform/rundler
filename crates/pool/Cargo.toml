@@ -8,7 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-alloy-consensus.workspace = true
 rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-sim.workspace = true
@@ -29,21 +28,15 @@ metrics.workspace = true
 metrics-derive.workspace = true
 parking_lot = "0.12.3"
 prost.workspace = true
-serde.workspace = true
-strum.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1.12", features = ["sync"] }
-tokio-util.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true
 tonic-reflection.workspace = true
 tracing.workspace = true
-url.workspace = true
-
-mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true

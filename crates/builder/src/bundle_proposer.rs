@@ -1013,7 +1013,7 @@ where
                         .simulation
                         .entity_infos
                         .factory
-                        .map_or(false, |f| f.is_staked),
+                        .is_some_and(|f| f.is_staked),
                 )
                 .await;
             }
@@ -1032,7 +1032,7 @@ where
                         .simulation
                         .entity_infos
                         .paymaster
-                        .map_or(false, |p| p.is_staked),
+                        .is_some_and(|p| p.is_staked),
                 )
                 .await;
             }
@@ -1593,7 +1593,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
         // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the staked factory or account.
         // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
-        let is_staked_factory = entity_infos.factory.map_or(false, |f| f.is_staked);
+        let is_staked_factory = entity_infos.factory.is_some_and(|f| f.is_staked);
         let is_staked_sender = entity_infos.sender.is_staked;
         if is_staked_factory || is_staked_sender {
             if let Some(paymaster) = entity_infos.paymaster {
