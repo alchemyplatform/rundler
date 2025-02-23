@@ -244,11 +244,11 @@ sol!(
 );
 
 // EntryPointSimulations deployed bytecode
-const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+static __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
     "../contracts/out/v0_7/EntryPointSimulations.sol/EntryPointSimulations_deployedBytecode.txt"
 );
 
-const __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: [u8; 16893] = {
+static __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: [u8; 16893] = {
     match const_hex::const_decode_to_array(__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX) {
         Ok(a) => a,
         Err(_) => panic!("Failed to decode entry point simulations hex"),
@@ -259,11 +259,11 @@ pub static ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: Bytes =
     Bytes::from_static(&__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE);
 
 // CallGasEstimationProxy deployed bytecode
-const __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+static __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
     "../contracts/out/v0_7/CallGasEstimationProxy.sol/CallGasEstimationProxy_deployedBytecode.txt"
 );
 
-const __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: [u8; 3558] = {
+static __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: [u8; 3558] = {
     match const_hex::const_decode_to_array(__CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE_HEX) {
         Ok(a) => a,
         Err(_) => panic!("Failed to decode call gas estimation proxy hex"),

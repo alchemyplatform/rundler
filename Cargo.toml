@@ -17,9 +17,9 @@ default-members = ["bin/rundler"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
-rust-version = "1.83"
+rust-version = "1.85"
 license = "LGPL-3.0-only"
 repository = "https://github.com/alchemyplatform/rundler"
 

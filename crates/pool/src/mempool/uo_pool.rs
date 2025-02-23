@@ -844,7 +844,6 @@ where
                         || (sender_num % U256::from(num_shards) == U256::from(shard_index)))
             })
             .take(max)
-            .map(Into::into)
             .collect())
     }
 

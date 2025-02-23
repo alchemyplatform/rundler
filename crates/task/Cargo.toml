@@ -16,13 +16,10 @@ alloy-primitives.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-futures.workspace = true
-metrics.workspace = true
 pin-project.workspace = true
 reth-tasks.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
 tonic.workspace = true
 tower.workspace = true
 tracing.workspace = true

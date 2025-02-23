@@ -49,9 +49,7 @@ mockall = { workspace = true, optional = true }
 test-utils = ["mockall"]
 
 [dev-dependencies]
-alloy-node-bindings = "0.4.2"
 alloy-provider = { workspace = true, features = ["debug-api", "anvil-node"] }
 alloy-sol-macro.workspace = true
-rundler-provider = { workspace = true, features = ["test-utils"] }
 tiny_http.workspace = true
 tokio.workspace = true

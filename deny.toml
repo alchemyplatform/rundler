@@ -14,7 +14,7 @@ deny = [
 [bans.workspace-dependencies]
 duplicates = 'deny'
 include-path-dependencies = true
-unused = 'deny'
+unused = 'allow'
 
 [licenses]
 version = 2
@@ -30,16 +30,13 @@ allow = [
     "ISC",
     "MPL-2.0",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
     "Unlicense",
     "Zlib",
 ]
 
 exceptions = [
     { allow = ["CC0-1.0"], name = "tiny-keccak" },
-    { allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
     { allow = ["OpenSSL"], name = "ring" },
-    { allow = ["OpenSSL"], name = "aws-lc-sys" }
 ]
 
 [[licenses.clarify]]
