@@ -46,12 +46,14 @@ use rundler_types::{
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 use rundler_utils::authorization_utils;
+use tracing::instrument;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
     DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
 };
+
 /// Entry point provider for v0.7
 #[derive(Clone)]
 pub struct EntryPointProvider<AP, T, D> {
@@ -102,6 +104,7 @@ where
         self.i_entry_point.address()
     }
 
+    #[instrument(skip(self))]
     async fn balance_of(
         &self,
         address: Address,
@@ -117,6 +120,7 @@ where
         Ok(ret._0)
     }
 
+    #[instrument(skip(self))]
     async fn get_deposit_info(&self, address: Address) -> ProviderResult<DepositInfo> {
         self.i_entry_point
             .getDepositInfo(address)
@@ -126,6 +130,7 @@ where
             .map(|r| r.info.into())
     }
 
+    #[instrument(skip(self))]
     async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>> {
         let provider = self.i_entry_point.provider();
         let call = GetBalances::deploy_builder(provider, *self.address(), addresses)
@@ -158,6 +163,7 @@ where
 {
     type UO = UserOperation;
 
+    #[instrument(skip(self))]
     async fn aggregate_signatures(
         &self,
         aggregator_address: Address,
@@ -200,6 +206,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     async fn validate_user_op_signature(
         &self,
         aggregator_address: Address,
@@ -243,6 +250,7 @@ where
 {
     type UO = UserOperation;
 
+    #[instrument(skip(self))]
     async fn call_handle_ops(
         &self,
         ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
@@ -336,6 +344,7 @@ where
 {
     type UO = UserOperation;
 
+    #[instrument(skip(self))]
     async fn calc_da_gas(
         &self,
         user_op: UserOperation,
@@ -412,6 +421,7 @@ where
         Ok((call, override_ep))
     }
 
+    #[instrument(skip(self))]
     async fn simulate_validation(
         &self,
         user_op: Self::UO,
@@ -459,6 +469,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     async fn simulate_handle_op(
         &self,
         op: Self::UO,
