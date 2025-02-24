@@ -39,6 +39,9 @@ metrics-derive.workspace = true
 metrics-exporter-prometheus = { version = "0.16.2", default-features = false, features = ["http-listener"] }
 metrics-process = "2.4.0"
 metrics-util = "0.19.0"
+opentelemetry = "0.28.0"
+opentelemetry-otlp = { version = "0.28.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.28.0"
 paste = "1.0"
 reth-tasks.workspace = true
 serde.workspace = true
@@ -50,4 +53,5 @@ tokio-metrics = "0.4.0"
 tracing.workspace = true
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
+tracing-opentelemetry = "0.29.0"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "fmt", "json"] }

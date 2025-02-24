@@ -647,6 +647,18 @@ pub struct LogsArgs {
         global = true
     )]
     json: bool,
+
+    /// Log OTLP Endpoint
+    ///
+    /// If set, tracing spans will be forwarded to the provided gRPC OTLP endpoint
+    #[arg(
+        long = "log.otlp_grpc_endpoint",
+        name = "log.otlp_grpc_endpoint",
+        env = "LOG_OTLP_GRPC_ENDPOINT",
+        default_value = None,
+        global = true
+    )]
+    otlp_grpc_endpoint: Option<String>,
 }
 
 /// CLI options
