@@ -13,7 +13,7 @@
 
 use std::{io, time::Duration};
 
-use opentelemetry::{global, trace::TracerProvider};
+use opentelemetry::{global, trace::TracerProvider, KeyValue};
 use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::Resource;
 use tonic::metadata::MetadataMap;
@@ -25,7 +25,10 @@ use tracing_subscriber::{layer::SubscriberExt, EnvFilter, FmtSubscriber, Layer};
 
 use super::LogsArgs;
 
-pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
+pub fn configure_logging(
+    network: &Option<String>,
+    config: &LogsArgs,
+) -> anyhow::Result<WorkerGuard> {
     let (appender, guard) = if let Some(log_file) = &config.file {
         tracing_appender::non_blocking(tracing_appender::rolling::never(".", log_file))
     } else {
@@ -51,7 +54,15 @@ pub fn configure_logging(config: &LogsArgs) -> anyhow::Result<WorkerGuard> {
 
             let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(exporter)
-                .with_resource(Resource::builder().with_service_name("rundler").build())
+                .with_resource(
+                    Resource::builder()
+                        .with_service_name("rundler")
+                        .with_attributes([KeyValue::new(
+                            "network",
+                            network.clone().unwrap_or_default(),
+                        )])
+                        .build(),
+                )
                 .build();
 
             global::set_tracer_provider(tracer_provider.clone());
