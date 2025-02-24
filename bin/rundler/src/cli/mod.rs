@@ -58,7 +58,7 @@ use rundler_types::{
 /// Listens for a ctrl-c signal and shuts down all components when received.
 pub async fn run() -> anyhow::Result<()> {
     let opt = Cli::parse();
-    let _guard = tracing::configure_logging(&opt.logs)?;
+    let _guard = tracing::configure_logging(&opt.common.network, &opt.logs)?;
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let mut task_manager = TaskManager::current();
