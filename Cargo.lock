@@ -4744,6 +4744,7 @@ dependencies = [
  "strum",
  "tokio",
  "tokio-metrics",
+ "tonic",
  "tracing",
  "tracing-appender",
  "tracing-log",

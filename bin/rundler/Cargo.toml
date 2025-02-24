@@ -50,6 +50,7 @@ sscanf = "0.4.2"
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-metrics = "0.4.0"
+tonic.workspace = true
 tracing.workspace = true
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
