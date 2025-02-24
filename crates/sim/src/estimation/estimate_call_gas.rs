@@ -9,6 +9,7 @@ use rundler_contracts::{
 use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
 use rundler_types::UserOperation;
 use rundler_utils::authorization_utils;
+use tracing::instrument;
 
 use super::Settings;
 use crate::GasEstimationError;
@@ -95,6 +96,7 @@ where
 {
     type UO = UO;
 
+    #[instrument(skip(self))]
     async fn estimate_call_gas(
         &self,
         op: Self::UO,
@@ -203,6 +205,7 @@ where
         }
     }
 
+    #[instrument(skip(self))]
     async fn simulate_handle_op_with_result(
         &self,
         op: Self::UO,
