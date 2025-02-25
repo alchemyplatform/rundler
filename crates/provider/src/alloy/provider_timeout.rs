@@ -84,10 +84,7 @@ where
     type Future = ResponseFuture<S::Future>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self.service.poll_ready(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(r) => Poll::Ready(r.map_err(Into::into)),
-        }
+        self.service.poll_ready(cx)
     }
 
     fn call(&mut self, request: RequestPacket) -> Self::Future {
@@ -123,7 +120,7 @@ where
 
         // First, try polling the future
         match this.response.poll(cx) {
-            Poll::Ready(v) => return Poll::Ready(v.map_err(Into::into)),
+            Poll::Ready(v) => return Poll::Ready(v),
             Poll::Pending => {}
         }
         // Now check the sleep

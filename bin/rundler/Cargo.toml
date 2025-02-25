@@ -30,7 +30,7 @@ aws-config.workspace = true
 aws-sdk-s3 = { version = "1.52", default-features = false }
 clap = { version = "4.5.16", features = ["derive", "env"] }
 config = "0.14.0"
-dotenv = "0.15.0"
+dotenvy = "0.15.7"
 go-parse-duration = "0.1"
 http.workspace = true
 itertools.workspace = true
@@ -50,8 +50,6 @@ sscanf = "0.4.2"
 strum = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-metrics = "0.4.0"
-tokio-rustls = "0.26.0"
-tokio-util.workspace = true
 tonic.workspace = true
 tracing.workspace = true
 tracing-appender = "0.2.3"
