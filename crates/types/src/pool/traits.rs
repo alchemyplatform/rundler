@@ -22,7 +22,7 @@ use super::{
     error::PoolError,
     types::{NewHead, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus},
 };
-use crate::{EntityUpdate, UserOperationId, UserOperationVariant};
+use crate::{EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant};
 
 /// Result type for pool server operations.
 pub type PoolResult<T> = std::result::Result<T, PoolError>;
@@ -35,7 +35,11 @@ pub trait Pool: Send + Sync {
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>>;
 
     /// Add an operation to the pool
-    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<B256>;
+    async fn add_op(
+        &self,
+        op: UserOperationVariant,
+        perms: UserOperationPermissions,
+    ) -> PoolResult<B256>;
 
     /// Get operations from the pool
     async fn get_ops(

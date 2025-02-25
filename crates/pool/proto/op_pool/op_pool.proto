@@ -24,6 +24,10 @@ message UserOperation {
   }
 }
 
+message UserOperationPermissions {
+  bool trusted = 1;
+}
+
 // Protocol Buffer representation of an 7702 authorization tuple. See the official 
 // specification at https://eips.ethereum.org/EIPS/eip-7702
 message AuthorizationTuple {
@@ -180,6 +184,8 @@ message MempoolOp {
   DaGasUoData da_gas_data = 9;
   // The filter ID to apply to the UserOperation
   string filter_id = 10;
+  // The permissions for the UserOperation
+  UserOperationPermissions permissions = 11;
 }
 
 // Data associated with a user operation for DA gas calculations
@@ -269,10 +275,10 @@ message GetSupportedEntryPointsResponse {
 }
 
 message AddOpRequest {
-  // The serialized entry point address via which the UserOperation is being submitted
-  bytes entry_point = 1;
   // The UserOperation to add to the mempool
-  UserOperation op = 2;
+  UserOperation op = 1;
+  // The permissions to use for the UserOperation
+  UserOperationPermissions permissions = 2;
 }
 message AddOpResponse {
   oneof result {

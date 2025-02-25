@@ -42,7 +42,6 @@ use rundler_provider::{
     AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, DAGasOracleSync,
     EntryPointProvider, EvmProvider, Providers,
 };
-use rundler_rpc::{EthApiSettings, RundlerApiSettings};
 use rundler_sim::{
     EstimationSettings, MempoolConfigs, PrecheckSettings, PriorityFeeMode, SimulationSettings,
     MIN_CALL_GAS_LIMIT,
@@ -531,26 +530,6 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
             U256::from(value.min_stake_value),
             value.tracer_timeout.clone(),
         ))
-    }
-}
-
-impl From<&CommonArgs> for EthApiSettings {
-    fn from(value: &CommonArgs) -> Self {
-        Self::new(value.user_operation_event_block_distance)
-    }
-}
-
-impl TryFrom<&CommonArgs> for RundlerApiSettings {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
-        Ok(Self {
-            priority_fee_mode: PriorityFeeMode::try_from(
-                value.priority_fee_mode_kind.as_str(),
-                value.priority_fee_mode_value,
-            )?,
-            bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
-        })
     }
 }
 

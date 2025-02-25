@@ -148,6 +148,9 @@ List of command line options for configuring the RPC API.
 - `--rpc.builder_url`:	Builder URL for RPC (default: `http://localhost:50052`)
   - env: *RPC_BUILDER_URL*
   - *Only required when running in distributed mode* 
+- `--rpc.permissions_enabled`: True if user operation permissions are enabled on the RPC API (default: `false`)
+  - env: *RPC_PERMISSIONS_ENABLED
+  - **NOTE: Do not enable this on a public API - for internal, trusted connections only.**
 
 ## Pool Options
 

@@ -150,7 +150,6 @@ impl OpPool for OpPoolImpl {
 
     async fn add_op(&self, request: Request<AddOpRequest>) -> Result<Response<AddOpResponse>> {
         let req = request.into_inner();
-        let ep = self.get_entry_point(&req.entry_point)?;
 
         let proto_op = req
             .op
@@ -159,8 +158,12 @@ impl OpPool for OpPoolImpl {
             UserOperationVariant::try_uo_from_proto(proto_op, &self.chain_spec).map_err(|e| {
                 Status::invalid_argument(format!("Failed to convert to UserOperation: {e}"))
             })?;
+        let permissions = req
+            .permissions
+            .ok_or_else(|| Status::invalid_argument("Permissions are required in AddOpRequest"))?
+            .into();
 
-        let resp = match self.local_pool.add_op(ep, uo).await {
+        let resp = match self.local_pool.add_op(uo, permissions).await {
             Ok(hash) => AddOpResponse {
                 result: Some(add_op_response::Result::Success(AddOpSuccess {
                     hash: hash.to_vec(),
