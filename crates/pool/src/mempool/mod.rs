@@ -38,7 +38,8 @@ use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
-    EntityUpdate, EntryPointVersion, UserOperationId, UserOperationVariant,
+    EntityUpdate, EntryPointVersion, UserOperationId, UserOperationPermissions,
+    UserOperationVariant,
 };
 use tonic::async_trait;
 pub(crate) use uo_pool::{UoPool, UoPoolProviders};
@@ -65,6 +66,7 @@ pub trait Mempool: Send + Sync {
         &self,
         origin: OperationOrigin,
         op: UserOperationVariant,
+        perms: UserOperationPermissions,
     ) -> MempoolResult<B256>;
 
     /// Removes a set of operations from the pool.
@@ -251,6 +253,7 @@ mod tests {
             },
             da_gas_data: Default::default(),
             filter_id: None,
+            perms: UserOperationPermissions::default(),
         };
 
         let entities = po.entities().collect::<Vec<_>>();

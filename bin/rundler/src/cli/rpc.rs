@@ -19,7 +19,7 @@ use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
-use rundler_sim::{EstimationSettings, PrecheckSettings};
+use rundler_sim::PriorityFeeMode;
 use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
 use rundler_types::chain::ChainSpec;
 
@@ -91,6 +91,14 @@ pub struct RpcArgs {
         value_delimiter = ','
     )]
     pub corsdomain: Option<Vec<http::HeaderValue>>,
+
+    #[arg(
+        long = "rpc.permissions_enabled",
+        name = "rpc.permissions_enabled",
+        env = "RPC_PERMISSIONS_ENABLED",
+        default_value = "false"
+    )]
+    permissions_enabled: bool,
 }
 
 impl RpcArgs {
@@ -100,16 +108,17 @@ impl RpcArgs {
         &self,
         chain_spec: ChainSpec,
         common: &CommonArgs,
-        precheck_settings: PrecheckSettings,
-        eth_api_settings: EthApiSettings,
-        rundler_api_settings: RundlerApiSettings,
-        estimation_settings: EstimationSettings,
     ) -> anyhow::Result<RpcTaskArgs> {
         let apis = self
             .api
             .iter()
             .map(|api| api.parse())
             .collect::<Result<Vec<_>, _>>()?;
+
+        let eth_api_settings = EthApiSettings {
+            permissions_enabled: self.permissions_enabled,
+            user_operation_event_block_distance: common.user_operation_event_block_distance,
+        };
 
         Ok(RpcTaskArgs {
             chain_spec,
@@ -118,10 +127,10 @@ impl RpcArgs {
             host: self.host.clone(),
             rpc_url: common.node_http.clone().context("must provide node_http")?,
             api_namespaces: apis,
-            precheck_settings,
+            precheck_settings: common.try_into()?,
             eth_api_settings,
-            rundler_api_settings,
-            estimation_settings,
+            rundler_api_settings: common.try_into()?,
+            estimation_settings: common.try_into()?,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
             entry_point_v0_6_enabled: !common.disable_entry_point_v0_6,
@@ -169,14 +178,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         builder_url,
     } = rpc_args;
 
-    let task_args = rpc_args.to_args(
-        chain_spec.clone(),
-        &common_args,
-        (&common_args).try_into()?,
-        (&common_args).into(),
-        (&common_args).try_into()?,
-        (&common_args).try_into()?,
-    )?;
+    let task_args = rpc_args.to_args(chain_spec.clone(), &common_args)?;
 
     let pool = connect_with_retries_shutdown(
         "op pool from rpc",
@@ -199,4 +201,18 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         .await?;
 
     Ok(())
+}
+
+impl TryFrom<&CommonArgs> for RundlerApiSettings {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+        Ok(Self {
+            priority_fee_mode: PriorityFeeMode::try_from(
+                value.priority_fee_mode_kind.as_str(),
+                value.priority_fee_mode_value,
+            )?,
+            bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
+        })
+    }
 }

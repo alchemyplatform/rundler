@@ -15,7 +15,7 @@ It also supports a health check endpoint.
 
 ### `eth_` Namespace
 
-Methods defined by the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#rpc-methods-eth-namespace).
+Methods defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-eth-namespace).
 
 | Method | Supported |
 | ------ | :-----------: |
@@ -28,7 +28,7 @@ Methods defined by the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#r
 
 ### `debug_` Namespace
 
-Method defined by the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
+Method defined by the [ERC-7769 spec](https://eips.ethereum.org/EIPS/eip-7769#rpc-methods-debug-namespace). Used only for debugging/testing and should be disabled on production APIs.
 
 | Method | Supported | Non-Standard |
 | ------ | :-----------: | :--: |
@@ -42,6 +42,8 @@ Method defined by the [ERC-4337 spec](https://eips.ethereum.org/EIPS/eip-4337#rp
 | [`debug_bundler_getStakeStatus`](#debug_bundler_getstakestatus) | ✅ | ✅ |
 | [`debug_bundler_clearMempool`](#debug_bundler_clearMempool) | ✅ | ✅
 | [`debug_bundler_dumpPaymasterBalances`](#debug_bundler_dumpPaymasterBalances) | ✅ | ✅
+
+Non standard API definitions:
 
 #### `debug_bundler_getStakeStatus`
 
@@ -307,6 +309,38 @@ Currently, it simply queries each the `Pool` and the `Builder` servers to check 
 | ------ | :-----------: | ---- |
 | Healthy | 200 | `ok` |
 | Unhealthy | 500 | JSON-RPC formatted error message | 
+
+## User Operation Permissions
+
+Rundler supports a non-standard 3rd positional parameter on `eth_sendUserOperation` to enabled special permissions on a per-user operation basis. If `rpc.permissions_enabled` is set, these permissions will be sent to the mempool. If disabled, the permissions will be ignored.
+
+These permissions are meant to be used only by trusted connections. For example, an internal proxy that has a trusted relationship with a sender can tag that user operation as `trusted` and skip complex untrusted simulation.
+
+When enabled, the `eth_sendUserOperation` request schema becomes:
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "eth_sendUserOperation",
+  "params": [
+    {
+      ... // user operation fields
+    }
+    "0x....", // entry point address 
+    {
+      trusted: bool // true if the UO should be trusted and simulation should be skipped.
+    }
+  ]
+}
+```
+
+### Available Permissions
+
+#### `trusted`
+
+The `trusted` parameter on the UO permissions object causes the mempool to "trust" that the user operation will not cause a DOS attack on the bundler. With this trust, the bundler can skip applying the ERC-7562 simulation rules on the user operation, skipping the costly debug trace call.
 
 
 ## Gas Estimation

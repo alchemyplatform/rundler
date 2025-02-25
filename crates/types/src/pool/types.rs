@@ -16,7 +16,7 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     da::DAGasUOData, entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation,
-    UserOperationVariant, ValidTimeRange,
+    UserOperationPermissions, UserOperationVariant, ValidTimeRange,
 };
 
 /// The new head of the chain, as viewed by the pool
@@ -124,6 +124,8 @@ pub struct PoolOperation {
     pub da_gas_data: DAGasUOData,
     /// The matched filter ID for this operation
     pub filter_id: Option<String>,
+    /// Permissions for this operation
+    pub perms: UserOperationPermissions,
 }
 
 impl PoolOperation {

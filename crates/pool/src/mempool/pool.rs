@@ -801,7 +801,8 @@ mod tests {
     use rundler_provider::MockDAGasOracleSync;
     use rundler_types::{
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
-        EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait, ValidTimeRange,
+        EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait,
+        UserOperationPermissions, ValidTimeRange,
     };
 
     use super::*;
@@ -1612,6 +1613,7 @@ mod tests {
             account_is_staked: false,
             da_gas_data: Default::default(),
             filter_id: None,
+            perms: UserOperationPermissions::default(),
         }
     }
 

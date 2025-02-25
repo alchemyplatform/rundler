@@ -140,6 +140,7 @@ pub trait Simulator: Send + Sync {
     async fn simulate_validation(
         &self,
         op: Self::UO,
+        trusted: bool,
         block_hash: B256,
         expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError>;

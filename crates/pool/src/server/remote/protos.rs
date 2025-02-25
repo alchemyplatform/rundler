@@ -28,7 +28,9 @@ use rundler_types::{
     },
     v0_6, v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
     EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
-    StakeInfo as RundlerStakeInfo, UserOperation as _, UserOperationVariant, ValidTimeRange,
+    StakeInfo as RundlerStakeInfo, UserOperation as _,
+    UserOperationPermissions as RundlerUserOperationPermissions, UserOperationVariant,
+    ValidTimeRange,
 };
 
 tonic::include_proto!("op_pool");
@@ -436,6 +438,7 @@ impl From<&PoolOperation> for MempoolOp {
             account_is_staked: op.account_is_staked,
             da_gas_data: Some(DaGasUoData::from(&op.da_gas_data)),
             filter_id: op.filter_id.clone().unwrap_or_default(),
+            permissions: Some(op.perms.clone().into()),
         }
     }
 }
@@ -522,6 +525,7 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
                 .context("DA gas data should be set")?
                 .try_into()?,
             filter_id,
+            perms: op.permissions.context("Permissions should be set")?.into(),
         })
     }
 }
@@ -564,6 +568,22 @@ impl From<PoolPaymasterMetadata> for PaymasterBalance {
             address: paymaster_metadata.address.to_vec(),
             confirmed_balance: paymaster_metadata.confirmed_balance.to_proto_bytes(),
             pending_balance: paymaster_metadata.pending_balance.to_proto_bytes(),
+        }
+    }
+}
+
+impl From<UserOperationPermissions> for RundlerUserOperationPermissions {
+    fn from(permissions: UserOperationPermissions) -> Self {
+        Self {
+            trusted: permissions.trusted,
+        }
+    }
+}
+
+impl From<RundlerUserOperationPermissions> for UserOperationPermissions {
+    fn from(permissions: RundlerUserOperationPermissions) -> Self {
+        Self {
+            trusted: permissions.trusted,
         }
     }
 }

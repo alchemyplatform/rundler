@@ -81,14 +81,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
             entry_point_builders,
         )
         .await?;
-    let rpc_task_args = rpc_args.to_args(
-        chain_spec.clone(),
-        &common_args,
-        (&common_args).try_into()?,
-        (&common_args).into(),
-        (&common_args).try_into()?,
-        (&common_args).try_into()?,
-    )?;
+    let rpc_task_args = rpc_args.to_args(chain_spec.clone(), &common_args)?;
 
     let (event_sender, event_rx) =
         broadcast::channel::<WithEntryPoint<Event>>(EVENT_CHANNEL_CAPACITY);

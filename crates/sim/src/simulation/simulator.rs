@@ -28,8 +28,11 @@ use rundler_types::{
     ValidTimeRange, ValidationOutput, ValidationReturnInfo, ViolationOpCode,
 };
 
-use super::context::{
-    self, AccessInfo, AssociatedSlotsByAddress, ValidationContext, ValidationContextProvider,
+use super::{
+    context::{
+        self, AccessInfo, AssociatedSlotsByAddress, ValidationContext, ValidationContextProvider,
+    },
+    UnsafeSimulator,
 };
 use crate::{
     simulation::{
@@ -101,6 +104,7 @@ pub struct SimulatorImpl<UO, P, E, V> {
     sim_settings: Settings,
     mempool_configs: HashMap<B256, MempoolConfig>,
     allow_unstaked_addresses: HashSet<Address>,
+    unsafe_sim: UnsafeSimulator<UO, E>,
     _uo_type: PhantomData<UO>,
 }
 
@@ -108,7 +112,7 @@ impl<UO, P, E, V> SimulatorImpl<UO, P, E, V>
 where
     UO: UserOperation,
     P: EvmProvider,
-    E: EntryPoint,
+    E: EntryPoint + Clone,
     V: ValidationContextProvider<UO = UO>,
 {
     /// Create a new simulator
@@ -137,6 +141,7 @@ where
 
         Self {
             provider,
+            unsafe_sim: UnsafeSimulator::new(entry_point.clone(), sim_settings.clone()),
             entry_point,
             validation_context_provider,
             sim_settings,
@@ -423,7 +428,7 @@ impl<UO, P, E, V> Simulator for SimulatorImpl<UO, P, E, V>
 where
     UO: UserOperation,
     P: EvmProvider,
-    E: EntryPoint,
+    E: EntryPoint + SimulationProvider<UO = UO> + Clone,
     V: ValidationContextProvider<UO = UO>,
 {
     type UO = UO;
@@ -431,9 +436,17 @@ where
     async fn simulate_validation(
         &self,
         op: UO,
+        trusted: bool,
         block_hash: B256,
         expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {
+        if trusted {
+            return self
+                .unsafe_sim
+                .simulate_validation(op, trusted, block_hash, expected_code_hash)
+                .await;
+        }
+
         let block_id = block_hash.into();
         let mut context = match self
             .validation_context_provider
@@ -628,6 +641,8 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy_primitives::{address, b256, bytes, uint, Bytes};
     use context::ContractInfo;
     use rundler_provider::{BlockId, BlockNumberOrTag, MockEntryPointV0_6, MockEvmProvider};
@@ -806,7 +821,7 @@ mod tests {
     ) -> SimulatorImpl<
         UserOperation,
         MockEvmProvider,
-        MockEntryPointV0_6,
+        Arc<MockEntryPointV0_6>,
         MockValidationContextProviderV0_6,
     > {
         let settings = Settings::default();
@@ -814,7 +829,13 @@ mod tests {
         let mut mempool_configs = HashMap::new();
         mempool_configs.insert(B256::ZERO, MempoolConfig::default());
 
-        SimulatorImpl::new(provider, entry_point, context, settings, mempool_configs)
+        SimulatorImpl::new(
+            provider,
+            Arc::new(entry_point),
+            context,
+            settings,
+            mempool_configs,
+        )
     }
 
     #[tokio::test]
@@ -862,7 +883,33 @@ mod tests {
 
         let simulator = create_simulator(provider, entry_point, context);
         let res = simulator
-            .simulate_validation(user_operation, B256::ZERO, None)
+            .simulate_validation(user_operation, false, B256::ZERO, None)
+            .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_simulate_validation_trusted() {
+        let (provider, mut entry_point, context) = create_base_config();
+        let uo = UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields::default(),
+        )
+        .build();
+
+        entry_point.expect_simulate_validation().returning(|_, _| {
+            Ok(Ok(ValidationOutput {
+                return_info: ValidationReturnInfo::default(),
+                sender_info: StakeInfo::default(),
+                factory_info: StakeInfo::default(),
+                paymaster_info: StakeInfo::default(),
+                aggregator_info: None,
+            }))
+        });
+
+        let simulator = create_simulator(provider, entry_point, context);
+        let res = simulator
+            .simulate_validation(uo, true, B256::ZERO, None)
             .await;
         assert!(res.is_ok());
     }

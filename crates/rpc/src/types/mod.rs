@@ -22,6 +22,9 @@ use rundler_types::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+mod permissions;
+pub(crate) use permissions::RpcUserOperationPermissions;
+
 mod v0_6;
 pub(crate) use v0_6::{
     RpcGasEstimate as RpcGasEstimateV0_6, RpcUserOperation as RpcUserOperationV0_6,
