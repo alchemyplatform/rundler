@@ -44,8 +44,8 @@ use rundler_types::{
     pool::{Pool, PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidationRevert,
-    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange,
+    ValidationRevert, BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
 use tokio::{sync::broadcast, try_join};
@@ -395,8 +395,10 @@ where
         }
 
         // filter by fees
-        if op.uo.max_fee_per_gas() < required_max_fee_per_gas
-            || op.uo.max_priority_fee_per_gas() < required_max_priority_fee_per_gas
+        if (op.uo.max_fee_per_gas() < required_max_fee_per_gas
+            || op.uo.max_priority_fee_per_gas() < required_max_priority_fee_per_gas)
+            && op.perms.bundler_sponsorship.is_none()
+        // skip if bundler sponsored
         {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
@@ -475,7 +477,7 @@ where
             required_pvg = math::percent_ceil(required_pvg, pct);
         }
 
-        if op.uo.pre_verification_gas() < required_pvg {
+        if op.uo.pre_verification_gas() < required_pvg && op.perms.bundler_sponsorship.is_none() {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
                 op_hash,
@@ -490,6 +492,25 @@ where
                 },
             ));
             return None;
+        }
+
+        // Check total gas cost and time for bundler sponsorship
+        if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
+            let total_gas_cost = U256::from(
+                op.uo
+                    .gas_limit(&self.settings.chain_spec, Some(bundle_size)),
+            ) * U256::from(required_op_fees.gas_price(base_fee));
+            if total_gas_cost > bundler_sponsorship.max_cost {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op_hash,
+                    SkipReason::InsufficientSponsorshipCost {
+                        max_cost: bundler_sponsorship.max_cost,
+                        actual_cost: total_gas_cost,
+                    },
+                ));
+                return None;
+            }
         }
 
         Some(op)
@@ -598,6 +619,23 @@ where
                 ));
                 context.rejected_ops.push((op.into(), po.entity_infos));
                 continue;
+            } else if let Some(bundler_sponsorship) = &po.perms.bundler_sponsorship {
+                let valid_time_range =
+                    ValidTimeRange::from_genesis(bundler_sponsorship.valid_until.into());
+                if !simulation
+                    .valid_time_range
+                    .contains(Timestamp::now(), TIME_RANGE_BUFFER)
+                {
+                    self.emit(BuilderEvent::skipped_op(
+                        self.builder_tag.clone(),
+                        op.hash(),
+                        SkipReason::InvalidTimeRange {
+                            valid_range: valid_time_range,
+                        },
+                    ));
+                    context.rejected_ops.push((op.into(), po.entity_infos));
+                    continue;
+                }
             }
 
             // Limit by transaction size
