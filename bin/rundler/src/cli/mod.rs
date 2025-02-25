@@ -58,7 +58,7 @@ use rundler_types::{
 /// Listens for a ctrl-c signal and shuts down all components when received.
 pub async fn run() -> anyhow::Result<()> {
     let opt = Cli::parse();
-    let _guard = tracing::configure_logging(&opt.logs)?;
+    let _guard = tracing::configure_logging(&opt.common.network, &opt.logs)?;
     tracing::info!("Parsed CLI options: {:#?}", opt);
 
     let mut task_manager = TaskManager::current();
@@ -647,6 +647,18 @@ pub struct LogsArgs {
         global = true
     )]
     json: bool,
+
+    /// Log OTLP Endpoint
+    ///
+    /// If set, tracing spans will be forwarded to the provided gRPC OTLP endpoint
+    #[arg(
+        long = "log.otlp_grpc_endpoint",
+        name = "log.otlp_grpc_endpoint",
+        env = "LOG_OTLP_GRPC_ENDPOINT",
+        default_value = None,
+        global = true
+    )]
+    otlp_grpc_endpoint: Option<String>,
 }
 
 /// CLI options

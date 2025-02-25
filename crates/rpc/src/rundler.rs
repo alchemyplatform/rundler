@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_sim::{gas, FeeEstimator};
 use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
+use tracing::instrument;
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
@@ -69,6 +70,7 @@ where
     P: Pool + 'static,
     F: FeeEstimator + 'static,
 {
+    #[instrument(name = "RundlerApiServer::max_priority_fee_per_gas", skip(self))]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
@@ -108,7 +110,7 @@ where
             fee_estimator,
         }
     }
-
+    #[instrument(name = "RundlerApi::max_priority_fee_per_gas", skip(self))]
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator
