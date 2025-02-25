@@ -178,7 +178,7 @@ where
         perms: &UserOperationPermissions,
         block: BlockHashOrNumber,
     ) -> Result<PrecheckReturn, PrecheckError> {
-        let async_data = self.load_async_data(op, block).await?;
+        let async_data = self.load_async_data(op, block, perms).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
         violations.extend(self.check_init_code(op, &async_data));
         violations.extend(self.check_gas(op, &async_data, perms));
@@ -302,6 +302,19 @@ where
                 max_total_execution_gas,
             ))
         }
+        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
+            violations.push(PrecheckViolation::CallGasLimitTooLow(
+                op.call_gas_limit(),
+                MIN_CALL_GAS_LIMIT,
+            ));
+        }
+
+        // If the UO is bundler sponsored, skip the fee checks
+        if perms.bundler_sponsorship.is_some() {
+            return violations;
+        }
+
+        // NOTE: only fee checks below this short circuit
 
         // if preVerificationGas is dynamic, then allow for the percentage buffer
         // and check if the preVerificationGas is at least the minimum.
@@ -348,12 +361,6 @@ where
             ));
         }
 
-        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
-            violations.push(PrecheckViolation::CallGasLimitTooLow(
-                op.call_gas_limit(),
-                MIN_CALL_GAS_LIMIT,
-            ));
-        }
         violations
     }
 
@@ -390,6 +397,7 @@ where
         &self,
         op: &UO,
         block: BlockHashOrNumber,
+        perms: &UserOperationPermissions,
     ) -> anyhow::Result<AsyncData> {
         let FeeUpdate { base_fee, .. } = self.get_fees().await?;
 
@@ -404,7 +412,7 @@ where
             self.is_contract(Some(op.sender())),
             self.is_contract(op.paymaster()),
             self.get_payer_funds(op),
-            self.get_required_pre_verification_gas(op.clone(), block, base_fee)
+            self.get_required_pre_verification_gas(op.clone(), block, base_fee, perms)
         )?;
         Ok(AsyncData {
             factory_exists,
@@ -475,7 +483,12 @@ where
         op: UO,
         block: BlockHashOrNumber,
         base_fee: u128,
+        perms: &UserOperationPermissions,
     ) -> anyhow::Result<(u128, DAGasUOData)> {
+        if perms.bundler_sponsorship.is_some() {
+            return Ok((0, DAGasUOData::Empty));
+        }
+
         gas::calc_required_pre_verification_gas(
             &self.chain_spec,
             &self.entry_point,
@@ -496,7 +509,7 @@ mod tests {
     use rundler_provider::{MockEntryPointV0_6, MockEvmProvider};
     use rundler_types::{
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
-        UserOperation as _,
+        BundlerSponsorship, UserOperation as _,
     };
 
     use super::*;
@@ -617,10 +630,10 @@ mod tests {
             ArrayVec::<PrecheckViolation, 6>::from([
                 PrecheckViolation::VerificationGasLimitTooHigh(10_000_000, 5_000_000,),
                 PrecheckViolation::TotalGasLimitTooHigh(total_gas_limit, 10_000_000,),
+                PrecheckViolation::CallGasLimitTooLow(9_000, 9_100,),
                 PrecheckViolation::PreVerificationGasTooLow(0, 1_000,),
                 PrecheckViolation::MaxPriorityFeePerGasTooLow(2_000, 4_000,),
                 PrecheckViolation::MaxFeePerGasTooLow(5_000, 8_000,),
-                PrecheckViolation::CallGasLimitTooLow(9_000, 9_100,),
             ])
         );
     }
@@ -929,5 +942,49 @@ mod tests {
         ));
 
         assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn test_bundler_sponsorship_skip_fee_check() {
+        let settings = Settings {
+            base_fee_accept_percent: 80,
+            priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
+            ..Default::default()
+        };
+
+        let (mut cs, provider, entry_point, fee_estimator) = create_base_config();
+        cs.id = 10;
+        cs.da_pre_verification_gas = true;
+
+        let provider = Arc::new(provider);
+        let prechecker =
+            PrecheckerImpl::new(cs.clone(), provider, entry_point, fee_estimator, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 5_000;
+        async_data.min_pre_verification_gas = 1_000;
+
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+                pre_verification_gas: 0,
+                call_gas_limit: MIN_CALL_GAS_LIMIT,
+                ..Default::default()
+            },
+        )
+        .build();
+
+        let perms = UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost: U256::from(100),
+                valid_until: u64::MAX,
+            }),
+            ..Default::default()
+        };
+
+        let res = prechecker.check_gas(&op, &async_data, &perms);
+        assert!(res.is_empty());
     }
 }

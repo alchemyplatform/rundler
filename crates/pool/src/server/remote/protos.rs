@@ -26,9 +26,9 @@ use rundler_types::{
         PaymasterMetadata as PoolPaymasterMetadata, PoolOperation, Reputation as PoolReputation,
         ReputationStatus as PoolReputationStatus, StakeStatus as RundlerStakeStatus,
     },
-    v0_6, v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
-    EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
-    StakeInfo as RundlerStakeInfo, UserOperation as _,
+    v0_6, v0_7, BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity,
+    EntityInfos, EntityType as RundlerEntityType, EntityUpdate as RundlerEntityUpdate,
+    EntityUpdateType as RundlerEntityUpdateType, StakeInfo as RundlerStakeInfo, UserOperation as _,
     UserOperationPermissions as RundlerUserOperationPermissions, UserOperationVariant,
     ValidTimeRange,
 };
@@ -525,7 +525,10 @@ impl TryUoFromProto<MempoolOp> for PoolOperation {
                 .context("DA gas data should be set")?
                 .try_into()?,
             filter_id,
-            perms: op.permissions.context("Permissions should be set")?.into(),
+            perms: op
+                .permissions
+                .context("Permissions should be set")?
+                .try_into()?,
         })
     }
 }
@@ -614,16 +617,22 @@ impl From<PoolPaymasterMetadata> for PaymasterBalance {
     }
 }
 
-impl From<UserOperationPermissions> for RundlerUserOperationPermissions {
-    fn from(permissions: UserOperationPermissions) -> Self {
-        Self {
+impl TryFrom<UserOperationPermissions> for RundlerUserOperationPermissions {
+    type Error = ConversionError;
+
+    fn try_from(permissions: UserOperationPermissions) -> Result<Self, Self::Error> {
+        Ok(Self {
             trusted: permissions.trusted,
             max_allowed_in_pool_for_sender: permissions
                 .max_allowed_in_pool_for_sender
                 .map(|c| c as usize),
             underpriced_accept_pct: permissions.underpriced_accept_pct,
             underpriced_bundle_pct: permissions.underpriced_bundle_pct,
-        }
+            bundler_sponsorship: permissions
+                .bundler_sponsorship
+                .map(|s| s.try_into())
+                .transpose()?,
+        })
     }
 }
 
@@ -636,6 +645,27 @@ impl From<RundlerUserOperationPermissions> for UserOperationPermissions {
                 .map(|c| c as u64),
             underpriced_accept_pct: permissions.underpriced_accept_pct,
             underpriced_bundle_pct: permissions.underpriced_bundle_pct,
+            bundler_sponsorship: permissions.bundler_sponsorship.map(|s| s.into()),
+        }
+    }
+}
+
+impl TryFrom<BundlerSponsorship> for RundlerBundlerSponsorship {
+    type Error = ConversionError;
+
+    fn try_from(sponsorship: BundlerSponsorship) -> Result<Self, Self::Error> {
+        Ok(Self {
+            max_cost: from_bytes(&sponsorship.max_cost)?,
+            valid_until: sponsorship.valid_until,
+        })
+    }
+}
+
+impl From<RundlerBundlerSponsorship> for BundlerSponsorship {
+    fn from(sponsorship: RundlerBundlerSponsorship) -> Self {
+        Self {
+            max_cost: sponsorship.max_cost.to_proto_bytes(),
+            valid_until: sponsorship.valid_until,
         }
     }
 }

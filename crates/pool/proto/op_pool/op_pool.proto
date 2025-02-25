@@ -29,6 +29,12 @@ message UserOperationPermissions {
   optional uint64 max_allowed_in_pool_for_sender = 2;
   optional uint32 underpriced_accept_pct = 3;
   optional uint32 underpriced_bundle_pct = 4;
+  BundlerSponsorship bundler_sponsorship = 5;
+}
+
+message BundlerSponsorship {
+  bytes max_cost = 1;
+  uint64 valid_until = 2;
 }
 
 // Protocol Buffer representation of an 7702 authorization tuple. See the official 

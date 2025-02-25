@@ -161,7 +161,12 @@ impl OpPool for OpPoolImpl {
         let permissions = req
             .permissions
             .ok_or_else(|| Status::invalid_argument("Permissions are required in AddOpRequest"))?
-            .into();
+            .try_into()
+            .map_err(|e| {
+                Status::invalid_argument(format!(
+                    "Failed to convert to UserOperationPermissions: {e}"
+                ))
+            })?;
 
         let resp = match self.local_pool.add_op(uo, permissions).await {
             Ok(hash) => AddOpResponse {

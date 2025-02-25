@@ -268,10 +268,37 @@ where
                     },
                 });
                 expired.push(*hash);
+                continue;
+            } else if op
+                .po
+                .perms
+                .bundler_sponsorship
+                .as_ref()
+                .is_some_and(|s| Timestamp::from(s.valid_until) < block_timestamp)
+            {
+                events.push(PoolEvent::RemovedOp {
+                    op_hash: *hash,
+                    reason: OpRemovalReason::Expired {
+                        valid_until: op
+                            .po
+                            .perms
+                            .bundler_sponsorship
+                            .as_ref()
+                            .unwrap()
+                            .valid_until
+                            .into(),
+                    },
+                });
+                expired.push(*hash);
+                continue;
             }
 
             // check for eligibility
-            if self.da_gas_oracle.is_some() && block_da_data.is_some() {
+            if self.da_gas_oracle.is_some()
+                && block_da_data.is_some()
+                && op.po.perms.bundler_sponsorship.is_none()
+            // skip if bundler sponsored
+            {
                 // TODO(bundle): assuming a bundle size of 1
                 let bundle_size = 1;
 
@@ -321,8 +348,10 @@ where
             self.best.insert(op.clone());
 
             // Check candidate status
-            if op.uo().max_fee_per_gas() < gas_fees.uo_fees.max_fee_per_gas
-                || op.uo().max_priority_fee_per_gas() < gas_fees.uo_fees.max_priority_fee_per_gas
+            if (op.uo().max_fee_per_gas() < gas_fees.uo_fees.max_fee_per_gas
+                || op.uo().max_priority_fee_per_gas() < gas_fees.uo_fees.max_priority_fee_per_gas)
+                && op.po.perms.bundler_sponsorship.is_none()
+            // skip if bundler sponsored
             {
                 // don't mark as ineligible, but also not a candidate
                 continue;
@@ -805,7 +834,7 @@ mod tests {
     use rundler_provider::MockDAGasOracleSync;
     use rundler_types::{
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
-        EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait,
+        BundlerSponsorship, EntityInfo, EntityInfos, GasFees, UserOperation as UserOperationTrait,
         UserOperationPermissions, ValidTimeRange,
     };
 
@@ -1539,6 +1568,43 @@ mod tests {
         assert_eq!(pool.best_operations().collect::<Vec<_>>(), vec![po2, po1]);
     }
 
+    #[test]
+    fn test_bundler_sponsorship_expired() {
+        let conf = conf();
+        let mut pool = pool_with_conf(conf.clone());
+        let sender = Address::random();
+        let mut po1 = create_op(sender, 0, 10);
+        po1.perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost: U256::from(100),
+            valid_until: 1,
+        });
+        let hash = pool.add_operation(po1.clone(), 0, 0).unwrap();
+
+        pool.do_maintenance(0, Timestamp::from(2), None, FeeUpdate::default());
+        assert_eq!(None, pool.get_operation_by_hash(hash));
+    }
+
+    #[test]
+    fn test_bundler_sponsorship_always_eligible() {
+        let mut conf = conf();
+        conf.chain_spec.da_pre_verification_gas = true;
+        conf.chain_spec.include_da_gas_in_gas_limit = true;
+        conf.da_gas_tracking_enabled = true;
+
+        let mut pool = pool_with_conf(conf.clone());
+        let sender = Address::random();
+        let mut po1 = create_op_zero_fees(sender, 0);
+        po1.perms.bundler_sponsorship = Some(BundlerSponsorship {
+            max_cost: U256::from(100),
+            valid_until: u64::MAX,
+        });
+        let hash = pool.add_operation(po1.clone(), 0, 0).unwrap();
+
+        pool.do_maintenance(0, Timestamp::from(2), None, FeeUpdate::default());
+        assert!(pool.get_operation_by_hash(hash).is_some());
+        assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
+    }
+
     const MAX_POOL_SIZE_OPS: usize = 20;
 
     fn conf() -> PoolInnerConfig {
@@ -1588,6 +1654,18 @@ mod tests {
             nonce: U256::from(nonce),
             max_fee_per_gas: gas_fee,
             max_priority_fee_per_gas: gas_fee,
+            ..base_required_fields()
+        };
+        create_op_from_required(required)
+    }
+
+    fn create_op_zero_fees(sender: Address, nonce: usize) -> PoolOperation {
+        let required = UserOperationRequiredFields {
+            sender,
+            nonce: U256::from(nonce),
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            pre_verification_gas: 0,
             ..base_required_fields()
         };
         create_op_from_required(required)
