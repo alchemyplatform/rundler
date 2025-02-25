@@ -11,6 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::U64;
 use rundler_types::{chain::ChainSpec, UserOperationPermissions};
 use serde::{Deserialize, Serialize};
 
@@ -23,12 +24,16 @@ pub(crate) struct RpcUserOperationPermissions {
     /// Whether the user operation is trusted, allowing the bundler to skip untrusted simulation
     #[serde(default)]
     pub(crate) trusted: bool,
+    /// The maximum sender allowed in the pool
+    #[serde(default)]
+    pub(crate) max_allowed_in_pool_for_sender: Option<U64>,
 }
 
 impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
     fn from_rpc(rpc: RpcUserOperationPermissions, _chain_spec: &ChainSpec) -> Self {
         UserOperationPermissions {
             trusted: rpc.trusted,
+            max_allowed_in_pool_for_sender: rpc.max_allowed_in_pool_for_sender.map(|c| c.to()),
         }
     }
 }
