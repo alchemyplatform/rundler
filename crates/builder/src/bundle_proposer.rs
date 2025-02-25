@@ -44,8 +44,8 @@ use rundler_types::{
     pool::{Pool, PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
     Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidationRevert,
-    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange,
+    ValidationRevert, BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
 use tokio::{sync::broadcast, try_join};
@@ -395,8 +395,10 @@ where
         }
 
         // filter by fees
-        if op.uo.max_fee_per_gas() < required_max_fee_per_gas
-            || op.uo.max_priority_fee_per_gas() < required_max_priority_fee_per_gas
+        if (op.uo.max_fee_per_gas() < required_max_fee_per_gas
+            || op.uo.max_priority_fee_per_gas() < required_max_priority_fee_per_gas)
+            && op.perms.bundler_sponsorship.is_none()
+        // skip if bundler sponsored
         {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
@@ -420,6 +422,12 @@ where
         // TODO(bundle): assuming a bundle size of 1
         let bundle_size = 1;
 
+        let gas_price = if op.perms.bundler_sponsorship.is_some() {
+            required_op_fees.gas_price(base_fee)
+        } else {
+            op.uo.gas_price(base_fee)
+        };
+
         let required_da_gas = if self.settings.da_gas_tracking_enabled
             && da_block_data.is_some()
             && self.ep_providers.da_gas_oracle_sync().is_some()
@@ -431,7 +439,7 @@ where
             da_gas_oracle.calc_da_gas_sync(
                 &op.da_gas_data,
                 da_block_data,
-                op.uo.gas_price(base_fee),
+                gas_price,
                 extra_data_len,
             )
         } else {
@@ -441,7 +449,7 @@ where
                 .calc_da_gas(
                     op.uo.clone().into(),
                     block_hash.into(),
-                    op.uo.gas_price(base_fee),
+                    gas_price,
                     bundle_size,
                 )
                 .await
@@ -475,7 +483,7 @@ where
             required_pvg = math::percent_ceil(required_pvg, pct);
         }
 
-        if op.uo.pre_verification_gas() < required_pvg {
+        if op.uo.pre_verification_gas() < required_pvg && op.perms.bundler_sponsorship.is_none() {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
                 op_hash,
@@ -490,6 +498,27 @@ where
                 },
             ));
             return None;
+        }
+
+        // Check total gas cost and time for bundler sponsorship
+        if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
+            let gas_limit = op
+                .uo
+                .gas_limit(&self.settings.chain_spec, Some(bundle_size))
+                + required_pvg; // PVG is added as part of the gas limit as this is part of the cost of sponsorship
+
+            let total_gas_cost = U256::from(gas_limit) * U256::from(gas_price);
+            if total_gas_cost > bundler_sponsorship.max_cost {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op_hash,
+                    SkipReason::OverSponsorshipMaxCost {
+                        max_cost: bundler_sponsorship.max_cost,
+                        actual_cost: total_gas_cost,
+                    },
+                ));
+                return None;
+            }
         }
 
         Some(op)
@@ -598,6 +627,23 @@ where
                 ));
                 context.rejected_ops.push((op.into(), po.entity_infos));
                 continue;
+            } else if let Some(bundler_sponsorship) = &po.perms.bundler_sponsorship {
+                let valid_time_range =
+                    ValidTimeRange::from_genesis(bundler_sponsorship.valid_until.into());
+                if !simulation
+                    .valid_time_range
+                    .contains(Timestamp::now(), TIME_RANGE_BUFFER)
+                {
+                    self.emit(BuilderEvent::rejected_op(
+                        self.builder_tag.clone(),
+                        op.hash(),
+                        OpRejectionReason::InvalidTimeRange {
+                            valid_range: valid_time_range,
+                        },
+                    ));
+                    context.rejected_ops.push((op.into(), po.entity_infos));
+                    continue;
+                }
             }
 
             // Limit by transaction size
@@ -1820,7 +1866,7 @@ mod tests {
         pool::{MockPool, SimulationViolation},
         proxy::MockSubmissionProxy,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        UserOperation as _, UserOperationPermissions, ValidTimeRange,
+        BundlerSponsorship, UserOperation as _, UserOperationPermissions, ValidTimeRange,
     };
 
     use super::*;
@@ -3379,6 +3425,124 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_bundler_sponsorship_skip_fee_check() {
+        let mock_op = op_with_sender_and_fees(address(1), 0, 0, 0); // Zero fees
+        let perms = UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost: U256::from(1000000000000_u64), // High enough max cost
+                valid_until: u64::MAX,                   // Never expires
+            }),
+            ..Default::default()
+        };
+
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: mock_op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms,
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            100,
+            10,
+            false,
+            ExpectedStorage::default(),
+            true,
+            vec![],
+            None,
+        )
+        .await;
+
+        // Operation should be included despite having zero fees
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![mock_op],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundler_sponsorship_expired() {
+        let mock_op = op_with_sender_and_fees(address(1), 0, 0, 0); // Zero fees
+        let perms = UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost: U256::from(1000), // High enough max cost
+                valid_until: u64::MAX,      // Never expires
+            }),
+            ..Default::default()
+        };
+        let error = mock_make_bundle_allow_error(
+            vec![MockOp {
+                op: mock_op.clone(),
+                simulation_result: Box::new(|| {
+                    Ok(SimulationResult {
+                        valid_time_range: ValidTimeRange::from_genesis(200.into()), // Current time > valid_until
+                        ..Default::default()
+                    })
+                }),
+                perms,
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            10000,
+            1000,
+            false,
+            ExpectedStorage::default(),
+            true,
+            vec![],
+            None,
+        )
+        .await
+        .expect_err("should fail to bundle");
+
+        assert!(matches!(
+            error,
+            BundleProposerError::NoOperationsAfterFeeFilter
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_bundler_sponsorship_over_max_cost() {
+        let mock_op = op_with_gas(0, 100_000, 100_000, false); // High gas limits
+        let perms = UserOperationPermissions {
+            bundler_sponsorship: Some(BundlerSponsorship {
+                max_cost: U256::from(1_000_000), // Max cost too low for gas price * gas limit
+                valid_until: u64::MAX,
+            }),
+            ..Default::default()
+        };
+
+        let error = mock_make_bundle_allow_error(
+            vec![MockOp {
+                op: mock_op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                perms,
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            10_000, // High base fee
+            1_000,  // High priority fee
+            false,
+            ExpectedStorage::default(),
+            true,
+            vec![],
+            None,
+        )
+        .await
+        .expect_err("should fail to bundle");
+
+        assert!(matches!(
+            error,
+            BundleProposerError::NoOperationsAfterFeeFilter
+        ));
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
@@ -3423,6 +3587,37 @@ mod tests {
         aggregators: Vec<MockSignatureAggregator>,
         proxy: Option<MockSubmissionProxy>,
     ) -> Bundle<UserOperation> {
+        mock_make_bundle_allow_error(
+            mock_ops,
+            mock_aggregators,
+            mock_handle_ops_call_results,
+            mock_paymaster_deposits,
+            base_fee,
+            max_priority_fee_per_gas,
+            notify_condition_not_met,
+            actual_storage,
+            da_gas_tracking_enabled,
+            aggregators,
+            proxy,
+        )
+        .await
+        .expect("should make a bundle")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mock_make_bundle_allow_error(
+        mock_ops: Vec<MockOp>,
+        mock_aggregators: Vec<MockAggregator>,
+        mock_handle_ops_call_results: Vec<HandleOpsOut>,
+        mock_paymaster_deposits: Vec<U256>,
+        base_fee: u128,
+        max_priority_fee_per_gas: u128,
+        notify_condition_not_met: bool,
+        actual_storage: ExpectedStorage,
+        da_gas_tracking_enabled: bool,
+        aggregators: Vec<MockSignatureAggregator>,
+        proxy: Option<MockSubmissionProxy>,
+    ) -> BundleProposerResult<Bundle<UserOperation>> {
         let mut chain_spec = ChainSpec {
             da_pre_verification_gas: da_gas_tracking_enabled,
             ..Default::default()
@@ -3591,10 +3786,7 @@ mod tests {
             proposer.notify_condition_not_met();
         }
 
-        proposer
-            .make_bundle(None, false)
-            .await
-            .expect("should make a bundle")
+        proposer.make_bundle(None, false).await
     }
 
     fn address(n: u8) -> Address {

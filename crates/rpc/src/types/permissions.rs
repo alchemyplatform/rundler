@@ -11,8 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::U64;
-use rundler_types::{chain::ChainSpec, UserOperationPermissions};
+use alloy_primitives::{U256, U64};
+use rundler_types::{chain::ChainSpec, BundlerSponsorship, UserOperationPermissions};
 use serde::{Deserialize, Serialize};
 
 use super::FromRpc;
@@ -33,6 +33,18 @@ pub(crate) struct RpcUserOperationPermissions {
     /// The allowed percentage of fees underpriced that is bundled
     #[serde(default)]
     pub(crate) underpriced_bundle_pct: Option<U64>,
+    /// Bundler sponsorship settings
+    #[serde(default)]
+    pub(crate) bundler_sponsorship: Option<RpcBundlerSponsorship>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RpcBundlerSponsorship {
+    /// The maximum cost the bundler is willing to pay for the user operation
+    pub(crate) max_cost: U256,
+    /// The valid until timestamp of the sponsorship
+    pub(crate) valid_until: U64,
 }
 
 impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
@@ -42,6 +54,18 @@ impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
             max_allowed_in_pool_for_sender: rpc.max_allowed_in_pool_for_sender.map(|c| c.to()),
             underpriced_accept_pct: rpc.underpriced_accept_pct.map(|c| c.to()),
             underpriced_bundle_pct: rpc.underpriced_bundle_pct.map(|c| c.to()),
+            bundler_sponsorship: rpc
+                .bundler_sponsorship
+                .map(|c| BundlerSponsorship::from_rpc(c, _chain_spec)),
+        }
+    }
+}
+
+impl FromRpc<RpcBundlerSponsorship> for BundlerSponsorship {
+    fn from_rpc(rpc: RpcBundlerSponsorship, _chain_spec: &ChainSpec) -> Self {
+        BundlerSponsorship {
+            max_cost: rpc.max_cost,
+            valid_until: rpc.valid_until.to(),
         }
     }
 }

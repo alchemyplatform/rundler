@@ -69,6 +69,17 @@ where
             )));
         }
 
+        if permissions.bundler_sponsorship.is_some()
+            && (op.max_fee_per_gas() != 0
+                || op.max_priority_fee_per_gas() != 0
+                || op.pre_verification_gas() != 0
+                || op.paymaster().is_some())
+        {
+            return Err(EthRpcError::InvalidParams(
+                    "Bundler sponsorship requires max fee per gas, max priority fee per gas, pre-verification gas, and paymaster to be 0/empty".to_string(),
+                ));
+        }
+
         self.router.check_and_get_route(&entry_point, &op)?;
 
         self.pool

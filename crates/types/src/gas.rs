@@ -11,8 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use rundler_utils::math;
+use std::cmp;
 
+use rundler_utils::math;
 /// Gas fees for a user operation or transaction
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GasFees {
@@ -32,5 +33,13 @@ impl GasFees {
                 percent,
             ),
         }
+    }
+
+    /// Get the gas price from these fees given a base fee
+    pub fn gas_price(self, base_fee: u128) -> u128 {
+        cmp::min(
+            self.max_fee_per_gas,
+            base_fee.saturating_add(self.max_priority_fee_per_gas),
+        )
     }
 }

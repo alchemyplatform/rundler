@@ -373,6 +373,10 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
       maxAllowedInPoolForSender: uint64,  // optional, the maximum number of UOs allowed in the mempool for this sender
       underpricedAcceptPct: uint64,       // optional, the percentage underpriced a UO may be while still allowed to enter the mempool
       underpricedBundlePct: uint64,       // optional, the percentage underpriced a UO may be while still bundled
+      bundlerSponsorship: {               // optional, set if bundler sponsoring
+        maxCost: uint256,                 // required if bundler sponsorship, sets the max cost for the sponsorship
+        validUntil: uint64                // required if bundler sponsorship, sets the expiry time for the sponsorship in seconds
+      }
     }
   ]
 }
@@ -397,6 +401,20 @@ The `underpricedAcceptPct` and `underpricedBundlePct` permissions parameters can
 `underpricedBundlePct` relaxes the fee check during bundling. It allows a UO to be X% of the bundle fees and still added to a bundle. NOTE: this causes the bundler to lose funds. Only set this if the bundler is willing to "sponsor" a portion of the UOs fee in exchange for higher liveliness.
 
 NOTE: This fee relaxation only applies to `preVerificationGas` if `chain.da_pre_verification_gas` is true (i.e. PVG is dynamic). Else the UO must pay 100% of the static value.
+
+#### `bundlerSponsorship`
+
+The `bundlerSponsorship` permission tells the bundler to sponsor a user operation. That is, pay for the entirety of the gas fees onchain. It contains two fields. `maxCost` sets the maximum total cost for the user operation that the bundler should sponsor. `validUntil` sets a time expiry on the sponsorship.
+
+The bundler will skip all fee checks and instead just check `maxCost` and `validUntil`. If the UO passes those checks, it will bundle the UO and sponsor all of the gas. The bundler will lose funds on this operation and an out of process mechanism must be used to refund the bundler's balance.
+
+To be eligible for `bundlerSponsorship` a user operation must have certain fields set to zero or empty. Those include:
+* `maxFeePerGas` = 0
+* `maxPriorityFeePerGas` = 0
+* `preVerificationGas` = 0
+* `paymaster` = empty
+* `paymasterData` = empty
+* `paymasterAndData` (v0.6) = empty
 
 ## Gas Estimation
 
