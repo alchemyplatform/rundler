@@ -369,8 +369,10 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
     }
     "0x....", // entry point address 
     {
-      trusted: bool // true if the UO should be trusted and simulation should be skipped.
-      maxAllowedInPoolForSender: uint64 // the maximum number of UOs allowed in the mempool for this sender
+      trusted: bool,                      // optional, true if the UO should be trusted and simulation should be skipped.
+      maxAllowedInPoolForSender: uint64,  // optional, the maximum number of UOs allowed in the mempool for this sender
+      underpricedAcceptPct: uint64,       // optional, the percentage underpriced a UO may be while still allowed to enter the mempool
+      underpricedBundlePct: uint64,       // optional, the percentage underpriced a UO may be while still bundled
     }
   ]
 }
@@ -385,6 +387,16 @@ The `trusted` parameter on the UO permissions object causes the mempool to "trus
 #### `maxAllowedInPoolForSender`
 
 The `maxAllowedInPoolForSender` parameter on the UO permissions object sets the maximum number of UOs this particular sender is allowed to have in the mempool. If unset, this will default to `pool.same_sender_mempool_count` from the CLI parameters.
+
+#### `Underpriced`
+
+The `underpricedAcceptPct` and `underpricedBundlePct` permissions parameters can relax the bundler's fee checks.
+
+`underpricedAcceptPct` relaxes the fee check during precheck upon `eth_sendUserOperation`. It allows a UO to be X% of the current estimated fees and still accepted to the mempool. NOTE: setting this too low without also relaxing pricing on bundling can lead to stuck UOs and long time to mine.
+
+`underpricedBundlePct` relaxes the fee check during bundling. It allows a UO to be X% of the bundle fees and still added to a bundle. NOTE: this causes the bundler to lose funds. Only set this if the bundler is willing to "sponsor" a portion of the UOs fee in exchange for higher liveliness.
+
+NOTE: This fee relaxation only applies to `preVerificationGas` if `chain.da_pre_verification_gas` is true (i.e. PVG is dynamic). Else the UO must pay 100% of the static value.
 
 ## Gas Estimation
 

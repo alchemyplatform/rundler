@@ -18,4 +18,8 @@ pub struct UserOperationPermissions {
     pub trusted: bool,
     /// The maximum number of user operations allowed for a sender in the mempool
     pub max_allowed_in_pool_for_sender: Option<usize>,
+    /// The allowed percentage of underpriced fees that is accepted into the pool
+    pub underpriced_accept_pct: Option<u32>,
+    /// The allowed percentage of fees underpriced that is bundled
+    pub underpriced_bundle_pct: Option<u32>,
 }
