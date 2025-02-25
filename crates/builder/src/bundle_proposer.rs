@@ -3328,7 +3328,10 @@ mod tests {
                 aggregator: None,
                 da_gas_data: Default::default(),
                 filter_id: None,
-                perms: UserOperationPermissions { trusted: *trusted },
+                perms: UserOperationPermissions {
+                    trusted: *trusted,
+                    ..Default::default()
+                },
             })
             .collect();
 

@@ -641,14 +641,18 @@ where
 
         // Check sender count in mempool. If sender has too many operations, must be staked
         {
+            let sender_allowed_count = pool_op
+                .perms
+                .max_allowed_in_pool_for_sender
+                .unwrap_or(self.config.same_sender_mempool_count);
+
             let state = self.state.read();
             if !pool_op.account_is_staked
                 && to_replace.is_none()
-                && state.pool.address_count(&pool_op.uo.sender())
-                    >= self.config.same_sender_mempool_count
+                && state.pool.address_count(&pool_op.uo.sender()) >= sender_allowed_count
             {
                 return Err(MempoolError::MaxOperationsReached(
-                    self.config.same_sender_mempool_count,
+                    sender_allowed_count,
                     Entity::account(pool_op.uo.sender()),
                 ));
             }
@@ -2229,13 +2233,45 @@ mod tests {
     #[tokio::test]
     async fn test_trusted_uo() {
         let config = default_config();
-        let perms = UserOperationPermissions { trusted: true };
+        let perms = UserOperationPermissions {
+            trusted: true,
+            ..Default::default()
+        };
 
         let op = create_trusted_op(Address::random(), 0, 0);
         let pool = create_pool_with_config(config, vec![op.clone()]);
         pool.add_operation(OperationOrigin::Local, op.op, perms)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_max_allowed_in_pool_for_sender() {
+        let config = default_config();
+        let perms = UserOperationPermissions {
+            max_allowed_in_pool_for_sender: Some(2),
+            ..Default::default()
+        };
+        let sender = Address::random();
+
+        let op1 = create_op(sender, 1, 100, None);
+        let op2 = create_op(sender, 2, 100, None);
+        let op3 = create_op(sender, 3, 100, None);
+
+        let pool = create_pool_with_config(config, vec![op1.clone(), op2.clone(), op3.clone()]);
+        pool.add_operation(OperationOrigin::Local, op1.op, perms.clone())
+            .await
+            .unwrap();
+        pool.add_operation(OperationOrigin::Local, op2.op, perms.clone())
+            .await
+            .unwrap();
+        let err = pool
+            .add_operation(OperationOrigin::Local, op3.op, perms)
+            .await
+            .err()
+            .unwrap();
+
+        assert!(matches!(err, MempoolError::MaxOperationsReached(2, _)));
     }
 
     #[derive(Clone, Debug)]
