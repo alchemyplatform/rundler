@@ -39,13 +39,17 @@ where
         permissions: Option<RpcUserOperationPermissions>,
     ) -> RpcResult<B256> {
         // if permissions are not enabled, default them
-        let permissions = if self.permissions_enabled {
+        let mut permissions = if self.permissions_enabled {
             permissions
                 .map(|p| UserOperationPermissions::from_rpc(p, &self.chain_spec))
                 .unwrap_or_default()
         } else {
             UserOperationPermissions::default()
         };
+
+        // cap percentages at 100
+        permissions.underpriced_accept_pct = permissions.underpriced_accept_pct.map(|p| p.min(100));
+        permissions.underpriced_bundle_pct = permissions.underpriced_bundle_pct.map(|p| p.min(100));
 
         utils::safe_call_rpc_handler(
             "eth_sendUserOperation",

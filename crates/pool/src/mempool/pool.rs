@@ -285,11 +285,15 @@ where
                     op.uo().extra_data_len(bundle_size),
                 );
 
-                let required_pvg = op.uo().required_pre_verification_gas(
+                let mut required_pvg = op.uo().required_pre_verification_gas(
                     &self.config.chain_spec,
                     bundle_size,
                     required_da_gas,
                 );
+                if let Some(pct) = op.po.perms.underpriced_bundle_pct {
+                    required_pvg = math::percent_ceil(required_pvg, pct);
+                }
+
                 let actual_pvg = op.uo().pre_verification_gas();
 
                 if actual_pvg < required_pvg {

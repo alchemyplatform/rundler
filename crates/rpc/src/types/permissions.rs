@@ -27,6 +27,12 @@ pub(crate) struct RpcUserOperationPermissions {
     /// The maximum sender allowed in the pool
     #[serde(default)]
     pub(crate) max_allowed_in_pool_for_sender: Option<U64>,
+    /// The allowed percentage of underpriced fees that is accepted into the pool
+    #[serde(default)]
+    pub(crate) underpriced_accept_pct: Option<U64>,
+    /// The allowed percentage of fees underpriced that is bundled
+    #[serde(default)]
+    pub(crate) underpriced_bundle_pct: Option<U64>,
 }
 
 impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
@@ -34,6 +40,8 @@ impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
         UserOperationPermissions {
             trusted: rpc.trusted,
             max_allowed_in_pool_for_sender: rpc.max_allowed_in_pool_for_sender.map(|c| c.to()),
+            underpriced_accept_pct: rpc.underpriced_accept_pct.map(|c| c.to()),
+            underpriced_bundle_pct: rpc.underpriced_bundle_pct.map(|c| c.to()),
         }
     }
 }

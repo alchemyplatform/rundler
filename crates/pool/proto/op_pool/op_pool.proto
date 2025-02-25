@@ -27,6 +27,8 @@ message UserOperation {
 message UserOperationPermissions {
   bool trusted = 1;
   optional uint64 max_allowed_in_pool_for_sender = 2;
+  optional uint32 underpriced_accept_pct = 3;
+  optional uint32 underpriced_bundle_pct = 4;
 }
 
 // Protocol Buffer representation of an 7702 authorization tuple. See the official 
