@@ -16,4 +16,6 @@
 pub struct UserOperationPermissions {
     /// Whether the user operation is trusted, allowing the bundler to skip untrusted simulation
     pub trusted: bool,
+    /// The maximum number of user operations allowed for a sender in the mempool
+    pub max_allowed_in_pool_for_sender: Option<usize>,
 }
