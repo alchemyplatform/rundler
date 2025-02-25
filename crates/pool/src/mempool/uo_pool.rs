@@ -580,7 +580,7 @@ where
         let precheck_ret = self
             .pool_providers
             .prechecker()
-            .check(&versioned_op, block_hash.into())
+            .check(&versioned_op, &perms, block_hash.into())
             .await?;
 
         // Only let ops with successful simulations through
@@ -2385,7 +2385,7 @@ mod tests {
             .returning(|| Ok(FeeUpdate::default()));
 
         for op in ops {
-            prechecker.expect_check().returning(move |_, _| {
+            prechecker.expect_check().returning(move |_, _, _| {
                 if let Some(error) = &op.precheck_error {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {

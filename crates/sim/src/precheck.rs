@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{marker::PhantomData, sync::RwLock};
+use std::{cmp, marker::PhantomData, sync::RwLock};
 
 use alloy_primitives::{Address, U256};
 use anyhow::Context;
@@ -23,7 +23,7 @@ use rundler_types::{
     chain::ChainSpec,
     da::DAGasUOData,
     pool::{MempoolError, PrecheckViolation},
-    GasFees, UserOperation,
+    GasFees, UserOperation, UserOperationPermissions,
 };
 use rundler_utils::math;
 use tracing::instrument;
@@ -67,6 +67,7 @@ pub trait Prechecker: Send + Sync {
     async fn check(
         &self,
         op: &Self::UO,
+        perms: &UserOperationPermissions,
         block: BlockHashOrNumber,
     ) -> Result<PrecheckReturn, PrecheckError>;
 
@@ -174,12 +175,13 @@ where
     async fn check(
         &self,
         op: &Self::UO,
+        perms: &UserOperationPermissions,
         block: BlockHashOrNumber,
     ) -> Result<PrecheckReturn, PrecheckError> {
         let async_data = self.load_async_data(op, block).await?;
         let mut violations: Vec<PrecheckViolation> = vec![];
         violations.extend(self.check_init_code(op, &async_data));
-        violations.extend(self.check_gas(op, &async_data));
+        violations.extend(self.check_gas(op, &async_data, perms));
         violations.extend(self.check_payer(op, &async_data));
         if !violations.is_empty() {
             Err(violations)?
@@ -266,7 +268,12 @@ where
         violations
     }
 
-    fn check_gas(&self, op: &UO, async_data: &AsyncData) -> ArrayVec<PrecheckViolation, 6> {
+    fn check_gas(
+        &self,
+        op: &UO,
+        async_data: &AsyncData,
+        perms: &UserOperationPermissions,
+    ) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
             max_verification_gas,
             max_total_execution_gas,
@@ -299,10 +306,12 @@ where
         // if preVerificationGas is dynamic, then allow for the percentage buffer
         // and check if the preVerificationGas is at least the minimum.
         if self.chain_spec.da_pre_verification_gas {
-            min_pre_verification_gas = math::percent(
-                min_pre_verification_gas,
+            let accept_pct = cmp::min(
+                perms.underpriced_accept_pct.unwrap_or(100),
                 self.settings.pre_verification_gas_accept_percent,
             );
+
+            min_pre_verification_gas = math::percent_ceil(min_pre_verification_gas, accept_pct);
         }
         if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
@@ -312,10 +321,14 @@ where
         }
 
         // check that the max fee per gas and max priority fee per gas are at least the required fees
-        let min_base_fee = math::percent(base_fee, self.settings.base_fee_accept_percent);
+        let min_base_fee_accept_pct = cmp::min(
+            perms.underpriced_accept_pct.unwrap_or(100),
+            self.settings.base_fee_accept_percent,
+        );
+        let min_base_fee = math::percent_ceil(base_fee, min_base_fee_accept_pct);
         let min_priority_fee = self.settings.priority_fee_mode.minimum_priority_fee(
             base_fee,
-            self.settings.base_fee_accept_percent,
+            min_base_fee_accept_pct,
             self.chain_spec.min_max_priority_fee_per_gas(),
             self.settings.bundle_priority_fee_overhead_percent,
         );
@@ -591,7 +604,11 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &get_test_async_data());
+        let res = prechecker.check_gas(
+            &op,
+            &get_test_async_data(),
+            &UserOperationPermissions::default(),
+        );
 
         let total_gas_limit = op.gas_limit(&cs, Some(1));
 
@@ -685,7 +702,7 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data);
+        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
         assert!(res.is_empty());
     }
 
@@ -718,7 +735,7 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data);
+        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxFeePerGasTooLow(
             math::percent(5_000, settings.base_fee_accept_percent - 10),
@@ -763,7 +780,7 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data);
+        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::MaxPriorityFeePerGasTooLow(
             mintip - 1,
@@ -805,11 +822,110 @@ mod tests {
         )
         .build();
 
-        let res = prechecker.check_gas(&op, &async_data);
+        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
         let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
         expected.push(PrecheckViolation::PreVerificationGasTooLow(
             math::percent(1_000, settings.pre_verification_gas_accept_percent - 10),
             math::percent(1_000, settings.pre_verification_gas_accept_percent),
+        ));
+
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn test_check_fees_relaxed() {
+        let settings = Settings {
+            base_fee_accept_percent: 80,
+            priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
+            ..Default::default()
+        };
+
+        let (mut cs, provider, entry_point, fee_estimator) = create_base_config();
+        cs.id = 10;
+        cs.da_pre_verification_gas = true;
+        let mintip = cs.min_max_priority_fee_per_gas();
+
+        let provider = Arc::new(provider);
+        let prechecker =
+            PrecheckerImpl::new(cs.clone(), provider, entry_point, fee_estimator, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 5_000;
+        async_data.min_pre_verification_gas = 1_000;
+
+        let pct_underpriced = 50;
+
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                max_fee_per_gas: math::percent(5000, pct_underpriced) + mintip,
+                max_priority_fee_per_gas: mintip,
+                pre_verification_gas: math::percent(1_000, pct_underpriced),
+                call_gas_limit: MIN_CALL_GAS_LIMIT,
+                ..Default::default()
+            },
+        )
+        .build();
+
+        let perms = UserOperationPermissions {
+            underpriced_accept_pct: Some(pct_underpriced),
+            ..Default::default()
+        };
+
+        let res = prechecker.check_gas(&op, &async_data, &perms);
+        assert!(res.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_check_fees_relaxed_underpriced() {
+        let settings = Settings {
+            base_fee_accept_percent: 80,
+            priority_fee_mode: gas::PriorityFeeMode::PriorityFeeIncreasePercent(0),
+            ..Default::default()
+        };
+
+        let (mut cs, provider, entry_point, fee_estimator) = create_base_config();
+        cs.id = 10;
+        cs.da_pre_verification_gas = true;
+        let mintip = cs.min_max_priority_fee_per_gas();
+
+        let provider = Arc::new(provider);
+        let prechecker =
+            PrecheckerImpl::new(cs.clone(), provider, entry_point, fee_estimator, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 5_000;
+        async_data.min_pre_verification_gas = 1_000;
+
+        let pct_underpriced = 50;
+
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                max_fee_per_gas: math::percent(5000, pct_underpriced - 10) + mintip,
+                max_priority_fee_per_gas: mintip,
+                pre_verification_gas: math::percent(1_000, pct_underpriced - 10),
+                call_gas_limit: MIN_CALL_GAS_LIMIT,
+                ..Default::default()
+            },
+        )
+        .build();
+
+        let perms = UserOperationPermissions {
+            underpriced_accept_pct: Some(pct_underpriced),
+            ..Default::default()
+        };
+
+        let res = prechecker.check_gas(&op, &async_data, &perms);
+
+        let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
+        expected.push(PrecheckViolation::PreVerificationGasTooLow(
+            math::percent(1_000, pct_underpriced - 10),
+            math::percent(1_000, pct_underpriced),
+        ));
+        expected.push(PrecheckViolation::MaxFeePerGasTooLow(
+            math::percent(5000, pct_underpriced - 10),
+            math::percent(5000, pct_underpriced),
         ));
 
         assert_eq!(res, expected);

@@ -384,9 +384,19 @@ where
         required_op_fees: GasFees,
     ) -> Option<PoolOperation> {
         let op_hash = op.uo.hash();
+
+        let mut required_max_fee_per_gas = required_op_fees.max_fee_per_gas;
+        let mut required_max_priority_fee_per_gas = required_op_fees.max_priority_fee_per_gas;
+
+        if let Some(pct) = op.perms.underpriced_bundle_pct {
+            required_max_fee_per_gas = math::percent_ceil(required_max_fee_per_gas, pct);
+            required_max_priority_fee_per_gas =
+                math::percent_ceil(required_max_priority_fee_per_gas, pct);
+        }
+
         // filter by fees
-        if op.uo.max_fee_per_gas() < required_op_fees.max_fee_per_gas
-            || op.uo.max_priority_fee_per_gas() < required_op_fees.max_priority_fee_per_gas
+        if op.uo.max_fee_per_gas() < required_max_fee_per_gas
+            || op.uo.max_priority_fee_per_gas() < required_max_priority_fee_per_gas
         {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
@@ -455,11 +465,15 @@ where
             }
         };
 
-        let required_pvg = op.uo.required_pre_verification_gas(
+        let mut required_pvg = op.uo.required_pre_verification_gas(
             &self.settings.chain_spec,
             bundle_size,
             required_da_gas,
         );
+
+        if let Some(pct) = op.perms.underpriced_bundle_pct {
+            required_pvg = math::percent_ceil(required_pvg, pct);
+        }
 
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
@@ -1823,7 +1837,7 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| Ok(SimulationResult::default())),
-            trusted: false,
+            perms: UserOperationPermissions::default(),
         }])
         .await;
 
@@ -1858,7 +1872,7 @@ mod tests {
                     entity_infos: None,
                 })
             }),
-            trusted: false,
+            perms: UserOperationPermissions::default(),
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1876,7 +1890,7 @@ mod tests {
                     entity_infos: None,
                 })
             }),
-            trusted: false,
+            perms: UserOperationPermissions::default(),
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1896,7 +1910,7 @@ mod tests {
                     entity_infos: None,
                 })
             }),
-            trusted: false,
+            perms: UserOperationPermissions::default(),
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1919,7 +1933,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }])
             .await;
             assert!(bundle.ops_per_aggregator.is_empty());
@@ -1940,7 +1954,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             },
             MockOp {
                 op: op2.clone(),
@@ -1950,7 +1964,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             },
         ])
         .await;
@@ -1977,12 +1991,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2018,12 +2032,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2069,12 +2083,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2130,22 +2144,22 @@ mod tests {
                 MockOp {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![
@@ -2231,22 +2245,22 @@ mod tests {
                 MockOp {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![
@@ -2308,32 +2322,32 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op4.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op5.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op6.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2405,7 +2419,7 @@ mod tests {
                         entity_infos: Some(entity_infos),
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![],
@@ -2467,7 +2481,7 @@ mod tests {
                         entity_infos: Some(entity_infos),
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![],
@@ -2549,7 +2563,7 @@ mod tests {
                             entity_infos: Some(entity_infos_1),
                         })
                     }),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op_2.clone(),
@@ -2568,7 +2582,7 @@ mod tests {
                             entity_infos: Some(entity_infos_2),
                         })
                     }),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2610,22 +2624,22 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op4.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2755,7 +2769,7 @@ mod tests {
             vec![MockOp {
                 op: op1.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![HandleOpsOut::PostOpRevert, HandleOpsOut::PostOpRevert],
@@ -2783,12 +2797,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -2837,17 +2851,17 @@ mod tests {
                 MockOp {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![MockAggregator {
@@ -2901,7 +2915,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -2943,7 +2957,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -2979,7 +2993,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -3018,7 +3032,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op1.clone(),
@@ -3028,7 +3042,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -3066,7 +3080,7 @@ mod tests {
             vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -3109,7 +3123,7 @@ mod tests {
             vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                trusted: false,
+                perms: UserOperationPermissions::default(),
             }],
             vec![],
             vec![HandleOpsOut::Revert(bytes)],
@@ -3151,7 +3165,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
                 MockOp {
                     op: op1.clone(),
@@ -3161,7 +3175,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -3198,7 +3212,10 @@ mod tests {
             vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                trusted: true,
+                perms: UserOperationPermissions {
+                    trusted: true,
+                    ..Default::default()
+                },
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -3231,12 +3248,15 @@ mod tests {
                 MockOp {
                     op: op0.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: true,
+                    perms: UserOperationPermissions {
+                        trusted: true,
+                        ..Default::default()
+                    },
                 },
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
-                    trusted: false,
+                    perms: UserOperationPermissions::default(),
                 },
             ],
             vec![],
@@ -3261,10 +3281,108 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_underpriced_op_perms() {
+        let op0 = op_with_sender_and_fees(address(1), 7500, 0, DEFAULT_PVG); // accept
+        let op1 = op_with_sender_and_fees(address(2), 7499, 0, DEFAULT_PVG); // reject w/o remove
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions {
+                        underpriced_bundle_pct: Some(75),
+                        ..Default::default()
+                    },
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions {
+                        underpriced_bundle_pct: Some(75),
+                        ..Default::default()
+                    },
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            10000,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op0],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_underpriced_op_perms_pvg() {
+        let cs = ChainSpec {
+            da_pre_verification_gas: true,
+            ..Default::default()
+        };
+        let mock_op0 = op_with_sender_and_fees(address(1), 10000, 0, DEFAULT_PVG);
+        let required_pvg = mock_op0.required_pre_verification_gas(&cs, 1, DEFAULT_DA_PVG);
+
+        let op0 = op_with_sender_and_fees(address(1), 10000, 0, math::percent(required_pvg, 75)); // accept
+        let op1 =
+            op_with_sender_and_fees(address(2), 10000, 0, math::percent(required_pvg, 75 - 1)); // reject w/o remove
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions {
+                        underpriced_bundle_pct: Some(75),
+                        ..Default::default()
+                    },
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions {
+                        underpriced_bundle_pct: Some(75),
+                        ..Default::default()
+                    },
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            10000,
+            0,
+            false,
+            ExpectedStorage::default(),
+            true, // da_gas_tracking_enabled == dynamic PVG
+            vec![],
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op0],
+                ..Default::default()
+            }]
+        );
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
-        trusted: bool,
+        perms: UserOperationPermissions,
     }
 
     struct MockAggregator {
@@ -3316,7 +3434,7 @@ mod tests {
         let proxy_address = proxy.as_ref().map(|p| p.address());
         let ops: Vec<_> = mock_ops
             .iter()
-            .map(|MockOp { op, trusted, .. }| PoolOperation {
+            .map(|MockOp { op, perms, .. }| PoolOperation {
                 uo: op.clone().into(),
                 expected_code_hash,
                 entry_point: chain_spec.entry_point_address_v0_6,
@@ -3328,10 +3446,7 @@ mod tests {
                 aggregator: None,
                 da_gas_data: Default::default(),
                 filter_id: None,
-                perms: UserOperationPermissions {
-                    trusted: *trusted,
-                    ..Default::default()
-                },
+                perms: perms.clone(),
             })
             .collect();
 
@@ -3354,7 +3469,7 @@ mod tests {
             .withf(move |op, &trusted, &block_hash, &code_hash| {
                 block_hash == current_block_hash
                     && code_hash == Some(expected_code_hash)
-                    && simulations_by_op_cloned[&op.hash()].trusted == trusted
+                    && simulations_by_op_cloned[&op.hash()].perms.trusted == trusted
             })
             .returning(move |op, _, _, _| {
                 simulations_by_op[&op.hash()].simulation_result.as_ref()()
@@ -3437,7 +3552,7 @@ mod tests {
             .expect_calc_da_gas_sync()
             .returning(move |_, bd, _, _| {
                 assert_eq!(*bd, block_data);
-                100_000
+                DEFAULT_DA_PVG
             });
 
         let mut registry = ContractRegistry::<Arc<dyn SignatureAggregator>>::default();
@@ -3500,6 +3615,7 @@ mod tests {
 
     // UOs require PVG to pass the PVG check even when fees are 0
     const DEFAULT_PVG: u128 = 1_000_000;
+    const DEFAULT_DA_PVG: u128 = 100_000;
 
     fn op_with_sender(sender: Address) -> UserOperation {
         op_from_required(UserOperationRequiredFields {
