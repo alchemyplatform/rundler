@@ -364,7 +364,7 @@ pub struct CommonArgs {
     )]
     pub disable_entry_point_v0_7: bool,
 
-    // Ignored if entry_point_v0_6_enabled is false
+    // Ignored if disable_entry_point_v0_6 is true
     // Ignored if entry_point_builders_path is set
     #[arg(
         long = "num_builders_v0_6",
@@ -375,7 +375,7 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_6: u64,
 
-    // Ignored if entry_point_v0_6_enabled is false
+    // Ignored if disable_entry_point_v0_6 is true
     // Ignored if entry_point_builders_path is set
     // The index offset to apply to the builder index
     #[arg(
@@ -387,7 +387,7 @@ pub struct CommonArgs {
     )]
     pub builder_index_offset_v0_6: u64,
 
-    // Ignored if entry_point_v0_7_enabled is false
+    // Ignored if disable_entry_point_v0_7 is true
     // Ignored if entry_point_builders_path is set
     #[arg(
         long = "num_builders_v0_7",
@@ -398,7 +398,7 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_7: u64,
 
-    // Ignored if entry_point_v0_7_enabled is false
+    // Ignored if disable_entry_point_v0_7 is true
     // Ignored if entry_point_builders_path is set
     // The index offset to apply to the builder index
     #[arg(
