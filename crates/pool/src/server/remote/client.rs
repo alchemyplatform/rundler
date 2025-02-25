@@ -27,7 +27,7 @@ use rundler_types::{
         NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult, Reputation,
         ReputationStatus, StakeStatus,
     },
-    EntityUpdate, UserOperationId, UserOperationVariant,
+    EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::retry::{self, UnlimitedRetryOpts};
 use tokio::sync::mpsc;
@@ -152,13 +152,17 @@ impl Pool for RemotePoolClient {
             .map_err(anyhow::Error::from)?)
     }
 
-    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<B256> {
+    async fn add_op(
+        &self,
+        op: UserOperationVariant,
+        perms: UserOperationPermissions,
+    ) -> PoolResult<B256> {
         let res = self
             .op_pool_client
             .clone()
             .add_op(AddOpRequest {
-                entry_point: entry_point.to_vec(),
                 op: Some(protos::UserOperation::from(&op)),
+                permissions: Some(protos::UserOperationPermissions::from(perms)),
             })
             .await
             .map_err(anyhow::Error::from)?

@@ -16,6 +16,10 @@ use std::{fmt::Debug, time::Duration};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::SolValue;
 
+/// User operation permissions
+mod permissions;
+pub use permissions::UserOperationPermissions;
+
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;
 /// User Operation types for Entry Point v0.7

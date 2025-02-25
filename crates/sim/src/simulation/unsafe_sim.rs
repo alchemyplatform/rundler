@@ -14,7 +14,7 @@
 use std::marker::PhantomData;
 
 use alloy_primitives::{Address, B256};
-use rundler_provider::{EntryPoint, SignatureAggregator, SimulationProvider};
+use rundler_provider::{EntryPoint, SimulationProvider};
 use rundler_types::{pool::SimulationViolation, UserOperation, ValidTimeRange};
 
 use super::Settings;
@@ -26,6 +26,7 @@ use crate::{simulation::context, SimulationError, SimulationResult, Simulator, V
 ///
 /// WARNING: This is "unsafe" for a reason. None of the ERC-7562 checks are
 /// performed.
+#[derive(Debug)]
 pub struct UnsafeSimulator<UO, E> {
     entry_point: E,
     settings: Settings,
@@ -47,7 +48,7 @@ impl<UO, E> UnsafeSimulator<UO, E> {
 impl<UO, E> Simulator for UnsafeSimulator<UO, E>
 where
     UO: UserOperation,
-    E: EntryPoint + SimulationProvider<UO = UO> + SignatureAggregator<UO = UO> + Clone,
+    E: EntryPoint + SimulationProvider<UO = UO>,
 {
     type UO = UO;
 
@@ -57,6 +58,7 @@ where
     async fn simulate_validation(
         &self,
         op: UO,
+        _trusted: bool,
         block_hash: B256,
         _expected_code_hash: Option<B256>,
     ) -> Result<SimulationResult, SimulationError> {

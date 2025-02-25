@@ -414,6 +414,27 @@ impl UserOperation {
     }
 }
 
+#[cfg(feature = "test-utils")]
+impl Default for UserOperation {
+    fn default() -> Self {
+        UserOperationBuilder::new(
+            &ChainSpec::default(),
+            UserOperationRequiredFields {
+                sender: Address::ZERO,
+                nonce: U256::ZERO,
+                call_data: Bytes::new(),
+                signature: Bytes::new(),
+                call_gas_limit: 0,
+                verification_gas_limit: 0,
+                pre_verification_gas: 0,
+                max_fee_per_gas: 0,
+                max_priority_fee_per_gas: 0,
+            },
+        )
+        .build()
+    }
+}
+
 impl From<UserOperationVariant> for UserOperation {
     /// Converts a UserOperationVariant to a UserOperation 0.7
     ///

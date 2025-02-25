@@ -17,7 +17,8 @@ use alloy_primitives::{Address, B256, U64};
 use futures_util::future;
 use rundler_provider::StateOverride;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool, UserOperation, UserOperationOptionalGas, UserOperationVariant,
+    chain::ChainSpec, pool::Pool, UserOperation, UserOperationOptionalGas,
+    UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::log::LogOnError;
 use tracing::{instrument, Level};
@@ -28,37 +29,28 @@ use super::{
 };
 use crate::types::{RpcGasEstimate, RpcUserOperationByHash, RpcUserOperationReceipt};
 
-/// Settings for the `eth_` API
-#[derive(Copy, Clone, Debug)]
-pub struct Settings {
-    /// The number of blocks to look back for user operation events
-    pub user_operation_event_block_distance: Option<u64>,
-}
-
-impl Settings {
-    /// Create new settings for the `eth_` API
-    pub fn new(block_distance: Option<u64>) -> Self {
-        Self {
-            user_operation_event_block_distance: block_distance,
-        }
-    }
-}
-
 pub(crate) struct EthApi<P> {
     pub(crate) chain_spec: ChainSpec,
     pool: P,
     router: EntryPointRouter,
+    pub(crate) permissions_enabled: bool,
 }
 
 impl<P> EthApi<P>
 where
     P: Pool,
 {
-    pub(crate) fn new(chain_spec: ChainSpec, router: EntryPointRouter, pool: P) -> Self {
+    pub(crate) fn new(
+        chain_spec: ChainSpec,
+        router: EntryPointRouter,
+        pool: P,
+        permissions_enabled: bool,
+    ) -> Self {
         Self {
             router,
             pool,
             chain_spec,
+            permissions_enabled,
         }
     }
 
@@ -67,6 +59,7 @@ where
         &self,
         op: UserOperationVariant,
         entry_point: Address,
+        permissions: UserOperationPermissions,
     ) -> EthResult<B256> {
         let bundle_size = op.single_uo_bundle_size_bytes();
         if bundle_size > self.chain_spec.max_transaction_size_bytes {
@@ -79,7 +72,7 @@ where
         self.router.check_and_get_route(&entry_point, &op)?;
 
         self.pool
-            .add_op(entry_point, op)
+            .add_op(op, permissions)
             .await
             .map_err(EthRpcError::from)
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")
@@ -230,6 +223,7 @@ mod tests {
             entity_infos: EntityInfos::default(),
             da_gas_data: rundler_types::da::DAGasUOData::Empty,
             filter_id: None,
+            perms: UserOperationPermissions::default(),
         };
 
         let mut pool = MockPool::default();
@@ -245,7 +239,13 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().return_const(ep);
 
-        let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
+        let api = create_api(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+        );
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
@@ -324,7 +324,13 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().return_const(ep);
 
-        let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
+        let api = create_api(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+        );
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         let ro = RpcUserOperationByHash {
             user_operation: UserOperationVariant::from(uo).into(),
@@ -359,7 +365,13 @@ mod tests {
         let mut entry_point = MockEntryPointV0_6::default();
         entry_point.expect_address().return_const(ep);
 
-        let api = create_api(provider, entry_point, pool, MockGasEstimator::default());
+        let api = create_api(
+            provider,
+            entry_point,
+            pool,
+            MockGasEstimator::default(),
+            false,
+        );
         let res = api.get_user_operation_by_hash(hash).await.unwrap();
         assert_eq!(res, None);
     }
@@ -369,6 +381,7 @@ mod tests {
         ep: MockEntryPointV0_6,
         pool: MockPool,
         gas_estimator: MockGasEstimator,
+        permissions_enabled: bool,
     ) -> EthApi<MockPool> {
         let ep = Arc::new(ep);
         let provider = Arc::new(provider);
@@ -389,6 +402,7 @@ mod tests {
             router,
             chain_spec,
             pool,
+            permissions_enabled,
         }
     }
 }

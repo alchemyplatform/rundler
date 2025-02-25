@@ -27,7 +27,8 @@ use rundler_types::{
         MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult,
         Reputation, ReputationStatus, StakeStatus,
     },
-    EntityUpdate, EntryPointVersion, UserOperationId, UserOperationVariant,
+    EntityUpdate, EntryPointVersion, UserOperation, UserOperationId, UserOperationPermissions,
+    UserOperationVariant,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{error, info};
@@ -130,10 +131,15 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn add_op(&self, entry_point: Address, op: UserOperationVariant) -> PoolResult<B256> {
+    async fn add_op(
+        &self,
+        op: UserOperationVariant,
+        perms: UserOperationPermissions,
+    ) -> PoolResult<B256> {
         let req = ServerRequestKind::AddOp {
-            entry_point,
+            entry_point: op.entry_point(),
             op,
+            perms,
             origin: OperationOrigin::Local,
         };
         let resp = self.send(req).await?;
@@ -557,7 +563,7 @@ impl LocalPoolServerRunner {
                     let resp = match req.request {
                         // Async methods
                         // Responses are sent in the spawned task
-                        ServerRequestKind::AddOp { entry_point, op, origin } => {
+                        ServerRequestKind::AddOp { entry_point, op, perms, origin } => {
                             let fut = |mempool: Arc<dyn Mempool>, response: oneshot::Sender<Result<ServerResponse, PoolError>>| async move {
                                 let resp = 'resp: {
                                     match mempool.entry_point_version() {
@@ -576,7 +582,7 @@ impl LocalPoolServerRunner {
                                         }
                                     }
 
-                                    match mempool.add_operation(origin, op).await {
+                                    match mempool.add_operation(origin, op, perms).await {
                                         Ok(hash) => Ok(ServerResponse::AddOp { hash }),
                                         Err(e) => Err(e.into()),
                                     }
@@ -708,6 +714,7 @@ enum ServerRequestKind {
     AddOp {
         entry_point: Address,
         op: UserOperationVariant,
+        perms: UserOperationPermissions,
         origin: OperationOrigin,
     },
     GetOps {
@@ -813,7 +820,10 @@ mod tests {
 
     use futures_util::StreamExt;
     use reth_tasks::TaskManager;
-    use rundler_types::v0_6::UserOperation;
+    use rundler_types::{
+        chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
+        v0_7::UserOperation as UserOperationV0_7,
+    };
 
     use super::*;
     use crate::{chain::ChainUpdate, mempool::MockMempool};
@@ -827,13 +837,17 @@ mod tests {
             .returning(|| EntryPointVersion::V0_6);
         mock_pool
             .expect_add_operation()
-            .returning(move |_, _| Ok(hash0));
+            .returning(move |_, _, _| Ok(hash0));
 
-        let ep = Address::random();
+        let ep = ChainSpec::default().entry_point_address_v0_6;
         let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
         let state = setup(HashMap::from([(ep, pool)]));
 
-        let hash1 = state.handle.add_op(ep, mock_op()).await.unwrap();
+        let hash1 = state
+            .handle
+            .add_op(mock_op(), UserOperationPermissions::default())
+            .await
+            .unwrap();
         assert_eq!(hash0, hash1);
     }
 
@@ -886,30 +900,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_entry_points() {
-        let eps = [Address::random(), Address::random(), Address::random()];
-        let mut pools = [MockMempool::new(), MockMempool::new(), MockMempool::new()];
+        let cs = ChainSpec::default();
+        let eps = [cs.entry_point_address_v0_6, cs.entry_point_address_v0_7];
+        let mut pools = [MockMempool::new(), MockMempool::new()];
         let h0 = B256::random();
         let h1 = B256::random();
-        let h2 = B256::random();
-        let hashes = [h0, h1, h2];
         pools[0]
             .expect_entry_point_version()
             .returning(|| EntryPointVersion::V0_6);
         pools[0]
             .expect_add_operation()
-            .returning(move |_, _| Ok(h0));
+            .returning(move |_, _, _| Ok(h0));
         pools[1]
             .expect_entry_point_version()
-            .returning(|| EntryPointVersion::V0_6);
+            .returning(|| EntryPointVersion::V0_7);
         pools[1]
             .expect_add_operation()
-            .returning(move |_, _| Ok(h1));
-        pools[2]
-            .expect_entry_point_version()
-            .returning(|| EntryPointVersion::V0_6);
-        pools[2]
-            .expect_add_operation()
-            .returning(move |_, _| Ok(h2));
+            .returning(move |_, _, _| Ok(h1));
 
         let state = setup(
             zip(eps.iter(), pools.into_iter())
@@ -920,9 +927,22 @@ mod tests {
                 .collect(),
         );
 
-        for (ep, hash) in zip(eps.iter(), hashes.iter()) {
-            assert_eq!(*hash, state.handle.add_op(*ep, mock_op()).await.unwrap());
-        }
+        assert_eq!(
+            h0,
+            state
+                .handle
+                .add_op(mock_op(), UserOperationPermissions::default())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            h1,
+            state
+                .handle
+                .add_op(mock_op_v0_7(), UserOperationPermissions::default())
+                .await
+                .unwrap()
+        );
     }
 
     struct State {
@@ -951,6 +971,10 @@ mod tests {
     }
 
     fn mock_op() -> UserOperationVariant {
-        UserOperationVariant::V0_6(UserOperation::default())
+        UserOperationVariant::V0_6(UserOperationV0_6::default())
+    }
+
+    fn mock_op_v0_7() -> UserOperationVariant {
+        UserOperationVariant::V0_7(UserOperationV0_7::default())
     }
 }
