@@ -302,6 +302,19 @@ where
                 max_total_execution_gas,
             ))
         }
+        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
+            violations.push(PrecheckViolation::CallGasLimitTooLow(
+                op.call_gas_limit(),
+                MIN_CALL_GAS_LIMIT,
+            ));
+        }
+
+        // If the UO is bundler sponsored, skip the fee checks
+        if perms.bundler_sponsorship.is_some() {
+            return violations;
+        }
+
+        // NOTE: only fee checks below this short circuit
 
         // if preVerificationGas is dynamic, then allow for the percentage buffer
         // and check if the preVerificationGas is at least the minimum.
@@ -313,6 +326,8 @@ where
 
             min_pre_verification_gas = math::percent_ceil(min_pre_verification_gas, accept_pct);
         }
+        println!("min_pre_verification_gas: {}", min_pre_verification_gas);
+        println!("op.pre_verification_gas(): {}", op.pre_verification_gas());
         if op.pre_verification_gas() < min_pre_verification_gas {
             violations.push(PrecheckViolation::PreVerificationGasTooLow(
                 op.pre_verification_gas(),
@@ -348,12 +363,6 @@ where
             ));
         }
 
-        if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
-            violations.push(PrecheckViolation::CallGasLimitTooLow(
-                op.call_gas_limit(),
-                MIN_CALL_GAS_LIMIT,
-            ));
-        }
         violations
     }
 
@@ -617,10 +626,10 @@ mod tests {
             ArrayVec::<PrecheckViolation, 6>::from([
                 PrecheckViolation::VerificationGasLimitTooHigh(10_000_000, 5_000_000,),
                 PrecheckViolation::TotalGasLimitTooHigh(total_gas_limit, 10_000_000,),
+                PrecheckViolation::CallGasLimitTooLow(9_000, 9_100,),
                 PrecheckViolation::PreVerificationGasTooLow(0, 1_000,),
                 PrecheckViolation::MaxPriorityFeePerGasTooLow(2_000, 4_000,),
                 PrecheckViolation::MaxFeePerGasTooLow(5_000, 8_000,),
-                PrecheckViolation::CallGasLimitTooLow(9_000, 9_100,),
             ])
         );
     }

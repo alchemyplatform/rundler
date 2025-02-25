@@ -186,6 +186,14 @@ impl ValidTimeRange {
         }
     }
 
+    /// Create a new valid time range that is valid from genesis to the given timestamp
+    pub fn from_genesis(valid_until: Timestamp) -> Self {
+        Self {
+            valid_after: Timestamp::MIN,
+            valid_until,
+        }
+    }
+
     /// A time range representing that the operation is valid for all time.
     pub fn all_time() -> Self {
         Self::default()

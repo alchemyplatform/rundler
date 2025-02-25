@@ -268,10 +268,37 @@ where
                     },
                 });
                 expired.push(*hash);
+                continue;
+            } else if op
+                .po
+                .perms
+                .bundler_sponsorship
+                .as_ref()
+                .is_some_and(|s| Timestamp::from(s.valid_until) < block_timestamp)
+            {
+                events.push(PoolEvent::RemovedOp {
+                    op_hash: *hash,
+                    reason: OpRemovalReason::Expired {
+                        valid_until: op
+                            .po
+                            .perms
+                            .bundler_sponsorship
+                            .as_ref()
+                            .unwrap()
+                            .valid_until
+                            .into(),
+                    },
+                });
+                expired.push(*hash);
+                continue;
             }
 
             // check for eligibility
-            if self.da_gas_oracle.is_some() && block_da_data.is_some() {
+            if self.da_gas_oracle.is_some()
+                && block_da_data.is_some()
+                && op.po.perms.bundler_sponsorship.is_none()
+            // skip if bundler sponsored
+            {
                 // TODO(bundle): assuming a bundle size of 1
                 let bundle_size = 1;
 
@@ -321,8 +348,10 @@ where
             self.best.insert(op.clone());
 
             // Check candidate status
-            if op.uo().max_fee_per_gas() < gas_fees.uo_fees.max_fee_per_gas
-                || op.uo().max_priority_fee_per_gas() < gas_fees.uo_fees.max_priority_fee_per_gas
+            if (op.uo().max_fee_per_gas() < gas_fees.uo_fees.max_fee_per_gas
+                || op.uo().max_priority_fee_per_gas() < gas_fees.uo_fees.max_priority_fee_per_gas)
+                && op.po.perms.bundler_sponsorship.is_none()
+            // skip if bundler sponsored
             {
                 // don't mark as ineligible, but also not a candidate
                 continue;

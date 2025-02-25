@@ -69,6 +69,29 @@ where
             )));
         }
 
+        if permissions.bundler_sponsorship.is_some() {
+            if op.max_fee_per_gas() != 0 {
+                return Err(EthRpcError::InvalidParams(
+                    "Bundler sponsorship requires max fee per gas to be 0".to_string(),
+                ));
+            }
+            if op.max_priority_fee_per_gas() != 0 {
+                return Err(EthRpcError::InvalidParams(
+                    "Bundler sponsorship requires max priority fee per gas to be 0".to_string(),
+                ));
+            }
+            if op.pre_verification_gas() != 0 {
+                return Err(EthRpcError::InvalidParams(
+                    "Bundler sponsorship requires pre-verification gas to be 0".to_string(),
+                ));
+            }
+            if op.paymaster().is_some() {
+                return Err(EthRpcError::InvalidParams(
+                    "Bundler sponsorship requires paymaster to be empty".to_string(),
+                ));
+            }
+        }
+
         self.router.check_and_get_route(&entry_point, &op)?;
 
         self.pool

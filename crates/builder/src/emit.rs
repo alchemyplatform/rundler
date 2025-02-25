@@ -13,7 +13,7 @@
 
 use std::{fmt::Display, sync::Arc};
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use rundler_provider::TransactionRequest;
 use rundler_sim::SimulationError;
 use rundler_types::{GasFees, ValidTimeRange};
@@ -168,6 +168,8 @@ pub enum SkipReason {
         required_pvg: u128,
         actual_pvg: u128,
     },
+    /// Insufficient sponsorship cost for the operation
+    InsufficientSponsorshipCost { max_cost: U256, actual_cost: U256 },
     /// Bundle ran out of space by gas limit to include the operation
     GasLimit,
     /// Expected storage conflict

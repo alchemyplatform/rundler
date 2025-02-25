@@ -18,7 +18,7 @@ use alloy_sol_types::SolValue;
 
 /// User operation permissions
 mod permissions;
-pub use permissions::UserOperationPermissions;
+pub use permissions::{BundlerSponsorship, UserOperationPermissions};
 
 /// User Operation types for Entry Point v0.6
 pub mod v0_6;

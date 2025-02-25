@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use alloy_primitives::U256;
+
 /// User operation permissions
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserOperationPermissions {
@@ -22,4 +24,15 @@ pub struct UserOperationPermissions {
     pub underpriced_accept_pct: Option<u32>,
     /// The allowed percentage of fees underpriced that is bundled
     pub underpriced_bundle_pct: Option<u32>,
+    /// Bundler sponsorship settings
+    pub bundler_sponsorship: Option<BundlerSponsorship>,
+}
+
+/// Bundler sponsorship settings
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BundlerSponsorship {
+    /// The maximum cost the bundler is willing to pay for the user operation in WEI
+    pub max_cost: U256,
+    /// The valid until timestamp of the sponsorship
+    pub valid_until: u64,
 }
