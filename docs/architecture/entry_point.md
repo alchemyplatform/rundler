@@ -9,9 +9,9 @@ Rundler currently supports the most recent two entry point versions:
 
 Rundler's entry point support is controlled by the following CLI options:
 
-Enable/disable entry point versions (defaults to both enabled):
-- `--entry_point_v0_6_enabled`
-- `--entry_point_v0_7_enabled`
+Disable entry point versions (defaults to both enabled):
+- `--disable_entry_point_v0_6`
+- `--disable_entry_point_v0_7`
 
 Modify the number of builders (and thus keys) associated with each entry point:
 - `--num_builders_v0_6`

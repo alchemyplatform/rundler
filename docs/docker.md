@@ -10,11 +10,9 @@ docker buildx build . -t rundler
 
 ## Run
 
-Simple full node docker-compose configuration:
+Sample full node docker-compose configuration:
 
 ```
-version: "3.8"
-
 services:
   rundler:
     image: rundler
@@ -25,11 +23,14 @@ services:
       # Metrics port
       - "8080:8080"
     environment:
-      - ENTRY_POINTS=0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789
+      - RUST_LOG=INFO
+      - NETWORK=[YOUR NETWORK HERE]
       - NODE_HTTP=[YOUR NODE HTTP HERE]
-      - CHAIN_ID=[YOUR CHAIN ID HERE]
       - BUILDER_PRIVATE_KEY=[YOUR PRIVATE KEY HERE]
+      - DISABLE_ENTRY_POINT_V0_6=true
 ```
+
+See [CLI docs](./cli.md) for more info on the environment variables.
 
 An example docker-compose configuration running Rundler in its distributed mode can be found [here](../test/spec-tests/remote/docker-compose.yml). 
 
