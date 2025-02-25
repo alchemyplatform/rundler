@@ -499,6 +499,7 @@ where
             .simulator()
             .simulate_validation(
                 op.uo.clone().into(),
+                op.perms.trusted,
                 block_hash,
                 Some(op.expected_code_hash),
             )
@@ -1805,7 +1806,7 @@ mod tests {
         pool::{MockPool, SimulationViolation},
         proxy::MockSubmissionProxy,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        UserOperation as _, ValidTimeRange,
+        UserOperation as _, UserOperationPermissions, ValidTimeRange,
     };
 
     use super::*;
@@ -1822,6 +1823,7 @@ mod tests {
         let bundle = simple_make_bundle(vec![MockOp {
             op: op.clone(),
             simulation_result: Box::new(|| Ok(SimulationResult::default())),
+            trusted: false,
         }])
         .await;
 
@@ -1856,6 +1858,7 @@ mod tests {
                     entity_infos: None,
                 })
             }),
+            trusted: false,
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1873,6 +1876,7 @@ mod tests {
                     entity_infos: None,
                 })
             }),
+            trusted: false,
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1892,6 +1896,7 @@ mod tests {
                     entity_infos: None,
                 })
             }),
+            trusted: false,
         }])
         .await;
         assert!(bundle.ops_per_aggregator.is_empty());
@@ -1914,6 +1919,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
+                trusted: false,
             }])
             .await;
             assert!(bundle.ops_per_aggregator.is_empty());
@@ -1934,6 +1940,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
+                trusted: false,
             },
             MockOp {
                 op: op2.clone(),
@@ -1943,6 +1950,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
+                trusted: false,
             },
         ])
         .await;
@@ -1969,10 +1977,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2008,10 +2018,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2057,10 +2069,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2116,18 +2130,22 @@ mod tests {
                 MockOp {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![
@@ -2213,18 +2231,22 @@ mod tests {
                 MockOp {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_b.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![
@@ -2286,26 +2308,32 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op4.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op5.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op6.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2377,6 +2405,7 @@ mod tests {
                         entity_infos: Some(entity_infos),
                     })
                 }),
+                trusted: false,
             }],
             vec![],
             vec![],
@@ -2438,6 +2467,7 @@ mod tests {
                         entity_infos: Some(entity_infos),
                     })
                 }),
+                trusted: false,
             }],
             vec![],
             vec![],
@@ -2519,6 +2549,7 @@ mod tests {
                             entity_infos: Some(entity_infos_1),
                         })
                     }),
+                    trusted: false,
                 },
                 MockOp {
                     op: op_2.clone(),
@@ -2537,6 +2568,7 @@ mod tests {
                             entity_infos: Some(entity_infos_2),
                         })
                     }),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2578,18 +2610,22 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op3.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op4.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2719,6 +2755,7 @@ mod tests {
             vec![MockOp {
                 op: op1.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                trusted: false,
             }],
             vec![],
             vec![HandleOpsOut::PostOpRevert, HandleOpsOut::PostOpRevert],
@@ -2746,10 +2783,12 @@ mod tests {
                 MockOp {
                     op: op1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: op2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -2798,14 +2837,17 @@ mod tests {
                 MockOp {
                     op: unaggregated_op.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_a1.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
                 MockOp {
                     op: aggregated_op_a2.clone(),
                     simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
                 },
             ],
             vec![MockAggregator {
@@ -2859,6 +2901,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
+                trusted: false,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -2900,6 +2943,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
+                trusted: false,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -2935,6 +2979,7 @@ mod tests {
                         ..Default::default()
                     })
                 }),
+                trusted: false,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -2973,6 +3018,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
+                    trusted: false,
                 },
                 MockOp {
                     op: op1.clone(),
@@ -2982,6 +3028,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -3019,6 +3066,7 @@ mod tests {
             vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                trusted: false,
             }],
             vec![],
             vec![HandleOpsOut::Success],
@@ -3061,6 +3109,7 @@ mod tests {
             vec![MockOp {
                 op: op.clone(),
                 simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                trusted: false,
             }],
             vec![],
             vec![HandleOpsOut::Revert(bytes)],
@@ -3102,6 +3151,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
+                    trusted: false,
                 },
                 MockOp {
                     op: op1.clone(),
@@ -3111,6 +3161,7 @@ mod tests {
                             ..Default::default()
                         })
                     }),
+                    trusted: false,
                 },
             ],
             vec![],
@@ -3140,9 +3191,80 @@ mod tests {
         assert_eq!(bundle.expected_storage.0, expected_storage1_clone.0);
     }
 
+    #[tokio::test]
+    async fn test_trusted_op() {
+        let op = default_op();
+        let bundle = mock_make_bundle(
+            vec![MockOp {
+                op: op.clone(),
+                simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                trusted: true,
+            }],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
+                ..Default::default()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_trusted_untrusted_ops() {
+        let op0 = op_with_sender(address(1));
+        let op1 = op_with_sender(address(2));
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op0.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: true,
+                },
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    trusted: false,
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op0, op1],
+                ..Default::default()
+            }]
+        );
+    }
+
     struct MockOp {
         op: UserOperation,
         simulation_result: Box<dyn Fn() -> Result<SimulationResult, SimulationError> + Send + Sync>,
+        trusted: bool,
     }
 
     struct MockAggregator {
@@ -3194,7 +3316,7 @@ mod tests {
         let proxy_address = proxy.as_ref().map(|p| p.address());
         let ops: Vec<_> = mock_ops
             .iter()
-            .map(|MockOp { op, .. }| PoolOperation {
+            .map(|MockOp { op, trusted, .. }| PoolOperation {
                 uo: op.clone().into(),
                 expected_code_hash,
                 entry_point: chain_spec.entry_point_address_v0_6,
@@ -3206,6 +3328,7 @@ mod tests {
                 aggregator: None,
                 da_gas_data: Default::default(),
                 filter_id: None,
+                perms: UserOperationPermissions { trusted: *trusted },
             })
             .collect();
 
@@ -3214,17 +3337,25 @@ mod tests {
             .expect_get_ops()
             .returning(move |_, _, _, _| Ok(ops.clone()));
 
-        let simulations_by_op: HashMap<_, _> = mock_ops
-            .into_iter()
-            .map(|op| (op.op.hash(), op.simulation_result))
-            .collect();
+        let simulations_by_op: Arc<HashMap<B256, MockOp>> = Arc::from(
+            mock_ops
+                .into_iter()
+                .map(|op| (op.op.hash(), op))
+                .collect::<HashMap<_, _>>(),
+        );
+        let simulations_by_op_cloned: Arc<HashMap<_, _>> = Arc::clone(&simulations_by_op);
+
         let mut simulator = MockSimulator::new();
         simulator
             .expect_simulate_validation()
-            .withf(move |_, &block_hash, &code_hash| {
-                block_hash == current_block_hash && code_hash == Some(expected_code_hash)
+            .withf(move |op, &trusted, &block_hash, &code_hash| {
+                block_hash == current_block_hash
+                    && code_hash == Some(expected_code_hash)
+                    && simulations_by_op_cloned[&op.hash()].trusted == trusted
             })
-            .returning(move |op, _, _| simulations_by_op[&op.hash()]());
+            .returning(move |op, _, _, _| {
+                simulations_by_op[&op.hash()].simulation_result.as_ref()()
+            });
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
             .expect_address()

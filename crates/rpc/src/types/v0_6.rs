@@ -22,6 +22,7 @@ use rundler_types::{
 use serde::{Deserialize, Serialize};
 
 use super::{rpc_authorization::RpcEip7702Auth, FromRpc, RpcAddress};
+
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

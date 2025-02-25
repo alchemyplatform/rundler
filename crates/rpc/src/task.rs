@@ -183,7 +183,12 @@ where
         let router = router_builder.build();
 
         let mut module = RpcModule::new(());
-        self.attach_namespaces(router, fee_estimator, &mut module)?;
+        self.attach_namespaces(
+            self.args.eth_api_settings.permissions_enabled,
+            router,
+            fee_estimator,
+            &mut module,
+        )?;
 
         let servers: Vec<Box<dyn HealthCheck>> =
             vec![Box::new(self.pool.clone()), Box::new(self.builder.clone())];
@@ -256,6 +261,7 @@ where
 
     fn attach_namespaces<F: FeeEstimator + 'static>(
         &self,
+        permissions_enabled: bool,
         entry_point_router: EntryPointRouter,
         fee_estimator: F,
         module: &mut RpcModule<()>,
@@ -266,6 +272,7 @@ where
                     self.args.chain_spec.clone(),
                     entry_point_router.clone(),
                     self.pool.clone(),
+                    permissions_enabled,
                 )
                 .into_rpc(),
             )?
