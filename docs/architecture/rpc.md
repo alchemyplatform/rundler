@@ -331,6 +331,7 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
     "0x....", // entry point address 
     {
       trusted: bool // true if the UO should be trusted and simulation should be skipped.
+      maxAllowedInPoolForSender: uint64 // the maximum number of UOs allowed in the mempool for this sender
     }
   ]
 }
@@ -342,6 +343,9 @@ When enabled, the `eth_sendUserOperation` request schema becomes:
 
 The `trusted` parameter on the UO permissions object causes the mempool to "trust" that the user operation will not cause a DOS attack on the bundler. With this trust, the bundler can skip applying the ERC-7562 simulation rules on the user operation, skipping the costly debug trace call.
 
+#### `maxAllowedInPoolForSender`
+
+The `maxAllowedInPoolForSender` parameter on the UO permissions object sets the maximum number of UOs this particular sender is allowed to have in the mempool. If unset, this will default to `pool.same_sender_mempool_count` from the CLI parameters.
 
 ## Gas Estimation
 

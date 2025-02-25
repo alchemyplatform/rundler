@@ -576,6 +576,9 @@ impl From<UserOperationPermissions> for RundlerUserOperationPermissions {
     fn from(permissions: UserOperationPermissions) -> Self {
         Self {
             trusted: permissions.trusted,
+            max_allowed_in_pool_for_sender: permissions
+                .max_allowed_in_pool_for_sender
+                .map(|c| c as usize),
         }
     }
 }
@@ -584,6 +587,9 @@ impl From<RundlerUserOperationPermissions> for UserOperationPermissions {
     fn from(permissions: RundlerUserOperationPermissions) -> Self {
         Self {
             trusted: permissions.trusted,
+            max_allowed_in_pool_for_sender: permissions
+                .max_allowed_in_pool_for_sender
+                .map(|c| c as u64),
         }
     }
 }
