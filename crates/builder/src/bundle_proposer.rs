@@ -384,9 +384,19 @@ where
         required_op_fees: GasFees,
     ) -> Option<PoolOperation> {
         let op_hash = op.uo.hash();
+
+        let mut required_max_fee_per_gas = required_op_fees.max_fee_per_gas;
+        let mut required_max_priority_fee_per_gas = required_op_fees.max_priority_fee_per_gas;
+
+        if let Some(pct) = op.perms.underpriced_bundle_pct {
+            required_max_fee_per_gas = math::percent_ceil(required_max_fee_per_gas, pct);
+            required_max_priority_fee_per_gas =
+                math::percent_ceil(required_max_priority_fee_per_gas, pct);
+        }
+
         // filter by fees
-        if op.uo.max_fee_per_gas() < required_op_fees.max_fee_per_gas
-            || op.uo.max_priority_fee_per_gas() < required_op_fees.max_priority_fee_per_gas
+        if op.uo.max_fee_per_gas() < required_max_fee_per_gas
+            || op.uo.max_priority_fee_per_gas() < required_max_priority_fee_per_gas
         {
             self.emit(BuilderEvent::skipped_op(
                 self.builder_tag.clone(),
@@ -455,11 +465,15 @@ where
             }
         };
 
-        let required_pvg = op.uo.required_pre_verification_gas(
+        let mut required_pvg = op.uo.required_pre_verification_gas(
             &self.settings.chain_spec,
             bundle_size,
             required_da_gas,
         );
+
+        if let Some(pct) = op.perms.underpriced_bundle_pct {
+            required_pvg = math::percent_ceil(required_pvg, pct);
+        }
 
         if op.uo.pre_verification_gas() < required_pvg {
             self.emit(BuilderEvent::skipped_op(
