@@ -28,10 +28,9 @@ jobs:
           submodules: recursive
 
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: clippy
-          toolchain: 1.85.0
 
       - name: Install toolchain (nightly)
         run: rustup toolchain add nightly --component rustfmt --profile minimal
