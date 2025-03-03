@@ -17,10 +17,10 @@ jobs:
       - name: Install protobuf
         run: sudo apt-get -y install protobuf-compiler
       - name: Install toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: clippy
-          toolchain: 1.85.0
+          target: x86_64-unknown-linux-gnu
       - name: Install toolchain (nightly)
         run: rustup toolchain add nightly --component rustfmt --profile minimal
       - uses: Swatinem/rust-cache@v2
@@ -33,29 +33,16 @@ jobs:
 
         # Build to generate the ABI bindings.
       - name: cargo build
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --all --all-features
+        run: cargo build --all --all-features
 
       - name: cargo check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --all --all-features
+        run: cargo check --all --all-features
 
       - name: cargo +nightly fmt
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          toolchain: nightly
-          args: --all --check
+        run: cargo +nightly fmt --all --check
 
       - name: cargo clippy
-        uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all --all-features --tests -- -D warnings
+        run: cargo clippy --all --all-features --tests -- -D warnings
 
       - name: buf setup
         uses: bufbuild/buf-setup-action@v1
@@ -87,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout sources
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Install cargo-sort
         run: cargo install --git=https://github.com/DevinR528/cargo-sort --rev=55ec89082466f6bb246d870a8d56d166a8e1f08b cargo-sort
       - name: Check cargo sort
