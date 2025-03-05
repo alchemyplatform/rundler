@@ -18,7 +18,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256};
-use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
+use rundler_provider::{EntryPoint, SimulationProvider, StateOverride, TransactionReceipt};
 use rundler_sim::{GasEstimationError, GasEstimator};
 use rundler_types::{
     EntryPointVersion, GasEstimate, UserOperation, UserOperationOptionalGas, UserOperationVariant,
@@ -141,6 +141,18 @@ impl EntryPointRouter {
             .map_err(Into::into)
     }
 
+    pub(crate) async fn get_mined_from_tx_receipt(
+        &self,
+        entry_point: &Address,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> EthResult<Option<RpcUserOperationByHash>> {
+        self.get_route(entry_point)?
+            .get_mined_from_tx_receipt(uo_hash, tx_receipt)
+            .await
+            .map_err(Into::into)
+    }
+
     pub(crate) async fn get_receipt(
         &self,
         entry_point: &Address,
@@ -148,6 +160,18 @@ impl EntryPointRouter {
     ) -> EthResult<Option<RpcUserOperationReceipt>> {
         self.get_route(entry_point)?
             .get_receipt(hash)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub(crate) async fn get_receipt_from_tx_receipt(
+        &self,
+        entry_point: &Address,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> EthResult<Option<RpcUserOperationReceipt>> {
+        self.get_route(entry_point)?
+            .get_receipt_from_tx_receipt(uo_hash, tx_receipt)
             .await
             .map_err(Into::into)
     }
@@ -248,7 +272,19 @@ pub(crate) trait EntryPointRoute: Send + Sync {
     async fn get_mined_by_hash(&self, hash: B256)
         -> anyhow::Result<Option<RpcUserOperationByHash>>;
 
+    async fn get_mined_from_tx_receipt(
+        &self,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<Option<RpcUserOperationByHash>>;
+
     async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
+
+    async fn get_receipt_from_tx_receipt(
+        &self,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>>;
 
     async fn estimate_gas(
         &self,
@@ -291,8 +327,28 @@ where
         self.event_provider.get_mined_by_hash(hash).await
     }
 
+    async fn get_mined_from_tx_receipt(
+        &self,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+        self.event_provider
+            .get_mined_from_tx_receipt(uo_hash, tx_receipt)
+            .await
+    }
+
     async fn get_receipt(&self, hash: B256) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
         self.event_provider.get_receipt(hash).await
+    }
+
+    async fn get_receipt_from_tx_receipt(
+        &self,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+        self.event_provider
+            .get_receipt_from_tx_receipt(uo_hash, tx_receipt)
+            .await
     }
 
     async fn estimate_gas(

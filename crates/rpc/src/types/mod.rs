@@ -294,3 +294,11 @@ pub struct RpcDebugPaymasterBalance {
     /// Paymaster confirmed balance onchain
     pub confirmed_balance: U256,
 }
+
+/// A user operation that has been mined
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RpcMinedUserOperation {
+    pub(crate) user_operation: RpcUserOperation,
+    pub(crate) receipt: RpcUserOperationReceipt,
+}

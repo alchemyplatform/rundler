@@ -293,6 +293,7 @@ where
                     entry_point_router,
                     self.pool.clone(),
                     fee_estimator,
+                    self.providers.evm().clone(),
                 )
                 .into_rpc(),
             )?;

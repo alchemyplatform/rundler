@@ -44,7 +44,6 @@ pub(crate) trait EntryPointEvents: Send + Sync {
 
     fn construct_receipt(
         event: Self::UserOperationEvent,
-        hash: B256,
         entry_point: Address,
         logs: Vec<Log>,
         tx_receipt: TransactionReceipt,
@@ -79,46 +78,24 @@ where
             .transaction_hash
             .context("tx_hash should be present")?;
 
-        let tx = self
-            .provider
-            .get_transaction_by_hash(transaction_hash)
+        self.get_user_operation(hash, transaction_hash, &event)
             .await
-            .context("should have fetched tx from provider")?
-            .context("should have found tx")?;
+            .log_on_error("should have successfully found user operation")
+    }
 
-        // We should return null if the tx isn't included in the block yet
-        if tx.block_hash.is_none() && tx.block_number.is_none() {
+    #[instrument(skip_all)]
+    async fn get_mined_from_tx_receipt(
+        &self,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+        let Some(event) = self.get_event_from_tx_receipt(uo_hash, &tx_receipt) else {
             return Ok(None);
-        }
-        let to = tx
-            .inner
-            .to()
-            .expect("tx.to should be present on transaction containing user operation event");
+        };
 
-        let input = tx.input();
-
-        let ep_address = E::address(&self.chain_spec);
-        let user_operation =
-            if ep_address == to || self.chain_spec.known_proxy_addresses().contains(&to) {
-                E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
-                    .into_iter()
-                    .find(|op| op.hash() == hash)
-                    .context("matching user operation should be found in tx data")?
-            } else {
-                tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
-                self.trace_find_user_operation(transaction_hash, hash)
-                    .await
-                    .context("error running trace")?
-                    .context("should have found user operation in trace")?
-            };
-
-        Ok(Some(RpcUserOperationByHash {
-            user_operation: user_operation.into().into(),
-            entry_point: event.address().into(),
-            block_number: Some(tx.block_number.map(|n| U256::from(n)).unwrap_or_default()),
-            block_hash: Some(tx.block_hash.unwrap_or_default()),
-            transaction_hash: Some(transaction_hash),
-        }))
+        self.get_user_operation(uo_hash, tx_receipt.transaction_hash, event)
+            .await
+            .log_on_error("should have successfully found user operation")
     }
 
     #[instrument(skip_all)]
@@ -128,8 +105,6 @@ where
             .await
             .log_on_error("should have successfully queried for user op events by hash")?;
         let Some(event) = event else { return Ok(None) };
-
-        let entry_point = event.address();
 
         let tx_hash = event
             .transaction_hash
@@ -143,22 +118,20 @@ where
             .context("should have fetched tx receipt")?
             .context("Failed to fetch tx receipt")?;
 
-        // filter receipt logs
-        let filtered_logs = super::filter_receipt_logs_matching_user_op(&event, &tx_receipt)
-            .context("should have found receipt logs matching user op")?;
+        self.construct_receipt(event, tx_receipt).map(Some)
+    }
 
-        // decode uo event
-        let uo_event = self
-            .decode_user_operation_event(event)
-            .context("should have decoded user operation event")?;
+    #[instrument(skip_all)]
+    async fn get_receipt_from_tx_receipt(
+        &self,
+        uo_hash: B256,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<Option<RpcUserOperationReceipt>> {
+        let Some(event) = self.get_event_from_tx_receipt(uo_hash, &tx_receipt) else {
+            return Ok(None);
+        };
 
-        Ok(Some(E::construct_receipt(
-            uo_event,
-            hash,
-            entry_point,
-            filtered_logs,
-            tx_receipt,
-        )))
+        self.construct_receipt(event.clone(), tx_receipt).map(Some)
     }
 }
 
@@ -198,6 +171,89 @@ where
 
         let logs = self.provider.get_logs(&filter).await?;
         Ok(logs.into_iter().next())
+    }
+
+    #[instrument(skip(self))]
+    async fn get_user_operation(
+        &self,
+        uo_hash: B256,
+        tx_hash: B256,
+        event: &Log,
+    ) -> anyhow::Result<Option<RpcUserOperationByHash>> {
+        let tx = self
+            .provider
+            .get_transaction_by_hash(tx_hash)
+            .await
+            .context("should have fetched tx from provider")?
+            .context("should have found tx")?;
+
+        // We should return null if the tx isn't included in the block yet
+        if tx.block_hash.is_none() && tx.block_number.is_none() {
+            return Ok(None);
+        }
+        let to = tx
+            .inner
+            .to()
+            .expect("tx.to should be present on transaction containing user operation event");
+
+        let input = tx.input();
+
+        let ep_address = E::address(&self.chain_spec);
+        let user_operation =
+            if ep_address == to || self.chain_spec.known_proxy_addresses().contains(&to) {
+                E::get_user_operations_from_tx_data(input.clone(), &self.chain_spec)
+                    .into_iter()
+                    .find(|op| op.hash() == uo_hash)
+                    .context("matching user operation should be found in tx data")?
+            } else {
+                tracing::debug!("Unknown entrypoint {to:?}, falling back to trace");
+                self.trace_find_user_operation(tx_hash, uo_hash)
+                    .await
+                    .context("error running trace")?
+                    .context("should have found user operation in trace")?
+            };
+
+        Ok(Some(RpcUserOperationByHash {
+            user_operation: user_operation.into().into(),
+            entry_point: event.address().into(),
+            block_number: Some(tx.block_number.map(|n| U256::from(n)).unwrap_or_default()),
+            block_hash: Some(tx.block_hash.unwrap_or_default()),
+            transaction_hash: Some(tx_hash),
+        }))
+    }
+
+    fn get_event_from_tx_receipt<'a>(
+        &self,
+        uo_hash: B256,
+        tx_receipt: &'a TransactionReceipt,
+    ) -> Option<&'a Log> {
+        tx_receipt.inner.logs().iter().find(|l| {
+            l.topics().len() >= 2
+                && l.topics()[0] == E::UserOperationEvent::SIGNATURE_HASH
+                && l.topics()[1] == uo_hash
+        })
+    }
+
+    fn construct_receipt(
+        &self,
+        event: Log,
+        tx_receipt: TransactionReceipt,
+    ) -> anyhow::Result<RpcUserOperationReceipt> {
+        // filter receipt logs
+        let filtered_logs = super::filter_receipt_logs_matching_user_op(&event, &tx_receipt)
+            .context("should have found receipt logs matching user op")?;
+
+        // decode uo event
+        let uo_event = self
+            .decode_user_operation_event(event)
+            .context("should have decoded user operation event")?;
+
+        Ok(E::construct_receipt(
+            uo_event,
+            E::address(&self.chain_spec),
+            filtered_logs,
+            tx_receipt,
+        ))
     }
 
     fn decode_user_operation_event(&self, log: Log) -> anyhow::Result<E::UserOperationEvent> {
