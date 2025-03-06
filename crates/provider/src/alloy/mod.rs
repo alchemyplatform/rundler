@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use alloy_provider::{Provider as AlloyProvider, ProviderBuilder};
+use alloy_provider::{network::AnyNetwork, Provider as AlloyProvider, ProviderBuilder};
 use alloy_rpc_client::ClientBuilder;
 use alloy_transport::layers::RetryBackoffService;
 use alloy_transport_http::Http;
@@ -47,8 +47,10 @@ pub fn new_alloy_provider(
     rpc_url: &str,
     provider_client_timeout_seconds: u64,
 ) -> anyhow::Result<
-    impl AlloyProvider<RetryBackoffService<AlloyMetricMiddleware<ProviderTimeout<Http<Client>>>>>
-        + Clone,
+    impl AlloyProvider<
+            RetryBackoffService<AlloyMetricMiddleware<ProviderTimeout<Http<Client>>>>,
+            AnyNetwork,
+        > + Clone,
 > {
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
     let metric_layer = AlloyMetricLayer::default();
@@ -62,7 +64,9 @@ pub fn new_alloy_provider(
         .layer(metric_layer)
         .layer(timeout_layer)
         .http(url);
-    let provider = ProviderBuilder::new().on_client(client);
+    let provider = ProviderBuilder::new()
+        .network::<AnyNetwork>()
+        .on_client(client);
     Ok(provider)
 }
 

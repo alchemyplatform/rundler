@@ -254,7 +254,11 @@ where
             None
         });
         let (gas_used, gas_price, is_success) = match tx_receipt {
-            Some(r) => (Some(r.gas_used), Some(r.effective_gas_price), r.status()),
+            Some(r) => (
+                Some(r.gas_used),
+                Some(r.effective_gas_price),
+                r.inner.status(),
+            ),
             None => {
                 warn!("failed to fetch transaction receipt for tx: {}", tx_hash);
                 (None, None, false)
@@ -580,15 +584,12 @@ struct TransactionTrackerMetrics {
 
 #[cfg(test)]
 mod tests {
-    use alloy_consensus::{
-        Signed, TxEip1559,
-        TxEnvelope::{self, Eip1559},
-    };
+    use alloy_consensus::{Signed, TxEip1559, TxEnvelope::Eip1559};
     use alloy_primitives::{Address, PrimitiveSignature};
     use mockall::Sequence;
     use rundler_provider::{
-        MockEvmProvider, Transaction, TransactionReceipt, TransactionReceiptEnvelope,
-        TransactionReceiptWithBloom,
+        AnyReceiptEnvelope, AnyTxEnvelope, MockEvmProvider, ReceiptWithBloom, Transaction,
+        TransactionReceipt,
     };
 
     use super::*;
@@ -810,7 +811,9 @@ mod tests {
             PrimitiveSignature::test_signature(),
             hash,
         ));
-        Transaction::<TxEnvelope> {
+        let inner = AnyTxEnvelope::Ethereum(inner);
+
+        Transaction {
             inner,
             block_hash: None,
             block_number: None,
@@ -848,9 +851,10 @@ mod tests {
             .expect_get_transaction_receipt()
             .returning(|_: B256| {
                 Ok(Some(TransactionReceipt {
-                    inner: TransactionReceiptEnvelope::Legacy(
-                        TransactionReceiptWithBloom::default(),
-                    ),
+                    inner: AnyReceiptEnvelope {
+                        inner: ReceiptWithBloom::default(),
+                        r#type: 0,
+                    },
                     transaction_hash: B256::ZERO,
                     transaction_index: None,
                     block_hash: None,

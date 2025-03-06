@@ -188,7 +188,7 @@ mod tests {
     use alloy_sol_types::SolInterface;
     use mockall::predicate::eq;
     use rundler_contracts::v0_6::IEntryPoint::{handleOpsCall, IEntryPointCalls};
-    use rundler_provider::{Log, MockEntryPointV0_6, MockEvmProvider, Transaction};
+    use rundler_provider::{AnyTxEnvelope, Log, MockEntryPointV0_6, MockEvmProvider, Transaction};
     use rundler_sim::MockGasEstimator;
     use rundler_types::{
         pool::{MockPool, PoolOperation},
@@ -294,6 +294,9 @@ mod tests {
             PrimitiveSignature::test_signature(),
             hash,
         ));
+        let tx_hash = *inner.tx_hash();
+        let inner = AnyTxEnvelope::Ethereum(inner);
+
         let tx = Transaction {
             inner,
             block_hash: Some(block_hash),
@@ -303,7 +306,6 @@ mod tests {
             from: Address::default(),
         };
 
-        let tx_hash = *tx.inner.tx_hash();
         let log = Log {
             inner: PrimitiveLog {
                 address: ep,

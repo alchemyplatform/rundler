@@ -52,6 +52,7 @@ alloy-provider = { version = "0.7.3", default-features = false, features = ["req
 alloy-rpc-client = "0.7.3"
 alloy-rpc-types-eth = "0.7.3"
 alloy-rpc-types-trace = "0.7.3"
+alloy-serde = "0.7.3"
 alloy-signer = "0.7.3"
 alloy-signer-aws = "0.7.3"
 alloy-signer-local = { version = "0.7.3" }

@@ -4840,7 +4840,6 @@ dependencies = [
 name = "rundler-pool"
 version = "0.6.0"
 dependencies = [
- "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
  "alloy-signer",
@@ -4888,7 +4887,7 @@ dependencies = [
  "alloy-rpc-client",
  "alloy-rpc-types-eth",
  "alloy-rpc-types-trace",
- "alloy-sol-macro",
+ "alloy-serde",
  "alloy-sol-types",
  "alloy-transport",
  "alloy-transport-http",

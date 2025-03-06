@@ -76,8 +76,11 @@ pub trait EvmProvider: Send + Sync {
     /// Get the current block number
     async fn get_block_number(&self) -> ProviderResult<u64>;
 
-    /// Get a block by its hash or number
+    /// Get a block by its hash or number. Only includes transaction hashes.
     async fn get_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>>;
+
+    /// Get a full block by its hash or number. Includes full transactions.
+    async fn get_full_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>>;
 
     /// Get the balance of an address
     async fn get_balance(&self, address: Address, block: Option<BlockId>) -> ProviderResult<U256>;
@@ -141,4 +144,7 @@ pub trait EvmProvider: Send + Sync {
         addresses: Vec<Address>,
         block: Option<BlockId>,
     ) -> ProviderResult<B256>;
+
+    /// Get the balances of multiple addresses
+    async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
 }
