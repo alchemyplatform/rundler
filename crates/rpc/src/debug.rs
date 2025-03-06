@@ -240,7 +240,7 @@ where
 
         let mut new_heads = self
             .pool
-            .subscribe_new_heads()
+            .subscribe_new_heads(vec![])
             .await
             .context("should subscribe new heads")?;
 

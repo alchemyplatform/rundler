@@ -34,7 +34,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{error, info};
 
 use crate::{
-    chain::ChainUpdate,
+    chain::ChainSubscriber,
     mempool::{Mempool, OperationOrigin},
 };
 
@@ -66,18 +66,18 @@ impl LocalPoolBuilder {
     }
 
     /// Run the local pool server, consumes the builder
-    pub fn run(
+    pub(crate) fn run(
         self,
         task_spawner: Box<dyn TaskSpawner>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
-        chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
+        chain_subscriber: ChainSubscriber,
         shutdown: GracefulShutdown,
     ) -> BoxFuture<'static, ()> {
         let runner = LocalPoolServerRunner::new(
             self.req_receiver,
             self.block_sender,
             mempools,
-            chain_updates,
+            chain_subscriber,
             task_spawner,
         );
         Box::pin(runner.run(shutdown))
@@ -96,7 +96,7 @@ struct LocalPoolServerRunner {
     req_receiver: mpsc::Receiver<ServerRequest>,
     block_sender: broadcast::Sender<NewHead>,
     mempools: HashMap<Address, Arc<dyn Mempool>>,
-    chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
+    chain_subscriber: ChainSubscriber,
     task_spawner: Box<dyn TaskSpawner>,
 }
 
@@ -330,8 +330,11 @@ impl Pool for LocalPoolHandle {
         }
     }
 
-    async fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
-        let req = ServerRequestKind::SubscribeNewHeads;
+    async fn subscribe_new_heads(
+        &self,
+        to_track: Vec<Address>,
+    ) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>> {
+        let req = ServerRequestKind::SubscribeNewHeads { to_track };
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::SubscribeNewHeads { mut new_heads } => Ok(Box::pin(stream! {
@@ -373,14 +376,14 @@ impl LocalPoolServerRunner {
         req_receiver: mpsc::Receiver<ServerRequest>,
         block_sender: broadcast::Sender<NewHead>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
-        chain_updates: broadcast::Receiver<Arc<ChainUpdate>>,
+        chain_subscriber: ChainSubscriber,
         task_spawner: Box<dyn TaskSpawner>,
     ) -> Self {
         Self {
             req_receiver,
             block_sender,
             mempools,
-            chain_updates,
+            chain_subscriber,
             task_spawner,
         }
     }
@@ -531,12 +534,14 @@ impl LocalPoolServerRunner {
     }
 
     async fn run(mut self, shutdown: GracefulShutdown) {
+        let mut chain_updates = self.chain_subscriber.subscribe();
+
         loop {
             tokio::select! {
                 _ = shutdown.clone() => {
                     break;
                 }
-                chain_update = self.chain_updates.recv() => {
+                chain_update = chain_updates.recv() => {
                     if let Ok(chain_update) = chain_update {
                         // Update each mempool before notifying listeners of the chain update
                         // This allows the mempools to update their state before the listeners
@@ -555,6 +560,7 @@ impl LocalPoolServerRunner {
                             let _ = block_sender.send(NewHead {
                                 block_hash: chain_update.latest_block_hash,
                                 block_number: chain_update.latest_block_number,
+                                address_updates: chain_update.address_updates.clone(),
                             });
                         }));
                     }
@@ -689,7 +695,8 @@ impl LocalPoolServerRunner {
                                 Err(e) => Err(e),
                             }
                         },
-                        ServerRequestKind::SubscribeNewHeads => {
+                        ServerRequestKind::SubscribeNewHeads { to_track } => {
+                            self.chain_subscriber.track_addresses(to_track);
                             Ok(ServerResponse::SubscribeNewHeads { new_heads: self.block_sender.subscribe() } )
                         }
                     };
@@ -769,7 +776,9 @@ enum ServerRequestKind {
         entry_point: Address,
         address: Address,
     },
-    SubscribeNewHeads,
+    SubscribeNewHeads {
+        to_track: Vec<Address>,
+    },
 }
 
 #[derive(Debug)]
@@ -816,9 +825,10 @@ enum ServerResponse {
 
 #[cfg(test)]
 mod tests {
-    use std::{iter::zip, sync::Arc};
+    use std::{collections::HashSet, iter::zip, sync::Arc};
 
     use futures_util::StreamExt;
+    use parking_lot::RwLock;
     use reth_tasks::TaskManager;
     use rundler_types::{
         chain::ChainSpec, v0_6::UserOperation as UserOperationV0_6,
@@ -860,7 +870,7 @@ mod tests {
         let pool: Arc<dyn Mempool> = Arc::new(mock_pool);
         let state = setup(HashMap::from([(ep, pool)]));
 
-        let mut sub = state.handle.subscribe_new_heads().await.unwrap();
+        let mut sub = state.handle.subscribe_new_heads(vec![]).await.unwrap();
 
         let hash = B256::random();
         let number = 1234;
@@ -947,20 +957,25 @@ mod tests {
 
     struct State {
         handle: LocalPoolHandle,
-        chain_update_tx: broadcast::Sender<Arc<ChainUpdate>>,
+        chain_update_tx: Arc<broadcast::Sender<Arc<ChainUpdate>>>,
         _task_manager: TaskManager,
     }
 
     fn setup(pools: HashMap<Address, Arc<dyn Mempool>>) -> State {
         let builder = LocalPoolBuilder::new(10, 10);
         let handle = builder.get_handle();
-        let (tx, rx) = broadcast::channel(10);
+        let (tx, _) = broadcast::channel(10);
+        let tx = Arc::new(tx);
         let tm = TaskManager::current();
         let ts = tm.executor();
         let ts_box = Box::new(ts.clone());
+        let chain_subscriber = ChainSubscriber {
+            sender: tx.clone(),
+            to_track: Arc::new(RwLock::new(HashSet::new())),
+        };
 
         ts.spawn_critical_with_graceful_shutdown_signal("test pool", |shutdown| {
-            builder.run(ts_box, pools, rx, shutdown)
+            builder.run(ts_box, pools, chain_subscriber, shutdown)
         });
 
         State {

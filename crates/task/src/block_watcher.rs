@@ -33,7 +33,7 @@ pub async fn wait_for_new_block(
     loop {
         let block = retry::with_unlimited_retries(
             "watch latest block",
-            || provider.get_block(BlockId::latest()),
+            || provider.get_full_block(BlockId::latest()),
             UnlimitedRetryOpts::default(),
         )
         .await;

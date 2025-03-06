@@ -13,7 +13,7 @@
 
 //! Utilities for retrying operations.
 
-use std::{future::Future, time::Duration};
+use std::{fmt, future::Future, time::Duration};
 
 use rand::Rng;
 use tokio::time;
@@ -49,6 +49,7 @@ pub async fn with_retries<Func, Fut, Out, Err>(
 where
     Func: Fn() -> Fut,
     Fut: Future<Output = Result<Out, Err>>,
+    Err: fmt::Debug,
 {
     let mut next_wait = Duration::ZERO;
     let mut last_error: Option<Err> = None;
@@ -56,8 +57,8 @@ where
         match func().await {
             Ok(out) => return Ok(out),
             Err(error) => {
+                warn!("Failed to {description} (attempt {attempt_number}) : {error:?}");
                 last_error = Some(error);
-                warn!("Failed to {description} (attempt {attempt_number})");
             }
         }
         // Grab a new rng each iteration because we can't hold it across awaits.
@@ -109,6 +110,7 @@ pub async fn with_unlimited_retries<Func, Fut, Out, Err>(
 where
     Func: Fn() -> Fut,
     Fut: Future<Output = Result<Out, Err>>,
+    Err: fmt::Debug,
 {
     let opts = opts.to_retry_opts_with_max_attempts(u64::MAX);
     with_retries(description, func, opts).await.ok().unwrap()

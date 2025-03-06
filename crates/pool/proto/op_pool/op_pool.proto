@@ -484,7 +484,10 @@ message PaymasterBalance {
   bytes confirmed_balance = 3;
 }
 
-message SubscribeNewHeadsRequest {}
+message SubscribeNewHeadsRequest {
+  // The addresses to track
+  repeated bytes to_track = 1;
+}
 message SubscribeNewHeadsResponse {
   // The new chain head
   NewHead new_head = 1;
@@ -494,8 +497,17 @@ message NewHead {
   bytes block_hash = 1;
   // The block number
   uint64 block_number = 2;
+  // Address Updates
+  repeated AddressUpdate address_updates = 3;
 }
-
+message AddressUpdate {
+  // The address
+  bytes address = 1;
+  // The new nonce  
+  uint64 nonce = 2;
+  // The new balance
+  bytes balance = 3;
+}
 message AdminSetTrackingRequest {
   // The serialized entry point address via which the UserOperation is being submitted
   bytes entry_point = 1;

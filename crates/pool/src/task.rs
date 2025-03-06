@@ -99,6 +99,7 @@ where
             history_size: self.args.chain_spec.chain_history_size,
             poll_interval: self.args.chain_poll_interval,
             max_sync_retries: self.args.chain_max_sync_retries,
+            channel_capacity: self.args.chain_update_channel_capacity,
             entry_point_addresses: self
                 .args
                 .pool_configs
@@ -108,10 +109,10 @@ where
         };
 
         let chain = Chain::new(self.providers.evm().clone(), chain_settings);
-        let (update_sender, _) = broadcast::channel(self.args.chain_update_channel_capacity);
+        let chain_subscriber = chain.subscriber();
 
         task_spawner.spawn_critical_with_graceful_shutdown_signal("chain watcher", |shutdown| {
-            chain.watch(update_sender.clone(), shutdown)
+            chain.watch(shutdown)
         });
 
         // create mempools
@@ -157,7 +158,7 @@ where
             "local pool server",
             |shutdown| {
                 self.pool_builder
-                    .run(ts_box, mempools, update_sender.subscribe(), shutdown)
+                    .run(ts_box, mempools, chain_subscriber, shutdown)
             },
         );
 
