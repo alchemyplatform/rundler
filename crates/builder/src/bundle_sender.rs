@@ -155,6 +155,7 @@ where
             &self.pool,
             self.bundle_action_receiver.take().unwrap(),
             Duration::from_millis(self.chain_spec.bundle_max_send_interval_millis),
+            self.sender_eoa,
         )
         .await
         .expect("Failed to create bundle sender trigger");
@@ -1177,6 +1178,7 @@ impl Trigger for BundleSenderTrigger {
                         bail!("Block stream closed");
                     };
 
+                    tracing::info!("received new head: {:?}", b);
                     self.last_block = b;
 
                     match self.bundling_mode {
@@ -1229,6 +1231,7 @@ impl Trigger for BundleSenderTrigger {
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("Block stream closed"))?;
+        tracing::info!("received new head: {:?}", self.last_block);
         self.consume_blocks()?;
         Ok(self.last_block.clone())
     }
@@ -1251,8 +1254,9 @@ impl BundleSenderTrigger {
         pool_client: &P,
         bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         timer_interval: Duration,
+        sender_eoa: Address,
     ) -> anyhow::Result<Self> {
-        let Ok(new_heads) = pool_client.subscribe_new_heads().await else {
+        let Ok(new_heads) = pool_client.subscribe_new_heads(vec![sender_eoa]).await else {
             error!("Failed to subscribe to new blocks");
             bail!("failed to subscribe to new blocks");
         };
@@ -1271,6 +1275,7 @@ impl BundleSenderTrigger {
             last_block: NewHead {
                 block_hash: B256::ZERO,
                 block_number: 0,
+                address_updates: vec![],
             },
         })
     }
@@ -1300,6 +1305,7 @@ impl BundleSenderTrigger {
         loop {
             match self.block_rx.try_recv() {
                 Ok(b) => {
+                    tracing::info!("received new head: {:?}", b);
                     self.last_block = b;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {
@@ -1532,6 +1538,7 @@ mod tests {
                     Ok(NewHead {
                         block_number: 2,
                         block_hash: B256::ZERO,
+                        address_updates: vec![],
                     })
                 })
             });
@@ -1730,6 +1737,7 @@ mod tests {
         mock_trigger.expect_last_block().return_const(NewHead {
             block_number: 0,
             block_hash: B256::ZERO,
+            address_updates: vec![],
         });
 
         let mut state = SenderMachineState {
@@ -1898,6 +1906,7 @@ mod tests {
                     Ok(NewHead {
                         block_number: 2,
                         block_hash: B256::ZERO,
+                        address_updates: vec![],
                     })
                 })
             });
@@ -2078,6 +2087,7 @@ mod tests {
         mock_trigger.expect_last_block().return_const(NewHead {
             block_number,
             block_hash: B256::ZERO,
+            address_updates: vec![],
         });
     }
 
@@ -2095,6 +2105,7 @@ mod tests {
                     Ok(NewHead {
                         block_number,
                         block_hash: B256::ZERO,
+                        address_updates: vec![],
                     })
                 })
             });
@@ -2105,6 +2116,7 @@ mod tests {
             .return_const(NewHead {
                 block_number,
                 block_hash: B256::ZERO,
+                address_updates: vec![],
             });
         mock_trigger
             .expect_builder_must_wait_for_trigger()

@@ -36,7 +36,10 @@ tonic-reflection.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+alloy-consensus.workspace = true
 alloy-eips.workspace = true
+alloy-network-primitives.workspace = true
+alloy-serde.workspace = true
 alloy-signer.workspace = true
 alloy-signer-local.workspace = true
 mockall.workspace = true

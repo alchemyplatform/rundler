@@ -466,10 +466,6 @@ where
             .record(maintenance_time.as_micros() as f64);
     }
 
-    fn entry_point(&self) -> Address {
-        self.config.entry_point
-    }
-
     fn entry_point_version(&self) -> EntryPointVersion {
         self.config.entry_point_version
     }
@@ -1150,6 +1146,7 @@ mod tests {
                 entrypoint: pool.config.entry_point,
                 is_addition: false,
             }],
+            address_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1248,6 +1245,7 @@ mod tests {
                 entrypoint: pool.config.entry_point,
                 is_addition: false,
             }],
+            address_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1282,6 +1280,7 @@ mod tests {
                 entrypoint: pool.config.entry_point,
                 is_addition: true,
             }],
+            address_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1319,6 +1318,7 @@ mod tests {
             unmined_ops: vec![],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
+            address_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1364,6 +1364,7 @@ mod tests {
             unmined_ops: vec![],
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
+            address_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;
@@ -1440,6 +1441,7 @@ mod tests {
             entity_balance_updates: vec![],
             unmined_entity_balance_updates: vec![],
             unmined_ops: vec![],
+            address_updates: vec![],
             reorg_larger_than_history: false,
         })
         .await;

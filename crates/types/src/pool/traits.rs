@@ -76,7 +76,10 @@ pub trait Pool: Send + Sync {
     ///
     /// The pool will notify the subscriber when a new chain head is received, and the pool
     /// has processed all operations up to that head.
-    async fn subscribe_new_heads(&self) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
+    async fn subscribe_new_heads(
+        &self,
+        to_track: Vec<Address>,
+    ) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
 
     /// Get reputation status given entrypoint and address
     async fn get_reputation_status(

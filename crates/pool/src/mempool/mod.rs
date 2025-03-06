@@ -51,12 +51,9 @@ pub(crate) type MempoolResult<T> = std::result::Result<T, MempoolError>;
 #[cfg_attr(test, automock)]
 #[async_trait]
 /// In-memory operation pool
-pub trait Mempool: Send + Sync {
+pub(crate) trait Mempool: Send + Sync {
     /// Call to update the mempool with a new chain update
     async fn on_chain_update(&self, update: &ChainUpdate);
-
-    /// Returns the entry point address this pool targets.
-    fn entry_point(&self) -> Address;
 
     /// Returns the entry point version this pool targets.
     fn entry_point_version(&self) -> EntryPointVersion;

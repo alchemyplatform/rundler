@@ -542,7 +542,7 @@ impl OpPool for OpPoolImpl {
 
     async fn subscribe_new_heads(
         &self,
-        _request: Request<SubscribeNewHeadsRequest>,
+        request: Request<SubscribeNewHeadsRequest>,
     ) -> Result<Response<Self::SubscribeNewHeadsStream>> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -553,8 +553,16 @@ impl OpPool for OpPoolImpl {
             return Err(Status::resource_exhausted("Too many block subscriptions"));
         }
 
+        let req = request.into_inner();
+        let to_track = req
+            .to_track
+            .into_iter()
+            .map(|a| from_bytes(&a))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| Status::invalid_argument(format!("Invalid address: {e}")))?;
+
         let num_block_subscriptions = Arc::clone(&self.num_block_subscriptions);
-        let mut new_heads = match self.local_pool.subscribe_new_heads().await {
+        let mut new_heads = match self.local_pool.subscribe_new_heads(to_track).await {
             Ok(new_heads) => new_heads,
             Err(error) => {
                 tracing::error!("Failed to subscribe to new blocks: {error}");

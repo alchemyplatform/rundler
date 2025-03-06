@@ -26,6 +26,19 @@ pub struct NewHead {
     pub block_hash: B256,
     /// The number of the new head
     pub block_number: u64,
+    /// The updates to the state of the addresses
+    pub address_updates: Vec<AddressUpdate>,
+}
+
+/// An update to the state of an address
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AddressUpdate {
+    /// The address that was updated
+    pub address: Address,
+    /// The new nonce for the address
+    pub nonce: u64,
+    /// The new balance for the address
+    pub balance: U256,
 }
 
 /// The reputation of an entity

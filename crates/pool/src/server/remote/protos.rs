@@ -22,9 +22,9 @@ use rundler_types::{
         NitroDAGasUOData as RundlerNitroDAGasUOData,
     },
     pool::{
-        NewHead as PoolNewHead, PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
-        Reputation as PoolReputation, ReputationStatus as PoolReputationStatus,
-        StakeStatus as RundlerStakeStatus,
+        AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
+        PaymasterMetadata as PoolPaymasterMetadata, PoolOperation, Reputation as PoolReputation,
+        ReputationStatus as PoolReputationStatus, StakeStatus as RundlerStakeStatus,
     },
     v0_6, v0_7, Entity as RundlerEntity, EntityInfos, EntityType as RundlerEntityType,
     EntityUpdate as RundlerEntityUpdate, EntityUpdateType as RundlerEntityUpdateType,
@@ -537,6 +537,11 @@ impl TryFrom<NewHead> for PoolNewHead {
         Ok(Self {
             block_hash: from_bytes(&new_head.block_hash)?,
             block_number: new_head.block_number,
+            address_updates: new_head
+                .address_updates
+                .into_iter()
+                .map(PoolAddressUpdate::try_from)
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -546,6 +551,33 @@ impl From<PoolNewHead> for NewHead {
         Self {
             block_hash: head.block_hash.to_proto_bytes(),
             block_number: head.block_number,
+            address_updates: head
+                .address_updates
+                .into_iter()
+                .map(AddressUpdate::from)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<AddressUpdate> for PoolAddressUpdate {
+    type Error = ConversionError;
+
+    fn try_from(update: AddressUpdate) -> Result<Self, Self::Error> {
+        Ok(Self {
+            address: from_bytes(&update.address)?,
+            nonce: update.nonce,
+            balance: from_bytes(&update.balance)?,
+        })
+    }
+}
+
+impl From<PoolAddressUpdate> for AddressUpdate {
+    fn from(update: PoolAddressUpdate) -> Self {
+        Self {
+            address: update.address.to_proto_bytes(),
+            nonce: update.nonce,
+            balance: update.balance.to_proto_bytes(),
         }
     }
 }
