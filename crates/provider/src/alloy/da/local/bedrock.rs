@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, Bytes};
-use alloy_provider::Provider as AlloyProvider;
+use alloy_provider::network::AnyNetwork;
 use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 use alloy_transport::Transport;
 use anyhow::Context;
@@ -28,7 +28,7 @@ use crate::{
         baseFeeScalarCall, blobBaseFeeCall, blobBaseFeeScalarCall, l1BaseFeeCall,
         GasPriceOracleCalls, GasPriceOracleInstance,
     },
-    BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult,
+    AlloyProvider, BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult,
 };
 
 // From https://github.com/ethereum-optimism/optimism/blob/f93f9f40adcd448168c6ea27820aeee5da65fcbd/packages/contracts-bedrock/src/L2/GasPriceOracle.sol#L26
@@ -42,15 +42,15 @@ const MIN_TRANSACTION_SIZE: i128 = 100_000_000;
 /// Details: https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/fjord/exec-engine.md#fjord-l1-cost-fee-changes-fastlz-estimator
 #[derive(Debug)]
 pub(crate) struct LocalBedrockDAGasOracle<AP, T> {
-    oracle: GasPriceOracleInstance<T, AP>,
-    multicaller: MulticallInstance<T, AP>,
+    oracle: GasPriceOracleInstance<T, AP, AnyNetwork>,
+    multicaller: MulticallInstance<T, AP, AnyNetwork>,
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BedrockDAGasBlockData>>,
     blocking_task_pool: BlockingTaskPool,
 }
 
 impl<AP, T> LocalBedrockDAGasOracle<AP, T>
 where
-    AP: AlloyProvider<T> + Clone,
+    AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
     pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {

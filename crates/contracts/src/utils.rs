@@ -33,3 +33,10 @@ sol!(
     StorageLoader,
     "contracts/out/utils/StorageLoader.sol/StorageLoader.json"
 );
+
+sol!(
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    GetBalances,
+    "contracts/out/utils/GetBalances.sol/GetBalances.json"
+);

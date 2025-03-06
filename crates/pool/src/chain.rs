@@ -768,7 +768,7 @@ mod tests {
     use alloy_primitives::{address, Log as PrimitiveLog, LogData};
     use parking_lot::RwLock;
     use rundler_provider::{
-        BlockHeader, BlockId, FilterBlockOption, MockEvmProvider, RpcBlockHash,
+        AnyHeader, BlockHeader, BlockId, FilterBlockOption, MockEvmProvider, RpcBlockHash,
     };
 
     use super::*;
@@ -851,10 +851,11 @@ mod tests {
             } else {
                 B256::ZERO
             };
+
             Some(Block {
                 header: BlockHeader {
                     hash,
-                    inner: alloy_consensus::Header {
+                    inner: AnyHeader {
                         parent_hash,
                         number: number as u64,
                         ..Default::default()

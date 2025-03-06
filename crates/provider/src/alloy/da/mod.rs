@@ -14,14 +14,13 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, Bytes};
-use alloy_provider::Provider as AlloyProvider;
 use alloy_transport::Transport;
 use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasOracleType, DAGasUOData},
 };
 
-use crate::{BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult};
+use crate::{AlloyProvider, BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult};
 
 mod arbitrum;
 use arbitrum::ArbitrumNitroDAGasOracle;
@@ -55,7 +54,7 @@ pub fn new_alloy_da_gas_oracle<'a, AP, T>(
     Option<Arc<dyn DAGasOracleSync + 'a>>,
 )
 where
-    AP: AlloyProvider<T> + Clone + 'a,
+    AP: AlloyProvider<T> + 'a,
     T: Transport + Clone,
 {
     match chain_spec.da_gas_oracle_type {
@@ -100,7 +99,7 @@ fn extend_bytes_with_random(data: Bytes, len: usize) -> Bytes {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{address, b256, bytes, uint, U256};
-    use alloy_provider::ProviderBuilder;
+    use alloy_provider::{network::AnyNetwork, Provider, ProviderBuilder};
     use alloy_sol_types::SolValue;
     use rundler_contracts::v0_7::PackedUserOperation;
 
@@ -295,10 +294,7 @@ mod tests {
         compare_results(gas_a, gas_b);
     }
 
-    async fn compare_opt_and_local_bedrock(
-        provider: impl AlloyProvider + Clone,
-        block: BlockHashOrNumber,
-    ) {
+    async fn compare_opt_and_local_bedrock(provider: impl AlloyProvider, block: BlockHashOrNumber) {
         let contract_oracle = OptimismBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
         let local_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
 
@@ -306,7 +302,7 @@ mod tests {
     }
 
     async fn compare_arb_and_cached_on_data(
-        provider: impl AlloyProvider + Clone,
+        provider: impl AlloyProvider,
         block: BlockHashOrNumber,
         data: Bytes,
     ) {
@@ -327,8 +323,9 @@ mod tests {
         oracle.calc_da_gas_sync(&uo_data, &block_data, 1, 0)
     }
 
-    fn opt_provider() -> impl AlloyProvider + Clone {
+    fn opt_provider() -> impl AlloyProvider {
         ProviderBuilder::new()
+            .network::<AnyNetwork>()
             .on_http(
                 format!("https://opt-sepolia.g.alchemy.com/v2/{}", get_api_key())
                     .parse()
@@ -337,8 +334,9 @@ mod tests {
             .boxed()
     }
 
-    fn arb_provider() -> impl AlloyProvider + Clone {
+    fn arb_provider() -> impl AlloyProvider {
         ProviderBuilder::new()
+            .network::<AnyNetwork>()
             .on_http(
                 format!("https://arb-mainnet.g.alchemy.com/v2/{}", get_api_key())
                     .parse()

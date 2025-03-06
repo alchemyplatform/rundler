@@ -88,7 +88,7 @@ fn filter_receipt_logs_matching_user_op(
 mod tests {
 
     use alloy_primitives::{address, utils::keccak256, Address, Log as PrimitiveLog, LogData};
-    use rundler_provider::{TransactionReceiptEnvelope, TransactionReceiptWithBloom};
+    use rundler_provider::{AnyReceiptEnvelope, ReceiptWithBloom, TransactionReceipt};
 
     use super::*;
 
@@ -232,11 +232,15 @@ mod tests {
             logs,
             ..Default::default()
         };
+
         TransactionReceipt {
-            inner: TransactionReceiptEnvelope::Legacy(TransactionReceiptWithBloom {
-                receipt,
-                ..Default::default()
-            }),
+            inner: AnyReceiptEnvelope {
+                inner: ReceiptWithBloom {
+                    receipt,
+                    ..Default::default()
+                },
+                r#type: 0,
+            },
             transaction_hash: B256::ZERO,
             transaction_index: None,
             block_hash: None,

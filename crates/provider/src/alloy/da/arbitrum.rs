@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, Bytes};
-use alloy_provider::Provider as AlloyProvider;
+use alloy_provider::network::AnyNetwork;
 use alloy_sol_types::sol;
 use alloy_transport::Transport;
 use rundler_types::da::{DAGasBlockData, DAGasUOData};
@@ -20,7 +20,7 @@ use tracing::instrument;
 use NodeInterface::NodeInterfaceInstance;
 
 use super::DAGasOracle;
-use crate::{BlockHashOrNumber, ProviderResult};
+use crate::{AlloyProvider, BlockHashOrNumber, ProviderResult};
 
 // From https://github.com/OffchainLabs/nitro-contracts/blob/fbbcef09c95f69decabaced3da683f987902f3e2/src/node-interface/NodeInterface.sol#L112
 sol! {
@@ -42,7 +42,7 @@ sol! {
 }
 
 pub(super) struct ArbitrumNitroDAGasOracle<AP, T> {
-    node_interface: NodeInterfaceInstance<T, AP>,
+    node_interface: NodeInterfaceInstance<T, AP, AnyNetwork>,
 }
 
 impl<AP, T> ArbitrumNitroDAGasOracle<AP, T>

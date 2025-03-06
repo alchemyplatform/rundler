@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, Bytes};
-use alloy_provider::Provider as AlloyProvider;
+use alloy_provider::network::AnyNetwork;
 use alloy_transport::Transport;
 use anyhow::Context;
 use rundler_types::da::{DAGasBlockData, DAGasUOData, NitroDAGasBlockData, NitroDAGasUOData};
@@ -21,8 +21,8 @@ use tokio::sync::Mutex as TokioMutex;
 use tracing::instrument;
 
 use crate::{
-    alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance, BlockHashOrNumber, DAGasOracle,
-    DAGasOracleSync, ProviderResult,
+    alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance, AlloyProvider, BlockHashOrNumber,
+    DAGasOracle, DAGasOracleSync, ProviderResult,
 };
 
 /// Cached Arbitrum Nitro DA gas oracle
@@ -30,7 +30,7 @@ use crate::{
 /// The goal of this oracle is to only need to make maximum
 /// 1 network call per block + 1 network call per distinct UO
 pub(crate) struct CachedNitroDAGasOracle<AP, T> {
-    node_interface: NodeInterfaceInstance<T, AP>,
+    node_interface: NodeInterfaceInstance<T, AP, AnyNetwork>,
     // Use a tokio::Mutex here to ensure only one network call per block, other threads can async wait for the result
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, NitroDAGasBlockData>>,
 }

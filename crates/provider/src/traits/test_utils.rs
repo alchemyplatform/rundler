@@ -14,8 +14,7 @@
 use alloy_json_rpc::{RpcParam, RpcReturn};
 use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
 use alloy_rpc_types_eth::{
-    state::StateOverride, Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, Log, Transaction,
-    TransactionReceipt, TransactionRequest,
+    state::StateOverride, BlockId, BlockNumberOrTag, FeeHistory, Filter, Log,
 };
 use alloy_rpc_types_trace::geth::{
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
@@ -29,9 +28,10 @@ use rundler_types::{
 
 use super::error::ProviderResult;
 use crate::{
-    AggregatorOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync, DAGasProvider,
-    DepositInfo, EntryPoint, EntryPointProvider, EvmCall, EvmProvider as EvmProviderTrait,
-    ExecutionResult, HandleOpsOut, SignatureAggregator, SimulationProvider,
+    AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
+    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
+    EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, SignatureAggregator,
+    SimulationProvider, Transaction, TransactionReceipt, TransactionRequest,
 };
 
 mockall::mock! {
@@ -61,6 +61,8 @@ mockall::mock! {
         async fn get_block_number(&self) -> ProviderResult<u64>;
 
         async fn get_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>>;
+
+        async fn get_full_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>>;
 
         async fn get_balance(&self, address: Address, block: Option<BlockId>) -> ProviderResult<U256>;
 
@@ -109,6 +111,11 @@ mockall::mock! {
             addresses: Vec<Address>,
             block: Option<BlockId>,
         ) -> ProviderResult<B256>;
+
+        async fn get_balances(
+            &self,
+            addresses: Vec<Address>,
+        ) -> ProviderResult<Vec<U256>>;
     }
 }
 

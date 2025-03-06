@@ -14,8 +14,9 @@
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, U256};
-use alloy_provider::{network::TransactionBuilder7702, Provider as AlloyProvider};
-use alloy_rpc_types_eth::{state::StateOverride, BlockId, TransactionRequest};
+use alloy_provider::network::{AnyNetwork, TransactionBuilder7702};
+use alloy_rpc_types_eth::{state::StateOverride, BlockId};
+use alloy_serde::WithOtherFields;
 use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
 use alloy_transport::{Transport, TransportError};
 use anyhow::Context;
@@ -39,15 +40,16 @@ use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use crate::{
-    AggregatorOut, AggregatorSimOut, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasProvider,
-    DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
+    AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
+    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
+    TransactionRequest,
 };
 
 /// Entry point provider for v0.6
 #[derive(Clone)]
 pub struct EntryPointProvider<AP, T, D> {
-    i_entry_point: IEntryPointInstance<T, AP>,
+    i_entry_point: IEntryPointInstance<T, AP, AnyNetwork>,
     da_gas_oracle: D,
     max_verification_gas: u64,
     max_simulate_handle_op_gas: u64,
@@ -253,6 +255,7 @@ where
             gas_fees,
             proxy,
         );
+        let tx = WithOtherFields::new(tx);
         let res = self.i_entry_point.provider().call(&tx).await;
 
         match res {
@@ -349,7 +352,7 @@ where
             .handleOps(vec![user_op.into()], Address::random())
             .into_transaction_request();
 
-        let data = txn_request.input.into_input().unwrap();
+        let data = txn_request.inner.input.into_input().unwrap();
 
         // TODO(bundle): assuming a bundle size of 1
         let bundle_data = super::max_bundle_transaction_data(
@@ -393,7 +396,7 @@ where
             .simulateValidation(user_op.into())
             .gas(self.max_verification_gas.saturating_add(da_gas))
             .into_transaction_request();
-        Ok((call, StateOverride::default()))
+        Ok((call.inner, StateOverride::default()))
     }
 
     #[instrument(skip(self))]
@@ -554,7 +557,7 @@ where
 }
 
 fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
-    entry_point: &IEntryPointInstance<T, AP>,
+    entry_point: &IEntryPointInstance<T, AP, AnyNetwork>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     sender_eoa: Address,
     gas_limit: u64,
@@ -585,10 +588,12 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
             entry_point
                 .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
                 .into_transaction_request()
+                .inner
         } else {
             entry_point
                 .handleAggregatedOps(ops_per_aggregator, sender_eoa)
                 .into_transaction_request()
+                .inner
         };
 
     txn_request = txn_request
