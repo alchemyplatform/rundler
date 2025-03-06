@@ -507,6 +507,8 @@ message AddressUpdate {
   uint64 nonce = 2;
   // The new balance
   bytes balance = 3;
+  // The mined tx hashes
+  repeated bytes mined_tx_hashes = 4;
 }
 message AdminSetTrackingRequest {
   // The serialized entry point address via which the UserOperation is being submitted

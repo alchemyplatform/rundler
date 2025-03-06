@@ -12,7 +12,6 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{hex, Address, Bytes, B256};
-use anyhow::Context;
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
     http_client::{transport::HttpBackend, HeaderMap, HeaderValue, HttpClient, HttpClientBuilder},
@@ -26,7 +25,6 @@ use tonic::async_trait;
 
 use super::{
     create_hard_cancel_tx, CancelTxInfo, Result, SentTxInfo, TransactionSender, TxSenderError,
-    TxStatus,
 };
 use crate::signer::Signer;
 
@@ -74,21 +72,6 @@ where
             tx_hash,
             soft_cancelled: false,
         })
-    }
-
-    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus> {
-        let tx = self
-            .provider
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .context("provider should return transaction status")?;
-        // BDN transactions will not always show up in the node's transaction pool
-        // so we can't rely on this to determine if the transaction was dropped
-        // Thus, always return pending.
-        Ok(tx
-            .and_then(|tx| tx.block_number)
-            .map(|block_number| TxStatus::Mined { block_number })
-            .unwrap_or(TxStatus::Pending))
     }
 
     fn address(&self) -> Address {

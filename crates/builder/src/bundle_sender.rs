@@ -32,7 +32,7 @@ use rundler_task::TaskSpawner;
 use rundler_types::{
     builder::BundlingMode,
     chain::ChainSpec,
-    pool::{NewHead, Pool},
+    pool::{AddressUpdate, NewHead, Pool},
     proxy::SubmissionProxy,
     EntityUpdate, UserOperation,
 };
@@ -953,15 +953,23 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
                 }
 
                 self.send_bundle_response = self.trigger.wait_for_trigger().await?;
+
+                let Some(update) = self.find_address_update() else {
+                    return Ok(None);
+                };
                 self.transaction_tracker
-                    .check_for_update()
+                    .process_update(&update)
                     .await
                     .map_err(|e| anyhow::anyhow!("transaction tracker update error {e:?}"))
             }
             InnerState::Pending(..) | InnerState::CancelPending(..) => {
                 self.trigger.wait_for_block().await?;
+
+                let Some(update) = self.find_address_update() else {
+                    return Ok(None);
+                };
                 self.transaction_tracker
-                    .check_for_update()
+                    .process_update(&update)
                     .await
                     .map_err(|e| anyhow::anyhow!("transaction tracker update error {e:?}"))
             }
@@ -979,6 +987,15 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
                 error!("Failed to send bundle result to manual caller");
             }
         }
+    }
+
+    fn find_address_update(&self) -> Option<AddressUpdate> {
+        self.trigger
+            .last_block()
+            .address_updates
+            .iter()
+            .find(|u| u.address == self.transaction_tracker.address())
+            .cloned()
     }
 }
 
@@ -1396,15 +1413,17 @@ impl BuilderMetric {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{bytes, Bytes};
+    use alloy_primitives::{bytes, Bytes, U256};
     use mockall::Sequence;
     use rundler_provider::{
         GethDebugTracerCallFrame, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
         ProvidersWithEntryPoint,
     };
     use rundler_types::{
-        chain::ChainSpec, pool::MockPool, v0_6::UserOperation, GasFees, UserOperation as _,
-        UserOpsPerAggregator,
+        chain::ChainSpec,
+        pool::{AddressUpdate, MockPool},
+        v0_6::UserOperation,
+        GasFees, UserOperation as _, UserOpsPerAggregator,
     };
     use tokio::sync::{broadcast, mpsc};
 
@@ -1426,12 +1445,7 @@ mod tests {
         } = new_mocks();
 
         // block 0
-        add_trigger_no_update_last_block(
-            &mut mock_trigger,
-            &mut mock_tracker,
-            &mut Sequence::new(),
-            0,
-        );
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut Sequence::new(), 0);
 
         // zero nonce
         mock_tracker
@@ -1472,12 +1486,7 @@ mod tests {
         } = new_mocks();
 
         // block 0
-        add_trigger_no_update_last_block(
-            &mut mock_trigger,
-            &mut mock_tracker,
-            &mut Sequence::new(),
-            0,
-        );
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut Sequence::new(), 0);
 
         // zero nonce
         mock_tracker
@@ -1529,45 +1538,51 @@ mod tests {
 
         let mut seq = Sequence::new();
         add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, 1);
+
+        let new_head = NewHead {
+            block_number: 2,
+            block_hash: B256::ZERO,
+            address_updates: vec![AddressUpdate {
+                address: Address::ZERO,
+                nonce: 0,
+                balance: U256::ZERO,
+                mined_tx_hashes: vec![B256::ZERO],
+            }],
+        };
+        let new_head_clone = new_head.clone();
+
         mock_trigger
             .expect_wait_for_block()
             .once()
             .in_sequence(&mut seq)
-            .returning(|| {
-                Box::pin(async {
-                    Ok(NewHead {
-                        block_number: 2,
-                        block_hash: B256::ZERO,
-                        address_updates: vec![],
-                    })
+            .returning(move || {
+                Box::pin({
+                    let new_head = new_head_clone.clone();
+                    async move { Ok(new_head) }
                 })
             });
-        // no call to last_block after mine
+        mock_trigger
+            .expect_last_block()
+            .once()
+            .in_sequence(&mut seq)
+            .return_const(new_head);
 
-        let mut seq = Sequence::new();
-        mock_tracker
-            .expect_check_for_update()
-            .once()
-            .in_sequence(&mut seq)
-            .returning(|| Box::pin(async { Ok(None) }));
-        mock_tracker
-            .expect_check_for_update()
-            .once()
-            .in_sequence(&mut seq)
-            .returning(|| {
-                Box::pin(async {
-                    Ok(Some(TrackerUpdate::Mined {
-                        block_number: 2,
-                        nonce: 0,
-                        gas_limit: None,
-                        gas_used: None,
-                        gas_price: None,
-                        tx_hash: B256::ZERO,
-                        attempt_number: 0,
-                        is_success: true,
-                    }))
-                })
-            });
+        mock_tracker.expect_address().return_const(Address::ZERO);
+
+        mock_tracker.expect_process_update().once().returning(|_| {
+            Box::pin(async {
+                Ok(Some(TrackerUpdate::Mined {
+                    block_number: 2,
+                    nonce: 0,
+                    gas_limit: None,
+                    gas_used: None,
+                    gas_price: None,
+                    tx_hash: B256::ZERO,
+                    attempt_number: 0,
+                    is_success: true,
+                }))
+            })
+        });
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, MockPool::new());
 
@@ -1608,7 +1623,7 @@ mod tests {
         let Mocks {
             mock_proposer,
             mock_entry_point,
-            mut mock_tracker,
+            mock_tracker,
             mut mock_trigger,
             mock_evm,
         } = new_mocks();
@@ -1617,11 +1632,6 @@ mod tests {
         for i in 1..=3 {
             add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, i);
         }
-
-        mock_tracker
-            .expect_check_for_update()
-            .times(3)
-            .returning(|| Box::pin(async { Ok(None) }));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, MockPool::new());
 
@@ -1670,7 +1680,7 @@ mod tests {
         } = new_mocks();
 
         let mut seq = Sequence::new();
-        add_trigger_no_update_last_block(&mut mock_trigger, &mut mock_tracker, &mut seq, 3);
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 3);
 
         // zero nonce
         mock_tracker
@@ -1768,7 +1778,7 @@ mod tests {
         let Mocks {
             mock_proposer,
             mock_entry_point,
-            mut mock_tracker,
+            mock_tracker,
             mut mock_trigger,
             mock_evm,
         } = new_mocks();
@@ -1777,11 +1787,6 @@ mod tests {
         for i in 1..=3 {
             add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, i);
         }
-
-        mock_tracker
-            .expect_check_for_update()
-            .times(3)
-            .returning(|| Box::pin(async { Ok(None) }));
 
         let mut state = SenderMachineState {
             trigger: mock_trigger,
@@ -1828,7 +1833,7 @@ mod tests {
         } = new_mocks();
 
         let mut seq = Sequence::new();
-        add_trigger_no_update_last_block(&mut mock_trigger, &mut mock_tracker, &mut seq, 1);
+        add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 1);
 
         // zero nonce
         mock_tracker
@@ -1897,45 +1902,51 @@ mod tests {
 
         let mut seq = Sequence::new();
         add_trigger_wait_for_block_last_block(&mut mock_trigger, &mut seq, 1);
+
+        let new_head = NewHead {
+            block_number: 2,
+            block_hash: B256::ZERO,
+            address_updates: vec![AddressUpdate {
+                address: Address::ZERO,
+                nonce: 0,
+                balance: U256::ZERO,
+                mined_tx_hashes: vec![B256::ZERO],
+            }],
+        };
+        let new_head_clone = new_head.clone();
+
         mock_trigger
             .expect_wait_for_block()
             .once()
             .in_sequence(&mut seq)
-            .returning(|| {
-                Box::pin(async {
-                    Ok(NewHead {
-                        block_number: 2,
-                        block_hash: B256::ZERO,
-                        address_updates: vec![],
-                    })
+            .returning(move || {
+                Box::pin({
+                    let new_head = new_head_clone.clone();
+                    async move { Ok(new_head) }
                 })
             });
-        // no call to last_block after mine
+        mock_trigger
+            .expect_last_block()
+            .once()
+            .in_sequence(&mut seq)
+            .return_const(new_head);
 
-        let mut seq = Sequence::new();
-        mock_tracker
-            .expect_check_for_update()
-            .once()
-            .in_sequence(&mut seq)
-            .returning(|| Box::pin(async { Ok(None) }));
-        mock_tracker
-            .expect_check_for_update()
-            .once()
-            .in_sequence(&mut seq)
-            .returning(|| {
-                Box::pin(async {
-                    Ok(Some(TrackerUpdate::Mined {
-                        block_number: 2,
-                        nonce: 0,
-                        gas_limit: None,
-                        gas_used: None,
-                        gas_price: None,
-                        tx_hash: B256::ZERO,
-                        attempt_number: 0,
-                        is_success: false, // revert
-                    }))
-                })
-            });
+        mock_tracker.expect_address().return_const(Address::ZERO);
+
+        mock_tracker.expect_process_update().once().returning(|_| {
+            Box::pin(async {
+                Ok(Some(TrackerUpdate::Mined {
+                    block_number: 2,
+                    nonce: 0,
+                    gas_limit: None,
+                    gas_used: None,
+                    gas_price: None,
+                    tx_hash: B256::ZERO,
+                    attempt_number: 0,
+                    is_success: false, // revert
+                }))
+            })
+        });
 
         let input = bytes!("1234");
         let input_clone = input.clone();
@@ -2072,7 +2083,6 @@ mod tests {
 
     fn add_trigger_no_update_last_block(
         mock_trigger: &mut MockTrigger,
-        mock_tracker: &mut MockTransactionTracker,
         seq: &mut Sequence,
         block_number: u64,
     ) {
@@ -2081,9 +2091,6 @@ mod tests {
             .once()
             .in_sequence(seq)
             .returning(move || Box::pin(async move { Ok(None) }));
-        mock_tracker
-            .expect_check_for_update()
-            .returning(|| Box::pin(async { Ok(None) }));
         mock_trigger.expect_last_block().return_const(NewHead {
             block_number,
             block_hash: B256::ZERO,
@@ -2109,15 +2116,20 @@ mod tests {
                     })
                 })
             });
-        mock_trigger
-            .expect_last_block()
-            .once()
-            .in_sequence(seq)
-            .return_const(NewHead {
-                block_number,
-                block_hash: B256::ZERO,
-                address_updates: vec![],
-            });
+
+        // this gets called twice after a trigger
+        for _ in 0..2 {
+            mock_trigger
+                .expect_last_block()
+                .once()
+                .in_sequence(seq)
+                .return_const(NewHead {
+                    block_number,
+                    block_hash: B256::ZERO,
+                    address_updates: vec![],
+                });
+        }
+
         mock_trigger
             .expect_builder_must_wait_for_trigger()
             .return_const(false);

@@ -149,17 +149,6 @@ pub struct BuilderArgs {
     )]
     pub submit_url: Option<String>,
 
-    /// If true, use the submit endpoint for transaction status checks.
-    ///
-    /// Only used when BUILDER_SENDER is "raw"
-    #[arg(
-        long = "builder.use_submit_for_status",
-        name = "builder.use_submit_for_status",
-        env = "BUILDER_USE_SUBMIT_FOR_STATUS",
-        default_value = "false"
-    )]
-    pub use_submit_for_status: bool,
-
     /// Use the conditional RPC endpoint for transaction submission.
     ///
     /// Only used when BUILDER_SENDER is "raw"
@@ -170,17 +159,6 @@ pub struct BuilderArgs {
         default_value = "false"
     )]
     pub use_conditional_rpc: bool,
-
-    /// If the "dropped" status is unsupported by the status provider.
-    ///
-    /// Only used when BUILDER_SENDER is "raw"
-    #[arg(
-        long = "builder.dropped_status_unsupported",
-        name = "builder.dropped_status_unsupported",
-        env = "BUILDER_DROPPED_STATUS_UNSUPPORTED",
-        default_value = "false"
-    )]
-    pub dropped_status_unsupported: bool,
 
     /// A list of builders to pass into the Flashbots Relay RPC.
     ///
@@ -399,8 +377,6 @@ impl BuilderArgs {
         match self.sender_type {
             TransactionSenderKind::Raw => Ok(TransactionSenderArgs::Raw(RawSenderArgs {
                 submit_url: self.submit_url.clone().unwrap_or_else(|| rpc_url.into()),
-                use_submit_for_status: self.use_submit_for_status,
-                dropped_status_supported: !self.dropped_status_unsupported,
                 use_conditional_rpc: self.use_conditional_rpc,
             })),
             TransactionSenderKind::Flashbots => {
@@ -414,9 +390,6 @@ impl BuilderArgs {
                         .flashbots_relay_url
                         .clone()
                         .context("should have a relay URL (chain spec: flashbots_relay_url)")?,
-                    status_url: chain_spec.flashbots_status_url.clone().context(
-                        "should have a flashbots status URL (chain spec: flashbots_status_url)",
-                    )?,
                     auth_key: self.flashbots_relay_auth_key.clone().context(
                         "should have a flashbots relay auth key (cli: flashbots_relay_auth_key)",
                     )?,
