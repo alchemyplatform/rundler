@@ -42,13 +42,6 @@ pub(crate) struct CancelTxInfo {
     pub(crate) soft_cancelled: bool,
 }
 
-#[derive(Debug)]
-pub(crate) enum TxStatus {
-    Pending,
-    Mined { block_number: u64 },
-    Dropped,
-}
-
 /// Errors from transaction senders
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TxSenderError {
@@ -97,15 +90,13 @@ pub(crate) trait TransactionSender: Send + Sync {
         gas_fees: GasFees,
     ) -> Result<CancelTxInfo>;
 
-    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus>;
-
     fn address(&self) -> Address;
 }
 
 #[enum_dispatch]
 pub(crate) enum TransactionSenderEnum<P: EvmProvider, S: Signer> {
     Raw(RawTransactionSender<P, S>),
-    Flashbots(FlashbotsTransactionSender<P, S>),
+    Flashbots(FlashbotsTransactionSender<S>),
     PolygonBloxroute(PolygonBloxrouteTransactionSender<P, S>),
 }
 
@@ -137,10 +128,6 @@ pub enum TransactionSenderArgs {
 pub struct RawSenderArgs {
     /// Submit URL
     pub submit_url: String,
-    /// Use submit for status
-    pub use_submit_for_status: bool,
-    /// If the "dropped" status is supported by the status provider
-    pub dropped_status_supported: bool,
     /// If the sender should use the conditional endpoint
     pub use_conditional_rpc: bool,
 }
@@ -159,8 +146,6 @@ pub struct FlashbotsSenderArgs {
     pub builders: Vec<String>,
     /// Flashbots relay URL
     pub relay_url: String,
-    /// Flashbots protect tx status URL (NOTE: must end in "/")
-    pub status_url: String,
     /// Auth Key
     pub auth_key: String,
 }
@@ -182,32 +167,18 @@ impl TransactionSenderArgs {
                     provider_client_timeout_seconds,
                 )?;
 
-                if args.use_submit_for_status {
-                    TransactionSenderEnum::Raw(RawTransactionSender::new(
-                        submitter.clone(),
-                        submitter,
-                        signer,
-                        args.dropped_status_supported,
-                        args.use_conditional_rpc,
-                    ))
-                } else {
-                    TransactionSenderEnum::Raw(RawTransactionSender::new(
-                        submitter,
-                        provider,
-                        signer,
-                        args.dropped_status_supported,
-                        args.use_conditional_rpc,
-                    ))
-                }
+                TransactionSenderEnum::Raw(RawTransactionSender::new(
+                    submitter,
+                    signer,
+                    args.use_conditional_rpc,
+                ))
             }
             Self::Flashbots(args) => {
                 TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(
-                    provider,
                     signer,
                     args.auth_key,
                     args.builders,
                     args.relay_url,
-                    args.status_url,
                 )?)
             }
             Self::Bloxroute(args) => TransactionSenderEnum::PolygonBloxroute(

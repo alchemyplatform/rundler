@@ -568,6 +568,11 @@ impl TryFrom<AddressUpdate> for PoolAddressUpdate {
             address: from_bytes(&update.address)?,
             nonce: update.nonce,
             balance: from_bytes(&update.balance)?,
+            mined_tx_hashes: update
+                .mined_tx_hashes
+                .into_iter()
+                .map(|h| from_bytes(&h))
+                .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
@@ -578,6 +583,11 @@ impl From<PoolAddressUpdate> for AddressUpdate {
             address: update.address.to_proto_bytes(),
             nonce: update.nonce,
             balance: update.balance.to_proto_bytes(),
+            mined_tx_hashes: update
+                .mined_tx_hashes
+                .into_iter()
+                .map(|h| h.to_proto_bytes())
+                .collect(),
         }
     }
 }

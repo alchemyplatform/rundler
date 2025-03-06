@@ -12,7 +12,6 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, B256};
-use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_sim::ExpectedStorage;
@@ -21,16 +20,14 @@ use serde_json::json;
 
 use super::{CancelTxInfo, Result};
 use crate::{
-    sender::{create_hard_cancel_tx, SentTxInfo, TransactionSender, TxStatus},
+    sender::{create_hard_cancel_tx, SentTxInfo, TransactionSender},
     signer::Signer,
 };
 
 #[derive(Debug)]
 pub(crate) struct RawTransactionSender<P, S> {
     submit_provider: P,
-    status_provider: P,
     signer: S,
-    dropped_status_supported: bool,
     use_conditional_rpc: bool,
 }
 
@@ -84,45 +81,16 @@ where
         })
     }
 
-    async fn get_transaction_status(&self, tx_hash: B256) -> Result<TxStatus> {
-        let tx = self
-            .status_provider
-            .get_transaction_by_hash(tx_hash)
-            .await
-            .context("provider should return transaction status")?;
-        Ok(match tx {
-            None => {
-                if self.dropped_status_supported {
-                    TxStatus::Dropped
-                } else {
-                    TxStatus::Pending
-                }
-            }
-            Some(tx) => match tx.block_number {
-                None => TxStatus::Pending,
-                Some(block_number) => TxStatus::Mined { block_number },
-            },
-        })
-    }
-
     fn address(&self) -> Address {
         self.signer.address()
     }
 }
 
 impl<P, S> RawTransactionSender<P, S> {
-    pub(crate) fn new(
-        submit_provider: P,
-        status_provider: P,
-        signer: S,
-        dropped_status_supported: bool,
-        use_conditional_rpc: bool,
-    ) -> Self {
+    pub(crate) fn new(submit_provider: P, signer: S, use_conditional_rpc: bool) -> Self {
         Self {
             submit_provider,
-            status_provider,
             signer,
-            dropped_status_supported,
             use_conditional_rpc,
         }
     }

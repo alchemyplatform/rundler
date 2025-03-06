@@ -17,6 +17,7 @@ use std::{
     time::Duration,
 };
 
+use alloy_network_primitives::TransactionResponse;
 use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::{bail, ensure, Context};
@@ -364,12 +365,22 @@ impl<P: EvmProvider> Chain<P> {
             .iter()
             .flat_map(|block| &block.address_updates)
             .for_each(|update| {
-                let latest_update = address_updates
-                    .entry(&update.address)
-                    .or_insert(update.clone());
+                let latest_update =
+                    address_updates
+                        .entry(&update.address)
+                        .or_insert(AddressUpdate {
+                            address: update.address,
+                            nonce: update.nonce,
+                            balance: update.balance,
+                            mined_tx_hashes: vec![],
+                        });
                 if update.nonce > latest_update.nonce {
-                    *latest_update = update.clone();
+                    latest_update.nonce = update.nonce;
+                    latest_update.balance = update.balance;
                 }
+                latest_update
+                    .mined_tx_hashes
+                    .extend(update.mined_tx_hashes.iter());
             });
         let address_updates = address_updates.into_values().collect();
 
@@ -573,10 +584,16 @@ impl<P: EvmProvider> Chain<P> {
         for tx in block.transactions.txns() {
             if self.to_track.read().contains(&tx.from) {
                 let nonce = tx.nonce();
-                let latest_nonce = updates.entry(tx.from).or_insert(nonce);
-                if nonce > *latest_nonce {
-                    *latest_nonce = nonce;
+                let update = updates.entry(tx.from).or_insert(AddressUpdate {
+                    address: tx.from,
+                    nonce,
+                    balance: U256::ZERO, // placeholder
+                    mined_tx_hashes: vec![],
+                });
+                if nonce > update.nonce {
+                    update.nonce = nonce;
                 }
+                update.mined_tx_hashes.push(tx.inner.tx_hash());
             }
         }
 
@@ -592,12 +609,11 @@ impl<P: EvmProvider> Chain<P> {
         );
 
         Ok(updates
-            .into_iter()
+            .into_values()
             .zip(balances.into_iter())
-            .map(|((address, nonce), balance)| AddressUpdate {
-                address,
-                nonce,
-                balance,
+            .map(|(mut update, balance)| {
+                update.balance = balance;
+                update
             })
             .collect())
     }
@@ -1620,6 +1636,8 @@ mod tests {
         });
 
         let txns = vec![make_transaction(addr(0), 0)];
+        let tx_hashes = vec![txns[0].tx_hash()];
+
         controller.set_blocks(vec![MockBlock::new(hash(0)).add_txns(txns)]);
         controller.set_balances(HashMap::from([(addr(0), U256::from(100))]));
 
@@ -1640,6 +1658,7 @@ mod tests {
                     address: addr(0),
                     nonce: 0,
                     balance: U256::from(100),
+                    mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
             }
@@ -1661,10 +1680,11 @@ mod tests {
 
         let txns0 = vec![make_transaction(addr(0), 0)];
         let txns1 = vec![make_transaction(addr(0), 1)];
+        let tx_hashes = vec![txns0[0].tx_hash(), txns1[0].tx_hash()];
 
         controller.set_blocks(vec![
-            MockBlock::new(hash(0)).add_txns(txns0),
-            MockBlock::new(hash(1)).add_txns(txns1),
+            MockBlock::new(hash(1)).add_txns(txns0), // this is a reorg block
+            MockBlock::new(hash(2)).add_txns(txns1),
         ]);
         controller.set_balances(HashMap::from([(addr(0), U256::from(100))]));
 
@@ -1673,10 +1693,10 @@ mod tests {
             update,
             ChainUpdate {
                 latest_block_number: 1,
-                latest_block_hash: hash(1),
+                latest_block_hash: hash(2),
                 latest_block_timestamp: 0.into(),
                 earliest_remembered_block_number: 0,
-                reorg_depth: 0,
+                reorg_depth: 1,
                 mined_ops: vec![],
                 unmined_ops: vec![],
                 entity_balance_updates: vec![],
@@ -1685,6 +1705,7 @@ mod tests {
                     address: addr(0),
                     nonce: 1,
                     balance: U256::from(100),
+                    mined_tx_hashes: tx_hashes,
                 }],
                 reorg_larger_than_history: false,
             }

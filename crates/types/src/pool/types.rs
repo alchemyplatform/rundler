@@ -39,6 +39,8 @@ pub struct AddressUpdate {
     pub nonce: u64,
     /// The new balance for the address
     pub balance: U256,
+    /// Mined transaction hashes
+    pub mined_tx_hashes: Vec<B256>,
 }
 
 /// The reputation of an entity

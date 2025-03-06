@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_consensus::Transaction;
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use metrics::{Gauge, Histogram};
@@ -21,11 +21,11 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_sim::ExpectedStorage;
-use rundler_types::GasFees;
+use rundler_types::{pool::AddressUpdate, GasFees};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
-use crate::sender::{TransactionSender, TxSenderError, TxStatus};
+use crate::sender::{TransactionSender, TxSenderError};
 
 /// Keeps track of pending transactions in order to suggest nonces and
 /// replacement fees and ensure that transactions do not get stalled. All sent
@@ -69,7 +69,10 @@ pub(crate) trait TransactionTracker: Send + Sync {
     ///    that a transaction from our account other than one of the ones we are
     ///    tracking has mined. This should not normally happen.
     /// 4. Several new blocks have passed.
-    async fn check_for_update(&mut self) -> TransactionTrackerResult<Option<TrackerUpdate>>;
+    async fn process_update(
+        &mut self,
+        update: &AddressUpdate,
+    ) -> TransactionTrackerResult<Option<TrackerUpdate>>;
 
     /// Resets the tracker to its initial state
     async fn reset(&mut self);
@@ -80,6 +83,9 @@ pub(crate) trait TransactionTracker: Send + Sync {
 
     /// Un-abandons the current transaction
     fn unabandon(&mut self);
+
+    /// Returns the address of the account being tracked
+    fn address(&self) -> Address;
 }
 
 /// Errors that can occur while using a `TransactionTracker`.
@@ -241,31 +247,38 @@ where
         }
     }
 
-    async fn get_mined_tx_gas_info(
-        &self,
-        tx_hash: B256,
-    ) -> anyhow::Result<(Option<u64>, Option<u128>, Option<u128>, bool)> {
+    async fn get_mined_tx_info(&self, tx_hash: B256) -> anyhow::Result<MinedTxInfo> {
         let (tx, tx_receipt) = tokio::try_join!(
             self.provider.get_transaction_by_hash(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
         )?;
         let gas_limit = tx.map(|t| t.inner.gas_limit()).or_else(|| {
-            warn!("failed to fetch transaction data for tx: {}", tx_hash);
+            warn!("failed to find transaction data for tx: {}", tx_hash);
             None
         });
-        let (gas_used, gas_price, is_success) = match tx_receipt {
-            Some(r) => (
-                Some(r.gas_used),
-                Some(r.effective_gas_price),
-                r.inner.status(),
-            ),
+        match tx_receipt {
+            Some(r) => Ok(MinedTxInfo {
+                block_number: r.block_number.unwrap_or(0),
+                gas_limit,
+                gas_used: Some(r.gas_used),
+                gas_price: Some(r.effective_gas_price),
+                is_success: r.inner.status(),
+            }),
             None => {
-                warn!("failed to fetch transaction receipt for tx: {}", tx_hash);
-                (None, None, false)
+                warn!("failed to find transaction receipt for tx: {}", tx_hash);
+                Ok(MinedTxInfo::default())
             }
-        };
-        Ok((gas_limit, gas_used, gas_price, is_success))
+        }
     }
+}
+
+#[derive(Debug, Default)]
+struct MinedTxInfo {
+    block_number: u64,
+    gas_limit: Option<u64>,
+    gas_used: Option<u128>,
+    gas_price: Option<u128>,
+    is_success: bool,
 }
 
 #[async_trait]
@@ -274,6 +287,10 @@ where
     P: EvmProvider,
     T: TransactionSender,
 {
+    fn address(&self) -> Address {
+        self.sender.address()
+    }
+
     fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(u64, Option<GasFees>)> {
         let gas_fees = if self.has_abandoned {
             None
@@ -436,93 +453,52 @@ where
         }
     }
 
-    async fn check_for_update(&mut self) -> TransactionTrackerResult<Option<TrackerUpdate>> {
-        let external_nonce = self.get_external_nonce().await?;
-        if self.nonce < external_nonce {
-            // The nonce has changed. Check to see which of our transactions has
-            // mined, if any.
-            info!(
-                "Nonce has changed from {:?} to {:?}",
-                self.nonce, external_nonce
-            );
+    async fn process_update(
+        &mut self,
+        update: &AddressUpdate,
+    ) -> TransactionTrackerResult<Option<TrackerUpdate>> {
+        if self.nonce > update.nonce {
+            return Ok(None);
+        }
 
-            let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
-            for tx in self.transactions.iter().rev() {
-                let status = self
-                    .sender
-                    .get_transaction_status(tx.tx_hash)
-                    .await
-                    .context("tracker should check transaction status when the nonce changes")?;
-                info!("Status of tx {:?}: {:?}", tx.tx_hash, status);
-                if let TxStatus::Mined { block_number } = status {
-                    let (gas_limit, gas_used, gas_price, is_success) =
-                        self.get_mined_tx_gas_info(tx.tx_hash).await?;
-                    out = TrackerUpdate::Mined {
-                        tx_hash: tx.tx_hash,
-                        nonce: self.nonce,
-                        block_number,
-                        attempt_number: tx.attempt_number,
-                        gas_limit,
-                        gas_used,
-                        gas_price,
-                        is_success,
-                    };
+        // The nonce has changed. Check to see which of our transactions has
+        // mined, if any.
+        info!(
+            "Nonce has changed from {:?} to {:?}",
+            self.nonce,
+            update.nonce + 1
+        );
 
-                    if let Some(sent_at_time) = tx.sent_at_time {
-                        let elapsed = Instant::now().duration_since(sent_at_time);
-                        self.metrics
-                            .txn_time_to_mine_ms
-                            .record(elapsed.as_millis() as f64);
-                    }
-                    if let Some(sent_at_block) = tx.sent_at_block {
-                        self.metrics
-                            .txn_blocks_to_mine
-                            .record((block_number - sent_at_block) as f64);
-                    }
+        let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
+        for tx in self.transactions.iter().rev() {
+            if update.mined_tx_hashes.contains(&tx.tx_hash) {
+                let mined_tx_info = self.get_mined_tx_info(tx.tx_hash).await?;
+                out = TrackerUpdate::Mined {
+                    tx_hash: tx.tx_hash,
+                    nonce: self.nonce,
+                    block_number: mined_tx_info.block_number,
+                    attempt_number: tx.attempt_number,
+                    gas_limit: mined_tx_info.gas_limit,
+                    gas_used: mined_tx_info.gas_used,
+                    gas_price: mined_tx_info.gas_price,
+                    is_success: mined_tx_info.is_success,
+                };
 
-                    break;
+                if let Some(sent_at_time) = tx.sent_at_time {
+                    let elapsed = Instant::now().duration_since(sent_at_time);
+                    self.metrics
+                        .txn_time_to_mine_ms
+                        .record(elapsed.as_millis() as f64);
+                }
+                if let Some(sent_at_block) = tx.sent_at_block {
+                    self.metrics
+                        .txn_blocks_to_mine
+                        .record((mined_tx_info.block_number - sent_at_block) as f64);
                 }
             }
-            self.set_nonce_and_clear_state(external_nonce);
-            return Ok(Some(out));
         }
-
-        let Some(&last_tx) = self.transactions.last() else {
-            // If there are no pending transactions, there's no update either.
-            return Ok(None);
-        };
-
-        if last_tx.tx_hash == B256::ZERO {
-            // If the last transaction was a replacement that failed to send, we
-            // don't need to check for updates.
-            return Ok(None);
-        }
-
-        let status = self
-            .sender
-            .get_transaction_status(last_tx.tx_hash)
-            .await
-            .context("tracker should check for transaction status")?;
-        Ok(match status {
-            TxStatus::Pending => None,
-            TxStatus::Mined { block_number } => {
-                let nonce = self.nonce;
-                self.set_nonce_and_clear_state(nonce + 1);
-                let (gas_limit, gas_used, gas_price, is_success) =
-                    self.get_mined_tx_gas_info(last_tx.tx_hash).await?;
-                Some(TrackerUpdate::Mined {
-                    tx_hash: last_tx.tx_hash,
-                    nonce,
-                    block_number,
-                    attempt_number: last_tx.attempt_number,
-                    gas_limit,
-                    gas_used,
-                    gas_price,
-                    is_success,
-                })
-            }
-            TxStatus::Dropped => Some(TrackerUpdate::LatestTxDropped { nonce: self.nonce }),
-        })
+        self.set_nonce_and_clear_state(update.nonce + 1); // +1 to account for the new nonce
+        return Ok(Some(out));
     }
 
     async fn reset(&mut self) {
@@ -585,8 +561,7 @@ struct TransactionTrackerMetrics {
 #[cfg(test)]
 mod tests {
     use alloy_consensus::{Signed, TxEip1559, TxEnvelope::Eip1559};
-    use alloy_primitives::{Address, PrimitiveSignature};
-    use mockall::Sequence;
+    use alloy_primitives::{Address, PrimitiveSignature, U256};
     use rundler_provider::{
         AnyReceiptEnvelope, AnyTxEnvelope, MockEvmProvider, ReceiptWithBloom, Transaction,
         TransactionReceipt,
@@ -664,10 +639,6 @@ mod tests {
         let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::ZERO);
 
-        sender
-            .expect_get_transaction_status()
-            .returning(move |_a| Box::pin(async { Ok(TxStatus::Pending) }));
-
         sender.expect_send_transaction().returning(move |_a, _b| {
             Box::pin(async {
                 Ok(SentTxInfo {
@@ -691,7 +662,6 @@ mod tests {
 
         // send dummy transaction
         let _sent = tracker.send_transaction(tx, &exp, 0).await;
-        let _tracker_update = tracker.check_for_update().await.unwrap();
 
         tracker.abandon();
 
@@ -782,18 +752,20 @@ mod tests {
         let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::ZERO);
 
-        let mut provider_seq = Sequence::new();
-        for transaction_count in 0..=1 {
-            provider
-                .expect_get_transaction_count()
-                .returning(move |_a| Ok(transaction_count))
-                .times(1)
-                .in_sequence(&mut provider_seq);
-        }
+        provider
+            .expect_get_transaction_count()
+            .returning(move |_a| Ok(0))
+            .times(1);
 
         let mut tracker = create_tracker(sender, provider).await;
+        let update = AddressUpdate {
+            address: Address::ZERO,
+            nonce: 1,
+            mined_tx_hashes: vec![],
+            balance: U256::ZERO,
+        };
 
-        let tracker_update = tracker.check_for_update().await.unwrap().unwrap();
+        let tracker_update = tracker.process_update(&update).await.unwrap().unwrap();
 
         assert!(matches!(
             tracker_update,
@@ -823,21 +795,15 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn test_check_for_update_mined() {
+    async fn test_process_update_mined() {
         let (mut sender, mut provider) = create_base_config();
         sender.expect_address().return_const(Address::ZERO);
-        sender
-            .expect_get_transaction_status()
-            .returning(move |_a| Box::pin(async { Ok(TxStatus::Mined { block_number: 1 }) }));
 
-        sender.expect_send_transaction().returning(move |_a, _b| {
-            Box::pin(async {
-                Ok(SentTxInfo {
-                    nonce: 0,
-                    tx_hash: B256::random(),
-                })
-            })
-        });
+        let tx_hash = B256::random();
+
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b| Box::pin(async move { Ok(SentTxInfo { nonce: 0, tx_hash }) }));
 
         provider
             .expect_get_transaction_count()
@@ -877,7 +843,14 @@ mod tests {
 
         // send dummy transaction
         let _sent = tracker.send_transaction(tx, &exp, 0).await;
-        let tracker_update = tracker.check_for_update().await.unwrap().unwrap();
+        let update = AddressUpdate {
+            address: Address::ZERO,
+            nonce: 0,
+            mined_tx_hashes: vec![tx_hash],
+            balance: U256::ZERO,
+        };
+
+        let tracker_update = tracker.process_update(&update).await.unwrap().unwrap();
 
         assert!(matches!(tracker_update, TrackerUpdate::Mined { .. }));
     }

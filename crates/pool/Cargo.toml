@@ -15,6 +15,7 @@ rundler-task.workspace = true
 rundler-types.workspace = true
 rundler-utils.workspace = true
 
+alloy-network-primitives.workspace = true
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
 
