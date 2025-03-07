@@ -122,7 +122,7 @@ impl<P> FeeOracle for UsageBasedFeeOracle<P>
 where
     P: EvmProvider,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let fee_history = self
             .provider
@@ -208,7 +208,7 @@ impl<P> FeeOracle for FeeHistoryOracle<P>
 where
     P: EvmProvider,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let fee_history = self
             .provider
@@ -281,7 +281,7 @@ impl<P> FeeOracle for ProviderOracle<P>
 where
     P: EvmProvider,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         Ok(self
             .provider
@@ -309,7 +309,7 @@ impl<'a> MaxOracle<'a> {
 
 #[async_trait::async_trait]
 impl FeeOracle for MaxOracle<'_> {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         let futures = self
             .oracles
@@ -339,7 +339,7 @@ impl ConstantOracle {
 
 #[async_trait::async_trait]
 impl FeeOracle for ConstantOracle {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_priority_fee(&self) -> Result<u128> {
         Ok(self.fee)
     }
