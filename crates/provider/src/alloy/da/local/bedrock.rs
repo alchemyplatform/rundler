@@ -72,7 +72,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_da_gas(
         &self,
         data: Bytes,
@@ -94,7 +94,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
@@ -107,7 +107,7 @@ where
         }
     }
 
-    #[instrument(skip(self, uo_data))]
+    #[instrument(skip_all)]
     async fn uo_data(
         &self,
         uo_data: Bytes,
@@ -150,7 +150,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn is_fjord(&self) -> bool {
         self.oracle
             .isFjord()
@@ -161,7 +161,7 @@ where
             .unwrap_or(true) // Fail-open. Assume fjord if we can't check, so this can be used downstream in asserts w/o panic on RPC errors.
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_block_data(
         &self,
         block: BlockHashOrNumber,
@@ -235,7 +235,7 @@ where
         })
     }
 
-    #[instrument(skip(self, data))]
+    #[instrument(skip_all)]
     async fn get_uo_data(&self, data: Bytes) -> ProviderResult<BedrockDAGasUOData> {
         // Blocking call compressing potentially a lot of data.
         // Generally takes more than 100µs so should be spawned on blocking threadpool.

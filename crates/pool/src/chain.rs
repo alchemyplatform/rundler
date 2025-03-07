@@ -228,7 +228,7 @@ impl<P: EvmProvider> Chain<P> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn wait_for_update(&mut self) -> ChainUpdate {
         let mut block_hash = self
             .blocks
@@ -268,7 +268,7 @@ impl<P: EvmProvider> Chain<P> {
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn sync_to_block(&mut self, new_head: Block) -> anyhow::Result<ChainUpdate> {
         let Some(current_block) = self.blocks.back() else {
             return self.reset_and_initialize(new_head).await;
@@ -428,7 +428,7 @@ impl<P: EvmProvider> Chain<P> {
         )
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn load_added_blocks_connecting_to_existing_chain(
         &self,
         current_block_number: u64,
@@ -507,7 +507,7 @@ impl<P: EvmProvider> Chain<P> {
         None
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn load_blocks_back_to_number(
         &self,
         head: Block,
@@ -540,7 +540,7 @@ impl<P: EvmProvider> Chain<P> {
         Ok(blocks)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn load_block_summaries(
         &self,
         blocks: &VecDeque<Block>,
@@ -555,7 +555,7 @@ impl<P: EvmProvider> Chain<P> {
             .map(VecDeque::from)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn load_block_summary(&self, block: &Block) -> anyhow::Result<BlockSummary> {
         let _permit = self
             .load_ops_semaphore

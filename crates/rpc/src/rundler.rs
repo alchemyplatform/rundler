@@ -70,7 +70,7 @@ where
     P: Pool + 'static,
     F: FeeEstimator + 'static,
 {
-    #[instrument(name = "RundlerApiServer::max_priority_fee_per_gas", skip(self))]
+    #[instrument(skip_all)]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
@@ -110,7 +110,7 @@ where
             fee_estimator,
         }
     }
-    #[instrument(name = "RundlerApi::max_priority_fee_per_gas", skip(self))]
+    #[instrument(skip_all)]
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator

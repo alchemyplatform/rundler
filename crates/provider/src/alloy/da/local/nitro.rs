@@ -56,7 +56,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_da_gas(
         &self,
         data: Bytes,
@@ -105,7 +105,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
@@ -118,7 +118,7 @@ where
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn uo_data(
         &self,
         uo_data: Bytes,

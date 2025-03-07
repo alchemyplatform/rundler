@@ -87,7 +87,7 @@ where
         Ok(self.inner.raw_request(method.into(), params).await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn fee_history(
         &self,
         block_count: u64,
@@ -100,7 +100,7 @@ where
             .await?)
     }
 
-    #[instrument(skip(self, state_overrides))]
+    #[instrument(skip_all)]
     async fn call(
         &self,
         tx: &TransactionRequest,
@@ -117,12 +117,12 @@ where
         Ok(call.await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_block_number(&self) -> ProviderResult<u64> {
         Ok(self.inner.get_block_number().await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>> {
         Ok(self
             .inner
@@ -140,7 +140,7 @@ where
             .map(|b| b.inner))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_balance(&self, address: Address, block: Option<BlockId>) -> ProviderResult<U256> {
         let mut call = self.inner.get_balance(address);
         if let Some(block) = block {
@@ -150,7 +150,7 @@ where
         Ok(call.await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_transaction_by_hash(&self, tx: TxHash) -> ProviderResult<Option<Transaction>> {
         Ok(self
             .inner
@@ -159,7 +159,7 @@ where
             .map(|t| t.inner))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_transaction_receipt(
         &self,
         tx: TxHash,
@@ -171,7 +171,7 @@ where
             .map(|t| t.inner))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_latest_block_hash_and_number(&self) -> ProviderResult<(B256, u64)> {
         let latest_block = EvmProvider::get_block(self, BlockId::latest())
             .await?
@@ -179,7 +179,7 @@ where
         Ok((latest_block.header.hash, latest_block.header.number))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_pending_base_fee(&self) -> ProviderResult<u128> {
         let fee_history = self.fee_history(1, BlockNumberOrTag::Latest, &[]).await?;
         Ok(fee_history
@@ -187,12 +187,12 @@ where
             .context("should have a next block base fee")?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_max_priority_fee(&self) -> ProviderResult<u128> {
         Ok(self.inner.get_max_priority_fee_per_gas().await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_code(&self, address: Address, block: Option<BlockId>) -> ProviderResult<Bytes> {
         let mut call = self.inner.get_code_at(address);
         if let Some(block) = block {
@@ -202,17 +202,17 @@ where
         Ok(call.await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_transaction_count(&self, address: Address) -> ProviderResult<u64> {
         Ok(self.inner.get_transaction_count(address).await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_logs(&self, filter: &Filter) -> ProviderResult<Vec<Log>> {
         Ok(self.inner.get_logs(filter).await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn debug_trace_transaction(
         &self,
         tx_hash: TxHash,
@@ -224,7 +224,7 @@ where
             .await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn debug_trace_call(
         &self,
         tx: TransactionRequest,
@@ -241,7 +241,7 @@ where
         Ok(call.await?)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_gas_used(&self, call: EvmCall) -> ProviderResult<GasUsedResult> {
         let EvmCall {
             to,
@@ -269,7 +269,7 @@ where
         Ok(ret)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn batch_get_storage_at(
         &self,
         address: Address,
@@ -314,7 +314,7 @@ where
             .unwrap())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_code_hash(
         &self,
         mut addresses: Vec<Address>,
