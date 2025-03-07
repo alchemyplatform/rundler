@@ -47,7 +47,7 @@ where
         .await
     }
 
-    #[instrument(name = "EthApiServer::estimate_user_operation_gas", skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_user_operation_gas(
         &self,
         op: RpcUserOperationOptionalGas,

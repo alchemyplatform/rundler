@@ -59,7 +59,7 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_da_gas(
         &self,
         data: Bytes,
