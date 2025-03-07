@@ -70,7 +70,7 @@ where
     P: Pool + 'static,
     F: FeeEstimator + 'static,
 {
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(rpc_method = "rundler_maxPriorityFeePerGas"))]
     async fn max_priority_fee_per_gas(&self) -> RpcResult<U128> {
         utils::safe_call_rpc_handler(
             "rundler_maxPriorityFeePerGas",
@@ -79,6 +79,7 @@ where
         .await
     }
 
+    #[instrument(skip_all, fields(rpc_method = "rundler_dropLocalUserOperation"))]
     async fn drop_local_user_operation(
         &self,
         user_op: RpcUserOperation,
