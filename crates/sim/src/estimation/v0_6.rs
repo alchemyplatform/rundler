@@ -66,7 +66,7 @@ where
 {
     type UserOperationOptionalGas = UserOperationOptionalGas;
 
-    #[instrument(skip(self, state_override))]
+    #[instrument(skip_all)]
     async fn estimate_op_gas(
         &self,
         op: UserOperationOptionalGas,

@@ -170,7 +170,7 @@ where
 {
     type UO = UO;
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn check(
         &self,
         op: &Self::UO,
@@ -190,7 +190,7 @@ where
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn update_fees(&self) -> anyhow::Result<FeeUpdate> {
         let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
         let uo_fees = self.fee_estimator.required_op_fees(bundle_fees);
@@ -372,7 +372,7 @@ where
         None
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn load_async_data(
         &self,
         op: &UO,
@@ -404,7 +404,7 @@ where
         })
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn is_contract(&self, address: Option<Address>) -> anyhow::Result<bool> {
         let Some(address) = address else {
             return Ok(false);
@@ -417,14 +417,14 @@ where
         Ok(!bytecode.is_empty())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_payer_funds(&self, op: &UO) -> anyhow::Result<U256> {
         let (deposit, balance) =
             tokio::try_join!(self.get_payer_deposit(op), self.get_payer_balance(op),)?;
         Ok(deposit + balance)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_payer_deposit(&self, op: &UO) -> anyhow::Result<U256> {
         let payer = match op.paymaster() {
             Some(paymaster) => paymaster,
@@ -436,7 +436,7 @@ where
             .context("precheck should get payer balance")
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_payer_balance(&self, op: &UO) -> anyhow::Result<U256> {
         if op.paymaster().is_some() {
             // Paymasters must deposit eth, and cannot pay with their own.
@@ -448,7 +448,7 @@ where
             .context("precheck should get sender balance")
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_fees(&self) -> anyhow::Result<FeeUpdate> {
         if let Some(fees) = self.cache.read().unwrap().fees {
             return Ok(fees);
@@ -456,7 +456,7 @@ where
         self.update_fees().await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_required_pre_verification_gas(
         &self,
         op: UO,
