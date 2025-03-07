@@ -621,6 +621,8 @@ impl From<UserOperationPermissions> for RundlerUserOperationPermissions {
             max_allowed_in_pool_for_sender: permissions
                 .max_allowed_in_pool_for_sender
                 .map(|c| c as usize),
+            underpriced_accept_pct: permissions.underpriced_accept_pct,
+            underpriced_bundle_pct: permissions.underpriced_bundle_pct,
         }
     }
 }
@@ -632,6 +634,8 @@ impl From<RundlerUserOperationPermissions> for UserOperationPermissions {
             max_allowed_in_pool_for_sender: permissions
                 .max_allowed_in_pool_for_sender
                 .map(|c| c as u64),
+            underpriced_accept_pct: permissions.underpriced_accept_pct,
+            underpriced_bundle_pct: permissions.underpriced_bundle_pct,
         }
     }
 }

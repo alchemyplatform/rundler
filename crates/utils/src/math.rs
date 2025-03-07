@@ -68,6 +68,14 @@ where
     (n * T::from(percent)) / T::from(100)
 }
 
+/// Take a percentage of a number, rounding up
+pub fn percent_ceil<T>(n: T, percent: u32) -> T
+where
+    T: Add<Output = T> + Mul<Output = T> + Div<Output = T> + From<u32>,
+{
+    (n * T::from(percent) + T::from(99)) / T::from(100)
+}
+
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
@@ -105,5 +113,10 @@ mod tests {
     #[test]
     fn test_percent() {
         assert_eq!(percent(3123_u32, 10), 312);
+    }
+
+    #[test]
+    fn test_percent_ceil() {
+        assert_eq!(percent_ceil(3123_u32, 10), 313);
     }
 }
