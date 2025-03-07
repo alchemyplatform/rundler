@@ -148,7 +148,8 @@ Rundler specific methods that are not specified by the ERC-4337 spec. This names
 | Method | Supported |
 | ------ | :-----------: |
 | [`rundler_maxPriorityFeePerGas`](#rundler_maxpriorityfeepergas) | ✅ |
-| [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation) | ✅ | 
+| [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation) | ✅ |
+| [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation) | ✅ |
 
 #### `rundler_maxPriorityFeePerGas`
 
@@ -217,6 +218,44 @@ Drops a user operation from the local mempool for the given sender/nonce. The us
   "jsonrpc": "2.0",
   "id": 1,
   "result": ["0x..."] // hash of UO if dropped, or empty if a UO is not found for the sender/ID
+}
+```
+
+#### `rundler_getMinedUserOperation`
+
+Gets a mined user operation object and its receipt from the given user operation hash, transaction hash, and entry point address.
+
+Used as an alternative to `eth_getUserOperationByHash` and `eth_getUserOperationReceipt` for use cases where the transaction hash containing the mined user operation is already known. This allows Rundler to skip an expensive/impossible `eth_getLogs` call to search for a user operation event. Instead, Rundler can retrieve the event directly from the transaction receipt.
+
+Returns `null` if the user operation is not found.
+
+NOTE: The returned user operation receipt is slightly different than the receipt returned in `eth_getUserOperationReceipt`. The `receipt` subfield of the user operation receipt contains the transaction receipt. Typically this transaction receipt should contain all logs emitted by the transaction. This RPC endpoint removes all logs from the outer transaction receipt to save resources returning typically unused information. Applications needing the outer logs can process the transaction receipt separately.
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_getMinedUserOperation",
+  "params": [
+    "0x...", // user operation hash
+    "0x...", // transaction hash containing mined user operation
+    "0x...", // entry point address
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    userOperation: {
+      ... // User operation
+    },
+    receipt: {
+      ... // User operation receipt
+    }
+  }
 }
 ```
 
