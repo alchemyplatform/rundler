@@ -31,6 +31,7 @@ impl<P> EthApiServer for EthApi<P>
 where
     P: Pool + 'static,
 {
+    #[instrument(skip_all, fields(rpc_method = "eth_sendUserOperation"))]
     async fn send_user_operation(
         &self,
         op: RpcUserOperation,
@@ -58,7 +59,7 @@ where
         .await
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, fields(rpc_method = "eth_estimateUserOperationGas"))]
     async fn estimate_user_operation_gas(
         &self,
         op: RpcUserOperationOptionalGas,
@@ -72,6 +73,7 @@ where
         .await
     }
 
+    #[instrument(skip_all, fields(rpc_method = "eth_getUserOperationByHash"))]
     async fn get_user_operation_by_hash(
         &self,
         hash: B256,
@@ -83,6 +85,7 @@ where
         .await
     }
 
+    #[instrument(skip_all, fields(rpc_method = "eth_getUserOperationReceipt"))]
     async fn get_user_operation_receipt(
         &self,
         hash: B256,
@@ -94,6 +97,7 @@ where
         .await
     }
 
+    #[instrument(skip_all, fields(rpc_method = "eth_supportedEntryPoints"))]
     async fn supported_entry_points(&self) -> RpcResult<Vec<String>> {
         utils::safe_call_rpc_handler(
             "eth_supportedEntryPoints",
@@ -102,6 +106,7 @@ where
         .await
     }
 
+    #[instrument(skip_all, fields(rpc_method = "eth_chainId"))]
     async fn chain_id(&self) -> RpcResult<U64> {
         utils::safe_call_rpc_handler("eth_chainId", EthApi::chain_id(self)).await
     }
