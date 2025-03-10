@@ -54,7 +54,7 @@ where
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn send_user_operation(
         &self,
         op: UserOperationVariant,
@@ -78,7 +78,7 @@ where
             .log_on_error_level(Level::DEBUG, "failed to add op to the mempool")
     }
 
-    #[instrument(skip(self, state_override))]
+    #[instrument(skip_all)]
     pub(crate) async fn estimate_user_operation_gas(
         &self,
         op: UserOperationOptionalGas,
@@ -98,7 +98,7 @@ where
             .await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn get_user_operation_by_hash(
         &self,
         hash: B256,
@@ -124,7 +124,7 @@ where
         Ok(results.into_iter().find_map(|x| x))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn get_user_operation_receipt(
         &self,
         hash: B256,
@@ -144,7 +144,7 @@ where
         Ok(results.into_iter().find_map(|x| x))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn supported_entry_points(&self) -> EthResult<Vec<String>> {
         Ok(self
             .router
@@ -153,12 +153,12 @@ where
             .collect())
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     pub(crate) async fn chain_id(&self) -> EthResult<U64> {
         Ok(U64::from(self.chain_spec.id))
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_pending_user_operation_by_hash(
         &self,
         hash: B256,

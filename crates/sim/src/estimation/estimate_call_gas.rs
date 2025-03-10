@@ -96,7 +96,7 @@ where
 {
     type UO = UO;
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn estimate_call_gas(
         &self,
         op: Self::UO,
@@ -205,7 +205,7 @@ where
         }
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn simulate_handle_op_with_result(
         &self,
         op: Self::UO,

@@ -232,7 +232,7 @@ where
     EP: ProvidersWithEntryPointT,
     UP: UoPoolProvidersT,
 {
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn on_chain_update(&self, update: &ChainUpdate) {
         let deduped_ops = update.deduped_ops();
         let mined_ops = deduped_ops
@@ -470,7 +470,7 @@ where
         self.config.entry_point_version
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn add_operation(
         &self,
         origin: OperationOrigin,
@@ -892,12 +892,12 @@ where
             .set_reputation(address, ops_seen, ops_included)
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn get_stake_status(&self, address: Address) -> MempoolResult<StakeStatus> {
         self.paymaster.get_stake_status(address).await
     }
 
-    #[instrument(skip(self))]
+    #[instrument(skip_all)]
     async fn reset_confirmed_paymaster_balances(&self) -> MempoolResult<()> {
         self.paymaster.reset_confirmed_balances().await
     }

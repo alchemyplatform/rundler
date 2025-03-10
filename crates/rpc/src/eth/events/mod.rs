@@ -45,7 +45,7 @@ pub(crate) trait UserOperationEventProvider: Send + Sync {
 //
 // NOTE: we can't convert just decode all the logs as user operations and filter because we still want all the other log types
 //
-#[instrument(skip(reference_log))]
+#[instrument(skip_all)]
 fn filter_receipt_logs_matching_user_op(
     reference_log: &Log,
     tx_receipt: &TransactionReceipt,
