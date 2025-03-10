@@ -20,7 +20,7 @@ use std::{
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use metrics::{Gauge, Histogram};
+use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::DAGasOracleSync;
@@ -196,6 +196,7 @@ where
             true
         };
 
+        let is_7702_uo = op.uo.authorization_tuple().is_some();
         // only eligibility requirement is if the op has required pvg
         let pool_op = Arc::new(OrderedPoolOperation::new(
             Arc::new(op),
@@ -205,6 +206,9 @@ where
         ));
 
         let hash = self.add_operation_internal(pool_op)?;
+        if is_7702_uo {
+            self.metrics.num_7702_ops.increment(1);
+        }
         Ok(hash)
     }
 
@@ -793,6 +797,8 @@ struct PoolMetrics {
     time_to_mine: Histogram,
     #[metric(describe = "the duration distribution of a blocked mined.")]
     blocks_to_mine: Histogram,
+    #[metric(describe = "the number of ups with 7702 auth")]
+    num_7702_ops: Counter,
 }
 
 #[cfg(test)]
