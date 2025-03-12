@@ -574,10 +574,10 @@ where
                 .valid_time_range
                 .contains(Timestamp::now(), TIME_RANGE_BUFFER)
             {
-                self.emit(BuilderEvent::skipped_op(
+                self.emit(BuilderEvent::rejected_op(
                     self.builder_tag.clone(),
                     op.hash(),
-                    SkipReason::InvalidTimeRange {
+                    OpRejectionReason::InvalidTimeRange {
                         valid_range: simulation.valid_time_range,
                     },
                 ));

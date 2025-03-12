@@ -154,8 +154,6 @@ pub struct BundleTxDetails {
 pub enum SkipReason {
     /// Operation accessed another sender account included earlier in the bundle
     AccessedOtherSender { other_sender: Address },
-    /// Current time is outside of the operation's valid time range
-    InvalidTimeRange { valid_range: ValidTimeRange },
     /// Operation did not bid high enough gas fees for inclusion in the bundle
     InsufficientFees {
         required_fees: GasFees,
@@ -191,6 +189,8 @@ pub enum OpRejectionReason {
     FailedInBundle { message: Arc<String> },
     /// Operation's storage slot condition was not met
     ConditionNotMet(ConditionNotMetReason),
+    /// Current time is outside of the operation's valid time range
+    InvalidTimeRange { valid_range: ValidTimeRange },
 }
 
 /// Reason for a condition not being met

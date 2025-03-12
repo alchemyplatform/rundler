@@ -158,7 +158,7 @@ where
         provider: P,
         sender: T,
         settings: Settings,
-        builder_index: u64,
+        builder_tag: String,
     ) -> anyhow::Result<Self> {
         let nonce = provider
             .get_transaction_count(sender.address())
@@ -172,10 +172,7 @@ where
             transactions: vec![],
             has_abandoned: false,
             attempt_count: 0,
-            metrics: TransactionTrackerMetrics::new_with_labels(&[(
-                "builder_index",
-                builder_index.to_string(),
-            )]),
+            metrics: TransactionTrackerMetrics::new_with_labels(&[("builder_tag", builder_tag)]),
         })
     }
 
@@ -533,6 +530,9 @@ where
     fn abandon(&mut self) {
         self.has_abandoned = true;
         self.attempt_count = 0;
+        // set fees to 0 when abandoning
+        self.metrics.current_max_fee_per_gas.set(0);
+        self.metrics.max_priority_fee_per_gas.set(0);
         // remember the transaction in case we need to cancel it
     }
 
@@ -610,7 +610,7 @@ mod tests {
         };
 
         let tracker: TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> =
-            TransactionTrackerImpl::new(provider, sender, settings, 0)
+            TransactionTrackerImpl::new(provider, sender, settings, "test".to_string())
                 .await
                 .unwrap();
 
