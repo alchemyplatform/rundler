@@ -164,7 +164,7 @@ where
         provider: P,
         sender: T,
         settings: Settings,
-        builder_index: u64,
+        builder_tag: String,
     ) -> anyhow::Result<Self> {
         let nonce = provider
             .get_transaction_count(sender.address())
@@ -178,10 +178,7 @@ where
             transactions: vec![],
             has_abandoned: false,
             attempt_count: 0,
-            metrics: TransactionTrackerMetrics::new_with_labels(&[(
-                "builder_index",
-                builder_index.to_string(),
-            )]),
+            metrics: TransactionTrackerMetrics::new_with_labels(&[("builder_tag", builder_tag)]),
         })
     }
 
@@ -560,6 +557,7 @@ struct TransactionTrackerMetrics {
 
 #[cfg(test)]
 mod tests {
+
     use alloy_consensus::{Signed, TxEip1559, TxEnvelope::Eip1559};
     use alloy_primitives::{Address, PrimitiveSignature, U256};
     use rundler_provider::{
@@ -586,7 +584,7 @@ mod tests {
         };
 
         let tracker: TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> =
-            TransactionTrackerImpl::new(provider, sender, settings, 0)
+            TransactionTrackerImpl::new(provider, sender, settings, "any:0".to_string())
                 .await
                 .unwrap();
 

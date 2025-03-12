@@ -412,7 +412,7 @@ where
             ep_providers.evm().clone(),
             transaction_sender,
             tracker_settings,
-            builder_settings.index,
+            builder_settings.tag(),
         )
         .await?;
 
