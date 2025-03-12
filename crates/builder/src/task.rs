@@ -15,7 +15,7 @@ use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
-use rundler_provider::{Providers as ProvidersT, ProvidersWithEntryPointT};
+use rundler_provider::{EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
@@ -108,9 +108,10 @@ pub struct BuilderSettings {
 
 impl BuilderSettings {
     /// Unique string tag for this builder
-    pub fn tag(&self) -> String {
+    pub fn tag(&self, entry_point_address: &Address) -> String {
         format!(
-            "{}:{}",
+            "{}:{}:{}",
+            entry_point_address,
             self.filter_id.as_ref().map_or("any", |v| v),
             self.index
         )
@@ -412,7 +413,7 @@ where
             ep_providers.evm().clone(),
             transaction_sender,
             tracker_settings,
-            builder_settings.index,
+            builder_settings.tag(ep_providers.entry_point().address()),
         )
         .await?;
 
@@ -433,7 +434,7 @@ where
 
         let proposer = BundleProposerImpl::new(
             builder_settings.index,
-            builder_settings.tag(),
+            builder_settings.tag(ep_providers.entry_point().address()),
             ep_providers.clone(),
             BundleProposerProviders::new(self.pool.clone(), simulator, fee_estimator),
             proposer_settings,
@@ -442,7 +443,7 @@ where
         );
 
         let builder = BundleSenderImpl::new(
-            builder_settings.tag(),
+            builder_settings.tag(ep_providers.entry_point().address()),
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
