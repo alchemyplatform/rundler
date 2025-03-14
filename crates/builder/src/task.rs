@@ -50,6 +50,8 @@ pub struct Args {
     pub unsafe_mode: bool,
     /// Signing scheme to use
     pub signing_scheme: SigningScheme,
+    /// Whether to automatically fund signers
+    pub auto_fund: bool,
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit

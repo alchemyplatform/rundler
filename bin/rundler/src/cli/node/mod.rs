@@ -122,6 +122,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
 
     let signer_manager = rundler_signer::new_signer_manager(
         &builder_task_args.signing_scheme,
+        builder_task_args.auto_fund,
         &chain_spec,
         providers.evm().clone(),
         &task_spawner,

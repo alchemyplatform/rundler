@@ -47,11 +47,20 @@ pub trait SignerManager: Send + Sync {
     /// Lease a signer
     fn lease_signer(&self) -> Option<SignerLease>;
 
+    /// Lease a specific signer
+    fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease>;
+
     /// Return a leased signer
     fn return_lease(&self, lease: SignerLease);
 
     /// Update the balances of the signers
     fn update_balances(&self, balances: Vec<(Address, U256)>);
+
+    /// Fund the signers
+    ///
+    /// Returns false if the signer manager does not support funding or
+    /// if no signers need funding
+    fn fund_signers(&self, balances: Vec<(Address, U256)>) -> bool;
 }
 
 /// A leased signer
@@ -124,6 +133,7 @@ impl SignerLease {
 pub(crate) struct FundingSignerManager {
     wallet: EthereumWallet,
     signer_statuses: Arc<RwLock<HashMap<Address, SignerStatus>>>,
+    auto_fund: bool,
     fund_below_balance: Option<U256>,
     funding_notify: Arc<Notify>,
 }
@@ -163,6 +173,17 @@ impl SignerManager for FundingSignerManager {
         )))
     }
 
+    fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease> {
+        let mut statuses = self.signer_statuses.write();
+        let status = statuses.get_mut(address)?;
+        if matches!(status, SignerStatus::Available) {
+            *status = SignerStatus::Leased;
+        }
+        Some(SignerLease::new(Arc::new(
+            self.wallet.signer_by_address(*address)?,
+        )))
+    }
+
     fn return_lease(&self, lease: SignerLease) {
         let mut statuses = self.signer_statuses.write();
 
@@ -175,8 +196,27 @@ impl SignerManager for FundingSignerManager {
     }
 
     fn update_balances(&self, balances: Vec<(Address, U256)>) {
-        if Self::update_signer_statuses(&self.signer_statuses, balances, self.fund_below_balance) {
+        if Self::update_signer_statuses(
+            &self.signer_statuses,
+            balances,
+            self.fund_below_balance,
+            self.auto_fund,
+        ) {
             self.funding_notify.notify_one();
+        }
+    }
+
+    fn fund_signers(&self, balances: Vec<(Address, U256)>) -> bool {
+        if Self::update_signer_statuses(
+            &self.signer_statuses,
+            balances,
+            self.fund_below_balance,
+            true,
+        ) {
+            self.funding_notify.notify_one();
+            true
+        } else {
+            false
         }
     }
 }
@@ -185,6 +225,7 @@ impl FundingSignerManager {
     pub(crate) fn new<T: TaskSpawner, P: EvmProvider + 'static>(
         wallet: EthereumWallet,
         funder_settings: Option<FunderSettings>,
+        auto_fund: bool,
         task_spawner: &T,
         provider: P,
     ) -> Self {
@@ -212,6 +253,7 @@ impl FundingSignerManager {
         Self {
             wallet,
             signer_statuses,
+            auto_fund,
             fund_below_balance,
             funding_notify,
         }
@@ -221,6 +263,7 @@ impl FundingSignerManager {
         signer_statuses: &Arc<RwLock<HashMap<Address, SignerStatus>>>,
         balances: Vec<(Address, U256)>,
         fund_below_balance: Option<U256>,
+        should_fund: bool,
     ) -> bool {
         let mut needs_funding = false;
 
@@ -232,7 +275,7 @@ impl FundingSignerManager {
             if let Some(fund_below_balance) = fund_below_balance {
                 let mut statuses = signer_statuses.write();
                 let status = statuses.get_mut(&address).unwrap();
-                if balance < fund_below_balance {
+                if should_fund && balance < fund_below_balance {
                     match status {
                         SignerStatus::Available => *status = SignerStatus::NeedsFunding,
                         SignerStatus::Leased => *status = SignerStatus::LeasedNeedsFunding,

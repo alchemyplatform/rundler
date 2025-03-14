@@ -41,7 +41,7 @@ mod local;
 mod manager;
 pub use manager::{SignerLease, SignerManager};
 
-mod utils;
+pub mod utils;
 
 // Types
 // 1. Private keys w/o funding
@@ -69,9 +69,9 @@ pub struct FundingSettings {
     /// Poll max retries
     pub poll_max_retries: u64,
     /// Priority fee multiplier
-    pub priority_fee_multiplier: u64,
+    pub priority_fee_multiplier: f64,
     /// Base fee multiplier
-    pub base_fee_multiplier: u64,
+    pub base_fee_multiplier: f64,
 }
 
 /// Signing scheme for the signer manager
@@ -104,9 +104,17 @@ pub enum SigningScheme {
     },
 }
 
+impl SigningScheme {
+    /// Returns true if the signing scheme supports funding
+    pub fn supports_funding(&self) -> bool {
+        matches!(self, SigningScheme::KmsFundingMnemonics { .. })
+    }
+}
+
 /// Create a new signer manager
 pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner>(
     scheme: &SigningScheme,
+    auto_fund: bool,
     chain_spec: &ChainSpec,
     provider: P,
     task_spawner: &T,
@@ -147,6 +155,7 @@ pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner
                 mnemonics_by_key_id,
                 lock_settings,
                 chain_spec,
+                auto_fund,
             )
             .await
         }
@@ -166,6 +175,7 @@ fn new_private_keys_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
     Ok(Arc::new(FundingSignerManager::new(
         wallet,
         None,
+        false,
         task_spawner,
         provider,
     )))
@@ -196,6 +206,7 @@ async fn new_kms_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
     Ok(Arc::new(FundingSignerManager::new(
         wallet,
         None,
+        false,
         task_spawner,
         provider,
     )))
@@ -209,6 +220,7 @@ async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner
     mnemonics_by_key_id: &HashMap<String, String>,
     lock_settings: &KmsLockingSettings,
     chain_spec: &ChainSpec,
+    auto_fund: bool,
 ) -> Result<Arc<dyn SignerManager>> {
     let key_ids = mnemonics_by_key_id.keys().cloned().collect::<Vec<_>>();
     let funding_signer = LockingKmsSigner::connect(
@@ -242,6 +254,7 @@ async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner
     Ok(Arc::new(FundingSignerManager::new(
         wallet,
         Some(funder_settings),
+        auto_fund,
         task_spawner,
         provider,
     )))

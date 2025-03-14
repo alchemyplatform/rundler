@@ -38,8 +38,8 @@ pub(crate) struct FunderSettings {
     pub multicall3_address: Address,
     pub poll_interval: Duration,
     pub poll_max_retries: u64,
-    pub priority_fee_multiplier: u64,
-    pub base_fee_multiplier: u64,
+    pub priority_fee_multiplier: f64,
+    pub base_fee_multiplier: f64,
 
     pub signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
 }
@@ -150,14 +150,13 @@ async fn funding_task_inner<P: EvmProvider>(
         .collect::<Vec<_>>();
     let call = multicall3::Multicall3::aggregate3ValueCall { calls };
 
-    let (nonce, base_fee, priority_fee) = tokio::try_join!(
-        provider.get_transaction_count(funding_signer_address),
-        provider.get_pending_base_fee(),
-        provider.get_max_priority_fee()
-    )?;
-
-    let priority_fee = priority_fee * settings.priority_fee_multiplier as u128;
-    let max_fee_per_gas = base_fee * settings.base_fee_multiplier as u128 + priority_fee;
+    let (nonce, max_fee_per_gas, priority_fee) = utils::get_nonce_and_fees(
+        provider,
+        funding_signer_address,
+        settings.base_fee_multiplier,
+        settings.priority_fee_multiplier,
+    )
+    .await?;
     let gas_limit = GAS_BASE + GAS_PER_CALL * num_calls;
 
     let tx = TransactionRequest::default()
@@ -182,27 +181,15 @@ async fn funding_task_inner<P: EvmProvider>(
         .request::<_, B256>("eth_sendRawTransaction", (tx_bytes,))
         .await?;
 
-    let mut found_tx = None;
-    for _ in 0..settings.poll_max_retries {
-        tokio::time::sleep(settings.poll_interval).await;
+    let tx_receipt = utils::wait_for_txn(
+        provider,
+        tx_hash,
+        settings.poll_max_retries,
+        settings.poll_interval,
+    )
+    .await?;
 
-        let maybe_tx = provider.get_transaction_receipt(tx_hash).await?;
-        let Some(tx) = maybe_tx else {
-            tracing::debug!("Transaction not found, retrying");
-            continue;
-        };
-        found_tx = Some(tx);
-        break;
-    }
-
-    match found_tx {
-        Some(tx) => {
-            tracing::info!("Funding transaction {tx_hash} mined. Receipt: {tx:?}");
-        }
-        None => {
-            anyhow::bail!("Funding transaction {tx_hash} not mined after max retries");
-        }
-    }
+    tracing::info!("Funding transaction {tx_hash} mined. Receipt: {tx_receipt:?}");
 
     metrics.funded_addresses.increment(num_calls);
     let _ = get_update_funder_balance(provider, metrics, funding_signer_address).await;
@@ -211,6 +198,7 @@ async fn funding_task_inner<P: EvmProvider>(
         statuses,
         new_balances,
         Some(settings.fund_below_balance),
+        true, // kick off another round of funding if balances are still below the threshold
     ))
 }
 
