@@ -8,8 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-contracts.workspace = true
-rundler-utils.workspace = true
 
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
@@ -22,13 +20,15 @@ chrono = "0.4.38"
 futures-util.workspace = true
 metrics.workspace = true
 metrics-derive.workspace = true
+
+mockall = { workspace = true, optional = true }
 num_enum = "0.7.3"
 parse-display.workspace = true
+rundler-contracts.workspace = true
+rundler-utils.workspace = true
 serde.workspace = true
 strum.workspace = true
 thiserror.workspace = true
-
-mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 alloy-primitives = { workspace = true, features = ["rand"] }

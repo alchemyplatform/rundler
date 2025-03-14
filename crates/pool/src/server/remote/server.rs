@@ -11,6 +11,8 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+#![allow(clippy::result_large_err)]
+
 use std::{
     net::SocketAddr,
     sync::{
