@@ -18,43 +18,44 @@ use std::str::FromStr;
 use alloy_primitives::{hex, utils, Address, Bytes, B256, U256, U64};
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response,
 };
 use rundler_provider::TransactionRequest;
+use rundler_signer::SignerLease;
 use rundler_types::GasFees;
 use serde::{de, Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{ExpectedStorage, Result, SentTxInfo, TransactionSender, TxSenderError};
-use crate::{sender::CancelTxInfo, signer::Signer};
+use super::{ExpectedStorage, Result, TransactionSender, TxSenderError};
+use crate::sender::CancelTxInfo;
 
 #[derive(Debug)]
-pub(crate) struct FlashbotsTransactionSender<S> {
-    signer: S,
+pub(crate) struct FlashbotsTransactionSender {
     flashbots_client: FlashbotsClient,
 }
 
 #[async_trait::async_trait]
-impl<S> TransactionSender for FlashbotsTransactionSender<S>
-where
-    S: Signer,
-{
+impl TransactionSender for FlashbotsTransactionSender {
     async fn send_transaction(
         &self,
         tx: TransactionRequest,
         _expected_storage: &ExpectedStorage,
-    ) -> Result<SentTxInfo> {
-        let (raw_tx, nonce) = self.signer.fill_and_sign(tx).await?;
+        signer: &SignerLease,
+    ) -> Result<B256> {
+        let raw_tx = signer
+            .sign_tx_raw(tx)
+            .await
+            .context("failed to sign transaction")?;
 
         let tx_hash = self
             .flashbots_client
             .send_private_transaction(raw_tx)
             .await?;
 
-        Ok(SentTxInfo { nonce, tx_hash })
+        Ok(tx_hash)
     }
 
     async fn cancel_transaction(
@@ -62,6 +63,7 @@ where
         tx_hash: B256,
         _nonce: u64,
         _gas_fees: GasFees,
+        _signer: &SignerLease,
     ) -> Result<CancelTxInfo> {
         let success = self
             .flashbots_client
@@ -77,24 +79,15 @@ where
             soft_cancelled: true,
         })
     }
-
-    fn address(&self) -> Address {
-        self.signer.address()
-    }
 }
 
-impl<S> FlashbotsTransactionSender<S>
-where
-    S: Signer,
-{
+impl FlashbotsTransactionSender {
     pub(crate) fn new(
-        signer: S,
         flashbots_auth_key: String,
         builders: Vec<String>,
         relay_url: String,
     ) -> Result<Self> {
         Ok(Self {
-            signer,
             flashbots_client: FlashbotsClient::new(flashbots_auth_key, builders, relay_url),
         })
     }

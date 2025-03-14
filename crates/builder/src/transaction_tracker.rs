@@ -20,6 +20,7 @@ use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_signer::SignerLease;
 use rundler_sim::ExpectedStorage;
 use rundler_types::{pool::AddressUpdate, GasFees};
 use tokio::time::Instant;
@@ -133,6 +134,7 @@ pub(crate) enum TrackerUpdate {
 pub(crate) struct TransactionTrackerImpl<P, T> {
     provider: P,
     sender: T,
+    signer: SignerLease,
     settings: Settings,
     nonce: u64,
     transactions: Vec<PendingTransaction>,
@@ -163,16 +165,18 @@ where
     pub(crate) async fn new(
         provider: P,
         sender: T,
+        signer: SignerLease,
         settings: Settings,
         builder_tag: String,
     ) -> anyhow::Result<Self> {
         let nonce = provider
-            .get_transaction_count(sender.address())
+            .get_transaction_count(signer.address())
             .await
             .unwrap_or(0);
         Ok(Self {
             provider,
             sender,
+            signer,
             settings,
             nonce,
             transactions: vec![],
@@ -192,7 +196,7 @@ where
 
     async fn get_external_nonce(&self) -> anyhow::Result<u64> {
         self.provider
-            .get_transaction_count(self.sender.address())
+            .get_transaction_count(self.signer.address())
             .await
             .context("tracker should load current nonce from provider")
     }
@@ -285,7 +289,7 @@ where
     T: TransactionSender,
 {
     fn address(&self) -> Address {
-        self.sender.address()
+        self.signer.address()
     }
 
     fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(u64, Option<GasFees>)> {
@@ -317,18 +321,25 @@ where
             gas_fees,
             tx.gas.unwrap_or(0),
         );
-        let sent_tx = self.sender.send_transaction(tx, expected_storage).await;
+
+        let Some(tx_nonce) = tx.nonce else {
+            return Err(TransactionTrackerError::Other(anyhow::anyhow!(
+                "transaction given to tracker should have nonce set"
+            )));
+        };
+
+        let tx_hash = self
+            .sender
+            .send_transaction(tx, expected_storage, &self.signer)
+            .await;
 
         self.update_metrics();
 
-        match sent_tx {
-            Ok(sent_tx) => {
-                info!(
-                    "Sent transaction {:?} nonce: {:?}",
-                    sent_tx.tx_hash, sent_tx.nonce
-                );
+        match tx_hash {
+            Ok(tx_hash) => {
+                info!("Sent transaction {:?} nonce: {:?}", tx_hash, tx_nonce);
                 self.transactions.push(PendingTransaction {
-                    tx_hash: sent_tx.tx_hash,
+                    tx_hash,
                     gas_fees,
                     attempt_number: self.attempt_count,
                     sent_at_block: Some(block_number),
@@ -337,7 +348,7 @@ where
                 self.has_abandoned = false;
                 self.attempt_count += 1;
                 self.update_metrics();
-                Ok(sent_tx.tx_hash)
+                Ok(tx_hash)
             }
             Err(e) if matches!(e, TxSenderError::ReplacementUnderpriced) => {
                 // Only can get into this state if there is an unknown pending transaction causing replacement
@@ -395,7 +406,7 @@ where
 
         let cancel_res = self
             .sender
-            .cancel_transaction(tx_hash, self.nonce, gas_fees)
+            .cancel_transaction(tx_hash, self.nonce, gas_fees, &self.signer)
             .await;
 
         match cancel_res {
@@ -560,7 +571,10 @@ struct TransactionTrackerMetrics {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use alloy_consensus::{Signed, TxEip1559, TxEnvelope::Eip1559};
+    use alloy_network::TxSigner;
     use alloy_primitives::{Address, PrimitiveSignature, U256};
     use rundler_provider::{
         AnyReceiptEnvelope, AnyTxEnvelope, MockEvmProvider, ReceiptWithBloom, Transaction,
@@ -568,25 +582,43 @@ mod tests {
     };
 
     use super::*;
-    use crate::sender::{MockTransactionSender, SentTxInfo};
+    use crate::sender::MockTransactionSender;
 
-    fn create_base_config() -> (MockTransactionSender, MockEvmProvider) {
+    struct MockTxSigner {}
+
+    #[async_trait::async_trait]
+    impl TxSigner<PrimitiveSignature> for MockTxSigner {
+        fn address(&self) -> Address {
+            Address::ZERO
+        }
+        async fn sign_transaction(
+            &self,
+            _tx: &mut dyn alloy_consensus::SignableTransaction<PrimitiveSignature>,
+        ) -> alloy_signer::Result<PrimitiveSignature> {
+            Ok(PrimitiveSignature::test_signature())
+        }
+    }
+
+    fn create_base_config() -> (MockTransactionSender, MockEvmProvider, MockTxSigner) {
         let sender = MockTransactionSender::new();
         let provider = MockEvmProvider::new();
-
-        (sender, provider)
+        let signer = MockTxSigner {};
+        (sender, provider, signer)
     }
 
     async fn create_tracker(
         sender: MockTransactionSender,
         provider: MockEvmProvider,
+        signer: MockTxSigner,
     ) -> TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> {
         let settings = Settings {
             replacement_fee_percent_increase: 5,
         };
 
+        let lease = SignerLease::new(Arc::new(signer));
+
         let tracker: TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> =
-            TransactionTrackerImpl::new(provider, sender, settings, "test".to_string())
+            TransactionTrackerImpl::new(provider, sender, lease, settings, "test".to_string())
                 .await
                 .unwrap();
 
@@ -595,22 +627,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonce_and_fees() {
-        let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::ZERO);
-        sender.expect_send_transaction().returning(move |_a, _b| {
-            Box::pin(async {
-                Ok(SentTxInfo {
-                    nonce: 0,
-                    tx_hash: B256::ZERO,
-                })
-            })
-        });
+        let (mut sender, mut provider, signer) = create_base_config();
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async { Ok(B256::ZERO) }));
 
         provider
             .expect_get_transaction_count()
             .returning(move |_a| Ok(0));
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
 
         let tx = TransactionRequest::default()
             .nonce(0)
@@ -636,23 +662,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_nonce_and_fees_abandoned() {
-        let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::ZERO);
-
-        sender.expect_send_transaction().returning(move |_a, _b| {
-            Box::pin(async {
-                Ok(SentTxInfo {
-                    nonce: 0,
-                    tx_hash: B256::ZERO,
-                })
-            })
-        });
+        let (mut sender, mut provider, signer) = create_base_config();
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async { Ok(B256::ZERO) }));
 
         provider
             .expect_get_transaction_count()
             .returning(move |_a| Ok(0));
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
 
         let tx = TransactionRequest::default()
             .nonce(0)
@@ -672,22 +691,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_without_nonce() {
-        let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::ZERO);
-        sender.expect_send_transaction().returning(move |_a, _b| {
-            Box::pin(async {
-                Ok(SentTxInfo {
-                    nonce: 0,
-                    tx_hash: B256::ZERO,
-                })
-            })
-        });
+        let (mut sender, mut provider, signer) = create_base_config();
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async { Ok(B256::ZERO) }));
 
         provider
             .expect_get_transaction_count()
             .returning(move |_a| Ok(2));
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
 
         let tx = TransactionRequest::default();
         let exp = ExpectedStorage::default();
@@ -698,23 +711,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction_with_invalid_nonce() {
-        let (mut sender, mut provider) = create_base_config();
+        let (mut sender, mut provider, signer) = create_base_config();
 
-        sender.expect_address().return_const(Address::ZERO);
-        sender.expect_send_transaction().returning(move |_a, _b| {
-            Box::pin(async {
-                Ok(SentTxInfo {
-                    nonce: 0,
-                    tx_hash: B256::ZERO,
-                })
-            })
-        });
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async { Ok(B256::ZERO) }));
 
         provider
             .expect_get_transaction_count()
             .returning(move |_a| Ok(2));
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
 
         let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
@@ -725,22 +732,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_transaction() {
-        let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::ZERO);
-        sender.expect_send_transaction().returning(move |_a, _b| {
-            Box::pin(async {
-                Ok(SentTxInfo {
-                    nonce: 0,
-                    tx_hash: B256::ZERO,
-                })
-            })
-        });
+        let (mut sender, mut provider, signer) = create_base_config();
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async { Ok(B256::ZERO) }));
 
         provider
             .expect_get_transaction_count()
             .returning(move |_a| Ok(0));
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
 
         let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();
@@ -749,15 +750,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_for_update_nonce_used() {
-        let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::ZERO);
+        let (sender, mut provider, signer) = create_base_config();
 
         provider
             .expect_get_transaction_count()
             .returning(move |_a| Ok(0))
             .times(1);
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
         let update = AddressUpdate {
             address: Address::ZERO,
             nonce: 1,
@@ -796,14 +796,13 @@ mod tests {
     }
     #[tokio::test]
     async fn test_process_update_mined() {
-        let (mut sender, mut provider) = create_base_config();
-        sender.expect_address().return_const(Address::ZERO);
+        let (mut sender, mut provider, signer) = create_base_config();
 
         let tx_hash = B256::random();
 
         sender
             .expect_send_transaction()
-            .returning(move |_a, _b| Box::pin(async move { Ok(SentTxInfo { nonce: 0, tx_hash }) }));
+            .returning(move |_a, _b, _c| Box::pin(async move { Ok(tx_hash) }));
 
         provider
             .expect_get_transaction_count()
@@ -836,7 +835,7 @@ mod tests {
                 }))
             });
 
-        let mut tracker = create_tracker(sender, provider).await;
+        let mut tracker = create_tracker(sender, provider, signer).await;
 
         let tx = TransactionRequest::default().nonce(0);
         let exp = ExpectedStorage::default();

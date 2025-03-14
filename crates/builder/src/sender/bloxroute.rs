@@ -11,43 +11,44 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{hex, Address, Bytes, B256};
+use alloy_primitives::{hex, Bytes, B256};
+use anyhow::Context;
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
     http_client::{transport::HttpBackend, HeaderMap, HeaderValue, HttpClient, HttpClientBuilder},
 };
 use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_signer::SignerLease;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tonic::async_trait;
 
-use super::{
-    create_hard_cancel_tx, CancelTxInfo, Result, SentTxInfo, TransactionSender, TxSenderError,
-};
-use crate::signer::Signer;
+use super::{create_hard_cancel_tx, CancelTxInfo, Result, TransactionSender, TxSenderError};
 
-pub(crate) struct PolygonBloxrouteTransactionSender<P, S> {
+pub(crate) struct PolygonBloxrouteTransactionSender<P> {
     provider: P,
-    signer: S,
     client: PolygonBloxrouteClient,
 }
 
 #[async_trait]
-impl<P, S> TransactionSender for PolygonBloxrouteTransactionSender<P, S>
+impl<P> TransactionSender for PolygonBloxrouteTransactionSender<P>
 where
     P: EvmProvider,
-    S: Signer,
 {
     async fn send_transaction(
         &self,
         tx: TransactionRequest,
         _expected_storage: &ExpectedStorage,
-    ) -> Result<SentTxInfo> {
-        let (raw_tx, nonce) = self.signer.fill_and_sign(tx).await?;
+        signer: &SignerLease,
+    ) -> Result<B256> {
+        let raw_tx = signer
+            .sign_tx_raw(tx)
+            .await
+            .context("failed to sign transaction")?;
         let tx_hash = self.client.send_transaction(raw_tx).await?;
-        Ok(SentTxInfo { nonce, tx_hash })
+        Ok(tx_hash)
     }
 
     async fn cancel_transaction(
@@ -55,13 +56,17 @@ where
         _tx_hash: B256,
         nonce: u64,
         gas_fees: GasFees,
+        signer: &SignerLease,
     ) -> Result<CancelTxInfo> {
         // Cannot cancel transactions on polygon bloxroute private, however, the transaction may have been
         // propagated to the public network, and can be cancelled via a public transaction.
 
-        let tx = create_hard_cancel_tx(self.signer.address(), nonce, gas_fees);
+        let tx = create_hard_cancel_tx(signer.address(), nonce, gas_fees);
 
-        let (raw_tx, _) = self.signer.fill_and_sign(tx).await?;
+        let raw_tx = signer
+            .sign_tx_raw(tx)
+            .await
+            .context("failed to sign transaction")?;
 
         let tx_hash = self
             .provider
@@ -73,21 +78,15 @@ where
             soft_cancelled: false,
         })
     }
-
-    fn address(&self) -> Address {
-        self.signer.address()
-    }
 }
 
-impl<P, S> PolygonBloxrouteTransactionSender<P, S>
+impl<P> PolygonBloxrouteTransactionSender<P>
 where
     P: EvmProvider,
-    S: Signer,
 {
-    pub(crate) fn new(provider: P, signer: S, auth_header: &str) -> Result<Self> {
+    pub(crate) fn new(provider: P, auth_header: &str) -> Result<Self> {
         Ok(Self {
             provider,
-            signer,
             client: PolygonBloxrouteClient::new(auth_header)?,
         })
     }

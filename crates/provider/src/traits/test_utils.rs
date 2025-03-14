@@ -115,7 +115,7 @@ mockall::mock! {
         async fn get_balances(
             &self,
             addresses: Vec<Address>,
-        ) -> ProviderResult<Vec<U256>>;
+        ) -> ProviderResult<Vec<(Address, U256)>>;
     }
 }
 

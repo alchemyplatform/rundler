@@ -67,10 +67,9 @@ fn filter_receipt_logs_matching_user_op(
     let mut start_idx = 0;
     let mut end_idx = logs.len() - 1;
 
-    // TODO protect against topic of zero size
-
     let is_ref_user_op = |log: &Log| {
-        log.topics()[0] == reference_log.topics()[0]
+        log.topics().len() >= 2
+            && log.topics()[0] == reference_log.topics()[0]
             && log.topics()[1] == reference_log.topics()[1]
             && log.address() == reference_log.address()
     };
