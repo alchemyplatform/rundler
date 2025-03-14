@@ -8,12 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-contracts.workspace = true
-rundler-provider.workspace = true
-rundler-sim.workspace = true
-rundler-task.workspace = true
-rundler-types.workspace = true
-rundler-utils.workspace = true
 
 alloy-network-primitives.workspace = true
 alloy-primitives.workspace = true
@@ -29,6 +23,12 @@ metrics.workspace = true
 metrics-derive.workspace = true
 parking_lot.workspace = true
 prost.workspace = true
+rundler-contracts.workspace = true
+rundler-provider.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 tokio.workspace = true
 tokio-stream = { version = "0.1.12", features = ["sync"] }
 tonic.workspace = true

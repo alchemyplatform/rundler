@@ -36,7 +36,7 @@ jobs:
         with:
           path: bundler-test-executors
           repository: alchemyplatform/bundler-test-executor
-          ref: master
+          ref: danc/v0.7-signer
           submodules: recursive
 
       - name: Build rundler image locally

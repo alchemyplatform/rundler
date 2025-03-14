@@ -21,6 +21,7 @@ use crate::mempool::OperationOrigin;
 
 /// Event type for the pool
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum OpPoolEvent {
     /// An operation was received and added to the pool
     ReceivedOp {

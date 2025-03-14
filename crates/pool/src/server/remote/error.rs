@@ -781,12 +781,10 @@ impl TryFrom<ProtoSimulationViolationError> for SimulationViolation {
                     EntityType::try_from(e.accessing_entity).context("unknown entity type")?,
                 )
                 .context("invalid entity type")?;
-                let accessed_entity = match rundler_types::EntityType::try_from(
+                let accessed_entity = rundler_types::EntityType::try_from(
                     EntityType::try_from(e.accessed_entity).context("unknown entity type")?,
-                ) {
-                    Ok(entity_type) => Some(entity_type),
-                    Err(_) => None,
-                };
+                )
+                .ok();
 
                 SimulationViolation::NotStaked(Box::new(NeedsStakeInformation {
                     needs_stake: (&e.needs_stake.context("should have entity in error")?)
