@@ -146,5 +146,5 @@ pub trait EvmProvider: Send + Sync {
     ) -> ProviderResult<B256>;
 
     /// Get the balances of multiple addresses
-    async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>>;
+    async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<(Address, U256)>>;
 }
