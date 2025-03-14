@@ -38,7 +38,7 @@ pub use alloy::{
     new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider,
 };
 pub use alloy_provider::network::{AnyHeader, AnyNetwork, AnyReceiptEnvelope, AnyTxEnvelope};
-use alloy_serde::WithOtherFields;
+pub use alloy_serde::WithOtherFields;
 use alloy_transport::{BoxTransport, Transport};
 mod traits;
 // re-export alloy RPC types

@@ -13,33 +13,50 @@
 
 use std::time::Duration;
 
-use alloy_signer::Signer as _;
+use alloy_consensus::SignableTransaction;
+use alloy_network::TxSigner;
+use alloy_primitives::{Address, PrimitiveSignature};
 use alloy_signer_aws::AwsSigner;
 use anyhow::Context;
 use aws_config::BehaviorVersion;
 use rslock::{Lock, LockGuard, LockManager};
-use rundler_provider::EvmProvider;
 use rundler_task::TaskSpawner;
 use tokio::{sync::oneshot, time::sleep};
 
-use super::monitor_account_balance;
+use crate::Result;
 
-/// A KMS signer handle that will release the key_id when dropped.
-#[derive(Debug)]
-pub(crate) struct KmsSigner {
-    pub(crate) signer: AwsSigner,
+pub(crate) struct LockingKmsSigner {
+    inner: AwsSigner,
+    key_id: String,
 }
 
-impl KmsSigner {
-    pub(crate) async fn connect<P: EvmProvider + Clone + 'static, T: TaskSpawner>(
+#[async_trait::async_trait]
+impl TxSigner<PrimitiveSignature> for LockingKmsSigner {
+    fn address(&self) -> Address {
+        TxSigner::address(&self.inner)
+    }
+
+    async fn sign_transaction(
+        &self,
+        tx: &mut dyn SignableTransaction<PrimitiveSignature>,
+    ) -> alloy_signer::Result<PrimitiveSignature> {
+        self.inner.sign_transaction(tx).await
+    }
+}
+
+impl LockingKmsSigner {
+    pub(crate) fn key_id(&self) -> &str {
+        &self.key_id
+    }
+
+    pub(crate) async fn connect<T: TaskSpawner>(
         task_spawner: &T,
-        provider: P,
         chain_id: u64,
         key_ids: Vec<String>,
         redis_uri: String,
         ttl_millis: u64,
-    ) -> anyhow::Result<Self> {
-        let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+    ) -> Result<Self> {
+        let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
         let client = aws_sdk_kms::Client::new(&config);
 
         let key_id = if key_ids.len() > 1 {
@@ -58,16 +75,14 @@ impl KmsSigner {
                 .to_owned()
         };
 
-        let signer = AwsSigner::new(client, key_id, Some(chain_id))
+        let signer = AwsSigner::new(client, key_id.clone(), Some(chain_id))
             .await
             .context("should create signer")?;
 
-        task_spawner.spawn(Box::pin(monitor_account_balance(
-            signer.address(),
-            provider.clone(),
-        )));
-
-        Ok(Self { signer })
+        Ok(Self {
+            inner: signer,
+            key_id,
+        })
     }
 
     async fn lock_manager_loop(
@@ -127,7 +142,7 @@ impl KmsSigner {
     }
 }
 
-async fn try_lock<'a>(lm: &'a LockManager, lock_id: &str, ttl_millis: u64) -> Option<Lock<'a>> {
+async fn try_lock(lm: &LockManager, lock_id: &str, ttl_millis: u64) -> Option<Lock> {
     match lm
         .lock(lock_id.as_bytes(), Duration::from_millis(ttl_millis))
         .await

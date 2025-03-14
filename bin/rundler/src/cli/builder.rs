@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use alloy_primitives::Address;
 use anyhow::{bail, Context};
@@ -24,6 +24,7 @@ use rundler_builder::{
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
+use rundler_signer::{FundingSettings, KmsLockingSettings, SigningScheme};
 use rundler_sim::{MempoolConfigs, PriorityFeeMode};
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
@@ -98,6 +99,16 @@ pub struct BuilderArgs {
         value_delimiter = ','
     )]
     aws_kms_key_ids: Vec<String>,
+
+    /// TODO how do we want to handle this?
+    /// AWS KMS mnemonics to use for signing transactions
+    #[arg(
+        long = "builder.aws_kms_key_id_and_mnemonics",
+        name = "builder.aws_kms_key_id_and_mnemonics",
+        env = "BUILDER_AWS_KMS_KEY_ID_AND_MNEMONICS",
+        value_delimiter = ','
+    )]
+    aws_kms_key_id_and_mnemonics: Vec<String>,
 
     /// Redis URI to use for KMS leasing
     #[arg(
@@ -308,34 +319,8 @@ impl BuilderArgs {
             num_builders += common.num_builders_v0_7;
         }
 
-        if (self.private_key.is_some() || !self.private_keys.is_empty())
-            && !self.aws_kms_key_ids.is_empty()
-        {
-            bail!(
-                "Cannot use both builder.private_key(s) and builder.aws_kms_key_ids at the same time."
-            );
-        }
-
-        let mut private_keys = self.private_keys.clone();
-        if self.private_key.is_some() || !self.private_keys.is_empty() {
-            if let Some(pk) = &self.private_key {
-                private_keys.push(pk.clone());
-            }
-
-            if num_builders > private_keys.len() as u64 {
-                bail!(
-                    "Found {} private keys, but need {} keys for the number of builders. You may need to disable one of the entry points.",
-                    private_keys.len(), num_builders
-                );
-            }
-        } else if self.aws_kms_key_ids.len() < num_builders as usize {
-            bail!(
-                "Not enough AWS KMS key IDs for the number of builders. Need {} keys, found {}. You may need to disable one of the entry points.",
-                num_builders, self.aws_kms_key_ids.len()
-            );
-        }
-
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
+        let signing_scheme = self.signing_scheme(num_builders as usize)?;
 
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);
@@ -345,12 +330,9 @@ impl BuilderArgs {
         Ok(BuilderTaskArgs {
             entry_points,
             chain_spec,
+            signing_scheme,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
-            private_keys,
-            aws_kms_key_ids: self.aws_kms_key_ids.clone(),
-            redis_uri: self.redis_uri.clone(),
-            redis_lock_ttl_millis: self.redis_lock_ttl_millis,
             max_bundle_size: self.max_bundle_size,
             max_bundle_gas: common.max_bundle_gas,
             bundle_base_fee_overhead_percent: common.bundle_base_fee_overhead_percent,
@@ -408,6 +390,70 @@ impl BuilderArgs {
                 }))
             }
         }
+    }
+
+    fn signing_scheme(&self, num_builders: usize) -> anyhow::Result<SigningScheme> {
+        if !self.aws_kms_key_id_and_mnemonics.is_empty() {
+            let mut mnemonics_by_key_id = HashMap::new();
+            for key_id_and_mnemonic in self.aws_kms_key_id_and_mnemonics.iter() {
+                let (key_id, mnemonic) = key_id_and_mnemonic.split_once(':').unwrap();
+                mnemonics_by_key_id.insert(key_id.to_string(), mnemonic.to_string());
+            }
+
+            return Ok(SigningScheme::KmsFundingMnemonics {
+                mnemonics_by_key_id,
+                lock_settings: KmsLockingSettings {
+                    redis_uri: self.redis_uri.clone(),
+                    ttl_millis: self.redis_lock_ttl_millis,
+                },
+                // TODO: these should be configurable
+                funding_settings: FundingSettings {
+                    fund_below_balance: alloy_primitives::utils::parse_ether("0.043").unwrap(),
+                    fund_to_balance: alloy_primitives::utils::parse_ether("0.044").unwrap(),
+                    poll_interval: Duration::from_secs(1),
+                    poll_max_retries: 20,
+                    priority_fee_multiplier: 2,
+                    base_fee_multiplier: 2,
+                },
+                to_create: num_builders,
+            });
+        }
+
+        if self.private_key.is_some() || !self.private_keys.is_empty() {
+            let mut private_keys = self.private_keys.clone();
+            if let Some(pk) = &self.private_key {
+                private_keys.push(pk.clone());
+            }
+
+            if num_builders > private_keys.len() {
+                bail!(
+                    "Found {} private keys, but need {} keys for the number of builders. You may need to disable one of the entry points.",
+                    private_keys.len(), num_builders
+                );
+            }
+
+            return Ok(SigningScheme::PrivateKeys { private_keys });
+        }
+
+        if !self.aws_kms_key_ids.is_empty() {
+            if self.aws_kms_key_ids.len() < num_builders {
+                bail!(
+                    "Not enough AWS KMS key IDs for the number of builders. Need {} keys, found {}. You may need to disable one of the entry points.",
+                    num_builders, self.aws_kms_key_ids.len()
+                );
+            }
+
+            return Ok(SigningScheme::AwsKms {
+                key_ids: self.aws_kms_key_ids.clone(),
+                to_lock: num_builders,
+                settings: KmsLockingSettings {
+                    redis_uri: self.redis_uri.clone(),
+                    ttl_millis: self.redis_lock_ttl_millis,
+                },
+            });
+        }
+
+        bail!("No signing scheme provided. Provide either builder.private_keys or builder.aws_kms_key_ids or builder.aws_kms_key_id_and_mnemonics");
     }
 }
 
@@ -557,12 +603,27 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
+    let signer_manager = rundler_signer::new_signer_manager(
+        &task_args.signing_scheme,
+        &chain_spec,
+        providers.evm().clone(),
+        &task_spawner,
+    )
+    .await?;
+
+    let builder_builder = LocalBuilderBuilder::new(
+        REQUEST_CHANNEL_CAPACITY,
+        signer_manager.clone(),
+        Arc::new(pool.clone()),
+    );
+
     BuilderTask::new(
         task_args,
         event_sender,
-        LocalBuilderBuilder::new(REQUEST_CHANNEL_CAPACITY),
+        builder_builder,
         pool,
         providers,
+        signer_manager,
     )
     .spawn(task_spawner)
     .await?;
