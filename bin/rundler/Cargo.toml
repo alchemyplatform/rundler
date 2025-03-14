@@ -17,6 +17,7 @@ rundler-pbh.workspace = true
 rundler-pool.workspace = true
 rundler-provider.workspace = true
 rundler-rpc.workspace = true
+rundler-signer.workspace = true
 rundler-sim.workspace = true
 rundler-task.workspace = true
 rundler-types.workspace = true

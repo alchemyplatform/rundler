@@ -45,7 +45,7 @@ async fn get_s3_json_config<T>(path: &str) -> anyhow::Result<T>
 where
     T: DeserializeOwned,
 {
-    let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
+    let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
     let client = aws_sdk_s3::Client::new(&config);
 
     let (bucket, key) = sscanf::sscanf!(path, "s3://{}/{}", String, String)
