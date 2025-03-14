@@ -76,6 +76,7 @@ where
             let oracle = Arc::new(LocalBedrockDAGasOracle::new(
                 chain_spec.da_gas_oracle_contract_address,
                 provider,
+                chain_spec,
             ));
             (oracle.clone(), Some(oracle))
         }
@@ -208,7 +209,8 @@ mod tests {
         let block = provider.get_block_number().await.unwrap();
 
         let contract_oracle = OptimismBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
-        let cached_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
+        let cached_oracle =
+            LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider, &ChainSpec::default());
 
         let cached_res = cached_e2e(cached_oracle, block, to, uo.clone()).await;
         let contract_res = contract_oracle
@@ -245,10 +247,15 @@ mod tests {
         let provider = opt_provider();
         let block = provider.get_block_number().await.unwrap();
 
-        let cached_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
+        let cached_oracle = LocalBedrockDAGasOracle::new(
+            OPT_ORACLE_ADDRESS,
+            provider.clone(),
+            &ChainSpec::default(),
+        );
         let block_data_1 = cached_oracle.block_data(block.into()).await.unwrap();
 
-        let uncached_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
+        let uncached_oracle =
+            LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider, &ChainSpec::default());
         let block_data_2 = uncached_oracle.block_data(block.into()).await.unwrap();
 
         assert_eq!(block_data_1, block_data_2);
@@ -296,7 +303,8 @@ mod tests {
 
     async fn compare_opt_and_local_bedrock(provider: impl AlloyProvider, block: BlockHashOrNumber) {
         let contract_oracle = OptimismBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider.clone());
-        let local_oracle = LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider);
+        let local_oracle =
+            LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider, &ChainSpec::default());
 
         compare_oracles(&contract_oracle, &local_oracle, block).await;
     }

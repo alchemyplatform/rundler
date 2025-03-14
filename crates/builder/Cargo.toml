@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 rundler-provider.workspace = true
+rundler-signer.workspace = true
 rundler-sim.workspace = true
 rundler-task.workspace = true
 rundler-types.workspace = true
@@ -18,13 +19,10 @@ alloy-consensus.workspace = true
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
 alloy-signer.workspace = true
-alloy-signer-aws.workspace = true
 alloy-signer-local.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-aws-config.workspace = true
-aws-sdk-kms = { version = "1.44", default-features = false }
 enum_dispatch = "0.3.13"
 futures.workspace = true
 futures-util.workspace = true
@@ -34,7 +32,6 @@ metrics.workspace = true
 metrics-derive.workspace = true
 prost.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["json"] }
-rslock = "0.4.0"
 serde.workspace = true
 serde_json.workspace = true
 strum.workspace = true
@@ -46,6 +43,7 @@ tonic-reflection.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+alloy-network.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }

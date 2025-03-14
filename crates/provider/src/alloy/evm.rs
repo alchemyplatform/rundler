@@ -341,7 +341,7 @@ where
     }
 
     #[instrument(skip(self))]
-    async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<U256>> {
+    async fn get_balances(&self, addresses: Vec<Address>) -> ProviderResult<Vec<(Address, U256)>> {
         let helper_addr = Address::random();
         let helper = GetBalancesInstance::new(helper_addr, &self.inner);
 
@@ -352,12 +352,25 @@ where
         };
         overrides.insert(helper_addr, account);
 
-        Ok(helper
-            .getBalances(addresses)
+        let ret = helper
+            .getBalances(addresses.clone())
             .state(overrides)
             .call()
-            .await?
-            .balances)
+            .await?;
+
+        if ret.balances.len() != addresses.len() {
+            return Err(anyhow::anyhow!(
+                "expected {} balances, got {}",
+                addresses.len(),
+                ret.balances.len()
+            )
+            .into());
+        }
+
+        Ok(addresses
+            .into_iter()
+            .zip(ret.balances.into_iter())
+            .collect::<Vec<_>>())
     }
 }
 

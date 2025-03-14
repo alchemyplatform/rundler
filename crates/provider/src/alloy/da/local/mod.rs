@@ -16,5 +16,3 @@ pub(crate) use bedrock::LocalBedrockDAGasOracle;
 
 mod nitro;
 pub(crate) use nitro::CachedNitroDAGasOracle;
-
-mod multicall;

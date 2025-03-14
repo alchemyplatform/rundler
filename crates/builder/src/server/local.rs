@@ -11,32 +11,46 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use futures_util::StreamExt;
+use rundler_signer::SignerManager;
 use rundler_task::{
     server::{HealthCheck, ServerStatus},
     GracefulShutdown,
 };
-use rundler_types::builder::{Builder, BuilderError, BuilderResult, BundlingMode};
+use rundler_types::{
+    builder::{Builder, BuilderError, BuilderResult, BundlingMode},
+    pool::Pool,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResult};
 
 /// Local builder server builder
-#[derive(Debug)]
 pub struct LocalBuilderBuilder {
     req_sender: mpsc::Sender<ServerRequest>,
     req_receiver: mpsc::Receiver<ServerRequest>,
+    signer_manager: Arc<dyn SignerManager>,
+    pool: Arc<dyn Pool>,
 }
 
 impl LocalBuilderBuilder {
     /// Create a new local builder server builder
-    pub fn new(request_capcity: usize) -> Self {
+    pub fn new(
+        request_capcity: usize,
+        signer_manager: Arc<dyn SignerManager>,
+        pool: Arc<dyn Pool>,
+    ) -> Self {
         let (req_sender, req_receiver) = mpsc::channel(request_capcity);
         Self {
             req_sender,
             req_receiver,
+            signer_manager,
+            pool,
         }
     }
 
@@ -54,8 +68,13 @@ impl LocalBuilderBuilder {
         entry_points: Vec<Address>,
         shutdown: GracefulShutdown,
     ) -> BoxFuture<'static, ()> {
-        let runner =
-            LocalBuilderServerRunner::new(self.req_receiver, bundle_sender_actions, entry_points);
+        let runner = LocalBuilderServerRunner::new(
+            self.req_receiver,
+            bundle_sender_actions,
+            entry_points,
+            self.signer_manager,
+            self.pool,
+        );
         Box::pin(runner.run(shutdown))
     }
 }
@@ -70,6 +89,8 @@ struct LocalBuilderServerRunner {
     req_receiver: mpsc::Receiver<ServerRequest>,
     bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
     entry_points: Vec<Address>,
+    signer_manager: Arc<dyn SignerManager>,
+    pool: Arc<dyn Pool>,
 }
 
 impl LocalBuilderHandle {
@@ -139,19 +160,41 @@ impl LocalBuilderServerRunner {
         req_receiver: mpsc::Receiver<ServerRequest>,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
+        signer_manager: Arc<dyn SignerManager>,
+        pool: Arc<dyn Pool>,
     ) -> Self {
         Self {
             req_receiver,
             bundle_sender_actions,
             entry_points,
+            signer_manager,
+            pool,
         }
     }
 
     async fn run(mut self, shutdown: GracefulShutdown) {
+        let Ok(mut new_heads) = self
+            .pool
+            .subscribe_new_heads(self.entry_points.clone())
+            .await
+        else {
+            tracing::error!("Failed to subscribe to new blocks");
+            panic!("failed to subscribe to new blocks");
+        };
+
         loop {
             tokio::select! {
                 _ = shutdown.clone() => {
                     return;
+                }
+                new_head = new_heads.next() => {
+                    let Some(new_head) = new_head else {
+                        tracing::error!("new head stream closed");
+                        panic!("new head stream closed");
+                    };
+
+                    let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
+                    self.signer_manager.update_balances(balances);
                 }
                 Some(req) = self.req_receiver.recv() => {
                     let resp: BuilderResult<ServerResponse> = 'a:  {

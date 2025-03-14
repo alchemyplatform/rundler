@@ -34,8 +34,6 @@ pub use sender::{
 mod server;
 pub use server::{LocalBuilderBuilder, LocalBuilderHandle, RemoteBuilderClient};
 
-mod signer;
-
 mod task;
 pub use task::{Args as BuilderTaskArgs, BuilderSettings, BuilderTask, EntryPointBuilderSettings};
 
