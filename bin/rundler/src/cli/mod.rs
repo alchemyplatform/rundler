@@ -13,6 +13,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use admin::AdminCliArgs;
 use aggregator::AggregatorType;
 use alloy_primitives::U256;
 use anyhow::{bail, Context};
@@ -21,6 +22,7 @@ use clap::{
     Args, Parser, Subcommand,
 };
 
+mod admin;
 mod aggregator;
 mod builder;
 mod chain_spec;
@@ -30,6 +32,7 @@ mod node;
 mod pool;
 mod proxy;
 mod rpc;
+mod signer;
 mod tracing;
 
 use builder::{BuilderCliArgs, EntryPointBuilderConfigs};
@@ -116,6 +119,11 @@ pub async fn run() -> anyhow::Result<()> {
         Command::Builder(args) => {
             builder::spawn_tasks(task_spawner.clone(), cs, args, opt.common, providers).await?
         }
+        Command::Admin(args) => {
+            admin::run(args, cs, providers, task_spawner).await?;
+            // admin CLI should not wait for ctrl-c
+            return Ok(());
+        }
     }
 
     // wait for ctrl-c or the task manager to panic
@@ -161,6 +169,12 @@ enum Command {
     /// Runs the Builder server
     #[command(name = "builder")]
     Builder(BuilderCliArgs),
+
+    /// Admin command
+    ///
+    /// Runs the admin commands
+    #[command(name = "admin")]
+    Admin(AdminCliArgs),
 }
 
 /// CLI common options

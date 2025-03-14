@@ -87,6 +87,7 @@ pub(crate) trait TransactionSender: Send + Sync {
 }
 
 #[enum_dispatch(TransactionSender)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum TransactionSenderEnum<P: EvmProvider> {
     Raw(RawTransactionSender<P>),
     Flashbots(FlashbotsTransactionSender),

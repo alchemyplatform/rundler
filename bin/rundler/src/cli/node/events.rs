@@ -17,6 +17,7 @@ use rundler_builder::BuilderEvent;
 use rundler_pool::PoolEvent;
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     PoolEvent(PoolEvent),
     BuilderEvent(BuilderEvent),

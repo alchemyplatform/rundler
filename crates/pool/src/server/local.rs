@@ -716,6 +716,7 @@ struct ServerRequest {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum ServerRequestKind {
     GetSupportedEntryPoints,
     AddOp {
@@ -782,6 +783,7 @@ enum ServerRequestKind {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum ServerResponse {
     GetSupportedEntryPoints {
         entry_points: Vec<Address>,
