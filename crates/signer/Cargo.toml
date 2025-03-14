@@ -8,10 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-contracts.workspace = true
-rundler-provider.workspace = true
-rundler-task.workspace = true
-rundler-types.workspace = true
 
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
@@ -28,6 +24,10 @@ metrics.workspace = true
 metrics-derive.workspace = true
 parking_lot.workspace = true
 rslock = "0.6.0"
+rundler-contracts.workspace = true
+rundler-provider.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

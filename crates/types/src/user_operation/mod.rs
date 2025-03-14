@@ -431,6 +431,7 @@ fn dummy_transform_for_aggregator<UO: UserOperation>(
 
 /// User operation enum
 #[derive(Debug, Clone, Eq, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum UserOperationVariant {
     /// User operation version 0.6
     V0_6(v0_6::UserOperation),

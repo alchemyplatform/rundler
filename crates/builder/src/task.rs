@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
@@ -50,6 +50,8 @@ pub struct Args {
     pub unsafe_mode: bool,
     /// Signing scheme to use
     pub signing_scheme: SigningScheme,
+    /// Whether to automatically fund signers
+    pub auto_fund: bool,
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit
@@ -168,35 +170,22 @@ where
             .map(|ep| ep.builders.len())
             .sum();
 
-        match &self.args.signing_scheme {
-            SigningScheme::AwsKms { .. } | SigningScheme::PrivateKeys { .. } => {
-                let signers = self.signer_manager.addresses();
-
-                if signers.len() < num_required_signers {
-                    return Err(anyhow::anyhow!(
-                        "Not enough signers available. Have {}, need {}",
-                        signers.len(),
-                        num_required_signers
-                    ));
+        // wait 60 seconds for the signers to be available
+        match tokio::time::timeout(
+            Duration::from_secs(60),
+            self.signer_manager.wait_for_available(num_required_signers),
+        )
+        .await
+        {
+            Ok(r) => {
+                if let Err(e) = r {
+                    return Err(e.into());
                 }
             }
-            SigningScheme::KmsFundingMnemonics {
-                funding_settings, ..
-            } => {
-                // allow some time for funding to complete on startup
-                for _ in 0..(funding_settings.poll_max_retries * 10) {
-                    let available = self.signer_manager.available();
-                    if num_required_signers <= available {
-                        break;
-                    }
-                    tracing::info!("Have {available} signers, waiting for {num_required_signers} total funded signers...");
-                    tokio::time::sleep(funding_settings.poll_interval).await;
-                }
-                if num_required_signers > self.signer_manager.available() {
-                    return Err(anyhow::anyhow!(
-                        "Not enough signers available after waiting for funding to complete"
-                    ));
-                }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Failed to wait for {num_required_signers} signers to be available: {e}"
+                ));
             }
         }
 

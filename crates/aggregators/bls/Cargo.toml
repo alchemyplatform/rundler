@@ -8,8 +8,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-provider.workspace = true
-rundler-types.workspace = true
 
 alloy-primitives.workspace = true
 async-trait.workspace = true
+rundler-provider.workspace = true
+rundler-types.workspace = true
