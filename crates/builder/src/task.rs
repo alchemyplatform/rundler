@@ -11,11 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
 use rundler_provider::{EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT};
+use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
@@ -26,10 +27,7 @@ use rundler_types::{
     chain::ChainSpec, pool::Pool as PoolT, EntryPointVersion, UserOperation, UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
-use tokio::{
-    sync::{broadcast, mpsc},
-    time,
-};
+use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
 use crate::{
@@ -38,7 +36,6 @@ use crate::{
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
     server::{self, LocalBuilderBuilder},
-    signer::{BundlerSigner, KmsSigner, LocalSigner, Signer},
     transaction_tracker::{self, TransactionTrackerImpl},
 };
 
@@ -51,16 +48,8 @@ pub struct Args {
     pub rpc_url: String,
     /// True if using unsafe mode
     pub unsafe_mode: bool,
-    /// Private key to use for signing transactions
-    /// If empty, AWS KMS will be used
-    pub private_keys: Vec<String>,
-    /// AWS KMS key ids to use for signing transactions
-    /// Only used if private_key is not provided
-    pub aws_kms_key_ids: Vec<String>,
-    /// Redis URI for key leasing
-    pub redis_uri: String,
-    /// Redis lease TTL in milliseconds
-    pub redis_lock_ttl_millis: u64,
+    /// Signing scheme to use
+    pub signing_scheme: SigningScheme,
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
     /// Maximum bundle size in gas limit
@@ -138,6 +127,7 @@ pub struct BuilderTask<Pool, Providers> {
     builder_builder: LocalBuilderBuilder,
     pool: Pool,
     providers: Providers,
+    signer_manager: Arc<dyn SignerManager>,
 }
 
 impl<Pool, Providers> BuilderTask<Pool, Providers> {
@@ -149,6 +139,7 @@ impl<Pool, Providers> BuilderTask<Pool, Providers> {
         builder_builder: LocalBuilderBuilder,
         pool: Pool,
         providers: Providers,
+        signer_manager: Arc<dyn SignerManager>,
     ) -> Self {
         Self {
             args,
@@ -156,6 +147,7 @@ impl<Pool, Providers> BuilderTask<Pool, Providers> {
             builder_builder,
             pool,
             providers,
+            signer_manager,
         }
     }
 }
@@ -168,19 +160,57 @@ where
     /// Spawn the builder task on the given task spawner
     pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
         let mut bundle_sender_actions = vec![];
-        let mut pk_iter = self.args.private_keys.clone().into_iter();
+
+        let num_required_signers: usize = self
+            .args
+            .entry_points
+            .iter()
+            .map(|ep| ep.builders.len())
+            .sum();
+
+        match &self.args.signing_scheme {
+            SigningScheme::AwsKms { .. } | SigningScheme::PrivateKeys { .. } => {
+                let signers = self.signer_manager.addresses();
+
+                if signers.len() < num_required_signers {
+                    return Err(anyhow::anyhow!(
+                        "Not enough signers available. Have {}, need {}",
+                        signers.len(),
+                        num_required_signers
+                    ));
+                }
+            }
+            SigningScheme::KmsFundingMnemonics {
+                funding_settings, ..
+            } => {
+                // allow some time for funding to complete on startup
+                for _ in 0..(funding_settings.poll_max_retries * 10) {
+                    let available = self.signer_manager.available();
+                    if num_required_signers <= available {
+                        break;
+                    }
+                    tracing::info!("Have {available} signers, waiting for {num_required_signers} total funded signers...");
+                    tokio::time::sleep(funding_settings.poll_interval).await;
+                }
+                if num_required_signers > self.signer_manager.available() {
+                    return Err(anyhow::anyhow!(
+                        "Not enough signers available after waiting for funding to complete"
+                    ));
+                }
+            }
+        }
 
         for ep in &self.args.entry_points {
             match ep.version {
                 EntryPointVersion::V0_6 => {
                     let actions = self
-                        .create_builders_v0_6(&task_spawner, ep, &mut pk_iter)
+                        .create_builders_v0_6(&task_spawner, ep, &self.signer_manager)
                         .await?;
                     bundle_sender_actions.extend(actions);
                 }
                 EntryPointVersion::V0_7 => {
                     let actions = self
-                        .create_builders_v0_7(&task_spawner, ep, &mut pk_iter)
+                        .create_builders_v0_7(&task_spawner, ep, &self.signer_manager)
                         .await?;
                     bundle_sender_actions.extend(actions);
                 }
@@ -221,15 +251,14 @@ where
         Ok(())
     }
 
-    async fn create_builders_v0_6<T, I>(
+    async fn create_builders_v0_6<T>(
         &self,
         task_spawner: &T,
         ep: &EntryPointBuilderSettings,
-        pk_iter: &mut I,
+        signer_manager: &Arc<dyn SignerManager>,
     ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
         T: TaskSpawnerExt,
-        I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
         let ep_providers = self
@@ -248,7 +277,7 @@ where
                         ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
                     ),
-                    pk_iter,
+                    signer_manager,
                 )
                 .await?
             } else {
@@ -262,7 +291,7 @@ where
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
-                    pk_iter,
+                    signer_manager,
                 )
                 .await?
             };
@@ -271,15 +300,14 @@ where
         Ok(bundle_sender_actions)
     }
 
-    async fn create_builders_v0_7<T, I>(
+    async fn create_builders_v0_7<T>(
         &self,
         task_spawner: &T,
         ep: &EntryPointBuilderSettings,
-        pk_iter: &mut I,
+        signer_manager: &Arc<dyn SignerManager>,
     ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
         T: TaskSpawnerExt,
-        I: Iterator<Item = String>,
     {
         info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
         let ep_providers = self
@@ -298,7 +326,7 @@ where
                         ep_providers.entry_point().clone(),
                         self.args.sim_settings.clone(),
                     ),
-                    pk_iter,
+                    signer_manager,
                 )
                 .await?
             } else {
@@ -312,7 +340,7 @@ where
                         self.args.sim_settings.clone(),
                         ep.mempool_configs.clone(),
                     ),
-                    pk_iter,
+                    signer_manager,
                 )
                 .await?
             };
@@ -321,13 +349,13 @@ where
         Ok(bundle_sender_actions)
     }
 
-    async fn create_bundle_builder<T, UO, EP, S, I>(
+    async fn create_bundle_builder<T, UO, EP, S>(
         &self,
         task_spawner: &T,
         builder_settings: &BuilderSettings,
         ep_providers: EP,
         simulator: S,
-        pk_iter: &mut I,
+        signer_manager: &Arc<dyn SignerManager>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
@@ -335,44 +363,11 @@ where
         UserOperationVariant: AsRef<UO>,
         EP: ProvidersWithEntryPointT + 'static,
         S: Simulator<UO = UO> + 'static,
-        I: Iterator<Item = String>,
     {
         let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
 
-        let signer = if let Some(pk) = pk_iter.next() {
-            info!("Using local signer");
-            BundlerSigner::Local(
-                LocalSigner::connect(
-                    &task_spawner,
-                    self.providers.evm().clone(),
-                    self.args.chain_spec.id,
-                    pk.to_owned(),
-                )
-                .await?,
-            )
-        } else {
-            info!("Using AWS KMS signer");
-            let signer = time::timeout(
-                // timeout must be < than the lock TTL to avoid a
-                // bug in the redis lock implementation that panics if connection
-                // takes longer than the TTL. Generally the TLL should be on the order of 10s of seconds
-                // so this should give ample time for the connection to establish.
-                Duration::from_millis(self.args.redis_lock_ttl_millis / 4),
-                KmsSigner::connect(
-                    &task_spawner,
-                    self.providers.evm().clone(),
-                    self.args.chain_spec.id,
-                    self.args.aws_kms_key_ids.clone(),
-                    self.args.redis_uri.clone(),
-                    self.args.redis_lock_ttl_millis,
-                ),
-            )
-            .await
-            .context("timeout connecting to KMS")?
-            .context("failure connecting to KMS")?;
-            let ret = BundlerSigner::Kms(signer);
-            info!("Created AWS KMS signer");
-            ret
+        let Some(signer) = signer_manager.lease_signer() else {
+            return Err(anyhow::anyhow!("No signer available"));
         };
 
         let submission_proxy = if let Some(proxy) = &builder_settings.submission_proxy {
@@ -401,7 +396,6 @@ where
 
         let transaction_sender = self.args.sender_args.clone().into_sender(
             &self.args.rpc_url,
-            signer,
             self.args.provider_client_timeout_seconds,
         )?;
 
@@ -412,6 +406,7 @@ where
         let transaction_tracker = TransactionTrackerImpl::new(
             ep_providers.evm().clone(),
             transaction_sender,
+            signer,
             tracker_settings,
             builder_settings.tag(ep_providers.entry_point().address()),
         )

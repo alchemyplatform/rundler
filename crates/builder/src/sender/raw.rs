@@ -11,38 +11,40 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256};
+use alloy_eips::eip2718::Encodable2718;
+use alloy_primitives::B256;
+use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_signer::SignerLease;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
-use crate::{
-    sender::{create_hard_cancel_tx, SentTxInfo, TransactionSender},
-    signer::Signer,
-};
+use crate::sender::{create_hard_cancel_tx, TransactionSender};
 
 #[derive(Debug)]
-pub(crate) struct RawTransactionSender<P, S> {
+pub(crate) struct RawTransactionSender<P> {
     submit_provider: P,
-    signer: S,
     use_conditional_rpc: bool,
 }
 
 #[async_trait]
-impl<P, S> TransactionSender for RawTransactionSender<P, S>
+impl<P> TransactionSender for RawTransactionSender<P>
 where
     P: EvmProvider,
-    S: Signer,
 {
     async fn send_transaction(
         &self,
         tx: TransactionRequest,
         expected_storage: &ExpectedStorage,
-    ) -> Result<SentTxInfo> {
-        let (raw_tx, nonce) = self.signer.fill_and_sign(tx).await?;
+        signer: &SignerLease,
+    ) -> Result<B256> {
+        let raw_tx = signer
+            .sign_tx_raw(tx)
+            .await
+            .context("failed to sign transaction")?;
 
         let tx_hash = if self.use_conditional_rpc {
             self.submit_provider
@@ -57,7 +59,7 @@ where
                 .await?
         };
 
-        Ok(SentTxInfo { nonce, tx_hash })
+        Ok(tx_hash)
     }
 
     async fn cancel_transaction(
@@ -65,10 +67,16 @@ where
         _tx_hash: B256,
         nonce: u64,
         gas_fees: GasFees,
+        signer: &SignerLease,
     ) -> Result<CancelTxInfo> {
-        let tx = create_hard_cancel_tx(self.signer.address(), nonce, gas_fees);
+        let tx = create_hard_cancel_tx(signer.address(), nonce, gas_fees);
 
-        let (raw_tx, _) = self.signer.fill_and_sign(tx).await?;
+        let tx_envelope = signer
+            .sign_tx(tx)
+            .await
+            .context("failed to sign transaction")?;
+        let mut raw_tx = vec![];
+        tx_envelope.encode_2718(&mut raw_tx);
 
         let tx_hash = self
             .submit_provider
@@ -80,17 +88,12 @@ where
             soft_cancelled: false,
         })
     }
-
-    fn address(&self) -> Address {
-        self.signer.address()
-    }
 }
 
-impl<P, S> RawTransactionSender<P, S> {
-    pub(crate) fn new(submit_provider: P, signer: S, use_conditional_rpc: bool) -> Self {
+impl<P> RawTransactionSender<P> {
+    pub(crate) fn new(submit_provider: P, use_conditional_rpc: bool) -> Self {
         Self {
             submit_provider,
-            signer,
             use_conditional_rpc,
         }
     }

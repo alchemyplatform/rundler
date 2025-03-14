@@ -33,7 +33,6 @@ reth-tasks = { workspace = true, features = ["rayon"] }
 anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
-const-hex.workspace = true
 futures-util.workspace = true
 pin-project.workspace = true
 rand.workspace = true

@@ -13,16 +13,18 @@
 
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
-use alloy_rpc_types_eth::state::{AccountOverride, StateOverride};
 use alloy_transport::Transport;
 use anyhow::Context;
 use reth_tasks::pool::BlockingTaskPool;
-use rundler_types::da::{BedrockDAGasBlockData, BedrockDAGasUOData, DAGasBlockData, DAGasUOData};
+use rundler_contracts::multicall3::{self, Multicall3::Multicall3Instance};
+use rundler_types::{
+    chain::ChainSpec,
+    da::{BedrockDAGasBlockData, BedrockDAGasUOData, DAGasBlockData, DAGasUOData},
+};
 use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{error, instrument};
 
-use super::multicall::{self, Multicall::MulticallInstance, MULTICALL_BYTECODE};
 use crate::{
     alloy::da::optimism::GasPriceOracle::{
         baseFeeScalarCall, blobBaseFeeCall, blobBaseFeeScalarCall, l1BaseFeeCall,
@@ -43,7 +45,7 @@ const MIN_TRANSACTION_SIZE: i128 = 100_000_000;
 #[derive(Debug)]
 pub(crate) struct LocalBedrockDAGasOracle<AP, T> {
     oracle: GasPriceOracleInstance<T, AP, AnyNetwork>,
-    multicaller: MulticallInstance<T, AP, AnyNetwork>,
+    multicaller: Multicall3Instance<T, AP, AnyNetwork>,
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BedrockDAGasBlockData>>,
     blocking_task_pool: BlockingTaskPool,
 }
@@ -53,9 +55,9 @@ where
     AP: AlloyProvider<T>,
     T: Transport + Clone,
 {
-    pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
+    pub(crate) fn new(oracle_address: Address, provider: AP, chain_spec: &ChainSpec) -> Self {
         let oracle = GasPriceOracleInstance::new(oracle_address, provider.clone());
-        let multicaller = MulticallInstance::new(Address::random(), provider);
+        let multicaller = Multicall3Instance::new(chain_spec.multicall3_address, provider);
         Self {
             oracle,
             multicaller,
@@ -169,36 +171,28 @@ where
         assert!(self.is_fjord().await);
 
         let calls = vec![
-            multicall::create_call(
+            multicall3::create_call(
                 *self.oracle.address(),
                 GasPriceOracleCalls::baseFeeScalar(baseFeeScalarCall {}),
             ),
-            multicall::create_call(
+            multicall3::create_call(
                 *self.oracle.address(),
                 GasPriceOracleCalls::l1BaseFee(l1BaseFeeCall {}),
             ),
-            multicall::create_call(
+            multicall3::create_call(
                 *self.oracle.address(),
                 GasPriceOracleCalls::blobBaseFeeScalar(blobBaseFeeScalarCall {}),
             ),
-            multicall::create_call(
+            multicall3::create_call(
                 *self.oracle.address(),
                 GasPriceOracleCalls::blobBaseFee(blobBaseFeeCall {}),
             ),
         ];
 
-        let mut overrides = StateOverride::default();
-        let account = AccountOverride {
-            code: Some(MULTICALL_BYTECODE.clone()),
-            ..Default::default()
-        };
-        overrides.insert(*self.multicaller.address(), account);
-
         let result = self
             .multicaller
             .aggregate3(calls)
             .call()
-            .overrides(&overrides)
             .block(block.into())
             .await?;
 
@@ -211,18 +205,19 @@ where
         }
 
         let base_fee_scalar =
-            multicall::decode_result::<baseFeeScalarCall>(&result.returnData[0].returnData)?._0
+            multicall3::decode_result::<baseFeeScalarCall>(&result.returnData[0].returnData)?._0
                 as u64;
         let l1_base_fee =
-            multicall::decode_result::<l1BaseFeeCall>(&result.returnData[1].returnData)?
+            multicall3::decode_result::<l1BaseFeeCall>(&result.returnData[1].returnData)?
                 ._0
                 .try_into()
                 .context("l1_base_fee too large for u64")?;
-        let blob_base_fee_scalar =
-            multicall::decode_result::<blobBaseFeeScalarCall>(&result.returnData[2].returnData)?._0
-                as u64;
+        let blob_base_fee_scalar = multicall3::decode_result::<blobBaseFeeScalarCall>(
+            &result.returnData[2].returnData,
+        )?
+        ._0 as u64;
         let blob_base_fee =
-            multicall::decode_result::<blobBaseFeeCall>(&result.returnData[3].returnData)?
+            multicall3::decode_result::<blobBaseFeeCall>(&result.returnData[3].returnData)?
                 ._0
                 .try_into()
                 .context("blob_base_fee too large for u64")?;

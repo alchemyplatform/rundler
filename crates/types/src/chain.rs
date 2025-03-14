@@ -22,6 +22,7 @@ use crate::{aggregator::SignatureAggregator, da::DAGasOracleType, proxy::Submiss
 
 const ENTRY_POINT_ADDRESS_V6_0: &str = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789";
 const ENTRY_POINT_ADDRESS_V7_0: &str = "0x0000000071727De22E5E9d8BAf0edAc6f37da032";
+const MULTICALL3_ADDRESS: &str = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
 /// Chain specification for Rundler
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -37,6 +38,9 @@ pub struct ChainSpec {
     pub entry_point_address_v0_6: Address,
     /// entry point address for v0_7
     pub entry_point_address_v0_7: Address,
+    /// address of the multicall3 contract
+    pub multicall3_address: Address,
+
     /// Overhead when preforming gas estimation to account for the deposit storage
     /// and transfer overhead.
     ///
@@ -150,6 +154,7 @@ impl Default for ChainSpec {
             id: 0,
             entry_point_address_v0_6: Address::from_str(ENTRY_POINT_ADDRESS_V6_0).unwrap(),
             entry_point_address_v0_7: Address::from_str(ENTRY_POINT_ADDRESS_V7_0).unwrap(),
+            multicall3_address: Address::from_str(MULTICALL3_ADDRESS).unwrap(),
             deposit_transfer_overhead: 30_000,
             transaction_intrinsic_gas: 21_000,
             per_user_op_v0_6_gas: 18_300,

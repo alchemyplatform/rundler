@@ -268,6 +268,7 @@ where
             gas_limit,
             gas_fees,
             proxy,
+            self.chain_spec.id,
         );
         let tx = WithOtherFields::new(tx);
         let res = self.i_entry_point.provider().call(&tx).await;
@@ -304,6 +305,7 @@ where
             gas_limit,
             gas_fees,
             proxy,
+            self.chain_spec.id,
         )
     }
 
@@ -553,6 +555,7 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
     gas_limit: u64,
     gas_fees: GasFees,
     proxy: Option<Address>,
+    chain_id: u64,
 ) -> TransactionRequest {
     let mut authorization_list: Vec<SignedAuthorization> = vec![];
     let mut ops_per_aggregator: Vec<UserOpsPerAggregatorV0_7> = ops_per_aggregator
@@ -577,11 +580,13 @@ fn get_handle_ops_call<AP: AlloyProvider<T>, T: Transport + Clone>(
         if ops_per_aggregator.len() == 1 && ops_per_aggregator[0].aggregator == Address::ZERO {
             entry_point
                 .handleOps(ops_per_aggregator.swap_remove(0).userOps, sender_eoa)
+                .chain_id(chain_id)
                 .into_transaction_request()
                 .inner
         } else {
             entry_point
                 .handleAggregatedOps(ops_per_aggregator, sender_eoa)
+                .chain_id(chain_id)
                 .into_transaction_request()
                 .inner
         };

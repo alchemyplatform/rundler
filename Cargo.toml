@@ -8,6 +8,7 @@ members = [
     "crates/pool/",
     "crates/provider/",
     "crates/rpc/",
+    "crates/signer/",
     "crates/sim/",
     "crates/task/",
     "crates/types/",
@@ -25,18 +26,19 @@ repository = "https://github.com/alchemyplatform/rundler"
 
 [workspace.dependencies]
 # rundler crates
+rundler-bindings-fastlz = { path = "crates/bindings/fastlz" }
 rundler-bls = { path = "crates/aggregators/bls" }
+rundler-builder = { path = "crates/builder" }
 rundler-contracts = { path = "crates/contracts" }
+rundler-pbh = { path = "crates/aggregators/pbh" }
+rundler-pool = { path = "crates/pool" }
 rundler-provider = { path = "crates/provider" }
+rundler-rpc = { path = "crates/rpc" }
 rundler-sim = { path = "crates/sim" }
+rundler-signer = { path = "crates/signer" }
 rundler-task = { path = "crates/task" }
 rundler-types = { path = "crates/types" }
 rundler-utils = { path = "crates/utils" }
-rundler-bindings-fastlz = { path = "crates/bindings/fastlz" }
-rundler-builder = { path = "crates/builder" }
-rundler-pbh = { path = "crates/aggregators/pbh" }
-rundler-pool = { path = "crates/pool" }
-rundler-rpc = { path = "crates/rpc" }
 
 # alloy core
 alloy-primitives = "0.8.15"
@@ -80,6 +82,7 @@ http = "1.1.0"
 metrics = "0.24.1"
 metrics-derive = "0.1.0"
 mockall = "0.13.0"
+parking_lot = "0.12.3"
 parse-display = "0.10.0"
 pin-project = "1.1.5"
 prost = "0.13.3"

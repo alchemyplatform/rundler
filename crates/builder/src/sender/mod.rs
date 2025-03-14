@@ -23,16 +23,9 @@ pub(crate) use flashbots::FlashbotsTransactionSender;
 use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
 use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
+use rundler_signer::SignerLease;
 use rundler_sim::ExpectedStorage;
 use rundler_types::GasFees;
-
-use crate::signer::Signer;
-
-#[derive(Debug)]
-pub(crate) struct SentTxInfo {
-    pub(crate) nonce: u64,
-    pub(crate) tx_hash: B256,
-}
 
 #[derive(Debug)]
 pub(crate) struct CancelTxInfo {
@@ -81,23 +74,23 @@ pub(crate) trait TransactionSender: Send + Sync {
         &self,
         tx: TransactionRequest,
         expected_storage: &ExpectedStorage,
-    ) -> Result<SentTxInfo>;
+        signer: &SignerLease,
+    ) -> Result<B256>;
 
     async fn cancel_transaction(
         &self,
         tx_hash: B256,
         nonce: u64,
         gas_fees: GasFees,
+        signer: &SignerLease,
     ) -> Result<CancelTxInfo>;
-
-    fn address(&self) -> Address;
 }
 
-#[enum_dispatch]
-pub(crate) enum TransactionSenderEnum<P: EvmProvider, S: Signer> {
-    Raw(RawTransactionSender<P, S>),
-    Flashbots(FlashbotsTransactionSender<S>),
-    PolygonBloxroute(PolygonBloxrouteTransactionSender<P, S>),
+#[enum_dispatch(TransactionSender)]
+pub(crate) enum TransactionSenderEnum<P: EvmProvider> {
+    Raw(RawTransactionSender<P>),
+    Flashbots(FlashbotsTransactionSender),
+    PolygonBloxroute(PolygonBloxrouteTransactionSender<P>),
 }
 
 /// Transaction sender types
@@ -151,13 +144,11 @@ pub struct FlashbotsSenderArgs {
 }
 
 impl TransactionSenderArgs {
-    pub(crate) fn into_sender<S: Signer>(
+    pub(crate) fn into_sender(
         self,
         rpc_url: &str,
-        signer: S,
         provider_client_timeout_seconds: u64,
-    ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider, S>, SenderConstructorErrors>
-    {
+    ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider>, SenderConstructorErrors> {
         let provider =
             rundler_provider::new_alloy_evm_provider(rpc_url, provider_client_timeout_seconds)?;
         let sender = match self {
@@ -169,20 +160,14 @@ impl TransactionSenderArgs {
 
                 TransactionSenderEnum::Raw(RawTransactionSender::new(
                     submitter,
-                    signer,
                     args.use_conditional_rpc,
                 ))
             }
-            Self::Flashbots(args) => {
-                TransactionSenderEnum::Flashbots(FlashbotsTransactionSender::new(
-                    signer,
-                    args.auth_key,
-                    args.builders,
-                    args.relay_url,
-                )?)
-            }
+            Self::Flashbots(args) => TransactionSenderEnum::Flashbots(
+                FlashbotsTransactionSender::new(args.auth_key, args.builders, args.relay_url)?,
+            ),
             Self::Bloxroute(args) => TransactionSenderEnum::PolygonBloxroute(
-                PolygonBloxrouteTransactionSender::new(provider, signer, &args.header)?,
+                PolygonBloxrouteTransactionSender::new(provider, &args.header)?,
             ),
         };
         Ok(sender)

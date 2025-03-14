@@ -612,7 +612,7 @@ impl<P: EvmProvider> Chain<P> {
             .into_values()
             .zip(balances.into_iter())
             .map(|(mut update, balance)| {
-                update.balance = balance;
+                update.balance = balance.1;
                 update
             })
             .collect())
@@ -942,15 +942,18 @@ mod tests {
             *self.balances.write() = balances;
         }
 
-        fn get_balances(&self, addresses: Vec<Address>) -> Vec<U256> {
+        fn get_balances(&self, addresses: Vec<Address>) -> Vec<(Address, U256)> {
             addresses
-                .iter()
+                .into_iter()
                 .map(|addr| {
-                    self.balances
-                        .read()
-                        .get(addr)
-                        .copied()
-                        .unwrap_or(U256::ZERO)
+                    (
+                        addr,
+                        self.balances
+                            .read()
+                            .get(&addr)
+                            .copied()
+                            .unwrap_or(U256::ZERO),
+                    )
                 })
                 .collect()
         }
