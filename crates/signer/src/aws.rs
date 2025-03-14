@@ -79,6 +79,11 @@ impl LockingKmsSigner {
             .await
             .context("should create signer")?;
 
+        tracing::info!(
+            "Connected to KMS key {key_id}. Address: {}",
+            signer.address()
+        );
+
         Ok(Self {
             inner: signer,
             key_id,

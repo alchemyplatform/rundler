@@ -4863,6 +4863,7 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 name = "rundler"
 version = "0.6.0"
 dependencies = [
+ "alloy-network",
  "alloy-primitives",
  "anyhow",
  "async-trait",
@@ -4871,6 +4872,7 @@ dependencies = [
  "clap",
  "config",
  "dotenvy",
+ "futures",
  "go-parse-duration",
  "http 1.2.0",
  "itertools 0.13.0",
