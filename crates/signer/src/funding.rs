@@ -110,6 +110,7 @@ async fn funding_task_inner<P: EvmProvider>(
     let addresses = statuses.read().keys().cloned().collect::<Vec<_>>();
     let balances = provider.get_balances(addresses.clone()).await?;
     let mut to_fund = balances
+        .clone()
         .into_iter()
         .filter_map(|(address, balance)| {
             if balance < settings.fund_below_balance && balance < settings.fund_to_balance {
@@ -119,6 +120,17 @@ async fn funding_task_inner<P: EvmProvider>(
             }
         })
         .collect::<Vec<_>>();
+
+    if to_fund.is_empty() {
+        tracing::info!("No funding needed");
+        return Ok(FundingSignerManager::update_signer_statuses(
+            statuses,
+            balances,
+            Some(settings),
+            false,
+        ));
+    }
+
     // sort by amount, descending
     to_fund.sort_by_key(|(_, amount)| cmp::Reverse(*amount));
 

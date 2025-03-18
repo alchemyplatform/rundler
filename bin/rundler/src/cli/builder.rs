@@ -274,7 +274,7 @@ impl BuilderArgs {
             entry_points,
             chain_spec,
             signing_scheme,
-            auto_fund: self.signer_args.auto_fund,
+            auto_fund: true,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
             max_bundle_size: self.max_bundle_size,

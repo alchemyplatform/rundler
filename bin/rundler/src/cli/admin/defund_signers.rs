@@ -65,12 +65,11 @@ pub(super) async fn defund_signers(
     if !signing_scheme.supports_funding() {
         anyhow::bail!("Signing scheme does not support defunding");
     }
-    if let SigningScheme::KmsFundingMnemonics {
-        mnemonics_by_key_id,
-        ..
+    if let SigningScheme::KmsFunding {
+        key_by_funding_key, ..
     } = &signing_scheme
     {
-        if mnemonics_by_key_id.len() > 1 {
+        if key_by_funding_key.len() > 1 {
             anyhow::bail!("Only one key ID with mnemonic is supported for funding");
         }
     }
