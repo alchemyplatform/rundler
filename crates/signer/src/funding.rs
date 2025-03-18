@@ -30,6 +30,7 @@ use crate::{
 
 const GAS_BASE: u64 = 50_000;
 const GAS_PER_CALL: u64 = 40_000;
+const MAX_TO_FUND_IN_BATCH: usize = 128;
 
 #[derive(Clone)]
 pub(crate) struct FunderSettings {
@@ -110,6 +111,7 @@ async fn funding_task_inner<P: EvmProvider>(
     let addresses = statuses.read().keys().cloned().collect::<Vec<_>>();
     let balances = provider.get_balances(addresses.clone()).await?;
     let mut to_fund = balances
+        .clone()
         .into_iter()
         .filter_map(|(address, balance)| {
             if balance < settings.fund_below_balance && balance < settings.fund_to_balance {
@@ -119,8 +121,21 @@ async fn funding_task_inner<P: EvmProvider>(
             }
         })
         .collect::<Vec<_>>();
+
+    if to_fund.is_empty() {
+        tracing::info!("No funding needed");
+        return Ok(FundingSignerManager::update_signer_statuses(
+            statuses,
+            balances,
+            Some(settings),
+            false,
+        ));
+    }
+
     // sort by amount, descending
     to_fund.sort_by_key(|(_, amount)| cmp::Reverse(*amount));
+    // limit the amount of funding in a single transaction
+    to_fund.truncate(MAX_TO_FUND_IN_BATCH);
 
     let total = to_fund.iter().map(|(_, amount)| amount).sum::<U256>();
     let total_to_fund = to_fund.len();

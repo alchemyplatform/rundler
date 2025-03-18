@@ -5136,6 +5136,7 @@ dependencies = [
  "rundler-provider",
  "rundler-task",
  "rundler-types",
+ "strum",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
