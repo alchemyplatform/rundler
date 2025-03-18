@@ -52,12 +52,11 @@ pub(super) async fn fund_signers(
     let Some(fund_to) = args.signer_args.fund_to else {
         anyhow::bail!("Fund to balance not set");
     };
-    if let SigningScheme::KmsFundingMnemonics {
-        mnemonics_by_key_id,
-        ..
+    if let SigningScheme::KmsFunding {
+        subkeys_by_key_id, ..
     } = &signing_scheme
     {
-        if mnemonics_by_key_id.len() > 1 {
+        if subkeys_by_key_id.len() > 1 {
             anyhow::bail!("Only one key ID with mnemonic is supported for funding");
         }
     }
@@ -87,10 +86,6 @@ pub(super) async fn fund_signers(
         }
     }
 
-    signer_manager
-        .fund_signers()
-        .context("Failed to fund signers")?;
-
     println!(
         "Total to fund: {}",
         alloy_primitives::utils::format_ether(total)
@@ -102,6 +97,9 @@ pub(super) async fn fund_signers(
 
     let count = signer_manager.addresses().len();
     println!("Waiting for {count} signers to be funded...");
+    signer_manager
+        .fund_signers()
+        .context("Failed to fund signers")?;
     let _ = signer_manager.wait_for_available(count).await;
     println!("All signers funded");
 
