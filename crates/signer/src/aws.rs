@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use alloy_consensus::SignableTransaction;
-use alloy_network::TxSigner;
+use alloy_network::{EthereumWallet, TxSigner};
 use alloy_primitives::{Address, PrimitiveSignature};
 use alloy_signer_aws::AwsSigner;
 use anyhow::Context;
@@ -24,6 +24,24 @@ use rundler_task::TaskSpawner;
 use tokio::{sync::oneshot, time::sleep};
 
 use crate::Result;
+
+pub(crate) async fn create_wallet_from_key_ids(
+    key_ids: Vec<String>,
+    chain_id: u64,
+) -> Result<EthereumWallet> {
+    let mut wallet = EthereumWallet::default();
+    let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+    let client = aws_sdk_kms::Client::new(&config);
+
+    for key_id in key_ids {
+        let signer = AwsSigner::new(client.clone(), key_id.to_string(), Some(chain_id))
+            .await
+            .context("should create signer")?;
+        wallet.register_signer(signer);
+    }
+
+    Ok(wallet)
+}
 
 pub(crate) struct LockingKmsSigner {
     inner: AwsSigner,

@@ -22,23 +22,25 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_network::EthereumWallet;
-use aws::LockingKmsSigner;
-use funding::FunderSettings;
-use manager::FundingSignerManager;
+use anyhow::Context;
 use rundler_provider::EvmProvider;
 use rundler_task::TaskSpawner;
 use rundler_types::chain::ChainSpec;
 
 mod aws;
+use aws::LockingKmsSigner;
 
 mod error;
 use alloy_primitives::U256;
 pub use error::{Error, Result};
 
 mod funding;
+use funding::FunderSettings;
+
 mod local;
 
 mod manager;
+use manager::FundingSignerManager;
 pub use manager::{SignerLease, SignerManager};
 
 pub mod utils;
@@ -82,8 +84,15 @@ pub enum SigningScheme {
         /// Private keys
         private_keys: Vec<String>,
     },
+    /// Mnemonic
+    Mnemonic {
+        /// Mnemonic
+        mnemonic: String,
+        /// Number of keys to create
+        num_keys: usize,
+    },
     /// List of kms key ids to lock
-    AwsKms {
+    AwsKmsLocking {
         /// Key IDs
         key_ids: Vec<String>,
         /// The number of keys to lock
@@ -91,23 +100,26 @@ pub enum SigningScheme {
         /// Settings
         settings: KmsLockingSettings,
     },
-    /// KMS funding with associated mnemonic for key derivation
-    KmsFundingMnemonics {
-        /// Mnemonics by KMS key ID
-        mnemonics_by_key_id: HashMap<String, String>,
+    /// KMS without locking
+    AwsKms {
+        /// Key IDs
+        key_ids: Vec<String>,
+    },
+    /// KMS funding key and associated keys
+    KmsFunding {
+        /// Subkey map keyed by the funding key ids
+        subkeys_by_key_id: HashMap<String, SigningScheme>,
         /// Lock settings
         lock_settings: KmsLockingSettings,
         /// Funding settings
         funding_settings: FundingSettings,
-        /// The number of keys to create
-        to_create: usize,
     },
 }
 
 impl SigningScheme {
     /// Returns true if the signing scheme supports funding
     pub fn supports_funding(&self) -> bool {
-        matches!(self, SigningScheme::KmsFundingMnemonics { .. })
+        matches!(self, SigningScheme::KmsFunding { .. })
     }
 }
 
@@ -126,7 +138,14 @@ pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner
             private_keys,
             chain_spec,
         ),
-        SigningScheme::AwsKms {
+        SigningScheme::Mnemonic { mnemonic, num_keys } => new_mnemonic_signer_manager(
+            task_spawner,
+            provider.clone(),
+            mnemonic.clone(),
+            *num_keys,
+            chain_spec,
+        ),
+        SigningScheme::AwsKmsLocking {
             key_ids,
             to_lock,
             settings,
@@ -134,25 +153,34 @@ pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner
             new_kms_signer_manager(
                 task_spawner,
                 provider.clone(),
-                key_ids,
+                key_ids.clone(),
                 *to_lock,
-                settings,
+                Some(settings),
                 chain_spec,
             )
             .await
         }
-        SigningScheme::KmsFundingMnemonics {
-            mnemonics_by_key_id,
+        SigningScheme::AwsKms { key_ids } => {
+            new_kms_signer_manager(
+                task_spawner,
+                provider.clone(),
+                key_ids.clone(),
+                key_ids.len(),
+                None,
+                chain_spec,
+            )
+            .await
+        }
+        SigningScheme::KmsFunding {
+            subkeys_by_key_id,
             lock_settings,
             funding_settings,
-            to_create,
         } => {
             new_kms_funding_signer_manager(
                 task_spawner,
                 provider.clone(),
-                *to_create,
+                subkeys_by_key_id,
                 funding_settings,
-                mnemonics_by_key_id,
                 lock_settings,
                 chain_spec,
                 auto_fund,
@@ -181,27 +209,48 @@ fn new_private_keys_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
     )))
 }
 
+fn new_mnemonic_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
+    task_spawner: &T,
+    provider: P,
+    mnemonic: String,
+    num_keys: usize,
+    chain_spec: &ChainSpec,
+) -> Result<Arc<dyn SignerManager>> {
+    let wallet = local::construct_local_wallet_from_mnemonic(mnemonic, chain_spec.id, num_keys)?;
+    Ok(Arc::new(FundingSignerManager::new(
+        wallet,
+        None,
+        false,
+        task_spawner,
+        provider,
+    )))
+}
+
 async fn new_kms_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
     task_spawner: &T,
     provider: P,
-    key_ids: &[String],
-    to_lock: usize,
-    settings: &KmsLockingSettings,
+    key_ids: Vec<String>,
+    count: usize,
+    settings: Option<&KmsLockingSettings>,
     chain_spec: &ChainSpec,
 ) -> Result<Arc<dyn SignerManager>> {
-    let mut wallet = EthereumWallet::default();
-
-    for _ in 0..to_lock {
-        let signer = LockingKmsSigner::connect(
-            task_spawner,
-            chain_spec.id,
-            key_ids.to_vec(),
-            settings.redis_uri.clone(),
-            settings.ttl_millis,
-        )
-        .await?;
-        wallet.register_signer(signer);
-    }
+    let wallet = if let Some(settings) = settings {
+        let mut wallet = EthereumWallet::default();
+        for _ in 0..count {
+            let signer = LockingKmsSigner::connect(
+                task_spawner,
+                chain_spec.id,
+                key_ids.to_vec(),
+                settings.redis_uri.clone(),
+                settings.ttl_millis,
+            )
+            .await?;
+            wallet.register_signer(signer);
+        }
+        wallet
+    } else {
+        aws::create_wallet_from_key_ids(key_ids, chain_spec.id).await?
+    };
 
     Ok(Arc::new(FundingSignerManager::new(
         wallet,
@@ -216,14 +265,13 @@ async fn new_kms_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
 async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
     task_spawner: &T,
     provider: P,
-    to_create: usize,
+    subkeys_by_key_id: &HashMap<String, SigningScheme>,
     settings: &FundingSettings,
-    mnemonics_by_key_id: &HashMap<String, String>,
     lock_settings: &KmsLockingSettings,
     chain_spec: &ChainSpec,
     auto_fund: bool,
 ) -> Result<Arc<dyn SignerManager>> {
-    let key_ids = mnemonics_by_key_id.keys().cloned().collect::<Vec<_>>();
+    let key_ids = subkeys_by_key_id.keys().cloned().collect::<Vec<_>>();
     let funding_signer = LockingKmsSigner::connect(
         task_spawner,
         chain_spec.id,
@@ -233,12 +281,24 @@ async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner
     )
     .await?;
 
-    let mnemonic = mnemonics_by_key_id
+    let subkeys = subkeys_by_key_id
         .get(funding_signer.key_id())
-        .expect("key id should be in mnemonics by key id")
-        .clone();
+        .context("funding key id should be in key ids by funding key id")?;
 
-    let wallet = local::construct_local_wallet_from_mnemonic(mnemonic, chain_spec.id, to_create)?;
+    let wallet = match subkeys {
+        SigningScheme::PrivateKeys { private_keys } => {
+            local::construct_local_wallet_from_private_keys(private_keys, chain_spec.id)?
+        }
+        SigningScheme::AwsKms { key_ids } => {
+            aws::create_wallet_from_key_ids(key_ids.clone(), chain_spec.id).await?
+        }
+        SigningScheme::Mnemonic { mnemonic, num_keys } => {
+            local::construct_local_wallet_from_mnemonic(mnemonic.clone(), chain_spec.id, *num_keys)?
+        }
+        _ => Err(anyhow::anyhow!(
+            "Signing scheme {subkeys:?} not supported in kms funding"
+        ))?,
+    };
 
     let funder_settings = FunderSettings {
         fund_below_balance: settings.fund_below_balance,

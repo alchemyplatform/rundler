@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use alloy_primitives::U256;
 use anyhow::{bail, Context};
@@ -22,8 +22,6 @@ use rundler_signer::{FundingSettings, KmsLockingSettings, SigningScheme};
 #[command(next_help_heading = "SIGNER")]
 pub struct SignerArgs {
     /// Private keys to use for signing transactions
-    ///
-    /// Cannot use both `builder.private_keys` and `builder.aws_kms_key_ids` at the same time.
     #[arg(
         long = "signer.private_keys",
         name = "signer.private_keys",
@@ -31,6 +29,14 @@ pub struct SignerArgs {
         value_delimiter = ','
     )]
     pub private_keys: Vec<String>,
+
+    /// Mnemonic to use for signing transactions
+    #[arg(
+        long = "signer.mnemonic",
+        name = "signer.mnemonic",
+        env = "SIGNER_MNEMONIC"
+    )]
+    pub mnemonic: Option<String>,
 
     /// AWS KMS key IDs to use for signing transactions
     #[arg(
@@ -41,15 +47,41 @@ pub struct SignerArgs {
     )]
     pub aws_kms_key_ids: Vec<String>,
 
-    /// TODO how do we want to handle this?
-    /// AWS KMS mnemonics to use for signing transactions
+    /// AWS KMS key groups to use for signing transactions
+    ///
+    /// Each group is separated by a semicolon. Group entries are separated by commas.
+    ///
+    /// Groups are associated 1:1 with entries in `signer.aws_kms_key_ids`
     #[arg(
-        long = "signer.aws_kms_key_id_and_mnemonics",
-        name = "signer.aws_kms_key_id_and_mnemonics",
-        env = "SIGNER_AWS_KMS_KEY_ID_AND_MNEMONICS",
-        value_delimiter = ','
+        long = "signer.aws_kms_key_groups",
+        name = "signer.aws_kms_key_groups",
+        env = "SIGNER_AWS_KMS_KEY_GROUPS",
+        value_parser = parse_aws_kms_key_groups,
+        value_delimiter = ':'
     )]
-    pub aws_kms_key_id_and_mnemonics: Vec<String>,
+    pub aws_kms_key_groups: Vec<Vec<String>>,
+
+    /// Whether to enable KMS funding
+    ///
+    /// Implies KMS locking.
+    #[arg(
+        long = "signer.enable_kms_funding",
+        name = "signer.enable_kms_funding",
+        env = "SIGNER_ENABLE_KMS_FUNDING",
+        default_value = "false"
+    )]
+    pub enable_kms_funding: bool,
+
+    /// Whether to enable KMS locking
+    ///
+    /// Not compatible with KMS funding, funding always locks
+    #[arg(
+        long = "signer.enable_kms_locking",
+        name = "signer.enable_kms_locking",
+        env = "SIGNER_ENABLE_KMS_LOCKING",
+        default_value = "false"
+    )]
+    pub enable_kms_locking: bool,
 
     /// Redis URI to use for KMS leasing
     #[arg(
@@ -68,14 +100,6 @@ pub struct SignerArgs {
         default_value = "60000"
     )]
     pub redis_lock_ttl_millis: u64,
-
-    /// Whether to automatically fund signers
-    #[arg(
-        long = "signer.auto_fund",
-        name = "signer.auto_fund",
-        default_value = "true"
-    )]
-    pub auto_fund: bool,
 
     /// The balance below which signers will be funded
     #[arg(
@@ -132,31 +156,15 @@ pub struct SignerArgs {
     pub funding_base_fee_multiplier: f64,
 }
 
+fn parse_aws_kms_key_groups(s: &str) -> Result<Vec<String>, String> {
+    let groups = s.split(',').map(|s| s.to_string()).collect();
+    Ok(groups)
+}
+
 impl SignerArgs {
     pub fn signing_scheme(&self, num_signers: usize) -> anyhow::Result<SigningScheme> {
-        if !self.aws_kms_key_id_and_mnemonics.is_empty() {
-            let mut mnemonics_by_key_id = HashMap::new();
-            for key_id_and_mnemonic in self.aws_kms_key_id_and_mnemonics.iter() {
-                let (key_id, mnemonic) = key_id_and_mnemonic.split_once(':').unwrap();
-                mnemonics_by_key_id.insert(key_id.to_string(), mnemonic.to_string());
-            }
-
-            return Ok(SigningScheme::KmsFundingMnemonics {
-                mnemonics_by_key_id,
-                lock_settings: KmsLockingSettings {
-                    redis_uri: self.redis_uri.clone(),
-                    ttl_millis: self.redis_lock_ttl_millis,
-                },
-                funding_settings: FundingSettings {
-                    fund_below_balance: self.fund_below.context("Fund below balance not set")?,
-                    fund_to_balance: self.fund_to.context("Fund to balance not set")?,
-                    poll_interval: Duration::from_millis(self.funding_txn_poll_interval_ms),
-                    poll_max_retries: self.funding_txn_poll_max_retries,
-                    priority_fee_multiplier: self.funding_priority_fee_multiplier,
-                    base_fee_multiplier: self.funding_base_fee_multiplier,
-                },
-                to_create: num_signers,
-            });
+        if self.enable_kms_funding {
+            return self.funding_signer_scheme(num_signers);
         }
 
         if !self.private_keys.is_empty() {
@@ -172,6 +180,13 @@ impl SignerArgs {
             });
         }
 
+        if let Some(mnemonic) = &self.mnemonic {
+            return Ok(SigningScheme::Mnemonic {
+                mnemonic: mnemonic.clone(),
+                num_keys: num_signers,
+            });
+        }
+
         if !self.aws_kms_key_ids.is_empty() {
             if self.aws_kms_key_ids.len() < num_signers {
                 bail!(
@@ -180,16 +195,96 @@ impl SignerArgs {
                     );
             }
 
-            return Ok(SigningScheme::AwsKms {
-                key_ids: self.aws_kms_key_ids.clone(),
-                to_lock: num_signers,
-                settings: KmsLockingSettings {
-                    redis_uri: self.redis_uri.clone(),
-                    ttl_millis: self.redis_lock_ttl_millis,
-                },
-            });
+            if self.enable_kms_locking {
+                return Ok(SigningScheme::AwsKmsLocking {
+                    key_ids: self.aws_kms_key_ids.clone(),
+                    to_lock: num_signers,
+                    settings: KmsLockingSettings {
+                        redis_uri: self.redis_uri.clone(),
+                        ttl_millis: self.redis_lock_ttl_millis,
+                    },
+                });
+            } else {
+                return Ok(SigningScheme::AwsKms {
+                    key_ids: self.aws_kms_key_ids.clone(),
+                });
+            }
         }
 
-        bail!("No signing scheme provided. Provide either signer.private_keys or signer.aws_kms_key_ids or signer.aws_kms_key_id_and_mnemonics");
+        bail!("No signing scheme provided (unfunded). Provide either signer.private_keys, signer.mnemonic, or signer.aws_kms_key_ids");
+    }
+
+    fn funding_signer_scheme(&self, num_signers: usize) -> anyhow::Result<SigningScheme> {
+        if self.aws_kms_key_ids.is_empty() {
+            bail!("AWS KMS key IDs are not set and KMS funding is enabled. Please set signer.aws_kms_key_ids");
+        };
+
+        let subkeys_by_key_id = if !self.aws_kms_key_groups.is_empty() {
+            if self.aws_kms_key_groups.len() != self.aws_kms_key_ids.len() {
+                bail!("Number of AWS KMS key groups ({}) does not match number of AWS KMS key IDs ({}).", self.aws_kms_key_groups.len(), self.aws_kms_key_ids.len());
+            }
+            for group in self.aws_kms_key_groups.iter() {
+                if group.len() < num_signers {
+                    bail!("Number of AWS KMS key IDs in group is less than the number of builders. Need {} keys, found {}", num_signers, group.len());
+                }
+            }
+
+            self.aws_kms_key_ids
+                .iter()
+                .zip(self.aws_kms_key_groups.iter())
+                .map(|(key_id, group)| {
+                    (
+                        key_id.to_string(),
+                        SigningScheme::AwsKms {
+                            key_ids: group.clone(),
+                        },
+                    )
+                })
+                .collect()
+        } else if !self.private_keys.is_empty() {
+            if num_signers > self.private_keys.len() {
+                bail!(
+                    "Number of private keys ({}) is less than the number of builders ({}).",
+                    self.private_keys.len(),
+                    num_signers
+                );
+            }
+            let keys = SigningScheme::PrivateKeys {
+                private_keys: self.private_keys.clone(),
+            };
+
+            self.aws_kms_key_ids
+                .iter()
+                .map(|key_id| (key_id.to_string(), keys.clone()))
+                .collect()
+        } else if self.mnemonic.is_some() {
+            let keys = SigningScheme::Mnemonic {
+                mnemonic: self.mnemonic.clone().unwrap(),
+                num_keys: num_signers,
+            };
+
+            self.aws_kms_key_ids
+                .iter()
+                .map(|key_id| (key_id.to_string(), keys.clone()))
+                .collect()
+        } else {
+            bail!("No signing scheme provided (funded). Provide either signer.private_keys, signer.mnemonic, signer.aws_kms_key_groups");
+        };
+
+        Ok(SigningScheme::KmsFunding {
+            subkeys_by_key_id,
+            lock_settings: KmsLockingSettings {
+                redis_uri: self.redis_uri.clone(),
+                ttl_millis: self.redis_lock_ttl_millis,
+            },
+            funding_settings: FundingSettings {
+                fund_below_balance: self.fund_below.context("Fund below balance not set")?,
+                fund_to_balance: self.fund_to.context("Fund to balance not set")?,
+                poll_interval: Duration::from_millis(self.funding_txn_poll_interval_ms),
+                poll_max_retries: self.funding_txn_poll_max_retries,
+                priority_fee_multiplier: self.funding_priority_fee_multiplier,
+                base_fee_multiplier: self.funding_base_fee_multiplier,
+            },
+        })
     }
 }
