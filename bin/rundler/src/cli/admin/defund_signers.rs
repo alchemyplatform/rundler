@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{str::FromStr, time::Duration};
+use std::time::Duration;
 
 use alloy_network::TransactionBuilder;
 use alloy_primitives::{Address, B256, U256};
@@ -43,7 +43,8 @@ pub(super) struct DefundSignersArgs {
 }
 
 fn parse_address(s: &str) -> Result<Address, String> {
-    Address::from_str(s).map_err(|_| format!("Invalid address: {}", s))
+    s.parse()
+        .map_err(|e| format!("Invalid address: {s} error: {e:?}"))
 }
 
 pub(super) async fn defund_signers(
@@ -65,12 +66,11 @@ pub(super) async fn defund_signers(
     if !signing_scheme.supports_funding() {
         anyhow::bail!("Signing scheme does not support defunding");
     }
-    if let SigningScheme::KmsFundingMnemonics {
-        mnemonics_by_key_id,
-        ..
+    if let SigningScheme::KmsFunding {
+        subkeys_by_key_id, ..
     } = &signing_scheme
     {
-        if mnemonics_by_key_id.len() > 1 {
+        if subkeys_by_key_id.len() > 1 {
             anyhow::bail!("Only one key ID with mnemonic is supported for funding");
         }
     }
