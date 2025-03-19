@@ -139,7 +139,7 @@ pub(crate) struct FundingSignerManager {
     funding_notify: Arc<Notify>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, strum::EnumString)]
 pub(crate) enum SignerStatus {
     Available,
     NeedsFunding,
@@ -164,6 +164,11 @@ impl SignerManager for FundingSignerManager {
     async fn wait_for_available(&self, num_required: usize) -> Result<()> {
         if self.available() >= num_required {
             return Ok(());
+        } else if num_required > self.addresses().len() {
+            return Err(anyhow::anyhow!(
+                "Required {num_required} but only have {}",
+                self.addresses().len()
+            ))?;
         }
 
         let Some(funder_settings) = &self.funder_settings else {
@@ -174,6 +179,11 @@ impl SignerManager for FundingSignerManager {
         };
 
         while self.available() < num_required {
+            tracing::info!(
+                "Waiting for {} signers to be available. Statuses: {:?}",
+                num_required,
+                self.signer_statuses.read().iter().collect::<Vec<_>>()
+            );
             tokio::time::sleep(funder_settings.poll_interval).await;
         }
 
@@ -230,6 +240,15 @@ impl SignerManager for FundingSignerManager {
     fn fund_signers(&self) -> Result<()> {
         if self.funder_settings.is_none() {
             Err(anyhow::anyhow!("Manager does not support funding"))?
+        }
+
+        // force a funding update cycle of the balances
+        for status in self.signer_statuses.write().values_mut() {
+            match status {
+                SignerStatus::Available => *status = SignerStatus::NeedsFunding,
+                SignerStatus::Leased => *status = SignerStatus::LeasedNeedsFunding,
+                SignerStatus::LeasedNeedsFunding | SignerStatus::NeedsFunding => {}
+            }
         }
 
         self.funding_notify.notify_one();
