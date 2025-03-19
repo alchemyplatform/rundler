@@ -11,11 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::{EthereumWallet, TransactionBuilder, TxSigner};
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, B256, U256};
+use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256};
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
@@ -82,6 +82,7 @@ pub(crate) async fn funding_task<P: EvmProvider>(
         {
             Ok(true) => {
                 tracing::info!("Funding successful, but funding is still required");
+                metrics.funding_reattempts.increment(1);
                 notify.notify_one();
             }
             Ok(false) => {
@@ -132,13 +133,13 @@ async fn funding_task_inner<P: EvmProvider>(
         ));
     }
 
-    // sort by amount, descending
-    to_fund.sort_by_key(|(_, amount)| cmp::Reverse(*amount));
+    // sort by amount, descending, break ties by address
+    to_fund.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     // limit the amount of funding in a single transaction
     to_fund.truncate(MAX_TO_FUND_IN_BATCH);
 
-    let total = to_fund.iter().map(|(_, amount)| amount).sum::<U256>();
-    let total_to_fund = to_fund.len();
+    let mut total = to_fund.iter().map(|(_, amount)| amount).sum::<U256>();
+    let mut total_to_fund = to_fund.len();
     let funding_balance =
         get_update_funder_balance(provider, metrics, funding_signer_address).await?;
 
@@ -156,9 +157,11 @@ async fn funding_task_inner<P: EvmProvider>(
 
     if total_with_gas > funding_balance {
         tracing::warn!("Not enough funding balance. Funding balance: {funding_balance}, total to fund: {total}. Partial funding will be attempted.");
-        while total > funding_balance && !to_fund.is_empty() {
+        while total_with_gas > funding_balance && !to_fund.is_empty() {
             let (_, amount) = to_fund.pop().unwrap();
             total_with_gas -= amount + U256::from(GAS_PER_CALL) * U256::from(max_fee_per_gas);
+            total -= amount;
+            total_to_fund -= 1;
         }
         if to_fund.is_empty() {
             anyhow::bail!("Not enough funding balance for any funding. Funding balance: {funding_balance}, total to fund: {total}");
@@ -197,9 +200,7 @@ async fn funding_task_inner<P: EvmProvider>(
     let tx_bytes: Bytes = raw_tx.into();
 
     // wait for the funding to complete, if doesn't mine after max retries
-    let tx_hash = provider
-        .request::<_, B256>("eth_sendRawTransaction", (tx_bytes,))
-        .await?;
+    let tx_hash = provider.send_raw_transaction(tx_bytes).await?;
 
     let tx_receipt = utils::wait_for_txn(
         provider,
@@ -249,8 +250,334 @@ struct FunderMetrics {
     funding_attempts: Counter,
     #[metric(describe = "tne mumber of funding errors")]
     funding_errors: Counter,
+    #[metric(describe = "the number of funding reattempts")]
+    funding_reattempts: Counter,
     #[metric(describe = "the number of addresses that were funded")]
     funded_addresses: Counter,
     #[metric(describe = "the balance of the funding account")]
     funding_account_balance: Gauge,
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_consensus::Transaction;
+    use alloy_eips::eip2718::Decodable2718;
+    use alloy_network::AnyTxEnvelope;
+    use alloy_primitives::{address, B256};
+    use alloy_sol_types::SolInterface;
+    use mockall::Sequence;
+    use rundler_contracts::multicall3::Multicall3::{Call3Value, Multicall3Calls};
+    use rundler_provider::{
+        AnyReceiptEnvelope, MockEvmProvider, ReceiptWithBloom, TransactionReceipt,
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_funding_one() {
+        let mut provider = MockEvmProvider::new();
+        set_provider_nonce_and_fees(&mut provider);
+        set_provider_balances(
+            &mut provider,
+            U256::from(1000000),
+            vec![(Address::ZERO, U256::from(0))],
+            vec![(Address::ZERO, U256::from(2000))],
+        );
+
+        let signer = MockTxSigner::default();
+        let wallet = EthereumWallet::new(signer.clone());
+        let settings = funding_settings(U256::from(1000), U256::from(2000), signer);
+
+        let statuses = HashMap::from([(Address::ZERO, SignerStatus::NeedsFunding)]);
+        let statuses = Arc::new(RwLock::new(statuses));
+
+        set_expected_transaction(
+            &mut provider,
+            U256::from(2000),
+            vec![multicall3::create_call_value_only(
+                Address::ZERO,
+                U256::from(2000),
+            )],
+        );
+
+        funding_task_inner(
+            &settings,
+            &provider,
+            &statuses,
+            &wallet,
+            Address::ZERO,
+            &FunderMetrics::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            statuses.read().get(&Address::ZERO),
+            Some(&SignerStatus::Available)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_funding_multiple() {
+        let address0 = address!("0000000000000000000000000000000000000000");
+        let address1 = address!("0000000000000000000000000000000000000001");
+        let address2 = address!("0000000000000000000000000000000000000002");
+
+        let mut provider = MockEvmProvider::new();
+        set_provider_nonce_and_fees(&mut provider);
+        set_provider_balances(
+            &mut provider,
+            U256::from(1000000),
+            vec![
+                (address0, U256::from(0)),
+                (address1, U256::from(0)),
+                (address2, U256::from(2000)),
+            ],
+            vec![
+                (address0, U256::from(2000)),
+                (address1, U256::from(2000)),
+                (address2, U256::from(2000)),
+            ],
+        );
+
+        let signer = MockTxSigner::default();
+        let wallet = EthereumWallet::new(signer.clone());
+        let settings = funding_settings(U256::from(1000), U256::from(2000), signer);
+
+        let statuses = HashMap::from([
+            (address0, SignerStatus::NeedsFunding),
+            (address1, SignerStatus::NeedsFunding),
+            (address2, SignerStatus::Available),
+        ]);
+        let statuses = Arc::new(RwLock::new(statuses));
+
+        set_expected_transaction(
+            &mut provider,
+            U256::from(4000),
+            vec![
+                multicall3::create_call_value_only(address0, U256::from(2000)),
+                multicall3::create_call_value_only(address1, U256::from(2000)),
+            ],
+        );
+
+        funding_task_inner(
+            &settings,
+            &provider,
+            &statuses,
+            &wallet,
+            Address::ZERO,
+            &FunderMetrics::default(),
+        )
+        .await
+        .unwrap();
+
+        check_statuses(
+            &statuses.read(),
+            vec![
+                (address0, SignerStatus::Available),
+                (address1, SignerStatus::Available),
+                (address2, SignerStatus::Available),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn test_funding_partial() {
+        let address0 = address!("0000000000000000000000000000000000000000");
+        let address1 = address!("0000000000000000000000000000000000000001");
+        let address2 = address!("0000000000000000000000000000000000000002");
+
+        let mut provider = MockEvmProvider::new();
+        set_provider_nonce_and_fees(&mut provider);
+        set_provider_balances(
+            &mut provider,
+            U256::from(182000), // 90K gas per call * 2 gas price
+            vec![
+                (address0, U256::from(0)),
+                (address1, U256::from(0)),
+                (address2, U256::from(2000)),
+            ],
+            vec![
+                (address0, U256::from(2000)),
+                (address1, U256::from(0)), // not enough balance to fund
+                (address2, U256::from(2000)),
+            ],
+        );
+
+        let signer = MockTxSigner::default();
+        let wallet = EthereumWallet::new(signer.clone());
+        let settings = funding_settings(U256::from(1000), U256::from(2000), signer);
+
+        let statuses = HashMap::from([
+            (address0, SignerStatus::NeedsFunding),
+            (address1, SignerStatus::NeedsFunding),
+            (address2, SignerStatus::Available),
+        ]);
+        let statuses = Arc::new(RwLock::new(statuses));
+
+        set_expected_transaction(
+            &mut provider,
+            U256::from(2000),
+            vec![multicall3::create_call_value_only(
+                address0,
+                U256::from(2000),
+            )],
+        );
+
+        funding_task_inner(
+            &settings,
+            &provider,
+            &statuses,
+            &wallet,
+            Address::ZERO,
+            &FunderMetrics::default(),
+        )
+        .await
+        .unwrap();
+
+        check_statuses(
+            &statuses.read(),
+            vec![
+                (address0, SignerStatus::Available),
+                (address1, SignerStatus::NeedsFunding),
+                (address2, SignerStatus::Available),
+            ],
+        );
+    }
+
+    fn check_statuses(
+        statuses: &HashMap<Address, SignerStatus>,
+        expected_statuses: Vec<(Address, SignerStatus)>,
+    ) {
+        for (address, status) in expected_statuses {
+            assert_eq!(statuses.get(&address), Some(&status));
+        }
+    }
+
+    fn check_tx_calls(tx: Bytes, total_value: U256, expected_calls: Vec<Call3Value>) -> bool {
+        let tx_bytes = tx.to_vec();
+        let tx_envelope = AnyTxEnvelope::decode_2718(&mut tx_bytes.as_slice()).unwrap();
+        if tx_envelope.value() != total_value {
+            return false;
+        }
+        let tx_data = tx_envelope.input();
+        let calls = Multicall3Calls::abi_decode(tx_data, true).unwrap();
+        let Multicall3Calls::aggregate3Value(calls) = calls else {
+            return false;
+        };
+
+        if expected_calls.len() != calls.calls.len() {
+            return false;
+        }
+
+        for (expected_call, call) in expected_calls.iter().zip(calls.calls.iter()) {
+            if expected_call.target != call.target
+                || expected_call.value != call.value
+                || expected_call.callData != call.callData
+                || expected_call.allowFailure != call.allowFailure
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    #[derive(Clone, Default)]
+    struct MockTxSigner {}
+
+    #[async_trait::async_trait]
+    impl TxSigner<PrimitiveSignature> for MockTxSigner {
+        fn address(&self) -> Address {
+            Address::ZERO
+        }
+        async fn sign_transaction(
+            &self,
+            _tx: &mut dyn alloy_consensus::SignableTransaction<PrimitiveSignature>,
+        ) -> alloy_signer::Result<PrimitiveSignature> {
+            Ok(PrimitiveSignature::test_signature())
+        }
+    }
+
+    fn funding_settings(
+        fund_below: U256,
+        fund_to: U256,
+        singer: impl TxSigner<PrimitiveSignature> + Send + Sync + 'static,
+    ) -> FunderSettings {
+        FunderSettings {
+            fund_below_balance: fund_below,
+            fund_to_balance: fund_to,
+            signer: Arc::new(singer),
+            chain_id: 1,
+            multicall3_address: Address::ZERO,
+            poll_interval: Duration::from_secs(1),
+            poll_max_retries: 10,
+            priority_fee_multiplier: 1.0,
+            base_fee_multiplier: 1.0,
+        }
+    }
+
+    fn set_expected_transaction(
+        provider: &mut MockEvmProvider,
+        total_value: U256,
+        expected_calls: Vec<Call3Value>,
+    ) {
+        provider
+            .expect_send_raw_transaction()
+            .once()
+            .withf(move |tx| check_tx_calls(tx.clone(), total_value, expected_calls.clone()))
+            .returning(|_| Ok(B256::ZERO));
+        provider
+            .expect_get_transaction_receipt()
+            .returning(|_| Ok(Some(transaction_receipt())));
+    }
+
+    fn set_provider_balances(
+        provider: &mut MockEvmProvider,
+        funder_balance: U256,
+        balances_before: Vec<(Address, U256)>,
+        balances_after: Vec<(Address, U256)>,
+    ) {
+        provider
+            .expect_get_balance()
+            .returning(move |_, _| Ok(funder_balance));
+        let mut seq = Sequence::new();
+        provider
+            .expect_get_balances()
+            .once()
+            .in_sequence(&mut seq)
+            .returning(move |_| Ok(balances_before.clone()));
+        provider
+            .expect_get_balances()
+            .once()
+            .in_sequence(&mut seq)
+            .returning(move |_| Ok(balances_after.clone()));
+    }
+
+    fn set_provider_nonce_and_fees(provider: &mut MockEvmProvider) {
+        provider.expect_get_transaction_count().returning(|_| Ok(1));
+        provider.expect_get_max_priority_fee().returning(|| Ok(1));
+        provider.expect_get_pending_base_fee().returning(|| Ok(1));
+    }
+
+    fn transaction_receipt() -> TransactionReceipt {
+        TransactionReceipt {
+            inner: AnyReceiptEnvelope {
+                inner: ReceiptWithBloom::default(),
+                r#type: 0,
+            },
+            transaction_hash: B256::ZERO,
+            transaction_index: None,
+            block_hash: None,
+            block_number: None,
+            gas_used: 0,
+            effective_gas_price: 0,
+            blob_gas_used: None,
+            blob_gas_price: None,
+            from: Address::ZERO,
+            to: None,
+            contract_address: None,
+            authorization_list: None,
+        }
+    }
 }

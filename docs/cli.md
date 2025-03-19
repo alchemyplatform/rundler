@@ -184,8 +184,6 @@ List of command line options for configuring the Pool.
   - env: *POOL_CHAIN_POLL_INTERVAL_MILLIS*
 - `--pool.chain_sync_max_retries`: The amount of times to retry syncing the chain before giving up and waiting for the next block (default: `5`)
   - env: *POOL_CHAIN_SYNC_MAX_RETRIES*
-- `--pool.chain_history_size`: Size of the chain history
-  - env: *POOL_CHAIN_HISTORY_SIZE*
 - `--pool.paymaster_tracking_enabled`: Boolean field that sets whether the pool server starts with paymaster tracking enabled (default: `true`)
   - env: *POOL_PAYMASTER_TRACKING_ENABLED*
 - `--pool.paymaster_cache_length`: Length of the paymaster cache (default: `10_000`)
@@ -209,21 +207,6 @@ List of command line options for configuring the Builder.
 - `--builder.host`: Host to listen on for gRPC requests (default: `127.0.0.1`)
   - env: *BUILDER_HOST*
   - *Only required when running in distributed mode* 
-- `--builder.private_key`: Private key to use for signing transactions
-  - env: *BUILDER_PRIVATE_KEY*
-  - **DEPRECATED**: Use `--builder.private_keys` instead. If both used this is added to the list.
-- `--builder.private_keys`: Private keys to use for signing transactions, separated by `,`
-  - env: *BUILDER_PRIVATE_KEYS*
-- `--builder.aws_kms_key_ids`: AWS KMS key IDs to use for signing transactions (comma-separated)
-  - env: *BUILDER_AWS_KMS_KEY_IDS*
-  - *Only required if BUILDER_PRIVATE_KEY is not provided* 
-  - *Cannot use `builder.private_keys` and `builder.aws_kms_key_ids` at the same time*
-- `--builder.redis_uri`: Redis URI to use for KMS leasing (default: `""`)
-  - env: *BUILDER_REDIS_URI*
-  - *Only required when AWS_KMS_KEY_IDS are provided* 
-- `--builder.redis_lock_ttl_millis`: Redis lock TTL in milliseconds (default: `60000`)
-  - env: *BUILDER_REDIS_LOCK_TTL_MILLIS*
-  - *Only required when AWS_KMS_KEY_IDS are provided* 
 - `--builder.max_bundle_size`: Maximum number of ops to include in one bundle (default: `128`)
   - env: *BUILDER_MAX_BUNDLE_SIZE*
 - `--builder.max_blocks_to_wait_for_mine`: After submitting a bundle transaction, the maximum number of blocks to wait for that transaction to mine before trying to resend with higher gas fees (default: `2`)
@@ -250,13 +233,68 @@ List of command line options for configuring the Builder.
   - env: *BUILDER_POOL_URL*
   - *Only required when running in distributed mode*
 
-### Key management
+## Signer Options
 
-Private keys for the bundler can be provided in a few ways. You can set the `--builder.private_key` flag or the `BUILDER_PRIVATE_KEY` environment variable
-within your local or deployed environment. Alternatively, you can provide the application with one or more AWS KMS ids using the `--builder.aws_kms_key_ids` flag or `AWS_KMS_KEY_IDS` environment
-variable. Rundler will download the key/s so long as you have `kms:DescribeKey` & `kms:Decrypt` IAM access to the KMS resource.
+- `--signer.private_keys`: Private keys to use for signing transactions, separated by `,`
+  - env: *SIGNER_PRIVATE_KEYS*
+- `--signer.mnemonic`: Mnemonic to use for signing transactions
+  - env: *SIGNER_MNEMONIC*
+- `--signer.aws_kms_key_ids`: AWS KMS key IDs to use for signing transactions, separated by `,`. 
+  - env: *SIGNER_AWS_KMS_KEY_IDS*
+  - To enable signer locking see `SIGNER_ENABLE_KMS_LOCKING`.
+- `--signer.aws_kms_key_groups`: AWS KMS key ids grouped to keys in `aws_kms_key_ids`. Groups are separated by `:` and entries are separated by `,`. These are never locked, but are used if the associated key id is locked.
+  - env: *SIGNER_AWS_KMS_KEY_GROUPS*
+- `--signer.enable_kms_funding`:
+  - env: *SIGNER_ENABLE_KMS_FUNDING*
+- `--signer.enable_kms_locking`:
+  - env: *SIGNER_ENABLE_KMS_LOCKING*
+- `--signer.redis_uri`: Redis URI to use for KMS leasing (default: `""`)
+  - env: *SIGNER_REDIS_URI*
+  -*Only required when SIGNER_ENABLE_KMS_LOCKING is set* 
+- `--signer.redis_lock_ttl_millis`: Redis lock TTL in milliseconds (default: `60000`)
+  - env: *SIGNER_REDIS_LOCK_TTL_MILLIS*
+  - *Only required when SIGNER_ENABLE_KMS_LOCKING is set* 
+- `--signer.enable_kms_funding`: Whether to enable kms funding from `aws_kms_key_ids` to the key ids in `aws_kms_key_groups`. (default: `false`)
+  - env: *SIGNER_ENABLE_KMS_FUNDING*
+- `--signer.fund_below`: If KMS funding is enabled, this is the signer balance value below which to trigger a funding event
+  - env: *SIGNER_FUND_BELOW*
+- `--signer.fund_to`: If KMS funding is enabled, this is the signer balance to fund to during a funding event
+  - env: *SIGNER_FUND_TO*
+- `--signer.funding_txn_poll_interval_ms`: During funding, this is the poll interval for transaction status (default: `1000`)
+  - env: *SIGNER_FUNDING_TXN_POLL_INTERVAL_MS*
+- `--signer.funding_txn_poll_max_retries`: During funding, this is the maximum amount of time to poll for transaction status before abandoning (default: `20`)
+  - env: *SIGNER_FUNDING_TXN_POLL_MAX_RETRIES*
+- `--signer.funding_txn_priority_fee_multiplier`: During funding, this is the multiplier to apply to the network priority fee (default: `2.0`)
+  - env: *SIGNER_FUNDING_TXN_PRIORITY_FEE_MULTIPLIER*
+- `--signer.funding_txn_base_fee_multiplier`: During funding, this is the multiplier to apply to the network base fee (default: `2.0`)
+  - env: *SIGNER_FUNDING_TXN_BASE_FEE_MULTIPLIER*
 
-When using KMS keys, a Redis URL must be provided to Rundler which will take care of key leasing to make sure keys are not accessed at the same time from concurrent processes.
+### Signing schemes
+
+Rundler supports multiple ways to sign bundle transactions. In configuration precedence order: 
+
+1. KMS locked master key with funded sub-keys: `--signer.enable_kms_funding`
+2. Private keys: `--signer.private_keys`
+3. Mnemonic: `--signer.mnemonic`
+4. KMS locked keys: `--signer.aws_kms_key_ids`
+
+#### KMS Locking
+
+If `--signer.enable_kms_locking` is set, keys that are listed in `--signer.aws_kms_key_ids` are always locked before usage so that they can be safely shared across multiple Rundler instances without nonce issues.
+
+Locking uses Redis and thus a Redis URL must be provided to Rundler for key leasing to make sure keys are not accessed at the same time from concurrent processes.
+
+#### KMS Funding
+
+If `--signer.enable_kms_funding` is set this scheme will be enabled. It will look for subkeys in the following precedence order:
+
+1. `aws_kms_key_groups`: If set it must have the same number of groups as keys in `aws_kms_key_ids`. 
+    - If locking is enabled, once a funding KMS key is locked, the corresponding group is used for all subkeys.
+    - Else, the first group is always used
+2. `private_keys`: Private keys for the subkeys. The same list applies regardless of which KMS key is locked.
+3. `mnemonic`: Supports a `mnemonic` from which multiple subkeys can be derived. The same `mnemonic` applies regardless of which KMS key is locked
+
+When funding is enabled, Rundler will run a background process that will fund keys whose balance has fallen below `fund_below` with a transaction from the funding key that increases their balance to `fund_to`.
 
 ## Example Usage
 
@@ -264,7 +302,7 @@ Here are some example commands to use the CLI:
 
 ```sh
 # Run the Node subcommand with custom options
-$ ./rundler node --network dev --disable_entry_point_v0_6 --node_http http://localhost:8545 --builder.private_keys 0x0000000000000000000000000000000000000000000000000000000000000001
+$ ./rundler node --network dev --disable_entry_point_v0_6 --node_http http://localhost:8545 --signer.private_keys 0x0000000000000000000000000000000000000000000000000000000000000001
 
 # Run the RPC subcommand with custom options and enable JSON logging. The builder (localhost:50052) and pool (localhost:50051) will need to be running before this starts.
 $ ./rundler rpc --network dev --node_http http://localhost:8545 --log.json --disable_entry_point_v0_6

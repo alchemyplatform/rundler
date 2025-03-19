@@ -32,6 +32,8 @@ use rundler_contracts::utils::{
     GetGasUsed::{self, GasUsedResult},
     StorageLoader,
 };
+use rundler_types::ExpectedStorage;
+use serde_json::json;
 use tracing::instrument;
 
 use crate::{
@@ -115,6 +117,29 @@ where
         call = call.overrides(state_overrides);
 
         Ok(call.await?)
+    }
+
+    #[instrument(skip_all)]
+    async fn send_raw_transaction(&self, tx: Bytes) -> ProviderResult<TxHash> {
+        Ok(self
+            .inner
+            .raw_request::<_, B256>("eth_sendRawTransaction".into(), (tx,))
+            .await?)
+    }
+
+    #[instrument(skip_all)]
+    async fn send_raw_transaction_conditional(
+        &self,
+        tx: Bytes,
+        expected_storage: &ExpectedStorage,
+    ) -> ProviderResult<TxHash> {
+        Ok(self
+            .inner
+            .raw_request::<_, B256>(
+                "eth_sendRawTransaction".into(),
+                (tx, json!({ "knownAccounts": expected_storage })),
+            )
+            .await?)
     }
 
     #[instrument(skip_all)]

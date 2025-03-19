@@ -24,8 +24,7 @@ use mockall::automock;
 pub(crate) use raw::RawTransactionSender;
 use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_sim::ExpectedStorage;
-use rundler_types::GasFees;
+use rundler_types::{ExpectedStorage, GasFees};
 
 #[derive(Debug)]
 pub(crate) struct CancelTxInfo {
