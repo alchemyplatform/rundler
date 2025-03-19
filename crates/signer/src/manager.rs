@@ -44,14 +44,25 @@ pub trait SignerManager: Send + Sync {
     /// Get the number of available signers
     fn available(&self) -> usize;
 
+    /// Wait for the number of available signers to reach the given number
+    async fn wait_for_available(&self, num_required: usize) -> Result<()>;
+
     /// Lease a signer
     fn lease_signer(&self) -> Option<SignerLease>;
+
+    /// Lease a specific signer
+    fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease>;
 
     /// Return a leased signer
     fn return_lease(&self, lease: SignerLease);
 
     /// Update the balances of the signers
     fn update_balances(&self, balances: Vec<(Address, U256)>);
+
+    /// Fund the signers
+    ///
+    /// Returns an error if the signer manager does not support funding
+    fn fund_signers(&self) -> Result<()>;
 }
 
 /// A leased signer
@@ -120,11 +131,11 @@ impl SignerLease {
     }
 }
 
-#[derive(Debug)]
 pub(crate) struct FundingSignerManager {
     wallet: EthereumWallet,
     signer_statuses: Arc<RwLock<HashMap<Address, SignerStatus>>>,
-    fund_below_balance: Option<U256>,
+    auto_fund: bool,
+    funder_settings: Option<FunderSettings>,
     funding_notify: Arc<Notify>,
 }
 
@@ -136,6 +147,7 @@ pub(crate) enum SignerStatus {
     Leased,
 }
 
+#[async_trait::async_trait]
 impl SignerManager for FundingSignerManager {
     fn addresses(&self) -> Vec<Address> {
         NetworkWallet::<AnyNetwork>::signer_addresses(&self.wallet).collect()
@@ -149,6 +161,25 @@ impl SignerManager for FundingSignerManager {
             .count()
     }
 
+    async fn wait_for_available(&self, num_required: usize) -> Result<()> {
+        if self.available() >= num_required {
+            return Ok(());
+        }
+
+        let Some(funder_settings) = &self.funder_settings else {
+            Err(anyhow::anyhow!(
+                "Required {num_required} but only have {} and funding is not enabled",
+                self.available()
+            ))?
+        };
+
+        while self.available() < num_required {
+            tokio::time::sleep(funder_settings.poll_interval).await;
+        }
+
+        Ok(())
+    }
+
     fn lease_signer(&self) -> Option<SignerLease> {
         let mut statuses = self.signer_statuses.write();
 
@@ -158,6 +189,17 @@ impl SignerManager for FundingSignerManager {
 
         *status = SignerStatus::Leased;
 
+        Some(SignerLease::new(Arc::new(
+            self.wallet.signer_by_address(*address)?,
+        )))
+    }
+
+    fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease> {
+        let mut statuses = self.signer_statuses.write();
+        let status = statuses.get_mut(address)?;
+        if matches!(status, SignerStatus::Available) {
+            *status = SignerStatus::Leased;
+        }
         Some(SignerLease::new(Arc::new(
             self.wallet.signer_by_address(*address)?,
         )))
@@ -175,9 +217,23 @@ impl SignerManager for FundingSignerManager {
     }
 
     fn update_balances(&self, balances: Vec<(Address, U256)>) {
-        if Self::update_signer_statuses(&self.signer_statuses, balances, self.fund_below_balance) {
+        if Self::update_signer_statuses(
+            &self.signer_statuses,
+            balances,
+            self.funder_settings.as_ref(),
+            self.auto_fund,
+        ) {
             self.funding_notify.notify_one();
         }
+    }
+
+    fn fund_signers(&self) -> Result<()> {
+        if self.funder_settings.is_none() {
+            Err(anyhow::anyhow!("Manager does not support funding"))?
+        }
+
+        self.funding_notify.notify_one();
+        Ok(())
     }
 }
 
@@ -185,6 +241,7 @@ impl FundingSignerManager {
     pub(crate) fn new<T: TaskSpawner, P: EvmProvider + 'static>(
         wallet: EthereumWallet,
         funder_settings: Option<FunderSettings>,
+        auto_fund: bool,
         task_spawner: &T,
         provider: P,
     ) -> Self {
@@ -195,13 +252,11 @@ impl FundingSignerManager {
         ));
         let funding_notify = Arc::new(Notify::new());
 
-        let mut fund_below_balance = None;
-        if let Some(funder_settings) = funder_settings {
-            fund_below_balance = Some(funder_settings.fund_below_balance);
+        if let Some(funder_settings) = &funder_settings {
             task_spawner.spawn_critical(
                 "funding task",
                 Box::pin(funding::funding_task(
-                    funder_settings,
+                    funder_settings.clone(),
                     provider,
                     signer_statuses.clone(),
                     funding_notify.clone(),
@@ -212,7 +267,8 @@ impl FundingSignerManager {
         Self {
             wallet,
             signer_statuses,
-            fund_below_balance,
+            auto_fund,
+            funder_settings,
             funding_notify,
         }
     }
@@ -220,7 +276,8 @@ impl FundingSignerManager {
     pub(crate) fn update_signer_statuses(
         signer_statuses: &Arc<RwLock<HashMap<Address, SignerStatus>>>,
         balances: Vec<(Address, U256)>,
-        fund_below_balance: Option<U256>,
+        funder_settings: Option<&FunderSettings>,
+        should_fund: bool,
     ) -> bool {
         let mut needs_funding = false;
 
@@ -229,10 +286,10 @@ impl FundingSignerManager {
                 continue;
             }
 
-            if let Some(fund_below_balance) = fund_below_balance {
+            if let Some(funder_settings) = funder_settings {
                 let mut statuses = signer_statuses.write();
                 let status = statuses.get_mut(&address).unwrap();
-                if balance < fund_below_balance {
+                if should_fund && balance < funder_settings.fund_below_balance {
                     match status {
                         SignerStatus::Available => *status = SignerStatus::NeedsFunding,
                         SignerStatus::Leased => *status = SignerStatus::LeasedNeedsFunding,

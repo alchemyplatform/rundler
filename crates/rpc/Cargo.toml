@@ -9,12 +9,6 @@ publish = false
 
 [dependencies]
 alloy-consensus.workspace = true
-rundler-contracts.workspace = true
-rundler-provider.workspace = true
-rundler-sim.workspace = true
-rundler-task.workspace = true
-rundler-types.workspace = true
-rundler-utils.workspace = true
 
 alloy-contract.workspace = true
 alloy-json-rpc.workspace = true
@@ -29,6 +23,12 @@ itertools.workspace = true
 jsonrpsee = { workspace = true, features = ["client", "macros", "server"] }
 metrics.workspace = true
 metrics-derive.workspace = true
+rundler-contracts.workspace = true
+rundler-provider.workspace = true
+rundler-sim.workspace = true
+rundler-task.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 serde.workspace = true
 strum.workspace = true
 thiserror.workspace = true

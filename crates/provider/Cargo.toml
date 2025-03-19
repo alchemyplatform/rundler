@@ -8,10 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-bindings-fastlz.workspace = true
-rundler-contracts.workspace = true
-rundler-types.workspace = true
-rundler-utils.workspace = true
 
 alloy-consensus.workspace = true
 alloy-contract.workspace = true
@@ -28,22 +24,26 @@ alloy-sol-types.workspace = true
 alloy-transport.workspace = true
 alloy-transport-http.workspace = true
 
-reth-tasks = { workspace = true, features = ["rayon"] }
-
 anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 futures-util.workspace = true
+
+mockall = { workspace = true, optional = true }
 pin-project.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+
+reth-tasks = { workspace = true, features = ["rayon"] }
+rundler-bindings-fastlz.workspace = true
+rundler-contracts.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tower.workspace = true
 tracing.workspace = true
 url.workspace = true
-
-mockall = { workspace = true, optional = true }
 
 [features]
 test-utils = ["mockall"]

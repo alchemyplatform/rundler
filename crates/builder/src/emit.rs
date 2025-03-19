@@ -89,6 +89,7 @@ impl BuilderEvent {
 
 /// BuilderEventKind
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum BuilderEventKind {
     /// A bundle was formed
     FormedBundle {

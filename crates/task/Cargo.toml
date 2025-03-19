@@ -8,9 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-provider.workspace = true
-rundler-types.workspace = true
-rundler-utils.workspace = true
 
 alloy-primitives.workspace = true
 
@@ -18,6 +15,9 @@ anyhow.workspace = true
 async-trait.workspace = true
 pin-project.workspace = true
 reth-tasks.workspace = true
+rundler-provider.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tonic.workspace = true

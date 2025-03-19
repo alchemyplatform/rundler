@@ -78,7 +78,7 @@ where
 
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
         let uri = request.uri().clone();
-        let method_name = uri.path().split('/').last().unwrap_or("unknown");
+        let method_name = uri.path().split('/').next_back().unwrap_or("unknown");
         let method_logger = MethodSessionLogger::start(
             self.scope.clone(),
             method_name.to_string(),

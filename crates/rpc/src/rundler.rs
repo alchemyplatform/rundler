@@ -165,7 +165,7 @@ where
 
         if uo.pre_verification_gas() != 0
             || uo.call_gas_limit() != 0
-            || uo.call_data().len() != 0
+            || uo.call_data().is_empty()
             || uo.max_fee_per_gas() != 0
         {
             Err(EthRpcError::InvalidParams("Invalid user operation for drop: preVerificationGas, callGasLimit, callData, and maxFeePerGas must be zero".to_string()))?;

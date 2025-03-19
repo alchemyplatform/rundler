@@ -46,7 +46,7 @@ services:
       - MIN_UNSTAKE_DELAY=2
       - PRIORITY_FEE_MODE_KIND=base_fee_percent
       - PRIORITY_FEE_MODE_VALUE=0
-      - BUILDER_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - SIGNER_PRIVATE_KEYS=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
       - BUILDER_POOL_URL=https://rundler-pool:50051
       - BUILDER_HOST=0.0.0.0
       - BUILDER_PORT=50051

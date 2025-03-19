@@ -150,6 +150,7 @@ pub(crate) struct RpcUserOperationByHash {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum RpcUserOperationOptionalGas {
     V0_6(RpcUserOperationOptionalGasV0_6),
     V0_7(RpcUserOperationOptionalGasV0_7),

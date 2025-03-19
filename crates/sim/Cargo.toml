@@ -8,10 +8,6 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-rundler-contracts.workspace = true
-rundler-provider.workspace = true
-rundler-types.workspace = true
-rundler-utils.workspace = true
 
 alloy-primitives.workspace = true
 alloy-sol-types.workspace = true
@@ -21,14 +17,18 @@ arrayvec = "0.7.6"
 async-trait.workspace = true
 auto_impl.workspace = true
 futures-util.workspace = true
+
+mockall = { workspace = true, optional = true }
 rand.workspace = true
+rundler-contracts.workspace = true
+rundler-provider.workspace = true
+rundler-types.workspace = true
+rundler-utils.workspace = true
 serde.workspace = true
 serde_with = "3.9.0"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 tracing.workspace = true
-
-mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 alloy-primitives = { workspace = true, features = ["rand"] }

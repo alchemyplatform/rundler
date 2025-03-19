@@ -31,6 +31,7 @@ use crate::{
 const GAS_BASE: u64 = 50_000;
 const GAS_PER_CALL: u64 = 40_000;
 
+#[derive(Clone)]
 pub(crate) struct FunderSettings {
     pub fund_below_balance: U256,
     pub fund_to_balance: U256,
@@ -38,8 +39,8 @@ pub(crate) struct FunderSettings {
     pub multicall3_address: Address,
     pub poll_interval: Duration,
     pub poll_max_retries: u64,
-    pub priority_fee_multiplier: u64,
-    pub base_fee_multiplier: u64,
+    pub priority_fee_multiplier: f64,
+    pub base_fee_multiplier: f64,
 
     pub signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
 }
@@ -111,7 +112,7 @@ async fn funding_task_inner<P: EvmProvider>(
     let mut to_fund = balances
         .into_iter()
         .filter_map(|(address, balance)| {
-            if balance < settings.fund_below_balance {
+            if balance < settings.fund_below_balance && balance < settings.fund_to_balance {
                 Some((address, settings.fund_to_balance - balance))
             } else {
                 None
@@ -121,16 +122,28 @@ async fn funding_task_inner<P: EvmProvider>(
     // sort by amount, descending
     to_fund.sort_by_key(|(_, amount)| cmp::Reverse(*amount));
 
-    let mut total = to_fund.iter().map(|(_, amount)| amount).sum::<U256>();
+    let total = to_fund.iter().map(|(_, amount)| amount).sum::<U256>();
     let total_to_fund = to_fund.len();
     let funding_balance =
         get_update_funder_balance(provider, metrics, funding_signer_address).await?;
 
-    if total > funding_balance {
+    let (nonce, max_fee_per_gas, priority_fee) = utils::get_nonce_and_fees(
+        provider,
+        funding_signer_address,
+        settings.base_fee_multiplier,
+        settings.priority_fee_multiplier,
+    )
+    .await?;
+
+    let mut gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
+    let gas_fee = U256::from(gas_limit) * U256::from(max_fee_per_gas);
+    let mut total_with_gas = total + gas_fee;
+
+    if total_with_gas > funding_balance {
         tracing::warn!("Not enough funding balance. Funding balance: {funding_balance}, total to fund: {total}. Partial funding will be attempted.");
         while total > funding_balance && !to_fund.is_empty() {
             let (_, amount) = to_fund.pop().unwrap();
-            total -= amount;
+            total_with_gas -= amount + U256::from(GAS_PER_CALL) * U256::from(max_fee_per_gas);
         }
         if to_fund.is_empty() {
             anyhow::bail!("Not enough funding balance for any funding. Funding balance: {funding_balance}, total to fund: {total}");
@@ -141,6 +154,7 @@ async fn funding_task_inner<P: EvmProvider>(
                 total_to_fund
             );
         }
+        gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
     }
 
     let num_calls = to_fund.len() as u64;
@@ -149,16 +163,6 @@ async fn funding_task_inner<P: EvmProvider>(
         .map(|(address, amount)| multicall3::create_call_value_only(address, amount))
         .collect::<Vec<_>>();
     let call = multicall3::Multicall3::aggregate3ValueCall { calls };
-
-    let (nonce, base_fee, priority_fee) = tokio::try_join!(
-        provider.get_transaction_count(funding_signer_address),
-        provider.get_pending_base_fee(),
-        provider.get_max_priority_fee()
-    )?;
-
-    let priority_fee = priority_fee * settings.priority_fee_multiplier as u128;
-    let max_fee_per_gas = base_fee * settings.base_fee_multiplier as u128 + priority_fee;
-    let gas_limit = GAS_BASE + GAS_PER_CALL * num_calls;
 
     let tx = TransactionRequest::default()
         .with_call(&call)
@@ -182,27 +186,15 @@ async fn funding_task_inner<P: EvmProvider>(
         .request::<_, B256>("eth_sendRawTransaction", (tx_bytes,))
         .await?;
 
-    let mut found_tx = None;
-    for _ in 0..settings.poll_max_retries {
-        tokio::time::sleep(settings.poll_interval).await;
+    let tx_receipt = utils::wait_for_txn(
+        provider,
+        tx_hash,
+        settings.poll_max_retries,
+        settings.poll_interval,
+    )
+    .await?;
 
-        let maybe_tx = provider.get_transaction_receipt(tx_hash).await?;
-        let Some(tx) = maybe_tx else {
-            tracing::debug!("Transaction not found, retrying");
-            continue;
-        };
-        found_tx = Some(tx);
-        break;
-    }
-
-    match found_tx {
-        Some(tx) => {
-            tracing::info!("Funding transaction {tx_hash} mined. Receipt: {tx:?}");
-        }
-        None => {
-            anyhow::bail!("Funding transaction {tx_hash} not mined after max retries");
-        }
-    }
+    tracing::info!("Funding transaction {tx_hash} mined. Receipt: {tx_receipt:?}");
 
     metrics.funded_addresses.increment(num_calls);
     let _ = get_update_funder_balance(provider, metrics, funding_signer_address).await;
@@ -210,7 +202,8 @@ async fn funding_task_inner<P: EvmProvider>(
     Ok(FundingSignerManager::update_signer_statuses(
         statuses,
         new_balances,
-        Some(settings.fund_below_balance),
+        Some(settings),
+        true, // kick off another round of funding if balances are still below the threshold
     ))
 }
 

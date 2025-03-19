@@ -30,3 +30,8 @@ async fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use cargo_husky as _;
+}

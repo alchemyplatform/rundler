@@ -1670,6 +1670,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-husky"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b02b629252fe8ef6460461409564e2c21d0c8e77e0944f3d189ff06c4e932ad"
+
+[[package]]
 name = "cc"
 version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4863,14 +4869,17 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 name = "rundler"
 version = "0.6.0"
 dependencies = [
+ "alloy-network",
  "alloy-primitives",
  "anyhow",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
+ "cargo-husky",
  "clap",
  "config",
  "dotenvy",
+ "futures",
  "go-parse-duration",
  "http 1.2.0",
  "itertools 0.13.0",
