@@ -62,8 +62,6 @@ pub struct SignerArgs {
     pub aws_kms_key_groups: Vec<Vec<String>>,
 
     /// Whether to enable KMS funding
-    ///
-    /// Implies KMS locking.
     #[arg(
         long = "signer.enable_kms_funding",
         name = "signer.enable_kms_funding",
@@ -73,8 +71,6 @@ pub struct SignerArgs {
     pub enable_kms_funding: bool,
 
     /// Whether to enable KMS locking
-    ///
-    /// Not compatible with KMS funding, funding always locks
     #[arg(
         long = "signer.enable_kms_locking",
         name = "signer.enable_kms_locking",
@@ -139,21 +135,21 @@ pub struct SignerArgs {
 
     /// The multiplier for the priority fee
     #[arg(
-        long = "signer.funding_priority_fee_multiplier",
-        name = "signer.funding_priority_fee_multiplier",
-        env = "SIGNER_FUNDING_PRIORITY_FEE_MULTIPLIER",
+        long = "signer.funding_txn_priority_fee_multiplier",
+        name = "signer.funding_txn_priority_fee_multiplier",
+        env = "SIGNER_FUNDING_TXN_PRIORITY_FEE_MULTIPLIER",
         default_value = "2.0"
     )]
-    pub funding_priority_fee_multiplier: f64,
+    pub funding_txn_priority_fee_multiplier: f64,
 
     /// The multiplier for the base fee
     #[arg(
-        long = "signer.funding_base_fee_multiplier",
-        name = "signer.funding_base_fee_multiplier",
-        env = "SIGNER_FUNDING_BASE_FEE_MULTIPLIER",
+        long = "signer.funding_txn_base_fee_multiplier",
+        name = "signer.funding_txn_base_fee_multiplier",
+        env = "SIGNER_FUNDING_TXN_BASE_FEE_MULTIPLIER",
         default_value = "2.0"
     )]
-    pub funding_base_fee_multiplier: f64,
+    pub funding_txn_base_fee_multiplier: f64,
 }
 
 fn parse_aws_kms_key_groups(s: &str) -> Result<Vec<String>, String> {
@@ -218,6 +214,14 @@ impl SignerArgs {
         if self.aws_kms_key_ids.is_empty() {
             bail!("AWS KMS key IDs are not set and KMS funding is enabled. Please set signer.aws_kms_key_ids");
         };
+        let lock_settings = if self.enable_kms_locking {
+            Some(KmsLockingSettings {
+                redis_uri: self.redis_uri.clone(),
+                ttl_millis: self.redis_lock_ttl_millis,
+            })
+        } else {
+            None
+        };
 
         let subkeys_by_key_id = if !self.aws_kms_key_groups.is_empty() {
             if self.aws_kms_key_groups.len() != self.aws_kms_key_ids.len() {
@@ -273,17 +277,14 @@ impl SignerArgs {
 
         Ok(SigningScheme::KmsFunding {
             subkeys_by_key_id,
-            lock_settings: KmsLockingSettings {
-                redis_uri: self.redis_uri.clone(),
-                ttl_millis: self.redis_lock_ttl_millis,
-            },
+            lock_settings,
             funding_settings: FundingSettings {
                 fund_below_balance: self.fund_below.context("Fund below balance not set")?,
                 fund_to_balance: self.fund_to.context("Fund to balance not set")?,
                 poll_interval: Duration::from_millis(self.funding_txn_poll_interval_ms),
                 poll_max_retries: self.funding_txn_poll_max_retries,
-                priority_fee_multiplier: self.funding_priority_fee_multiplier,
-                base_fee_multiplier: self.funding_base_fee_multiplier,
+                priority_fee_multiplier: self.funding_txn_priority_fee_multiplier,
+                base_fee_multiplier: self.funding_txn_base_fee_multiplier,
             },
         })
     }

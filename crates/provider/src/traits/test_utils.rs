@@ -23,7 +23,7 @@ use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasUOData},
-    v0_6, v0_7, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
+    v0_6, v0_7, ExpectedStorage, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
 use super::error::ProviderResult;
@@ -57,6 +57,14 @@ mockall::mock! {
             block: Option<BlockId>,
             state_overrides: &StateOverride,
         ) -> ProviderResult<Bytes>;
+
+        async fn send_raw_transaction(&self, tx: Bytes) -> ProviderResult<TxHash>;
+
+        async fn send_raw_transaction_conditional(
+            &self,
+            tx: Bytes,
+            expected_storage: &ExpectedStorage,
+        ) -> ProviderResult<TxHash>;
 
         async fn get_block_number(&self) -> ProviderResult<u64>;
 
