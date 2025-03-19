@@ -19,10 +19,10 @@ use rundler_provider::{
     BlockId, EvmProvider, GethDebugTracerType, GethDebugTracingCallOptions,
     GethDebugTracingOptions, GethTrace, SimulationProvider,
 };
-use rundler_types::{v0_7::UserOperation, Opcode};
+use rundler_types::{v0_7::UserOperation, ExpectedStorage, Opcode};
 use serde::Deserialize;
 
-use crate::{simulation::context::ContractInfo, ExpectedStorage};
+use crate::simulation::context::ContractInfo;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

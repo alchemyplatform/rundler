@@ -34,8 +34,7 @@ use rundler_provider::{
     ProvidersWithEntryPointT,
 };
 use rundler_sim::{
-    BundleExpectedStorage, ExpectedStorage, FeeEstimator, PriorityFeeMode, SimulationError,
-    SimulationResult, Simulator, ViolationError,
+    FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator, ViolationError,
 };
 use rundler_types::{
     aggregator::SignatureAggregatorResult,
@@ -43,9 +42,10 @@ use rundler_types::{
     da::DAGasBlockData,
     pool::{Pool, PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
-    Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate, EntityUpdateType, GasFees,
-    Timestamp, UserOperation, UserOperationVariant, UserOpsPerAggregator, ValidTimeRange,
-    ValidationRevert, BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
+    EntityUpdateType, ExpectedStorage, GasFees, Timestamp, UserOperation, UserOperationVariant,
+    UserOpsPerAggregator, ValidTimeRange, ValidationRevert, BUNDLE_BYTE_OVERHEAD,
+    TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
 use tokio::{sync::broadcast, try_join};

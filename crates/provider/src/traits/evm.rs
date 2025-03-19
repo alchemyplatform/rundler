@@ -16,6 +16,7 @@
 use std::fmt::Display;
 
 use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
+use rundler_types::ExpectedStorage;
 
 use crate::{
     Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, GasUsedResult,
@@ -72,6 +73,16 @@ pub trait EvmProvider: Send + Sync {
         block: Option<BlockId>,
         state_overrides: &StateOverride,
     ) -> ProviderResult<Bytes>;
+
+    /// Send a raw transaction
+    async fn send_raw_transaction(&self, tx: Bytes) -> ProviderResult<TxHash>;
+
+    /// Send a raw transaction with conditional execution
+    async fn send_raw_transaction_conditional(
+        &self,
+        tx: Bytes,
+        expected_storage: &ExpectedStorage,
+    ) -> ProviderResult<TxHash>;
 
     /// Get the current block number
     async fn get_block_number(&self) -> ProviderResult<u64>;

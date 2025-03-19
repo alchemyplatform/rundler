@@ -63,4 +63,4 @@ pub use simulation::{
 };
 
 mod types;
-pub use types::{BundleExpectedStorage, ExpectedStorage, ViolationError};
+pub use types::ViolationError;

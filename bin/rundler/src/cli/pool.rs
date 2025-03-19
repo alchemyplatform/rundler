@@ -112,13 +112,6 @@ pub struct PoolArgs {
     pub chain_sync_max_retries: u64,
 
     #[arg(
-        long = "pool.chain_history_size",
-        name = "pool.chain_history_size",
-        env = "POOL_CHAIN_HISTORY_SIZE"
-    )]
-    pub chain_history_size: Option<u64>,
-
-    #[arg(
         long = "pool.chain_update_channel_capacity",
         name = "pool.chain_update_channel_capacity",
         env = "POOL_CHAIN_UPDATE_CHANNEL_CAPACITY"
