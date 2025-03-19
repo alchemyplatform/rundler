@@ -14,7 +14,7 @@
 use std::{str::FromStr, time::Duration};
 
 use alloy_network::TransactionBuilder;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, U256};
 use clap::Args;
 use rundler_provider::{EvmProvider, Providers, TransactionRequest};
 use rundler_signer::{utils, SignerLease, SigningScheme};
@@ -176,9 +176,7 @@ async fn defund_signer(
 
     let tx_bytes = signer.sign_tx_raw(tx).await?;
 
-    let tx_hash = provider
-        .request::<_, B256>("eth_sendRawTransaction", (tx_bytes,))
-        .await?;
+    let tx_hash = provider.send_raw_transaction(tx_bytes).await?;
     println!("Defunding transaction {tx_hash} sent");
 
     let tx_receipt = utils::wait_for_txn(

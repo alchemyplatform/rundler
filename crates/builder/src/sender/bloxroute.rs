@@ -19,8 +19,7 @@ use jsonrpsee::{
 };
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_sim::ExpectedStorage;
-use rundler_types::GasFees;
+use rundler_types::{ExpectedStorage, GasFees};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tonic::async_trait;
@@ -68,10 +67,7 @@ where
             .await
             .context("failed to sign transaction")?;
 
-        let tx_hash = self
-            .provider
-            .request("eth_sendRawTransaction", (raw_tx,))
-            .await?;
+        let tx_hash = self.provider.send_raw_transaction(raw_tx).await?;
 
         Ok(CancelTxInfo {
             tx_hash,

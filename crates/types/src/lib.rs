@@ -48,7 +48,7 @@ mod user_operation;
 pub use user_operation::*;
 
 mod storage;
-pub use storage::StorageSlot;
+pub use storage::*;
 
 mod validation_results;
 pub use validation_results::{
