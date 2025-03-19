@@ -27,14 +27,13 @@ use rundler_provider::{
     GethDebugTracerType, GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT,
     TransactionRequest,
 };
-use rundler_sim::ExpectedStorage;
 use rundler_task::TaskSpawner;
 use rundler_types::{
     builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool},
     proxy::SubmissionProxy,
-    EntityUpdate, UserOperation,
+    EntityUpdate, ExpectedStorage, UserOperation,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{

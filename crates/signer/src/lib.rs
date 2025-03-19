@@ -21,7 +21,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy_network::EthereumWallet;
+use alloy_network::{EthereumWallet, TxSigner};
 use anyhow::Context;
 use rundler_provider::EvmProvider;
 use rundler_task::TaskSpawner;
@@ -110,7 +110,7 @@ pub enum SigningScheme {
         /// Subkey map keyed by the funding key ids
         subkeys_by_key_id: HashMap<String, SigningScheme>,
         /// Lock settings
-        lock_settings: KmsLockingSettings,
+        lock_settings: Option<KmsLockingSettings>,
         /// Funding settings
         funding_settings: FundingSettings,
     },
@@ -181,7 +181,7 @@ pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner
                 provider.clone(),
                 subkeys_by_key_id,
                 funding_settings,
-                lock_settings,
+                lock_settings.as_ref(),
                 chain_spec,
                 auto_fund,
             )
@@ -267,22 +267,37 @@ async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner
     provider: P,
     subkeys_by_key_id: &HashMap<String, SigningScheme>,
     settings: &FundingSettings,
-    lock_settings: &KmsLockingSettings,
+    lock_settings: Option<&KmsLockingSettings>,
     chain_spec: &ChainSpec,
     auto_fund: bool,
 ) -> Result<Arc<dyn SignerManager>> {
     let key_ids = subkeys_by_key_id.keys().cloned().collect::<Vec<_>>();
-    let funding_signer = LockingKmsSigner::connect(
-        task_spawner,
-        chain_spec.id,
-        key_ids,
-        lock_settings.redis_uri.clone(),
-        lock_settings.ttl_millis,
-    )
-    .await?;
+
+    let (funding_signer, key_id): (Arc<dyn TxSigner<_> + Send + Sync + 'static>, _) =
+        if let Some(lock_settings) = lock_settings {
+            let signer = LockingKmsSigner::connect(
+                task_spawner,
+                chain_spec.id,
+                key_ids,
+                lock_settings.redis_uri.clone(),
+                lock_settings.ttl_millis,
+            )
+            .await?;
+            let key_id = signer.key_id().to_string();
+            (Arc::new(signer), key_id)
+        } else {
+            // non-locking, just use the first key id
+            let key_id = subkeys_by_key_id
+                .iter()
+                .next()
+                .context("no key ids configured")?
+                .0;
+            let signer = aws::create_signer_from_key_id(key_id.clone(), chain_spec.id).await?;
+            (Arc::new(signer), key_id.clone())
+        };
 
     let subkeys = subkeys_by_key_id
-        .get(funding_signer.key_id())
+        .get(&key_id)
         .context("funding key id should be in key ids by funding key id")?;
 
     let wallet = match subkeys {
@@ -309,7 +324,7 @@ async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner
         base_fee_multiplier: settings.base_fee_multiplier,
         chain_id: chain_spec.id,
         multicall3_address: chain_spec.multicall3_address,
-        signer: Arc::new(funding_signer),
+        signer: funding_signer,
     };
 
     Ok(Arc::new(FundingSignerManager::new(

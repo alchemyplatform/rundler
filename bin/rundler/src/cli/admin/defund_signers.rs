@@ -14,7 +14,7 @@
 use std::time::Duration;
 
 use alloy_network::TransactionBuilder;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, U256};
 use clap::Args;
 use rundler_provider::{EvmProvider, Providers, TransactionRequest};
 use rundler_signer::{utils, SignerLease, SigningScheme};
@@ -160,8 +160,8 @@ async fn defund_signer(
     let (nonce, max_fee_per_gas, priority_fee) = utils::get_nonce_and_fees(
         &provider,
         signer.address(),
-        signer_args.funding_base_fee_multiplier,
-        signer_args.funding_priority_fee_multiplier,
+        signer_args.funding_txn_base_fee_multiplier,
+        signer_args.funding_txn_priority_fee_multiplier,
     )
     .await?;
 
@@ -177,9 +177,7 @@ async fn defund_signer(
 
     let tx_bytes = signer.sign_tx_raw(tx).await?;
 
-    let tx_hash = provider
-        .request::<_, B256>("eth_sendRawTransaction", (tx_bytes,))
-        .await?;
+    let tx_hash = provider.send_raw_transaction(tx_bytes).await?;
     println!("Defunding transaction {tx_hash} sent");
 
     let tx_receipt = utils::wait_for_txn(

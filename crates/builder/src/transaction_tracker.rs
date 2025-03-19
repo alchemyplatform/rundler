@@ -21,8 +21,7 @@ use metrics_derive::Metrics;
 use mockall::automock;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_sim::ExpectedStorage;
-use rundler_types::{pool::AddressUpdate, GasFees};
+use rundler_types::{pool::AddressUpdate, ExpectedStorage, GasFees};
 use tokio::time::Instant;
 use tracing::{info, warn};
 
