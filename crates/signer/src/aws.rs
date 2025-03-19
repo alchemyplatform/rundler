@@ -36,11 +36,21 @@ pub(crate) async fn create_wallet_from_key_ids(
     for key_id in key_ids {
         let signer = AwsSigner::new(client.clone(), key_id.to_string(), Some(chain_id))
             .await
-            .context("should create signer")?;
+            .context("should create aws kms signer")?;
         wallet.register_signer(signer);
     }
 
     Ok(wallet)
+}
+
+pub(crate) async fn create_signer_from_key_id(key_id: String, chain_id: u64) -> Result<AwsSigner> {
+    let config = aws_config::load_defaults(BehaviorVersion::v2025_01_17()).await;
+    let client = aws_sdk_kms::Client::new(&config);
+    Ok(
+        AwsSigner::new(client.clone(), key_id.to_string(), Some(chain_id))
+            .await
+            .context("should create aws kms signer")?,
+    )
 }
 
 pub(crate) struct LockingKmsSigner {

@@ -139,7 +139,7 @@ pub(crate) struct FundingSignerManager {
     funding_notify: Arc<Notify>,
 }
 
-#[derive(Debug, strum::EnumString)]
+#[derive(Debug, strum::EnumString, PartialEq, Eq)]
 pub(crate) enum SignerStatus {
     Available,
     NeedsFunding,
@@ -166,14 +166,14 @@ impl SignerManager for FundingSignerManager {
             return Ok(());
         } else if num_required > self.addresses().len() {
             return Err(anyhow::anyhow!(
-                "Required {num_required} but only have {}",
+                "Required {num_required} signers but only have {}",
                 self.addresses().len()
             ))?;
         }
 
         let Some(funder_settings) = &self.funder_settings else {
             Err(anyhow::anyhow!(
-                "Required {num_required} but only have {} and funding is not enabled",
+                "Required {num_required} signers but only have {} and funding is not enabled",
                 self.available()
             ))?
         };
@@ -209,10 +209,12 @@ impl SignerManager for FundingSignerManager {
         let status = statuses.get_mut(address)?;
         if matches!(status, SignerStatus::Available) {
             *status = SignerStatus::Leased;
+            Some(SignerLease::new(Arc::new(
+                self.wallet.signer_by_address(*address)?,
+            )))
+        } else {
+            None
         }
-        Some(SignerLease::new(Arc::new(
-            self.wallet.signer_by_address(*address)?,
-        )))
     }
 
     fn return_lease(&self, lease: SignerLease) {
@@ -329,4 +331,184 @@ impl FundingSignerManager {
 pub(crate) struct SignerMetrics {
     #[metric(describe = "the balance of a signer address")]
     pub(crate) account_balance: Gauge,
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{address, U256};
+    use rundler_provider::MockEvmProvider;
+    use rundler_task::TokioTaskExecutor;
+
+    use super::*;
+
+    fn create_test_manager(signers: Vec<Address>) -> FundingSignerManager {
+        let mut wallet = EthereumWallet::default();
+        for signer in signers {
+            wallet.register_signer(MockTxSigner::new(signer));
+        }
+        let funder_settings = Some(FunderSettings {
+            fund_below_balance: U256::from(100),
+            poll_interval: std::time::Duration::from_millis(100),
+            chain_id: 1,
+            multicall3_address: address!("0000000000000000000000000000000000000000"),
+            poll_max_retries: 10,
+            priority_fee_multiplier: 1.0,
+            base_fee_multiplier: 1.0,
+            signer: Arc::new(MockTxSigner::new(address!(
+                "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
+            ))),
+            fund_to_balance: U256::from(1000),
+        });
+        let task_spawner = TokioTaskExecutor::default();
+        let provider = MockEvmProvider::default();
+
+        FundingSignerManager::new(wallet, funder_settings, true, &task_spawner, provider)
+    }
+
+    #[tokio::test]
+    async fn test_leasing_signers() {
+        let manager = create_test_manager(vec![
+            address!("0000000000000000000000000000000000000000"),
+            address!("0000000000000000000000000000000000000001"),
+        ]);
+        let addresses = manager.addresses();
+        assert!(!addresses.is_empty());
+
+        // Test general leasing
+        let lease = manager
+            .lease_signer()
+            .expect("Should be able to lease a signer");
+        assert!(addresses.contains(&lease.address()));
+        assert_eq!(manager.available(), addresses.len() - 1);
+        manager.return_lease(lease);
+        assert_eq!(manager.available(), addresses.len());
+
+        // Test leasing by address
+        let specific_address = addresses[0];
+        let specific_lease = manager
+            .lease_signer_by_address(&specific_address)
+            .expect("Should be able to lease specific signer");
+        assert_eq!(specific_lease.address(), specific_address);
+        assert_eq!(manager.available(), addresses.len() - 1);
+        manager.return_lease(specific_lease);
+        assert_eq!(manager.available(), addresses.len());
+    }
+
+    #[tokio::test]
+    async fn test_updating_balances() {
+        let manager = create_test_manager(vec![
+            address!("0000000000000000000000000000000000000000"),
+            address!("0000000000000000000000000000000000000001"),
+            address!("0000000000000000000000000000000000000002"),
+            address!("0000000000000000000000000000000000000003"),
+        ]);
+        let addresses = manager.addresses();
+        assert!(!addresses.is_empty());
+
+        // Test balance updates that trigger funding
+        let low_balance = U256::from(50); // Below fund_below_balance
+        let high_balance = U256::from(200); // Above fund_below_balance
+
+        let mut balances: Vec<_> = addresses
+            .iter()
+            .map(|&addr| {
+                if addr == addresses[0] {
+                    (addr, low_balance)
+                } else {
+                    (addr, high_balance)
+                }
+            })
+            .collect();
+
+        manager.update_balances(balances.clone());
+
+        // Verify status transitions
+        {
+            let statuses = manager.signer_statuses.read();
+            assert_eq!(
+                statuses.get(&addresses[0]),
+                Some(&SignerStatus::NeedsFunding)
+            );
+            for addr in &addresses[1..] {
+                assert_eq!(statuses.get(addr), Some(&SignerStatus::Available));
+            }
+        }
+
+        balances[0].1 = high_balance;
+        manager.update_balances(balances.clone());
+        {
+            let statuses = manager.signer_statuses.read();
+            assert_eq!(statuses.get(&addresses[0]), Some(&SignerStatus::Available));
+        }
+
+        let lease = manager.lease_signer_by_address(&addresses[0]).unwrap();
+        balances[0].1 = low_balance;
+        manager.update_balances(balances);
+        {
+            let statuses = manager.signer_statuses.read();
+            assert_eq!(
+                statuses.get(&addresses[0]),
+                Some(&SignerStatus::LeasedNeedsFunding)
+            );
+        }
+
+        manager.return_lease(lease);
+        {
+            let statuses = manager.signer_statuses.read();
+            assert_eq!(
+                statuses.get(&addresses[0]),
+                Some(&SignerStatus::NeedsFunding)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_leasing_with_funding_status() {
+        let manager = create_test_manager(vec![
+            address!("0000000000000000000000000000000000000000"),
+            address!("0000000000000000000000000000000000000001"),
+        ]);
+        let addresses = manager.addresses();
+        assert!(!addresses.is_empty());
+
+        // Set up a signer that needs funding
+        let balances = addresses
+            .iter()
+            .map(|&addr| {
+                if addr == addresses[0] {
+                    (addr, U256::from(50)) // Below threshold
+                } else {
+                    (addr, U256::from(200)) // Above threshold
+                }
+            })
+            .collect();
+        manager.update_balances(balances);
+
+        // Try to lease the signer that needs funding
+        assert!(manager.lease_signer_by_address(&addresses[0]).is_none());
+    }
+
+    #[derive(Clone)]
+    struct MockTxSigner {
+        address: Address,
+    }
+
+    impl MockTxSigner {
+        fn new(address: Address) -> Self {
+            Self { address }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TxSigner<PrimitiveSignature> for MockTxSigner {
+        fn address(&self) -> Address {
+            self.address
+        }
+        async fn sign_transaction(
+            &self,
+            _tx: &mut dyn alloy_consensus::SignableTransaction<PrimitiveSignature>,
+        ) -> alloy_signer::Result<PrimitiveSignature> {
+            Ok(PrimitiveSignature::test_signature())
+        }
+    }
 }

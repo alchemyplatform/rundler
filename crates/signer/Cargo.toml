@@ -34,3 +34,6 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+alloy-sol-types.workspace = true
+mockall.workspace = true
+rundler-provider = { workspace = true, features = ["test-utils"] }

@@ -17,13 +17,13 @@ use alloy_primitives::{Address, U256};
 use anyhow::Context;
 use rundler_provider::BlockId;
 use rundler_types::{
-    pool::SimulationViolation, EntityInfos, EntityType, Opcode, StakeInfo, UserOperation,
-    ValidationOutput,
+    pool::SimulationViolation, EntityInfos, EntityType, ExpectedStorage, Opcode, StakeInfo,
+    UserOperation, ValidationOutput,
 };
 use serde::{Deserialize, Serialize};
 
 use super::Settings;
-use crate::{ExpectedStorage, ViolationError};
+use crate::ViolationError;
 
 #[derive(Clone, Debug)]
 pub struct ValidationContext<UO> {

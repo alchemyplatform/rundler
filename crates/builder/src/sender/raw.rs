@@ -17,8 +17,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_signer::SignerLease;
-use rundler_sim::ExpectedStorage;
-use rundler_types::GasFees;
+use rundler_types::{ExpectedStorage, GasFees};
 use serde_json::json;
 
 use super::{CancelTxInfo, Result};
@@ -54,9 +53,7 @@ where
                 )
                 .await?
         } else {
-            self.submit_provider
-                .request("eth_sendRawTransaction", (raw_tx,))
-                .await?
+            self.submit_provider.send_raw_transaction(raw_tx).await?
         };
 
         Ok(tx_hash)
@@ -80,7 +77,7 @@ where
 
         let tx_hash = self
             .submit_provider
-            .request("eth_sendRawTransaction", (raw_tx,))
+            .send_raw_transaction(raw_tx.into())
             .await?;
 
         Ok(CancelTxInfo {

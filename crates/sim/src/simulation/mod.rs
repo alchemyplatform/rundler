@@ -21,7 +21,7 @@ use mockall::automock;
 use rundler_provider::ProviderError;
 use rundler_types::{
     pool::{MempoolError, SimulationViolation},
-    EntityInfos, UserOperation, ValidTimeRange,
+    EntityInfos, ExpectedStorage, UserOperation, ValidTimeRange,
 };
 
 mod context;
@@ -41,7 +41,7 @@ pub mod v0_6;
 /// Entry Point v0.7 Tracing
 pub mod v0_7;
 
-use crate::{ExpectedStorage, ViolationError};
+use crate::ViolationError;
 
 /// The result of a successful simulation
 #[derive(Clone, Debug, Default)]
