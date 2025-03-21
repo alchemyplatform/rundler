@@ -6,4 +6,5 @@
 *.iml
 *.rs.bk
 .idea
-Dockerfile
+Dockerfile*
+/.git
