@@ -147,7 +147,6 @@ where
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
-    #[instrument(skip_all, fields(entry_point = self.ep_address.to_string(), tag = self.builder_tag))]
     async fn send_bundles_in_loop<TS: TaskSpawner>(mut self, task_spawner: TS) {
         // trigger for sending bundles
         let sender_trigger = BundleSenderTrigger::new(
@@ -217,6 +216,7 @@ where
         }
     }
 
+    #[instrument(skip_all, fields(entry_point = self.ep_address.to_string(), tag = self.builder_tag))]
     async fn step_state<TRIG: Trigger>(
         &mut self,
         state: &mut SenderMachineState<T, TRIG>,
