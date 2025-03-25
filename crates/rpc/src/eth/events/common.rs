@@ -34,6 +34,7 @@ pub(crate) struct UserOperationEventProviderImpl<P, F> {
     chain_spec: ChainSpec,
     provider: P,
     event_block_distance: Option<u64>,
+    event_block_distance_fallback: Option<u64>,
     _f_type: PhantomData<F>,
 }
 
@@ -144,11 +145,13 @@ where
         chain_spec: ChainSpec,
         provider: P,
         event_block_distance: Option<u64>,
+        event_block_distance_fallback: Option<u64>,
     ) -> Self {
         Self {
             chain_spec,
             provider,
             event_block_distance,
+            event_block_distance_fallback,
             _f_type: PhantomData,
         }
     }
@@ -162,6 +165,31 @@ where
             None => 0,
         };
 
+        match self.get_event_by_hash_at(hash, from_block, to_block).await {
+            Ok(logs) => Ok(logs),
+            Err(e) => {
+                if let Some(fallback_distance) = self.event_block_distance_fallback {
+                    tracing::warn!("Error querying for event at from block {from_block:?} to block {to_block:?} falling back to a distance of {fallback_distance:?}. Error {e:?}");
+                    self.get_event_by_hash_at(
+                        hash,
+                        to_block.saturating_sub(fallback_distance),
+                        to_block,
+                    )
+                    .await
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    #[instrument(skip_all)]
+    async fn get_event_by_hash_at(
+        &self,
+        hash: B256,
+        from_block: u64,
+        to_block: u64,
+    ) -> anyhow::Result<Option<Log>> {
         let filter = Filter::new()
             .address(E::address(&self.chain_spec))
             .event_signature(E::UserOperationEvent::SIGNATURE_HASH)
@@ -169,8 +197,7 @@ where
             .to_block(to_block)
             .topic1(hash);
 
-        let logs = self.provider.get_logs(&filter).await?;
-        Ok(logs.into_iter().next())
+        Ok(self.provider.get_logs(&filter).await?.into_iter().next())
     }
 
     #[instrument(skip(self))]

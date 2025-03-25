@@ -82,6 +82,8 @@ pub trait EthApi {
 pub struct EthApiSettings {
     /// The number of blocks to look back for user operation events
     pub user_operation_event_block_distance: Option<u64>,
+    /// The number of blocks to look back for user operation events during a fallback
+    pub user_operation_event_block_distance_fallback: Option<u64>,
     /// If external permissions are allowed
     pub permissions_enabled: bool,
 }

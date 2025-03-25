@@ -407,7 +407,12 @@ mod tests {
             .v0_6(EntryPointRouteImpl::new(
                 ep.clone(),
                 gas_estimator,
-                UserOperationEventProviderV0_6::new(chain_spec.clone(), provider.clone(), None),
+                UserOperationEventProviderV0_6::new(
+                    chain_spec.clone(),
+                    provider.clone(),
+                    None,
+                    None,
+                ),
             ))
             .build();
 

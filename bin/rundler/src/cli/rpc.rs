@@ -118,6 +118,8 @@ impl RpcArgs {
         let eth_api_settings = EthApiSettings {
             permissions_enabled: self.permissions_enabled,
             user_operation_event_block_distance: common.user_operation_event_block_distance,
+            user_operation_event_block_distance_fallback: common
+                .user_operation_event_block_distance_fallback,
         };
 
         Ok(RpcTaskArgs {

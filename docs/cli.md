@@ -40,8 +40,12 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *MIN_UNSTAKE_DELAY*
 - `--tracer_timeout`: The timeout used for custom javascript tracers, the string must be in a valid parseable format that can be used in the `ParseDuration` function on an ethereum node. See Docs [Here](https://pkg.go.dev/time#ParseDuration). (default: `15s`)
   - env: *TRACER_TIMEOUT*
-- `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`. (default: all blocks)
+- `--enable_unsafe_fallback`: If set, allows the simulation code to fallback to an unsafe simulation if there is a tracer error. (default: `false`)
+  - env: *ENABLE_UNSAFE_FALLBACK*
+- `--user_operation_event_block_distance`: Number of blocks to search when calling `eth_getUserOperationByHash`/`eth_getUserOperationReceipt`. (default: all blocks)
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
+- `--user_operation_event_block_distance_fallback`: Number of blocks to search when falling back during `eth_getUserOperationByHash`/`eth_getUserOperationReceipt` upon initial failure using `user_operation_event_block_distance`. (default: None)
+  - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE_FALLBACK*
 - `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
   - env: *MAX_SIMULATE_HANDLE_OPS_GAS*
 - `--verification_estimation_gas_fee`: The gas fee to use during verification estimation. (default: `1000000000000` 10K gwei).

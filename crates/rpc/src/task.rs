@@ -149,6 +149,9 @@ where
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
+                    self.args
+                        .eth_api_settings
+                        .user_operation_event_block_distance_fallback,
                 ),
             ));
         }
@@ -175,6 +178,9 @@ where
                     self.args
                         .eth_api_settings
                         .user_operation_event_block_distance,
+                    self.args
+                        .eth_api_settings
+                        .user_operation_event_block_distance_fallback,
                 ),
             ));
         }
