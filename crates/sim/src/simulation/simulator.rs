@@ -454,7 +454,19 @@ where
             .await
         {
             Ok(context) => context,
-            error @ Err(_) => error?,
+            error @ Err(_) => {
+                if self.sim_settings.enable_unsafe_fallback {
+                    tracing::warn!(
+                        "tracing error with enable_unsafe_fallback set, falling back to unsafe sim. Error: {error:?}"
+                    );
+                    return self
+                        .unsafe_sim
+                        .simulate_validation(op, trusted, block_hash, expected_code_hash)
+                        .await;
+                } else {
+                    error?
+                }
+            }
         };
 
         // Gather all violations from the tracer

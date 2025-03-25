@@ -246,6 +246,14 @@ pub struct CommonArgs {
     )]
     tracer_timeout: String,
 
+    /// If set, allows the simulator to fallback to unsafe mode if the simulation tracer fails
+    #[arg(
+        long = "enable_unsafe_fallback",
+        name = "enable_unsafe_fallback",
+        env = "ENABLE_UNSAFE_FALLBACK"
+    )]
+    enable_unsafe_fallback: bool,
+
     /// Amount of blocks to search when calling eth_getUserOperationByHash.
     /// Defaults from 0 to latest block
     #[arg(
@@ -255,6 +263,17 @@ pub struct CommonArgs {
         global = true
     )]
     user_operation_event_block_distance: Option<u64>,
+
+    /// Amount of blocks to search when calling eth_getUserOperationByHash during a fallback.
+    ///
+    /// Defaults to unset. If set, will be used in the case that a first query for events fails.
+    #[arg(
+        long = "user_operation_event_block_distance_fallback",
+        name = "user_operation_event_block_distance_fallback",
+        env = "USER_OPERATION_EVENT_BLOCK_DISTANCE_FALLBACK",
+        global = true
+    )]
+    user_operation_event_block_distance_fallback: Option<u64>,
 
     #[arg(
         long = "max_simulate_handle_ops_gas",
@@ -525,11 +544,12 @@ impl TryFrom<&CommonArgs> for SimulationSettings {
             bail!("Invalid value for tracer_timeout, must be parsable by the ParseDuration function. See docs https://pkg.go.dev/time#ParseDuration")
         }
 
-        Ok(Self::new(
-            value.min_unstake_delay,
-            U256::from(value.min_stake_value),
-            value.tracer_timeout.clone(),
-        ))
+        Ok(Self {
+            min_unstake_delay: value.min_unstake_delay,
+            min_stake_value: U256::from(value.min_stake_value),
+            tracer_timeout: value.tracer_timeout.clone(),
+            enable_unsafe_fallback: value.enable_unsafe_fallback,
+        })
     }
 }
 

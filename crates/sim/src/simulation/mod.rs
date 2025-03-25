@@ -158,17 +158,8 @@ pub struct Settings {
     /// The max duration of the custom javascript tracer. Must be in a format parseable by the
     /// ParseDuration function on an ethereum node. See Docs: https://pkg.go.dev/time#ParseDuration
     pub tracer_timeout: String,
-}
-
-impl Settings {
-    /// Create new settings
-    pub fn new(min_unstake_delay: u32, min_stake_value: U256, tracer_timeout: String) -> Self {
-        Self {
-            min_unstake_delay,
-            min_stake_value,
-            tracer_timeout,
-        }
-    }
+    /// If set, allows the simulator to fallback to unsafe mode if the simulation tracer fails
+    pub enable_unsafe_fallback: bool,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -180,6 +171,7 @@ impl Default for Settings {
             // 10^18 wei = 1 eth
             min_stake_value: uint!(1_000_000_000_000_000_000_U256),
             tracer_timeout: "10s".to_string(),
+            enable_unsafe_fallback: false,
         }
     }
 }
