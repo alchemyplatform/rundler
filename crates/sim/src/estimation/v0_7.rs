@@ -324,7 +324,11 @@ where
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
         // If not using paymaster, return zero, else if set and non-zero, don't estimate and return value
-        if let Some(pvl) = optional_op.verification_gas_limit {
+        if optional_op.paymaster.is_none() {
+            return Ok(0);
+        }
+
+        if let Some(pvl) = optional_op.paymaster_verification_gas_limit {
             if pvl != 0 {
                 return Ok(pvl);
             }
