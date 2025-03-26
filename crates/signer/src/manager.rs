@@ -336,8 +336,9 @@ pub(crate) struct SignerMetrics {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::{address, U256};
-    use rundler_provider::MockEvmProvider;
+    use rundler_provider::{MockEvmProvider, ZeroDAGasOracle};
     use rundler_task::TokioTaskExecutor;
+    use rundler_types::chain::ChainSpec;
 
     use super::*;
 
@@ -349,7 +350,7 @@ mod tests {
         let funder_settings = Some(FunderSettings {
             fund_below_balance: U256::from(100),
             poll_interval: std::time::Duration::from_millis(100),
-            chain_id: 1,
+            chain_spec: ChainSpec::default(),
             multicall3_address: address!("0000000000000000000000000000000000000000"),
             poll_max_retries: 10,
             priority_fee_multiplier: 1.0,
@@ -357,6 +358,7 @@ mod tests {
             signer: Arc::new(MockTxSigner::new(address!(
                 "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
             ))),
+            da_gas_oracle: Arc::new(ZeroDAGasOracle {}),
             fund_to_balance: U256::from(1000),
         });
         let task_spawner = TokioTaskExecutor::default();

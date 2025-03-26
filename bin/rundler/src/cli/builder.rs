@@ -488,6 +488,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         task_args.auto_fund,
         &chain_spec,
         providers.evm().clone(),
+        providers.da_gas_oracle().clone(),
         &task_spawner,
     )
     .await?;

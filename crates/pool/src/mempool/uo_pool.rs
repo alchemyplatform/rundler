@@ -400,7 +400,7 @@ where
         {
             let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
             match da_gas_oracle
-                .block_data(update.latest_block_hash.into())
+                .da_block_data(update.latest_block_hash.into())
                 .await
             {
                 Ok(da_block_data) => Some(da_block_data),
@@ -1000,7 +1000,7 @@ mod tests {
         },
         authorization::Eip7702Auth,
         chain::{ChainSpec, ContractRegistry},
-        da::DAGasUOData,
+        da::DAGasData,
         pool::{PrecheckViolation, SimulationViolation},
         v0_6::{UserOperationBuilder, UserOperationRequiredFields},
         EntityInfo, EntityInfos, EntityType, EntryPointVersion,
@@ -2390,7 +2390,7 @@ mod tests {
                     Err(PrecheckError::Violations(vec![error.clone()]))
                 } else {
                     Ok(PrecheckReturn {
-                        da_gas_data: DAGasUOData::Empty,
+                        da_gas_data: DAGasData::Empty,
                         required_pre_verification_gas: 100_000,
                     })
                 }

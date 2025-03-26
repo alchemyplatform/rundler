@@ -14,7 +14,7 @@
 //! Traits for the provider module.
 
 mod da;
-pub use da::{DAGasOracle, DAGasOracleSync};
+pub use da::{DAGasOracle, DAGasOracleSync, ZeroDAGasOracle};
 
 mod error;
 pub use error::*;

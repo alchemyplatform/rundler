@@ -15,7 +15,7 @@ use alloy_primitives::{Address, B256, U256};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    da::DAGasUOData, entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation,
+    da::DAGasData, entity::EntityInfos, Entity, EntityType, StakeInfo, UserOperation,
     UserOperationPermissions, UserOperationVariant, ValidTimeRange,
 };
 
@@ -136,7 +136,7 @@ pub struct PoolOperation {
     /// Staking information about all the entities.
     pub entity_infos: EntityInfos,
     /// The DA gas data for this operation
-    pub da_gas_data: DAGasUOData,
+    pub da_gas_data: DAGasData,
     /// The matched filter ID for this operation
     pub filter_id: Option<String>,
     /// Permissions for this operation

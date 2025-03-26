@@ -17,6 +17,7 @@ use std::{
     mem,
     pin::Pin,
     sync::Arc,
+    time::Instant,
 };
 
 use alloy_primitives::{Address, Bytes, B256, U256};
@@ -190,7 +191,7 @@ where
         required_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
-        let _bundler_build_timer = CustomTimerGuard::new(self.metric.bundle_build_ms.clone());
+        let timer = Instant::now();
         let (ops, (block_hash, _), (bundle_fees, base_fee)) = try_join!(
             self.get_ops_from_pool(),
             self.ep_providers
@@ -222,7 +223,7 @@ where
         {
             let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
 
-            match da_gas_oracle.block_data(block_hash.into()).await {
+            match da_gas_oracle.da_block_data(block_hash.into()).await {
                 Ok(block_data) => Some(block_data),
                 Err(e) => {
                     error!("Failed to get block data for block hash {block_hash:?}, falling back to async da gas calculations: {e:?}");
@@ -307,6 +308,10 @@ where
                     }
                 }
 
+                // bundle built, record time
+                self.metric
+                    .bundle_build_ms
+                    .record(timer.elapsed().as_millis() as f64);
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
@@ -532,8 +537,7 @@ where
         op: PoolOperation,
         block_hash: B256,
     ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
-        let _timer_guard =
-            rundler_utils::guard_timer::CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
+        let _timer_guard = CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
         let op_hash = op.uo.hash();
 
         // Simulate
@@ -3741,7 +3745,7 @@ mod tests {
         });
         let bd_cloned = block_data.clone();
         da_oracle
-            .expect_block_data()
+            .expect_da_block_data()
             .returning(move |_| Ok(bd_cloned.clone()));
         da_oracle
             .expect_calc_da_gas_sync()

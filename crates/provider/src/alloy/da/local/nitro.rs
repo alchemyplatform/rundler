@@ -15,7 +15,7 @@ use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use alloy_transport::Transport;
 use anyhow::Context;
-use rundler_types::da::{DAGasBlockData, DAGasUOData, NitroDAGasBlockData, NitroDAGasUOData};
+use rundler_types::da::{DAGasBlockData, DAGasData, NitroDAGasBlockData, NitroDAGasData};
 use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::instrument;
@@ -28,7 +28,7 @@ use crate::{
 /// Cached Arbitrum Nitro DA gas oracle
 ///
 /// The goal of this oracle is to only need to make maximum
-/// 1 network call per block + 1 network call per distinct UO
+/// 1 network call per block + 1 network call per distinct data
 pub(crate) struct CachedNitroDAGasOracle<AP, T> {
     node_interface: NodeInterfaceInstance<T, AP, AnyNetwork>,
     // Use a tokio::Mutex here to ensure only one network call per block, other threads can async wait for the result
@@ -64,7 +64,7 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
         extra_bytes_len: usize,
-    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
+    ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
             Some(block_da_data) => {
@@ -72,13 +72,13 @@ where
                 let block_da_data = block_da_data.clone();
                 drop(cache);
 
-                let uo_data = self.get_uo_data(to, data, block).await?;
-                let uo_data = DAGasUOData::Nitro(uo_data);
+                let gas_data = self.get_gas_data(to, data, block).await?;
+                let gas_data = DAGasData::Nitro(gas_data);
                 let block_data = DAGasBlockData::Nitro(block_da_data);
                 let l1_gas_estimate =
-                    self.calc_da_gas_sync(&uo_data, &block_data, gas_price, extra_bytes_len);
+                    self.calc_da_gas_sync(&gas_data, &block_data, gas_price, extra_bytes_len);
 
-                Ok((l1_gas_estimate, uo_data, block_data))
+                Ok((l1_gas_estimate, gas_data, block_data))
             }
             None => {
                 // Block cache miss, make remote call to get the da fee
@@ -87,11 +87,11 @@ where
                 cache.insert(block, block_da_data.clone());
                 drop(cache);
 
-                let uo_units = calculate_uo_units(gas_estimate_for_l1, &block_da_data);
+                let units = calculate_units(gas_estimate_for_l1, &block_da_data);
 
                 Ok((
                     gas_estimate_for_l1,
-                    DAGasUOData::Nitro(NitroDAGasUOData { uo_units }),
+                    DAGasData::Nitro(NitroDAGasData { units }),
                     DAGasBlockData::Nitro(block_da_data),
                 ))
             }
@@ -106,7 +106,7 @@ where
     T: Transport + Clone,
 {
     #[instrument(skip_all)]
-    async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
+    async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
         let mut cache = self.block_data_cache.lock().await;
         match cache.get(&block) {
             Some(block_data) => Ok(DAGasBlockData::Nitro(block_data.clone())),
@@ -119,33 +119,33 @@ where
     }
 
     #[instrument(skip_all)]
-    async fn uo_data(
+    async fn da_gas_data(
         &self,
-        uo_data: Bytes,
+        data: Bytes,
         to: Address,
         block: BlockHashOrNumber,
-    ) -> ProviderResult<DAGasUOData> {
-        let uo_data = self.get_uo_data(to, uo_data, block).await?;
-        Ok(DAGasUOData::Nitro(uo_data))
+    ) -> ProviderResult<DAGasData> {
+        let gas_data = self.get_gas_data(to, data, block).await?;
+        Ok(DAGasData::Nitro(gas_data))
     }
 
     fn calc_da_gas_sync(
         &self,
-        uo_data: &DAGasUOData,
+        data: &DAGasData,
         block_data: &DAGasBlockData,
         _gas_price: u128,
         extra_data_len: usize,
     ) -> u128 {
-        let uo_units = match uo_data {
-            DAGasUOData::Nitro(uo_data) => uo_data.uo_units,
-            _ => panic!("NitroDAGasOracle only supports Nitro DAGasUOData"),
+        let units = match data {
+            DAGasData::Nitro(data) => data.units,
+            _ => panic!("NitroDAGasOracle only supports Nitro DAGasData"),
         };
         let block_data = match block_data {
             DAGasBlockData::Nitro(block_data) => block_data,
             _ => panic!("NitroDAGasOracle only supports Nitro DAGasBlockData"),
         };
 
-        let units = uo_units + extra_data_to_units(extra_data_len);
+        let units = units + extra_data_to_units(extra_data_len);
 
         calculate_da_fee(units, block_data)
     }
@@ -169,15 +169,15 @@ where
         Ok(block_data)
     }
 
-    async fn get_uo_data(
+    async fn get_gas_data(
         &self,
         to: Address,
         data: Bytes,
         block: BlockHashOrNumber,
-    ) -> ProviderResult<NitroDAGasUOData> {
+    ) -> ProviderResult<NitroDAGasData> {
         let (l1_gas_estimate, block_da_data) = self.call_oracle_contract(to, data, block).await?;
-        let uo_units = calculate_uo_units(l1_gas_estimate, &block_da_data);
-        Ok(NitroDAGasUOData { uo_units })
+        let units = calculate_units(l1_gas_estimate, &block_da_data);
+        Ok(NitroDAGasData { units })
     }
 
     async fn call_oracle_contract(
@@ -219,10 +219,10 @@ where
 //
 // Errors should round down
 
-// Calculate the da fee from the cached scaled UO units
-fn calculate_da_fee(uo_units: u128, block_da_data: &NitroDAGasBlockData) -> u128 {
+// Calculate the da fee from the cached scaled units
+fn calculate_da_fee(units: u128, block_da_data: &NitroDAGasBlockData) -> u128 {
     // Multiply by l1_base_fee
-    let a = uo_units.saturating_mul(block_da_data.l1_base_fee);
+    let a = units.saturating_mul(block_da_data.l1_base_fee);
     // Add 10%
     let b = a.saturating_mul(11).saturating_div(10);
     // Divide by base_fee
@@ -235,8 +235,8 @@ fn calculate_da_fee(uo_units: u128, block_da_data: &NitroDAGasBlockData) -> u128
     c / CACHE_UNITS_SCALAR
 }
 
-// Calculate scaled UO units from the da fee
-fn calculate_uo_units(da_fee: u128, block_da_data: &NitroDAGasBlockData) -> u128 {
+// Calculate scaled units from the da fee
+fn calculate_units(da_fee: u128, block_da_data: &NitroDAGasBlockData) -> u128 {
     // Undo base fee division, scale up to reduce rounding error
     let a = da_fee
         .saturating_mul(CACHE_UNITS_SCALAR)

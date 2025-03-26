@@ -21,7 +21,7 @@ use mockall::automock;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, EntryPoint, EvmProvider};
 use rundler_types::{
     chain::ChainSpec,
-    da::DAGasUOData,
+    da::DAGasData,
     pool::{MempoolError, PrecheckViolation},
     GasFees, UserOperation, UserOperationPermissions,
 };
@@ -39,7 +39,7 @@ pub const MIN_CALL_GAS_LIMIT: u128 = 9100;
 /// The result of a precheck call.
 pub struct PrecheckReturn {
     /// DA gas data for the operation
-    pub da_gas_data: DAGasUOData,
+    pub da_gas_data: DAGasData,
     /// The required pre-verification gas for the operation
     pub required_pre_verification_gas: u128,
 }
@@ -153,7 +153,7 @@ struct AsyncData {
     payer_funds: U256,
     base_fee: u128,
     min_pre_verification_gas: u128,
-    da_gas_data: DAGasUOData,
+    da_gas_data: DAGasData,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -484,9 +484,9 @@ where
         block: BlockHashOrNumber,
         base_fee: u128,
         perms: &UserOperationPermissions,
-    ) -> anyhow::Result<(u128, DAGasUOData)> {
+    ) -> anyhow::Result<(u128, DAGasData)> {
         if perms.bundler_sponsorship.is_some() {
-            return Ok((0, DAGasUOData::Empty));
+            return Ok((0, DAGasData::Empty));
         }
 
         gas::calc_required_pre_verification_gas(
@@ -536,7 +536,7 @@ mod tests {
             payer_funds: U256::from(5_000_000),
             base_fee: 4_000,
             min_pre_verification_gas: 1_000,
-            da_gas_data: DAGasUOData::Empty,
+            da_gas_data: DAGasData::Empty,
         }
     }
 

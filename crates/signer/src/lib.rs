@@ -23,7 +23,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_network::{EthereumWallet, TxSigner};
 use anyhow::Context;
-use rundler_provider::EvmProvider;
+use rundler_provider::{DAGasOracle, EvmProvider};
 use rundler_task::TaskSpawner;
 use rundler_types::chain::ChainSpec;
 
@@ -124,11 +124,16 @@ impl SigningScheme {
 }
 
 /// Create a new signer manager
-pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner>(
+pub async fn new_signer_manager<
+    P: EvmProvider + Clone + 'static,
+    T: TaskSpawner,
+    D: DAGasOracle + 'static,
+>(
     scheme: &SigningScheme,
     auto_fund: bool,
     chain_spec: &ChainSpec,
     provider: P,
+    da_gas_oracle: D,
     task_spawner: &T,
 ) -> Result<Arc<dyn SignerManager>> {
     let manager = match scheme {
@@ -179,6 +184,7 @@ pub async fn new_signer_manager<P: EvmProvider + Clone + 'static, T: TaskSpawner
             new_kms_funding_signer_manager(
                 task_spawner,
                 provider.clone(),
+                da_gas_oracle,
                 subkeys_by_key_id,
                 funding_settings,
                 lock_settings.as_ref(),
@@ -262,9 +268,14 @@ async fn new_kms_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
+async fn new_kms_funding_signer_manager<
+    P: EvmProvider + 'static,
+    T: TaskSpawner,
+    D: DAGasOracle + 'static,
+>(
     task_spawner: &T,
     provider: P,
+    da_gas_oracle: D,
     subkeys_by_key_id: &HashMap<String, SigningScheme>,
     settings: &FundingSettings,
     lock_settings: Option<&KmsLockingSettings>,
@@ -322,9 +333,10 @@ async fn new_kms_funding_signer_manager<P: EvmProvider + 'static, T: TaskSpawner
         poll_max_retries: settings.poll_max_retries,
         priority_fee_multiplier: settings.priority_fee_multiplier,
         base_fee_multiplier: settings.base_fee_multiplier,
-        chain_id: chain_spec.id,
+        chain_spec: chain_spec.clone(),
         multicall3_address: chain_spec.multicall3_address,
         signer: funding_signer,
+        da_gas_oracle: Arc::new(da_gas_oracle),
     };
 
     Ok(Arc::new(FundingSignerManager::new(

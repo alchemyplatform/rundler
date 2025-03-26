@@ -232,7 +232,7 @@ mod tests {
             sim_block_number: 1000,
             account_is_staked: false,
             entity_infos: EntityInfos::default(),
-            da_gas_data: rundler_types::da::DAGasUOData::Empty,
+            da_gas_data: rundler_types::da::DAGasData::Empty,
             filter_id: None,
             perms: UserOperationPermissions::default(),
         };

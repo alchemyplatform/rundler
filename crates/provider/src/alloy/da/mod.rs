@@ -13,14 +13,11 @@
 
 use std::sync::Arc;
 
-use alloy_primitives::{Address, Bytes};
+use alloy_primitives::Bytes;
 use alloy_transport::Transport;
-use rundler_types::{
-    chain::ChainSpec,
-    da::{DAGasBlockData, DAGasOracleType, DAGasUOData},
-};
+use rundler_types::{chain::ChainSpec, da::DAGasOracleType};
 
-use crate::{AlloyProvider, BlockHashOrNumber, DAGasOracle, DAGasOracleSync, ProviderResult};
+use crate::{AlloyProvider, DAGasOracle, DAGasOracleSync, ZeroDAGasOracle};
 
 mod arbitrum;
 use arbitrum::ArbitrumNitroDAGasOracle;
@@ -28,22 +25,6 @@ mod optimism;
 use optimism::OptimismBedrockDAGasOracle;
 mod local;
 use local::{CachedNitroDAGasOracle, LocalBedrockDAGasOracle};
-
-struct ZeroDAGasOracle;
-
-#[async_trait::async_trait]
-impl DAGasOracle for ZeroDAGasOracle {
-    async fn estimate_da_gas(
-        &self,
-        _data: Bytes,
-        _to: Address,
-        _block: BlockHashOrNumber,
-        _gas_price: u128,
-        _extra_data_len: usize,
-    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
-        Ok((0, DAGasUOData::Empty, DAGasBlockData::Empty))
-    }
-}
 
 /// Create a DA gas oracle for the given chain spec
 pub fn new_alloy_da_gas_oracle<'a, AP, T>(
@@ -99,8 +80,9 @@ fn extend_bytes_with_random(data: Bytes, len: usize) -> Bytes {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{address, b256, bytes, uint, U256};
+    use alloy_primitives::{address, b256, bytes, uint, Address, U256};
     use alloy_provider::{network::AnyNetwork, Provider, ProviderBuilder};
+    use alloy_rpc_types_eth::BlockHashOrNumber;
     use alloy_sol_types::SolValue;
     use rundler_contracts::v0_7::PackedUserOperation;
 
@@ -229,14 +211,14 @@ mod tests {
         let block = provider.get_block_number().await.unwrap();
 
         let cached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider.clone());
-        let block_data_1 = cached_oracle.block_data(block.into()).await.unwrap();
+        let block_data_1 = cached_oracle.da_block_data(block.into()).await.unwrap();
 
         let uncached_oracle = CachedNitroDAGasOracle::new(ARB_ORACLE_ADDRESS, provider);
-        let block_data_2 = uncached_oracle.block_data(block.into()).await.unwrap();
+        let block_data_2 = uncached_oracle.da_block_data(block.into()).await.unwrap();
 
         assert_eq!(block_data_1, block_data_2);
 
-        let block_data_3 = cached_oracle.block_data(block.into()).await.unwrap();
+        let block_data_3 = cached_oracle.da_block_data(block.into()).await.unwrap();
 
         assert_eq!(block_data_1, block_data_3);
     }
@@ -252,15 +234,15 @@ mod tests {
             provider.clone(),
             &ChainSpec::default(),
         );
-        let block_data_1 = cached_oracle.block_data(block.into()).await.unwrap();
+        let block_data_1 = cached_oracle.da_block_data(block.into()).await.unwrap();
 
         let uncached_oracle =
             LocalBedrockDAGasOracle::new(OPT_ORACLE_ADDRESS, provider, &ChainSpec::default());
-        let block_data_2 = uncached_oracle.block_data(block.into()).await.unwrap();
+        let block_data_2 = uncached_oracle.da_block_data(block.into()).await.unwrap();
 
         assert_eq!(block_data_1, block_data_2);
 
-        let block_data_3 = cached_oracle.block_data(block.into()).await.unwrap();
+        let block_data_3 = cached_oracle.da_block_data(block.into()).await.unwrap();
 
         assert_eq!(block_data_1, block_data_3);
     }
@@ -326,8 +308,8 @@ mod tests {
         to: Address,
         data: Bytes,
     ) -> u128 {
-        let block_data = oracle.block_data(block.into()).await.unwrap();
-        let uo_data = oracle.uo_data(data, to, block.into()).await.unwrap();
+        let block_data = oracle.da_block_data(block.into()).await.unwrap();
+        let uo_data = oracle.da_gas_data(data, to, block.into()).await.unwrap();
         oracle.calc_da_gas_sync(&uo_data, &block_data, 1, 0)
     }
 

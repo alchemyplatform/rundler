@@ -98,6 +98,9 @@ pub trait Providers: Send + Sync + Clone {
     /// The entry point provider for v0.7.
     type EntryPointV0_7: EntryPointProvider<UserOperationV0_7> + Clone;
 
+    /// The DA gas oracle provider.
+    type DAGasOracle: DAGasOracle + Clone;
+
     /// The DA gas oracle sync provider.
     type DAGasOracleSync: DAGasOracleSync + Clone;
 
@@ -109,6 +112,9 @@ pub trait Providers: Send + Sync + Clone {
 
     /// Returns the entry point provider for v0.7.
     fn ep_v0_7(&self) -> &Option<Self::EntryPointV0_7>;
+
+    /// Returns the DA gas oracle.
+    fn da_gas_oracle(&self) -> &Self::DAGasOracle;
 
     /// Returns the DA gas oracle sync provider.
     fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync>;

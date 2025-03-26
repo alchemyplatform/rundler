@@ -218,11 +218,6 @@ impl From<ProviderError> for TxSenderError {
 // Reth: https://github.com/paradigmxyz/reth/blob/8e4a917ec1aa70b3779083454ff2d5ecf6b44168/crates/rpc/rpc-eth-types/src/error/mod.rs#L624
 // Erigon: https://github.com/erigontech/erigon/blob/96fabf3fd1a4ddce26b845ffe2b6cfb50d5b4b2d/txnprovider/txpool/txpoolcfg/txpoolcfg.go#L124
 fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSenderError> {
-    // Check error codes before checking the message
-    // The error code is -32003 or -32005 when condition is not met: https://eips.ethereum.org/EIPS/eip-7796
-    if code == -32003 || code == -32005 {
-        return Some(TxSenderError::ConditionNotMet);
-    }
     // String match on the error message when an error code is not available
     // DEVELOPER NOTE: ensure to put the most specific matches first
     let lowercase_message = message.to_lowercase();
@@ -253,6 +248,11 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
     // erigon
     if lowercase_message.contains("underpriced") {
         return Some(TxSenderError::Underpriced);
+    }
+    // Check error codes before checking the message
+    // The error code is -32003 or -32005 when condition is not met: https://eips.ethereum.org/EIPS/eip-7796
+    if code == -32003 || code == -32005 {
+        return Some(TxSenderError::ConditionNotMet);
     }
     // No known error matched
     None
