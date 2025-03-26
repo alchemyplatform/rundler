@@ -22,7 +22,7 @@ use alloy_rpc_types_trace::geth::{
 use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
     chain::ChainSpec,
-    da::{DAGasBlockData, DAGasUOData},
+    da::{DAGasBlockData, DAGasData},
     v0_6, v0_7, ExpectedStorage, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
@@ -194,7 +194,7 @@ mockall::mock! {
             block: BlockHashOrNumber,
             gas_price: u128,
             bundle_size: usize,
-        ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+        ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)>;
     }
 
     #[async_trait::async_trait]
@@ -293,7 +293,7 @@ mockall::mock! {
             block: BlockHashOrNumber,
             gas_price: u128,
             bundle_size: usize,
-        ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+        ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)>;
     }
 
     #[async_trait::async_trait]
@@ -330,16 +330,16 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl DAGasOracleSync for DAGasOracleSync {
-        async fn block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
-        async fn uo_data(
+        async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData>;
+        async fn da_gas_data(
             &self,
             uo_data: Bytes,
             to: Address,
             block: BlockHashOrNumber,
-        ) -> ProviderResult<DAGasUOData>;
+        ) -> ProviderResult<DAGasData>;
         fn calc_da_gas_sync(
             &self,
-            uo_data: &DAGasUOData,
+            data: &DAGasData,
             block_data: &DAGasBlockData,
             gas_price: u128,
             extra_bytes_len: usize,
@@ -350,11 +350,11 @@ mockall::mock! {
     impl DAGasOracle for DAGasOracleSync {
         async fn estimate_da_gas(
             &self,
-            uo_bytes: Bytes,
+            bytes: Bytes,
             to: Address,
             block: BlockHashOrNumber,
             gas_price: u128,
             extra_data_len: usize,
-        ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+        ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)>;
     }
 }

@@ -18,8 +18,8 @@ use rundler_types::{
     authorization::Eip7702Auth,
     chain::ChainSpec,
     da::{
-        BedrockDAGasUOData as RundlerBedrockDAGasUOData, DAGasUOData as RundlerDAGasUOData,
-        NitroDAGasUOData as RundlerNitroDAGasUOData,
+        BedrockDAGasData as RundlerBedrockDAGasData, DAGasData as RundlerDAGasData,
+        NitroDAGasData as RundlerNitroDAGasData,
     },
     pool::{
         AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
@@ -436,48 +436,48 @@ impl From<&PoolOperation> for MempoolOp {
             expected_code_hash: op.expected_code_hash.to_proto_bytes(),
             sim_block_hash: op.sim_block_hash.to_proto_bytes(),
             account_is_staked: op.account_is_staked,
-            da_gas_data: Some(DaGasUoData::from(&op.da_gas_data)),
+            da_gas_data: Some(DaGasData::from(&op.da_gas_data)),
             filter_id: op.filter_id.clone().unwrap_or_default(),
             permissions: Some(op.perms.clone().into()),
         }
     }
 }
 
-impl From<&RundlerDAGasUOData> for DaGasUoData {
-    fn from(data: &RundlerDAGasUOData) -> Self {
+impl From<&RundlerDAGasData> for DaGasData {
+    fn from(data: &RundlerDAGasData) -> Self {
         match data {
-            RundlerDAGasUOData::Empty => DaGasUoData {
-                data: Some(da_gas_uo_data::Data::Empty(EmptyUoData {})),
+            RundlerDAGasData::Empty => DaGasData {
+                data: Some(da_gas_data::Data::Empty(EmptyGasData {})),
             },
-            RundlerDAGasUOData::Nitro(data) => DaGasUoData {
-                data: Some(da_gas_uo_data::Data::Nitro(NitroDaGasUoData {
-                    uo_units: data.uo_units.to_proto_bytes(),
+            RundlerDAGasData::Nitro(data) => DaGasData {
+                data: Some(da_gas_data::Data::Nitro(NitroDaGasData {
+                    units: data.units.to_proto_bytes(),
                 })),
             },
-            RundlerDAGasUOData::Bedrock(data) => DaGasUoData {
-                data: Some(da_gas_uo_data::Data::Bedrock(BedrockDaGasUoData {
-                    uo_units: data.uo_units,
+            RundlerDAGasData::Bedrock(data) => DaGasData {
+                data: Some(da_gas_data::Data::Bedrock(BedrockDaGasData {
+                    units: data.units,
                 })),
             },
         }
     }
 }
 
-impl TryFrom<DaGasUoData> for RundlerDAGasUOData {
+impl TryFrom<DaGasData> for RundlerDAGasData {
     type Error = ConversionError;
 
-    fn try_from(data: DaGasUoData) -> Result<Self, Self::Error> {
+    fn try_from(data: DaGasData) -> Result<Self, Self::Error> {
         let ret = match data.data {
-            Some(da_gas_uo_data::Data::Empty(_)) => RundlerDAGasUOData::Empty,
-            Some(da_gas_uo_data::Data::Nitro(NitroDaGasUoData { uo_units })) => {
-                RundlerDAGasUOData::Nitro(RundlerNitroDAGasUOData {
-                    uo_units: from_bytes(&uo_units)?,
+            Some(da_gas_data::Data::Empty(_)) => RundlerDAGasData::Empty,
+            Some(da_gas_data::Data::Nitro(NitroDaGasData { units })) => {
+                RundlerDAGasData::Nitro(RundlerNitroDAGasData {
+                    units: from_bytes(&units)?,
                 })
             }
-            Some(da_gas_uo_data::Data::Bedrock(BedrockDaGasUoData { uo_units })) => {
-                RundlerDAGasUOData::Bedrock(RundlerBedrockDAGasUOData { uo_units })
+            Some(da_gas_data::Data::Bedrock(BedrockDaGasData { units })) => {
+                RundlerDAGasData::Bedrock(RundlerBedrockDAGasData { units })
             }
-            None => RundlerDAGasUOData::Empty,
+            None => RundlerDAGasData::Empty,
         };
 
         Ok(ret)
