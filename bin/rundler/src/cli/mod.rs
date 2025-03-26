@@ -42,7 +42,7 @@ use pool::PoolCliArgs;
 use reth_tasks::TaskManager;
 use rpc::RpcCliArgs;
 use rundler_provider::{
-    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, DAGasOracleSync,
+    AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, DAGasOracle, DAGasOracleSync,
     EntryPointProvider, EvmProvider, Providers,
 };
 use rundler_sim::{
@@ -691,24 +691,27 @@ pub struct Cli {
 }
 
 #[derive(Clone)]
-pub struct RundlerProviders<P, EP06, EP07, D> {
+pub struct RundlerProviders<P, EP06, EP07, D, DS> {
     provider: P,
     ep_v0_6: Option<EP06>,
     ep_v0_7: Option<EP07>,
-    da_gas_oracle_sync: Option<D>,
+    da_gas_oracle: D,
+    da_gas_oracle_sync: Option<DS>,
 }
 
-impl<P, EP06, EP07, D> Providers for RundlerProviders<P, EP06, EP07, D>
+impl<P, EP06, EP07, D, DS> Providers for RundlerProviders<P, EP06, EP07, D, DS>
 where
     P: EvmProvider + Clone,
     EP06: EntryPointProvider<UserOperationV0_6> + Clone,
     EP07: EntryPointProvider<UserOperationV0_7> + Clone,
-    D: DAGasOracleSync + Clone,
+    D: DAGasOracle + Clone,
+    DS: DAGasOracleSync + Clone,
 {
     type Evm = P;
     type EntryPointV0_6 = EP06;
     type EntryPointV0_7 = EP07;
-    type DAGasOracleSync = D;
+    type DAGasOracle = D;
+    type DAGasOracleSync = DS;
 
     fn evm(&self) -> &Self::Evm {
         &self.provider
@@ -720,6 +723,10 @@ where
 
     fn ep_v0_7(&self) -> &Option<Self::EntryPointV0_7> {
         &self.ep_v0_7
+    }
+
+    fn da_gas_oracle(&self) -> &Self::DAGasOracle {
+        &self.da_gas_oracle
     }
 
     fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync> {
@@ -768,6 +775,7 @@ pub fn construct_providers(
         provider: AlloyEvmProvider::new(provider),
         ep_v0_6,
         ep_v0_7,
+        da_gas_oracle,
         da_gas_oracle_sync,
     })
 }

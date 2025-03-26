@@ -80,6 +80,7 @@ pub(super) async fn defund_signers(
         false,
         &chain_spec,
         providers.evm().clone(),
+        providers.da_gas_oracle().clone(),
         &task_spawner,
     )
     .await?;

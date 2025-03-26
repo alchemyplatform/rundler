@@ -17,7 +17,7 @@ use anyhow::Context;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, EvmProvider};
-use rundler_types::{chain::ChainSpec, da::DAGasUOData, GasFees, UserOperation};
+use rundler_types::{chain::ChainSpec, da::DAGasData, GasFees, UserOperation};
 use rundler_utils::math;
 use tokio::try_join;
 use tracing::instrument;
@@ -72,7 +72,7 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
     op: &UO,
     block: BlockHashOrNumber,
     base_fee: u128,
-) -> anyhow::Result<(u128, DAGasUOData)> {
+) -> anyhow::Result<(u128, DAGasData)> {
     // TODO(bundle): assuming a bundle size of 1
     let bundle_size = 1;
 
@@ -82,7 +82,7 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
             .await?;
         (da_gas, uo_data)
     } else {
-        (0, DAGasUOData::Empty)
+        (0, DAGasData::Empty)
     };
 
     Ok((

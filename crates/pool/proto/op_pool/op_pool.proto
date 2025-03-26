@@ -190,7 +190,7 @@ message MempoolOp {
   // The entry point address of this operation
   bytes entry_point = 8;
   // The DA gas data for the UO
-  DaGasUoData da_gas_data = 9;
+  DaGasData da_gas_data = 9;
   // The filter ID to apply to the UserOperation
   string filter_id = 10;
   // The permissions for the UserOperation
@@ -198,24 +198,24 @@ message MempoolOp {
 }
 
 // Data associated with a user operation for DA gas calculations
-message DaGasUoData {
+message DaGasData {
   oneof data {
-    EmptyUoData empty = 1;
-    NitroDaGasUoData nitro = 2;
-    BedrockDaGasUoData bedrock = 3;
+    EmptyGasData empty = 1;
+    NitroDaGasData nitro = 2;
+    BedrockDaGasData bedrock = 3;
   }
 }
 
-message EmptyUoData {}
+message EmptyGasData {}
 
 // Data associated with a user operation for Nitro DA gas calculations
-message NitroDaGasUoData {
-  bytes uo_units = 1;
+message NitroDaGasData {
+  bytes units = 1;
 }
 
 // Data associated with a user operation for Bedrock DA gas calculations
-message BedrockDaGasUoData {
-  uint64 uo_units = 1;
+message BedrockDaGasData {
+  uint64 units = 1;
 }
 
 // Defines the gRPC endpoints for a UserOperation mempool service
