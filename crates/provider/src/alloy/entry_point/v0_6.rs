@@ -32,7 +32,7 @@ use rundler_contracts::v0_6::{
 };
 use rundler_types::{
     chain::ChainSpec,
-    da::{DAGasBlockData, DAGasUOData},
+    da::{DAGasBlockData, DAGasData},
     v0_6::{UserOperation, UserOperationBuilder},
     GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
@@ -345,7 +345,7 @@ where
         block: BlockHashOrNumber,
         gas_price: u128,
         bundle_size: usize,
-    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)> {
+    ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)> {
         let au = user_op.authorization_tuple().cloned();
         let extra_data_len = user_op.extra_data_len(bundle_size);
 

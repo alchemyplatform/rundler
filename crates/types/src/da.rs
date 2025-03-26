@@ -32,33 +32,33 @@ pub enum DAGasOracleType {
     CachedNitro,
 }
 
-/// Data associated with a user operation for Nitro DA gas calculations
+/// Data associated with a transaction for Nitro DA gas calculations
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NitroDAGasUOData {
-    /// The calculated user operation units as they apply to DA gas. Only have meaning when used
+pub struct NitroDAGasData {
+    /// The calculated units as they apply to DA gas. Only have meaning when used
     /// with the NitroDAGasBlockData that was used to calculate them and combined with a NitroDAGasBlockData.
-    pub uo_units: u128,
+    pub units: u128,
 }
 
-/// Data associated with a user operation for Bedrock DA gas calculations
+/// Data associated with a transaction for Bedrock DA gas calculations
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BedrockDAGasUOData {
-    /// The calculated user operation units as they apply to DA gas. Only have meaning when used
+pub struct BedrockDAGasData {
+    /// The calculated units as they apply to DA gas. Only have meaning when used
     /// with the BedrockDAGasBlockData that was used to calculate them and combined with a
     /// BedrockDAGasBlockData.
-    pub uo_units: u64,
+    pub units: u64,
 }
 
-/// Data associated with a user operation for DA gas calculations
+/// Data associated with a transaction for DA gas calculations
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub enum DAGasUOData {
+pub enum DAGasData {
     /// Empty, no data
     #[default]
     Empty,
     /// Nitro DA
-    Nitro(NitroDAGasUOData),
+    Nitro(NitroDAGasData),
     /// Bedrock DA
-    Bedrock(BedrockDAGasUOData),
+    Bedrock(BedrockDAGasData),
 }
 
 /// Data associated with a block for DA gas calculations

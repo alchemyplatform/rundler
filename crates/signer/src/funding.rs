@@ -13,14 +13,17 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::{EthereumWallet, TransactionBuilder, TxSigner};
 use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256};
+use anyhow::{bail, Context};
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_contracts::multicall3;
-use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_provider::{DAGasOracle, EvmProvider, TransactionRequest};
+use rundler_types::chain::ChainSpec;
 use tokio::sync::Notify;
 
 use crate::{
@@ -36,7 +39,7 @@ const MAX_TO_FUND_IN_BATCH: usize = 128;
 pub(crate) struct FunderSettings {
     pub fund_below_balance: U256,
     pub fund_to_balance: U256,
-    pub chain_id: u64,
+    pub chain_spec: ChainSpec,
     pub multicall3_address: Address,
     pub poll_interval: Duration,
     pub poll_max_retries: u64,
@@ -44,6 +47,7 @@ pub(crate) struct FunderSettings {
     pub base_fee_multiplier: f64,
 
     pub signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
+    pub da_gas_oracle: Arc<dyn DAGasOracle>,
 }
 
 pub(crate) async fn funding_task<P: EvmProvider>(
@@ -152,7 +156,23 @@ async fn funding_task_inner<P: EvmProvider>(
     .await?;
 
     let mut gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
-    let gas_fee = U256::from(gas_limit) * U256::from(max_fee_per_gas);
+    let mut gas_fee = U256::from(gas_limit) * U256::from(max_fee_per_gas);
+
+    if settings.chain_spec.da_pre_verification_gas {
+        let da_gas = estimate_da_gas(
+            &provider,
+            &settings.da_gas_oracle,
+            settings.multicall3_address,
+            to_fund.clone(),
+            max_fee_per_gas,
+        )
+        .await?;
+        if settings.chain_spec.include_da_gas_in_gas_limit {
+            gas_limit += da_gas;
+        }
+        gas_fee += U256::from(da_gas) * U256::from(max_fee_per_gas);
+    }
+
     let mut total_with_gas = total + gas_fee;
 
     if total_with_gas > funding_balance {
@@ -176,16 +196,12 @@ async fn funding_task_inner<P: EvmProvider>(
     }
 
     let num_calls = to_fund.len() as u64;
-    let calls = to_fund
-        .into_iter()
-        .map(|(address, amount)| multicall3::create_call_value_only(address, amount))
-        .collect::<Vec<_>>();
-    let call = multicall3::Multicall3::aggregate3ValueCall { calls };
+    let call = create_multicall3_call(to_fund);
 
     let tx = TransactionRequest::default()
         .with_call(&call)
         .with_value(total)
-        .with_chain_id(settings.chain_id)
+        .with_chain_id(settings.chain_spec.id)
         .with_nonce(nonce)
         .with_from(funding_signer_address)
         .with_to(settings.multicall3_address)
@@ -243,6 +259,61 @@ async fn get_update_funder_balance<P: EvmProvider>(
     }
 }
 
+fn create_multicall3_call(
+    to_fund: impl IntoIterator<Item = (Address, U256)>,
+) -> multicall3::Multicall3::aggregate3ValueCall {
+    let calls = to_fund
+        .into_iter()
+        .map(|(address, amount)| multicall3::create_call_value_only(address, amount))
+        .collect::<Vec<_>>();
+    multicall3::Multicall3::aggregate3ValueCall { calls }
+}
+
+async fn estimate_da_gas<P: EvmProvider>(
+    provider: &P,
+    da_gas_oracle: &Arc<dyn DAGasOracle>,
+    multicall3_address: Address,
+    to_fund: Vec<(Address, U256)>,
+    gas_price: u128,
+) -> anyhow::Result<u64> {
+    let Ok(TypedTransaction::Eip1559(tx)) = TransactionRequest::default()
+        .with_call(&create_multicall3_call(to_fund))
+        .with_value(U256::MAX)
+        .with_chain_id(u64::MAX)
+        .with_nonce(u64::MAX)
+        .with_from(multicall3_address)
+        .with_to(multicall3_address)
+        .with_max_fee_per_gas(gas_price)
+        .with_max_priority_fee_per_gas(gas_price)
+        .with_gas_limit(u64::MAX)
+        .build_typed_tx()
+    else {
+        bail!("failed to build EIP-1559 typed txn")
+    };
+    let mut data = vec![];
+    TxEnvelope::from(tx.into_signed(PrimitiveSignature::test_signature())).encode_2718(&mut data);
+    let extra_data_len = data.len() / 4; // overestimate
+
+    let block = provider
+        .get_block_number()
+        .await
+        .context("failed to query for block number")?;
+
+    da_gas_oracle
+        .estimate_da_gas(
+            data.into(),
+            multicall3_address,
+            block.into(),
+            gas_price,
+            extra_data_len,
+        )
+        .await
+        .context("failed to query for da gas data")?
+        .0
+        .try_into()
+        .context("da gas overflow u64")
+}
+
 #[derive(Metrics)]
 #[metrics(scope = "funder")]
 struct FunderMetrics {
@@ -268,7 +339,7 @@ mod tests {
     use mockall::Sequence;
     use rundler_contracts::multicall3::Multicall3::{Call3Value, Multicall3Calls};
     use rundler_provider::{
-        AnyReceiptEnvelope, MockEvmProvider, ReceiptWithBloom, TransactionReceipt,
+        AnyReceiptEnvelope, MockEvmProvider, ReceiptWithBloom, TransactionReceipt, ZeroDAGasOracle,
     };
 
     use super::*;
@@ -508,7 +579,8 @@ mod tests {
             fund_below_balance: fund_below,
             fund_to_balance: fund_to,
             signer: Arc::new(singer),
-            chain_id: 1,
+            da_gas_oracle: Arc::new(ZeroDAGasOracle {}),
+            chain_spec: ChainSpec::default(),
             multicall3_address: Address::ZERO,
             poll_interval: Duration::from_secs(1),
             poll_max_retries: 10,

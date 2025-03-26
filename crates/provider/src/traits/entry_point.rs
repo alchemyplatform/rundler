@@ -14,7 +14,7 @@
 use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
     chain::ChainSpec,
-    da::{DAGasBlockData, DAGasUOData},
+    da::{DAGasBlockData, DAGasData},
     GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
 };
 
@@ -189,7 +189,7 @@ pub trait DAGasProvider: Send + Sync {
         block: BlockHashOrNumber,
         gas_price: u128,
         bundle_size: usize,
-    ) -> ProviderResult<(u128, DAGasUOData, DAGasBlockData)>;
+    ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)>;
 }
 
 /// Trait for simulating user operations on an entry point contract
