@@ -131,6 +131,8 @@ enum SendBundleAttemptResult {
     ConditionNotMet,
     // Rejected
     Rejected,
+    // Insufficient Funds
+    InsufficientFunds,
     // Nonce too low
     NonceTooLow,
 }
@@ -328,6 +330,11 @@ where
                 self.proposer.notify_condition_not_met();
                 state.update(InnerState::Building(inner.retry()));
             }
+            Ok(SendBundleAttemptResult::InsufficientFunds) => {
+                // Insufficient funds
+                info!("Insufficient funds sending bundle, resetting state and starting new bundle attempt");
+                state.reset();
+            }
             Ok(SendBundleAttemptResult::Rejected) => {
                 // Bundle was rejected, try with a higher price
                 // May want to consider a simple retry instead of increasing fees, but this should be rare
@@ -477,6 +484,11 @@ where
             Err(TransactionTrackerError::NonceTooLow) => {
                 // reset the transaction tracker and try again
                 info!("Nonce too low during cancellation, starting new bundle attempt");
+                state.reset();
+            }
+            Err(TransactionTrackerError::InsufficientFunds) => {
+                error!("Insufficient funds during cancellation, starting new bundle attempt");
+                self.metrics.cancellation_txns_failed.increment(1);
                 state.reset();
             }
             Err(TransactionTrackerError::ConditionNotMet) => {
@@ -658,6 +670,11 @@ where
                 self.metrics.bundle_txn_rejected.increment(1);
                 warn!("Bundle attempt rejected");
                 Ok(SendBundleAttemptResult::Rejected)
+            }
+            Err(TransactionTrackerError::InsufficientFunds) => {
+                self.metrics.bundle_txn_insufficient_funds.increment(1);
+                error!("Bundle attempt insufficient funds");
+                Ok(SendBundleAttemptResult::InsufficientFunds)
             }
             Err(TransactionTrackerError::Other(e)) => {
                 error!("Failed to send bundle with unexpected error: {e:?}");
@@ -1369,6 +1386,8 @@ struct BuilderMetric {
     bundle_txn_condition_not_met: Counter,
     #[metric(describe = "the count of bundle transactions rejected.")]
     bundle_txn_rejected: Counter,
+    #[metric(describe = "the count of bundle transactions with insufficient funds")]
+    bundle_txn_insufficient_funds: Counter,
     #[metric(describe = "the count of cancellation bundle transactions sent events.")]
     cancellation_txns_sent: Counter,
     #[metric(describe = "the count of cancellation bundle transactions mined events.")]

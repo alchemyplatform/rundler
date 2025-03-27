@@ -101,6 +101,8 @@ pub(crate) enum TransactionTrackerError {
     ConditionNotMet,
     #[error("rejected")]
     Rejected,
+    #[error("insufficient funds")]
+    InsufficientFunds,
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -541,6 +543,7 @@ impl From<TxSenderError> for TransactionTrackerError {
             }
             TxSenderError::ConditionNotMet => TransactionTrackerError::ConditionNotMet,
             TxSenderError::Rejected => TransactionTrackerError::Rejected,
+            TxSenderError::InsufficientFunds => TransactionTrackerError::InsufficientFunds,
             TxSenderError::SoftCancelFailed => {
                 TransactionTrackerError::Other(anyhow::anyhow!("soft cancel failed"))
             }

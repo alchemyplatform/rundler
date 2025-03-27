@@ -58,6 +58,9 @@ pub(crate) enum TxSenderError {
     /// Soft cancellation failed
     #[error("soft cancel failed")]
     SoftCancelFailed,
+    /// Insufficient funds for transaction
+    #[error("insufficient funds for transaction")]
+    InsufficientFunds,
     /// All other errors
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -248,6 +251,10 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
     // erigon
     if lowercase_message.contains("underpriced") {
         return Some(TxSenderError::Underpriced);
+    }
+    // geth, erigon, reth
+    if lowercase_message.contains("insufficient funds") {
+        return Some(TxSenderError::InsufficientFunds);
     }
     // Check error codes before checking the message
     // The error code is -32003 or -32005 when condition is not met: https://eips.ethereum.org/EIPS/eip-7796
