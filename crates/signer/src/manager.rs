@@ -199,9 +199,9 @@ impl SignerManager for FundingSignerManager {
 
         *status = SignerStatus::Leased;
 
-        Some(SignerLease::new(Arc::new(
-            self.wallet.signer_by_address(*address)?,
-        )))
+        Some(SignerLease::new(
+            self.wallet.signer_by_address(*address)?.clone(),
+        ))
     }
 
     fn lease_signer_by_address(&self, address: &Address) -> Option<SignerLease> {
@@ -209,9 +209,9 @@ impl SignerManager for FundingSignerManager {
         let status = statuses.get_mut(address)?;
         if matches!(status, SignerStatus::Available) {
             *status = SignerStatus::Leased;
-            Some(SignerLease::new(Arc::new(
-                self.wallet.signer_by_address(*address)?,
-            )))
+            Some(SignerLease::new(
+                self.wallet.signer_by_address(*address)?.clone(),
+            ))
         } else {
             None
         }
