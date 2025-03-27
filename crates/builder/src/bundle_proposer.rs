@@ -1633,6 +1633,8 @@ impl<UO: UserOperation> ProposalContext<UO> {
             .map(|sim_op| sim_op.op.gas_limit(chain_spec, None))
             .sum::<u128>();
 
+        // TODO(danc): during bundler sponsorship on arbitrum we need to account for DA gas in gas limit
+
         gas_limit
     }
 

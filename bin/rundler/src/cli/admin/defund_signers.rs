@@ -13,10 +13,13 @@
 
 use std::time::Duration;
 
+use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
+use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TransactionBuilder;
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, PrimitiveSignature, U256};
+use anyhow::{bail, Context};
 use clap::Args;
-use rundler_provider::{EvmProvider, Providers, TransactionRequest};
+use rundler_provider::{DAGasOracle, EvmProvider, Providers, TransactionRequest};
 use rundler_signer::{utils, SignerLease, SigningScheme};
 use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
@@ -118,10 +121,11 @@ pub(super) async fn defund_signers(
         let signer = signer_manager.lease_signer_by_address(address).unwrap();
         tasks.push(defund_signer(
             signer,
-            chain_spec.id,
+            chain_spec.clone(),
             args.to,
             amount,
             providers.evm().clone(),
+            providers.da_gas_oracle().clone(),
             &args.signer_args,
         ));
     }
@@ -152,10 +156,11 @@ pub(super) async fn defund_signers(
 
 async fn defund_signer(
     signer: SignerLease,
-    chain_id: u64,
+    chain_spec: ChainSpec,
     to: Address,
     amount: U256,
     provider: impl EvmProvider,
+    da_gas_oracle: impl DAGasOracle,
     signer_args: &SignerArgs,
 ) -> anyhow::Result<()> {
     let (nonce, max_fee_per_gas, priority_fee) = utils::get_nonce_and_fees(
@@ -168,13 +173,46 @@ async fn defund_signer(
 
     let tx = TransactionRequest::default()
         .with_value(amount)
-        .with_chain_id(chain_id)
+        .with_chain_id(chain_spec.id)
         .with_nonce(nonce)
         .with_from(signer.address())
         .with_to(to)
         .with_max_fee_per_gas(max_fee_per_gas)
-        .with_max_priority_fee_per_gas(priority_fee)
-        .with_gas_limit(50_000);
+        .with_max_priority_fee_per_gas(priority_fee);
+
+    // handle networks that have da gas in gas limit i.e Arbitrum
+    let mut gas_limit: u64 = 50_000;
+    if chain_spec.include_da_gas_in_gas_limit {
+        let Ok(TypedTransaction::Eip1559(tx)) = tx.clone().build_typed_tx() else {
+            bail!("failed to build EIP-1559 typed txn")
+        };
+        let mut data = vec![];
+        TxEnvelope::from(tx.into_signed(PrimitiveSignature::test_signature()))
+            .encode_2718(&mut data);
+        let extra_data_len = data.len() / 4; // overestimate
+
+        let block = provider
+            .get_block_number()
+            .await
+            .context("failed to query for block number")?;
+
+        let da_gas: u64 = da_gas_oracle
+            .estimate_da_gas(
+                data.into(),
+                chain_spec.multicall3_address,
+                block.into(),
+                max_fee_per_gas,
+                extra_data_len,
+            )
+            .await
+            .context("failed to query for da gas data")?
+            .0
+            .try_into()
+            .context("da gas overflow u64")?;
+
+        gas_limit += da_gas;
+    }
+    let tx = tx.gas_limit(gas_limit);
 
     let tx_bytes = signer.sign_tx_raw(tx).await?;
 
