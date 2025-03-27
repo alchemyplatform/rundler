@@ -192,17 +192,18 @@ where
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
         let timer = Instant::now();
-        let (ops, (block_hash, _), (bundle_fees, base_fee)) = try_join!(
-            self.get_ops_from_pool(),
+        let ops = self.get_ops_from_pool().await?;
+        if ops.is_empty() {
+            return Err(BundleProposerError::NoOperationsInitially);
+        }
+
+        let ((block_hash, _), (bundle_fees, base_fee)) = try_join!(
             self.ep_providers
                 .evm()
                 .get_latest_block_hash_and_number()
                 .map_err(BundleProposerError::from),
             self.estimate_gas_fees(required_fees)
         )?;
-        if ops.is_empty() {
-            return Err(BundleProposerError::NoOperationsInitially);
-        }
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
