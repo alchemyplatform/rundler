@@ -11,6 +11,8 @@ ERC-4337 bundler implementation
 publish = false
 
 [dependencies]
+alloy-consensus.workspace = true
+alloy-eips.workspace = true
 alloy-network.workspace = true
 
 alloy-primitives.workspace = true
