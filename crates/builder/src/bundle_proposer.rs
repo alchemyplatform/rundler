@@ -388,7 +388,7 @@ where
         da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
-    ) -> Option<PoolOperation> {
+    ) -> Option<PoolOperationWithSponsoredDAGas> {
         let op_hash = op.uo.hash();
 
         let mut required_max_fee_per_gas = required_op_fees.max_fee_per_gas;
@@ -422,7 +422,10 @@ where
 
         if !self.settings.chain_spec.da_pre_verification_gas {
             // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
-            return Some(op);
+            return Some(PoolOperationWithSponsoredDAGas {
+                op,
+                sponsored_da_gas: None,
+            });
         }
 
         // TODO(bundle): assuming a bundle size of 1
@@ -507,6 +510,7 @@ where
         }
 
         // Check total gas cost and time for bundler sponsorship
+        let mut sponsored_da_gas = None;
         if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
             let gas_limit = op
                 .uo
@@ -525,9 +529,16 @@ where
                 ));
                 return None;
             }
+
+            if self.settings.chain_spec.include_da_gas_in_gas_limit {
+                sponsored_da_gas = Some(required_da_gas)
+            }
         }
 
-        Some(op)
+        Some(PoolOperationWithSponsoredDAGas {
+            op,
+            sponsored_da_gas,
+        })
     }
 
     // Simulate a single op. Returns None if the op should be skipped.
@@ -535,21 +546,24 @@ where
     // Filters on any errors
     async fn simulate_op(
         &self,
-        op: PoolOperation,
+        op: PoolOperationWithSponsoredDAGas,
         block_hash: B256,
-    ) -> Option<(PoolOperation, Result<SimulationResult, SimulationError>)> {
+    ) -> Option<(
+        PoolOperationWithSponsoredDAGas,
+        Result<SimulationResult, SimulationError>,
+    )> {
         let _timer_guard = CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
-        let op_hash = op.uo.hash();
+        let op_hash = op.op.uo.hash();
 
         // Simulate
         let result = self
             .bundle_providers
             .simulator()
             .simulate_validation(
-                op.uo.clone().into(),
-                op.perms.trusted,
+                op.op.uo.clone().into(),
+                op.op.perms.trusted,
                 block_hash,
-                Some(op.expected_code_hash),
+                Some(op.op.expected_code_hash),
             )
             .await;
         let result = match result {
@@ -580,12 +594,15 @@ where
 
     async fn assemble_context(
         &self,
-        ops_with_simulations: Vec<(PoolOperation, Result<SimulationResult, SimulationError>)>,
+        ops_with_simulations: Vec<(
+            PoolOperationWithSponsoredDAGas,
+            Result<SimulationResult, SimulationError>,
+        )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext<<Self as BundleProposer>::UO> {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
-            .map(|(op, _)| op.uo.sender())
+            .map(|(op, _)| op.op.uo.sender())
             .collect();
         let mut context = ProposalContext::<<Self as BundleProposer>::UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
@@ -594,7 +611,7 @@ where
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
 
         for (po, simulation) in ops_with_simulations {
-            let op = po.clone().uo;
+            let op = po.op.clone().uo;
             let simulation = match simulation {
                 Ok(simulation) => simulation,
                 Err(error) => {
@@ -611,7 +628,7 @@ where
                     } = error
                     {
                         // try to use EntityInfos from the latest simulation, but if it doesn't exist use the EntityInfos from the previous simulation
-                        let infos = entity_infos.map_or(po.entity_infos, |e| e);
+                        let infos = entity_infos.map_or(po.op.entity_infos, |e| e);
                         context.process_simulation_violations(op.into(), violations, infos);
                     }
                     continue;
@@ -630,9 +647,9 @@ where
                         valid_range: simulation.valid_time_range,
                     },
                 ));
-                context.rejected_ops.push((op.into(), po.entity_infos));
+                context.rejected_ops.push((op.into(), po.op.entity_infos));
                 continue;
-            } else if let Some(bundler_sponsorship) = &po.perms.bundler_sponsorship {
+            } else if let Some(bundler_sponsorship) = &po.op.perms.bundler_sponsorship {
                 let valid_time_range =
                     ValidTimeRange::from_genesis(bundler_sponsorship.valid_until.into());
                 if !simulation
@@ -646,7 +663,7 @@ where
                             valid_range: valid_time_range,
                         },
                     ));
-                    context.rejected_ops.push((op.into(), po.entity_infos));
+                    context.rejected_ops.push((op.into(), po.op.entity_infos));
                     continue;
                 }
             }
@@ -723,7 +740,7 @@ where
                 let max_cost = op.max_gas_cost();
                 if *balance < max_cost {
                     info!("Rejected paymaster {paymaster:?} because its balance {balance:?} was too low.");
-                    paymasters_to_reject.push(po.entity_infos.paymaster.unwrap());
+                    paymasters_to_reject.push(po.op.entity_infos.paymaster.unwrap());
                     continue;
                 } else {
                     *balance -= max_cost;
@@ -744,6 +761,7 @@ where
                 .push(OpWithSimulation {
                     op: op.into(),
                     simulation,
+                    sponsored_da_gas: po.sponsored_da_gas,
                 });
         }
 
@@ -1266,14 +1284,14 @@ where
 
     fn limit_user_operations_for_simulation(
         &self,
-        ops: Vec<PoolOperation>,
-    ) -> (Vec<PoolOperation>, u128) {
+        ops: Vec<PoolOperationWithSponsoredDAGas>,
+    ) -> (Vec<PoolOperationWithSponsoredDAGas>, u128) {
         // Make the bundle gas limit 10% higher here so that we simulate more UOs than we need in case that we end up dropping some UOs later so we can still pack a full bundle
         let mut gas_left = math::increase_by_percent(self.settings.max_bundle_gas, 10);
         let mut ops_in_bundle = Vec::new();
         for op in ops {
             // if the op has an aggregator, check if the aggregator is supported, if not skip
-            if let Some(agg) = op.uo.aggregator() {
+            if let Some(agg) = op.op.uo.aggregator() {
                 if self
                     .settings
                     .chain_spec
@@ -1282,7 +1300,7 @@ where
                 {
                     self.emit(BuilderEvent::skipped_op(
                         self.builder_tag.clone(),
-                        op.uo.hash(),
+                        op.op.uo.hash(),
                         SkipReason::UnsupportedAggregator(agg),
                     ));
                     continue;
@@ -1291,11 +1309,14 @@ where
 
             // Here we use optimistic gas limits for the UOs by assuming none of the paymaster UOs use postOp calls.
             // This way after simulation once we have determined if each UO actually uses a postOp call or not we can still pack a full bundle
-            let gas = op.uo.computation_gas_limit(&self.settings.chain_spec, None);
+            let gas = op
+                .op
+                .uo
+                .computation_gas_limit(&self.settings.chain_spec, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
-                    op.uo.hash(),
+                    op.op.uo.hash(),
                     SkipReason::GasLimit,
                 ));
                 continue;
@@ -1374,9 +1395,16 @@ where
 }
 
 #[derive(Debug)]
+struct PoolOperationWithSponsoredDAGas {
+    op: PoolOperation,
+    sponsored_da_gas: Option<u128>,
+}
+
+#[derive(Debug)]
 struct OpWithSimulation<UO> {
     op: UO,
     simulation: SimulationResult,
+    sponsored_da_gas: Option<u128>,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
@@ -1630,10 +1658,10 @@ impl<UO: UserOperation> ProposalContext<UO> {
         // per UO gas, bundle_size == None to signal to exclude shared gas
         gas_limit += self
             .iter_ops_with_simulations()
-            .map(|sim_op| sim_op.op.gas_limit(chain_spec, None))
+            .map(|sim_op| {
+                sim_op.op.gas_limit(chain_spec, None) + sim_op.sponsored_da_gas.unwrap_or(0)
+            })
             .sum::<u128>();
-
-        // TODO(danc): during bundler sponsorship on arbitrum we need to account for DA gas in gas limit
 
         gas_limit
     }
@@ -2746,6 +2774,7 @@ mod tests {
                             requires_post_op: false,
                             ..Default::default()
                         },
+                        sponsored_da_gas: Some(100_000),
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -2753,6 +2782,7 @@ mod tests {
                             requires_post_op: false,
                             ..Default::default()
                         },
+                        sponsored_da_gas: None,
                     },
                 ],
                 signature: Default::default(),
@@ -2767,7 +2797,8 @@ mod tests {
 
         let expected_gas_limit = op1.gas_limit(&cs, None)
             + op2.gas_limit(&cs, None)
-            + rundler_types::bundle_shared_gas(&cs);
+            + rundler_types::bundle_shared_gas(&cs)
+            + 100_000; // sponsored DA gas
 
         assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
     }
@@ -2788,6 +2819,7 @@ mod tests {
                             requires_post_op: true, // uses postOp
                             ..Default::default()
                         },
+                        sponsored_da_gas: None,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -2795,6 +2827,7 @@ mod tests {
                             requires_post_op: false,
                             ..Default::default()
                         },
+                        sponsored_da_gas: None,
                     },
                 ],
                 signature: Default::default(),
