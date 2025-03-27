@@ -31,7 +31,7 @@ jobs:
         with:
           path: bundler-test-executors
           repository: alchemyplatform/bundler-test-executor
-          ref: danc/v0.6-signer
+          ref: releases/v0.6
 
       - name: Build rundler image locally
         run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
