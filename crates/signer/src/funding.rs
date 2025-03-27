@@ -58,7 +58,10 @@ pub(crate) async fn funding_task<P: EvmProvider>(
 ) {
     let funding_signer_address = settings.signer.address();
     let wallet = EthereumWallet::new(settings.signer.clone());
-    let metrics = FunderMetrics::default();
+    let metrics = FunderMetrics::new_with_labels(&[(
+        "addr",
+        funding_signer_address.to_checksum(Some(settings.chain_spec.id)),
+    )]);
 
     let _ = get_update_funder_balance(&provider, &metrics, funding_signer_address).await;
 
