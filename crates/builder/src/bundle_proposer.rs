@@ -155,6 +155,7 @@ pub(crate) struct BundleProposerImpl<EP, BP> {
 pub(crate) struct Settings {
     pub(crate) chain_spec: ChainSpec,
     pub(crate) max_bundle_size: u64,
+    pub(crate) target_bundle_gas: u128,
     pub(crate) max_bundle_gas: u128,
     pub(crate) sender_eoa: Address,
     pub(crate) priority_fee_mode: PriorityFeeMode,
@@ -611,6 +612,7 @@ where
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
 
         for (po, simulation) in ops_with_simulations {
+            // first process any possible rejections
             let op = po.op.clone().uo;
             let simulation = match simulation {
                 Ok(simulation) => simulation,
@@ -668,6 +670,27 @@ where
                 }
             }
 
+            // if the bundle is at or past target, skip op and continue to finish processing any rejections
+            if gas_spent >= self.settings.target_bundle_gas {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op.hash(),
+                    SkipReason::GasLimit,
+                ));
+                continue;
+            }
+            // if this would put the bundle over its max, skip
+            let op_computation_gas_limit =
+                op.computation_gas_limit(&self.settings.chain_spec, None);
+            if gas_spent.saturating_add(op_computation_gas_limit) > self.settings.max_bundle_gas {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op.hash(),
+                    SkipReason::GasLimit,
+                ));
+                continue;
+            }
+
             // Limit by transaction size
             let op_size_bytes: usize = op.abi_encoded_size();
             let op_size_with_offset_word = op_size_bytes.saturating_add(USER_OP_OFFSET_WORD_SIZE);
@@ -678,18 +701,6 @@ where
                     self.builder_tag.clone(),
                     op.hash(),
                     SkipReason::TransactionSizeLimit,
-                ));
-                continue;
-            }
-
-            // Skip this op if the bundle does not have enough remaining gas to execute it.
-            let required_gas =
-                gas_spent + op.computation_gas_limit(&self.settings.chain_spec, None);
-            if required_gas > self.settings.max_bundle_gas {
-                self.emit(BuilderEvent::skipped_op(
-                    self.builder_tag.clone(),
-                    op.hash(),
-                    SkipReason::GasLimit,
                 ));
                 continue;
             }
@@ -747,9 +758,8 @@ where
                 }
             }
 
-            // Update the running gas that would need to be be spent to execute the bundle so far.
-            gas_spent += op.computation_gas_limit(&self.settings.chain_spec, None);
-
+            // Update the running totals
+            gas_spent = gas_spent.saturating_add(op_computation_gas_limit);
             constructed_bundle_size =
                 constructed_bundle_size.saturating_add(op_size_with_offset_word);
 
@@ -1286,8 +1296,7 @@ where
         &self,
         ops: Vec<PoolOperationWithSponsoredDAGas>,
     ) -> (Vec<PoolOperationWithSponsoredDAGas>, u128) {
-        // Make the bundle gas limit 10% higher here so that we simulate more UOs than we need in case that we end up dropping some UOs later so we can still pack a full bundle
-        let mut gas_left = math::increase_by_percent(self.settings.max_bundle_gas, 10);
+        let mut gas_left = self.settings.max_bundle_gas;
         let mut ops_in_bundle = Vec::new();
         for op in ops {
             // if the op has an aggregator, check if the aggregator is supported, if not skip
@@ -2690,14 +2699,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bundle_gas_limit_simple() {
-        // Limit is 10M
+    async fn test_bundle_gas_limit_max() {
+        // Target is 10M, max is 25M
         // Each OP has 1M pre_verification_gas, 0 verification_gas_limit, call_gas_limit is passed in
         let op1 = op_with_sender_call_gas_limit(address(1), 4_000_000);
         let op2 = op_with_sender_call_gas_limit(address(2), 3_000_000);
-        // these two shouldn't be included in the bundle
-        let op3 = op_with_sender_call_gas_limit(address(3), 10_000_000);
-        let op4 = op_with_sender_call_gas_limit(address(4), 10_000_000);
+        // these two shouldn't be included in the bundle as they put us over the max
+        let op3 = op_with_sender_call_gas_limit(address(3), 20_000_000);
+        let op4 = op_with_sender_call_gas_limit(address(4), 20_000_000);
         let deposit = parse_units("1", "ether").unwrap().into();
 
         let bundle = mock_make_bundle(
@@ -2759,7 +2768,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_bundle_gas_limit() {
+    async fn test_bundle_gas_limit_target() {
+        // Target is 10M, max is 25M
+        // Each OP has 1M pre_verification_gas, 0 verification_gas_limit, call_gas_limit is passed in
+        let op1 = op_with_sender_call_gas_limit(address(1), 4_000_000);
+        let op2 = op_with_sender_call_gas_limit(address(2), 6_000_000);
+        // this op should be included in the bundle as we're already at the target
+        let op3 = op_with_sender_call_gas_limit(address(3), 1_000_000);
+        let deposit = parse_units("1", "ether").unwrap().into();
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: op3.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![deposit, deposit, deposit],
+            0,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+        )
+        .await;
+
+        let cs = ChainSpec::default();
+        let expected_gas_limit: u64 = (op1.gas_limit(&cs, None)
+            + op2.gas_limit(&cs, None)
+            + rundler_types::bundle_shared_gas(&cs))
+        .try_into()
+        .unwrap();
+
+        assert_eq!(bundle.entity_updates, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op1, op2],
+                ..Default::default()
+            }]
+        );
+        assert_eq!(
+            bundle.gas_estimate,
+            math::increase_by_percent(expected_gas_limit, BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bundle_gas_limit_da_gas() {
         let cs = ChainSpec::default();
         let op1 = op_with_gas(100_000, 100_000, 1_000_000, false);
         let op2 = op_with_gas(100_000, 100_000, 200_000, false);
@@ -3811,7 +3883,8 @@ mod tests {
             Settings {
                 chain_spec,
                 max_bundle_size,
-                max_bundle_gas: 10_000_000,
+                target_bundle_gas: 10_000_000,
+                max_bundle_gas: 25_000_000,
                 sender_eoa,
                 priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 da_gas_tracking_enabled,

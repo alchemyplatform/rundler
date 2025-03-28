@@ -5,3 +5,4 @@ priority_fee_oracle_type = "USAGE_BASED"
 min_max_priority_fee_per_gas = 30000000000
 bloxroute_enabled = true
 max_transaction_size_bytes = 130000
+block_gas_limit = 30000000
