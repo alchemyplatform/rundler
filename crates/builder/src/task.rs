@@ -54,7 +54,9 @@ pub struct Args {
     pub auto_fund: bool,
     /// Maximum bundle size in number of operations
     pub max_bundle_size: u64,
-    /// Maximum bundle size in gas limit
+    /// Target bundle size in gas
+    pub target_bundle_gas: u128,
+    /// Maximum bundle size in gas
     pub max_bundle_gas: u128,
     /// Percentage to add to the network pending base fee for the bundle base fee
     pub bundle_base_fee_overhead_percent: u32,
@@ -375,6 +377,7 @@ where
         let proposer_settings = bundle_proposer::Settings {
             chain_spec: self.args.chain_spec.clone(),
             max_bundle_size: self.args.max_bundle_size,
+            target_bundle_gas: self.args.target_bundle_gas,
             max_bundle_gas: self.args.max_bundle_gas,
             sender_eoa,
             priority_fee_mode: self.args.priority_fee_mode,

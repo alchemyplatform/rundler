@@ -14,10 +14,8 @@
 use alloy_primitives::{Address, B256, U128, U256, U64};
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{
-    chain::ChainSpec,
+    chain::{ChainSpec, FromWithSpec, IntoWithSpec},
     pool::{Reputation, ReputationStatus},
-    v0_6::UserOperation as UserOperationV0_6,
-    v0_7::UserOperation as UserOperationV0_7,
     UserOperationOptionalGas, UserOperationVariant,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -46,11 +44,6 @@ pub enum ApiNamespace {
     Debug,
     Rundler,
     Admin,
-}
-
-/// Conversion trait for RPC types adding the context of the entry point and chain id
-pub(crate) trait FromRpc<R> {
-    fn from_rpc(rpc: R, chain_spec: &ChainSpec) -> Self;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,15 +112,11 @@ impl From<UserOperationVariant> for RpcUserOperation {
     }
 }
 
-impl FromRpc<RpcUserOperation> for UserOperationVariant {
-    fn from_rpc(op: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
+impl FromWithSpec<RpcUserOperation> for UserOperationVariant {
+    fn from_with_spec(op: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
         match op {
-            RpcUserOperation::V0_6(op) => {
-                UserOperationVariant::V0_6(UserOperationV0_6::from_rpc(op, chain_spec))
-            }
-            RpcUserOperation::V0_7(op) => {
-                UserOperationVariant::V0_7(UserOperationV0_7::from_rpc(op, chain_spec))
-            }
+            RpcUserOperation::V0_6(op) => UserOperationVariant::V0_6(op.into_with_spec(chain_spec)),
+            RpcUserOperation::V0_7(op) => UserOperationVariant::V0_7(op.into_with_spec(chain_spec)),
         }
     }
 }

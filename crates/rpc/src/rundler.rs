@@ -18,12 +18,16 @@ use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::EvmProvider;
 use rundler_sim::{gas, FeeEstimator};
-use rundler_types::{chain::ChainSpec, pool::Pool, UserOperation, UserOperationVariant};
+use rundler_types::{
+    chain::{ChainSpec, IntoWithSpec},
+    pool::Pool,
+    UserOperation, UserOperationVariant,
+};
 use tracing::instrument;
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
-    types::{FromRpc, RpcMinedUserOperation, RpcUserOperation},
+    types::{RpcMinedUserOperation, RpcUserOperation},
     utils,
 };
 
@@ -160,7 +164,7 @@ where
         user_op: RpcUserOperation,
         entry_point: Address,
     ) -> EthResult<Option<B256>> {
-        let uo = UserOperationVariant::from_rpc(user_op, &self.chain_spec);
+        let uo: UserOperationVariant = user_op.into_with_spec(&self.chain_spec);
         let id = uo.id();
 
         if uo.pre_verification_gas() != 0

@@ -13,7 +13,7 @@
 
 use alloy_primitives::{Address, Bytes, U128, U256};
 use rundler_types::{
-    chain::ChainSpec,
+    chain::{ChainSpec, FromWithSpec},
     v0_6::{
         UserOperation, UserOperationBuilder, UserOperationOptionalGas, UserOperationRequiredFields,
     },
@@ -21,7 +21,7 @@ use rundler_types::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{rpc_authorization::RpcEip7702Auth, FromRpc, RpcAddress};
+use super::{rpc_authorization::RpcEip7702Auth, RpcAddress};
 
 /// User operation definition for RPC
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -65,8 +65,8 @@ impl From<UserOperation> for RpcUserOperation {
     }
 }
 
-impl FromRpc<RpcUserOperation> for UserOperation {
-    fn from_rpc(def: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
+impl FromWithSpec<RpcUserOperation> for UserOperation {
+    fn from_with_spec(def: RpcUserOperation, chain_spec: &ChainSpec) -> Self {
         let mut builder = UserOperationBuilder::new(
             chain_spec,
             UserOperationRequiredFields {

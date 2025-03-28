@@ -21,7 +21,7 @@ use rundler_provider::Providers;
 use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
 use rundler_sim::PriorityFeeMode;
 use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
-use rundler_types::chain::ChainSpec;
+use rundler_types::chain::{ChainSpec, TryIntoWithSpec};
 
 use super::CommonArgs;
 
@@ -123,21 +123,21 @@ impl RpcArgs {
         };
 
         Ok(RpcTaskArgs {
-            chain_spec,
             unsafe_mode: common.unsafe_mode,
             port: self.port,
             host: self.host.clone(),
             rpc_url: common.node_http.clone().context("must provide node_http")?,
             api_namespaces: apis,
-            precheck_settings: common.try_into()?,
+            precheck_settings: common.try_into_with_spec(&chain_spec)?,
             eth_api_settings,
             rundler_api_settings: common.try_into()?,
-            estimation_settings: common.try_into()?,
+            estimation_settings: common.try_into_with_spec(&chain_spec)?,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
             entry_point_v0_6_enabled: !common.disable_entry_point_v0_6,
             entry_point_v0_7_enabled: !common.disable_entry_point_v0_7,
             corsdomain: self.corsdomain.clone(),
+            chain_spec,
         })
     }
 }

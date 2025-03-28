@@ -14,14 +14,14 @@
 use alloy_primitives::{Address, B256, U64};
 use jsonrpsee::core::RpcResult;
 use rundler_provider::StateOverride;
-use rundler_types::{pool::Pool, UserOperationPermissions, UserOperationVariant};
+use rundler_types::{chain::IntoWithSpec, pool::Pool, UserOperationPermissions};
 use tracing::instrument;
 
 use super::{api::EthApi, EthApiServer};
 use crate::{
     types::{
-        FromRpc, RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash,
-        RpcUserOperationOptionalGas, RpcUserOperationPermissions, RpcUserOperationReceipt,
+        RpcGasEstimate, RpcUserOperation, RpcUserOperationByHash, RpcUserOperationOptionalGas,
+        RpcUserOperationPermissions, RpcUserOperationReceipt,
     },
     utils,
 };
@@ -41,7 +41,7 @@ where
         // if permissions are not enabled, default them
         let mut permissions = if self.permissions_enabled {
             permissions
-                .map(|p| UserOperationPermissions::from_rpc(p, &self.chain_spec))
+                .map(|p| p.into_with_spec(&self.chain_spec))
                 .unwrap_or_default()
         } else {
             UserOperationPermissions::default()
@@ -55,7 +55,7 @@ where
             "eth_sendUserOperation",
             EthApi::send_user_operation(
                 self,
-                UserOperationVariant::from_rpc(op, &self.chain_spec),
+                op.into_with_spec(&self.chain_spec),
                 entry_point,
                 permissions,
             ),

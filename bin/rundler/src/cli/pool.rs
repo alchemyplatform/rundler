@@ -20,7 +20,10 @@ use rundler_pool::{LocalPoolBuilder, PoolConfig, PoolTask, PoolTaskArgs};
 use rundler_provider::Providers;
 use rundler_sim::MempoolConfigs;
 use rundler_task::TaskSpawnerExt;
-use rundler_types::{chain::ChainSpec, EntryPointVersion};
+use rundler_types::{
+    chain::{ChainSpec, TryIntoWithSpec},
+    EntryPointVersion,
+};
 use rundler_utils::emit::{self, EVENT_CHANNEL_CAPACITY};
 use tokio::sync::broadcast;
 
@@ -230,7 +233,7 @@ impl PoolArgs {
             max_size_of_pool_bytes: self.max_size_in_bytes,
             blocklist: blocklist.clone(),
             allowlist: allowlist.clone(),
-            precheck_settings: common.try_into()?,
+            precheck_settings: common.try_into_with_spec(&chain_spec)?,
             sim_settings: common.try_into()?,
             throttled_entity_mempool_count: self.throttled_entity_mempool_count,
             throttled_entity_live_blocks: self.throttled_entity_live_blocks,

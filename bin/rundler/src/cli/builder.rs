@@ -272,13 +272,15 @@ impl BuilderArgs {
 
         Ok(BuilderTaskArgs {
             entry_points,
-            chain_spec,
             signing_scheme,
             auto_fund: true,
             unsafe_mode: common.unsafe_mode,
             rpc_url,
             max_bundle_size: self.max_bundle_size,
-            max_bundle_gas: common.max_bundle_gas,
+            target_bundle_gas: chain_spec
+                .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
+            max_bundle_gas: chain_spec
+                .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio),
             bundle_base_fee_overhead_percent: common.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
             priority_fee_mode,
@@ -292,6 +294,7 @@ impl BuilderArgs {
             da_gas_tracking_enabled,
             provider_client_timeout_seconds,
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            chain_spec,
         })
     }
 

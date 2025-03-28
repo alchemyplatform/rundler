@@ -50,7 +50,9 @@ use rundler_sim::{
     MIN_CALL_GAS_LIMIT,
 };
 use rundler_types::{
-    chain::ChainSpec, da::DAGasOracleType, v0_6::UserOperation as UserOperationV0_6,
+    chain::{ChainSpec, TryFromWithSpec},
+    da::DAGasOracleType,
+    v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
 };
 
@@ -223,13 +225,24 @@ pub struct CommonArgs {
     max_verification_gas: u64,
 
     #[arg(
-        long = "max_bundle_gas",
-        name = "max_bundle_gas",
-        default_value = "25000000",
-        env = "MAX_BUNDLE_GAS",
+        long = "target_bundle_block_gas_limit_ratio",
+        name = "target_bundle_block_gas_limit_ratio",
+        default_value = "0.5",
+        env = "TARGET_BUNDLE_BLOCK_GAS_LIMIT_RATIO",
+        value_parser = verify_f64_less_than_one,
         global = true
     )]
-    max_bundle_gas: u128,
+    target_bundle_block_gas_limit_ratio: f64,
+
+    #[arg(
+        long = "max_bundle_block_gas_limit_ratio",
+        name = "max_bundle_block_gas_limit_ratio",
+        default_value = "0.9",
+        env = "MAX_BUNDLE_BLOCK_GAS_LIMIT_RATIO",
+        value_parser = verify_f64_less_than_one,
+        global = true
+    )]
+    max_bundle_block_gas_limit_ratio: f64,
 
     #[arg(
         long = "min_stake_value",
@@ -494,12 +507,23 @@ fn parse_key_val(s: &str) -> Result<(String, String), anyhow::Error> {
     Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
 }
 
+fn verify_f64_less_than_one(v: &str) -> Result<f64, String> {
+    let Ok(v) = v.parse() else {
+        return Err("invalid float".to_string());
+    };
+    if v < 1.0 {
+        Ok(v)
+    } else {
+        Err(format!("value {v} is not less than 1.0"))
+    }
+}
+
 const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
 
-impl TryFrom<&CommonArgs> for EstimationSettings {
+impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
 
-    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+    fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
         if value.max_verification_gas
             > (value.max_simulate_handle_ops_gas - SIMULATION_GAS_OVERHEAD)
         {
@@ -524,20 +548,22 @@ impl TryFrom<&CommonArgs> for EstimationSettings {
             max_call_gas,
             max_paymaster_verification_gas: value.max_verification_gas as u128,
             max_paymaster_post_op_gas: max_call_gas,
-            max_total_execution_gas: value.max_bundle_gas,
+            max_total_execution_gas: chain_spec
+                .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
             max_simulate_handle_ops_gas: value.max_simulate_handle_ops_gas,
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
         })
     }
 }
 
-impl TryFrom<&CommonArgs> for PrecheckSettings {
+impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
     type Error = anyhow::Error;
 
-    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
+    fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
-            max_total_execution_gas: value.max_bundle_gas,
+            max_total_execution_gas: chain_spec
+                .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
             bundle_base_fee_overhead_percent: value.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
