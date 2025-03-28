@@ -4,3 +4,4 @@ name = "Ethereum Devnet"
 id = 1337
 
 bundle_max_send_interval_millis = 250
+block_gas_limit = 30000000

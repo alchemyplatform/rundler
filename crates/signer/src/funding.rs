@@ -187,7 +187,9 @@ async fn funding_task_inner<P: EvmProvider>(
             total_to_fund -= 1;
         }
         if to_fund.is_empty() {
-            anyhow::bail!("Not enough funding balance for any funding. Funding balance: {funding_balance}, total to fund: {total}");
+            anyhow::bail!(
+                "Not enough funding balance for any funding. Funding balance: {funding_balance}"
+            );
         } else {
             tracing::warn!(
                 "Partially funding {} of {} addresses",

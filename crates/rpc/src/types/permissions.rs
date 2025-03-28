@@ -12,10 +12,11 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{U256, U64};
-use rundler_types::{chain::ChainSpec, BundlerSponsorship, UserOperationPermissions};
+use rundler_types::{
+    chain::{ChainSpec, FromWithSpec, IntoWithSpec},
+    BundlerSponsorship, UserOperationPermissions,
+};
 use serde::{Deserialize, Serialize};
-
-use super::FromRpc;
 
 /// User operation permissions
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,8 +48,8 @@ pub(crate) struct RpcBundlerSponsorship {
     pub(crate) valid_until: U64,
 }
 
-impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
-    fn from_rpc(rpc: RpcUserOperationPermissions, _chain_spec: &ChainSpec) -> Self {
+impl FromWithSpec<RpcUserOperationPermissions> for UserOperationPermissions {
+    fn from_with_spec(rpc: RpcUserOperationPermissions, chain_spec: &ChainSpec) -> Self {
         UserOperationPermissions {
             trusted: rpc.trusted,
             max_allowed_in_pool_for_sender: rpc.max_allowed_in_pool_for_sender.map(|c| c.to()),
@@ -56,13 +57,13 @@ impl FromRpc<RpcUserOperationPermissions> for UserOperationPermissions {
             underpriced_bundle_pct: rpc.underpriced_bundle_pct.map(|c| c.to()),
             bundler_sponsorship: rpc
                 .bundler_sponsorship
-                .map(|c| BundlerSponsorship::from_rpc(c, _chain_spec)),
+                .map(|c| c.into_with_spec(chain_spec)),
         }
     }
 }
 
-impl FromRpc<RpcBundlerSponsorship> for BundlerSponsorship {
-    fn from_rpc(rpc: RpcBundlerSponsorship, _chain_spec: &ChainSpec) -> Self {
+impl FromWithSpec<RpcBundlerSponsorship> for BundlerSponsorship {
+    fn from_with_spec(rpc: RpcBundlerSponsorship, _chain_spec: &ChainSpec) -> Self {
         BundlerSponsorship {
             max_cost: rpc.max_cost,
             valid_until: rpc.valid_until.to(),
