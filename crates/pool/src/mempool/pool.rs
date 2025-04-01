@@ -15,7 +15,7 @@ use std::{
     cmp::Ordering,
     collections::{hash_map::Entry, BTreeSet, HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime},
 };
 
 use alloy_primitives::{Address, B256};
@@ -98,7 +98,7 @@ pub(crate) struct PoolInner<D> {
     /// keeps track of the size of the removed cache in bytes
     cache_size: SizeTracker,
     /// The time of the previous block
-    prev_sys_block_time: Duration,
+    prev_sys_block_time: SystemTime,
     /// The number of the previous block
     prev_block_number: u64,
     /// The metrics of pool.
@@ -130,7 +130,7 @@ where
             submission_id: 0,
             pool_size: SizeTracker::default(),
             cache_size: SizeTracker::default(),
-            prev_sys_block_time: Duration::default(),
+            prev_sys_block_time: SystemTime::now(),
             prev_block_number: 0,
             metrics: PoolMetrics::new_with_labels(&[("entry_point", entry_point)]),
             event_sender,
@@ -235,11 +235,11 @@ where
         block_da_data: Option<&DAGasBlockData>,
         gas_fees: FeeUpdate,
     ) {
-        let sys_block_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should be after epoch");
+        let sys_block_time = SystemTime::now();
 
-        let block_delta_time = sys_block_time.saturating_sub(self.prev_sys_block_time);
+        let block_delta_time = sys_block_time
+            .duration_since(self.prev_sys_block_time)
+            .unwrap_or_default();
         let block_delta_height = block_number.saturating_sub(self.prev_block_number);
         let mut expired = Vec::new();
         let mut num_candidates = 0;
@@ -269,7 +269,10 @@ where
                 events.push(PoolEvent::RemovedOp {
                     op_hash: *hash,
                     reason: OpRemovalReason::Expired {
-                        valid_until: sys_block_time.into(),
+                        valid_until: sys_block_time
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .into(),
                     },
                 });
                 expired.push(*hash);
@@ -481,7 +484,14 @@ where
         // stay in the pool forever as `remove_operation_internal` is hash based.
         // Time to mine will also fail because UO1's hash was removed from the pool.
 
-        if let Some(time_to_mine) = self.time_to_mine.get(&mined_op.hash) {
+        if let Some(time_to_mine) = self.time_to_mine.get_mut(&mined_op.hash) {
+            time_to_mine.increase(
+                SystemTime::now()
+                    .duration_since(self.prev_sys_block_time)
+                    .unwrap_or_default(),
+                block_number.saturating_sub(self.prev_block_number),
+            );
+
             self.metrics
                 .time_to_mine
                 .record(time_to_mine.candidate_for_time.as_secs_f64());
