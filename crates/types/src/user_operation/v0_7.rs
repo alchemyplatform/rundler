@@ -557,15 +557,6 @@ impl UserOperationOptionalGas {
             );
         }
 
-        if let Some(address) = self.eip7702_auth_address {
-            let auth = Eip7702Auth {
-                address,
-                chain_id: chain_spec.id,
-                ..Default::default()
-            };
-            builder = builder.authorization_tuple(auth.max_fill());
-        }
-
         if let Some(factory) = self.factory {
             builder = builder.factory(factory, vec![255_u8; self.factory_data.len()].into());
         }
@@ -575,7 +566,7 @@ impl UserOperationOptionalGas {
                 chain_id: chain_spec.id,
                 ..Default::default()
             };
-            builder = builder.authorization_tuple(auth.random_fill());
+            builder = builder.authorization_tuple(auth.max_fill());
         }
         if let Some(aggregator) = self.aggregator {
             builder = builder.aggregator(aggregator);
