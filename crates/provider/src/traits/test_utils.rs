@@ -216,7 +216,7 @@ mockall::mock! {
             gas_fees: GasFees,
             proxy: Option<Address>,
         ) -> TransactionRequest;
-        fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut;
+        fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>) -> Option<HandleOpsOut>;
         fn decode_ops_from_calldata(
             chain_spec: &ChainSpec,
             calldata: &Bytes,
@@ -297,7 +297,7 @@ mockall::mock! {
     }
 
     #[async_trait::async_trait]
-    impl BundleHandler for EntryPointV0_7 {
+    impl<'a> BundleHandler for EntryPointV0_7 {
         type UO = v0_7::UserOperation;
         async fn call_handle_ops(
             &self,
@@ -315,7 +315,7 @@ mockall::mock! {
             gas_fees: GasFees,
             proxy: Option<Address>,
         ) -> TransactionRequest;
-        fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut;
+        fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>) -> Option<HandleOpsOut>;
         fn decode_ops_from_calldata(
             chain_spec: &ChainSpec,
             calldata: &Bytes,

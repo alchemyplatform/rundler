@@ -276,12 +276,12 @@ where
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
             Err(TransportError::ErrorResp(resp)) => {
-                if let Some(revert_data) = resp.as_revert_data() {
-                    Ok(Self::decode_handle_ops_revert(&resp.message, &revert_data))
-                } else {
-                    tracing::error!("handle_ops failed with request: {:?}", tx);
-                    Err(TransportError::ErrorResp(resp).into())
-                }
+                Self::decode_handle_ops_revert(&resp.message, &resp.as_revert_data()).ok_or_else(
+                    || {
+                        tracing::error!("handle_ops failed with request: {:?}", tx);
+                        TransportError::ErrorResp(resp).into()
+                    },
+                )
             }
             Err(error) => {
                 tracing::error!("handle_ops failed with request: {:?}", tx);
@@ -309,9 +309,16 @@ where
         )
     }
 
-    fn decode_handle_ops_revert(_message: &str, revert_data: &Bytes) -> HandleOpsOut {
+    fn decode_handle_ops_revert(
+        _message: &str,
+        revert_data: &Option<Bytes>,
+    ) -> Option<HandleOpsOut> {
+        let Some(revert_data) = revert_data else {
+            return None;
+        };
+
         if let Ok(err) = IEntryPointErrors::abi_decode(revert_data, false) {
-            match err {
+            let ret = match err {
                 IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
                     HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
                 }
@@ -326,9 +333,10 @@ where
                 IEntryPointErrors::SignatureValidationFailed(failure) => {
                     HandleOpsOut::SignatureValidationFailed(failure.aggregator)
                 }
-            }
+            };
+            Some(ret)
         } else {
-            HandleOpsOut::Revert(revert_data.clone())
+            Some(HandleOpsOut::Revert(revert_data.clone()))
         }
     }
 
