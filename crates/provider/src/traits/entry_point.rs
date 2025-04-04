@@ -41,7 +41,7 @@ pub enum AggregatorOut {
 }
 
 /// Result of an entry point handle ops call
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HandleOpsOut {
     /// Call succeeded
     Success,
@@ -158,7 +158,8 @@ pub trait BundleHandler: Send + Sync {
     ) -> TransactionRequest;
 
     /// Decode the revert data from a call to `handleOps`
-    fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut;
+    fn decode_handle_ops_revert(message: &str, revert_data: &Option<Bytes>)
+        -> Option<HandleOpsOut>;
 
     /// Decode user ops from calldata
     fn decode_ops_from_calldata(

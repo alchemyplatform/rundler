@@ -815,17 +815,17 @@ where
 
         let handle_ops_out = EP::EntryPoint::decode_handle_ops_revert(
             frame.error.as_ref().map_or("", |e| e),
-            &revert_data,
+            &Some(revert_data),
         );
         tracing::warn!(
             "reverted transaction {tx_hash:?} decoded handle ops out: {handle_ops_out:?}"
         );
 
         let to_remove = match handle_ops_out {
-            HandleOpsOut::Success => {
+            Some(HandleOpsOut::Success) => {
                 bail!("handle ops returned success");
             }
-            HandleOpsOut::FailedOp(index, _) => {
+            Some(HandleOpsOut::FailedOp(index, _)) => {
                 tracing::warn!("removing op from pool for reverted bundle op index {index:?}",);
                 ops.iter()
                     .flat_map(|ops| ops.user_ops.iter())
@@ -833,7 +833,7 @@ where
                     .map(|op| vec![op.hash()])
                     .unwrap_or_default()
             }
-            HandleOpsOut::SignatureValidationFailed(aggregator) => {
+            Some(HandleOpsOut::SignatureValidationFailed(aggregator)) => {
                 tracing::warn!(
                     "removing all ops from pool for reverted bundle for aggregator {aggregator:?}",
                 );
@@ -842,7 +842,7 @@ where
                     .map(|ops| ops.user_ops.iter().map(|op| op.hash()).collect())
                     .unwrap_or_default()
             }
-            HandleOpsOut::Revert(_) | HandleOpsOut::PostOpRevert => {
+            None | Some(HandleOpsOut::Revert(_)) | Some(HandleOpsOut::PostOpRevert) => {
                 tracing::warn!("removing all ops from pool for reverted bundle");
                 ops.iter()
                     .flat_map(|ops| ops.user_ops.iter().map(|op| op.hash()))
@@ -1996,8 +1996,8 @@ mod tests {
 
         let ctx = MockEntryPointV0_6::decode_handle_ops_revert_context();
         ctx.expect()
-            .withf(move |_, data| *data == output_clone)
-            .returning(|_, _| HandleOpsOut::FailedOp(0, "revert".to_string()));
+            .withf(move |_, data| *data == Some(output_clone.clone()))
+            .returning(|_, _| Some(HandleOpsOut::FailedOp(0, "revert".to_string())));
 
         let mut mock_pool = MockPool::new();
         mock_pool

@@ -262,12 +262,12 @@ where
         match res {
             Ok(_) => return Ok(HandleOpsOut::Success),
             Err(TransportError::ErrorResp(resp)) => {
-                if let Some(revert) = resp.as_revert_data() {
-                    Ok(Self::decode_handle_ops_revert(&resp.message, &revert))
-                } else {
-                    tracing::error!("handle_ops failed with request: {:?}", tx);
-                    Err(TransportError::ErrorResp(resp).into())
-                }
+                Self::decode_handle_ops_revert(&resp.message, &resp.as_revert_data()).ok_or_else(
+                    || {
+                        tracing::error!("handle_ops failed with request: {:?}", tx);
+                        TransportError::ErrorResp(resp).into()
+                    },
+                )
             }
             Err(error) => {
                 tracing::error!("handle_ops failed with request: {:?}", tx);
@@ -295,29 +295,37 @@ where
         )
     }
 
-    fn decode_handle_ops_revert(message: &str, revert_data: &Bytes) -> HandleOpsOut {
-        if let Ok(err) = IEntryPointErrors::abi_decode(revert_data, false) {
-            match err {
-                IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
-                    HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
+    fn decode_handle_ops_revert(
+        message: &str,
+        revert_data: &Option<Bytes>,
+    ) -> Option<HandleOpsOut> {
+        if let Some(revert_data) = revert_data {
+            let ret = if let Ok(err) = IEntryPointErrors::abi_decode(revert_data, false) {
+                match err {
+                    IEntryPointErrors::FailedOp(FailedOp { opIndex, reason }) => {
+                        HandleOpsOut::FailedOp(opIndex.try_into().unwrap_or(usize::MAX), reason)
+                    }
+                    IEntryPointErrors::SignatureValidationFailed(err) => {
+                        HandleOpsOut::SignatureValidationFailed(err.aggregator)
+                    }
+                    IEntryPointErrors::ValidationResult(_)
+                    | IEntryPointErrors::ValidationResultWithAggregation(_)
+                    | IEntryPointErrors::ExecutionResult(_) => {
+                        HandleOpsOut::Revert(revert_data.clone())
+                    }
                 }
-                IEntryPointErrors::SignatureValidationFailed(err) => {
-                    HandleOpsOut::SignatureValidationFailed(err.aggregator)
-                }
-                IEntryPointErrors::ValidationResult(_)
-                | IEntryPointErrors::ValidationResultWithAggregation(_)
-                | IEntryPointErrors::ExecutionResult(_) => {
-                    HandleOpsOut::Revert(revert_data.clone())
-                }
-            }
+            } else {
+                HandleOpsOut::Revert(revert_data.clone())
+            };
+            Some(ret)
         } else if message.contains("return data out of bounds") {
             // Special handling for a bug in the 0.6 entry point contract to detect the bug where
             // the `returndatacopy` opcode reverts due to a postOp revert and the revert data is too short.
             // See https://github.com/eth-infinitism/account-abstraction/pull/325 for more details.
             // NOTE: this error message is copied directly from Geth and assumes it will not change.
-            HandleOpsOut::PostOpRevert
+            Some(HandleOpsOut::PostOpRevert)
         } else {
-            HandleOpsOut::Revert(revert_data.clone())
+            None
         }
     }
 
@@ -695,5 +703,24 @@ impl From<DepositInfoV0_6> for DepositInfo {
             unstake_delay_sec: deposit_info.unstakeDelaySec,
             withdraw_time: deposit_info.withdrawTime.to(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_provider::RootProvider;
+    use alloy_transport::BoxTransport;
+
+    use super::*;
+    use crate::ZeroDAGasOracle;
+
+    #[test]
+    fn test_decode_handle_ops_revert_return_data_out_of_bounds() {
+        let result = EntryPointProvider::<
+            RootProvider<BoxTransport, AnyNetwork>,
+            BoxTransport,
+            ZeroDAGasOracle,
+        >::decode_handle_ops_revert("return data out of bounds", &None);
+        assert_eq!(result, Some(HandleOpsOut::PostOpRevert));
     }
 }
