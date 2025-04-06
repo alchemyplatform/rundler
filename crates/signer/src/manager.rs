@@ -19,7 +19,9 @@ use std::{
 
 use alloy_consensus::{SignableTransaction, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
-use alloy_network::{AnyNetwork, AnyTxEnvelope, EthereumWallet, NetworkWallet, TxSigner};
+use alloy_network::{
+    AnyNetwork, AnyTxEnvelope, EthereumWallet, NetworkWallet, TransactionBuilder, TxSigner,
+};
 use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256};
 use metrics::Gauge;
 use metrics_derive::Metrics;
@@ -69,6 +71,7 @@ pub trait SignerManager: Send + Sync {
 #[derive(Clone)]
 pub struct SignerLease {
     signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
+    chain_id: u64,
 }
 
 impl Debug for SignerLease {
@@ -79,8 +82,11 @@ impl Debug for SignerLease {
 
 impl SignerLease {
     /// Create a new signer lease
-    pub fn new(signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>) -> Self {
-        Self { signer }
+    pub fn new(
+        signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
+        chain_id: u64,
+    ) -> Self {
+        Self { signer, chain_id }
     }
 
     /// Get the address of the signer
@@ -89,7 +95,8 @@ impl SignerLease {
     }
 
     /// Sign a transaction
-    pub async fn sign_tx(&self, tx: TransactionRequest) -> Result<AnyTxEnvelope> {
+    pub async fn sign_tx(&self, mut tx: TransactionRequest) -> Result<AnyTxEnvelope> {
+        tx.set_chain_id(self.chain_id);
         let Ok(tx) = tx.build_typed_tx() else {
             return Err(Error::InvalidTransaction(
                 "could not build typed transaction".to_string(),
@@ -132,6 +139,7 @@ impl SignerLease {
 }
 
 pub(crate) struct FundingSignerManager {
+    chain_id: u64,
     wallet: EthereumWallet,
     signer_statuses: Arc<RwLock<HashMap<Address, SignerStatus>>>,
     auto_fund: bool,
@@ -201,6 +209,7 @@ impl SignerManager for FundingSignerManager {
 
         Some(SignerLease::new(
             self.wallet.signer_by_address(*address)?.clone(),
+            self.chain_id,
         ))
     }
 
@@ -211,6 +220,7 @@ impl SignerManager for FundingSignerManager {
             *status = SignerStatus::Leased;
             Some(SignerLease::new(
                 self.wallet.signer_by_address(*address)?.clone(),
+                self.chain_id,
             ))
         } else {
             None
@@ -251,6 +261,7 @@ impl SignerManager for FundingSignerManager {
 
 impl FundingSignerManager {
     pub(crate) fn new<T: TaskSpawner, P: EvmProvider + 'static>(
+        chain_id: u64,
         wallet: EthereumWallet,
         funder_settings: Option<FunderSettings>,
         auto_fund: bool,
@@ -277,6 +288,7 @@ impl FundingSignerManager {
         }
 
         Self {
+            chain_id,
             wallet,
             signer_statuses,
             auto_fund,
@@ -364,7 +376,7 @@ mod tests {
         let task_spawner = TokioTaskExecutor::default();
         let provider = MockEvmProvider::default();
 
-        FundingSignerManager::new(wallet, funder_settings, true, &task_spawner, provider)
+        FundingSignerManager::new(1, wallet, funder_settings, true, &task_spawner, provider)
     }
 
     #[tokio::test]

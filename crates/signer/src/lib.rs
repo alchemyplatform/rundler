@@ -207,6 +207,7 @@ fn new_private_keys_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
 ) -> Result<Arc<dyn SignerManager>> {
     let wallet = local::construct_local_wallet_from_private_keys(private_keys, chain_spec.id)?;
     Ok(Arc::new(FundingSignerManager::new(
+        chain_spec.id,
         wallet,
         None,
         false,
@@ -224,6 +225,7 @@ fn new_mnemonic_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
 ) -> Result<Arc<dyn SignerManager>> {
     let wallet = local::construct_local_wallet_from_mnemonic(mnemonic, chain_spec.id, num_keys)?;
     Ok(Arc::new(FundingSignerManager::new(
+        chain_spec.id,
         wallet,
         None,
         false,
@@ -259,6 +261,7 @@ async fn new_kms_signer_manager<P: EvmProvider + 'static, T: TaskSpawner>(
     };
 
     Ok(Arc::new(FundingSignerManager::new(
+        chain_spec.id,
         wallet,
         None,
         false,
@@ -340,6 +343,7 @@ async fn new_kms_funding_signer_manager<
     };
 
     Ok(Arc::new(FundingSignerManager::new(
+        chain_spec.id,
         wallet,
         Some(funder_settings),
         auto_fund,
