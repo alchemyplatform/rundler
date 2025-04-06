@@ -15,7 +15,7 @@ mod bloxroute;
 mod flashbots;
 mod raw;
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, ChainId, B256};
 pub(crate) use bloxroute::PolygonBloxrouteTransactionSender;
 use enum_dispatch::enum_dispatch;
 pub(crate) use flashbots::FlashbotsTransactionSender;
@@ -150,6 +150,7 @@ impl TransactionSenderArgs {
     pub(crate) fn into_sender(
         self,
         rpc_url: &str,
+        chain_id: ChainId,
         provider_client_timeout_seconds: u64,
     ) -> std::result::Result<TransactionSenderEnum<impl EvmProvider>, SenderConstructorErrors> {
         let provider =
@@ -164,13 +165,14 @@ impl TransactionSenderArgs {
                 TransactionSenderEnum::Raw(RawTransactionSender::new(
                     submitter,
                     args.use_conditional_rpc,
+                    chain_id,
                 ))
             }
             Self::Flashbots(args) => TransactionSenderEnum::Flashbots(
                 FlashbotsTransactionSender::new(args.auth_key, args.builders, args.relay_url)?,
             ),
             Self::Bloxroute(args) => TransactionSenderEnum::PolygonBloxroute(
-                PolygonBloxrouteTransactionSender::new(provider, &args.header)?,
+                PolygonBloxrouteTransactionSender::new(provider, &args.header, chain_id)?,
             ),
         };
         Ok(sender)
@@ -188,13 +190,21 @@ pub(crate) enum SenderConstructorErrors {
     Other(#[from] anyhow::Error),
 }
 
-fn create_hard_cancel_tx(to: Address, nonce: u64, gas_fees: GasFees) -> TransactionRequest {
-    TransactionRequest::default()
-        .to(to)
-        .nonce(nonce)
-        .gas_limit(30_000)
-        .max_fee_per_gas(gas_fees.max_fee_per_gas)
-        .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas)
+fn create_hard_cancel_tx(
+    chain_id: ChainId,
+    to: Address,
+    nonce: u64,
+    gas_fees: GasFees,
+) -> TransactionRequest {
+    TransactionRequest {
+        chain_id: Some(chain_id),
+        gas: Some(30000),
+        nonce: Some(nonce),
+        to: Some(to.into()),
+        max_fee_per_gas: Some(gas_fees.max_fee_per_gas),
+        max_priority_fee_per_gas: Some(gas_fees.max_priority_fee_per_gas),
+        ..Default::default()
+    }
 }
 
 impl From<ProviderError> for TxSenderError {

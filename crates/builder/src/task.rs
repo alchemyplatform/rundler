@@ -388,6 +388,7 @@ where
 
         let transaction_sender = self.args.sender_args.clone().into_sender(
             &self.args.rpc_url,
+            self.args.chain_spec.id,
             self.args.provider_client_timeout_seconds,
         )?;
 

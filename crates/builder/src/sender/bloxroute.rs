@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{hex, Bytes, B256};
+use alloy_primitives::{hex, Bytes, ChainId, B256};
 use anyhow::Context;
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
@@ -29,6 +29,7 @@ use super::{create_hard_cancel_tx, CancelTxInfo, Result, TransactionSender, TxSe
 pub(crate) struct PolygonBloxrouteTransactionSender<P> {
     provider: P,
     client: PolygonBloxrouteClient,
+    chain_id: ChainId,
 }
 
 #[async_trait]
@@ -60,7 +61,7 @@ where
         // Cannot cancel transactions on polygon bloxroute private, however, the transaction may have been
         // propagated to the public network, and can be cancelled via a public transaction.
 
-        let tx = create_hard_cancel_tx(signer.address(), nonce, gas_fees);
+        let tx = create_hard_cancel_tx(self.chain_id, signer.address(), nonce, gas_fees);
 
         let raw_tx = signer
             .sign_tx_raw(tx)
@@ -80,10 +81,11 @@ impl<P> PolygonBloxrouteTransactionSender<P>
 where
     P: EvmProvider,
 {
-    pub(crate) fn new(provider: P, auth_header: &str) -> Result<Self> {
+    pub(crate) fn new(provider: P, auth_header: &str, chain_id: ChainId) -> Result<Self> {
         Ok(Self {
             provider,
             client: PolygonBloxrouteClient::new(auth_header)?,
+            chain_id,
         })
     }
 }

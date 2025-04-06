@@ -12,7 +12,7 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_eips::eip2718::Encodable2718;
-use alloy_primitives::B256;
+use alloy_primitives::{ChainId, B256};
 use anyhow::Context;
 use async_trait::async_trait;
 use rundler_provider::{EvmProvider, TransactionRequest};
@@ -26,6 +26,7 @@ use crate::sender::{create_hard_cancel_tx, TransactionSender};
 #[derive(Debug)]
 pub(crate) struct RawTransactionSender<P> {
     submit_provider: P,
+    chain_id: ChainId,
     use_conditional_rpc: bool,
 }
 
@@ -66,7 +67,7 @@ where
         gas_fees: GasFees,
         signer: &SignerLease,
     ) -> Result<CancelTxInfo> {
-        let tx = create_hard_cancel_tx(signer.address(), nonce, gas_fees);
+        let tx = create_hard_cancel_tx(self.chain_id, signer.address(), nonce, gas_fees);
 
         let tx_envelope = signer
             .sign_tx(tx)
@@ -88,9 +89,10 @@ where
 }
 
 impl<P> RawTransactionSender<P> {
-    pub(crate) fn new(submit_provider: P, use_conditional_rpc: bool) -> Self {
+    pub(crate) fn new(submit_provider: P, use_conditional_rpc: bool, chain_id: ChainId) -> Self {
         Self {
             submit_provider,
+            chain_id,
             use_conditional_rpc,
         }
     }
