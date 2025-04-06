@@ -617,7 +617,7 @@ mod tests {
             replacement_fee_percent_increase: 5,
         };
 
-        let lease = SignerLease::new(Arc::new(signer));
+        let lease = SignerLease::new(Arc::new(signer), 1);
 
         let tracker: TransactionTrackerImpl<MockEvmProvider, MockTransactionSender> =
             TransactionTrackerImpl::new(provider, sender, lease, settings, "test".to_string())
