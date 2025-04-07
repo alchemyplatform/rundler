@@ -20,6 +20,7 @@ use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::instrument;
 
+use super::DAMetrics;
 use crate::{
     alloy::da::arbitrum::NodeInterface::NodeInterfaceInstance, AlloyProvider, BlockHashOrNumber,
     DAGasOracle, DAGasOracleSync, ProviderResult,
@@ -33,6 +34,7 @@ pub(crate) struct CachedNitroDAGasOracle<AP, T> {
     node_interface: NodeInterfaceInstance<T, AP, AnyNetwork>,
     // Use a tokio::Mutex here to ensure only one network call per block, other threads can async wait for the result
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, NitroDAGasBlockData>>,
+    metrics: DAMetrics,
 }
 
 impl<AP, T> CachedNitroDAGasOracle<AP, T>
@@ -44,6 +46,7 @@ where
         Self {
             node_interface: NodeInterfaceInstance::new(oracle_address, provider),
             block_data_cache: TokioMutex::new(LruMap::new(100)),
+            metrics: DAMetrics::default(),
         }
     }
 }
@@ -165,6 +168,9 @@ where
         let to = Address::ZERO;
 
         let (_, block_data) = self.call_oracle_contract(to, data, block).await?;
+        self.metrics
+            .per_unit_l1_fee
+            .set(block_data.l1_base_fee as f64);
 
         Ok(block_data)
     }

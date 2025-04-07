@@ -11,7 +11,6 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_eips::eip2718::Encodable2718;
 use alloy_primitives::B256;
 use anyhow::Context;
 use async_trait::async_trait;
@@ -68,17 +67,12 @@ where
     ) -> Result<CancelTxInfo> {
         let tx = create_hard_cancel_tx(signer.address(), nonce, gas_fees);
 
-        let tx_envelope = signer
-            .sign_tx(tx)
+        let raw_tx = signer
+            .sign_tx_raw(tx)
             .await
             .context("failed to sign transaction")?;
-        let mut raw_tx = vec![];
-        tx_envelope.encode_2718(&mut raw_tx);
 
-        let tx_hash = self
-            .submit_provider
-            .send_raw_transaction(raw_tx.into())
-            .await?;
+        let tx_hash = self.submit_provider.send_raw_transaction(raw_tx).await?;
 
         Ok(CancelTxInfo {
             tx_hash,

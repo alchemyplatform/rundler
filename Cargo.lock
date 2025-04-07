@@ -4943,7 +4943,6 @@ name = "rundler-builder"
 version = "0.7.0"
 dependencies = [
  "alloy-consensus",
- "alloy-eips",
  "alloy-network",
  "alloy-primitives",
  "alloy-signer",
@@ -5064,6 +5063,8 @@ dependencies = [
  "async-trait",
  "auto_impl",
  "futures-util",
+ "metrics",
+ "metrics-derive",
  "mockall",
  "pin-project",
  "rand",

@@ -11,8 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use metrics::Gauge;
+use metrics_derive::Metrics;
+
 mod bedrock;
 pub(crate) use bedrock::LocalBedrockDAGasOracle;
 
 mod nitro;
 pub(crate) use nitro::CachedNitroDAGasOracle;
+
+#[derive(Metrics, Clone)]
+#[metrics(scope = "provider_da")]
+struct DAMetrics {
+    #[metric(describe = "l1 base fee in wei (only bedrock)")]
+    l1_base_fee: Gauge,
+    #[metric(describe = "blob base fee in wei (only bedrock)")]
+    blob_base_fee: Gauge,
+    #[metric(describe = "per unit l1 fee in wei (only nitro)")]
+    per_unit_l1_fee: Gauge,
+}

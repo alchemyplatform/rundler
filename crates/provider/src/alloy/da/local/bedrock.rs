@@ -25,6 +25,7 @@ use rundler_utils::cache::LruMap;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{error, instrument};
 
+use super::DAMetrics;
 use crate::{
     alloy::da::optimism::GasPriceOracle::{
         baseFeeScalarCall, blobBaseFeeCall, blobBaseFeeScalarCall, l1BaseFeeCall,
@@ -48,6 +49,7 @@ pub(crate) struct LocalBedrockDAGasOracle<AP, T> {
     multicaller: Multicall3Instance<T, AP, AnyNetwork>,
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BedrockDAGasBlockData>>,
     blocking_task_pool: BlockingTaskPool,
+    metrics: DAMetrics,
 }
 
 impl<AP, T> LocalBedrockDAGasOracle<AP, T>
@@ -64,6 +66,7 @@ where
             block_data_cache: TokioMutex::new(LruMap::new(100)),
             blocking_task_pool: BlockingTaskPool::build()
                 .expect("failed to build blocking task pool"),
+            metrics: DAMetrics::default(),
         }
     }
 }
@@ -221,6 +224,9 @@ where
                 ._0
                 .try_into()
                 .context("blob_base_fee too large for u64")?;
+
+        self.metrics.l1_base_fee.set(l1_base_fee as f64);
+        self.metrics.blob_base_fee.set(blob_base_fee as f64);
 
         Ok(BedrockDAGasBlockData {
             base_fee_scalar,
