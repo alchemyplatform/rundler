@@ -28,12 +28,12 @@ anyhow.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 futures-util.workspace = true
-
+metrics.workspace = true
+metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
 pin-project.workspace = true
 rand.workspace = true
 reqwest.workspace = true
-
 reth-tasks = { workspace = true, features = ["rayon"] }
 rundler-bindings-fastlz.workspace = true
 rundler-contracts.workspace = true
