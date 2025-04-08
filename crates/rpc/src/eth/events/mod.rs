@@ -74,7 +74,8 @@ fn filter_receipt_logs_matching_user_op(
             && log.address() == reference_log.address()
     };
 
-    let is_user_op_event = |log: &Log| log.topics()[0] == reference_log.topics()[0];
+    let is_user_op_event =
+        |log: &Log| !log.topics().is_empty() && log.topics()[0] == reference_log.topics()[0];
 
     let mut i = 0;
     while i < logs.len() {
@@ -222,12 +223,42 @@ mod tests {
         assert!(result.is_err(), "{:?}", result.unwrap());
     }
 
+    #[test]
+    fn test_filter_anon_logs() {
+        let reference_log = given_log(UO_OP_TOPIC, "moldy-hash");
+        let receipt = given_receipt(vec![
+            anon_log(),
+            anon_log(),
+            reference_log.clone(),
+            anon_log(),
+        ]);
+
+        let result = filter_receipt_logs_matching_user_op(&reference_log, &receipt);
+
+        assert!(result.is_ok(), "{}", result.unwrap_err());
+        let result = result.unwrap();
+        assert_eq!(result, receipt.inner.logs()[0..=2]);
+    }
+
     fn given_log(topic_0: &str, topic_1: &str) -> Log {
         let mut log_data = LogData::default();
         log_data.set_topics_unchecked(vec![
             keccak256(topic_0.as_bytes()),
             keccak256(topic_1.as_bytes()),
         ]);
+
+        Log {
+            inner: PrimitiveLog {
+                address: Address::ZERO,
+                data: log_data,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn anon_log() -> Log {
+        let mut log_data = LogData::default();
+        log_data.set_topics_unchecked(vec![]);
 
         Log {
             inner: PrimitiveLog {
