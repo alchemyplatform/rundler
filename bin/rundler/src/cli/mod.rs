@@ -225,6 +225,15 @@ pub struct CommonArgs {
     max_verification_gas: u64,
 
     #[arg(
+        long = "max_uo_cost",
+        name = "max_uo_cost",
+        env = "MAX_UO_COST",
+        value_parser = alloy_primitives::utils::parse_ether,
+        global = true
+    )]
+    max_uo_cost: Option<U256>,
+
+    #[arg(
         long = "target_bundle_block_gas_limit_ratio",
         name = "target_bundle_block_gas_limit_ratio",
         default_value = "0.5",
@@ -564,6 +573,7 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
             max_verification_gas: value.max_verification_gas as u128,
             max_total_execution_gas: chain_spec
                 .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
+            max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
             bundle_base_fee_overhead_percent: value.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(

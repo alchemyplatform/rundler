@@ -171,6 +171,8 @@ pub enum SkipReason {
     OverSponsorshipMaxCost { max_cost: U256, actual_cost: U256 },
     /// Bundle ran out of space by gas limit to include the operation
     GasLimit,
+    /// Bundle ran out of space by max bundle fee to include the operation
+    OverMaxBundleFee,
     /// Expected storage conflict
     ExpectedStorageConflict(String),
     /// Expected storage limit reached

@@ -108,7 +108,8 @@ pub(crate) trait BundleProposer: Send + Sync {
     /// at least `min_fees`.
     async fn make_bundle(
         &mut self,
-        min_fees: Option<GasFees>,
+        max_bundle_fee: U256,
+        min_gas_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<<Self as BundleProposer>::UO>>;
 
@@ -189,7 +190,8 @@ where
 
     async fn make_bundle(
         &mut self,
-        required_fees: Option<GasFees>,
+        max_bundle_fee: U256,
+        min_gas_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
         let timer = Instant::now();
@@ -203,7 +205,7 @@ where
                 .evm()
                 .get_latest_block_hash_and_number()
                 .map_err(BundleProposerError::from),
-            self.estimate_gas_fees(required_fees)
+            self.estimate_gas_fees(min_gas_fees)
         )?;
 
         // (0) Determine fees required for ops to be included in a bundle
@@ -287,7 +289,12 @@ where
             .flatten()
             .collect::<Vec<_>>();
         let mut context = self
-            .assemble_context(ops_with_simulations, balances_by_paymaster)
+            .assemble_context(
+                max_bundle_fee,
+                bundle_fees.max_fee_per_gas,
+                ops_with_simulations,
+                balances_by_paymaster,
+            )
             .await;
         while !context.is_empty() {
             let gas_estimate = self
@@ -595,6 +602,8 @@ where
 
     async fn assemble_context(
         &self,
+        max_bundle_fee: U256,
+        gas_price: u128,
         ops_with_simulations: Vec<(
             PoolOperationWithSponsoredDAGas,
             Result<SimulationResult, SimulationError>,
@@ -608,7 +617,10 @@ where
         let mut context = ProposalContext::<<Self as BundleProposer>::UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
-        let mut gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
+        let mut execution_gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
+        // shared gas is included in the `gas_limit()` calls for this total
+        // this is conservative, we could try to optimize to amortize the shared gas
+        let mut total_gas_spent = 0_u128;
         let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
 
         for (po, simulation) in ops_with_simulations {
@@ -671,7 +683,7 @@ where
             }
 
             // if the bundle is at or past target, skip op and continue to finish processing any rejections
-            if gas_spent >= self.settings.target_bundle_gas {
+            if execution_gas_spent >= self.settings.target_bundle_gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
@@ -679,14 +691,30 @@ where
                 ));
                 continue;
             }
-            // if this would put the bundle over its max, skip
+
+            // if this would put the bundle over its max execution gas, skip
             let op_computation_gas_limit =
                 op.computation_gas_limit(&self.settings.chain_spec, None);
-            if gas_spent.saturating_add(op_computation_gas_limit) > self.settings.max_bundle_gas {
+            if execution_gas_spent.saturating_add(op_computation_gas_limit)
+                > self.settings.max_bundle_gas
+            {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
                     SkipReason::GasLimit,
+                ));
+                continue;
+            }
+
+            // if this would put the bundle over its max fee, skip
+            let op_total_gas_limit = op.gas_limit(&self.settings.chain_spec, None);
+            let total_gas_cost = U256::from(total_gas_spent.saturating_add(op_total_gas_limit))
+                * U256::from(gas_price);
+            if total_gas_cost > max_bundle_fee {
+                self.emit(BuilderEvent::skipped_op(
+                    self.builder_tag.clone(),
+                    op.hash(),
+                    SkipReason::OverMaxBundleFee,
                 ));
                 continue;
             }
@@ -759,7 +787,8 @@ where
             }
 
             // Update the running totals
-            gas_spent = gas_spent.saturating_add(op_computation_gas_limit);
+            execution_gas_spent = execution_gas_spent.saturating_add(op_computation_gas_limit);
+            total_gas_spent = total_gas_spent.saturating_add(op_total_gas_limit);
             constructed_bundle_size =
                 constructed_bundle_size.saturating_add(op_size_with_offset_word);
 
@@ -2099,6 +2128,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
         assert_eq!(
@@ -2140,6 +2170,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
         assert_eq!(
@@ -2191,6 +2222,7 @@ mod tests {
             true,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
         assert_eq!(
@@ -2271,6 +2303,7 @@ mod tests {
             false,
             vec![agg_a, agg_b],
             None,
+            U256::MAX,
         )
         .await;
         // Ops should be grouped by aggregator. Further, the `signature` field
@@ -2372,6 +2405,7 @@ mod tests {
             false,
             vec![agg_a, agg_b],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2454,6 +2488,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2521,6 +2556,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2583,6 +2619,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2685,6 +2722,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2742,6 +2780,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2805,6 +2844,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2939,6 +2979,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -2978,6 +3019,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3040,6 +3082,7 @@ mod tests {
             false,
             vec![agg_a],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3085,6 +3128,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3127,6 +3171,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3163,6 +3208,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3213,6 +3259,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3250,6 +3297,7 @@ mod tests {
             false,
             vec![],
             Some(proxy),
+            U256::MAX,
         )
         .await;
 
@@ -3293,6 +3341,7 @@ mod tests {
             false,
             vec![],
             Some(proxy),
+            U256::MAX,
         )
         .await;
 
@@ -3349,6 +3398,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3385,6 +3435,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3427,6 +3478,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3472,6 +3524,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3525,6 +3578,7 @@ mod tests {
             true, // da_gas_tracking_enabled == dynamic PVG
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3564,6 +3618,7 @@ mod tests {
             true,
             vec![],
             None,
+            U256::MAX,
         )
         .await;
 
@@ -3608,6 +3663,7 @@ mod tests {
             true,
             vec![],
             None,
+            U256::MAX,
         )
         .await
         .expect_err("should fail to bundle");
@@ -3645,6 +3701,7 @@ mod tests {
             true,
             vec![],
             None,
+            U256::MAX,
         )
         .await
         .expect_err("should fail to bundle");
@@ -3653,6 +3710,68 @@ mod tests {
             error,
             BundleProposerError::NoOperationsAfterFeeFilter
         ));
+    }
+
+    #[tokio::test]
+    async fn test_max_bundle_fee() {
+        let gas_price = 1_000_000_000;
+        // Create operations with different gas limits
+        let op1 =
+            op_with_sender_call_gas_limit_and_fees(address(1), 1_000_000, gas_price, gas_price);
+        let op2 =
+            op_with_sender_call_gas_limit_and_fees(address(2), 2_000_000, gas_price, gas_price);
+        let op3 =
+            op_with_sender_call_gas_limit_and_fees(address(3), 3_000_000, gas_price, gas_price);
+
+        let cs = ChainSpec::default();
+        let total_gas_cost = U256::from(
+            op1.gas_limit(&cs, None) + op2.gas_limit(&cs, None) + op3.gas_limit(&cs, None),
+        ) * U256::from(gas_price);
+
+        // set max bundle fee to 1 gwei less than the total gas cost, op3 will be skipped
+        let max_bundle_fee = total_gas_cost - U256::from(1_000_000_000);
+
+        let bundle = mock_make_bundle(
+            vec![
+                MockOp {
+                    op: op1.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: op2.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+                MockOp {
+                    op: op3.clone(),
+                    simulation_result: Box::new(|| Ok(SimulationResult::default())),
+                    perms: UserOperationPermissions::default(),
+                },
+            ],
+            vec![],
+            vec![HandleOpsOut::Success],
+            vec![],
+            gas_price,
+            0,
+            false,
+            ExpectedStorage::default(),
+            false,
+            vec![],
+            None,
+            max_bundle_fee,
+        )
+        .await;
+
+        assert_eq!(bundle.entity_updates, vec![]);
+        assert_eq!(bundle.rejected_ops, vec![]);
+        assert_eq!(
+            bundle.ops_per_aggregator,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op1, op2],
+                ..Default::default()
+            }]
+        );
     }
 
     struct MockOp {
@@ -3679,6 +3798,7 @@ mod tests {
             false,
             vec![],
             None,
+            U256::MAX,
         )
         .await
     }
@@ -3698,6 +3818,7 @@ mod tests {
         da_gas_tracking_enabled: bool,
         aggregators: Vec<MockSignatureAggregator>,
         proxy: Option<MockSubmissionProxy>,
+        max_bundle_fee: U256,
     ) -> Bundle<UserOperation> {
         mock_make_bundle_allow_error(
             mock_ops,
@@ -3711,6 +3832,7 @@ mod tests {
             da_gas_tracking_enabled,
             aggregators,
             proxy,
+            max_bundle_fee,
         )
         .await
         .expect("should make a bundle")
@@ -3729,6 +3851,7 @@ mod tests {
         da_gas_tracking_enabled: bool,
         aggregators: Vec<MockSignatureAggregator>,
         proxy: Option<MockSubmissionProxy>,
+        max_bundle_fee: U256,
     ) -> BundleProposerResult<Bundle<UserOperation>> {
         let mut chain_spec = ChainSpec {
             da_pre_verification_gas: da_gas_tracking_enabled,
@@ -3899,7 +4022,7 @@ mod tests {
             proposer.notify_condition_not_met();
         }
 
-        proposer.make_bundle(None, false).await
+        proposer.make_bundle(max_bundle_fee, None, false).await
     }
 
     fn address(n: u8) -> Address {
@@ -4007,6 +4130,22 @@ mod tests {
         op_from_required(UserOperationRequiredFields {
             sender,
             call_gas_limit,
+            pre_verification_gas: DEFAULT_PVG,
+            ..Default::default()
+        })
+    }
+
+    fn op_with_sender_call_gas_limit_and_fees(
+        sender: Address,
+        call_gas_limit: u128,
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
+    ) -> UserOperation {
+        op_from_required(UserOperationRequiredFields {
+            sender,
+            call_gas_limit,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
             pre_verification_gas: DEFAULT_PVG,
             ..Default::default()
         })

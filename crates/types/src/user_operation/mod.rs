@@ -255,8 +255,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
         // On other chains (Arbitrum), the DA portion IS charged in the gas limit, so calculate it here.
         if chain_spec.da_pre_verification_gas && chain_spec.include_da_gas_in_gas_limit {
             self.pre_verification_gas()
-                .saturating_sub(self.static_pre_verification_gas(chain_spec))
-                .saturating_sub(optional_bundle_per_uo_shared_gas(chain_spec, bundle_size))
+                .saturating_sub(self.pre_verification_execution_gas_limit(chain_spec, bundle_size))
         } else {
             0
         }
