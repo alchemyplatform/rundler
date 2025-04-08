@@ -114,6 +114,7 @@ pub enum SendBundleResult {
 }
 
 // Internal result of attempting to send a bundle.
+#[derive(Debug)]
 enum SendBundleAttemptResult {
     // The bundle was successfully sent
     Success,
@@ -1217,6 +1218,7 @@ impl Trigger for BundleSenderTrigger {
         &mut self,
     ) -> anyhow::Result<Option<oneshot::Sender<SendBundleResult>>> {
         let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
+        self.timer.reset();
 
         loop {
             // 3 triggers for loop logic:
