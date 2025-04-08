@@ -32,15 +32,16 @@ use super::protos::{
     InvalidSignature, InvalidStorageAccess, InvalidTimeRange, MaxFeePerGasTooLow,
     MaxOperationsReachedError, MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError,
     MultipleRolesViolation, NotStaked, OperationAlreadyKnownError, OperationDropTooSoon,
-    OperationRevert, OutOfGas, PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow,
-    PaymasterIsNotContract, PreOpGasLimitEfficiencyTooLow, PreVerificationGasTooLow,
-    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
-    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnknownRevert, UnstakedPaymasterContext, UseUnsupportedEip, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
-    VerificationGasLimitBufferTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    OperationRevert, OutOfGas, OverMaxCost, PanicRevert, PaymasterBalanceTooLow,
+    PaymasterDepositTooLow, PaymasterIsNotContract, PreOpGasLimitEfficiencyTooLow,
+    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
+    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
+    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
+    TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
+    UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
+    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
+    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
+    VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -391,6 +392,14 @@ impl From<PrecheckViolation> for ProtoPrecheckViolationError {
                     },
                 )),
             },
+            PrecheckViolation::OverMaxCost(actual, max) => ProtoPrecheckViolationError {
+                violation: Some(precheck_violation_error::Violation::OverMaxCost(
+                    OverMaxCost {
+                        actual_cost: actual.to_proto_bytes(),
+                        max_cost: max.to_proto_bytes(),
+                    },
+                )),
+            },
         }
     }
 }
@@ -462,6 +471,12 @@ impl TryFrom<ProtoPrecheckViolationError> for PrecheckViolation {
             }
             Some(precheck_violation_error::Violation::FactoryMustBeEmpty(e)) => {
                 PrecheckViolation::FactoryMustBeEmpty(from_bytes(&e.factory_address)?)
+            }
+            Some(precheck_violation_error::Violation::OverMaxCost(e)) => {
+                PrecheckViolation::OverMaxCost(
+                    from_bytes(&e.actual_cost)?,
+                    from_bytes(&e.max_cost)?,
+                )
             }
             None => {
                 bail!("unknown proto mempool precheck violation")

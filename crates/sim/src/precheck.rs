@@ -116,6 +116,8 @@ pub struct Settings {
     pub max_verification_gas: u128,
     /// Maximum total execution gas allowed for a user operation
     pub max_total_execution_gas: u128,
+    /// Maximum cost of a single user operation
+    pub max_uo_cost: U256,
     /// The percentage to add to the network pending base fee as a safety margin for fast inclusion.
     pub bundle_base_fee_overhead_percent: u32,
     /// If using a bundle priority fee, the percentage to add to the network/oracle
@@ -135,10 +137,11 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             max_verification_gas: 5_000_000,
+            max_total_execution_gas: 10_000_000,
+            max_uo_cost: U256::MAX,
             bundle_base_fee_overhead_percent: 27, // 2 12.5% EIP-1559 increases
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(0),
-            max_total_execution_gas: 10_000_000,
             base_fee_accept_percent: 50,
             pre_verification_gas_accept_percent: 100,
         }
@@ -277,6 +280,7 @@ where
         let Settings {
             max_verification_gas,
             max_total_execution_gas,
+            max_uo_cost,
             ..
         } = self.settings;
         let AsyncData {
@@ -315,6 +319,14 @@ where
         }
 
         // NOTE: only fee checks below this short circuit
+
+        // Check if the total gas fee of this op is too high
+        if op.max_gas_cost() > max_uo_cost {
+            violations.push(PrecheckViolation::OverMaxCost(
+                op.max_gas_cost(),
+                max_uo_cost,
+            ));
+        }
 
         // if preVerificationGas is dynamic, then allow for the percentage buffer
         // and check if the preVerificationGas is at least the minimum.
@@ -582,6 +594,7 @@ mod tests {
         let test_settings = Settings {
             max_verification_gas: 5_000_000,
             max_total_execution_gas: 10_000_000,
+            max_uo_cost: U256::MAX,
             bundle_base_fee_overhead_percent: 27,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: gas::PriorityFeeMode::BaseFeePercent(100),
@@ -985,6 +998,81 @@ mod tests {
         };
 
         let res = prechecker.check_gas(&op, &async_data, &perms);
+        assert!(res.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_max_uo_cost_fail() {
+        let settings = Settings {
+            max_uo_cost: U256::from(1_000_000_000), // 1 gwei
+            ..Default::default()
+        };
+
+        let (cs, provider, entry_point, fee_estimator) = create_base_config();
+        let provider = Arc::new(provider);
+        let prechecker =
+            PrecheckerImpl::new(cs.clone(), provider, entry_point, fee_estimator, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 1_000;
+
+        // Create a UO with a high gas cost that exceeds max_uo_cost
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                max_fee_per_gas: 1_000,
+                max_priority_fee_per_gas: 100,
+                call_gas_limit: 1_000_000,
+                verification_gas_limit: 1_000_000,
+                pre_verification_gas: 1_000_000,
+                ..Default::default()
+            }, // max gas cost 3 gwei
+        )
+        .build();
+
+        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
+
+        // Calculate expected max gas cost
+        let max_gas_cost = op.max_gas_cost();
+        let mut expected = ArrayVec::<PrecheckViolation, 6>::new();
+        expected.push(PrecheckViolation::OverMaxCost(
+            max_gas_cost,
+            U256::from(1_000_000_000),
+        ));
+
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn test_max_uo_cost_pass() {
+        let settings = Settings {
+            max_uo_cost: U256::from(5_000_000_000_u128), // 5 gwei
+            ..Default::default()
+        };
+
+        let (cs, provider, entry_point, fee_estimator) = create_base_config();
+        let provider = Arc::new(provider);
+        let prechecker =
+            PrecheckerImpl::new(cs.clone(), provider, entry_point, fee_estimator, settings);
+
+        let mut async_data = get_test_async_data();
+        async_data.base_fee = 1_000;
+
+        // Create a UO with a high gas cost that exceeds max_uo_cost
+        let op = UserOperationBuilder::new(
+            &cs,
+            UserOperationRequiredFields {
+                max_fee_per_gas: 1_000,
+                max_priority_fee_per_gas: 100,
+                call_gas_limit: 1_000_000,
+                verification_gas_limit: 1_000_000,
+                pre_verification_gas: 1_000_000,
+                ..Default::default()
+            }, // max gas cost 3 gwei
+        )
+        .build();
+
+        let res = prechecker.check_gas(&op, &async_data, &UserOperationPermissions::default());
         assert!(res.is_empty());
     }
 }

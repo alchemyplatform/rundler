@@ -154,6 +154,9 @@ pub enum PrecheckViolation {
     /// The Uo contains both factory and authorization tuple.
     #[display("Factory must be empty when authorization contract is set")]
     FactoryMustBeEmpty(Address),
+    /// The UO's maximum cost is above the max bundle fee
+    #[display("UO's maximum cost is {0} but must be at most {1}")]
+    OverMaxCost(U256, U256),
 }
 
 /// All possible simulation violations

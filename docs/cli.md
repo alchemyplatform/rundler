@@ -32,6 +32,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *NODE_HTTP*
 - `--max_verification_gas`: Maximum verification gas. (default: `5000000`).
   - env: *MAX_VERIFICATION_GAS*
+- `--max_uo_cost`: Maximum cost of a UO that the mempool will accept. Optional, defaults to MAX (default: `None`).
+  - env: *MAX_UO_COST*
 - `--max_bundle_gas`: Maximum bundle gas. (default: `25000000`).
   - env: *MAX_BUNDLE_GAS*
 - `--min_stake_value`: Minimum stake value. (default: `1000000000000000000`).
