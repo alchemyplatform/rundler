@@ -24,8 +24,6 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: "v0.3.0"
 
       - uses: KengoTODA/actions-setup-docker-compose@v1
         with:
