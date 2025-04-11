@@ -329,6 +329,7 @@ where
             )));
         };
 
+        let sent_at_time = Instant::now();
         let tx_hash = self
             .sender
             .send_transaction(tx, expected_storage, &self.signer)
@@ -344,7 +345,7 @@ where
                     gas_fees,
                     attempt_number: self.attempt_count,
                     sent_at_block: Some(block_number),
-                    sent_at_time: Some(Instant::now()),
+                    sent_at_time: Some(sent_at_time),
                 });
                 self.has_abandoned = false;
                 self.attempt_count += 1;

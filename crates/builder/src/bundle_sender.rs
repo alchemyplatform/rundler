@@ -381,7 +381,7 @@ where
 
                     if !is_success {
                         if let Err(e) = self.process_revert(tx_hash).await {
-                            error!("Failed to process revert for bundle transaction {tx_hash:?}: {e:#?}");
+                            warn!("Failed to process revert for bundle transaction {tx_hash:?}: {e:#?}");
                         }
                     }
 
