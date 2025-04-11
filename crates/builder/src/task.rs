@@ -24,19 +24,22 @@ use rundler_sim::{
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
-    chain::ChainSpec, pool::Pool as PoolT, EntryPointVersion, UserOperation, UserOperationVariant,
+    chain::ChainSpec,
+    pool::{NewHead, Pool as PoolT},
+    EntryPointVersion, UserOperation, UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tracing::info;
 
 use crate::{
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders},
-    bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
+    bundle_sender::{self, BundleSender, BundleSenderImpl},
     emit::BuilderEvent,
     sender::TransactionSenderArgs,
-    server::{self, LocalBuilderBuilder},
+    server::{self, BuilderSender, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
+    trigger,
 };
 
 /// Builder task arguments
@@ -163,7 +166,7 @@ where
 {
     /// Spawn the builder task on the given task spawner
     pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
-        let mut bundle_sender_actions = vec![];
+        let mut all_senders = vec![];
 
         let num_required_signers: usize = self
             .args
@@ -191,19 +194,31 @@ where
             }
         }
 
+        let (block_broadcaster, block_receiver) = broadcast::channel(100_000);
+
         for ep in &self.args.entry_points {
             match ep.version {
                 EntryPointVersion::V0_6 => {
-                    let actions = self
-                        .create_builders_v0_6(&task_spawner, ep, &self.signer_manager)
+                    let senders = self
+                        .create_builders_v0_6(
+                            &task_spawner,
+                            ep,
+                            &self.signer_manager,
+                            block_receiver.resubscribe(),
+                        )
                         .await?;
-                    bundle_sender_actions.extend(actions);
+                    all_senders.extend(senders);
                 }
                 EntryPointVersion::V0_7 => {
-                    let actions = self
-                        .create_builders_v0_7(&task_spawner, ep, &self.signer_manager)
+                    let senders = self
+                        .create_builders_v0_7(
+                            &task_spawner,
+                            ep,
+                            &self.signer_manager,
+                            block_receiver.resubscribe(),
+                        )
                         .await?;
-                    bundle_sender_actions.extend(actions);
+                    all_senders.extend(senders);
                 }
                 EntryPointVersion::Unspecified => {
                     panic!("Unspecified entry point version")
@@ -217,8 +232,10 @@ where
             "local builder server",
             |shutdown| {
                 self.builder_builder.run(
-                    bundle_sender_actions,
+                    self.args.chain_spec.clone(),
                     vec![self.args.chain_spec.entry_point_address_v0_6],
+                    all_senders,
+                    block_broadcaster,
                     shutdown,
                 )
             },
@@ -247,7 +264,8 @@ where
         task_spawner: &T,
         ep: &EntryPointBuilderSettings,
         signer_manager: &Arc<dyn SignerManager>,
-    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
+        block_receiver: broadcast::Receiver<NewHead>,
+    ) -> anyhow::Result<Vec<BuilderSender>>
     where
         T: TaskSpawnerExt,
     {
@@ -257,9 +275,9 @@ where
             .ep_v0_6_providers()
             .clone()
             .context("entry point v0.6 not supplied")?;
-        let mut bundle_sender_actions = vec![];
+        let mut senders = vec![];
         for settings in &ep.builders {
-            let bundle_sender_action = if self.args.unsafe_mode {
+            let sender = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     task_spawner,
                     settings,
@@ -269,6 +287,7 @@ where
                         self.args.sim_settings.clone(),
                     ),
                     signer_manager,
+                    block_receiver.resubscribe(),
                 )
                 .await?
             } else {
@@ -283,12 +302,13 @@ where
                         ep.mempool_configs.clone(),
                     ),
                     signer_manager,
+                    block_receiver.resubscribe(),
                 )
                 .await?
             };
-            bundle_sender_actions.push(bundle_sender_action);
+            senders.push(sender);
         }
-        Ok(bundle_sender_actions)
+        Ok(senders)
     }
 
     async fn create_builders_v0_7<T>(
@@ -296,7 +316,8 @@ where
         task_spawner: &T,
         ep: &EntryPointBuilderSettings,
         signer_manager: &Arc<dyn SignerManager>,
-    ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
+        block_receiver: broadcast::Receiver<NewHead>,
+    ) -> anyhow::Result<Vec<BuilderSender>>
     where
         T: TaskSpawnerExt,
     {
@@ -306,9 +327,9 @@ where
             .ep_v0_7_providers()
             .clone()
             .context("entry point v0.7 not supplied")?;
-        let mut bundle_sender_actions = vec![];
+        let mut senders = vec![];
         for settings in &ep.builders {
-            let bundle_sender_action = if self.args.unsafe_mode {
+            let sender = if self.args.unsafe_mode {
                 self.create_bundle_builder(
                     task_spawner,
                     settings,
@@ -318,6 +339,7 @@ where
                         self.args.sim_settings.clone(),
                     ),
                     signer_manager,
+                    block_receiver.resubscribe(),
                 )
                 .await?
             } else {
@@ -332,12 +354,13 @@ where
                         ep.mempool_configs.clone(),
                     ),
                     signer_manager,
+                    block_receiver.resubscribe(),
                 )
                 .await?
             };
-            bundle_sender_actions.push(bundle_sender_action);
+            senders.push(sender);
         }
-        Ok(bundle_sender_actions)
+        Ok(senders)
     }
 
     async fn create_bundle_builder<T, UO, EP, S>(
@@ -347,7 +370,8 @@ where
         ep_providers: EP,
         simulator: S,
         signer_manager: &Arc<dyn SignerManager>,
-    ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
+        block_receiver: broadcast::Receiver<NewHead>,
+    ) -> anyhow::Result<BuilderSender>
     where
         T: TaskSpawnerExt,
         UO: UserOperation + From<UserOperationVariant>,
@@ -355,8 +379,6 @@ where
         EP: ProvidersWithEntryPointT + 'static,
         S: Simulator<UO = UO> + 'static,
     {
-        let (send_bundle_tx, send_bundle_rx) = mpsc::channel(1);
-
         let Some(signer) = signer_manager.lease_signer() else {
             return Err(anyhow::anyhow!("No signer available"));
         };
@@ -429,9 +451,10 @@ where
             builder_settings.filter_id.clone(),
         );
 
+        let (trigger_sender, trigger_receiver) = trigger::new_trigger_channel(block_receiver);
+
         let builder = BundleSenderImpl::new(
             builder_settings.tag(ep_providers.entry_point().address()),
-            send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
             submission_proxy.cloned(),
@@ -443,10 +466,14 @@ where
             self.event_sender.clone(),
         );
 
-        // Spawn each sender as its own independent task
-        let ts = task_spawner.clone();
-        task_spawner.spawn_critical("bundle sender", builder.send_bundles_in_loop(ts));
+        task_spawner.spawn_critical(
+            "bundle sender",
+            builder.send_bundles_in_loop(trigger_receiver),
+        );
 
-        Ok(send_bundle_tx)
+        Ok(BuilderSender {
+            address: sender_eoa,
+            trigger: trigger_sender,
+        })
     }
 }

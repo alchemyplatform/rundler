@@ -11,25 +11,19 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
-use futures::Stream;
-use futures_util::StreamExt;
 use metrics::Counter;
 use metrics_derive::Metrics;
-#[cfg(test)]
-use mockall::automock;
 use rundler_provider::{
     BundleHandler, EntryPoint, EvmProvider, GethDebugBuiltInTracerType, GethDebugTracerCallConfig,
     GethDebugTracerType, GethDebugTracingOptions, HandleOpsOut, ProvidersWithEntryPointT,
     TransactionRequest,
 };
-use rundler_task::TaskSpawner;
 use rundler_types::{
-    builder::BundlingMode,
     chain::ChainSpec,
     pool::{AddressUpdate, NewHead, Pool},
     proxy::SubmissionProxy,
@@ -38,11 +32,7 @@ use rundler_types::{
 use rundler_utils::emit::WithEntryPoint;
 use tokio::{
     join,
-    sync::{
-        broadcast, mpsc,
-        mpsc::{UnboundedReceiver, UnboundedSender},
-        oneshot,
-    },
+    sync::{broadcast, oneshot},
 };
 use tracing::{debug, error, info, instrument, warn};
 
@@ -50,11 +40,12 @@ use crate::{
     bundle_proposer::{Bundle, BundleProposer, BundleProposerError},
     emit::{BuilderEvent, BundleTxDetails},
     transaction_tracker::{TrackerUpdate, TransactionTracker, TransactionTrackerError},
+    trigger::TriggerReceiver,
 };
 
 #[async_trait]
 pub(crate) trait BundleSender: Send + Sync {
-    async fn send_bundles_in_loop<T: TaskSpawner>(self, task_spawner: T);
+    async fn send_bundles_in_loop(self, trigger: TriggerReceiver);
 }
 
 #[derive(Debug)]
@@ -67,7 +58,6 @@ pub(crate) struct Settings {
 #[derive(Debug)]
 pub(crate) struct BundleSenderImpl<P, EP, T, C> {
     builder_tag: String,
-    bundle_action_receiver: Option<mpsc::Receiver<BundleSenderAction>>,
     chain_spec: ChainSpec,
     sender_eoa: Address,
     // Optional submission proxy - bundles are sent through this contract
@@ -89,27 +79,13 @@ struct BundleTx {
     op_hashes: Vec<B256>,
 }
 
-pub enum BundleSenderAction {
-    SendBundle(SendBundleRequest),
-    ChangeMode(BundlingMode),
-}
-
-pub struct SendBundleRequest {
-    pub responder: oneshot::Sender<SendBundleResult>,
-}
-
 /// Response to a `SendBundleRequest` after
 /// going through a full cycle of bundling, sending,
 /// and waiting for the transaction to be mined.
 #[derive(Debug)]
-pub enum SendBundleResult {
-    Success {
-        block_number: u64,
-        attempt_number: u64,
-        tx_hash: B256,
-    },
+pub(crate) enum SendBundleResult {
+    Success { block_number: u64, tx_hash: B256 },
     NoOperationsInitially,
-    StalledAtMaxFeeIncreases,
     Error(anyhow::Error),
 }
 
@@ -149,21 +125,9 @@ where
     /// Loops forever, attempting to form and send a bundle on each new block,
     /// then waiting for one bundle to be mined or dropped before forming the
     /// next one.
-    async fn send_bundles_in_loop<TS: TaskSpawner>(mut self, task_spawner: TS) {
-        // trigger for sending bundles
-        let sender_trigger = BundleSenderTrigger::new(
-            &task_spawner,
-            &self.pool,
-            self.bundle_action_receiver.take().unwrap(),
-            Duration::from_millis(self.chain_spec.bundle_max_send_interval_millis),
-            self.sender_eoa,
-        )
-        .await
-        .expect("Failed to create bundle sender trigger");
-
+    async fn send_bundles_in_loop(mut self, trigger: TriggerReceiver) {
         // initial state
-        let mut state =
-            SenderMachineState::new(sender_trigger, self.transaction_tracker.take().unwrap());
+        let mut state = SenderMachineState::new(self.transaction_tracker.take().unwrap(), trigger);
 
         loop {
             if let Err(e) = self.step_state(&mut state).await {
@@ -185,7 +149,6 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         builder_tag: String,
-        bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
         chain_spec: ChainSpec,
         sender_eoa: Address,
         submission_proxy: Option<Arc<dyn SubmissionProxy>>,
@@ -198,7 +161,6 @@ where
     ) -> Self {
         Self {
             builder_tag: builder_tag.clone(),
-            bundle_action_receiver: Some(bundle_action_receiver),
             chain_spec,
             sender_eoa,
             submission_proxy,
@@ -220,10 +182,7 @@ where
     }
 
     #[instrument(skip_all, fields(entry_point = self.ep_address.to_string(), tag = self.builder_tag))]
-    async fn step_state<TRIG: Trigger>(
-        &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
-    ) -> anyhow::Result<()> {
+    async fn step_state(&mut self, state: &mut SenderMachineState<T>) -> anyhow::Result<()> {
         let tracker_update = state.wait_for_trigger().await?;
 
         match state.inner {
@@ -247,9 +206,9 @@ where
         Ok(())
     }
 
-    async fn handle_building_state<TRIG: Trigger>(
+    async fn handle_building_state(
         &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
+        state: &mut SenderMachineState<T>,
         inner: BuildingState,
     ) -> anyhow::Result<()> {
         // send bundle
@@ -356,9 +315,9 @@ where
         Ok(())
     }
 
-    async fn handle_pending_state<TRIG: Trigger>(
+    async fn handle_pending_state(
         &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
+        state: &mut SenderMachineState<T>,
         inner: PendingState,
         tracker_update: Option<TrackerUpdate>,
     ) -> anyhow::Result<()> {
@@ -391,7 +350,7 @@ where
                         nonce,
                         block_number,
                     ));
-                    state.bundle_mined(block_number, attempt_number, tx_hash);
+                    state.bundle_mined(block_number, tx_hash);
                 }
                 TrackerUpdate::LatestTxDropped { nonce } => {
                     info!("Latest transaction dropped, starting new bundle attempt");
@@ -429,9 +388,9 @@ where
         Ok(())
     }
 
-    async fn handle_cancelling_state<TRIG: Trigger>(
+    async fn handle_cancelling_state(
         &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
+        state: &mut SenderMachineState<T>,
         inner: CancellingState,
     ) -> anyhow::Result<()> {
         info!(
@@ -509,9 +468,9 @@ where
         Ok(())
     }
 
-    async fn handle_cancel_pending_state<TRIG: Trigger>(
+    async fn handle_cancel_pending_state(
         &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
+        state: &mut SenderMachineState<T>,
         inner: CancelPendingState,
         tracker_update: Option<TrackerUpdate>,
     ) -> anyhow::Result<()> {
@@ -571,9 +530,9 @@ where
     ///  - There are no ops available to bundle initially.
     ///  - The gas fees are high enough that the bundle is empty because there
     ///    are no ops that meet the fee requirements.
-    async fn send_bundle<TRIG: Trigger>(
+    async fn send_bundle(
         &mut self,
-        state: &mut SenderMachineState<T, TRIG>,
+        state: &mut SenderMachineState<T>,
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
         let (nonce, required_fees) = state.transaction_tracker.get_nonce_and_required_fees()?;
@@ -863,26 +822,28 @@ where
     }
 }
 
-struct SenderMachineState<T, TRIG> {
-    trigger: TRIG,
+struct SenderMachineState<T> {
     pub transaction_tracker: T,
     send_bundle_response: Option<oneshot::Sender<SendBundleResult>>,
     inner: InnerState,
     requires_reset: bool,
     pub last_idle_block: Option<u64>,
     balance: Option<U256>,
+    trigger: TriggerReceiver,
+    last_block: Option<NewHead>,
 }
 
-impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
-    fn new(trigger: TRIG, transaction_tracker: T) -> Self {
+impl<T: TransactionTracker> SenderMachineState<T> {
+    fn new(transaction_tracker: T, trigger: TriggerReceiver) -> Self {
         Self {
-            trigger,
             transaction_tracker,
             send_bundle_response: None,
             inner: InnerState::new(),
             requires_reset: false,
             last_idle_block: None,
             balance: None,
+            trigger,
+            last_block: None,
         }
     }
 
@@ -926,14 +887,13 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     //
     // In auto mode, will not wait for trigger and will move to the next bundle.
     // In manual mode, will wait for the next trigger
-    fn bundle_mined(&mut self, block_number: u64, attempt_number: u64, tx_hash: B256) {
+    fn bundle_mined(&mut self, block_number: u64, tx_hash: B256) {
         self.send_result(SendBundleResult::Success {
             block_number,
-            attempt_number,
             tx_hash,
         });
         self.update(InnerState::Building(BuildingState {
-            wait_for_trigger: self.trigger.builder_must_wait_for_trigger(),
+            wait_for_trigger: true,
             fee_increase_count: 0,
             underpriced_info: None,
         }));
@@ -988,9 +948,13 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
                     return Ok(None);
                 }
 
-                self.send_bundle_response = self.trigger.wait_for_trigger().await?;
+                self.send_bundle_response = Some(self.trigger.wait_for_trigger().await?);
+                let blocks = self.trigger.consume_blocks()?;
+                if let Some(block) = blocks.last() {
+                    self.last_block = Some(block.clone());
+                }
 
-                let Some(update) = self.find_address_update() else {
+                let Some(update) = self.find_address_update(&blocks) else {
                     return Ok(None);
                 };
                 self.update_balance(update.balance);
@@ -1001,9 +965,13 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
                     .map_err(|e| anyhow::anyhow!("transaction tracker update error {e:?}"))
             }
             InnerState::Pending(..) | InnerState::CancelPending(..) => {
-                self.trigger.wait_for_block().await?;
+                let mut blocks = vec![self.trigger.wait_for_block().await?];
+                blocks.extend(self.trigger.consume_blocks()?);
+                if let Some(block) = blocks.last() {
+                    self.last_block = Some(block.clone());
+                }
 
-                let Some(update) = self.find_address_update() else {
+                let Some(update) = self.find_address_update(&blocks) else {
                     return Ok(None);
                 };
                 self.update_balance(update.balance);
@@ -1018,24 +986,36 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
     }
 
     fn block_number(&self) -> u64 {
-        self.trigger.last_block().block_number
+        self.last_block
+            .as_ref()
+            .map(|b| b.block_number)
+            .unwrap_or(0)
     }
 
     fn send_result(&mut self, result: SendBundleResult) {
         if let Some(r) = self.send_bundle_response.take() {
-            if r.send(result).is_err() {
-                error!("Failed to send bundle result to manual caller");
-            }
+            let _ = r.send(result);
         }
     }
 
-    fn find_address_update(&self) -> Option<AddressUpdate> {
-        self.trigger
-            .last_block()
-            .address_updates
-            .iter()
-            .find(|u| u.address == self.transaction_tracker.address())
-            .cloned()
+    fn find_address_update(&self, blocks: &[NewHead]) -> Option<AddressUpdate> {
+        let mut update: Option<AddressUpdate> = None;
+        for block in blocks {
+            if let Some(u) = block
+                .address_updates
+                .iter()
+                .find(|u| u.address == self.transaction_tracker.address())
+            {
+                if let Some(update) = &mut update {
+                    update.balance = u.balance;
+                    update.nonce = u.nonce;
+                    update.mined_tx_hashes.extend(u.mined_tx_hashes.clone());
+                } else {
+                    update = Some(u.clone());
+                }
+            }
+        }
+        update
     }
 }
 
@@ -1179,201 +1159,6 @@ impl CancelPendingState {
     fn to_cancelling(self) -> CancellingState {
         CancellingState {
             fee_increase_count: self.fee_increase_count + 1,
-        }
-    }
-}
-
-#[async_trait]
-#[cfg_attr(test, automock)]
-trait Trigger {
-    // Wait for the next trigger to send a bundle
-    // Depending on the mode this will either wait for the next block, a timer tick, or a manual trigger
-    async fn wait_for_trigger(
-        &mut self,
-    ) -> anyhow::Result<Option<oneshot::Sender<SendBundleResult>>>;
-
-    // Wait for the next block
-    async fn wait_for_block(&mut self) -> anyhow::Result<NewHead>;
-
-    // Whether the builder must wait for a trigger to send a bundle
-    //
-    // When in auto mode the builder doesn't need to wait for a trigger to send a bundle
-    fn builder_must_wait_for_trigger(&self) -> bool;
-
-    // Get the last block processed by the trigger
-    fn last_block(&self) -> &NewHead;
-}
-
-struct BundleSenderTrigger {
-    bundling_mode: BundlingMode,
-    block_rx: UnboundedReceiver<NewHead>,
-    bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
-    timer: tokio::time::Interval,
-    last_block: NewHead,
-}
-
-#[async_trait]
-impl Trigger for BundleSenderTrigger {
-    async fn wait_for_trigger(
-        &mut self,
-    ) -> anyhow::Result<Option<oneshot::Sender<SendBundleResult>>> {
-        let mut send_bundle_response: Option<oneshot::Sender<SendBundleResult>> = None;
-        self.timer.reset();
-
-        loop {
-            // 3 triggers for loop logic:
-            // 1 - new block
-            //      - If auto mode, send next bundle
-            // 2 - timer tick
-            //      - If auto mode, send next bundle
-            // 3 - action recv
-            //      - If change mode, change and restart loop
-            //      - If send bundle and manual mode, send next bundle
-            tokio::select! {
-                b = self.block_rx.recv() => {
-                    let Some(b) = b else {
-                        error!("Block stream closed");
-                        bail!("Block stream closed");
-                    };
-
-                    tracing::info!("received new head: {:?}", b);
-                    self.last_block = b;
-
-                    match self.bundling_mode {
-                        BundlingMode::Manual => continue,
-                        BundlingMode::Auto => break,
-                    }
-                },
-                _ = self.timer.tick() => {
-                    match self.bundling_mode {
-                        BundlingMode::Manual => continue,
-                        BundlingMode::Auto => break,
-                    }
-                },
-                a = self.bundle_action_receiver.recv() => {
-                    match a {
-                        Some(BundleSenderAction::ChangeMode(mode)) => {
-                            info!("changing bundling mode to {mode:?}");
-                            self.bundling_mode = mode;
-                            continue;
-                        },
-                        Some(BundleSenderAction::SendBundle(r)) => {
-                            match self.bundling_mode {
-                                BundlingMode::Manual => {
-                                    send_bundle_response = Some(r.responder);
-                                    break;
-                                },
-                                BundlingMode::Auto => {
-                                    error!("Received bundle send action while in auto mode, ignoring");
-                                    continue;
-                                }
-                            }
-                        },
-                        None => {
-                            error!("Bundle action recv closed");
-                            bail!("Bundle action recv closed");
-                        }
-                    }
-                }
-            };
-        }
-
-        self.consume_blocks()?;
-
-        Ok(send_bundle_response)
-    }
-
-    async fn wait_for_block(&mut self) -> anyhow::Result<NewHead> {
-        self.last_block = self
-            .block_rx
-            .recv()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Block stream closed"))?;
-        tracing::info!("received new head: {:?}", self.last_block);
-        self.consume_blocks()?;
-        Ok(self.last_block.clone())
-    }
-
-    fn builder_must_wait_for_trigger(&self) -> bool {
-        match self.bundling_mode {
-            BundlingMode::Manual => true,
-            BundlingMode::Auto => false,
-        }
-    }
-
-    fn last_block(&self) -> &NewHead {
-        &self.last_block
-    }
-}
-
-impl BundleSenderTrigger {
-    async fn new<P: Pool, T: TaskSpawner>(
-        task_spawner: &T,
-        pool_client: &P,
-        bundle_action_receiver: mpsc::Receiver<BundleSenderAction>,
-        timer_interval: Duration,
-        sender_eoa: Address,
-    ) -> anyhow::Result<Self> {
-        let Ok(new_heads) = pool_client.subscribe_new_heads(vec![sender_eoa]).await else {
-            error!("Failed to subscribe to new blocks");
-            bail!("failed to subscribe to new blocks");
-        };
-        let (block_tx, block_rx) = mpsc::unbounded_channel();
-
-        task_spawner.spawn_critical(
-            "block stream",
-            Box::pin(Self::block_stream_task(new_heads, block_tx)),
-        );
-
-        Ok(Self {
-            bundling_mode: BundlingMode::Auto,
-            block_rx,
-            bundle_action_receiver,
-            timer: tokio::time::interval(timer_interval),
-            last_block: NewHead {
-                block_hash: B256::ZERO,
-                block_number: 0,
-                address_updates: vec![],
-            },
-        })
-    }
-
-    async fn block_stream_task(
-        mut new_heads: Pin<Box<dyn Stream<Item = NewHead> + Send>>,
-        block_tx: UnboundedSender<NewHead>,
-    ) {
-        loop {
-            match new_heads.next().await {
-                Some(b) => {
-                    if block_tx.send(b).is_err() {
-                        error!("Failed to buffer new block for bundle sender");
-                        return;
-                    }
-                }
-                None => {
-                    error!("Block stream ended");
-                    return;
-                }
-            }
-        }
-    }
-
-    fn consume_blocks(&mut self) -> anyhow::Result<()> {
-        // Consume any other blocks that may have been buffered up
-        loop {
-            match self.block_rx.try_recv() {
-                Ok(b) => {
-                    tracing::info!("received new head: {:?}", b);
-                    self.last_block = b;
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    return Ok(());
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    error!("Block stream closed");
-                    bail!("Block stream closed");
-                }
-            }
         }
     }
 }

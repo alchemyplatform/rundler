@@ -38,3 +38,5 @@ mod task;
 pub use task::{Args as BuilderTaskArgs, BuilderSettings, BuilderTask, EntryPointBuilderSettings};
 
 mod transaction_tracker;
+
+mod trigger;

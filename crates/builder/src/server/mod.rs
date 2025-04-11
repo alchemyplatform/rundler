@@ -11,6 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+mod builder;
+pub(crate) use builder::BuilderSender;
+
 mod local;
 pub use local::{LocalBuilderBuilder, LocalBuilderHandle};
 
