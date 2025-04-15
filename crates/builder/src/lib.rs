@@ -19,11 +19,14 @@
 ))]
 //! Bundle builder implementation for the Rundler.
 
+mod assigner;
 mod bundle_proposer;
 mod bundle_sender;
 
 mod emit;
 pub use emit::{BuilderEvent, BuilderEventKind};
+
+mod factory;
 
 mod sender;
 pub use sender::{
@@ -35,8 +38,6 @@ mod server;
 pub use server::{LocalBuilderBuilder, LocalBuilderHandle, RemoteBuilderClient};
 
 mod task;
-pub use task::{Args as BuilderTaskArgs, BuilderSettings, BuilderTask, EntryPointBuilderSettings};
+pub use task::{Args as BuilderTaskArgs, BuilderSettings, BuilderTask};
 
 mod transaction_tracker;
-
-mod trigger;

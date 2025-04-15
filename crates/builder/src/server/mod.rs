@@ -12,7 +12,6 @@
 // If not, see https://www.gnu.org/licenses/.
 
 mod builder;
-pub(crate) use builder::BuilderSender;
 
 mod local;
 pub use local::{LocalBuilderBuilder, LocalBuilderHandle};

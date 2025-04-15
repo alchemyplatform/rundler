@@ -14,8 +14,6 @@
 use std::fmt::Debug;
 
 use anyhow::Context;
-#[cfg(feature = "test-utils")]
-use mockall::automock;
 use rundler_provider::{BlockHashOrNumber, DAGasProvider, EvmProvider};
 use rundler_types::{chain::ChainSpec, da::DAGasData, GasFees, UserOperation};
 use rundler_utils::math;
@@ -152,8 +150,8 @@ impl PriorityFeeMode {
 }
 
 /// Trait for a fee estimator.
-#[cfg_attr(feature = "test-utils", automock)]
 #[async_trait::async_trait]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait FeeEstimator: Send + Sync {
     /// Returns the required fees for the given bundle fees.
     ///
@@ -250,5 +248,16 @@ impl<P: EvmProvider, O: FeeOracle> FeeEstimator for FeeEstimatorImpl<P, O> {
 
     fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees {
         self.priority_fee_mode.required_fees(bundle_fees)
+    }
+}
+
+#[cfg(feature = "test-utils")]
+mockall::mock! {
+    pub FeeEstimator {}
+
+    #[async_trait::async_trait]
+    impl FeeEstimator for FeeEstimator {
+        async fn required_bundle_fees(&self, min_fees: Option<GasFees>) -> anyhow::Result<(GasFees, u128)>;
+        fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees;
     }
 }

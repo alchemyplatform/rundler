@@ -256,7 +256,7 @@ impl PoolArgs {
                 entry_point_version: EntryPointVersion::V0_6,
                 num_shards_by_filter_id: get_num_shards_by_filter_id(
                     chain_spec.entry_point_address_v0_6,
-                    common.num_builders_v0_6,
+                    1, // TODO
                     builder_configs.as_ref(),
                 ),
                 mempool_channel_configs: mempool_channel_configs
@@ -272,7 +272,7 @@ impl PoolArgs {
                 entry_point_version: EntryPointVersion::V0_7,
                 num_shards_by_filter_id: get_num_shards_by_filter_id(
                     chain_spec.entry_point_address_v0_7,
-                    common.num_builders_v0_7,
+                    1, // TODO
                     builder_configs.as_ref(),
                 ),
                 mempool_channel_configs: mempool_channel_configs
@@ -349,7 +349,7 @@ fn get_num_shards_by_filter_id(
             config
                 .builders
                 .iter()
-                .map(|builder| (builder.filter_id.clone().unwrap_or_default(), builder.count))
+                .map(|builder| (builder.filter_id.clone().unwrap_or_default(), 1))
                 .collect()
         } else {
             HashMap::from([("".to_string(), default_num_shards)])

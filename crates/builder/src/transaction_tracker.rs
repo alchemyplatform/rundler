@@ -123,9 +123,6 @@ pub(crate) enum TrackerUpdate {
         gas_price: Option<u128>,
         is_success: bool,
     },
-    LatestTxDropped {
-        nonce: u64,
-    },
     NonceUsedForOtherTx {
         nonce: u64,
     },

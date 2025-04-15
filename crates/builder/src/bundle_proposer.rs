@@ -63,7 +63,8 @@ pub(crate) struct Bundle<UO: UserOperation> {
     pub(crate) gas_estimate: u64,
     pub(crate) gas_fees: GasFees,
     pub(crate) expected_storage: ExpectedStorage,
-    pub(crate) rejected_ops: Vec<UO>,
+    pub(crate) skipped_ops: Vec<PoolOperation>,
+    pub(crate) rejected_ops: Vec<PoolOperation>,
     pub(crate) entity_updates: Vec<EntityUpdate>,
 }
 
@@ -74,6 +75,7 @@ impl<UO: UserOperation> Default for Bundle<UO> {
             gas_estimate: 0,
             gas_fees: GasFees::default(),
             expected_storage: ExpectedStorage::default(),
+            skipped_ops: Vec::new(),
             rejected_ops: Vec::new(),
             entity_updates: Vec::new(),
         }
@@ -108,6 +110,7 @@ pub(crate) trait BundleProposer: Send + Sync {
     /// at least `min_fees`.
     async fn make_bundle(
         &mut self,
+        ops: Vec<PoolOperation>,
         max_bundle_fee: U256,
         min_gas_fees: Option<GasFees>,
         is_replacement: bool,
@@ -129,8 +132,6 @@ pub(crate) type BundleProposerResult<T> = std::result::Result<T, BundleProposerE
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BundleProposerError {
-    #[error("No operations initially")]
-    NoOperationsInitially,
     #[error("No operations after fee filtering")]
     NoOperationsAfterFeeFilter,
     #[error(transparent)]
@@ -141,7 +142,6 @@ pub(crate) enum BundleProposerError {
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
-    builder_index: u64,
     builder_tag: String,
     settings: Settings,
     ep_providers: EP,
@@ -149,20 +149,19 @@ pub(crate) struct BundleProposerImpl<EP, BP> {
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
     metric: BuilderProposerMetric,
-    filter_id: Option<String>,
+    sender_eoa: Address,
+    submission_proxy: Option<Arc<dyn SubmissionProxy>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Settings {
     pub(crate) chain_spec: ChainSpec,
     pub(crate) max_bundle_size: u64,
     pub(crate) target_bundle_gas: u128,
     pub(crate) max_bundle_gas: u128,
-    pub(crate) sender_eoa: Address,
     pub(crate) priority_fee_mode: PriorityFeeMode,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
-    pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
 }
 
 #[async_trait]
@@ -190,15 +189,12 @@ where
 
     async fn make_bundle(
         &mut self,
+        ops: Vec<PoolOperation>,
         max_bundle_fee: U256,
         min_gas_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
         let timer = Instant::now();
-        let ops = self.get_ops_from_pool().await?;
-        if ops.is_empty() {
-            return Err(BundleProposerError::NoOperationsInitially);
-        }
 
         let ((block_hash, _), (bundle_fees, base_fee)) = try_join!(
             self.ep_providers
@@ -237,6 +233,9 @@ where
         } else {
             None
         };
+
+        let mut skipped_ops = Vec::new();
+
         // (1) Filter out ops that don't pay enough to be included
         let fee_futs = ops
             .into_iter()
@@ -250,28 +249,42 @@ where
                 )
             })
             .collect::<Vec<_>>();
-        let ops = future::join_all(fee_futs)
-            .await
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let fee_limit_results = future::join_all(fee_futs).await;
+        let mut passed_fee_limit = Vec::new();
+        for result in fee_limit_results {
+            match result {
+                LimitResult::Passed(op) => passed_fee_limit.push(op),
+                LimitResult::Skipped(op) => skipped_ops.push(op),
+            }
+        }
 
-        tracing::debug!("Bundle proposal after fee limit had {} ops", ops.len());
-        if ops.is_empty() {
+        tracing::debug!(
+            "Bundle proposal after fee limit had {} ops",
+            passed_fee_limit.len()
+        );
+        if passed_fee_limit.is_empty() {
             return Err(BundleProposerError::NoOperationsAfterFeeFilter);
         }
 
         // (2) Limit the amount of operations for simulation
-        let (ops, gas_limit) = self.limit_user_operations_for_simulation(ops);
+        let (sim_limit_results, gas_limit) =
+            self.limit_user_operations_for_simulation(passed_fee_limit);
+        let mut passed_sim_limit = Vec::new();
+        for result in sim_limit_results {
+            match result {
+                LimitResult::Passed(op) => passed_sim_limit.push(op),
+                LimitResult::Skipped(op) => skipped_ops.push(op.op),
+            }
+        }
 
         debug!(
             "Bundle proposal after gas limit had {} ops and {:?} gas limit",
-            ops.len(),
+            passed_sim_limit.len(),
             gas_limit
         );
 
         // (3) simulate ops
-        let simulation_futures = ops
+        let simulation_futures = passed_sim_limit
             .into_iter()
             .map(|op| self.simulate_op(op, block_hash))
             .collect::<Vec<_>>();
@@ -321,12 +334,14 @@ where
                 self.metric
                     .bundle_build_ms
                     .record(timer.elapsed().as_millis() as f64);
+
                 return Ok(Bundle {
                     ops_per_aggregator: context.to_ops_per_aggregator(),
                     gas_estimate,
                     gas_fees: bundle_fees,
                     expected_storage: context.bundle_expected_storage.inner,
-                    rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+                    rejected_ops: context.rejected_ops,
+                    skipped_ops: context.skipped_ops.into_iter().chain(skipped_ops).collect(),
                     entity_updates: context.entity_updates.into_values().collect(),
                 });
             }
@@ -335,8 +350,10 @@ where
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
 
+        skipped_ops.extend(context.skipped_ops.into_iter());
         Ok(Bundle {
-            rejected_ops: context.rejected_ops.iter().map(|po| po.0.clone()).collect(),
+            rejected_ops: context.rejected_ops,
+            skipped_ops,
             entity_updates: context.entity_updates.into_values().collect(),
             gas_fees: bundle_fees,
             ..Default::default()
@@ -355,6 +372,11 @@ struct BuilderProposerMetric {
     bundle_simulation_failures: Counter,
 }
 
+enum LimitResult<P, S> {
+    Passed(P),
+    Skipped(S),
+}
+
 impl<EP, BP> BundleProposerImpl<EP, BP>
 where
     EP: ProvidersWithEntryPointT,
@@ -362,16 +384,15 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        builder_index: u64,
         builder_tag: String,
         ep_providers: EP,
         bundle_providers: BP,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-        filter_id: Option<String>,
+        sender_eoa: Address,
+        submission_proxy: Option<Arc<dyn SubmissionProxy>>,
     ) -> Self {
         Self {
-            builder_index,
             builder_tag,
             ep_providers,
             bundle_providers,
@@ -379,7 +400,8 @@ where
             event_sender,
             condition_not_met_notified: false,
             metric: BuilderProposerMetric::default(),
-            filter_id,
+            sender_eoa,
+            submission_proxy,
         }
     }
 
@@ -396,7 +418,7 @@ where
         da_block_data: Option<&DAGasBlockData>,
         base_fee: u128,
         required_op_fees: GasFees,
-    ) -> Option<PoolOperationWithSponsoredDAGas> {
+    ) -> LimitResult<PoolOperationWithSponsoredDAGas, PoolOperation> {
         let op_hash = op.uo.hash();
 
         let mut required_max_fee_per_gas = required_op_fees.max_fee_per_gas;
@@ -425,12 +447,12 @@ where
                     },
                 },
             ));
-            return None;
+            return LimitResult::Skipped(op);
         }
 
         if !self.settings.chain_spec.da_pre_verification_gas {
             // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
-            return Some(PoolOperationWithSponsoredDAGas {
+            return LimitResult::Passed(PoolOperationWithSponsoredDAGas {
                 op,
                 sponsored_da_gas: None,
             });
@@ -485,7 +507,7 @@ where
                             )),
                         },
                     ));
-                    return None;
+                    return LimitResult::Skipped(op);
                 }
             }
         };
@@ -514,7 +536,7 @@ where
                     actual_pvg: op.uo.pre_verification_gas(),
                 },
             ));
-            return None;
+            return LimitResult::Skipped(op);
         }
 
         // Check total gas cost and time for bundler sponsorship
@@ -535,7 +557,7 @@ where
                         actual_cost: total_gas_cost,
                     },
                 ));
-                return None;
+                return LimitResult::Skipped(op);
             }
 
             if self.settings.chain_spec.include_da_gas_in_gas_limit {
@@ -543,7 +565,7 @@ where
             }
         }
 
-        Some(PoolOperationWithSponsoredDAGas {
+        LimitResult::Passed(PoolOperationWithSponsoredDAGas {
             op,
             sponsored_da_gas,
         })
@@ -609,12 +631,12 @@ where
             Result<SimulationResult, SimulationError>,
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
-    ) -> ProposalContext<<Self as BundleProposer>::UO> {
+    ) -> ProposalContext {
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
             .map(|(op, _)| op.op.uo.sender())
             .collect();
-        let mut context = ProposalContext::<<Self as BundleProposer>::UO>::new();
+        let mut context = ProposalContext::default();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
 
         let mut execution_gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
@@ -643,7 +665,7 @@ where
                     {
                         // try to use EntityInfos from the latest simulation, but if it doesn't exist use the EntityInfos from the previous simulation
                         let infos = entity_infos.map_or(po.op.entity_infos, |e| e);
-                        context.process_simulation_violations(op.into(), violations, infos);
+                        context.process_simulation_violations(po.op, violations, infos);
                     }
                     continue;
                 }
@@ -661,7 +683,7 @@ where
                         valid_range: simulation.valid_time_range,
                     },
                 ));
-                context.rejected_ops.push((op.into(), po.op.entity_infos));
+                context.rejected_ops.push(po.op);
                 continue;
             } else if let Some(bundler_sponsorship) = &po.op.perms.bundler_sponsorship {
                 let valid_time_range =
@@ -677,7 +699,7 @@ where
                             valid_range: valid_time_range,
                         },
                     ));
-                    context.rejected_ops.push((op.into(), po.op.entity_infos));
+                    context.rejected_ops.push(po.op);
                     continue;
                 }
             }
@@ -689,6 +711,7 @@ where
                     op.hash(),
                     SkipReason::GasLimit,
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             }
 
@@ -703,6 +726,7 @@ where
                     op.hash(),
                     SkipReason::GasLimit,
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             }
 
@@ -716,6 +740,7 @@ where
                     op.hash(),
                     SkipReason::OverMaxBundleFee,
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             }
 
@@ -730,6 +755,7 @@ where
                     op.hash(),
                     SkipReason::TransactionSizeLimit,
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             }
 
@@ -743,6 +769,7 @@ where
                     op.hash(),
                     SkipReason::ExpectedStorageConflict(e.to_string()),
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             } else if context.bundle_expected_storage.inner.num_slots()
                 > self.settings.max_expected_storage_slots
@@ -752,6 +779,7 @@ where
                     op.hash(),
                     SkipReason::ExpectedStorageLimit,
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             }
 
@@ -768,6 +796,7 @@ where
                     op.hash(),
                     SkipReason::AccessedOtherSender { other_sender },
                 ));
+                context.skipped_ops.push(po.op);
                 continue;
             }
 
@@ -798,7 +827,7 @@ where
                 .or_default()
                 .ops_with_simulations
                 .push(OpWithSimulation {
-                    op: op.into(),
+                    op: po.op,
                     simulation,
                     sponsored_da_gas: po.sponsored_da_gas,
                 });
@@ -814,10 +843,7 @@ where
         context
     }
 
-    async fn check_conditions_met(
-        &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-    ) -> anyhow::Result<()> {
+    async fn check_conditions_met(&self, context: &mut ProposalContext) -> anyhow::Result<()> {
         let futs = context
             .iter_ops_with_simulations()
             .enumerate()
@@ -833,7 +859,7 @@ where
         for (index, reason) in to_reject {
             self.emit(BuilderEvent::rejected_op(
                 self.builder_tag.clone(),
-                context.get_op_at(index)?.op.hash(),
+                context.get_op_at(index)?.op.uo.hash(),
                 OpRejectionReason::ConditionNotMet(reason),
             ));
             self.reject_index(context, index, false).await;
@@ -885,15 +911,11 @@ where
         None
     }
 
-    async fn reject_bundle(&self, context: &mut ProposalContext<<Self as BundleProposer>::UO>) {
+    async fn reject_bundle(&self, context: &mut ProposalContext) {
         context.reject_all();
     }
 
-    async fn reject_hash(
-        &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-        hash: B256,
-    ) -> bool {
+    async fn reject_hash(&self, context: &mut ProposalContext, hash: B256) -> bool {
         let Some(index) = context.get_op_index(hash) else {
             return false;
         };
@@ -904,7 +926,7 @@ where
 
     async fn reject_index(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext,
         i: usize,
         paymaster_amendment: bool,
     ) {
@@ -913,21 +935,13 @@ where
             .await;
     }
 
-    async fn reject_entity(
-        &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-        entity: Entity,
-        is_staked: bool,
-    ) {
+    async fn reject_entity(&self, context: &mut ProposalContext, entity: Entity, is_staked: bool) {
         let changed_aggregators = context.reject_entity(entity, is_staked);
         self.compute_aggregator_signatures(context, &changed_aggregators)
             .await;
     }
 
-    async fn compute_all_aggregator_signatures(
-        &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
-    ) {
+    async fn compute_all_aggregator_signatures(&self, context: &mut ProposalContext) {
         let aggregators: Vec<_> = context
             .groups_by_aggregator
             .keys()
@@ -940,7 +954,7 @@ where
 
     async fn compute_aggregator_signatures<'a>(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext,
         aggregators: impl IntoIterator<Item = &'a Address>,
     ) {
         let signature_futures = aggregators.into_iter().filter_map(|&aggregator| {
@@ -960,7 +974,7 @@ where
     /// op(s) caused the failure.
     async fn estimate_gas_rejecting_failed_ops(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext,
         bundle_fees: GasFees,
     ) -> BundleProposerResult<Option<u64>> {
         // sum up the gas needed for all the ops in the bundle
@@ -980,10 +994,10 @@ where
             .entry_point()
             .call_handle_ops(
                 context.to_ops_per_aggregator(),
-                self.settings.sender_eoa,
+                self.sender_eoa,
                 gas_limit,
                 bundle_fees,
-                self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                self.submission_proxy.as_ref().map(|p| p.address()),
             )
             .await
             .context("should call handle ops with candidate bundle")?;
@@ -993,7 +1007,7 @@ where
             HandleOpsOut::FailedOp(index, message) => {
                 self.emit(BuilderEvent::rejected_op(
                     self.builder_tag.clone(),
-                    context.get_op_at(index)?.op.hash(),
+                    context.get_op_at(index)?.op.uo.hash(),
                     OpRejectionReason::FailedInBundle {
                         message: Arc::new(message.clone()),
                     },
@@ -1017,9 +1031,9 @@ where
                 // Process the revert.
                 // If we can't identify the offending op, reject the full bundle to avoid infinite failure loops.
 
-                if let Some(proxy) = self.settings.submission_proxy.as_ref() {
+                if let Some(proxy) = self.submission_proxy.as_ref() {
                     let ops = context
-                        .to_ops_per_aggregator()
+                        .to_ops_per_aggregator::<<Self as BundleProposer>::UO>()
                         .into_iter()
                         .map(|uo| uo.into_uo_variants())
                         .collect::<Vec<_>>();
@@ -1045,27 +1059,6 @@ where
         }
     }
 
-    async fn get_ops_from_pool(&self) -> BundleProposerResult<Vec<PoolOperation>> {
-        // Use builder's index as the shard index to ensure that two builders don't
-        // attempt to bundle the same operations.
-        //
-        // NOTE: this assumes that the pool server has as many shards as there
-        // are builders.
-        Ok(self
-            .bundle_providers
-            .pool()
-            .get_ops(
-                *self.ep_providers.entry_point().address(),
-                self.settings.max_bundle_size,
-                self.builder_index,
-                self.filter_id.clone(),
-            )
-            .await
-            .context("should get ops from pool")?
-            .into_iter()
-            .collect())
-    }
-
     async fn get_balances_by_paymaster(
         &self,
         addresses: impl IntoIterator<Item = Address>,
@@ -1088,7 +1081,7 @@ where
     async fn aggregate_signatures(
         &self,
         aggregator: Address,
-        group: &AggregatorGroup<<Self as BundleProposer>::UO>,
+        group: &AggregatorGroup,
     ) -> (Address, SignatureAggregatorResult<Bytes>) {
         let Some(agg) = self
             .settings
@@ -1103,7 +1096,7 @@ where
             .ops_with_simulations
             .iter()
             // Mempool ops are transformed during insertion - use the original signature to aggregate
-            .map(|op| op.op.clone().with_original_signature().into())
+            .map(|op| op.op.clone().uo.with_original_signature().into())
             .collect::<Vec<_>>();
 
         let aggregated = match agg.aggregate_signatures(uos).await {
@@ -1118,7 +1111,7 @@ where
 
     async fn process_failed_op(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext,
         index: usize,
         message: String,
     ) -> anyhow::Result<()> {
@@ -1127,7 +1120,7 @@ where
             // AA10 is an internal error and is ignored
             "AA13" | "AA14" | "AA15" => {
                 let op_with_sim = context.get_op_at(index)?;
-                let factory = op_with_sim.op.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
+                let factory = op_with_sim.op.uo.factory().context("op failed during gas estimation with factory error, but did not include a factory")?;
                 info!("Rejected op because it failed during gas estimation with factory {factory:?} error {message}.");
                 self.reject_entity(
                     context,
@@ -1144,7 +1137,7 @@ where
             // Note: AA32 is not included as this is a time expiry error.
             "AA30" | "AA31" | "AA33" | "AA34" => {
                 let op_with_sim = context.get_op_at(index)?;
-                let paymaster = op_with_sim.op.paymaster().context(
+                let paymaster = op_with_sim.op.uo.paymaster().context(
                     "op failed during gas estimation with {message}, but had no paymaster",
                 )?;
                 info!("Rejected op because it failed during gas estimation with a paymaster {paymaster:?} error {message}.");
@@ -1178,11 +1171,11 @@ where
     // from the bundle and from the pool.
     async fn process_post_op_revert(
         &self,
-        context: &mut ProposalContext<<Self as BundleProposer>::UO>,
+        context: &mut ProposalContext,
         gas_limit: u64,
         bundle_fees: GasFees,
     ) -> anyhow::Result<()> {
-        let agg_groups = context.to_ops_per_aggregator();
+        let agg_groups = context.to_ops_per_aggregator::<<Self as BundleProposer>::UO>();
         let mut op_index = 0;
         let mut futures: Vec<Pin<Box<dyn Future<Output = Vec<usize>> + Send>>> = vec![];
 
@@ -1225,7 +1218,7 @@ where
         for index in to_remove.into_iter().rev() {
             self.emit(BuilderEvent::rejected_op(
                 self.builder_tag.clone(),
-                context.get_op_at(index)?.op.hash(),
+                context.get_op_at(index)?.op.uo.hash(),
                 OpRejectionReason::FailedInBundle {
                     message: Arc::new("post op reverted leading to entry point revert".to_owned()),
                 },
@@ -1254,10 +1247,10 @@ where
             .entry_point()
             .call_handle_ops(
                 bundle,
-                self.settings.sender_eoa,
+                self.sender_eoa,
                 gas_limit,
                 bundle_fees,
-                self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                self.submission_proxy.as_ref().map(|p| p.address()),
             )
             .await;
         match ret {
@@ -1295,10 +1288,10 @@ where
             .entry_point()
             .call_handle_ops(
                 bundle,
-                self.settings.sender_eoa,
+                self.sender_eoa,
                 gas_limit,
                 bundle_fees,
-                self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                self.submission_proxy.as_ref().map(|p| p.address()),
             )
             .await;
         match ret {
@@ -1324,9 +1317,12 @@ where
     fn limit_user_operations_for_simulation(
         &self,
         ops: Vec<PoolOperationWithSponsoredDAGas>,
-    ) -> (Vec<PoolOperationWithSponsoredDAGas>, u128) {
+    ) -> (
+        Vec<LimitResult<PoolOperationWithSponsoredDAGas, PoolOperationWithSponsoredDAGas>>,
+        u128,
+    ) {
         let mut gas_left = self.settings.max_bundle_gas;
-        let mut ops_in_bundle = Vec::new();
+        let mut result = Vec::new();
         for op in ops {
             // if the op has an aggregator, check if the aggregator is supported, if not skip
             if let Some(agg) = op.op.uo.aggregator() {
@@ -1341,6 +1337,7 @@ where
                         op.op.uo.hash(),
                         SkipReason::UnsupportedAggregator(agg),
                     ));
+                    result.push(LimitResult::Skipped(op));
                     continue;
                 }
             }
@@ -1360,10 +1357,10 @@ where
                 continue;
             }
             gas_left -= gas;
-            ops_in_bundle.push(op);
+            result.push(LimitResult::Passed(op));
         }
         (
-            ops_in_bundle,
+            result,
             self.settings.max_bundle_gas.saturating_sub(gas_left),
         )
     }
@@ -1439,8 +1436,8 @@ struct PoolOperationWithSponsoredDAGas {
 }
 
 #[derive(Debug)]
-struct OpWithSimulation<UO> {
-    op: UO,
+struct OpWithSimulation {
+    op: PoolOperation,
     simulation: SimulationResult,
     sponsored_da_gas: Option<u128>,
 }
@@ -1449,40 +1446,23 @@ struct OpWithSimulation<UO> {
 /// as it goes through iterations. Contains similar data to the
 /// `Vec<UserOpsPerAggregator>` that will eventually be passed to the entry
 /// point, but contains extra context needed for the computation.
-#[derive(Debug)]
-struct ProposalContext<UO> {
-    groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup<UO>>,
-    rejected_ops: Vec<(UO, EntityInfos)>,
+#[derive(Debug, Default)]
+struct ProposalContext {
+    groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup>,
+    skipped_ops: Vec<PoolOperation>,
+    rejected_ops: Vec<PoolOperation>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
     entity_updates: BTreeMap<Address, EntityUpdate>,
     bundle_expected_storage: BundleExpectedStorage,
 }
 
-#[derive(Debug)]
-struct AggregatorGroup<UO> {
-    ops_with_simulations: Vec<OpWithSimulation<UO>>,
+#[derive(Debug, Default)]
+struct AggregatorGroup {
+    ops_with_simulations: Vec<OpWithSimulation>,
     signature: Bytes,
 }
 
-impl<UO> Default for AggregatorGroup<UO> {
-    fn default() -> Self {
-        Self {
-            ops_with_simulations: Vec::new(),
-            signature: Bytes::new(),
-        }
-    }
-}
-
-impl<UO: UserOperation> ProposalContext<UO> {
-    fn new() -> Self {
-        Self {
-            groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup<UO>>::new(),
-            rejected_ops: Vec::<(UO, EntityInfos)>::new(),
-            entity_updates: BTreeMap::new(),
-            bundle_expected_storage: BundleExpectedStorage::default(),
-        }
-    }
-
+impl ProposalContext {
     fn is_empty(&self) -> bool {
         self.groups_by_aggregator.is_empty()
     }
@@ -1501,7 +1481,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         }
     }
 
-    fn get_op_at(&self, index: usize) -> anyhow::Result<&OpWithSimulation<UO>> {
+    fn get_op_at(&self, index: usize) -> anyhow::Result<&OpWithSimulation> {
         let mut remaining_i = index;
         for group in self.groups_by_aggregator.values() {
             if remaining_i < group.ops_with_simulations.len() {
@@ -1514,7 +1494,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
 
     fn get_op_index(&self, hash: B256) -> Option<usize> {
         self.iter_ops_with_simulations()
-            .position(|op| op.op.hash() == *hash)
+            .position(|op| op.op.uo.hash() == *hash)
     }
 
     fn reject_all(&mut self) {
@@ -1580,22 +1560,22 @@ impl<UO: UserOperation> ProposalContext<UO> {
     }
 
     fn reject_paymaster(&mut self, address: Address) -> Vec<Address> {
-        self.filter_reject(false, |op| op.paymaster() == Some(address))
+        self.filter_reject(false, |op| op.uo.paymaster() == Some(address))
     }
 
     // In accordance with [EREP-015]/[EREP-020]/[EREP-030], responsibility for failures lies with the factory or account.
     // Paymasters should not be held accountable, so the paymaster's `opsSeen` count should be decremented accordingly.
     // Paymaster amendment is required for all other entities rejections.
     fn reject_factory(&mut self, address: Address) -> Vec<Address> {
-        self.filter_reject(true, |op| op.factory() == Some(address))
+        self.filter_reject(true, |op| op.uo.factory() == Some(address))
     }
 
     fn reject_sender(&mut self, address: Address) -> Vec<Address> {
-        self.filter_reject(true, |op| op.sender() == address)
+        self.filter_reject(true, |op| op.uo.sender() == address)
     }
 
     fn reject_aggregator(&mut self, address: Address) -> Vec<Address> {
-        self.filter_reject(true, |op| op.aggregator() == Some(address))
+        self.filter_reject(true, |op| op.uo.aggregator() == Some(address))
     }
 
     /// Reject all ops that match the filter, and return the addresses of any aggregators
@@ -1603,7 +1583,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
     fn filter_reject(
         &mut self,
         paymaster_amendment: bool,
-        filter: impl Fn(&UO) -> bool,
+        filter: impl Fn(&PoolOperation) -> bool,
     ) -> Vec<Address> {
         let mut changed_aggregators: Vec<Address> = vec![];
         let mut aggregators_to_remove: Vec<Option<Address>> = vec![];
@@ -1643,28 +1623,29 @@ impl<UO: UserOperation> ProposalContext<UO> {
         changed_aggregators
     }
 
-    fn reject_op(&mut self, rejected: OpWithSimulation<UO>, paymaster_amendment: bool) {
+    fn reject_op(&mut self, rejected: OpWithSimulation, paymaster_amendment: bool) {
         if paymaster_amendment {
-            if let Some(paymaster) = rejected.op.paymaster() {
+            if let Some(paymaster) = rejected.op.uo.paymaster() {
                 self.add_erep_015_paymaster_amendment(paymaster, 1);
             }
         }
-        self.rejected_ops
-            .push((rejected.op, rejected.simulation.entity_infos));
 
         // remove associated storage slots
         self.bundle_expected_storage
             .remove(&rejected.simulation.expected_storage);
+        self.rejected_ops.push(rejected.op);
     }
 
-    fn to_ops_per_aggregator(&self) -> Vec<UserOpsPerAggregator<UO>> {
+    fn to_ops_per_aggregator<UO: UserOperation + From<UserOperationVariant>>(
+        &self,
+    ) -> Vec<UserOpsPerAggregator<UO>> {
         self.groups_by_aggregator
             .iter()
             .map(|(&aggregator, group)| UserOpsPerAggregator {
                 user_ops: group
                     .ops_with_simulations
                     .iter()
-                    .map(|op| op.op.clone())
+                    .map(|op| op.op.clone().uo.into())
                     .collect(),
                 aggregator: aggregator.unwrap_or_default(),
                 signature: group.signature.clone(),
@@ -1697,31 +1678,31 @@ impl<UO: UserOperation> ProposalContext<UO> {
         gas_limit += self
             .iter_ops_with_simulations()
             .map(|sim_op| {
-                sim_op.op.gas_limit(chain_spec, None) + sim_op.sponsored_da_gas.unwrap_or(0)
+                sim_op.op.uo.gas_limit(chain_spec, None) + sim_op.sponsored_da_gas.unwrap_or(0)
             })
             .sum::<u128>();
 
         gas_limit
     }
 
-    fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation<UO>> + '_ {
+    fn iter_ops_with_simulations(&self) -> impl Iterator<Item = &OpWithSimulation> + '_ {
         self.groups_by_aggregator
             .values()
             .flat_map(|group| &group.ops_with_simulations)
     }
 
-    fn iter_ops(&self) -> impl Iterator<Item = &UO> + '_ {
+    fn iter_ops(&self) -> impl Iterator<Item = &PoolOperation> + '_ {
         self.iter_ops_with_simulations().map(|op| &op.op)
     }
 
     // Go through the simulation violations for a given op and add all entity updates to pass to the mempool in entity_updates
     fn process_simulation_violations(
         &mut self,
-        op: UO,
+        op: PoolOperation,
         violations: Vec<SimulationViolation>,
         entity_infos: EntityInfos,
     ) {
-        self.rejected_ops.push((op, entity_infos));
+        self.rejected_ops.push(op);
 
         // If a staked factory or sender is present, we attribute errors to them directly.
 
@@ -1843,7 +1824,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
     fn add_entity_update(&mut self, entity: Entity, entity_infos: EntityInfos) {
         let entity_update = EntityUpdate {
             entity,
-            update_type: ProposalContext::<UO>::get_entity_update_type(entity.kind, entity_infos),
+            update_type: ProposalContext::get_entity_update_type(entity.kind, entity_infos),
             value: None,
         };
         self.entity_updates.insert(entity.address, entity_update);

@@ -19,7 +19,7 @@ use futures::future::BoxFuture;
 use rundler_signer::SignerManager;
 use rundler_task::{
     server::{HealthCheck, ServerStatus},
-    GracefulShutdown,
+    GracefulShutdown, TaskSpawner,
 };
 use rundler_types::{
     builder::{Builder, BuilderError, BuilderResult, BundlingMode},
@@ -31,7 +31,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use super::builder::{
     self, BuilderRequest, BuilderRequestKind, BuilderResponse, BuilderServerArgs,
 };
-use crate::server::builder::BuilderSender;
+use crate::{factory::BundleSenderTaskFactoryT, BuilderSettings};
 
 /// Local builder server builder
 pub struct LocalBuilderBuilder {
@@ -67,20 +67,24 @@ impl LocalBuilderBuilder {
     /// Run the local builder server, consuming the builder
     pub(crate) fn run(
         self,
+        task_spawner: Box<dyn TaskSpawner>,
         chain_spec: ChainSpec,
         entry_points: Vec<Address>,
-        senders: Vec<BuilderSender>,
+        sender_factory: Box<dyn BundleSenderTaskFactoryT>,
+        builders: Vec<BuilderSettings>,
         block_broadcaster: broadcast::Sender<NewHead>,
         shutdown: GracefulShutdown,
     ) -> BoxFuture<'static, ()> {
         let runner = BuilderServerArgs {
+            task_spawner,
             req_receiver: self.req_receiver,
             entry_points,
             signer_manager: self.signer_manager,
+            sender_factory,
+            builders,
             pool: self.pool,
             shutdown,
             chain_spec,
-            senders,
             block_broadcaster,
         };
         Box::pin(builder::run_builder(runner))

@@ -11,35 +11,29 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use alloy_primitives::{Address, B256};
-use anyhow::Context;
-use rundler_provider::{EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT};
+use rundler_provider::Providers as ProvidersT;
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
     gas::{self, FeeEstimatorImpl},
-    simulation::{self, UnsafeSimulator},
-    MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
+    MempoolConfig, PriorityFeeMode, SimulationSettings,
 };
 use rundler_task::TaskSpawnerExt;
-use rundler_types::{
-    chain::ChainSpec,
-    pool::{NewHead, Pool as PoolT},
-    EntryPointVersion, UserOperation, UserOperationVariant,
-};
+use rundler_types::{chain::ChainSpec, pool::Pool as PoolT, EntryPointVersion};
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
 use tracing::info;
 
 use crate::{
-    bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders},
-    bundle_sender::{self, BundleSender, BundleSenderImpl},
+    bundle_proposer::Settings as BundleProposerSettings,
+    bundle_sender::Settings as BundleSenderSettings,
     emit::BuilderEvent,
+    factory::BundleSenderTaskFactory,
     sender::TransactionSenderArgs,
-    server::{self, BuilderSender, LocalBuilderBuilder},
-    transaction_tracker::{self, TransactionTrackerImpl},
-    trigger,
+    server::{self, LocalBuilderBuilder},
+    transaction_tracker,
 };
 
 /// Builder task arguments
@@ -81,8 +75,8 @@ pub struct Args {
     pub max_replacement_underpriced_blocks: u64,
     /// Address to bind the remote builder server to, if any. If none, no server is starter.
     pub remote_address: Option<SocketAddr>,
-    /// Entry points to start builders for
-    pub entry_points: Vec<EntryPointBuilderSettings>,
+    /// Types of builders to run
+    pub builders: Vec<BuilderSettings>,
     /// Enable DA tracking
     pub da_gas_tracking_enabled: bool,
     /// Provider client timeout
@@ -90,12 +84,15 @@ pub struct Args {
     /// Maximum number of expected storage slots in a bundle
     pub max_expected_storage_slots: usize,
 }
-
 /// Builder settings
 #[derive(Debug, Clone)]
 pub struct BuilderSettings {
-    /// Index of this builder
-    pub index: u64,
+    /// Entry point address
+    pub address: Address,
+    /// Entry point version
+    pub version: EntryPointVersion,
+    /// Mempool configs
+    pub mempool_configs: HashMap<B256, MempoolConfig>,
     /// Optional submission proxy to use for this builder
     pub submission_proxy: Option<Address>,
     /// Optional filter id to apply to this builder
@@ -104,27 +101,31 @@ pub struct BuilderSettings {
 
 impl BuilderSettings {
     /// Unique string tag for this builder
-    pub fn tag(&self, entry_point_address: &Address) -> String {
+    pub fn tag(&self, entry_point_address: &Address, signer_address: &Address) -> String {
         format!(
             "{}:{}:{}",
             entry_point_address,
+            signer_address,
             self.filter_id.as_ref().map_or("any", |v| v),
-            self.index
         )
     }
-}
 
-/// Builder settings for an entrypoint
-#[derive(Debug)]
-pub struct EntryPointBuilderSettings {
-    /// Entry point address
-    pub address: Address,
-    /// Entry point version
-    pub version: EntryPointVersion,
-    /// Mempool configs
-    pub mempool_configs: HashMap<B256, MempoolConfig>,
-    /// Builder settings
-    pub builders: Vec<BuilderSettings>,
+    pub fn tag_from_ep_version(
+        &self,
+        chain_spec: &ChainSpec,
+        ep_version: EntryPointVersion,
+        signer_address: &Address,
+    ) -> String {
+        match ep_version {
+            EntryPointVersion::V0_6 => {
+                self.tag(&chain_spec.entry_point_address_v0_6, signer_address)
+            }
+            EntryPointVersion::V0_7 => {
+                self.tag(&chain_spec.entry_point_address_v0_7, signer_address)
+            }
+            EntryPointVersion::Unspecified => panic!("entry point version is unspecified"),
+        }
+    }
 }
 
 /// Builder task
@@ -166,65 +167,51 @@ where
 {
     /// Spawn the builder task on the given task spawner
     pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
-        let mut all_senders = vec![];
+        let (block_broadcaster, _) = broadcast::channel(100_000);
 
-        let num_required_signers: usize = self
-            .args
-            .entry_points
-            .iter()
-            .map(|ep| ep.builders.len())
-            .sum();
+        let sender_settings = BundleSenderSettings {
+            max_replacement_underpriced_blocks: self.args.max_replacement_underpriced_blocks,
+            max_cancellation_fee_increases: self.args.max_cancellation_fee_increases,
+            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
+        };
 
-        // wait 60 seconds for the signers to be available
-        match tokio::time::timeout(
-            Duration::from_secs(60),
-            self.signer_manager.wait_for_available(num_required_signers),
-        )
-        .await
-        {
-            Ok(r) => {
-                if let Err(e) = r {
-                    return Err(e.into());
-                }
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to wait for {num_required_signers} signers to be available: {e}"
-                ));
-            }
-        }
+        let proposer_settings = BundleProposerSettings {
+            max_bundle_size: self.args.max_bundle_size,
+            target_bundle_gas: self.args.target_bundle_gas,
+            max_bundle_gas: self.args.max_bundle_gas,
+            chain_spec: self.args.chain_spec.clone(),
+            priority_fee_mode: self.args.priority_fee_mode,
+            da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
+            max_expected_storage_slots: self.args.max_expected_storage_slots,
+        };
 
-        let (block_broadcaster, block_receiver) = broadcast::channel(100_000);
+        let fee_oracle = gas::get_fee_oracle(&self.args.chain_spec, self.providers.evm().clone());
+        let fee_estimator = FeeEstimatorImpl::new(
+            self.providers.evm().clone(),
+            fee_oracle,
+            proposer_settings.priority_fee_mode,
+            self.args.bundle_base_fee_overhead_percent,
+            self.args.bundle_priority_fee_overhead_percent,
+        );
 
-        for ep in &self.args.entry_points {
-            match ep.version {
-                EntryPointVersion::V0_6 => {
-                    let senders = self
-                        .create_builders_v0_6(
-                            &task_spawner,
-                            ep,
-                            &self.signer_manager,
-                            block_receiver.resubscribe(),
-                        )
-                        .await?;
-                    all_senders.extend(senders);
-                }
-                EntryPointVersion::V0_7 => {
-                    let senders = self
-                        .create_builders_v0_7(
-                            &task_spawner,
-                            ep,
-                            &self.signer_manager,
-                            block_receiver.resubscribe(),
-                        )
-                        .await?;
-                    all_senders.extend(senders);
-                }
-                EntryPointVersion::Unspecified => {
-                    panic!("Unspecified entry point version")
-                }
-            }
-        }
+        // TODO
+        let factory = BundleSenderTaskFactory {
+            chain_spec: self.args.chain_spec.clone(),
+            sender_settings,
+            proposer_settings,
+            sim_settings: self.args.sim_settings.clone(),
+            tracker_settings: transaction_tracker::Settings {
+                replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
+            },
+            unsafe_mode: self.args.unsafe_mode,
+            providers: self.providers.clone(),
+            fee_estimator: Arc::new(fee_estimator),
+            pool: self.pool.clone(),
+            sender_args: self.args.sender_args.clone(),
+            event_sender: self.event_sender.clone(),
+            provider_client_timeout_seconds: self.args.provider_client_timeout_seconds,
+            rpc_url: self.args.rpc_url.clone(),
+        };
 
         let builder_handle = self.builder_builder.get_handle();
 
@@ -232,9 +219,11 @@ where
             "local builder server",
             |shutdown| {
                 self.builder_builder.run(
+                    Box::new(task_spawner.clone()),
                     self.args.chain_spec.clone(),
                     vec![self.args.chain_spec.entry_point_address_v0_6],
-                    all_senders,
+                    Box::new(factory),
+                    self.args.builders.clone(),
                     block_broadcaster,
                     shutdown,
                 )
@@ -257,223 +246,5 @@ where
 
         info!("Started bundle builder");
         Ok(())
-    }
-
-    async fn create_builders_v0_6<T>(
-        &self,
-        task_spawner: &T,
-        ep: &EntryPointBuilderSettings,
-        signer_manager: &Arc<dyn SignerManager>,
-        block_receiver: broadcast::Receiver<NewHead>,
-    ) -> anyhow::Result<Vec<BuilderSender>>
-    where
-        T: TaskSpawnerExt,
-    {
-        info!("Mempool config for ep v0.6: {:?}", ep.mempool_configs);
-        let ep_providers = self
-            .providers
-            .ep_v0_6_providers()
-            .clone()
-            .context("entry point v0.6 not supplied")?;
-        let mut senders = vec![];
-        for settings in &ep.builders {
-            let sender = if self.args.unsafe_mode {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    UnsafeSimulator::new(
-                        ep_providers.entry_point().clone(),
-                        self.args.sim_settings.clone(),
-                    ),
-                    signer_manager,
-                    block_receiver.resubscribe(),
-                )
-                .await?
-            } else {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    simulation::new_v0_6_simulator(
-                        ep_providers.evm().clone(),
-                        ep_providers.entry_point().clone(),
-                        self.args.sim_settings.clone(),
-                        ep.mempool_configs.clone(),
-                    ),
-                    signer_manager,
-                    block_receiver.resubscribe(),
-                )
-                .await?
-            };
-            senders.push(sender);
-        }
-        Ok(senders)
-    }
-
-    async fn create_builders_v0_7<T>(
-        &self,
-        task_spawner: &T,
-        ep: &EntryPointBuilderSettings,
-        signer_manager: &Arc<dyn SignerManager>,
-        block_receiver: broadcast::Receiver<NewHead>,
-    ) -> anyhow::Result<Vec<BuilderSender>>
-    where
-        T: TaskSpawnerExt,
-    {
-        info!("Mempool config for ep v0.7: {:?}", ep.mempool_configs);
-        let ep_providers = self
-            .providers
-            .ep_v0_7_providers()
-            .clone()
-            .context("entry point v0.7 not supplied")?;
-        let mut senders = vec![];
-        for settings in &ep.builders {
-            let sender = if self.args.unsafe_mode {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    UnsafeSimulator::new(
-                        ep_providers.entry_point().clone(),
-                        self.args.sim_settings.clone(),
-                    ),
-                    signer_manager,
-                    block_receiver.resubscribe(),
-                )
-                .await?
-            } else {
-                self.create_bundle_builder(
-                    task_spawner,
-                    settings,
-                    ep_providers.clone(),
-                    simulation::new_v0_7_simulator(
-                        ep_providers.evm().clone(),
-                        ep_providers.entry_point().clone(),
-                        self.args.sim_settings.clone(),
-                        ep.mempool_configs.clone(),
-                    ),
-                    signer_manager,
-                    block_receiver.resubscribe(),
-                )
-                .await?
-            };
-            senders.push(sender);
-        }
-        Ok(senders)
-    }
-
-    async fn create_bundle_builder<T, UO, EP, S>(
-        &self,
-        task_spawner: &T,
-        builder_settings: &BuilderSettings,
-        ep_providers: EP,
-        simulator: S,
-        signer_manager: &Arc<dyn SignerManager>,
-        block_receiver: broadcast::Receiver<NewHead>,
-    ) -> anyhow::Result<BuilderSender>
-    where
-        T: TaskSpawnerExt,
-        UO: UserOperation + From<UserOperationVariant>,
-        UserOperationVariant: AsRef<UO>,
-        EP: ProvidersWithEntryPointT + 'static,
-        S: Simulator<UO = UO> + 'static,
-    {
-        let Some(signer) = signer_manager.lease_signer() else {
-            return Err(anyhow::anyhow!("No signer available"));
-        };
-
-        let submission_proxy = if let Some(proxy) = &builder_settings.submission_proxy {
-            let Some(proxy) = self.args.chain_spec.get_submission_proxy(proxy) else {
-                return Err(anyhow::anyhow!(
-                    "Proxy {} is not in the known submission proxies",
-                    proxy
-                ));
-            };
-            Some(proxy)
-        } else {
-            None
-        };
-
-        let sender_eoa = signer.address();
-        let proposer_settings = bundle_proposer::Settings {
-            chain_spec: self.args.chain_spec.clone(),
-            max_bundle_size: self.args.max_bundle_size,
-            target_bundle_gas: self.args.target_bundle_gas,
-            max_bundle_gas: self.args.max_bundle_gas,
-            sender_eoa,
-            priority_fee_mode: self.args.priority_fee_mode,
-            da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
-            max_expected_storage_slots: self.args.max_expected_storage_slots,
-            submission_proxy: submission_proxy.cloned(),
-        };
-
-        let transaction_sender = self.args.sender_args.clone().into_sender(
-            &self.args.rpc_url,
-            self.args.provider_client_timeout_seconds,
-        )?;
-
-        let tracker_settings = transaction_tracker::Settings {
-            replacement_fee_percent_increase: self.args.replacement_fee_percent_increase,
-        };
-
-        let transaction_tracker = TransactionTrackerImpl::new(
-            ep_providers.evm().clone(),
-            transaction_sender,
-            signer,
-            tracker_settings,
-            builder_settings.tag(ep_providers.entry_point().address()),
-        )
-        .await?;
-
-        let sender_settings = bundle_sender::Settings {
-            max_replacement_underpriced_blocks: self.args.max_replacement_underpriced_blocks,
-            max_cancellation_fee_increases: self.args.max_cancellation_fee_increases,
-            max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
-        };
-
-        let fee_oracle = gas::get_fee_oracle(&self.args.chain_spec, ep_providers.evm().clone());
-        let fee_estimator = FeeEstimatorImpl::new(
-            ep_providers.evm().clone(),
-            fee_oracle,
-            proposer_settings.priority_fee_mode,
-            self.args.bundle_base_fee_overhead_percent,
-            self.args.bundle_priority_fee_overhead_percent,
-        );
-
-        let proposer = BundleProposerImpl::new(
-            builder_settings.index,
-            builder_settings.tag(ep_providers.entry_point().address()),
-            ep_providers.clone(),
-            BundleProposerProviders::new(self.pool.clone(), simulator, fee_estimator),
-            proposer_settings,
-            self.event_sender.clone(),
-            builder_settings.filter_id.clone(),
-        );
-
-        let (trigger_sender, trigger_receiver) = trigger::new_trigger_channel(block_receiver);
-
-        let builder = BundleSenderImpl::new(
-            builder_settings.tag(ep_providers.entry_point().address()),
-            self.args.chain_spec.clone(),
-            sender_eoa,
-            submission_proxy.cloned(),
-            proposer,
-            ep_providers.clone(),
-            transaction_tracker,
-            self.pool.clone(),
-            sender_settings,
-            self.event_sender.clone(),
-        );
-
-        task_spawner.spawn_critical(
-            "bundle sender",
-            builder.send_bundles_in_loop(trigger_receiver),
-        );
-
-        Ok(BuilderSender {
-            address: sender_eoa,
-            trigger: trigger_sender,
-        })
     }
 }

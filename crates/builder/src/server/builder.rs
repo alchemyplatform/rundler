@@ -11,12 +11,13 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use alloy_primitives::{Address, B256};
+use futures::FutureExt;
 use futures_util::StreamExt;
 use rundler_signer::SignerManager;
-use rundler_task::GracefulShutdown;
+use rundler_task::{GracefulShutdown, TaskSpawner};
 use rundler_types::{
     builder::{BuilderResult, BundlingMode},
     chain::ChainSpec,
@@ -24,7 +25,10 @@ use rundler_types::{
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 
-use crate::{bundle_sender::SendBundleResult, trigger::TriggerSender};
+use crate::{
+    assigner::Assigner, bundle_sender::SendBundleResult, factory::BundleSenderTaskFactoryT,
+    BuilderSettings,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) enum BuilderRequestKind {
@@ -46,31 +50,30 @@ pub(crate) enum BuilderResponse {
     DebugSetBundlingMode,
 }
 
-pub(crate) struct BuilderSender {
-    pub(crate) address: Address,
-    pub(crate) trigger: TriggerSender,
-}
-
 pub(crate) struct BuilderServerArgs {
+    pub(crate) task_spawner: Box<dyn TaskSpawner>,
     pub(crate) req_receiver: mpsc::Receiver<BuilderRequest>,
     pub(crate) entry_points: Vec<Address>,
     pub(crate) signer_manager: Arc<dyn SignerManager>,
+    pub(crate) sender_factory: Box<dyn BundleSenderTaskFactoryT>,
+    pub(crate) builders: Vec<BuilderSettings>,
     pub(crate) pool: Arc<dyn Pool>,
     pub(crate) shutdown: GracefulShutdown,
     pub(crate) chain_spec: ChainSpec,
-    pub(crate) senders: Vec<BuilderSender>,
     pub(crate) block_broadcaster: broadcast::Sender<NewHead>,
 }
 
 pub(crate) async fn run_builder(args: BuilderServerArgs) {
     let BuilderServerArgs {
+        task_spawner,
         mut req_receiver,
         entry_points,
         signer_manager,
+        sender_factory,
+        builders,
         pool,
         shutdown,
         chain_spec,
-        mut senders,
         block_broadcaster,
     } = args;
 
@@ -78,15 +81,18 @@ pub(crate) async fn run_builder(args: BuilderServerArgs) {
         chain_spec.bundle_max_send_interval_millis,
     ));
 
-    let Ok(mut new_heads) = pool
-        .subscribe_new_heads(senders.iter().map(|s| s.address).collect())
-        .await
-    else {
+    let Ok(mut new_heads) = pool.subscribe_new_heads(signer_manager.addresses()).await else {
         tracing::error!("Failed to subscribe to new blocks");
         panic!("failed to subscribe to new blocks");
     };
 
     let mut mode = BundlingMode::Auto;
+    let mut last_block_number = 0;
+
+    tracing::info!("Builders {:?}", builders);
+    let mut builder_queue = VecDeque::from(builders);
+
+    let assigner = Assigner::new(pool.clone());
 
     loop {
         timer.reset();
@@ -105,23 +111,20 @@ pub(crate) async fn run_builder(args: BuilderServerArgs) {
                 let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
                 signer_manager.update_balances(balances);
 
-                if let Err(e) = block_broadcaster.send(new_head) {
-                    tracing::error!("failed to send new head: {:?}", e);
+                for update in &new_head.address_updates {
+                    // TODO make sure this is the latest nonce from the transaction tracker
+                    assigner.release_all_operations(update.address);
                 }
 
-                for sender in senders.iter_mut() {
-                    if mode == BundlingMode::Auto {
-                        sender.trigger.trigger(oneshot::channel().0);
-                    }
-                }
+                last_block_number = new_head.block_number;
+                let _ = block_broadcaster.send(new_head);
             }
             _ = timer.tick() => {
-                if mode == BundlingMode::Manual {
-                    continue;
-                }
-
-                for sender in senders.iter_mut() {
-                    sender.trigger.trigger(oneshot::channel().0);
+                tracing::info!("tick: num available signers: {:?}", signer_manager.available());
+                if mode == BundlingMode::Auto {
+                    if let Err(e) = trigger_bundles(&assigner, &mut builder_queue, signer_manager.clone(), sender_factory.as_ref(), last_block_number, &block_broadcaster, task_spawner.as_ref(), None).await {
+                        tracing::error!("failed to trigger bundles: {:?}", e);
+                    }
                 }
             }
             Some(req) = req_receiver.recv() => {
@@ -135,27 +138,30 @@ pub(crate) async fn run_builder(args: BuilderServerArgs) {
                         BuilderRequestKind::DebugSendBundleNow => {
                             if mode != BundlingMode::Manual {
                                 break 'a Err(anyhow::anyhow!("bundler is not in manual mode").into())
+                            } else if builder_queue.len() > 1 {
+                                tracing::warn!("builder queue has more than one builder, only one result will be reported");
                             }
 
-                            let responses = senders.iter_mut().map(async |s| {
-                                let (tx, rx) = oneshot::channel();
-                                s.trigger.trigger(tx);
-                                rx.await
-                            }).collect::<Vec<_>>();
+                            let (tx, rx) = oneshot::channel();
+                            if let Err(e) = trigger_bundles( &assigner, &mut builder_queue, signer_manager.clone(), sender_factory.as_ref(), last_block_number, &block_broadcaster, task_spawner.as_ref(), Some(tx)).await {
+                                tracing::error!("failed to trigger bundles: {:?}", e);
+                            }
 
-                            let results = futures::future::join_all(responses).await;
-                            let Some(Ok(result)) = results.first() else {
-                                break 'a Err(anyhow::anyhow!("no bundle sender results").into())
-                            };
-
-                            match result {
-                                SendBundleResult::Success { tx_hash, block_number, .. } => {
-                                    Ok(BuilderResponse::DebugSendBundleNow { hash: *tx_hash, block_number: *block_number })
+                            match rx.await {
+                                Ok(SendBundleResult::Success { tx_hash, block_number, .. }) => {
+                                    Ok(BuilderResponse::DebugSendBundleNow { hash: tx_hash, block_number })
                                 },
-                                SendBundleResult::NoOperationsInitially => {
+                                Ok(SendBundleResult::NoOperationsInitially) => {
                                     Err(anyhow::anyhow!("no ops to send").into())
                                 },
-                                SendBundleResult::Error(e) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),
+                                Ok(SendBundleResult::Cancelled) => {
+                                    Err(anyhow::anyhow!("bundle cancelled").into())
+                                },
+                                Ok(SendBundleResult::CancelFailed) => {
+                                    Err(anyhow::anyhow!("bundle cancel failed").into())
+                                },
+                                Ok(SendBundleResult::Error(e)) => Err(anyhow::anyhow!("send bundle error: {e:?}").into()),
+                                Err(e) => Err(anyhow::anyhow!("failed to receive result: {:?}", e).into()),
                             }
                         },
                         BuilderRequestKind::DebugSetBundlingMode { mode: new_mode } => {
@@ -171,4 +177,68 @@ pub(crate) async fn run_builder(args: BuilderServerArgs) {
             }
         }
     }
+}
+
+async fn trigger_bundles(
+    assigner: &Assigner,
+    builder_queue: &mut VecDeque<BuilderSettings>,
+    signer_manager: Arc<dyn SignerManager>,
+    sender_factory: &dyn BundleSenderTaskFactoryT,
+    last_block_number: u64,
+    block_broadcaster: &broadcast::Sender<NewHead>,
+    task_spawner: &dyn TaskSpawner,
+    mut result_responder: Option<oneshot::Sender<SendBundleResult>>,
+) -> anyhow::Result<usize> {
+    let mut triggered_count = 0;
+    let max_to_trigger = builder_queue.len();
+
+    while let Some(builder) = builder_queue.pop_front() {
+        let Some(signer) = signer_manager.lease_signer() else {
+            tracing::warn!("no signer available");
+            builder_queue.push_front(builder);
+            return Ok(triggered_count);
+        };
+        tracing::info!("signer: {:?}", signer);
+        let cloned_lease = signer.clone();
+
+        let Ok(sender) = sender_factory
+            .new_task(
+                last_block_number,
+                block_broadcaster.subscribe(),
+                assigner.clone(),
+                signer,
+                &builder,
+            )
+            .await
+        else {
+            builder_queue.push_back(builder);
+            anyhow::bail!("failed to create sender task");
+        };
+        builder_queue.push_back(builder);
+
+        // TODO capture results and return signer lease
+        let cloned_manager = signer_manager.clone();
+        let result_responder = result_responder.take();
+        task_spawner.spawn(
+            async move {
+                let result = sender.await;
+                tracing::info!("sender task result: {:?}", result);
+                // TODO we need to make sure this happens regardless of panics
+                cloned_manager.return_lease(cloned_lease);
+                if let Some(responder) = result_responder {
+                    if let Err(e) = responder.send(result) {
+                        tracing::error!("failed to send result: {:?}", e);
+                    }
+                }
+            }
+            .boxed(),
+        );
+
+        triggered_count += 1;
+        if triggered_count >= max_to_trigger {
+            break;
+        }
+    }
+
+    Ok(triggered_count)
 }

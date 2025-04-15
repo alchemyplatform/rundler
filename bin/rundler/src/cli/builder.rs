@@ -18,8 +18,8 @@ use anyhow::Context;
 use clap::Args;
 use rundler_builder::{
     self, BloxrouteSenderArgs, BuilderEvent, BuilderEventKind, BuilderSettings, BuilderTask,
-    BuilderTaskArgs, EntryPointBuilderSettings, FlashbotsSenderArgs, LocalBuilderBuilder,
-    RawSenderArgs, TransactionSenderArgs, TransactionSenderKind,
+    BuilderTaskArgs, FlashbotsSenderArgs, LocalBuilderBuilder, RawSenderArgs,
+    TransactionSenderArgs, TransactionSenderKind,
 };
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
@@ -208,7 +208,8 @@ impl BuilderArgs {
         let rpc_url = common.node_http.clone().context("must provide node_http")?;
 
         let mempool_configs = mempool_configs.unwrap_or_default();
-        let mut entry_points = vec![];
+        let mut all_builders = vec![];
+
         let mut num_builders = 0;
 
         if !common.disable_entry_point_v0_6 {
@@ -217,24 +218,34 @@ impl BuilderArgs {
                 .and_then(|builder_configs| {
                     builder_configs
                         .get_for_entry_point(chain_spec.entry_point_address_v0_6)
-                        .map(|ep| ep.builders())
+                        .map(|ep| {
+                            ep.builders
+                                .iter()
+                                .map(|builder| BuilderSettings {
+                                    address: ep.address,
+                                    version: EntryPointVersion::V0_6,
+                                    mempool_configs: mempool_configs
+                                        .get_for_entry_point(chain_spec.entry_point_address_v0_6),
+                                    submission_proxy: builder.proxy,
+                                    filter_id: builder.filter_id.clone(),
+                                })
+                                .collect::<Vec<_>>()
+                        })
                 })
                 .unwrap_or_else(|| {
-                    builder_settings_from_cli(
-                        common.builder_index_offset_v0_6,
-                        common.num_builders_v0_6,
-                    )
+                    vec![BuilderSettings {
+                        address: chain_spec.entry_point_address_v0_6,
+                        version: EntryPointVersion::V0_6,
+                        mempool_configs: mempool_configs
+                            .get_for_entry_point(chain_spec.entry_point_address_v0_6),
+                        submission_proxy: None,
+                        filter_id: None,
+                    }]
                 });
 
-            entry_points.push(EntryPointBuilderSettings {
-                address: chain_spec.entry_point_address_v0_6,
-                version: EntryPointVersion::V0_6,
-                mempool_configs: mempool_configs
-                    .get_for_entry_point(chain_spec.entry_point_address_v0_6),
-                builders,
-            });
-
+            // change this name to num_signers, only use a single number, and only with mnemonics
             num_builders += common.num_builders_v0_6;
+            all_builders.extend(builders);
         }
         if !common.disable_entry_point_v0_7 {
             let builders = entry_point_builders
@@ -242,24 +253,33 @@ impl BuilderArgs {
                 .and_then(|builder_configs| {
                     builder_configs
                         .get_for_entry_point(chain_spec.entry_point_address_v0_7)
-                        .map(|ep| ep.builders())
+                        .map(|ep| {
+                            ep.builders
+                                .iter()
+                                .map(|builder| BuilderSettings {
+                                    address: ep.address,
+                                    version: EntryPointVersion::V0_7,
+                                    mempool_configs: mempool_configs
+                                        .get_for_entry_point(chain_spec.entry_point_address_v0_7),
+                                    submission_proxy: builder.proxy,
+                                    filter_id: builder.filter_id.clone(),
+                                })
+                                .collect::<Vec<_>>()
+                        })
                 })
                 .unwrap_or_else(|| {
-                    builder_settings_from_cli(
-                        common.builder_index_offset_v0_7,
-                        common.num_builders_v0_7,
-                    )
+                    vec![BuilderSettings {
+                        address: chain_spec.entry_point_address_v0_7,
+                        version: EntryPointVersion::V0_7,
+                        mempool_configs: mempool_configs
+                            .get_for_entry_point(chain_spec.entry_point_address_v0_7),
+                        filter_id: None,
+                        submission_proxy: None,
+                    }]
                 });
 
-            entry_points.push(EntryPointBuilderSettings {
-                address: chain_spec.entry_point_address_v0_7,
-                version: EntryPointVersion::V0_7,
-                mempool_configs: mempool_configs
-                    .get_for_entry_point(chain_spec.entry_point_address_v0_7),
-                builders,
-            });
-
             num_builders += common.num_builders_v0_7;
+            all_builders.extend(builders);
         }
 
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
@@ -271,7 +291,7 @@ impl BuilderArgs {
         let provider_client_timeout_seconds = common.provider_client_timeout_seconds;
 
         Ok(BuilderTaskArgs {
-            entry_points,
+            builders: all_builders,
             signing_scheme,
             auto_fund: true,
             unsafe_mode: common.unsafe_mode,
@@ -359,10 +379,6 @@ pub(crate) struct EntryPointBuilderConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct BuilderConfig {
-    // Number of builders using this config
-    pub(crate) count: u64,
-    // Builder index offset - defaults to 0
-    pub(crate) index_offset: Option<u64>,
     // Submitter proxy to use for builders
     pub(crate) proxy: Option<Address>,
     // Type of proxy to use for builders
@@ -403,30 +419,6 @@ impl EntryPointBuilderConfigs {
 
         chain_spec.set_submission_proxies(Arc::new(registry));
     }
-}
-
-impl EntryPointBuilderConfig {
-    pub fn builders(&self) -> Vec<BuilderSettings> {
-        let mut builders = vec![];
-        for builder in &self.builders {
-            builders.extend((0..builder.count).map(|i| BuilderSettings {
-                index: builder.index_offset.unwrap_or(0) + i,
-                submission_proxy: builder.proxy,
-                filter_id: builder.filter_id.clone(),
-            }));
-        }
-        builders
-    }
-}
-
-fn builder_settings_from_cli(index_offset: u64, count: u64) -> Vec<BuilderSettings> {
-    (0..count)
-        .map(|i| BuilderSettings {
-            index: index_offset + i,
-            submission_proxy: None,
-            filter_id: None,
-        })
-        .collect()
 }
 
 /// CLI options for the Builder server standalone
