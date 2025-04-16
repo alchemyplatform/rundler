@@ -111,7 +111,6 @@ pub async fn run() -> anyhow::Result<()> {
                 opt.common,
                 providers,
                 mempool_configs,
-                entry_point_builders,
             )
             .await?
         }
