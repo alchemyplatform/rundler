@@ -43,3 +43,63 @@ impl GasFees {
         )
     }
 }
+
+/// Different modes for calculating the required priority fee
+/// for the bundler to include a user operation in a bundle.
+#[derive(Debug, Clone, Copy)]
+pub enum PriorityFeeMode {
+    /// The priority fee is required to be a percentage of the bundle base fee.
+    BaseFeePercent(u32),
+    /// The priority fee is required to be a percentage above the bundle priority fee.
+    PriorityFeeIncreasePercent(u32),
+}
+
+impl PriorityFeeMode {
+    /// Try to create a priority fee mode from a string and value.
+    pub fn try_from(kind: &str, value: u32) -> anyhow::Result<Self> {
+        match kind {
+            "base_fee_percent" => Ok(Self::BaseFeePercent(value)),
+            "priority_fee_increase_percent" => Ok(Self::PriorityFeeIncreasePercent(value)),
+            _ => anyhow::bail!("Invalid priority fee mode: {}", kind),
+        }
+    }
+
+    /// Returns the required fees for the given bundle fees based on this priority
+    /// fee mode.
+    pub fn required_fees(&self, bundle_fees: GasFees) -> GasFees {
+        let base_fee = bundle_fees.max_fee_per_gas - bundle_fees.max_priority_fee_per_gas;
+
+        let max_priority_fee_per_gas = match *self {
+            PriorityFeeMode::BaseFeePercent(percent) => math::percent(base_fee, percent),
+            PriorityFeeMode::PriorityFeeIncreasePercent(percent) => {
+                math::increase_by_percent(bundle_fees.max_priority_fee_per_gas, percent)
+            }
+        };
+
+        let max_fee_per_gas = base_fee + max_priority_fee_per_gas;
+        GasFees {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+        }
+    }
+
+    /// Calculate the minimum priority fee given the current bundle fees and network configured
+    /// settings
+    pub fn minimum_priority_fee(
+        &self,
+        base_fee: u128,
+        base_fee_accept_percent: u32,
+        min_max_priority_fee_per_gas: u128,
+        bundle_priority_fee_overhead_percent: u32,
+    ) -> u128 {
+        match *self {
+            PriorityFeeMode::BaseFeePercent(percent) => {
+                math::percent(math::percent(base_fee, base_fee_accept_percent), percent)
+            }
+            PriorityFeeMode::PriorityFeeIncreasePercent(percent) => math::increase_by_percent(
+                min_max_priority_fee_per_gas,
+                percent + bundle_priority_fee_overhead_percent,
+            ),
+        }
+    }
+}

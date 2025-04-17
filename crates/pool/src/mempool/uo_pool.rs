@@ -21,15 +21,16 @@ use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::{
-    DAGasOracleSync, EvmProvider, ProvidersWithEntryPointT, SimulationProvider, StateOverride,
+    DAGasOracleSync, EvmProvider, FeeEstimator, ProvidersWithEntryPointT, SimulationProvider,
+    StateOverride,
 };
-use rundler_sim::{FeeUpdate, MempoolConfig, Prechecker, Simulator};
+use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     pool::{
         MempoolError, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus,
     },
-    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, UserOperation, UserOperationId,
-    UserOperationPermissions, UserOperationVariant,
+    Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
+    UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
 use rundler_utils::emit::WithEntryPoint;
 use tokio::sync::broadcast;
@@ -68,7 +69,9 @@ struct UoPoolState<D> {
     throttled_ops: HashSet<B256>,
     block_number: u64,
     block_hash: B256,
-    gas_fees: FeeUpdate,
+    bundle_fees: GasFees,
+    uo_fees: GasFees,
+    base_fee: u128,
 }
 
 impl<UP, EP> UoPool<UP, EP>
@@ -96,7 +99,9 @@ where
                 throttled_ops: HashSet::new(),
                 block_number: 0,
                 block_hash: B256::ZERO,
-                gas_fees: FeeUpdate::default(),
+                bundle_fees: GasFees::default(),
+                uo_fees: GasFees::default(),
+                base_fee: 0,
             }),
             reputation,
             paymaster,
@@ -355,16 +360,25 @@ where
             .increment(unmined_op_count);
 
         // update required bundle fees and update metrics
-        match self.pool_providers.prechecker().update_fees().await {
-            Ok(fees) => {
-                let max_fee = match format_units(fees.bundle_fees.max_fee_per_gas, "gwei") {
+        match self
+            .ep_providers
+            .fee_estimator()
+            .required_bundle_fees(update.latest_block_hash, None)
+            .await
+        {
+            Ok((bundle_fees, base_fee)) => {
+                let uo_fees = self
+                    .ep_providers
+                    .fee_estimator()
+                    .required_op_fees(bundle_fees);
+                let max_fee = match format_units(bundle_fees.max_fee_per_gas, "gwei") {
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
                     Err(_) => 0.0,
                 };
                 self.metrics.current_max_fee_gwei.set(max_fee);
 
                 let max_priority_fee =
-                    match format_units(fees.bundle_fees.max_priority_fee_per_gas, "gwei") {
+                    match format_units(bundle_fees.max_priority_fee_per_gas, "gwei") {
                         Ok(s) => s.parse::<f64>().unwrap_or_default(),
                         Err(_) => 0.0,
                     };
@@ -372,7 +386,7 @@ where
                     .current_max_priority_fee_gwei
                     .set(max_priority_fee);
 
-                let base_fee_f64 = match format_units(fees.base_fee, "gwei") {
+                let base_fee_f64 = match format_units(base_fee, "gwei") {
                     Ok(s) => s.parse::<f64>().unwrap_or_default(),
                     Err(_) => 0.0,
                 };
@@ -383,7 +397,9 @@ where
                     let mut state = self.state.write();
                     state.block_number = update.latest_block_number;
                     state.block_hash = update.latest_block_hash;
-                    state.gas_fees = fees;
+                    state.bundle_fees = bundle_fees;
+                    state.uo_fees = uo_fees;
+                    state.base_fee = base_fee;
                 }
             }
             Err(e) => {
@@ -448,12 +464,14 @@ where
             }
 
             // pool maintenance
-            let gas_fees = state.gas_fees;
+            let uo_fees = state.uo_fees;
+            let base_fee = state.base_fee;
             state.pool.do_maintenance(
                 update.latest_block_number,
                 update.latest_block_timestamp,
                 da_block_data.as_ref(),
-                gas_fees,
+                uo_fees,
+                base_fee,
             );
         }
         let maintenance_time = start.elapsed();
@@ -580,7 +598,7 @@ where
         let precheck_ret = self
             .pool_providers
             .prechecker()
-            .check(&versioned_op, &perms, block_hash.into())
+            .check(&versioned_op, &perms, block_hash)
             .await?;
 
         // Only let ops with successful simulations through
@@ -678,7 +696,7 @@ where
         // Add op to pool
         let hash = {
             let mut state = self.state.write();
-            let base_fee = state.gas_fees.base_fee;
+            let base_fee = state.base_fee;
             let hash = state.pool.add_operation(
                 pool_op.clone(),
                 base_fee,
@@ -970,7 +988,7 @@ mod tests {
     use mockall::Sequence;
     use rundler_provider::{
         DepositInfo, ExecutionResult, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
-        ProvidersWithEntryPoint,
+        MockFeeEstimator, ProvidersWithEntryPoint,
     };
     use rundler_sim::{
         MockPrechecker, MockSimulator, PrecheckError, PrecheckReturn, PrecheckSettings,
@@ -2336,6 +2354,7 @@ mod tests {
 
         let mut simulator = MockSimulator::new();
         let mut prechecker = MockPrechecker::new();
+        let mut fee_estimator = MockFeeEstimator::new();
         let entry_point = Arc::new(entrypoint);
 
         let paymaster = PaymasterTracker::new(
@@ -2354,9 +2373,15 @@ mod tests {
             args.allowlist.clone().unwrap_or_default(),
         ));
 
-        prechecker
-            .expect_update_fees()
-            .returning(|| Ok(FeeUpdate::default()));
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(move |_, _| Ok((GasFees::default(), 0)));
+        fee_estimator
+            .expect_required_op_fees()
+            .returning(move |fees| GasFees {
+                max_fee_per_gas: fees.max_fee_per_gas,
+                max_priority_fee_per_gas: fees.max_priority_fee_per_gas,
+            });
 
         for op in ops {
             prechecker.expect_check().returning(move |_, _, _| {
@@ -2402,7 +2427,12 @@ mod tests {
 
         UoPool::new(
             args,
-            ProvidersWithEntryPoint::new(Arc::new(evm), entry_point, Some(da_oracle)),
+            ProvidersWithEntryPoint::new(
+                Arc::new(evm),
+                entry_point,
+                Some(da_oracle),
+                Arc::new(fee_estimator),
+            ),
             UoPoolProviders::new(simulator, prechecker),
             event_sender,
             paymaster,
