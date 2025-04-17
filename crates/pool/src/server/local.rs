@@ -24,8 +24,8 @@ use rundler_task::{
 };
 use rundler_types::{
     pool::{
-        MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult,
-        Reputation, ReputationStatus, StakeStatus,
+        MempoolError, NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation,
+        PoolOperationSummary, PoolResult, Reputation, ReputationStatus, StakeStatus,
     },
     EntityUpdate, EntryPointVersion, UserOperation, UserOperationId, UserOperationPermissions,
     UserOperationVariant,
@@ -153,18 +153,50 @@ impl Pool for LocalPoolHandle {
         &self,
         entry_point: Address,
         max_ops: u64,
-        shard_index: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>> {
         let req = ServerRequestKind::GetOps {
             entry_point,
             max_ops,
-            shard_index,
             filter_id,
         };
         let resp = self.send(req).await?;
         match resp {
             ServerResponse::GetOps { ops } => Ok(ops),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_ops_summaries(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        filter_id: Option<String>,
+    ) -> PoolResult<Vec<PoolOperationSummary>> {
+        let req = ServerRequestKind::GetOpsSummaries {
+            entry_point,
+            max_ops,
+            filter_id,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetOpsSummaries { summaries } => Ok(summaries),
+            _ => Err(PoolError::UnexpectedResponse),
+        }
+    }
+
+    async fn get_ops_by_hashes(
+        &self,
+        entry_point: Address,
+        hashes: Vec<B256>,
+    ) -> PoolResult<Vec<PoolOperation>> {
+        let req = ServerRequestKind::GetOpsByHashes {
+            entry_point,
+            hashes,
+        };
+        let resp = self.send(req).await?;
+        match resp {
+            ServerResponse::GetOpsByHashes { ops } => Ok(ops),
             _ => Err(PoolError::UnexpectedResponse),
         }
     }
@@ -398,14 +430,43 @@ impl LocalPoolServerRunner {
         &self,
         entry_point: Address,
         max_ops: u64,
-        shard_index: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>> {
         let mempool = self.get_pool(entry_point)?;
         Ok(mempool
-            .best_operations(max_ops as usize, shard_index, filter_id)?
+            .best_operations(max_ops as usize, filter_id)?
             .iter()
             .map(|op| (**op).clone())
+            .collect())
+    }
+
+    fn get_ops_summaries(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        filter_id: Option<String>,
+    ) -> PoolResult<Vec<PoolOperationSummary>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(mempool
+            .best_operations(max_ops as usize, filter_id)?
+            .iter()
+            .map(|op| op.as_ref().into())
+            .collect())
+    }
+
+    fn get_ops_by_hashes(
+        &self,
+        entry_point: Address,
+        hashes: Vec<B256>,
+    ) -> PoolResult<Vec<PoolOperation>> {
+        let mempool = self.get_pool(entry_point)?;
+        Ok(hashes
+            .iter()
+            .filter_map(|hash| {
+                mempool
+                    .get_user_operation_by_hash(*hash)
+                    .map(|op| (*op).clone())
+            })
             .collect())
     }
 
@@ -623,9 +684,21 @@ impl LocalPoolServerRunner {
                                 entry_points: self.mempools.keys().copied().collect()
                             })
                         },
-                        ServerRequestKind::GetOps { entry_point, max_ops, shard_index, filter_id } => {
-                            match self.get_ops(entry_point, max_ops, shard_index, filter_id) {
+                        ServerRequestKind::GetOps { entry_point, max_ops, filter_id } => {
+                            match self.get_ops(entry_point, max_ops, filter_id) {
                                 Ok(ops) => Ok(ServerResponse::GetOps { ops }),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::GetOpsSummaries { entry_point, max_ops, filter_id } => {
+                            match self.get_ops_summaries(entry_point, max_ops, filter_id) {
+                                Ok(summaries) => Ok(ServerResponse::GetOpsSummaries { summaries }),
+                                Err(e) => Err(e),
+                            }
+                        },
+                        ServerRequestKind::GetOpsByHashes { entry_point, hashes } => {
+                            match self.get_ops_by_hashes(entry_point, hashes) {
+                                Ok(ops) => Ok(ServerResponse::GetOpsByHashes { ops }),
                                 Err(e) => Err(e),
                             }
                         },
@@ -728,8 +801,16 @@ enum ServerRequestKind {
     GetOps {
         entry_point: Address,
         max_ops: u64,
-        shard_index: u64,
         filter_id: Option<String>,
+    },
+    GetOpsSummaries {
+        entry_point: Address,
+        max_ops: u64,
+        filter_id: Option<String>,
+    },
+    GetOpsByHashes {
+        entry_point: Address,
+        hashes: Vec<B256>,
     },
     GetOpByHash {
         hash: B256,
@@ -792,6 +873,12 @@ enum ServerResponse {
         hash: B256,
     },
     GetOps {
+        ops: Vec<PoolOperation>,
+    },
+    GetOpsSummaries {
+        summaries: Vec<PoolOperationSummary>,
+    },
+    GetOpsByHashes {
         ops: Vec<PoolOperation>,
     },
     GetOpByHash {

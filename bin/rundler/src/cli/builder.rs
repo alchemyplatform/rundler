@@ -219,12 +219,7 @@ impl BuilderArgs {
                         .get_for_entry_point(chain_spec.entry_point_address_v0_6)
                         .map(|ep| ep.builders())
                 })
-                .unwrap_or_else(|| {
-                    builder_settings_from_cli(
-                        common.builder_index_offset_v0_6,
-                        common.num_builders_v0_6,
-                    )
-                });
+                .unwrap_or_else(|| builder_settings_from_cli(common.num_builders_v0_6));
 
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_6,
@@ -244,12 +239,7 @@ impl BuilderArgs {
                         .get_for_entry_point(chain_spec.entry_point_address_v0_7)
                         .map(|ep| ep.builders())
                 })
-                .unwrap_or_else(|| {
-                    builder_settings_from_cli(
-                        common.builder_index_offset_v0_7,
-                        common.num_builders_v0_7,
-                    )
-                });
+                .unwrap_or_else(|| builder_settings_from_cli(common.num_builders_v0_7));
 
             entry_points.push(EntryPointBuilderSettings {
                 address: chain_spec.entry_point_address_v0_7,
@@ -361,8 +351,6 @@ pub(crate) struct EntryPointBuilderConfig {
 pub(crate) struct BuilderConfig {
     // Number of builders using this config
     pub(crate) count: u64,
-    // Builder index offset - defaults to 0
-    pub(crate) index_offset: Option<u64>,
     // Submitter proxy to use for builders
     pub(crate) proxy: Option<Address>,
     // Type of proxy to use for builders
@@ -409,8 +397,7 @@ impl EntryPointBuilderConfig {
     pub fn builders(&self) -> Vec<BuilderSettings> {
         let mut builders = vec![];
         for builder in &self.builders {
-            builders.extend((0..builder.count).map(|i| BuilderSettings {
-                index: builder.index_offset.unwrap_or(0) + i,
+            builders.extend((0..builder.count).map(|_| BuilderSettings {
                 submission_proxy: builder.proxy,
                 filter_id: builder.filter_id.clone(),
             }));
@@ -419,10 +406,9 @@ impl EntryPointBuilderConfig {
     }
 }
 
-fn builder_settings_from_cli(index_offset: u64, count: u64) -> Vec<BuilderSettings> {
+fn builder_settings_from_cli(count: u64) -> Vec<BuilderSettings> {
     (0..count)
-        .map(|i| BuilderSettings {
-            index: index_offset + i,
+        .map(|_| BuilderSettings {
             submission_proxy: None,
             filter_id: None,
         })

@@ -42,6 +42,9 @@ pub(crate) trait TransactionTracker: Send + Sync {
     /// Returns the current nonce and the required fees for the next transaction.
     fn get_nonce_and_required_fees(&self) -> TransactionTrackerResult<(u64, Option<GasFees>)>;
 
+    /// Returns the number of pending transactions.
+    fn num_pending_transactions(&self) -> usize;
+
     /// Sends the provided transaction and typically returns its transaction
     /// hash, but if the transaction failed to send because another transaction
     /// with the same nonce mined first, then returns information about that
@@ -249,7 +252,7 @@ where
         }
     }
 
-    async fn get_mined_tx_info(&self, tx_hash: B256) -> anyhow::Result<MinedTxInfo> {
+    async fn get_mined_tx_info(&self, tx_hash: B256) -> anyhow::Result<Option<MinedTxInfo>> {
         let (tx, tx_receipt) = tokio::try_join!(
             self.provider.get_transaction_by_hash(tx_hash),
             self.provider.get_transaction_receipt(tx_hash),
@@ -259,16 +262,16 @@ where
             None
         });
         match tx_receipt {
-            Some(r) => Ok(MinedTxInfo {
+            Some(r) => Ok(Some(MinedTxInfo {
                 block_number: r.block_number.unwrap_or(0),
                 gas_limit,
                 gas_used: Some(r.gas_used),
                 gas_price: Some(r.effective_gas_price),
                 is_success: r.inner.status(),
-            }),
+            })),
             None => {
                 warn!("failed to find transaction receipt for tx: {}", tx_hash);
-                Ok(MinedTxInfo::default())
+                Ok(None)
             }
         }
     }
@@ -303,6 +306,10 @@ where
             })
         };
         Ok((self.nonce, gas_fees))
+    }
+
+    fn num_pending_transactions(&self) -> usize {
+        self.transactions.len()
     }
 
     async fn send_transaction(
@@ -482,7 +489,9 @@ where
         let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
         for tx in self.transactions.iter().rev() {
             if update.mined_tx_hashes.contains(&tx.tx_hash) {
-                let mined_tx_info = self.get_mined_tx_info(tx.tx_hash).await?;
+                let Some(mined_tx_info) = self.get_mined_tx_info(tx.tx_hash).await? else {
+                    continue;
+                };
                 out = TrackerUpdate::Mined {
                     tx_hash: tx.tx_hash,
                     nonce: self.nonce,
@@ -503,7 +512,7 @@ where
                 if let Some(sent_at_block) = tx.sent_at_block {
                     self.metrics
                         .txn_blocks_to_mine
-                        .record((mined_tx_info.block_number - sent_at_block) as f64);
+                        .record((mined_tx_info.block_number.saturating_sub(sent_at_block)) as f64);
                 }
             }
         }

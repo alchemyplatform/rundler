@@ -23,7 +23,8 @@ use rundler_types::{
     },
     pool::{
         AddressUpdate as PoolAddressUpdate, NewHead as PoolNewHead,
-        PaymasterMetadata as PoolPaymasterMetadata, PoolOperation, Reputation as PoolReputation,
+        PaymasterMetadata as PoolPaymasterMetadata, PoolOperation,
+        PoolOperationSummary as RundlerPoolOperationSummary, Reputation as PoolReputation,
         ReputationStatus as PoolReputationStatus, StakeStatus as RundlerStakeStatus,
     },
     v0_6, v0_7, BundlerSponsorship as RundlerBundlerSponsorship, Entity as RundlerEntity,
@@ -667,5 +668,27 @@ impl From<RundlerBundlerSponsorship> for BundlerSponsorship {
             max_cost: sponsorship.max_cost.to_proto_bytes(),
             valid_until: sponsorship.valid_until,
         }
+    }
+}
+
+impl From<RundlerPoolOperationSummary> for PoolOperationSummary {
+    fn from(summary: RundlerPoolOperationSummary) -> Self {
+        Self {
+            hash: summary.hash.to_proto_bytes(),
+            entry_point: summary.entry_point.to_proto_bytes(),
+            sender: summary.sender.to_proto_bytes(),
+        }
+    }
+}
+
+impl TryFrom<PoolOperationSummary> for RundlerPoolOperationSummary {
+    type Error = ConversionError;
+
+    fn try_from(summary: PoolOperationSummary) -> Result<Self, Self::Error> {
+        Ok(Self {
+            hash: from_bytes(&summary.hash)?,
+            entry_point: from_bytes(&summary.entry_point)?,
+            sender: from_bytes(&summary.sender)?,
+        })
     }
 }
