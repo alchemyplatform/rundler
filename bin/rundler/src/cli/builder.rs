@@ -24,7 +24,7 @@ use rundler_builder::{
 use rundler_pbh::PbhSubmissionProxy;
 use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
-use rundler_sim::{MempoolConfigs, PriorityFeeMode};
+use rundler_sim::MempoolConfigs;
 use rundler_task::{
     server::{connect_with_retries_shutdown, format_socket_addr},
     TaskSpawnerExt,
@@ -200,11 +200,6 @@ impl BuilderArgs {
         mempool_configs: Option<MempoolConfigs>,
         entry_point_builders: Option<EntryPointBuilderConfigs>,
     ) -> anyhow::Result<BuilderTaskArgs> {
-        let priority_fee_mode = PriorityFeeMode::try_from(
-            common.priority_fee_mode_kind.as_str(),
-            common.priority_fee_mode_value,
-        )?;
-
         let rpc_url = common.node_http.clone().context("must provide node_http")?;
 
         let mempool_configs = mempool_configs.unwrap_or_default();
@@ -271,9 +266,6 @@ impl BuilderArgs {
                 .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
             max_bundle_gas: chain_spec
                 .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio),
-            bundle_base_fee_overhead_percent: common.bundle_base_fee_overhead_percent,
-            bundle_priority_fee_overhead_percent: common.bundle_priority_fee_overhead_percent,
-            priority_fee_mode,
             sender_args,
             sim_settings: common.try_into()?,
             max_blocks_to_wait_for_mine: self.max_blocks_to_wait_for_mine,

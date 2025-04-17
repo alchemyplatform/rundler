@@ -18,8 +18,7 @@ use clap::Args;
 use rundler_builder::RemoteBuilderClient;
 use rundler_pool::RemotePoolClient;
 use rundler_provider::Providers;
-use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs, RundlerApiSettings};
-use rundler_sim::PriorityFeeMode;
+use rundler_rpc::{EthApiSettings, RpcTask, RpcTaskArgs};
 use rundler_task::{server::connect_with_retries_shutdown, TaskSpawnerExt};
 use rundler_types::chain::{ChainSpec, TryIntoWithSpec};
 
@@ -130,7 +129,6 @@ impl RpcArgs {
             api_namespaces: apis,
             precheck_settings: common.try_into_with_spec(&chain_spec)?,
             eth_api_settings,
-            rundler_api_settings: common.try_into()?,
             estimation_settings: common.try_into_with_spec(&chain_spec)?,
             rpc_timeout: Duration::from_secs(self.timeout_seconds.parse()?),
             max_connections: self.max_connections,
@@ -203,18 +201,4 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         .await?;
 
     Ok(())
-}
-
-impl TryFrom<&CommonArgs> for RundlerApiSettings {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &CommonArgs) -> Result<Self, Self::Error> {
-        Ok(Self {
-            priority_fee_mode: PriorityFeeMode::try_from(
-                value.priority_fee_mode_kind.as_str(),
-                value.priority_fee_mode_value,
-            )?,
-            bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
-        })
-    }
 }

@@ -24,19 +24,16 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::future;
-use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{
-    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
-    ProvidersWithEntryPointT,
+    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
+    HandleOpsOut, ProvidersWithEntryPointT,
 };
-use rundler_sim::{
-    FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator, ViolationError,
-};
+use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
     aggregator::SignatureAggregatorResult,
     chain::ChainSpec,
@@ -49,7 +46,7 @@ use rundler_types::{
     TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
-use tokio::{sync::broadcast, try_join};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::emit::{BuilderEvent, ConditionNotMetReason, OpRejectionReason, SkipReason};
@@ -109,6 +106,7 @@ pub(crate) trait BundleProposer: Send + Sync {
     async fn make_bundle(
         &mut self,
         ops: Vec<PoolOperation>,
+        block_hash: B256,
         max_bundle_fee: U256,
         min_gas_fees: Option<GasFees>,
         is_replacement: bool,
@@ -119,6 +117,7 @@ pub(crate) trait BundleProposer: Send + Sync {
     /// If `min_fees` is `Some`, the proposer will ensure the gas fees returned are at least `min_fees`.
     async fn estimate_gas_fees(
         &self,
+        block_hash: B256,
         min_fees: Option<GasFees>,
     ) -> BundleProposerResult<(GasFees, u128)>;
 
@@ -155,7 +154,6 @@ pub(crate) struct Settings {
     pub(crate) target_bundle_gas: u128,
     pub(crate) max_bundle_gas: u128,
     pub(crate) sender_eoa: Address,
-    pub(crate) priority_fee_mode: PriorityFeeMode,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
     pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
@@ -171,12 +169,13 @@ where
 
     async fn estimate_gas_fees(
         &self,
+        block_hash: B256,
         required_fees: Option<GasFees>,
     ) -> BundleProposerResult<(GasFees, u128)> {
         Ok(self
-            .bundle_providers
+            .ep_providers
             .fee_estimator()
-            .required_bundle_fees(required_fees)
+            .required_bundle_fees(block_hash, required_fees)
             .await?)
     }
 
@@ -187,26 +186,20 @@ where
     async fn make_bundle(
         &mut self,
         ops: Vec<PoolOperation>,
+        block_hash: B256,
         max_bundle_fee: U256,
         min_gas_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
         let timer = Instant::now();
-
-        let ((block_hash, _), (bundle_fees, base_fee)) = try_join!(
-            self.ep_providers
-                .evm()
-                .get_latest_block_hash_and_number()
-                .map_err(BundleProposerError::from),
-            self.estimate_gas_fees(min_gas_fees)
-        )?;
+        let (bundle_fees, base_fee) = self.estimate_gas_fees(block_hash, min_gas_fees).await?;
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
         let required_op_fees = if is_replacement {
             bundle_fees
         } else {
-            self.bundle_providers
+            self.ep_providers
                 .fee_estimator()
                 .required_op_fees(bundle_fees)
         };
@@ -1353,43 +1346,30 @@ where
 pub(crate) trait BundleProposerProvidersT: Send + Sync {
     type UO: UserOperation + From<UserOperationVariant>;
     type Simulator: Simulator<UO = Self::UO>;
-    type FeeEstimator: FeeEstimator;
 
     fn simulator(&self) -> &Self::Simulator;
-
-    fn fee_estimator(&self) -> &Self::FeeEstimator;
 }
 
-pub(crate) struct BundleProposerProviders<S, F> {
+pub(crate) struct BundleProposerProviders<S> {
     simulator: S,
-    fee_estimator: F,
 }
 
-impl<S, F> BundleProposerProviders<S, F> {
-    pub(crate) fn new(simulator: S, fee_estimator: F) -> Self {
-        Self {
-            simulator,
-            fee_estimator,
-        }
+impl<S> BundleProposerProviders<S> {
+    pub(crate) fn new(simulator: S) -> Self {
+        Self { simulator }
     }
 }
 
-impl<S, F> BundleProposerProvidersT for BundleProposerProviders<S, F>
+impl<S> BundleProposerProvidersT for BundleProposerProviders<S>
 where
     S: Simulator,
     S::UO: UserOperation + From<UserOperationVariant>,
-    F: FeeEstimator,
 {
     type UO = S::UO;
     type Simulator = S;
-    type FeeEstimator = F;
 
     fn simulator(&self) -> &Self::Simulator {
         &self.simulator
-    }
-
-    fn fee_estimator(&self) -> &Self::FeeEstimator {
-        &self.fee_estimator
     }
 }
 
@@ -1888,9 +1868,10 @@ mod tests {
     use alloy_primitives::{utils::parse_units, Address, B256};
     use anyhow::anyhow;
     use rundler_provider::{
-        MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, ProvidersWithEntryPoint,
+        MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
+        ProvidersWithEntryPoint,
     };
-    use rundler_sim::{MockFeeEstimator, MockSimulator};
+    use rundler_sim::MockSimulator;
     use rundler_types::{
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
@@ -3890,7 +3871,7 @@ mod tests {
         let mut fee_estimator = MockFeeEstimator::new();
         fee_estimator
             .expect_required_bundle_fees()
-            .returning(move |_| {
+            .returning(move |_, _| {
                 Ok((
                     GasFees {
                         max_fee_per_gas: base_fee + max_priority_fee_per_gas,
@@ -3955,14 +3936,14 @@ mod tests {
                 Arc::new(provider),
                 Arc::new(entry_point),
                 Some(Arc::new(da_oracle)),
+                Arc::new(fee_estimator),
             ),
-            BundleProposerProviders::new(simulator, fee_estimator),
+            BundleProposerProviders::new(simulator),
             Settings {
                 chain_spec,
                 target_bundle_gas: 10_000_000,
                 max_bundle_gas: 25_000_000,
                 sender_eoa,
-                priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 da_gas_tracking_enabled,
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
                 submission_proxy,
@@ -3974,7 +3955,9 @@ mod tests {
             proposer.notify_condition_not_met();
         }
 
-        proposer.make_bundle(ops, max_bundle_fee, None, false).await
+        proposer
+            .make_bundle(ops, current_block_hash, max_bundle_fee, None, false)
+            .await
     }
 
     fn address(n: u8) -> Address {

@@ -17,7 +17,6 @@ use anyhow::{bail, Context};
 use futures::FutureExt;
 use rundler_provider::{EntryPoint, Providers, ProvidersWithEntryPointT};
 use rundler_sim::{
-    gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
     PrecheckerImpl, Simulator,
 };
@@ -89,7 +88,10 @@ where
     P: Providers + 'static,
 {
     /// Spawns the mempool task on the given task spawner.
-    pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
+    pub async fn spawn<T>(self, task_spawner: T) -> anyhow::Result<()>
+    where
+        T: TaskSpawnerExt,
+    {
         let chain_id = self.args.chain_spec.id;
         tracing::info!("Chain id: {chain_id}");
         tracing::info!("Http url: {:?}", self.args.http_url);
@@ -183,14 +185,17 @@ where
         Ok(())
     }
 
-    fn create_mempool_v0_6<T: TaskSpawnerExt>(
+    fn create_mempool_v0_6<T>(
         &self,
         task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    ) -> anyhow::Result<Arc<dyn Mempool + 'static>> {
+    ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
+    where
+        T: TaskSpawnerExt,
+    {
         let ep_providers = self
             .providers
             .ep_v0_6_providers()
@@ -228,14 +233,17 @@ where
         }
     }
 
-    fn create_mempool_v0_7<T: TaskSpawnerExt>(
+    fn create_mempool_v0_7<T>(
         &self,
         task_spawner: &T,
         chain_spec: ChainSpec,
         pool_config: &PoolConfig,
         unsafe_mode: bool,
         event_sender: broadcast::Sender<WithEntryPoint<OpPoolEvent>>,
-    ) -> anyhow::Result<Arc<dyn Mempool + 'static>> {
+    ) -> anyhow::Result<Arc<dyn Mempool + 'static>>
+    where
+        T: TaskSpawnerExt,
+    {
         let ep_providers = self
             .providers
             .ep_v0_7_providers()
@@ -289,24 +297,11 @@ where
         EP: ProvidersWithEntryPointT<UO = UO> + 'static,
         S: Simulator<UO = UO> + 'static,
     {
-        let fee_oracle = gas::get_fee_oracle(&chain_spec, ep_providers.evm().clone());
-        let fee_estimator = FeeEstimatorImpl::new(
-            ep_providers.evm().clone(),
-            fee_oracle,
-            pool_config.precheck_settings.priority_fee_mode,
-            pool_config
-                .precheck_settings
-                .bundle_base_fee_overhead_percent,
-            pool_config
-                .precheck_settings
-                .bundle_priority_fee_overhead_percent,
-        );
-
         let prechecker = PrecheckerImpl::new(
             chain_spec,
             ep_providers.evm().clone(),
             ep_providers.entry_point().clone(),
-            fee_estimator,
+            ep_providers.fee_estimator().clone(),
             pool_config.precheck_settings,
         );
 

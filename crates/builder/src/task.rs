@@ -18,9 +18,8 @@ use anyhow::Context;
 use rundler_provider::{EntryPoint, Providers as ProvidersT, ProvidersWithEntryPointT};
 use rundler_signer::{SignerManager, SigningScheme};
 use rundler_sim::{
-    gas::{self, FeeEstimatorImpl},
     simulation::{self, UnsafeSimulator},
-    MempoolConfig, PriorityFeeMode, SimulationSettings, Simulator,
+    MempoolConfig, SimulationSettings, Simulator,
 };
 use rundler_task::TaskSpawnerExt;
 use rundler_types::{
@@ -61,12 +60,6 @@ pub struct Args {
     pub target_bundle_gas: u128,
     /// Maximum bundle size in gas
     pub max_bundle_gas: u128,
-    /// Percentage to add to the network pending base fee for the bundle base fee
-    pub bundle_base_fee_overhead_percent: u32,
-    /// Percentage to add to the network priority fee for the bundle priority fee
-    pub bundle_priority_fee_overhead_percent: u32,
-    /// Priority fee mode to use for operation priority fee minimums
-    pub priority_fee_mode: PriorityFeeMode,
     /// Sender to be used by the builder
     pub sender_args: TransactionSenderArgs,
     /// Operation simulation settings
@@ -163,7 +156,10 @@ where
     Providers: ProvidersT + 'static,
 {
     /// Spawn the builder task on the given task spawner
-    pub async fn spawn<T: TaskSpawnerExt>(self, task_spawner: T) -> anyhow::Result<()> {
+    pub async fn spawn<T>(self, task_spawner: T) -> anyhow::Result<()>
+    where
+        T: TaskSpawnerExt,
+    {
         let mut bundle_sender_actions = vec![];
 
         let num_required_signers: usize = self
@@ -393,7 +389,6 @@ where
             target_bundle_gas: self.args.target_bundle_gas,
             max_bundle_gas: self.args.max_bundle_gas,
             sender_eoa,
-            priority_fee_mode: self.args.priority_fee_mode,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
             max_expected_storage_slots: self.args.max_expected_storage_slots,
             submission_proxy: submission_proxy.cloned(),
@@ -423,19 +418,10 @@ where
             max_blocks_to_wait_for_mine: self.args.max_blocks_to_wait_for_mine,
         };
 
-        let fee_oracle = gas::get_fee_oracle(&self.args.chain_spec, ep_providers.evm().clone());
-        let fee_estimator = FeeEstimatorImpl::new(
-            ep_providers.evm().clone(),
-            fee_oracle,
-            proposer_settings.priority_fee_mode,
-            self.args.bundle_base_fee_overhead_percent,
-            self.args.bundle_priority_fee_overhead_percent,
-        );
-
         let proposer = BundleProposerImpl::new(
             builder_settings.tag(ep_providers.entry_point().address(), &sender_eoa),
             ep_providers.clone(),
-            BundleProposerProviders::new(simulator, fee_estimator),
+            BundleProposerProviders::new(simulator),
             proposer_settings,
             self.event_sender.clone(),
         );
