@@ -1268,11 +1268,6 @@ impl Trigger for BundleSenderTrigger {
                     };
 
                     self.last_block = b;
-
-                    match self.bundling_mode {
-                        BundlingMode::Manual => continue,
-                        BundlingMode::Auto => break,
-                    }
                 },
                 _ = self.timer.tick() => {
                     match self.bundling_mode {
