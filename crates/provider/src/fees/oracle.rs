@@ -15,15 +15,16 @@
 use std::fmt::Debug;
 
 use futures_util::future::join_all;
-use rundler_provider::{BlockNumberOrTag, EvmProvider};
 use rundler_types::chain::{ChainSpec, PriorityFeeOracleType};
 use tracing::instrument;
+
+use crate::{BlockNumberOrTag, EvmProvider};
 
 pub(crate) type Result<T, E = FeeOracleError> = std::result::Result<T, E>;
 
 /// Error type for the fee oracle
 #[derive(Debug, thiserror::Error)]
-pub enum FeeOracleError {
+pub(crate) enum FeeOracleError {
     /// No oracle available, or all oracles failed
     #[error("No oracle available")]
     NoOracle,
@@ -35,13 +36,13 @@ pub enum FeeOracleError {
 #[async_trait::async_trait]
 /// FeeOracle is a trait that provides a way to estimate the priority fee
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
-pub trait FeeOracle: Send + Sync {
+pub(crate) trait FeeOracle: Send + Sync {
     /// Estimate the priority fee
     async fn estimate_priority_fee(&self) -> Result<u128>;
 }
 
 /// Get a fee oracle for the given chain spec.
-pub fn get_fee_oracle<'a, P>(chain_spec: &ChainSpec, provider: P) -> Box<dyn FeeOracle + 'a>
+pub(crate) fn get_fee_oracle<'a, P>(chain_spec: &ChainSpec, provider: P) -> Box<dyn FeeOracle + 'a>
 where
     P: EvmProvider + 'a,
 {
@@ -349,9 +350,8 @@ impl FeeOracle for ConstantOracle {
 mod tests {
     use std::sync::Arc;
 
-    use rundler_provider::{FeeHistory, MockEvmProvider};
-
     use super::*;
+    use crate::{FeeHistory, MockEvmProvider};
 
     #[tokio::test]
     async fn test_usage_oracle_non_congested() {

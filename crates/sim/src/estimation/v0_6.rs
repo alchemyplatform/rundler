@@ -24,7 +24,8 @@ use rundler_contracts::v0_6::{
     ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
 };
 use rundler_provider::{
-    AccountOverride, DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
+    AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, SimulationProvider,
+    StateOverride,
 };
 use rundler_types::{
     chain::ChainSpec,
@@ -41,7 +42,7 @@ use super::{
 };
 use crate::{
     estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
-    simulation, FeeEstimator, GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
+    simulation, GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
 };
 
 /// Gas estimator implementation
@@ -301,7 +302,10 @@ where
             0
         } else {
             // If the user provides fees, use them, otherwise use the current bundle fees
-            let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
+            let (bundle_fees, base_fee) = self
+                .fee_estimator
+                .required_bundle_fees(block_hash, None)
+                .await?;
             if let (Some(max_fee), Some(prio_fee)) = (
                 optional_op.max_fee_per_gas.filter(|fee| *fee != 0),
                 optional_op.max_priority_fee_per_gas.filter(|fee| *fee != 0),
@@ -462,10 +466,10 @@ mod tests {
     use alloy_primitives::{hex, uint};
     use alloy_sol_types::{Revert, SolCall, SolError, SolValue};
     use anyhow::anyhow;
-    use gas::MockFeeEstimator;
     use rundler_contracts::v0_6::{IEntryPoint, UserOperation as ContractUserOperation};
     use rundler_provider::{
         EvmCall, ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider,
+        MockFeeEstimator,
     };
     use rundler_types::{
         da::DAGasOracleType,
@@ -687,15 +691,17 @@ mod tests {
         let provider = Arc::new(provider);
 
         let mut fee_estimator = MockFeeEstimator::new();
-        fee_estimator.expect_required_bundle_fees().returning(|_| {
-            Ok((
-                GasFees {
-                    max_fee_per_gas: TEST_FEE,
-                    max_priority_fee_per_gas: TEST_FEE,
-                },
-                TEST_FEE,
-            ))
-        });
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(|_, _| {
+                Ok((
+                    GasFees {
+                        max_fee_per_gas: TEST_FEE,
+                        max_priority_fee_per_gas: TEST_FEE,
+                    },
+                    TEST_FEE,
+                ))
+            });
 
         let estimator = GasEstimator::new(
             cs.clone(),
@@ -761,15 +767,17 @@ mod tests {
             ..Default::default()
         };
         let mut fee_estimator = MockFeeEstimator::new();
-        fee_estimator.expect_required_bundle_fees().returning(|_| {
-            Ok((
-                GasFees {
-                    max_fee_per_gas: TEST_FEE,
-                    max_priority_fee_per_gas: TEST_FEE,
-                },
-                TEST_FEE,
-            ))
-        });
+        fee_estimator
+            .expect_required_bundle_fees()
+            .returning(|_, _| {
+                Ok((
+                    GasFees {
+                        max_fee_per_gas: TEST_FEE,
+                        max_priority_fee_per_gas: TEST_FEE,
+                    },
+                    TEST_FEE,
+                ))
+            });
 
         let estimator = create_custom_estimator(cs, provider, fee_estimator, entry, settings);
 
