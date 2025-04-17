@@ -12,6 +12,8 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_primitives::{Address, Bytes};
+use metrics::Histogram;
+use metrics_derive::Metrics;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 use rundler_provider::{ProviderError, StateOverride};
@@ -116,4 +118,19 @@ impl Settings {
         }
         None
     }
+}
+
+#[derive(Metrics)]
+#[metrics(scope = "gas_estimator")]
+struct Metrics {
+    #[metric(describe = "the distribution of total gas estimate time.")]
+    total_gas_estimate_ms: Histogram,
+    #[metric(describe = "the distribution of pvg estimate time.")]
+    pvg_estimate_ms: Histogram,
+    #[metric(describe = "the distribution of vgl estimate time.")]
+    vgl_estimate_ms: Histogram,
+    #[metric(describe = "the distribution of cgl estimate time.")]
+    cgl_estimate_ms: Histogram,
+    #[metric(describe = "the distribution of pvgl estimate time.")]
+    pvgl_estimate_ms: Histogram,
 }

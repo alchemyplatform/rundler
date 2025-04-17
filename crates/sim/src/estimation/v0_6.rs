@@ -32,13 +32,13 @@ use rundler_types::{
     v0_6::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate, UserOperation as _,
 };
-use rundler_utils::math;
+use rundler_utils::{guard_timer::CustomTimerGuard, math};
 use tokio::join;
 use tracing::instrument;
 
 use super::{
     CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, GasEstimationError,
-    Settings, VerificationGasEstimator,
+    Metrics, Settings, VerificationGasEstimator,
 };
 use crate::{
     estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
@@ -54,6 +54,7 @@ pub struct GasEstimator<P, E, VGE, CGE, F> {
     fee_estimator: F,
     verification_gas_estimator: VGE,
     call_gas_estimator: CGE,
+    metrics: Metrics,
 }
 
 #[async_trait::async_trait]
@@ -73,6 +74,7 @@ where
         op: UserOperationOptionalGas,
         state_override: StateOverride,
     ) -> Result<GasEstimate, GasEstimationError> {
+        let _timer = CustomTimerGuard::new(self.metrics.total_gas_estimate_ms.clone());
         self.check_provided_limits(&op)?;
 
         let agg = op
@@ -196,6 +198,7 @@ where
             fee_estimator,
             verification_gas_estimator,
             call_gas_estimator,
+            metrics: Metrics::default(),
         }
     }
 }
@@ -249,6 +252,8 @@ where
             }
         }
 
+        let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
+
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
 
@@ -297,6 +302,8 @@ where
             }
         }
 
+        let _timer = CustomTimerGuard::new(self.metrics.pvg_estimate_ms.clone());
+
         // If not using calldata pre-verification gas, return 0
         let gas_price = if !self.chain_spec.da_pre_verification_gas {
             0
@@ -341,6 +348,7 @@ where
         block_hash: B256,
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
+        let _timer = CustomTimerGuard::new(self.metrics.cgl_estimate_ms.clone());
         // if set and non-zero, don't estimate
         if let Some(cl) = optional_op.call_gas_limit {
             if cl != 0 {
