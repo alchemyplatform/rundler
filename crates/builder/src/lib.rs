@@ -19,6 +19,7 @@
 ))]
 //! Bundle builder implementation for the Rundler.
 
+mod assigner;
 mod bundle_proposer;
 mod bundle_sender;
 

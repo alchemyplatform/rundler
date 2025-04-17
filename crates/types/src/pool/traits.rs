@@ -15,21 +15,32 @@ use std::pin::Pin;
 
 use alloy_primitives::{Address, B256};
 use futures_util::Stream;
-#[cfg(feature = "test-utils")]
-use mockall::automock;
 
 use super::{
     error::PoolError,
     types::{NewHead, PaymasterMetadata, PoolOperation, Reputation, ReputationStatus, StakeStatus},
 };
-use crate::{EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant};
+use crate::{
+    EntityUpdate, UserOperation, UserOperationId, UserOperationPermissions, UserOperationVariant,
+};
 
 /// Result type for pool server operations.
 pub type PoolResult<T> = std::result::Result<T, PoolError>;
 
+/// Summary of an operation in the pool
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PoolOperationSummary {
+    /// Entry point of the operation
+    pub entry_point: Address,
+    /// Hash of the operation
+    pub hash: B256,
+    /// Sender of the operation
+    pub sender: Address,
+}
+
 /// Pool server trait
-#[cfg_attr(feature = "test-utils", automock)]
 #[async_trait::async_trait]
+#[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait Pool: Send + Sync {
     /// Get the supported entry points of the pool
     async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>>;
@@ -46,8 +57,22 @@ pub trait Pool: Send + Sync {
         &self,
         entry_point: Address,
         max_ops: u64,
-        shard_index: u64,
         filter_id: Option<String>,
+    ) -> PoolResult<Vec<PoolOperation>>;
+
+    /// Get summaries of operations from the pool
+    async fn get_ops_summaries(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        filter_id: Option<String>,
+    ) -> PoolResult<Vec<PoolOperationSummary>>;
+
+    /// Get operations from the pool by hashes
+    async fn get_ops_by_hashes(
+        &self,
+        entry_point: Address,
+        hashes: Vec<B256>,
     ) -> PoolResult<Vec<PoolOperation>>;
 
     /// Get an operation from the pool by hash
@@ -129,4 +154,95 @@ pub trait Pool: Send + Sync {
         paymaster: bool,
         reputation: bool,
     ) -> PoolResult<()>;
+}
+
+impl From<&PoolOperation> for PoolOperationSummary {
+    fn from(op: &PoolOperation) -> Self {
+        Self {
+            entry_point: op.entry_point,
+            hash: op.uo.hash(),
+            sender: op.uo.sender(),
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+mockall::mock! {
+    pub Pool {}
+
+    #[async_trait::async_trait]
+    impl Pool for Pool {
+        async fn get_supported_entry_points(&self) -> PoolResult<Vec<Address>>;
+        async fn add_op(
+            &self,
+            op: UserOperationVariant,
+            perms: UserOperationPermissions,
+        ) -> PoolResult<B256>;
+        async fn get_ops(
+            &self,
+            entry_point: Address,
+            max_ops: u64,
+            filter_id: Option<String>,
+        ) -> PoolResult<Vec<PoolOperation>>;
+        async fn get_ops_summaries(
+            &self,
+            entry_point: Address,
+            max_ops: u64,
+            filter_id: Option<String>,
+        ) -> PoolResult<Vec<PoolOperationSummary>>;
+        async fn get_ops_by_hashes(
+            &self,
+            entry_point: Address,
+            hashes: Vec<B256>,
+        ) -> PoolResult<Vec<PoolOperation>>;
+        async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
+        async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
+        async fn remove_op_by_id(
+            &self,
+            entry_point: Address,
+            id: UserOperationId,
+        ) -> PoolResult<Option<B256>>;
+        async fn update_entities(
+            &self,
+            entry_point: Address,
+            entities: Vec<EntityUpdate>,
+        ) -> PoolResult<()>;
+        async fn subscribe_new_heads(
+            &self,
+            to_track: Vec<Address>,
+        ) -> PoolResult<Pin<Box<dyn Stream<Item = NewHead> + Send>>>;
+        async fn get_reputation_status(
+            &self,
+            entry_point: Address,
+            address: Address,
+        ) -> PoolResult<ReputationStatus>;
+        async fn get_stake_status(
+            &self,
+            entry_point: Address,
+            address: Address,
+        ) -> PoolResult<StakeStatus>;
+        async fn admin_set_tracking(
+            &self,
+            entry_point: Address,
+            paymaster: bool,
+            reputation: bool,
+        ) -> PoolResult<()>;
+        async fn debug_clear_state(
+            &self,
+            clear_mempool: bool,
+            clear_paymaster: bool,
+            clear_reputation: bool,
+        ) -> PoolResult<()>;
+        async fn debug_dump_mempool(&self, entry_point: Address) -> PoolResult<Vec<PoolOperation>>;
+        async fn debug_set_reputations(
+            &self,
+            entry_point: Address,
+            reputations: Vec<Reputation>,
+        ) -> PoolResult<()>;
+        async fn debug_dump_reputation(&self, entry_point: Address) -> PoolResult<Vec<Reputation>>;
+        async fn debug_dump_paymaster_balances(
+            &self,
+            entry_point: Address,
+        ) -> PoolResult<Vec<PaymasterMetadata>>;
+    }
 }
