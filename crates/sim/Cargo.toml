@@ -16,6 +16,8 @@ anyhow.workspace = true
 arrayvec = "0.7.6"
 async-trait.workspace = true
 futures-util.workspace = true
+metrics.workspace = true
+metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
 rand.workspace = true
 rundler-contracts.workspace = true
