@@ -1,6 +1,6 @@
 #!/bin/bash 
 # Launcher script for the rundler.
-
+set -x
 export TAG=latest
 export DISABLE_ENTRY_POINT_V0_6=false
 export DISABLE_ENTRY_POINT_V0_7=false

@@ -41,7 +41,8 @@ use super::protos::{
     add_op_response, admin_set_tracking_response, debug_clear_state_response,
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_response, get_reputation_status_response, get_stake_status_response,
+    get_ops_by_hashes_response, get_ops_response, get_ops_summaries_response,
+    get_reputation_status_response, get_stake_status_response,
     op_pool_server::{OpPool, OpPoolServer},
     remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
     AddOpResponse, AddOpSuccess, AdminSetTrackingRequest, AdminSetTrackingResponse,
@@ -51,10 +52,12 @@ use super::protos::{
     DebugDumpPaymasterBalancesSuccess, DebugDumpReputationRequest, DebugDumpReputationResponse,
     DebugDumpReputationSuccess, DebugSetReputationRequest, DebugSetReputationResponse,
     DebugSetReputationSuccess, GetOpByHashRequest, GetOpByHashResponse, GetOpByHashSuccess,
-    GetOpsRequest, GetOpsResponse, GetOpsSuccess, GetReputationStatusRequest,
-    GetReputationStatusResponse, GetReputationStatusSuccess, GetStakeStatusRequest,
-    GetStakeStatusResponse, GetStakeStatusSuccess, GetSupportedEntryPointsRequest,
-    GetSupportedEntryPointsResponse, MempoolOp, RemoveOpByIdRequest, RemoveOpByIdResponse,
+    GetOpsByHashesRequest, GetOpsByHashesResponse, GetOpsByHashesSuccess, GetOpsRequest,
+    GetOpsResponse, GetOpsSuccess, GetOpsSummariesRequest, GetOpsSummariesResponse,
+    GetOpsSummariesSuccess, GetReputationStatusRequest, GetReputationStatusResponse,
+    GetReputationStatusSuccess, GetStakeStatusRequest, GetStakeStatusResponse,
+    GetStakeStatusSuccess, GetSupportedEntryPointsRequest, GetSupportedEntryPointsResponse,
+    MempoolOp, PoolOperationSummary, RemoveOpByIdRequest, RemoveOpByIdResponse,
     RemoveOpByIdSuccess, RemoveOpsRequest, RemoveOpsResponse, RemoveOpsSuccess, ReputationStatus,
     SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
     UpdateEntitiesResponse, UpdateEntitiesSuccess, OP_POOL_FILE_DESCRIPTOR_SET,
@@ -194,11 +197,7 @@ impl OpPool for OpPoolImpl {
             Some(req.filter_id)
         };
 
-        let resp = match self
-            .local_pool
-            .get_ops(ep, req.max_ops, req.shard_index, filter_id)
-            .await
-        {
+        let resp = match self.local_pool.get_ops(ep, req.max_ops, filter_id).await {
             Ok(ops) => GetOpsResponse {
                 result: Some(get_ops_response::Result::Success(GetOpsSuccess {
                     ops: ops.iter().map(MempoolOp::from).collect(),
@@ -212,6 +211,71 @@ impl OpPool for OpPoolImpl {
         Ok(Response::new(resp))
     }
 
+    async fn get_ops_summaries(
+        &self,
+        request: Request<GetOpsSummariesRequest>,
+    ) -> Result<Response<GetOpsSummariesResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+
+        let filter_id = if req.filter_id.is_empty() {
+            None
+        } else {
+            Some(req.filter_id)
+        };
+
+        let resp = match self
+            .local_pool
+            .get_ops_summaries(ep, req.max_ops, filter_id)
+            .await
+        {
+            Ok(summaries) => GetOpsSummariesResponse {
+                result: Some(get_ops_summaries_response::Result::Success(
+                    GetOpsSummariesSuccess {
+                        summaries: summaries
+                            .into_iter()
+                            .map(PoolOperationSummary::from)
+                            .collect(),
+                    },
+                )),
+            },
+            Err(error) => GetOpsSummariesResponse {
+                result: Some(get_ops_summaries_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
+
+    async fn get_ops_by_hashes(
+        &self,
+        request: Request<GetOpsByHashesRequest>,
+    ) -> Result<Response<GetOpsByHashesResponse>> {
+        let req = request.into_inner();
+        let ep = self.get_entry_point(&req.entry_point)?;
+        let hashes: Vec<B256> = req
+            .hashes
+            .into_iter()
+            .map(|h| {
+                from_bytes(&h).map_err(|e| Status::invalid_argument(format!("Invalid hash: {e}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let resp = match self.local_pool.get_ops_by_hashes(ep, hashes).await {
+            Ok(ops) => GetOpsByHashesResponse {
+                result: Some(get_ops_by_hashes_response::Result::Success(
+                    GetOpsByHashesSuccess {
+                        ops: ops.iter().map(MempoolOp::from).collect(),
+                    },
+                )),
+            },
+            Err(error) => GetOpsByHashesResponse {
+                result: Some(get_ops_by_hashes_response::Result::Failure(error.into())),
+            },
+        };
+
+        Ok(Response::new(resp))
+    }
     async fn get_op_by_hash(
         &self,
         request: Request<GetOpByHashRequest>,
