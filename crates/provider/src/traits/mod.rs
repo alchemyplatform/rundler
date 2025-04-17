@@ -25,5 +25,8 @@ pub use entry_point::*;
 mod evm;
 pub use evm::*;
 
+mod fee_estimator;
+pub use fee_estimator::*;
+
 #[cfg(feature = "test-utils")]
 pub(crate) mod test_utils;

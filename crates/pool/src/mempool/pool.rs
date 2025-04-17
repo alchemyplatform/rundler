@@ -24,12 +24,11 @@ use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::DAGasOracleSync;
-use rundler_sim::FeeUpdate;
 use rundler_types::{
     chain::ChainSpec,
     da::DAGasBlockData,
     pool::{MempoolError, PoolOperation},
-    Entity, EntityType, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
+    Entity, EntityType, GasFees, Timestamp, UserOperation, UserOperationId, UserOperationVariant,
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::sync::broadcast;
@@ -231,7 +230,8 @@ where
         block_number: u64,
         block_timestamp: Timestamp,
         block_da_data: Option<&DAGasBlockData>,
-        gas_fees: FeeUpdate,
+        uo_fees: GasFees,
+        base_fee: u128,
     ) {
         let mut expired = Vec::new();
         let mut num_candidates = 0;
@@ -241,7 +241,7 @@ where
         self.best.clear();
 
         for (hash, op) in &mut self.by_hash {
-            op.update_gas_price(gas_fees.base_fee);
+            op.update_gas_price(base_fee);
 
             // check for expiry
             if op.po.valid_time_range.valid_until < block_timestamp {
@@ -305,7 +305,7 @@ where
                 let required_da_gas = da_gas_oracle.calc_da_gas_sync(
                     &op.po.da_gas_data,
                     block_da_data,
-                    op.uo().gas_price(gas_fees.base_fee),
+                    op.uo().gas_price(base_fee),
                     op.uo().extra_data_len(bundle_size),
                 );
 
@@ -345,8 +345,8 @@ where
             self.best.insert(op.clone());
 
             // Check candidate status
-            if (op.uo().max_fee_per_gas() < gas_fees.uo_fees.max_fee_per_gas
-                || op.uo().max_priority_fee_per_gas() < gas_fees.uo_fees.max_priority_fee_per_gas)
+            if (op.uo().max_fee_per_gas() < uo_fees.max_fee_per_gas
+                || op.uo().max_priority_fee_per_gas() < uo_fees.max_priority_fee_per_gas)
                 && op.po.perms.bundler_sponsorship.is_none()
             // skip if bundler sponsored
             {
@@ -1318,7 +1318,7 @@ mod tests {
         po1.valid_time_range.valid_until = Timestamp::from(1);
         let hash = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
-        pool.do_maintenance(0, Timestamp::from(2), None, FeeUpdate::default());
+        pool.do_maintenance(0, Timestamp::from(2), None, GasFees::default(), 0);
         assert_eq!(None, pool.get_operation_by_hash(hash));
     }
 
@@ -1338,7 +1338,7 @@ mod tests {
         po3.valid_time_range.valid_until = 9.into();
         let hash3 = pool.add_operation(po3.clone(), 0, 0).unwrap();
 
-        pool.do_maintenance(0, Timestamp::from(10), None, FeeUpdate::default());
+        pool.do_maintenance(0, Timestamp::from(10), None, GasFees::default(), 0);
 
         assert_eq!(None, pool.get_operation_by_hash(hash1));
         assert!(pool.get_operation_by_hash(hash2).is_some());
@@ -1388,7 +1388,8 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate::default(),
+            GasFees::default(),
+            0,
         );
 
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1); // UO is now eligible
@@ -1423,7 +1424,8 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate::default(),
+            GasFees::default(),
+            0,
         );
 
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
@@ -1458,7 +1460,8 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate::default(),
+            GasFees::default(),
+            0,
         );
 
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
@@ -1498,7 +1501,8 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate::default(),
+            GasFees::default(),
+            0,
         );
 
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 0);
@@ -1517,7 +1521,8 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate::default(),
+            GasFees::default(),
+            0,
         );
         assert!(pool.get_operation_by_hash(hash).is_some());
 
@@ -1526,7 +1531,8 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate::default(),
+            GasFees::default(),
+            0,
         );
         assert!(pool.get_operation_by_hash(hash).is_none());
     }
@@ -1567,17 +1573,11 @@ mod tests {
             0,
             0.into(),
             Some(&DAGasBlockData::default()),
-            FeeUpdate {
-                bundle_fees: GasFees {
-                    max_fee_per_gas: 21,
-                    max_priority_fee_per_gas: 10,
-                },
-                uo_fees: GasFees {
-                    max_fee_per_gas: 21,
-                    max_priority_fee_per_gas: 10,
-                },
-                base_fee: 11,
+            GasFees {
+                max_fee_per_gas: 21,
+                max_priority_fee_per_gas: 10,
             },
+            11,
         );
 
         // order swaps after base fee update
@@ -1596,7 +1596,7 @@ mod tests {
         });
         let hash = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
-        pool.do_maintenance(0, Timestamp::from(2), None, FeeUpdate::default());
+        pool.do_maintenance(0, Timestamp::from(2), None, GasFees::default(), 0);
         assert_eq!(None, pool.get_operation_by_hash(hash));
     }
 
@@ -1616,7 +1616,7 @@ mod tests {
         });
         let hash = pool.add_operation(po1.clone(), 0, 0).unwrap();
 
-        pool.do_maintenance(0, Timestamp::from(2), None, FeeUpdate::default());
+        pool.do_maintenance(0, Timestamp::from(2), None, GasFees::default(), 0);
         assert!(pool.get_operation_by_hash(hash).is_some());
         assert_eq!(pool.best_operations().collect::<Vec<_>>().len(), 1);
     }

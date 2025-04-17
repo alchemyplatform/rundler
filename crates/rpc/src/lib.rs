@@ -33,7 +33,7 @@ pub use eth::{EthApiClient, EthApiSettings};
 mod health;
 
 mod rundler;
-pub use rundler::{RundlerApiClient, Settings as RundlerApiSettings};
+pub use rundler::RundlerApiClient;
 
 mod task;
 pub use task::{Args as RpcTaskArgs, RpcTask};

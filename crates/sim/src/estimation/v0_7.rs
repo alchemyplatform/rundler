@@ -24,7 +24,8 @@ use rundler_contracts::v0_7::{
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_provider::{
-    AccountOverride, DAGasProvider, EntryPoint, EvmProvider, SimulationProvider, StateOverride,
+    AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, SimulationProvider,
+    StateOverride,
 };
 use rundler_types::{
     chain::ChainSpec,
@@ -37,7 +38,7 @@ use tracing::instrument;
 
 use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
 use crate::{
-    gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization, FeeEstimator,
+    gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
     VerificationGasEstimator, VerificationGasEstimatorImpl, MIN_CALL_GAS_LIMIT,
 };
 
@@ -382,7 +383,10 @@ where
             0
         } else {
             // If the user provides fees, use them, otherwise use the current bundle fees
-            let (bundle_fees, base_fee) = self.fee_estimator.required_bundle_fees(None).await?;
+            let (bundle_fees, base_fee) = self
+                .fee_estimator
+                .required_bundle_fees(block_hash, None)
+                .await?;
             if let (Some(max_fee), Some(prio_fee)) = (
                 optional_op.max_fee_per_gas.filter(|fee| *fee != 0),
                 optional_op.max_priority_fee_per_gas.filter(|fee| *fee != 0),
@@ -534,11 +538,12 @@ mod tests {
 
     use alloy_primitives::{hex, U256};
     use alloy_sol_types::{Revert, SolCall, SolError};
-    use gas::MockFeeEstimator;
     use rundler_contracts::v0_7::{
         CallGasEstimationProxy::TestCallGasResult, IEntryPointSimulations,
     };
-    use rundler_provider::{EvmCall, ExecutionResult, MockEntryPointV0_7, MockEvmProvider};
+    use rundler_provider::{
+        EvmCall, ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
+    };
     use rundler_types::v0_7::UserOperationOptionalGas;
 
     use super::*;

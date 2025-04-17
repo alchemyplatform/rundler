@@ -457,7 +457,7 @@ where
 
         let (estimated_fees, _) = self
             .proposer
-            .estimate_gas_fees(None)
+            .estimate_gas_fees(state.block_hash(), None)
             .await
             .unwrap_or_default();
 
@@ -649,7 +649,13 @@ where
 
         let bundle = match self
             .proposer
-            .make_bundle(ops, balance, required_fees, fee_increase_count > 0)
+            .make_bundle(
+                ops,
+                state.block_hash(),
+                balance,
+                required_fees,
+                fee_increase_count > 0,
+            )
             .await
         {
             Ok(bundle) => bundle,
@@ -1051,6 +1057,10 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
 
     fn block_number(&self) -> u64 {
         self.trigger.last_block().block_number
+    }
+
+    fn block_hash(&self) -> B256 {
+        self.trigger.last_block().block_hash
     }
 
     fn send_result(&mut self, result: SendBundleResult) {
@@ -1482,7 +1492,7 @@ mod tests {
     use mockall::Sequence;
     use rundler_provider::{
         GethDebugTracerCallFrame, MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider,
-        ProvidersWithEntryPoint,
+        MockFeeEstimator, ProvidersWithEntryPoint,
     };
     use rundler_types::{
         chain::ChainSpec,
@@ -1552,7 +1562,7 @@ mod tests {
         mock_proposer
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _| Box::pin(async { Ok(Bundle::<UserOperation>::default()) }));
+            .returning(|_, _, _, _, _| Box::pin(async { Ok(Bundle::<UserOperation>::default()) }));
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
 
@@ -1618,7 +1628,7 @@ mod tests {
         mock_proposer
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _| Box::pin(async { Ok(bundle()) }));
+            .returning(|_, _, _, _, _| Box::pin(async { Ok(bundle()) }));
 
         // should create the bundle txn
         mock_entry_point
@@ -1840,7 +1850,7 @@ mod tests {
         mock_proposer
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _| {
+            .returning(|_, _, _, _, _| {
                 Box::pin(async { Err(BundleProposerError::NoOperationsAfterFeeFilter) })
             });
 
@@ -1886,7 +1896,7 @@ mod tests {
         mock_proposer
             .expect_estimate_gas_fees()
             .once()
-            .returning(|_| Box::pin(async { Ok((GasFees::default(), 0)) }));
+            .returning(|_, _| Box::pin(async { Ok((GasFees::default(), 0)) }));
 
         mock_tracker
             .expect_cancel_transaction()
@@ -2016,7 +2026,7 @@ mod tests {
         mock_proposer
             .expect_make_bundle()
             .times(1)
-            .returning(|_, _, _, _| Box::pin(async { Ok(bundle()) }));
+            .returning(|_, _, _, _, _| Box::pin(async { Ok(bundle()) }));
 
         // should get balance of sender
         mock_evm
@@ -2235,6 +2245,7 @@ mod tests {
             Arc<MockEvmProvider>,
             Arc<MockEntryPointV0_6>,
             Arc<MockDAGasOracleSync>,
+            Arc<MockFeeEstimator>,
         >,
         MockTransactionTracker,
         Arc<MockPool>,
@@ -2250,7 +2261,12 @@ mod tests {
             Address::default(),
             None,
             mock_proposer,
-            ProvidersWithEntryPoint::new(Arc::new(mock_evm), Arc::new(mock_entry_point), None),
+            ProvidersWithEntryPoint::new(
+                Arc::new(mock_evm),
+                Arc::new(mock_entry_point),
+                None,
+                Arc::new(MockFeeEstimator::new()),
+            ),
             MockTransactionTracker::new(),
             Arc::new(Assigner::new(Box::new(pool.clone()), 1024, 1024)),
             pool,
