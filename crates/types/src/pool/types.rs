@@ -30,15 +30,15 @@ pub struct NewHead {
     pub address_updates: Vec<AddressUpdate>,
 }
 
-/// An update to the state of an address
+/// An the state of an address
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AddressUpdate {
-    /// The address that was updated
+    /// The address being tracked
     pub address: Address,
-    /// The new nonce for the address
-    pub nonce: u64,
-    /// The new balance for the address
+    /// The balance for the address
     pub balance: U256,
+    /// Maybe a new nonce for the address
+    pub nonce: Option<u64>,
     /// Mined transaction hashes
     pub mined_tx_hashes: Vec<B256>,
 }

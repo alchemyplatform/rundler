@@ -13,7 +13,7 @@
 
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256};
 use anyhow::{bail, Context};
 use async_trait::async_trait;
 use futures::Stream;
@@ -50,7 +50,9 @@ use crate::{
     assigner::Assigner,
     bundle_proposer::{Bundle, BundleProposer, BundleProposerError},
     emit::{BuilderEvent, BundleTxDetails},
-    transaction_tracker::{TrackerUpdate, TransactionTracker, TransactionTrackerError},
+    transaction_tracker::{
+        TrackerState, TrackerUpdate, TransactionTracker, TransactionTrackerError,
+    },
     BuilderSettings,
 };
 
@@ -628,8 +630,12 @@ where
         ops: Vec<PoolOperation>,
         fee_increase_count: u64,
     ) -> anyhow::Result<SendBundleAttemptResult> {
-        let (nonce, required_fees) = state.transaction_tracker.get_nonce_and_required_fees()?;
-        let balance = state.get_balance(self.ep_providers.evm()).await?;
+        let TrackerState {
+            nonce,
+            required_fees,
+            balance,
+        } = state.transaction_tracker.get_state()?;
+
         let bundle = match self
             .proposer
             .make_bundle(ops, balance, required_fees, fee_increase_count > 0)
@@ -906,7 +912,6 @@ struct SenderMachineState<T, TRIG> {
     send_bundle_response: Option<oneshot::Sender<SendBundleResult>>,
     inner: InnerState,
     requires_reset: bool,
-    balance: Option<U256>,
 }
 
 impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
@@ -917,7 +922,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
             send_bundle_response: None,
             inner: InnerState::new(),
             requires_reset: false,
-            balance: None,
         }
     }
 
@@ -995,23 +999,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
      * Helpers
      */
 
-    fn update_balance(&mut self, balance: U256) {
-        self.balance = Some(balance);
-    }
-
-    async fn get_balance(&mut self, provider: impl EvmProvider) -> anyhow::Result<U256> {
-        // TODO this balance can be stale if the sender has been recently funded
-        // if let Some(balance) = self.balance {
-        //     return Ok(balance);
-        // }
-
-        let balance = provider
-            .get_balance(self.transaction_tracker.address(), None)
-            .await?;
-        self.balance = Some(balance);
-        Ok(balance)
-    }
-
     async fn wait_for_trigger(&mut self) -> anyhow::Result<Option<TrackerUpdate>> {
         if self.requires_reset {
             self.transaction_tracker.reset().await;
@@ -1029,7 +1016,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
                 let Some(update) = self.find_address_update() else {
                     return Ok(None);
                 };
-                self.update_balance(update.balance);
 
                 self.transaction_tracker
                     .process_update(&update)
@@ -1042,7 +1028,6 @@ impl<T: TransactionTracker, TRIG: Trigger> SenderMachineState<T, TRIG> {
                 let Some(update) = self.find_address_update() else {
                     return Ok(None);
                 };
-                self.update_balance(update.balance);
 
                 self.transaction_tracker
                     .process_update(&update)
@@ -1272,7 +1257,6 @@ impl Trigger for BundleSenderTrigger {
                         bail!("Block stream closed");
                     };
 
-                    tracing::info!("received new head: {:?}", b);
                     self.last_block = b;
 
                     match self.bundling_mode {
@@ -1325,7 +1309,6 @@ impl Trigger for BundleSenderTrigger {
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("Block stream closed"))?;
-        tracing::info!("received new head: {:?}", self.last_block);
         self.consume_blocks()?;
         Ok(self.last_block.clone())
     }
@@ -1399,7 +1382,6 @@ impl BundleSenderTrigger {
         loop {
             match self.block_rx.try_recv() {
                 Ok(b) => {
-                    tracing::info!("received new head: {:?}", b);
                     self.last_block = b;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {
@@ -1529,9 +1511,13 @@ mod tests {
         add_trigger_no_update_last_block(&mut mock_trigger, &mut Sequence::new(), 0);
 
         // zero nonce
-        mock_tracker
-            .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((0, None)));
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
         mock_tracker.expect_address().return_const(Address::ZERO);
 
         mock_evm
@@ -1591,9 +1577,13 @@ mod tests {
         add_trigger_no_update_last_block(&mut mock_trigger, &mut Sequence::new(), 0);
 
         // zero nonce
-        mock_tracker
-            .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((0, None)));
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
         mock_tracker.expect_address().return_const(Address::ZERO);
 
         mock_evm
@@ -1667,7 +1657,7 @@ mod tests {
             block_hash: B256::ZERO,
             address_updates: vec![AddressUpdate {
                 address: Address::ZERO,
-                nonce: 0,
+                nonce: Some(0),
                 balance: U256::ZERO,
                 mined_tx_hashes: vec![B256::ZERO],
             }],
@@ -1719,7 +1709,6 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
-            balance: None,
         };
 
         // first step has no update
@@ -1769,7 +1758,6 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
-            balance: None,
         };
 
         // first and second step has no update
@@ -1808,9 +1796,13 @@ mod tests {
         add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 3);
 
         // zero nonce
-        mock_tracker
-            .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((0, None)));
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
         mock_tracker.expect_address().return_const(Address::ZERO);
 
         mock_evm
@@ -1856,7 +1848,6 @@ mod tests {
                 }),
             }),
             requires_reset: false,
-            balance: None,
         };
 
         // step state, block number should trigger move to cancellation
@@ -1904,7 +1895,6 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
-            balance: None,
         };
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
@@ -1944,7 +1934,6 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
-            balance: None,
         };
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
@@ -1984,9 +1973,13 @@ mod tests {
         add_trigger_no_update_last_block(&mut mock_trigger, &mut seq, 1);
 
         // zero nonce
-        mock_tracker
-            .expect_get_nonce_and_required_fees()
-            .returning(|| Ok((0, None)));
+        mock_tracker.expect_get_state().returning(|| {
+            Ok(TrackerState {
+                nonce: 0,
+                balance: U256::ZERO,
+                required_fees: None,
+            })
+        });
         mock_tracker.expect_address().return_const(Address::ZERO);
 
         mock_pool
@@ -2041,7 +2034,6 @@ mod tests {
                 underpriced_info: None,
             }),
             requires_reset: false,
-            balance: None,
         };
 
         let mut sender = new_sender(mock_proposer, mock_entry_point, mock_evm, mock_pool);
@@ -2078,7 +2070,7 @@ mod tests {
             block_hash: B256::ZERO,
             address_updates: vec![AddressUpdate {
                 address: Address::ZERO,
-                nonce: 0,
+                nonce: Some(0),
                 balance: U256::ZERO,
                 mined_tx_hashes: vec![B256::ZERO],
             }],
@@ -2169,7 +2161,6 @@ mod tests {
                 fee_increase_count: 0,
             }),
             requires_reset: false,
-            balance: None,
         };
 
         // first step has no update
