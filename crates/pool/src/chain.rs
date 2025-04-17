@@ -580,18 +580,25 @@ impl<P: EvmProvider> Chain<P> {
     }
 
     async fn load_address_updates(&self, block: &Block) -> anyhow::Result<Vec<AddressUpdate>> {
-        let mut updates = HashMap::new();
+        let mut updates: HashMap<Address, AddressUpdate> =
+            HashMap::from_iter(self.to_track.read().iter().map(|a| {
+                (
+                    *a,
+                    AddressUpdate {
+                        address: *a,
+                        nonce: None,
+                        balance: U256::ZERO,
+                        mined_tx_hashes: vec![],
+                    },
+                )
+            }));
+
         for tx in block.transactions.txns() {
             if self.to_track.read().contains(&tx.from) {
                 let nonce = tx.nonce();
-                let update = updates.entry(tx.from).or_insert(AddressUpdate {
-                    address: tx.from,
-                    nonce,
-                    balance: U256::ZERO, // placeholder
-                    mined_tx_hashes: vec![],
-                });
-                if nonce > update.nonce {
-                    update.nonce = nonce;
+                let update = updates.get_mut(&tx.from).unwrap();
+                if nonce >= update.nonce.unwrap_or(0) {
+                    update.nonce = Some(nonce);
                 }
                 update.mined_tx_hashes.push(tx.inner.tx_hash());
             }
@@ -605,17 +612,14 @@ impl<P: EvmProvider> Chain<P> {
 
         ensure!(
             updates.len() == balances.len(),
-            "updates and balances should have the same length"
+            "tracked addresses and balances should have the same length"
         );
 
-        Ok(updates
-            .into_values()
-            .zip(balances.into_iter())
-            .map(|(mut update, balance)| {
-                update.balance = balance.1;
-                update
-            })
-            .collect())
+        for (address, balance) in balances {
+            updates.get_mut(&address).unwrap().balance = balance;
+        }
+
+        Ok(updates.into_values().collect())
     }
 
     async fn load_events_in_block(
@@ -1659,7 +1663,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
                     address: addr(0),
-                    nonce: 0,
+                    nonce: Some(0),
                     balance: U256::from(100),
                     mined_tx_hashes: tx_hashes,
                 }],
@@ -1706,7 +1710,7 @@ mod tests {
                 unmined_entity_balance_updates: vec![],
                 address_updates: vec![AddressUpdate {
                     address: addr(0),
-                    nonce: 1,
+                    nonce: Some(1),
                     balance: U256::from(100),
                     mined_tx_hashes: tx_hashes,
                 }],

@@ -558,8 +558,8 @@ message NewHead {
 message AddressUpdate {
   // The address
   bytes address = 1;
-  // The new nonce  
-  uint64 nonce = 2;
+  // The new nonce (if any)
+  optional uint64 nonce = 2;
   // The new balance
   bytes balance = 3;
   // The mined tx hashes
