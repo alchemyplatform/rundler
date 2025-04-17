@@ -192,6 +192,7 @@ impl LocalBuilderServerRunner {
                         tracing::error!("new head stream closed");
                         panic!("new head stream closed");
                     };
+                    tracing::info!("received new head: {:?}", new_head);
 
                     let balances = new_head.address_updates.iter().map(|update| (update.address, update.balance)).collect();
                     self.signer_manager.update_balances(balances);
