@@ -23,7 +23,8 @@ use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
-    v0_6, v0_7, ExpectedStorage, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
+    v0_6, v0_7, EntryPointVersion, ExpectedStorage, GasFees, UserOpsPerAggregator,
+    ValidationOutput, ValidationRevert,
 };
 
 use super::error::ProviderResult;
@@ -132,6 +133,7 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl EntryPoint for EntryPointV0_6 {
+        fn version(&self) -> EntryPointVersion;
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
@@ -207,6 +209,7 @@ mockall::mock! {
             gas_limit: u64,
             gas_fees: GasFees,
             proxy: Option<Address>,
+            validation_only: bool,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
@@ -231,6 +234,7 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl EntryPoint for EntryPointV0_7 {
+        fn version(&self) -> EntryPointVersion;
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
@@ -306,6 +310,7 @@ mockall::mock! {
             gas_limit: u64,
             gas_fees: GasFees,
             proxy: Option<Address>,
+            validation_only: bool,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
