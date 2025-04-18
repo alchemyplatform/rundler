@@ -41,9 +41,9 @@ use rundler_types::{
     pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
     BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
-    EntityUpdateType, ExpectedStorage, GasFees, Timestamp, UserOperation, UserOperationVariant,
-    UserOpsPerAggregator, ValidTimeRange, ValidationRevert, BUNDLE_BYTE_OVERHEAD,
-    TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, Timestamp, UserOperation,
+    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
+    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
 use tokio::sync::broadcast;
@@ -965,11 +965,20 @@ where
             .try_into()
             .context("estimated bundle gas limit is larger than u64::MAX")?;
 
-        // call handle ops with the bundle to filter any rejected ops before sending
-        // TODO: if EP v0.7
-        // - if only 1 op, skip this call as simulation has already run a similar check
-        // - if more than 1 op, add a reverting UO to the bundle and call handle ops, this will skip running the execution portion of the op
+        // if EP v0.7+ and only 1 op, skip this call as simulation has already run a similar check
+        // v0.6 cannot do this as we need to check for postOp reverts
+        if self.ep_providers.entry_point().version() != EntryPointVersion::V0_6
+            && context.iter_ops().count() == 1
+        {
+            return Ok(Some(gas_limit));
+        }
+
+        // validate the bundle to filter any rejected ops before sending
         let start = Instant::now();
+        // if not using a proxy, and using v0.7+, we can only run validation and skip execution
+        let validation_only = self.settings.submission_proxy.is_none()
+            && self.ep_providers.entry_point().version() != EntryPointVersion::V0_6;
+
         let handle_ops_out = self
             .ep_providers
             .entry_point()
@@ -979,6 +988,7 @@ where
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                validation_only,
             )
             .await
             .context("should call handle ops with candidate bundle")?;
@@ -1235,6 +1245,7 @@ where
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                false,
             )
             .await;
         match ret {
@@ -1276,6 +1287,7 @@ where
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                false,
             )
             .await;
         match ret {
@@ -3853,14 +3865,17 @@ mod tests {
             });
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
+            .expect_version()
+            .returning(move || EntryPointVersion::V0_6);
+        entry_point
             .expect_address()
             .return_const(chain_spec.entry_point_address_v0_6);
         for call_res in mock_handle_ops_call_results {
             entry_point
                 .expect_call_handle_ops()
                 .times(..=1)
-                .withf(move |_, &b, _, _, &p| b == sender_eoa && p == proxy_address)
-                .return_once(|_, _, _, _, _| Ok(call_res));
+                .withf(move |_, &b, _, _, &p, _| b == sender_eoa && p == proxy_address)
+                .return_once(|_, _, _, _, _, _| Ok(call_res));
         }
         for deposit in mock_paymaster_deposits {
             entry_point
