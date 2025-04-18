@@ -34,7 +34,8 @@ use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
     v0_6::{UserOperation, UserOperationBuilder},
-    GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
+    EntryPointVersion, GasFees, UserOperation as _, UserOpsPerAggregator, ValidationOutput,
+    ValidationRevert,
 };
 use rundler_utils::authorization_utils;
 use tracing::instrument;
@@ -93,6 +94,10 @@ where
     AP: AlloyProvider<T>,
     D: Send + Sync,
 {
+    fn version(&self) -> EntryPointVersion {
+        EntryPointVersion::V0_6
+    }
+
     fn address(&self) -> &Address {
         self.i_entry_point.address()
     }
@@ -246,6 +251,7 @@ where
         gas_limit: u64,
         gas_fees: GasFees,
         proxy: Option<Address>,
+        _validation_only: bool,
     ) -> ProviderResult<HandleOpsOut> {
         let tx = get_handle_ops_call(
             &self.i_entry_point,

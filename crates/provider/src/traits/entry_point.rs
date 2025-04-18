@@ -15,7 +15,8 @@ use alloy_primitives::{Address, Bytes, U256};
 use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
-    GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
+    EntryPointVersion, GasFees, Timestamp, UserOperation, UserOpsPerAggregator, ValidationOutput,
+    ValidationRevert,
 };
 
 use crate::{
@@ -92,6 +93,9 @@ pub struct ExecutionResult {
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
 pub trait EntryPoint: Send + Sync {
+    /// Get the version of the entry point contract
+    fn version(&self) -> EntryPointVersion;
+
     /// Get the address of the entry point contract
     fn address(&self) -> &Address;
 
@@ -145,6 +149,7 @@ pub trait BundleHandler: Send + Sync {
         gas_limit: u64,
         gas_fees: GasFees,
         proxy: Option<Address>,
+        validation_only: bool,
     ) -> ProviderResult<HandleOpsOut>;
 
     /// Construct the transaction to send a bundle of operations to the entry point contract
