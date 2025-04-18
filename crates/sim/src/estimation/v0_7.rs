@@ -36,7 +36,7 @@ use rundler_utils::{guard_timer::CustomTimerGuard, math};
 use tokio::join;
 use tracing::instrument;
 
-use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Metrics, Settings};
+use super::{estimate_verification_gas::EstimateGasArgs, GasEstimationError, Metrics, Settings};
 use crate::{
     gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
     VerificationGasEstimator, VerificationGasEstimatorImpl, MIN_CALL_GAS_LIMIT,
@@ -171,7 +171,7 @@ impl<P, E, F>
     GasEstimator<
         P,
         E,
-        VerificationGasEstimatorImpl<P, E>,
+        VerificationGasEstimatorImpl<UserOperation>,
         CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV07>,
         F,
     >
@@ -195,12 +195,8 @@ where
             panic!("Invalid gas estimator settings: {}", err);
         }
 
-        let verification_gas_estimator = VerificationGasEstimatorImpl::new(
-            chain_spec.clone(),
-            provider.clone(),
-            entry_point.clone(),
-            settings,
-        );
+        let verification_gas_estimator =
+            VerificationGasEstimatorImpl::new(chain_spec.clone(), settings);
         let call_gas_estimator = CallGasEstimatorImpl::new(
             entry_point.clone(),
             settings,
@@ -288,26 +284,14 @@ where
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
 
-        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
-            let GetOpWithLimitArgs { gas, fee } = args;
-            // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
-            UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .max_fee_per_gas(fee)
-                .max_priority_fee_per_gas(fee)
-                .verification_gas_limit(gas)
-                .call_gas_limit(0)
-                .build()
+        let estimate_gas = |_op: UserOperation, _args: EstimateGasArgs<'_>| async {
+            // TODO: implement
+            Ok(Err(Bytes::new()))
         };
 
         let verification_gas_limit = self
             .verification_gas_estimator
-            .estimate_verification_gas(
-                full_op,
-                block_hash,
-                state_override,
-                self.settings.max_verification_gas,
-                get_op_with_limit,
-            )
+            .estimate_verification_gas(full_op, block_hash, state_override, estimate_gas)
             .await?;
 
         let verification_gas_limit = math::increase_by_percent(
@@ -340,26 +324,14 @@ where
 
         let _timer = CustomTimerGuard::new(self.metrics.pvgl_estimate_ms.clone());
 
-        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
-            let GetOpWithLimitArgs { gas, fee } = args;
-            // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
-            UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .max_fee_per_gas(fee)
-                .max_priority_fee_per_gas(fee)
-                .paymaster_verification_gas_limit(gas)
-                .call_gas_limit(0)
-                .build()
+        let estimate_gas = |_op: UserOperation, _args: EstimateGasArgs<'_>| async {
+            // TODO: implement
+            Ok(Err(Bytes::new()))
         };
 
         let paymaster_verification_gas_limit = self
             .verification_gas_estimator
-            .estimate_verification_gas(
-                full_op,
-                block_hash,
-                state_override,
-                self.settings.max_paymaster_verification_gas,
-                get_op_with_limit,
-            )
+            .estimate_verification_gas(full_op, block_hash, state_override, estimate_gas)
             .await?;
 
         let paymaster_verification_gas_limit = math::increase_by_percent(
@@ -560,8 +532,7 @@ mod tests {
     };
 
     // Alises for complex types (which also satisfy Clippy)
-    type VerificationGasEstimatorWithMocks =
-        VerificationGasEstimatorImpl<Arc<MockEvmProvider>, Arc<MockEntryPointV0_7>>;
+    type VerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<UserOperation>;
     type CallGasEstimatorWithMocks =
         CallGasEstimatorImpl<Arc<MockEntryPointV0_7>, CallGasEstimatorSpecializationV07>;
     type GasEstimatorWithMocks = GasEstimator<

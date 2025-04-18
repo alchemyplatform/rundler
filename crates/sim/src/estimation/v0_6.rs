@@ -41,7 +41,7 @@ use super::{
     Metrics, Settings, VerificationGasEstimator,
 };
 use crate::{
-    estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
+    estimation::estimate_verification_gas::EstimateGasArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
     simulation, GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
 };
 
@@ -118,10 +118,7 @@ where
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
-        let timer = std::time::Instant::now();
         let (verification_gas_limit, call_gas_limit) = join!(verification_future, call_future);
-        tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
-
         let verification_gas_limit = verification_gas_limit?;
         let call_gas_limit = call_gas_limit?;
 
@@ -153,7 +150,7 @@ impl<P, E, F>
     GasEstimator<
         P,
         E,
-        VerificationGasEstimatorImpl<P, E>,
+        VerificationGasEstimatorImpl<UserOperation>,
         CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV06>,
         F,
     >
@@ -177,12 +174,8 @@ where
             panic!("Invalid gas estimator settings: {}", err);
         }
 
-        let verification_gas_estimator = VerificationGasEstimatorImpl::new(
-            chain_spec.clone(),
-            provider.clone(),
-            entry_point.clone(),
-            settings,
-        );
+        let verification_gas_estimator =
+            VerificationGasEstimatorImpl::new(chain_spec.clone(), settings);
         let call_gas_estimator = CallGasEstimatorImpl::new(
             entry_point.clone(),
             settings,
@@ -254,26 +247,14 @@ where
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
 
-        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
-            let GetOpWithLimitArgs { gas, fee } = args;
-
-            UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .verification_gas_limit(gas)
-                .max_fee_per_gas(fee)
-                .max_priority_fee_per_gas(fee)
-                .call_gas_limit(0)
-                .build()
+        let estimate_gas = |_op: UserOperation, _args: EstimateGasArgs<'_>| async {
+            // TODO: implement
+            Ok(Err(Bytes::new()))
         };
 
         let verification_gas_limit: u128 = self
             .verification_gas_estimator
-            .estimate_verification_gas(
-                full_op,
-                block_hash,
-                state_override,
-                self.settings.max_verification_gas,
-                get_op_with_limit,
-            )
+            .estimate_verification_gas(full_op, block_hash, state_override, estimate_gas)
             .await?;
 
         // Add a buffer to the verification gas limit. Add 10% or 2000 gas, whichever is larger
@@ -485,8 +466,7 @@ mod tests {
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
     use CallGasEstimationProxy::{
-        EstimateCallGasContinuation, EstimateCallGasResult, EstimateCallGasRevertAtMax,
-        TestCallGasResult,
+        EstimateCallGasResult, EstimateGasContinuation, EstimateGasRevertAtMax, TestCallGasResult,
     };
 
     use super::*;
@@ -510,8 +490,7 @@ mod tests {
     const BUNDLE_SIZE: u32 = 1;
 
     // Alises for complex types (which also satisfy Clippy)
-    type VerificationGasEstimatorWithMocks =
-        VerificationGasEstimatorImpl<Arc<MockEvmProvider>, Arc<MockEntryPointV0_6>>;
+    type VerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<UserOperation>;
     type CallGasEstimatorWithMocks =
         CallGasEstimatorImpl<Arc<MockEntryPointV0_6>, CallGasEstimatorSpecializationV06>;
     type GasEstimatorWithMocks = GasEstimator<
@@ -1166,7 +1145,7 @@ mod tests {
             .expect_simulate_handle_op()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
-                    target_result: EstimateCallGasRevertAtMax {
+                    target_result: EstimateGasRevertAtMax {
                         revertData: Bytes::new(),
                     }
                     .abi_encode()
@@ -1203,7 +1182,7 @@ mod tests {
             .expect_simulate_handle_op()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
-                    target_result: EstimateCallGasContinuation {
+                    target_result: EstimateGasContinuation {
                         minGas: U256::from(100),
                         maxGas: U256::from(100000),
                         numRounds: U256::from(10),

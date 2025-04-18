@@ -224,15 +224,41 @@ sol!(
 
         error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
 
-        error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+        error EstimateGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
 
-        error EstimateCallGasRevertAtMax(bytes revertData);
+        error EstimateGasRevertAtMax(bytes revertData);
 
         error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
 
         function estimateCallGas(EstimateCallGasArgs calldata args) external;
 
         function testCallGas(PackedUserOperation calldata userOp, uint256 callGasLimit) external;
+    }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    contract VerificationGasEstimationHelper {
+        struct EstimateGasArgs {
+            address entryPointSimulations;
+            PackedUserOperation userOp;
+            uint256 minGas;
+            uint256 maxGas;
+            uint256 rounding;
+        }
+
+        struct EstimateGasResult {
+            uint256 gasEstimate;
+            uint256 numRounds;
+        }
+
+        error EstimateGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+
+        error EstimateGasRevertAtMax(bytes revertData);
+
+        function estimateVerificationGas(EstimateGasArgs calldata args) external returns (EstimateGasResult memory);
+
+        function estimatePaymasterVerificationGas(EstimateGasArgs calldata args) external returns (EstimateGasResult memory);
     }
 );
 

@@ -153,6 +153,13 @@ sol! {
     "contracts/out/v0_6/CallGasEstimationProxy.sol/CallGasEstimationProxy.json"
 }
 
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    VerificationGasEstimationHelper,
+    "contracts/out/v0_6/VerificationGasEstimationHelper.sol/VerificationGasEstimationHelper.json"
+}
+
 sol!(
     #[allow(missing_docs)]
     #[sol(rpc)]
