@@ -610,6 +610,11 @@ where
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext<<Self as BundleProposer>::UO> {
+        if max_bundle_fee == U256::ZERO {
+            return ProposalContext::<<Self as BundleProposer>::UO>::new();
+        }
+        let buffered_max_bundle_fee = max_bundle_fee * U256::from(90) / U256::from(100);
+
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
             .map(|(op, _)| op.op.uo.sender())
@@ -710,7 +715,7 @@ where
             let op_total_gas_limit = op.gas_limit(&self.settings.chain_spec, None);
             let total_gas_cost = U256::from(total_gas_spent.saturating_add(op_total_gas_limit))
                 * U256::from(gas_price);
-            if total_gas_cost > max_bundle_fee {
+            if total_gas_cost > buffered_max_bundle_fee {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
