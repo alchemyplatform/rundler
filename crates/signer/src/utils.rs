@@ -24,7 +24,7 @@ pub(crate) fn set_balance_gauge(gauge: &Gauge, address: Address, balance: U256) 
     match eth_string.parse::<f64>() {
         Ok(eth_f64) => {
             gauge.set(eth_f64);
-            tracing::info!("account {address:?} balance: {eth_f64:.6}");
+            tracing::debug!("account {address:?} balance: {eth_f64:.6}");
         }
         Err(err) => {
             tracing::error!("Parse balance {balance} to eth {eth_string} to f64 error {err:?}");

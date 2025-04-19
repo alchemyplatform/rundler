@@ -37,9 +37,11 @@ pub use alloy::{
     evm::AlloyEvmProvider,
     new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider,
 };
+mod fees;
 pub use alloy_provider::network::{AnyHeader, AnyNetwork, AnyReceiptEnvelope, AnyTxEnvelope};
 pub use alloy_serde::WithOtherFields;
 use alloy_transport::{BoxTransport, Transport};
+pub use fees::new_fee_estimator;
 mod traits;
 // re-export alloy RPC types
 use std::marker::PhantomData;
@@ -104,6 +106,9 @@ pub trait Providers: Send + Sync + Clone {
     /// The DA gas oracle sync provider.
     type DAGasOracleSync: DAGasOracleSync + Clone;
 
+    /// The fee estimator.
+    type FeeEstimator: FeeEstimator + Clone;
+
     /// Returns the EVM provider.
     fn evm(&self) -> &Self::Evm;
 
@@ -119,6 +124,9 @@ pub trait Providers: Send + Sync + Clone {
     /// Returns the DA gas oracle sync provider.
     fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync>;
 
+    /// Returns the fee estimator.
+    fn fee_estimator(&self) -> &Self::FeeEstimator;
+
     /// Returns the providers with the entry point for v0.6.
     #[allow(clippy::type_complexity)]
     fn ep_v0_6_providers(
@@ -129,12 +137,14 @@ pub trait Providers: Send + Sync + Clone {
             Self::Evm,
             Self::EntryPointV0_6,
             Self::DAGasOracleSync,
+            Self::FeeEstimator,
         >,
     > {
         self.ep_v0_6().as_ref().map(|ep| ProvidersWithEntryPoint {
             evm: self.evm().clone(),
             ep: ep.clone(),
             da_gas_oracle_sync: self.da_gas_oracle_sync().clone(),
+            fee_estimator: self.fee_estimator().clone(),
             _phantom: PhantomData,
         })
     }
@@ -149,12 +159,14 @@ pub trait Providers: Send + Sync + Clone {
             Self::Evm,
             Self::EntryPointV0_7,
             Self::DAGasOracleSync,
+            Self::FeeEstimator,
         >,
     > {
         self.ep_v0_7().as_ref().map(|ep| ProvidersWithEntryPoint {
             evm: self.evm().clone(),
             ep: ep.clone(),
             da_gas_oracle_sync: self.da_gas_oracle_sync().clone(),
+            fee_estimator: self.fee_estimator().clone(),
             _phantom: PhantomData,
         })
     }
@@ -174,6 +186,9 @@ pub trait ProvidersWithEntryPointT: Send + Sync + Clone {
     /// The DA gas oracle sync provider.
     type DAGasOracleSync: DAGasOracleSync + Clone;
 
+    /// The fee estimator.
+    type FeeEstimator: FeeEstimator + Clone;
+
     /// Returns the EVM provider.
     fn evm(&self) -> &Self::Evm;
 
@@ -182,40 +197,47 @@ pub trait ProvidersWithEntryPointT: Send + Sync + Clone {
 
     /// Returns the DA gas oracle sync provider.
     fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync>;
+
+    /// Returns the fee estimator.
+    fn fee_estimator(&self) -> &Self::FeeEstimator;
 }
 
 /// Container for providers with a specific entry point.
 #[derive(Clone)]
-pub struct ProvidersWithEntryPoint<UO, E, EP, D> {
+pub struct ProvidersWithEntryPoint<UO, E, EP, D, F> {
     evm: E,
     ep: EP,
     da_gas_oracle_sync: Option<D>,
+    fee_estimator: F,
     _phantom: PhantomData<UO>,
 }
 
-impl<UO, E, EP, D> ProvidersWithEntryPoint<UO, E, EP, D> {
+impl<UO, E, EP, D, F> ProvidersWithEntryPoint<UO, E, EP, D, F> {
     /// Create a new ProvidersWithEntryPoint.
-    pub fn new(evm: E, ep: EP, da_gas_oracle_sync: Option<D>) -> Self {
+    pub fn new(evm: E, ep: EP, da_gas_oracle_sync: Option<D>, fee_estimator: F) -> Self {
         Self {
             evm,
             ep,
             da_gas_oracle_sync,
+            fee_estimator,
             _phantom: PhantomData,
         }
     }
 }
 
-impl<UO, E, EP, D> ProvidersWithEntryPointT for ProvidersWithEntryPoint<UO, E, EP, D>
+impl<UO, E, EP, D, F> ProvidersWithEntryPointT for ProvidersWithEntryPoint<UO, E, EP, D, F>
 where
     UO: UserOperation + From<UserOperationVariant> + Into<UserOperationVariant>,
     E: EvmProvider + Clone,
     EP: EntryPointProvider<UO> + Clone,
     D: DAGasOracleSync + Clone,
+    F: FeeEstimator + Clone,
 {
     type UO = UO;
     type Evm = E;
     type EntryPoint = EP;
     type DAGasOracleSync = D;
+    type FeeEstimator = F;
 
     fn evm(&self) -> &Self::Evm {
         &self.evm
@@ -227,5 +249,9 @@ where
 
     fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync> {
         &self.da_gas_oracle_sync
+    }
+
+    fn fee_estimator(&self) -> &Self::FeeEstimator {
+        &self.fee_estimator
     }
 }

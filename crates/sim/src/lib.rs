@@ -40,17 +40,15 @@ pub use estimation::{
     VerificationGasEstimator, VerificationGasEstimatorImpl,
 };
 
+/// Gas estimation utilities
 pub mod gas;
-#[cfg(feature = "test-utils")]
-pub use gas::MockFeeEstimator;
-pub use gas::{FeeEstimator, PriorityFeeMode};
 
 mod precheck;
 #[cfg(feature = "test-utils")]
 pub use precheck::MockPrechecker;
 pub use precheck::{
-    FeeUpdate, PrecheckError, PrecheckReturn, Prechecker, PrecheckerImpl,
-    Settings as PrecheckSettings, MIN_CALL_GAS_LIMIT,
+    PrecheckError, PrecheckReturn, Prechecker, PrecheckerImpl, Settings as PrecheckSettings,
+    MIN_CALL_GAS_LIMIT,
 };
 
 /// Simulation and violation checking

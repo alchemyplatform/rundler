@@ -35,7 +35,7 @@ mod opcode;
 pub use opcode::{Opcode, ViolationOpCode};
 
 mod gas;
-pub use gas::GasFees;
+pub use gas::{GasFees, PriorityFeeMode};
 
 pub mod pool;
 
