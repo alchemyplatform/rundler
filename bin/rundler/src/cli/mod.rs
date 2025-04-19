@@ -111,7 +111,6 @@ pub async fn run() -> anyhow::Result<()> {
                 opt.common,
                 providers,
                 mempool_configs,
-                entry_point_builders,
             )
             .await?
         }
@@ -429,18 +428,6 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_6: u64,
 
-    // Ignored if disable_entry_point_v0_6 is true
-    // Ignored if entry_point_builders_path is set
-    // The index offset to apply to the builder index
-    #[arg(
-        long = "builder_index_offset_v0_6",
-        name = "builder_index_offset_v0_6",
-        env = "BUILDER_INDEX_OFFSET_V0_6",
-        default_value = "0",
-        global = true
-    )]
-    pub builder_index_offset_v0_6: u64,
-
     // Ignored if disable_entry_point_v0_7 is true
     // Ignored if entry_point_builders_path is set
     #[arg(
@@ -451,18 +438,6 @@ pub struct CommonArgs {
         global = true
     )]
     pub num_builders_v0_7: u64,
-
-    // Ignored if disable_entry_point_v0_7 is true
-    // Ignored if entry_point_builders_path is set
-    // The index offset to apply to the builder index
-    #[arg(
-        long = "builder_index_offset_v0_7",
-        name = "builder_index_offset_v0_7",
-        env = "BUILDER_INDEX_OFFSET_V0_7",
-        default_value = "0",
-        global = true
-    )]
-    pub builder_index_offset_v0_7: u64,
 
     #[arg(
         long = "da_gas_tracking_enabled",

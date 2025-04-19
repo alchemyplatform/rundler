@@ -146,8 +146,8 @@ pub struct BundleTxDetails {
     pub tx_hash: B256,
     /// The transaction
     pub tx: TransactionRequest,
-    /// Operation hashes included in the bundle
-    pub op_hashes: Arc<Vec<B256>>,
+    /// Operations included in the bundle
+    pub ops: Arc<Vec<(Address, B256)>>,
 }
 
 /// Reason for skipping an operation in a bundle
@@ -225,9 +225,9 @@ impl Display for BuilderEvent {
                 match tx_details {
                     Some(tx_details) => {
                         let op_hashes = tx_details
-                            .op_hashes
+                            .ops
                             .iter()
-                            .map(|hash| format!("{hash:?}"))
+                            .map(|(sender, hash)| format!("(sender: {sender:?} hash: {hash:?})"))
                             .collect::<Vec<_>>()
                             .join(", ");
                         write!(
@@ -240,7 +240,7 @@ impl Display for BuilderEvent {
                                 "    Fee increases: {}",
                                 "    Required maxFeePerGas: {}",
                                 "    Required maxPriorityFeePerGas: {}",
-                                "    Op hashes: {}",
+                                "    Ops: {}",
                             ),
                             self.tag,
                             tx_details.tx_hash,

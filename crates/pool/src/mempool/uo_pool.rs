@@ -820,33 +820,15 @@ where
     fn best_operations(
         &self,
         max: usize,
-        shard_index: u64,
         filter_id: Option<String>,
     ) -> MempoolResult<Vec<Arc<PoolOperation>>> {
-        let Some(&num_shards) = self
-            .config
-            .num_shards_by_filter_id
-            .get(filter_id.as_ref().unwrap_or(&"".to_string()))
-        else {
-            return Err(anyhow::anyhow!("Invalid filter ID").into());
-        };
-
-        if shard_index >= num_shards {
-            return Err(anyhow::anyhow!("Invalid shard ID").into());
-        }
-
         // get the best operations from the pool
         let state = self.state.read();
         let ordered_ops = state.pool.best_operations();
 
         Ok(ordered_ops
             .into_iter()
-            .filter(|op| {
-                let sender_num = U256::from_be_bytes(op.uo.sender().into_word().into());
-                (filter_id == op.filter_id)
-                    && ((num_shards == 1)
-                        || (sender_num % U256::from(num_shards) == U256::from(shard_index)))
-            })
+            .filter(|op| filter_id == op.filter_id)
             .take(max)
             .collect())
     }
@@ -1026,9 +1008,9 @@ mod tests {
             .add_operation(OperationOrigin::Local, op.op, default_perms())
             .await
             .unwrap();
-        check_ops(pool.best_operations(1, 0, None).unwrap(), uos);
+        check_ops(pool.best_operations(1, None).unwrap(), uos);
         pool.remove_operations(&[hash]);
-        assert_eq!(pool.best_operations(1, 0, None).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(1, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1049,9 +1031,9 @@ mod tests {
                 .unwrap();
             hashes.push(hash);
         }
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
+        check_ops(pool.best_operations(3, None).unwrap(), uos);
         pool.remove_operations(&hashes);
-        assert_eq!(pool.best_operations(3, 0, None).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(3, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1070,9 +1052,9 @@ mod tests {
                 .await
                 .unwrap();
         }
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
+        check_ops(pool.best_operations(3, None).unwrap(), uos);
         pool.clear_state(true, true, true);
-        assert_eq!(pool.best_operations(3, 0, None).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(3, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1117,7 +1099,7 @@ mod tests {
             entrypoint,
         )
         .await;
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos.clone());
+        check_ops(pool.best_operations(3, None).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -1151,7 +1133,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos[1..].to_vec());
+        check_ops(pool.best_operations(3, None).unwrap(), uos[1..].to_vec());
 
         let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.confirmed_balance, U256::from(1110));
@@ -1215,7 +1197,7 @@ mod tests {
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
 
         assert_eq!(metadata.pending_balance, U256::from(850));
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos.clone());
+        check_ops(pool.best_operations(3, None).unwrap(), uos.clone());
 
         // mine the first op with actual gas cost of 10
         pool.on_chain_update(&ChainUpdate {
@@ -1251,7 +1233,7 @@ mod tests {
         .await;
 
         check_ops(
-            pool.best_operations(3, 0, None).unwrap(),
+            pool.best_operations(3, None).unwrap(),
             uos.clone()[1..].to_vec(),
         );
 
@@ -1285,7 +1267,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
+        check_ops(pool.best_operations(3, None).unwrap(), uos);
 
         let metadata = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(metadata.pending_balance, U256::from(840));
@@ -1299,7 +1281,7 @@ mod tests {
             create_op(Address::random(), 0, 1, None),
         ])
         .await;
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos.clone());
+        check_ops(pool.best_operations(3, None).unwrap(), uos.clone());
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_number: 1,
@@ -1323,7 +1305,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
+        check_ops(pool.best_operations(3, None).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -1336,10 +1318,7 @@ mod tests {
         ])
         .await;
         // staked, so include all ops
-        check_ops(
-            pool.best_operations(3, 0, None).unwrap(),
-            uos[0..2].to_vec(),
-        );
+        check_ops(pool.best_operations(3, None).unwrap(), uos[0..2].to_vec());
 
         let rep = pool.dump_reputation();
         assert_eq!(rep.len(), 1);
@@ -1400,7 +1379,7 @@ mod tests {
         }
 
         check_ops(
-            pool.best_operations(4, 0, None).unwrap(),
+            pool.best_operations(4, None).unwrap(),
             vec![
                 uos[0].clone(),
                 uos[1].clone(),
@@ -1451,7 +1430,7 @@ mod tests {
             .await
             .unwrap();
         check_ops(
-            pool.best_operations(4, 0, None).unwrap(),
+            pool.best_operations(4, None).unwrap(),
             vec![
                 uos[1].clone(),
                 uos[2].clone(),
@@ -1541,7 +1520,7 @@ mod tests {
             )) => {}
             _ => panic!("Expected InitCodeTooShort error"),
         }
-        assert_eq!(pool.best_operations(1, 0, None).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(1, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1564,7 +1543,7 @@ mod tests {
             Err(MempoolError::SimulationViolation(SimulationViolation::DidNotRevert)) => {}
             _ => panic!("Expected DidNotRevert error"),
         }
-        assert_eq!(pool.best_operations(1, 0, None).unwrap(), vec![]);
+        assert_eq!(pool.best_operations(1, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1583,7 +1562,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, MempoolError::OperationAlreadyKnown));
 
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1608,7 +1587,7 @@ mod tests {
 
         assert!(matches!(err, MempoolError::ReplacementUnderpriced(_, _)));
 
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1669,7 +1648,7 @@ mod tests {
             .await
             .unwrap();
 
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![replacement]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![replacement]);
 
         let paymaster_balance = pool.paymaster.paymaster_balance(paymaster).await.unwrap();
         assert_eq!(paymaster_balance.pending_balance, U256::from(900));
@@ -1694,10 +1673,7 @@ mod tests {
             .await
             .unwrap();
 
-        check_ops(
-            pool.best_operations(1, 0, None).unwrap(),
-            vec![op.op.clone()],
-        );
+        check_ops(pool.best_operations(1, None).unwrap(), vec![op.op.clone()]);
 
         pool.on_chain_update(&ChainUpdate {
             latest_block_timestamp: 11.into(),
@@ -1705,7 +1681,7 @@ mod tests {
         })
         .await;
 
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1736,7 +1712,7 @@ mod tests {
             pool.remove_op_by_id(&op.op.id()),
             Err(MempoolError::OperationDropTooSoon(_, _, _))
         ));
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1756,7 +1732,7 @@ mod tests {
             }),
             Ok(None)
         ));
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![op.op]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![op.op]);
     }
 
     #[tokio::test]
@@ -1777,7 +1753,7 @@ mod tests {
         .await;
 
         assert_eq!(pool.remove_op_by_id(&op.op.id()).unwrap().unwrap(), hash);
-        check_ops(pool.best_operations(1, 0, None).unwrap(), vec![]);
+        check_ops(pool.best_operations(1, None).unwrap(), vec![]);
     }
 
     #[tokio::test]
@@ -1851,7 +1827,7 @@ mod tests {
         ])
         .await;
         // staked, so include all ops
-        check_ops(pool.best_operations(3, 0, None).unwrap(), uos);
+        check_ops(pool.best_operations(3, None).unwrap(), uos);
     }
 
     #[tokio::test]
@@ -2047,7 +2023,7 @@ mod tests {
             .await
             .unwrap();
 
-        let best = pool.best_operations(10000, 0, None).unwrap();
+        let best = pool.best_operations(10000, None).unwrap();
         assert_eq!(best.len(), 0);
     }
 
@@ -2183,7 +2159,7 @@ mod tests {
             .await
             .unwrap();
 
-        let best = pool.best_operations(10000, 0, None).unwrap();
+        let best = pool.best_operations(10000, None).unwrap();
         assert_eq!(best.len(), 0);
     }
 
@@ -2205,7 +2181,6 @@ mod tests {
         config
             .chain_spec
             .set_signature_aggregators(Arc::new(registry));
-        config.num_shards_by_filter_id = HashMap::from([(filter_id.clone(), 1)]);
 
         let mempool_config = r#"{
             "entryPoint": "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
@@ -2228,7 +2203,7 @@ mod tests {
             .await
             .unwrap();
 
-        let best = pool.best_operations(10000, 0, Some(filter_id)).unwrap();
+        let best = pool.best_operations(10000, Some(filter_id)).unwrap();
         assert_eq!(best.len(), 1);
     }
 
@@ -2298,7 +2273,6 @@ mod tests {
             precheck_settings: PrecheckSettings::default(),
             sim_settings: SimulationSettings::default(),
             mempool_channel_configs: HashMap::new(),
-            num_shards_by_filter_id: HashMap::from([("".to_string(), 1)]),
             same_sender_mempool_count: 4,
             throttled_entity_mempool_count: 4,
             throttled_entity_live_blocks: 10,
