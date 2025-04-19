@@ -145,7 +145,7 @@ pub(crate) struct BundleProposerImpl<EP, BP> {
     bundle_providers: BP,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
-    metric: BuilderProposerMetric,
+    metrics: BuilderProposerMetrics,
 }
 
 #[derive(Debug)]
@@ -213,6 +213,7 @@ where
         {
             let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
 
+            // should typically be a cache hit and fast
             match da_gas_oracle.da_block_data(block_hash.into()).await {
                 Ok(block_data) => Some(block_data),
                 Err(e) => {
@@ -236,6 +237,7 @@ where
                 )
             })
             .collect::<Vec<_>>();
+        // if using a sync da oracle, this doesn't make any remote calls
         let ops = future::join_all(fee_futs)
             .await
             .into_iter()
@@ -304,7 +306,7 @@ where
                 }
 
                 // bundle built, record time
-                self.metric
+                self.metrics
                     .bundle_build_ms
                     .record(timer.elapsed().as_millis() as f64);
                 return Ok(Bundle {
@@ -317,7 +319,7 @@ where
                 });
             }
 
-            self.metric.bundle_simulation_failures.increment(1);
+            self.metrics.bundle_simulation_failures.increment(1);
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
 
@@ -332,13 +334,15 @@ where
 
 #[derive(Metrics)]
 #[metrics(scope = "builder_proposer")]
-struct BuilderProposerMetric {
+struct BuilderProposerMetrics {
     #[metric(describe = "the distribution of end to end bundle build time.")]
     bundle_build_ms: Histogram,
-    #[metric(describe = "the distribution of op simulation time of a bundle.")]
+    #[metric(describe = "the distribution of op simulation time during bundle build.")]
     op_simulation_ms: Histogram,
     #[metric(describe = "the number of bundle simulation failures.")]
     bundle_simulation_failures: Counter,
+    #[metric(describe = "the distribution of bundle simulation time.")]
+    bundle_simulation_ms: Histogram,
 }
 
 impl<EP, BP> BundleProposerImpl<EP, BP>
@@ -361,7 +365,7 @@ where
             settings,
             event_sender,
             condition_not_met_notified: false,
-            metric: BuilderProposerMetric::default(),
+            metrics: BuilderProposerMetrics::default(),
         }
     }
 
@@ -542,7 +546,7 @@ where
         PoolOperationWithSponsoredDAGas,
         Result<SimulationResult, SimulationError>,
     )> {
-        let _timer_guard = CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
+        let _timer_guard = CustomTimerGuard::new(self.metrics.op_simulation_ms.clone());
         let op_hash = op.op.uo.hash();
 
         // Simulate
@@ -962,6 +966,10 @@ where
             .context("estimated bundle gas limit is larger than u64::MAX")?;
 
         // call handle ops with the bundle to filter any rejected ops before sending
+        // TODO: if EP v0.7
+        // - if only 1 op, skip this call as simulation has already run a similar check
+        // - if more than 1 op, add a reverting UO to the bundle and call handle ops, this will skip running the execution portion of the op
+        let start = Instant::now();
         let handle_ops_out = self
             .ep_providers
             .entry_point()
@@ -974,6 +982,9 @@ where
             )
             .await
             .context("should call handle ops with candidate bundle")?;
+        self.metrics
+            .bundle_simulation_ms
+            .record(start.elapsed().as_millis() as f64);
 
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas_limit)),
