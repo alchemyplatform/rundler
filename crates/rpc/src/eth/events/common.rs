@@ -53,6 +53,8 @@ pub(crate) trait EntryPointEvents: Send + Sync {
     fn get_user_operations_from_tx_data(tx_data: Bytes, chain_spec: &ChainSpec) -> Vec<Self::UO>;
 
     fn address(chain_spec: &ChainSpec) -> Address;
+
+    fn before_execution_selector() -> B256;
 }
 
 #[async_trait::async_trait]
@@ -267,8 +269,13 @@ where
         tx_receipt: TransactionReceipt,
     ) -> anyhow::Result<RpcUserOperationReceipt> {
         // filter receipt logs
-        let filtered_logs = super::filter_receipt_logs_matching_user_op(&event, &tx_receipt)
-            .context("should have found receipt logs matching user op")?;
+        let filtered_logs = super::filter_receipt_logs_matching_user_op(
+            E::address(&self.chain_spec),
+            E::before_execution_selector(),
+            &event,
+            &tx_receipt,
+        )
+        .context("should have found receipt logs matching user op")?;
 
         // decode uo event
         let uo_event = self
