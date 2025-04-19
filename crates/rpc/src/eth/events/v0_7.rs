@@ -11,8 +11,11 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{ruint::UintTryFrom, Address, Bytes, U128};
-use rundler_contracts::v0_7::IEntryPoint::{UserOperationEvent, UserOperationRevertReason};
+use alloy_primitives::{ruint::UintTryFrom, Address, Bytes, B256, U128};
+use alloy_sol_types::SolEvent;
+use rundler_contracts::v0_7::IEntryPoint::{
+    BeforeExecution, UserOperationEvent, UserOperationRevertReason,
+};
 use rundler_provider::{Log, TransactionReceipt};
 use rundler_types::{chain::ChainSpec, v0_7::UserOperation};
 
@@ -80,5 +83,9 @@ impl EntryPointEvents for EntryPointFiltersV0_7 {
 
     fn address(chain_spec: &ChainSpec) -> Address {
         chain_spec.entry_point_address_v0_7
+    }
+
+    fn before_execution_selector() -> B256 {
+        BeforeExecution::SIGNATURE_HASH
     }
 }
