@@ -33,11 +33,28 @@ jobs:
           repository: alchemyplatform/bundler-test-executor
           ref: releases/v0.6
 
-      - name: Build rundler image locally
-        run: docker buildx build ./rundler -t alchemyplatform/rundler:latest
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: rundler
+          push: false
+          load: true
+          tags: alchemyplatform/rundler:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run bundle executor
         run: ./bundler-test-executors/runall.sh local ./bundler-test-executors/bundlers/rundler/rundler.yml
 
       - name: Parse spec results
         run: ./rundler/.github/scripts/compliance_parser.sh ./bundler-test-executors/build/out/rundler.xml
+
+      - name: Archive rundler log file
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rundler-log-file
+          path: bundler-test-executors/build/out/rundler.log
