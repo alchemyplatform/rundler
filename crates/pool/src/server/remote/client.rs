@@ -24,8 +24,8 @@ use rundler_task::{
 use rundler_types::{
     chain::ChainSpec,
     pool::{
-        NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolResult, Reputation,
-        ReputationStatus, StakeStatus,
+        NewHead, PaymasterMetadata, Pool, PoolError, PoolOperation, PoolOperationSummary,
+        PoolResult, Reputation, ReputationStatus, StakeStatus,
     },
     EntityUpdate, UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
@@ -45,13 +45,14 @@ use super::protos::{
     self, add_op_response, admin_set_tracking_response, debug_clear_state_response,
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_response, get_reputation_status_response, get_stake_status_response,
-    op_pool_client::OpPoolClient, remove_op_by_id_response, remove_ops_response,
-    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
-    DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
-    DebugSetReputationRequest, GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest,
-    RemoveOpsRequest, ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest,
-    SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
+    get_ops_by_hashes_response, get_ops_response, get_ops_summaries_response,
+    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
+    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
+    AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
+    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
+    GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest,
+    ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
+    TryUoFromProto, UpdateEntitiesRequest,
 };
 
 /// Remote pool client
@@ -189,7 +190,6 @@ impl Pool for RemotePoolClient {
         &self,
         entry_point: Address,
         max_ops: u64,
-        shard_index: u64,
         filter_id: Option<String>,
     ) -> PoolResult<Vec<PoolOperation>> {
         let res = self
@@ -198,7 +198,6 @@ impl Pool for RemotePoolClient {
             .get_ops(GetOpsRequest {
                 entry_point: entry_point.to_vec(),
                 max_ops,
-                shard_index,
                 filter_id: filter_id.unwrap_or_default(),
             })
             .await
@@ -213,10 +212,80 @@ impl Pool for RemotePoolClient {
                 .map(|proto_uo| {
                     PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
                         .context("should convert proto uo to pool operation")
+                        .map_err(PoolError::from)
+                })
+                .collect::<PoolResult<_>>(),
+            Some(get_ops_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_ops_summaries(
+        &self,
+        entry_point: Address,
+        max_ops: u64,
+        filter_id: Option<String>,
+    ) -> PoolResult<Vec<PoolOperationSummary>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_ops_summaries(protos::GetOpsSummariesRequest {
+                entry_point: entry_point.to_proto_bytes(),
+                max_ops,
+                filter_id: filter_id.unwrap_or_default(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_ops_summaries_response::Result::Success(s)) => s
+                .summaries
+                .into_iter()
+                .map(|proto_summary| {
+                    PoolOperationSummary::try_from(proto_summary)
+                        .context("should convert proto summary to pool operation summary")
+                        .map_err(PoolError::from)
+                })
+                .collect::<PoolResult<_>>(),
+            Some(get_ops_summaries_response::Result::Failure(f)) => Err(f.try_into()?),
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_ops_by_hashes(
+        &self,
+        entry_point: Address,
+        hashes: Vec<B256>,
+    ) -> PoolResult<Vec<PoolOperation>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_ops_by_hashes(protos::GetOpsByHashesRequest {
+                entry_point: entry_point.to_proto_bytes(),
+                hashes: hashes.into_iter().map(|h| h.to_proto_bytes()).collect(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_ops_by_hashes_response::Result::Success(s)) => s
+                .ops
+                .into_iter()
+                .map(|proto_uo| {
+                    PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
+                        .context("should convert proto uo to pool operation")
                 })
                 .map(|res| res.map_err(PoolError::from))
-                .collect(),
-            Some(get_ops_response::Result::Failure(f)) => Err(f.try_into()?),
+                .collect::<PoolResult<_>>(),
+            Some(get_ops_by_hashes_response::Result::Failure(f)) => Err(f.try_into()?),
             None => Err(PoolError::Other(anyhow::anyhow!(
                 "should have received result from op pool"
             )))?,

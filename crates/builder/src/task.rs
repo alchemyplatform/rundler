@@ -31,6 +31,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
 use crate::{
+    assigner::Assigner,
     bundle_proposer::{self, BundleProposerImpl, BundleProposerProviders},
     bundle_sender::{self, BundleSender, BundleSenderAction, BundleSenderImpl},
     emit::BuilderEvent,
@@ -38,6 +39,8 @@ use crate::{
     server::{self, LocalBuilderBuilder},
     transaction_tracker::{self, TransactionTrackerImpl},
 };
+
+const MAX_POOL_OPS_PER_REQUEST: u64 = 1024;
 
 /// Builder task arguments
 #[derive(Debug)]
@@ -91,8 +94,6 @@ pub struct Args {
 /// Builder settings
 #[derive(Debug, Clone)]
 pub struct BuilderSettings {
-    /// Index of this builder
-    pub index: u64,
     /// Optional submission proxy to use for this builder
     pub submission_proxy: Option<Address>,
     /// Optional filter id to apply to this builder
@@ -101,12 +102,12 @@ pub struct BuilderSettings {
 
 impl BuilderSettings {
     /// Unique string tag for this builder
-    pub fn tag(&self, entry_point_address: &Address) -> String {
+    pub fn tag(&self, entry_point_address: &Address, builder_address: &Address) -> String {
         format!(
             "{}:{}:{}",
             entry_point_address,
             self.filter_id.as_ref().map_or("any", |v| v),
-            self.index
+            builder_address
         )
     }
 }
@@ -191,17 +192,33 @@ where
             }
         }
 
+        let assigner = Arc::new(Assigner::new(
+            Box::new(self.pool.clone()),
+            MAX_POOL_OPS_PER_REQUEST,
+            self.args.max_bundle_size,
+        ));
+
         for ep in &self.args.entry_points {
             match ep.version {
                 EntryPointVersion::V0_6 => {
                     let actions = self
-                        .create_builders_v0_6(&task_spawner, ep, &self.signer_manager)
+                        .create_builders_v0_6(
+                            &task_spawner,
+                            ep,
+                            &self.signer_manager,
+                            assigner.clone(),
+                        )
                         .await?;
                     bundle_sender_actions.extend(actions);
                 }
                 EntryPointVersion::V0_7 => {
                     let actions = self
-                        .create_builders_v0_7(&task_spawner, ep, &self.signer_manager)
+                        .create_builders_v0_7(
+                            &task_spawner,
+                            ep,
+                            &self.signer_manager,
+                            assigner.clone(),
+                        )
                         .await?;
                     bundle_sender_actions.extend(actions);
                 }
@@ -247,6 +264,7 @@ where
         task_spawner: &T,
         ep: &EntryPointBuilderSettings,
         signer_manager: &Arc<dyn SignerManager>,
+        assigner: Arc<Assigner>,
     ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
         T: TaskSpawnerExt,
@@ -269,6 +287,7 @@ where
                         self.args.sim_settings.clone(),
                     ),
                     signer_manager,
+                    assigner.clone(),
                 )
                 .await?
             } else {
@@ -283,6 +302,7 @@ where
                         ep.mempool_configs.clone(),
                     ),
                     signer_manager,
+                    assigner.clone(),
                 )
                 .await?
             };
@@ -296,6 +316,7 @@ where
         task_spawner: &T,
         ep: &EntryPointBuilderSettings,
         signer_manager: &Arc<dyn SignerManager>,
+        assigner: Arc<Assigner>,
     ) -> anyhow::Result<Vec<mpsc::Sender<BundleSenderAction>>>
     where
         T: TaskSpawnerExt,
@@ -318,6 +339,7 @@ where
                         self.args.sim_settings.clone(),
                     ),
                     signer_manager,
+                    assigner.clone(),
                 )
                 .await?
             } else {
@@ -332,6 +354,7 @@ where
                         ep.mempool_configs.clone(),
                     ),
                     signer_manager,
+                    assigner.clone(),
                 )
                 .await?
             };
@@ -347,6 +370,7 @@ where
         ep_providers: EP,
         simulator: S,
         signer_manager: &Arc<dyn SignerManager>,
+        assigner: Arc<Assigner>,
     ) -> anyhow::Result<mpsc::Sender<BundleSenderAction>>
     where
         T: TaskSpawnerExt,
@@ -376,7 +400,6 @@ where
         let sender_eoa = signer.address();
         let proposer_settings = bundle_proposer::Settings {
             chain_spec: self.args.chain_spec.clone(),
-            max_bundle_size: self.args.max_bundle_size,
             target_bundle_gas: self.args.target_bundle_gas,
             max_bundle_gas: self.args.max_bundle_gas,
             sender_eoa,
@@ -400,7 +423,7 @@ where
             transaction_sender,
             signer,
             tracker_settings,
-            builder_settings.tag(ep_providers.entry_point().address()),
+            builder_settings.tag(ep_providers.entry_point().address(), &sender_eoa),
         )
         .await?;
 
@@ -420,17 +443,15 @@ where
         );
 
         let proposer = BundleProposerImpl::new(
-            builder_settings.index,
-            builder_settings.tag(ep_providers.entry_point().address()),
+            builder_settings.tag(ep_providers.entry_point().address(), &sender_eoa),
             ep_providers.clone(),
-            BundleProposerProviders::new(self.pool.clone(), simulator, fee_estimator),
+            BundleProposerProviders::new(simulator, fee_estimator),
             proposer_settings,
             self.event_sender.clone(),
-            builder_settings.filter_id.clone(),
         );
 
         let builder = BundleSenderImpl::new(
-            builder_settings.tag(ep_providers.entry_point().address()),
+            builder_settings.clone(),
             send_bundle_rx,
             self.args.chain_spec.clone(),
             sender_eoa,
@@ -438,6 +459,7 @@ where
             proposer,
             ep_providers.clone(),
             transaction_tracker,
+            assigner,
             self.pool.clone(),
             sender_settings,
             self.event_sender.clone(),
