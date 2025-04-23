@@ -48,8 +48,6 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE*
 - `--user_operation_event_block_distance_fallback`: Number of blocks to search when falling back during `eth_getUserOperationByHash`/`eth_getUserOperationReceipt` upon initial failure using `user_operation_event_block_distance`. (default: None)
   - env: *USER_OPERATION_EVENT_BLOCK_DISTANCE_FALLBACK*
-- `--max_simulate_handle_ops_gas`: Maximum gas for simulating handle operations. (default: `20000000`).
-  - env: *MAX_SIMULATE_HANDLE_OPS_GAS*
 - `--verification_estimation_gas_fee`: The gas fee to use during verification estimation. (default: `1000000000000` 10K gwei).
   - env: *VERIFICATION_ESTIMATION_GAS_FEE*
   - See [RPC documentation](./architecture/rpc.md#verificationGasLimit-estimation) for details.

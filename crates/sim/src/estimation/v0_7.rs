@@ -101,7 +101,7 @@ where
             .clone()
             .into_user_operation_builder(
                 &self.chain_spec,
-                settings.max_call_gas,
+                settings.max_bundle_execution_gas,
                 settings.max_verification_gas,
                 settings.max_paymaster_verification_gas,
             )
@@ -149,10 +149,10 @@ where
 
         // require that this can fit in a bundle of size 1
         let gas_limit = op_with_gas.computation_gas_limit(&self.chain_spec, Some(1));
-        if gas_limit > self.settings.max_total_execution_gas {
+        if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
-                self.settings.max_total_execution_gas,
+                self.settings.max_bundle_execution_gas,
             ));
         }
 
@@ -250,18 +250,18 @@ where
             }
         }
         if let Some(cl) = optional_op.call_gas_limit {
-            if cl > self.settings.max_call_gas {
+            if cl > self.settings.max_bundle_execution_gas {
                 return Err(GasEstimationError::GasFieldTooLarge(
                     "callGasLimit",
-                    self.settings.max_call_gas,
+                    self.settings.max_bundle_execution_gas,
                 ));
             }
         }
         if let Some(cl) = optional_op.paymaster_post_op_gas_limit {
-            if cl > self.settings.max_call_gas {
+            if cl > self.settings.max_bundle_execution_gas {
                 return Err(GasEstimationError::GasFieldTooLarge(
                     "paymasterPostOpGasLimit",
-                    self.settings.max_call_gas,
+                    self.settings.max_bundle_execution_gas,
                 ));
             }
         }
@@ -443,7 +443,7 @@ where
         // Add a buffer to the call gas limit and clamp
         let call_gas_limit = call_gas_limit
             .add(super::CALL_GAS_BUFFER_VALUE)
-            .clamp(MIN_CALL_GAS_LIMIT, self.settings.max_call_gas);
+            .clamp(MIN_CALL_GAS_LIMIT, self.settings.max_bundle_execution_gas);
 
         Ok(call_gas_limit)
     }
@@ -627,11 +627,9 @@ mod tests {
     ) -> (GasEstimatorWithMocks, Settings) {
         let settings = Settings {
             max_verification_gas: TEST_MAX_GAS_LIMITS,
-            max_call_gas: TEST_MAX_GAS_LIMITS,
+            max_bundle_execution_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_verification_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
-            max_total_execution_gas: TEST_MAX_GAS_LIMITS,
-            max_simulate_handle_ops_gas: TEST_MAX_GAS_LIMITS.try_into().unwrap(),
             verification_estimation_gas_fee: 1_000_000_000_000,
         };
         let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);

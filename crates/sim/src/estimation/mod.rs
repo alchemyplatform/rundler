@@ -92,16 +92,12 @@ pub trait GasEstimator: Send + Sync {
 pub struct Settings {
     /// The maximum amount of gas that can be used for the verification step of a user operation
     pub max_verification_gas: u128,
-    /// The maximum amount of gas that can be used for the call step of a user operation
-    pub max_call_gas: u128,
     /// The maximum amount of gas that can be used for the paymaster verification step of a user operation
     pub max_paymaster_verification_gas: u128,
     /// The maximum amount of gas that can be used for the paymaster post op step of a user operation
     pub max_paymaster_post_op_gas: u128,
-    /// The maximum amount of total execution gas to check after estimation
-    pub max_total_execution_gas: u128,
-    /// The maximum amount of gas that can be used in a call to `simulateHandleOps`
-    pub max_simulate_handle_ops_gas: u64,
+    /// The maximum amount of execution gas in a bundle
+    pub max_bundle_execution_gas: u128,
     /// The gas fee to use during verification gas estimation, required to be held by the fee-payer
     /// during estimation. If using a paymaster, the fee-payer must have 3x this value.
     /// As the gas limit is varied during estimation, the fee is held constant by varying the
@@ -113,8 +109,11 @@ pub struct Settings {
 impl Settings {
     /// Check if the settings are valid
     pub fn validate(&self) -> Option<String> {
-        if self.max_call_gas < MIN_CALL_GAS_LIMIT {
-            return Some("max_call_gas field cannot be lower than MIN_CALL_GAS_LIMIT".to_string());
+        if self.max_bundle_execution_gas < MIN_CALL_GAS_LIMIT {
+            return Some(
+                "max_bundle_execution_gas field cannot be lower than MIN_CALL_GAS_LIMIT"
+                    .to_string(),
+            );
         }
         None
     }
