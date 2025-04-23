@@ -118,7 +118,7 @@ where
             );
         }
         let mut min_gas = 0;
-        let mut max_gas = self.settings.max_call_gas;
+        let mut max_gas = self.settings.max_bundle_execution_gas;
         let mut is_continuation = false;
         let mut num_rounds = 0_u32;
         loop {

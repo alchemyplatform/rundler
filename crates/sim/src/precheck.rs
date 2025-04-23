@@ -94,8 +94,8 @@ pub struct PrecheckerImpl<UO, P, E, F> {
 pub struct Settings {
     /// Maximum verification gas allowed for a user operation
     pub max_verification_gas: u128,
-    /// Maximum total execution gas allowed for a user operation
-    pub max_total_execution_gas: u128,
+    /// Maximum bundle execution gas allowed for a user operation
+    pub max_bundle_execution_gas: u128,
     /// Maximum cost of a single user operation
     pub max_uo_cost: U256,
     /// If using a bundle priority fee, the percentage to add to the network/oracle
@@ -115,7 +115,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             max_verification_gas: 5_000_000,
-            max_total_execution_gas: 10_000_000,
+            max_bundle_execution_gas: 10_000_000,
             max_uo_cost: U256::MAX,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: PriorityFeeMode::BaseFeePercent(0),
@@ -234,7 +234,7 @@ where
     ) -> ArrayVec<PrecheckViolation, 6> {
         let Settings {
             max_verification_gas,
-            max_total_execution_gas,
+            max_bundle_execution_gas,
             max_uo_cost,
             ..
         } = self.settings;
@@ -255,10 +255,10 @@ where
         // Compute the worst case total gas limit by assuming the UO is in its own bundle.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
         let gas_limit = op.computation_gas_limit(&self.chain_spec, Some(1));
-        if gas_limit > max_total_execution_gas {
+        if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
-                max_total_execution_gas,
+                max_bundle_execution_gas,
             ))
         }
         if op.call_gas_limit() < MIN_CALL_GAS_LIMIT {
@@ -548,7 +548,7 @@ mod tests {
     async fn test_check_gas() {
         let test_settings = Settings {
             max_verification_gas: 5_000_000,
-            max_total_execution_gas: 10_000_000,
+            max_bundle_execution_gas: 10_000_000,
             max_uo_cost: U256::MAX,
             bundle_priority_fee_overhead_percent: 0,
             priority_fee_mode: PriorityFeeMode::BaseFeePercent(100),

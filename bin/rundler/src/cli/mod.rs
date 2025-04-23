@@ -311,15 +311,6 @@ pub struct CommonArgs {
     user_operation_event_block_distance_fallback: Option<u64>,
 
     #[arg(
-        long = "max_simulate_handle_ops_gas",
-        name = "max_simulate_handle_ops_gas",
-        env = "MAX_SIMULATE_HANDLE_OPS_GAS",
-        default_value = "20000000",
-        global = true
-    )]
-    max_simulate_handle_ops_gas: u64,
-
-    #[arg(
         long = "verification_estimation_gas_fee",
         name = "verification_estimation_gas_fee",
         env = "VERIFICATION_ESTIMATION_GAS_FEE",
@@ -502,39 +493,39 @@ fn verify_f64_less_than_one(v: &str) -> Result<f64, String> {
     }
 }
 
-const SIMULATION_GAS_OVERHEAD: u64 = 100_000;
+const SIMULATION_GAS_OVERHEAD: u128 = 100_000;
 
 impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
     type Error = anyhow::Error;
 
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
+        let max_bundle_execution_gas =
+            chain_spec.block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio);
+
         if value.max_verification_gas
-            > (value.max_simulate_handle_ops_gas - SIMULATION_GAS_OVERHEAD)
+            > max_bundle_execution_gas.saturating_sub(SIMULATION_GAS_OVERHEAD) as u64
         {
             anyhow::bail!(
                 "max_verification_gas ({}) must be less than max_simulate_handle_ops_gas ({}) by at least {}",
                 value.max_verification_gas,
-                value.max_simulate_handle_ops_gas,
+                max_bundle_execution_gas,
                 SIMULATION_GAS_OVERHEAD
             );
         }
-        let max_call_gas: u128 =
-            (value.max_simulate_handle_ops_gas - value.max_verification_gas) as u128;
-        if max_call_gas < MIN_CALL_GAS_LIMIT {
+
+        if max_bundle_execution_gas < MIN_CALL_GAS_LIMIT {
             anyhow::bail!(
-                "max_simulate_handle_ops_gas ({}) must be greater than max_verification_gas ({}) by at least {MIN_CALL_GAS_LIMIT}",
-                value.max_verification_gas,
-                value.max_simulate_handle_ops_gas,
+                "max_bundle_execution_gas ({}) must be greater than or equal to {}",
+                max_bundle_execution_gas,
+                MIN_CALL_GAS_LIMIT
             );
         }
+
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
-            max_call_gas,
             max_paymaster_verification_gas: value.max_verification_gas as u128,
-            max_paymaster_post_op_gas: max_call_gas,
-            max_total_execution_gas: chain_spec
-                .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
-            max_simulate_handle_ops_gas: value.max_simulate_handle_ops_gas,
+            max_paymaster_post_op_gas: max_bundle_execution_gas,
+            max_bundle_execution_gas,
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
         })
     }
@@ -546,7 +537,7 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
     fn try_from_with_spec(value: &CommonArgs, chain_spec: &ChainSpec) -> Result<Self, Self::Error> {
         Ok(Self {
             max_verification_gas: value.max_verification_gas as u128,
-            max_total_execution_gas: chain_spec
+            max_bundle_execution_gas: chain_spec
                 .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
             max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
@@ -761,6 +752,10 @@ pub fn construct_providers(
     )?);
     let (da_gas_oracle, da_gas_oracle_sync) =
         rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
+    let max_bundle_execution_gas = chain_spec
+        .block_gas_limit_mult(args.max_bundle_block_gas_limit_ratio)
+        .try_into()
+        .expect("max_bundle_execution_gas is too large for u64");
 
     let evm = AlloyEvmProvider::new(provider.clone());
 
@@ -770,8 +765,8 @@ pub fn construct_providers(
         Some(AlloyEntryPointV0_6::new(
             chain_spec.clone(),
             args.max_verification_gas,
-            args.max_simulate_handle_ops_gas,
-            args.max_simulate_handle_ops_gas,
+            max_bundle_execution_gas,
+            max_bundle_execution_gas,
             provider.clone(),
             da_gas_oracle.clone(),
         ))
@@ -783,8 +778,8 @@ pub fn construct_providers(
         Some(AlloyEntryPointV0_7::new(
             chain_spec.clone(),
             args.max_verification_gas,
-            args.max_simulate_handle_ops_gas,
-            args.max_simulate_handle_ops_gas,
+            max_bundle_execution_gas,
+            max_bundle_execution_gas,
             provider.clone(),
             da_gas_oracle.clone(),
         ))
