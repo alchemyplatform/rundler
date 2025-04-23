@@ -43,17 +43,17 @@ use reth_tasks::TaskManager;
 use rpc::RpcCliArgs;
 use rundler_provider::{
     AlloyEntryPointV0_6, AlloyEntryPointV0_7, AlloyEvmProvider, DAGasOracle, DAGasOracleSync,
-    EntryPointProvider, EvmProvider, Providers,
+    EntryPointProvider, EvmProvider, FeeEstimator, Providers,
 };
 use rundler_sim::{
-    EstimationSettings, MempoolConfigs, PrecheckSettings, PriorityFeeMode, SimulationSettings,
-    MIN_CALL_GAS_LIMIT,
+    EstimationSettings, MempoolConfigs, PrecheckSettings, SimulationSettings, MIN_CALL_GAS_LIMIT,
 };
 use rundler_types::{
     chain::{ChainSpec, TryFromWithSpec},
     da::DAGasOracleType,
     v0_6::UserOperation as UserOperationV0_6,
     v0_7::UserOperation as UserOperationV0_7,
+    PriorityFeeMode,
 };
 
 /// Main entry point for the CLI
@@ -111,7 +111,6 @@ pub async fn run() -> anyhow::Result<()> {
                 opt.common,
                 providers,
                 mempool_configs,
-                entry_point_builders,
             )
             .await?
         }
@@ -429,18 +428,6 @@ pub struct CommonArgs {
     )]
     pub num_builders_v0_6: u64,
 
-    // Ignored if disable_entry_point_v0_6 is true
-    // Ignored if entry_point_builders_path is set
-    // The index offset to apply to the builder index
-    #[arg(
-        long = "builder_index_offset_v0_6",
-        name = "builder_index_offset_v0_6",
-        env = "BUILDER_INDEX_OFFSET_V0_6",
-        default_value = "0",
-        global = true
-    )]
-    pub builder_index_offset_v0_6: u64,
-
     // Ignored if disable_entry_point_v0_7 is true
     // Ignored if entry_point_builders_path is set
     #[arg(
@@ -451,18 +438,6 @@ pub struct CommonArgs {
         global = true
     )]
     pub num_builders_v0_7: u64,
-
-    // Ignored if disable_entry_point_v0_7 is true
-    // Ignored if entry_point_builders_path is set
-    // The index offset to apply to the builder index
-    #[arg(
-        long = "builder_index_offset_v0_7",
-        name = "builder_index_offset_v0_7",
-        env = "BUILDER_INDEX_OFFSET_V0_7",
-        default_value = "0",
-        global = true
-    )]
-    pub builder_index_offset_v0_7: u64,
 
     #[arg(
         long = "da_gas_tracking_enabled",
@@ -574,7 +549,6 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
             max_total_execution_gas: chain_spec
                 .block_gas_limit_mult(value.max_bundle_block_gas_limit_ratio),
             max_uo_cost: value.max_uo_cost.unwrap_or(U256::MAX),
-            bundle_base_fee_overhead_percent: value.bundle_base_fee_overhead_percent,
             bundle_priority_fee_overhead_percent: value.bundle_priority_fee_overhead_percent,
             priority_fee_mode: PriorityFeeMode::try_from(
                 value.priority_fee_mode_kind.as_str(),
@@ -727,27 +701,30 @@ pub struct Cli {
 }
 
 #[derive(Clone)]
-pub struct RundlerProviders<P, EP06, EP07, D, DS> {
+pub struct RundlerProviders<P, EP06, EP07, D, DS, F> {
     provider: P,
     ep_v0_6: Option<EP06>,
     ep_v0_7: Option<EP07>,
     da_gas_oracle: D,
     da_gas_oracle_sync: Option<DS>,
+    fee_estimator: F,
 }
 
-impl<P, EP06, EP07, D, DS> Providers for RundlerProviders<P, EP06, EP07, D, DS>
+impl<P, EP06, EP07, D, DS, F> Providers for RundlerProviders<P, EP06, EP07, D, DS, F>
 where
     P: EvmProvider + Clone,
     EP06: EntryPointProvider<UserOperationV0_6> + Clone,
     EP07: EntryPointProvider<UserOperationV0_7> + Clone,
     D: DAGasOracle + Clone,
     DS: DAGasOracleSync + Clone,
+    F: FeeEstimator + Clone,
 {
     type Evm = P;
     type EntryPointV0_6 = EP06;
     type EntryPointV0_7 = EP07;
     type DAGasOracle = D;
     type DAGasOracleSync = DS;
+    type FeeEstimator = F;
 
     fn evm(&self) -> &Self::Evm {
         &self.provider
@@ -768,6 +745,10 @@ where
     fn da_gas_oracle_sync(&self) -> &Option<Self::DAGasOracleSync> {
         &self.da_gas_oracle_sync
     }
+
+    fn fee_estimator(&self) -> &Self::FeeEstimator {
+        &self.fee_estimator
+    }
 }
 
 pub fn construct_providers(
@@ -780,6 +761,8 @@ pub fn construct_providers(
     )?);
     let (da_gas_oracle, da_gas_oracle_sync) =
         rundler_provider::new_alloy_da_gas_oracle(chain_spec, provider.clone());
+
+    let evm = AlloyEvmProvider::new(provider.clone());
 
     let ep_v0_6 = if args.disable_entry_point_v0_6 {
         None
@@ -807,12 +790,25 @@ pub fn construct_providers(
         ))
     };
 
+    let priority_fee_mode = PriorityFeeMode::try_from(
+        args.priority_fee_mode_kind.as_str(),
+        args.priority_fee_mode_value,
+    )?;
+    let fee_estimator = Arc::new(rundler_provider::new_fee_estimator(
+        chain_spec,
+        evm.clone(),
+        priority_fee_mode,
+        args.bundle_base_fee_overhead_percent,
+        args.bundle_priority_fee_overhead_percent,
+    ));
+
     Ok(RundlerProviders {
-        provider: AlloyEvmProvider::new(provider),
+        provider: evm,
         ep_v0_6,
         ep_v0_7,
         da_gas_oracle,
         da_gas_oracle_sync,
+        fee_estimator,
     })
 }
 

@@ -23,15 +23,16 @@ use rundler_contracts::utils::GetGasUsed::GasUsedResult;
 use rundler_types::{
     chain::ChainSpec,
     da::{DAGasBlockData, DAGasData},
-    v0_6, v0_7, ExpectedStorage, GasFees, UserOpsPerAggregator, ValidationOutput, ValidationRevert,
+    v0_6, v0_7, EntryPointVersion, ExpectedStorage, GasFees, UserOpsPerAggregator,
+    ValidationOutput, ValidationRevert,
 };
 
 use super::error::ProviderResult;
 use crate::{
     AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
-    EvmProvider as EvmProviderTrait, ExecutionResult, HandleOpsOut, SignatureAggregator,
-    SimulationProvider, Transaction, TransactionReceipt, TransactionRequest,
+    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut,
+    SignatureAggregator, SimulationProvider, Transaction, TransactionReceipt, TransactionRequest,
 };
 
 mockall::mock! {
@@ -132,6 +133,7 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl EntryPoint for EntryPointV0_6 {
+        fn version(&self) -> EntryPointVersion;
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
@@ -207,6 +209,7 @@ mockall::mock! {
             gas_limit: u64,
             gas_fees: GasFees,
             proxy: Option<Address>,
+            validation_only: bool,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
@@ -231,6 +234,7 @@ mockall::mock! {
 
     #[async_trait::async_trait]
     impl EntryPoint for EntryPointV0_7 {
+        fn version(&self) -> EntryPointVersion;
         fn address(&self) -> &Address;
         async fn balance_of(&self, address: Address, block_id: Option<BlockId>)
             -> ProviderResult<U256>;
@@ -306,6 +310,7 @@ mockall::mock! {
             gas_limit: u64,
             gas_fees: GasFees,
             proxy: Option<Address>,
+            validation_only: bool,
         ) -> ProviderResult<HandleOpsOut>;
         fn get_send_bundle_transaction(
             &self,
@@ -356,5 +361,20 @@ mockall::mock! {
             gas_price: u128,
             extra_data_len: usize,
         ) -> ProviderResult<(u128, DAGasData, DAGasBlockData)>;
+    }
+}
+
+mockall::mock! {
+    pub FeeEstimator {}
+
+    #[async_trait::async_trait]
+    impl FeeEstimator for FeeEstimator {
+        async fn required_bundle_fees(
+            &self,
+            block_hash: B256,
+            min_fees: Option<GasFees>,
+        ) -> anyhow::Result<(GasFees, u128)>;
+        async fn latest_bundle_fees(&self) -> anyhow::Result<(GasFees, u128)>;
+        fn required_op_fees(&self, bundle_fees: GasFees) -> GasFees;
     }
 }

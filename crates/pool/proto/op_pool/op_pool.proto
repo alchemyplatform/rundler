@@ -197,6 +197,15 @@ message MempoolOp {
   UserOperationPermissions permissions = 11;
 }
 
+message PoolOperationSummary {
+  // The serialized UserOperation hash
+  bytes hash = 1;
+  // The serialized entry point address
+  bytes entry_point = 2;
+  // The sender of the UserOperation
+  bytes sender = 3;
+}
+
 // Data associated with a user operation for DA gas calculations
 message DaGasData {
   oneof data {
@@ -230,6 +239,12 @@ service OpPool {
   
   // Get up to `max_ops` from the mempool.
   rpc GetOps (GetOpsRequest) returns (GetOpsResponse);
+
+  // Get summaries of up to `max_ops` from the mempool.
+  rpc GetOpsSummaries (GetOpsSummariesRequest) returns (GetOpsSummariesResponse);
+
+  // Get operations by their hashes.
+  rpc GetOpsByHashes (GetOpsByHashesRequest) returns (GetOpsByHashesResponse);
 
   // Get a UserOperation by its hash
   rpc GetOpByHash (GetOpByHashRequest) returns (GetOpByHashResponse);
@@ -305,10 +320,8 @@ message GetOpsRequest {
   bytes entry_point = 1;
   // The maximum number of UserOperations to return
   uint64 max_ops = 2;
-  // The mempool shard num retrieve UserOperations from
-  uint64 shard_index = 3; 
   // The filter ID to apply to the UserOperations 
-  string filter_id = 4;
+  string filter_id = 3;
 }
 message GetOpsResponse {
   oneof result {
@@ -317,6 +330,40 @@ message GetOpsResponse {
   }
 }
 message GetOpsSuccess {
+  repeated MempoolOp ops = 1;
+}
+
+message GetOpsSummariesRequest {  
+  // The serialized entry point address
+  bytes entry_point = 1;
+  // The maximum number of UserOperations to return
+  uint64 max_ops = 2;
+  // The filter ID to apply to the UserOperations 
+  string filter_id = 3;
+}
+message GetOpsSummariesResponse {
+  oneof result {
+    GetOpsSummariesSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetOpsSummariesSuccess {
+  repeated PoolOperationSummary summaries = 1;
+}
+
+message GetOpsByHashesRequest {
+  // The serialized entry point address
+  bytes entry_point = 1;
+  // The serialized UserOperation hashes to get
+  repeated bytes hashes = 2;
+}
+message GetOpsByHashesResponse {
+  oneof result {
+    GetOpsByHashesSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetOpsByHashesSuccess {
   repeated MempoolOp ops = 1;
 }
 
@@ -511,8 +558,8 @@ message NewHead {
 message AddressUpdate {
   // The address
   bytes address = 1;
-  // The new nonce  
-  uint64 nonce = 2;
+  // The new nonce (if any)
+  optional uint64 nonce = 2;
   // The new balance
   bytes balance = 3;
   // The mined tx hashes

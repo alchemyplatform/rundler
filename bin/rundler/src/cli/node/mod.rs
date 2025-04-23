@@ -71,7 +71,6 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
             &common_args,
             None,
             mempool_configs.clone(),
-            entry_point_builders.clone(),
         )
         .await?;
     let builder_task_args = builder_args

@@ -16,8 +16,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::future;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-use rundler_provider::EvmProvider;
-use rundler_sim::{gas, FeeEstimator};
+use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
     chain::{ChainSpec, IntoWithSpec},
     pool::Pool,
@@ -30,16 +29,6 @@ use crate::{
     types::{RpcMinedUserOperation, RpcUserOperation},
     utils,
 };
-
-/// Settings for the `rundler_` API
-#[derive(Copy, Clone, Debug)]
-pub struct Settings {
-    /// The priority fee mode to use for calculating required user operation priority fee.
-    pub priority_fee_mode: gas::PriorityFeeMode,
-    /// If using a bundle priority fee, the percentage to add to the network/oracle
-    /// provided value as a safety margin for fast inclusion.
-    pub bundle_priority_fee_overhead_percent: u32,
-}
 
 #[rpc(client, server, namespace = "rundler")]
 pub trait RundlerApi {
@@ -149,7 +138,7 @@ where
     async fn max_priority_fee_per_gas(&self) -> EthResult<U128> {
         let (bundle_fees, _) = self
             .fee_estimator
-            .required_bundle_fees(None)
+            .latest_bundle_fees()
             .await
             .context("should get required fees")?;
         Ok(U128::from(

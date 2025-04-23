@@ -24,32 +24,29 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures::future;
-use futures_util::TryFutureExt;
 use linked_hash_map::LinkedHashMap;
 use metrics::{Counter, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
 use rundler_provider::{
-    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, HandleOpsOut,
-    ProvidersWithEntryPointT,
+    BundleHandler, DAGasOracleSync, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator,
+    HandleOpsOut, ProvidersWithEntryPointT,
 };
-use rundler_sim::{
-    FeeEstimator, PriorityFeeMode, SimulationError, SimulationResult, Simulator, ViolationError,
-};
+use rundler_sim::{SimulationError, SimulationResult, Simulator, ViolationError};
 use rundler_types::{
     aggregator::SignatureAggregatorResult,
     chain::ChainSpec,
     da::DAGasBlockData,
-    pool::{Pool, PoolOperation, SimulationViolation},
+    pool::{PoolOperation, SimulationViolation},
     proxy::SubmissionProxy,
     BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
-    EntityUpdateType, ExpectedStorage, GasFees, Timestamp, UserOperation, UserOperationVariant,
-    UserOpsPerAggregator, ValidTimeRange, ValidationRevert, BUNDLE_BYTE_OVERHEAD,
-    TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, Timestamp, UserOperation,
+    UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
+    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
-use tokio::{sync::broadcast, try_join};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::emit::{BuilderEvent, ConditionNotMetReason, OpRejectionReason, SkipReason};
@@ -108,6 +105,8 @@ pub(crate) trait BundleProposer: Send + Sync {
     /// at least `min_fees`.
     async fn make_bundle(
         &mut self,
+        ops: Vec<PoolOperation>,
+        block_hash: B256,
         max_bundle_fee: U256,
         min_gas_fees: Option<GasFees>,
         is_replacement: bool,
@@ -118,6 +117,7 @@ pub(crate) trait BundleProposer: Send + Sync {
     /// If `min_fees` is `Some`, the proposer will ensure the gas fees returned are at least `min_fees`.
     async fn estimate_gas_fees(
         &self,
+        block_hash: B256,
         min_fees: Option<GasFees>,
     ) -> BundleProposerResult<(GasFees, u128)>;
 
@@ -129,8 +129,6 @@ pub(crate) type BundleProposerResult<T> = std::result::Result<T, BundleProposerE
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum BundleProposerError {
-    #[error("No operations initially")]
-    NoOperationsInitially,
     #[error("No operations after fee filtering")]
     NoOperationsAfterFeeFilter,
     #[error(transparent)]
@@ -141,25 +139,21 @@ pub(crate) enum BundleProposerError {
 }
 
 pub(crate) struct BundleProposerImpl<EP, BP> {
-    builder_index: u64,
     builder_tag: String,
     settings: Settings,
     ep_providers: EP,
     bundle_providers: BP,
     event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
     condition_not_met_notified: bool,
-    metric: BuilderProposerMetric,
-    filter_id: Option<String>,
+    metrics: BuilderProposerMetrics,
 }
 
 #[derive(Debug)]
 pub(crate) struct Settings {
     pub(crate) chain_spec: ChainSpec,
-    pub(crate) max_bundle_size: u64,
     pub(crate) target_bundle_gas: u128,
     pub(crate) max_bundle_gas: u128,
     pub(crate) sender_eoa: Address,
-    pub(crate) priority_fee_mode: PriorityFeeMode,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
     pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
@@ -175,12 +169,13 @@ where
 
     async fn estimate_gas_fees(
         &self,
+        block_hash: B256,
         required_fees: Option<GasFees>,
     ) -> BundleProposerResult<(GasFees, u128)> {
         Ok(self
-            .bundle_providers
+            .ep_providers
             .fee_estimator()
-            .required_bundle_fees(required_fees)
+            .required_bundle_fees(block_hash, required_fees)
             .await?)
     }
 
@@ -190,30 +185,21 @@ where
 
     async fn make_bundle(
         &mut self,
+        ops: Vec<PoolOperation>,
+        block_hash: B256,
         max_bundle_fee: U256,
         min_gas_fees: Option<GasFees>,
         is_replacement: bool,
     ) -> BundleProposerResult<Bundle<Self::UO>> {
         let timer = Instant::now();
-        let ops = self.get_ops_from_pool().await?;
-        if ops.is_empty() {
-            return Err(BundleProposerError::NoOperationsInitially);
-        }
-
-        let ((block_hash, _), (bundle_fees, base_fee)) = try_join!(
-            self.ep_providers
-                .evm()
-                .get_latest_block_hash_and_number()
-                .map_err(BundleProposerError::from),
-            self.estimate_gas_fees(min_gas_fees)
-        )?;
+        let (bundle_fees, base_fee) = self.estimate_gas_fees(block_hash, min_gas_fees).await?;
 
         // (0) Determine fees required for ops to be included in a bundle
         // if replacing, just require bundle fees increase chances of unsticking
         let required_op_fees = if is_replacement {
             bundle_fees
         } else {
-            self.bundle_providers
+            self.ep_providers
                 .fee_estimator()
                 .required_op_fees(bundle_fees)
         };
@@ -227,6 +213,7 @@ where
         {
             let da_gas_oracle = self.ep_providers.da_gas_oracle_sync().as_ref().unwrap();
 
+            // should typically be a cache hit and fast
             match da_gas_oracle.da_block_data(block_hash.into()).await {
                 Ok(block_data) => Some(block_data),
                 Err(e) => {
@@ -250,6 +237,7 @@ where
                 )
             })
             .collect::<Vec<_>>();
+        // if using a sync da oracle, this doesn't make any remote calls
         let ops = future::join_all(fee_futs)
             .await
             .into_iter()
@@ -318,7 +306,7 @@ where
                 }
 
                 // bundle built, record time
-                self.metric
+                self.metrics
                     .bundle_build_ms
                     .record(timer.elapsed().as_millis() as f64);
                 return Ok(Bundle {
@@ -331,7 +319,7 @@ where
                 });
             }
 
-            self.metric.bundle_simulation_failures.increment(1);
+            self.metrics.bundle_simulation_failures.increment(1);
             info!("Bundle gas estimation failed. Retrying after removing rejected op(s).");
         }
 
@@ -346,13 +334,15 @@ where
 
 #[derive(Metrics)]
 #[metrics(scope = "builder_proposer")]
-struct BuilderProposerMetric {
+struct BuilderProposerMetrics {
     #[metric(describe = "the distribution of end to end bundle build time.")]
     bundle_build_ms: Histogram,
-    #[metric(describe = "the distribution of op simulation time of a bundle.")]
+    #[metric(describe = "the distribution of op simulation time during bundle build.")]
     op_simulation_ms: Histogram,
     #[metric(describe = "the number of bundle simulation failures.")]
     bundle_simulation_failures: Counter,
+    #[metric(describe = "the distribution of bundle simulation time.")]
+    bundle_simulation_ms: Histogram,
 }
 
 impl<EP, BP> BundleProposerImpl<EP, BP>
@@ -362,24 +352,20 @@ where
 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        builder_index: u64,
         builder_tag: String,
         ep_providers: EP,
         bundle_providers: BP,
         settings: Settings,
         event_sender: broadcast::Sender<WithEntryPoint<BuilderEvent>>,
-        filter_id: Option<String>,
     ) -> Self {
         Self {
-            builder_index,
             builder_tag,
             ep_providers,
             bundle_providers,
             settings,
             event_sender,
             condition_not_met_notified: false,
-            metric: BuilderProposerMetric::default(),
-            filter_id,
+            metrics: BuilderProposerMetrics::default(),
         }
     }
 
@@ -560,7 +546,7 @@ where
         PoolOperationWithSponsoredDAGas,
         Result<SimulationResult, SimulationError>,
     )> {
-        let _timer_guard = CustomTimerGuard::new(self.metric.op_simulation_ms.clone());
+        let _timer_guard = CustomTimerGuard::new(self.metrics.op_simulation_ms.clone());
         let op_hash = op.op.uo.hash();
 
         // Simulate
@@ -610,6 +596,11 @@ where
         )>,
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext<<Self as BundleProposer>::UO> {
+        if max_bundle_fee == U256::ZERO {
+            return ProposalContext::<<Self as BundleProposer>::UO>::new();
+        }
+        let buffered_max_bundle_fee = max_bundle_fee * U256::from(90) / U256::from(100);
+
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
             .map(|(op, _)| op.op.uo.sender())
@@ -710,7 +701,7 @@ where
             let op_total_gas_limit = op.gas_limit(&self.settings.chain_spec, None);
             let total_gas_cost = U256::from(total_gas_spent.saturating_add(op_total_gas_limit))
                 * U256::from(gas_price);
-            if total_gas_cost > max_bundle_fee {
+            if total_gas_cost > buffered_max_bundle_fee {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
@@ -974,7 +965,20 @@ where
             .try_into()
             .context("estimated bundle gas limit is larger than u64::MAX")?;
 
-        // call handle ops with the bundle to filter any rejected ops before sending
+        // if EP v0.7+ and only 1 op, skip this call as simulation has already run a similar check
+        // v0.6 cannot do this as we need to check for postOp reverts
+        if self.ep_providers.entry_point().version() != EntryPointVersion::V0_6
+            && context.iter_ops().count() == 1
+        {
+            return Ok(Some(gas_limit));
+        }
+
+        // validate the bundle to filter any rejected ops before sending
+        let start = Instant::now();
+        // if not using a proxy, and using v0.7+, we can only run validation and skip execution
+        let validation_only = self.settings.submission_proxy.is_none()
+            && self.ep_providers.entry_point().version() != EntryPointVersion::V0_6;
+
         let handle_ops_out = self
             .ep_providers
             .entry_point()
@@ -984,9 +988,13 @@ where
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                validation_only,
             )
             .await
             .context("should call handle ops with candidate bundle")?;
+        self.metrics
+            .bundle_simulation_ms
+            .record(start.elapsed().as_millis() as f64);
 
         match handle_ops_out {
             HandleOpsOut::Success => Ok(Some(gas_limit)),
@@ -1043,27 +1051,6 @@ where
                 Ok(None)
             }
         }
-    }
-
-    async fn get_ops_from_pool(&self) -> BundleProposerResult<Vec<PoolOperation>> {
-        // Use builder's index as the shard index to ensure that two builders don't
-        // attempt to bundle the same operations.
-        //
-        // NOTE: this assumes that the pool server has as many shards as there
-        // are builders.
-        Ok(self
-            .bundle_providers
-            .pool()
-            .get_ops(
-                *self.ep_providers.entry_point().address(),
-                self.settings.max_bundle_size,
-                self.builder_index,
-                self.filter_id.clone(),
-            )
-            .await
-            .context("should get ops from pool")?
-            .into_iter()
-            .collect())
     }
 
     async fn get_balances_by_paymaster(
@@ -1258,6 +1245,7 @@ where
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                false,
             )
             .await;
         match ret {
@@ -1299,6 +1287,7 @@ where
                 gas_limit,
                 bundle_fees,
                 self.settings.submission_proxy.as_ref().map(|p| p.address()),
+                false,
             )
             .await;
         match ret {
@@ -1379,56 +1368,31 @@ where
 // Type erasure for the bundle proposer providers
 pub(crate) trait BundleProposerProvidersT: Send + Sync {
     type UO: UserOperation + From<UserOperationVariant>;
-    type Pool: Pool;
     type Simulator: Simulator<UO = Self::UO>;
-    type FeeEstimator: FeeEstimator;
-
-    fn pool(&self) -> &Self::Pool;
 
     fn simulator(&self) -> &Self::Simulator;
-
-    fn fee_estimator(&self) -> &Self::FeeEstimator;
 }
 
-pub(crate) struct BundleProposerProviders<P, S, F> {
-    pool: P,
+pub(crate) struct BundleProposerProviders<S> {
     simulator: S,
-    fee_estimator: F,
 }
 
-impl<P, S, F> BundleProposerProviders<P, S, F> {
-    pub(crate) fn new(pool: P, simulator: S, fee_estimator: F) -> Self {
-        Self {
-            pool,
-            simulator,
-            fee_estimator,
-        }
+impl<S> BundleProposerProviders<S> {
+    pub(crate) fn new(simulator: S) -> Self {
+        Self { simulator }
     }
 }
 
-impl<P, S, F> BundleProposerProvidersT for BundleProposerProviders<P, S, F>
+impl<S> BundleProposerProvidersT for BundleProposerProviders<S>
 where
-    P: Pool,
     S: Simulator,
     S::UO: UserOperation + From<UserOperationVariant>,
-    P: Pool,
-    F: FeeEstimator,
 {
     type UO = S::UO;
-    type Pool = P;
     type Simulator = S;
-    type FeeEstimator = F;
-
-    fn pool(&self) -> &Self::Pool {
-        &self.pool
-    }
 
     fn simulator(&self) -> &Self::Simulator {
         &self.simulator
-    }
-
-    fn fee_estimator(&self) -> &Self::FeeEstimator {
-        &self.fee_estimator
     }
 }
 
@@ -1927,16 +1891,17 @@ mod tests {
     use alloy_primitives::{utils::parse_units, Address, B256};
     use anyhow::anyhow;
     use rundler_provider::{
-        MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, ProvidersWithEntryPoint,
+        MockDAGasOracleSync, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
+        ProvidersWithEntryPoint,
     };
-    use rundler_sim::{MockFeeEstimator, MockSimulator};
+    use rundler_sim::MockSimulator;
     use rundler_types::{
         aggregator::{
             AggregatorCosts, MockSignatureAggregator, SignatureAggregator, SignatureAggregatorError,
         },
         chain::ContractRegistry,
         da::BedrockDAGasBlockData,
-        pool::{MockPool, SimulationViolation},
+        pool::SimulationViolation,
         proxy::MockSubmissionProxy,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
         BundlerSponsorship, UserOperation as _, UserOperationPermissions, ValidTimeRange,
@@ -3860,7 +3825,6 @@ mod tests {
         let sender_eoa = address(124);
         let current_block_hash = hash(125);
         let expected_code_hash = hash(126);
-        let max_bundle_size = mock_ops.len() as u64;
         let proxy_address = proxy.as_ref().map(|p| p.address());
         let ops: Vec<_> = mock_ops
             .iter()
@@ -3879,11 +3843,6 @@ mod tests {
                 perms: perms.clone(),
             })
             .collect();
-
-        let mut pool_client = MockPool::new();
-        pool_client
-            .expect_get_ops()
-            .returning(move |_, _, _, _| Ok(ops.clone()));
 
         let simulations_by_op: Arc<HashMap<B256, MockOp>> = Arc::from(
             mock_ops
@@ -3906,14 +3865,17 @@ mod tests {
             });
         let mut entry_point = MockEntryPointV0_6::new();
         entry_point
+            .expect_version()
+            .returning(move || EntryPointVersion::V0_6);
+        entry_point
             .expect_address()
             .return_const(chain_spec.entry_point_address_v0_6);
         for call_res in mock_handle_ops_call_results {
             entry_point
                 .expect_call_handle_ops()
                 .times(..=1)
-                .withf(move |_, &b, _, _, &p| b == sender_eoa && p == proxy_address)
-                .return_once(|_, _, _, _, _| Ok(call_res));
+                .withf(move |_, &b, _, _, &p, _| b == sender_eoa && p == proxy_address)
+                .return_once(|_, _, _, _, _, _| Ok(call_res));
         }
         for deposit in mock_paymaster_deposits {
             entry_point
@@ -3935,7 +3897,7 @@ mod tests {
         let mut fee_estimator = MockFeeEstimator::new();
         fee_estimator
             .expect_required_bundle_fees()
-            .returning(move |_| {
+            .returning(move |_, _| {
                 Ok((
                     GasFees {
                         max_fee_per_gas: base_fee + max_priority_fee_per_gas,
@@ -3995,34 +3957,33 @@ mod tests {
             proxy.map(|p| Arc::new(p) as Arc<dyn SubmissionProxy>);
 
         let mut proposer = BundleProposerImpl::new(
-            0,
             "test".to_string(),
             ProvidersWithEntryPoint::new(
                 Arc::new(provider),
                 Arc::new(entry_point),
                 Some(Arc::new(da_oracle)),
+                Arc::new(fee_estimator),
             ),
-            BundleProposerProviders::new(pool_client, simulator, fee_estimator),
+            BundleProposerProviders::new(simulator),
             Settings {
                 chain_spec,
-                max_bundle_size,
                 target_bundle_gas: 10_000_000,
                 max_bundle_gas: 25_000_000,
                 sender_eoa,
-                priority_fee_mode: PriorityFeeMode::PriorityFeeIncreasePercent(0),
                 da_gas_tracking_enabled,
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
                 submission_proxy,
             },
             event_sender,
-            None,
         );
 
         if notify_condition_not_met {
             proposer.notify_condition_not_met();
         }
 
-        proposer.make_bundle(max_bundle_fee, None, false).await
+        proposer
+            .make_bundle(ops, current_block_hash, max_bundle_fee, None, false)
+            .await
     }
 
     fn address(n: u8) -> Address {
