@@ -32,11 +32,11 @@ use rundler_types::{
     v0_7::{UserOperation, UserOperationBuilder, UserOperationOptionalGas},
     GasEstimate, UserOperation as _,
 };
-use rundler_utils::math;
+use rundler_utils::{guard_timer::CustomTimerGuard, math};
 use tokio::join;
 use tracing::instrument;
 
-use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Settings};
+use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Metrics, Settings};
 use crate::{
     gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
     VerificationGasEstimator, VerificationGasEstimatorImpl, MIN_CALL_GAS_LIMIT,
@@ -51,6 +51,7 @@ pub struct GasEstimator<P, E, VGE, CGE, F> {
     fee_estimator: F,
     verification_gas_estimator: VGE,
     call_gas_estimator: CGE,
+    metrics: Metrics,
 }
 
 #[async_trait::async_trait]
@@ -73,6 +74,7 @@ where
         op: UserOperationOptionalGas,
         state_override: StateOverride,
     ) -> Result<GasEstimate, GasEstimationError> {
+        let _timer = CustomTimerGuard::new(self.metrics.total_gas_estimate_ms.clone());
         self.check_provided_limits(&op)?;
 
         let Self {
@@ -127,13 +129,11 @@ where
             self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
-        let timer = std::time::Instant::now();
         let (verification_gas_limit, paymaster_verification_gas_limit, call_gas_limit) = join!(
             verification_gas_future,
             paymaster_verification_gas_future,
             call_gas_future
         );
-        tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
 
         let verification_gas_limit = verification_gas_limit?;
         let paymaster_verification_gas_limit = paymaster_verification_gas_limit?;
@@ -216,6 +216,7 @@ where
             fee_estimator,
             verification_gas_estimator,
             call_gas_estimator,
+            metrics: Metrics::default(),
         }
     }
 }
@@ -285,6 +286,8 @@ where
             }
         }
 
+        let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
+
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
             // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
@@ -335,6 +338,8 @@ where
             }
         }
 
+        let _timer = CustomTimerGuard::new(self.metrics.pvgl_estimate_ms.clone());
+
         let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
             let GetOpWithLimitArgs { gas, fee } = args;
             // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
@@ -378,6 +383,8 @@ where
             }
         }
 
+        let _timer = CustomTimerGuard::new(self.metrics.pvg_estimate_ms.clone());
+
         // If not using calldata pre-verification gas, return 0
         let gas_price = if !self.chain_spec.da_pre_verification_gas {
             0
@@ -416,6 +423,7 @@ where
         block_hash: B256,
         state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
+        let _timer = CustomTimerGuard::new(self.metrics.cgl_estimate_ms.clone());
         // if set and non-zero, don't estimate
         if let Some(cl) = optional_op.call_gas_limit {
             if cl != 0 {

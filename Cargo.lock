@@ -5158,6 +5158,8 @@ dependencies = [
  "arrayvec",
  "async-trait",
  "futures-util",
+ "metrics",
+ "metrics-derive",
  "mockall",
  "rand",
  "rundler-contracts",
