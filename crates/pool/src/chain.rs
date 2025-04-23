@@ -261,10 +261,11 @@ impl<P: EvmProvider> Chain<P> {
             }
 
             warn!(
-                "Failed to update chain at block {:?} after {} retries. Abandoning sync.",
+                "Failed to update chain at block {:?} after {} retries. Abandoning sync and resetting history.",
                 block_hash, self.settings.max_sync_retries
             );
             self.metrics.sync_abandoned.increment(1);
+            self.blocks.clear();
         }
     }
 
