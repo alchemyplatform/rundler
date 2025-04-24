@@ -155,7 +155,9 @@ pub(crate) struct Settings {
 
 #[derive(Clone, Copy, Debug)]
 struct PendingTransaction {
-    tx_hash: B256,
+    // If none, this indicates that the transaction was not successfully sent
+    // We still track these to ensure that we handle fee increases correctly
+    tx_hash: Option<B256>,
     gas_fees: GasFees,
     attempt_number: u64,
     sent_at_block: Option<u64>,
@@ -319,7 +321,10 @@ where
     }
 
     fn num_pending_transactions(&self) -> usize {
-        self.transactions.len()
+        self.transactions
+            .iter()
+            .filter(|t| t.tx_hash.is_some())
+            .count()
     }
 
     async fn send_transaction(
@@ -358,7 +363,7 @@ where
             Ok(tx_hash) => {
                 info!("Sent transaction {:?} nonce: {:?}", tx_hash, tx_nonce);
                 self.transactions.push(PendingTransaction {
-                    tx_hash,
+                    tx_hash: Some(tx_hash),
                     gas_fees,
                     attempt_number: self.attempt_count,
                     sent_at_block: Some(block_number),
@@ -369,12 +374,15 @@ where
                 self.update_metrics();
                 Ok(tx_hash)
             }
-            Err(e) if matches!(e, TxSenderError::ReplacementUnderpriced) => {
-                // Only can get into this state if there is an unknown pending transaction causing replacement
-                // underpriced errors, or if the last transaction was abandoned.
+            Err(e)
+                if matches!(
+                    e,
+                    TxSenderError::ReplacementUnderpriced | TxSenderError::Underpriced
+                ) =>
+            {
                 warn!(
-                    "Replacement underpriced: nonce: {:?}, fees: {:?}",
-                    self.nonce, gas_fees
+                    "Underpriced: nonce: {:?}, fees: {:?}, error: {:?}",
+                    self.nonce, gas_fees, e
                 );
 
                 // Store this transaction as pending if last is empty or if it has higher gas fees than last
@@ -384,7 +392,7 @@ where
                         && gas_fees.max_priority_fee_per_gas > t.gas_fees.max_priority_fee_per_gas
                 }) {
                     self.transactions.push(PendingTransaction {
-                        tx_hash: B256::ZERO,
+                        tx_hash: None,
                         gas_fees,
                         attempt_number: self.attempt_count,
                         sent_at_block: None,
@@ -405,7 +413,9 @@ where
         &mut self,
         estimated_fees: GasFees,
     ) -> TransactionTrackerResult<Option<B256>> {
-        let (tx_hash, gas_fees) = match self.transactions.last() {
+        // find the last pending txn with a tx_hash
+        let pending_tx = self.transactions.iter().rev().find(|t| t.tx_hash.is_some());
+        let (tx_hash, gas_fees) = match pending_tx {
             Some(tx) => {
                 let increased_fees = tx
                     .gas_fees
@@ -418,7 +428,7 @@ where
                         .max_priority_fee_per_gas
                         .max(estimated_fees.max_priority_fee_per_gas),
                 };
-                (tx.tx_hash, gas_fees)
+                (tx.tx_hash.unwrap(), gas_fees)
             }
             None => (B256::ZERO, estimated_fees),
         };
@@ -442,7 +452,7 @@ where
                 );
 
                 self.transactions.push(PendingTransaction {
-                    tx_hash: cancel_info.tx_hash,
+                    tx_hash: Some(cancel_info.tx_hash),
                     gas_fees,
                     attempt_number: self.attempt_count,
                     sent_at_block: None,
@@ -453,10 +463,10 @@ where
                 self.update_metrics();
                 Ok(Some(cancel_info.tx_hash))
             }
-            Err(TxSenderError::ReplacementUnderpriced) => {
+            Err(TxSenderError::ReplacementUnderpriced | TxSenderError::Underpriced) => {
                 warn!(
-                    "Cancellation tx replacement underpriced: nonce: {:?} fees: {:?}",
-                    self.nonce, gas_fees
+                    "Cancellation tx underpriced: nonce: {:?} fees: {:?} error: {:?}",
+                    self.nonce, gas_fees, cancel_res
                 );
 
                 // Store this transaction as pending if last is empty or if it has higher gas fees than last
@@ -466,7 +476,7 @@ where
                         && gas_fees.max_priority_fee_per_gas > t.gas_fees.max_priority_fee_per_gas
                 }) {
                     self.transactions.push(PendingTransaction {
-                        tx_hash: B256::ZERO,
+                        tx_hash: None,
                         gas_fees,
                         attempt_number: self.attempt_count,
                         sent_at_block: None,
@@ -511,12 +521,16 @@ where
 
         let mut out = TrackerUpdate::NonceUsedForOtherTx { nonce: self.nonce };
         for tx in self.transactions.iter().rev() {
-            if update.mined_tx_hashes.contains(&tx.tx_hash) {
-                let Some(mined_tx_info) = self.get_mined_tx_info(tx.tx_hash).await? else {
+            let Some(pending_tx_hash) = tx.tx_hash else {
+                continue;
+            };
+
+            if update.mined_tx_hashes.contains(&pending_tx_hash) {
+                let Some(mined_tx_info) = self.get_mined_tx_info(pending_tx_hash).await? else {
                     continue;
                 };
                 out = TrackerUpdate::Mined {
-                    tx_hash: tx.tx_hash,
+                    tx_hash: pending_tx_hash,
                     nonce: self.nonce,
                     block_number: mined_tx_info.block_number,
                     attempt_number: tx.attempt_number,
@@ -806,6 +820,66 @@ mod tests {
             tracker_update,
             TrackerUpdate::NonceUsedForOtherTx { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_underpriced_txn() {
+        let (mut sender, provider, signer) = create_base_config(0);
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| Box::pin(async { Err(TxSenderError::Underpriced) }));
+
+        let mut tracker = create_tracker(sender, provider, signer).await;
+
+        let tx = TransactionRequest::default()
+            .nonce(0)
+            .max_fee_per_gas(10000);
+        let exp = ExpectedStorage::default();
+        let sent_transaction = tracker.send_transaction(tx, &exp, 0).await;
+
+        assert!(matches!(
+            sent_transaction,
+            Err(TransactionTrackerError::Underpriced)
+        ));
+        assert_eq!(tracker.num_pending_transactions(), 0);
+        assert_eq!(
+            tracker.get_state().unwrap().required_fees,
+            Some(GasFees {
+                max_fee_per_gas: 10500,
+                max_priority_fee_per_gas: 0,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replacement_underpriced_txn() {
+        let (mut sender, provider, signer) = create_base_config(0);
+        sender
+            .expect_send_transaction()
+            .returning(move |_a, _b, _c| {
+                Box::pin(async { Err(TxSenderError::ReplacementUnderpriced) })
+            });
+
+        let mut tracker = create_tracker(sender, provider, signer).await;
+
+        let tx = TransactionRequest::default()
+            .nonce(0)
+            .max_fee_per_gas(10000);
+        let exp = ExpectedStorage::default();
+        let sent_transaction = tracker.send_transaction(tx, &exp, 0).await;
+
+        assert!(matches!(
+            sent_transaction,
+            Err(TransactionTrackerError::ReplacementUnderpriced)
+        ));
+        assert_eq!(tracker.num_pending_transactions(), 0);
+        assert_eq!(
+            tracker.get_state().unwrap().required_fees,
+            Some(GasFees {
+                max_fee_per_gas: 10500,
+                max_priority_fee_per_gas: 0,
+            })
+        );
     }
 
     fn sign_transaction(hash: B256) -> Transaction {
