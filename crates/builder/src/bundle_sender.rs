@@ -284,10 +284,16 @@ where
             }
             Ok(SendBundleAttemptResult::NoOperationsInitially) => {
                 debug!("No operations available initially");
+                if inner.fee_increase_count > 0 {
+                    state.transaction_tracker.abandon();
+                }
                 state.no_operations();
             }
             Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
                 debug!("No operations available after simulation");
+                if inner.fee_increase_count > 0 {
+                    state.transaction_tracker.abandon();
+                }
                 state.no_operations();
             }
             Ok(SendBundleAttemptResult::NoOperationsAfterFeeFilter) => {
@@ -598,9 +604,8 @@ where
             )
             .await?;
         if ops.is_empty() {
-            if state.transaction_tracker.num_pending_transactions() == 0 {
-                self.assigner.release_all(self.sender_eoa);
-            }
+            // there are no UOs for this sender, so we can release all from the assigner
+            self.assigner.release_all(self.sender_eoa);
             return Ok(SendBundleAttemptResult::NoOperationsInitially);
         }
 
@@ -612,6 +617,10 @@ where
                     .confirm_senders_drop_unused(self.sender_eoa, ops.iter().map(|op| &op.0));
             }
             Ok(SendBundleAttemptResult::NonceTooLow) => {
+                self.assigner.release_all(self.sender_eoa);
+            }
+            Ok(SendBundleAttemptResult::NoOperationsAfterSimulation) => {
+                // all UOs for this sender are invalid, so we can release all from the assigner
                 self.assigner.release_all(self.sender_eoa);
             }
             _ => {
