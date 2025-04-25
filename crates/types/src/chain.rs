@@ -176,7 +176,7 @@ impl Default for ChainSpec {
             max_max_priority_fee_per_gas: u64::MAX,
             congestion_trigger_usage_ratio_threshold: 0.75,
             max_transaction_size_bytes: 131072, // 128 KiB
-            bundle_max_send_interval_millis: u64::MAX,
+            bundle_max_send_interval_millis: 1000,
             flashbots_enabled: false,
             flashbots_relay_url: None,
             bloxroute_enabled: false,

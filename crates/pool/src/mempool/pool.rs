@@ -32,7 +32,7 @@ use rundler_types::{
 };
 use rundler_utils::{emit::WithEntryPoint, math};
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::info;
 
 use super::{entity_tracker::EntityCounter, size::SizeTracker, MempoolResult, PoolConfig};
 use crate::{chain::MinedOp, emit::OpRemovalReason, PoolEvent};
@@ -475,8 +475,6 @@ where
                 .time_to_mine
                 .record(time_to_mine.0.as_secs_f64());
             self.metrics.blocks_to_mine.record(time_to_mine.1 as f64);
-        } else {
-            warn!("Could not find time to mine for {:?}", mined_op.hash);
         }
 
         let hash = tx_in_pool.uo().hash();
