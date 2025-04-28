@@ -255,6 +255,15 @@ impl BuilderArgs {
 
         let provider_client_timeout_seconds = common.provider_client_timeout_seconds;
 
+        tracing::info!(
+            "Builder bundle limits: Chain block gas limit: {}. Target bundle gas: {}. Max bundle gas: {}",
+            chain_spec.block_gas_limit,
+            chain_spec
+                .block_gas_limit_mult(common.target_bundle_block_gas_limit_ratio),
+            chain_spec
+                .block_gas_limit_mult(common.max_bundle_block_gas_limit_ratio)
+        );
+
         Ok(BuilderTaskArgs {
             entry_points,
             signing_scheme,

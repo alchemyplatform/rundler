@@ -169,8 +169,12 @@ pub enum SkipReason {
     },
     /// Cost of this operation is greater than the max cost of the bundler sponsorship
     OverSponsorshipMaxCost { max_cost: U256, actual_cost: U256 },
-    /// Bundle ran out of space by gas limit to include the operation
-    GasLimit,
+    /// Bundle ran out of space by simulation gas limit to include the operation
+    SimulationGasLimit,
+    /// Bundle ran out of space by target gas limit to include the operation
+    TargetGasLimit,
+    /// Bundle ran out of space by max gas limit to include the operation
+    MaxGasLimit,
     /// Bundle ran out of space by max bundle fee to include the operation
     OverMaxBundleFee,
     /// Expected storage conflict

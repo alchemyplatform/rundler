@@ -11,7 +11,12 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy_primitives::{Address, B256};
 use anyhow::Context;
@@ -194,6 +199,7 @@ where
             self.args.max_bundle_size,
         ));
 
+        let mut supported_entry_points = HashSet::new();
         for ep in &self.args.entry_points {
             match ep.version {
                 EntryPointVersion::V0_6 => {
@@ -206,6 +212,7 @@ where
                         )
                         .await?;
                     bundle_sender_actions.extend(actions);
+                    supported_entry_points.insert(self.args.chain_spec.entry_point_address_v0_6);
                 }
                 EntryPointVersion::V0_7 => {
                     let actions = self
@@ -217,6 +224,7 @@ where
                         )
                         .await?;
                     bundle_sender_actions.extend(actions);
+                    supported_entry_points.insert(self.args.chain_spec.entry_point_address_v0_7);
                 }
                 EntryPointVersion::Unspecified => {
                     panic!("Unspecified entry point version")
@@ -231,7 +239,7 @@ where
             |shutdown| {
                 self.builder_builder.run(
                     bundle_sender_actions,
-                    vec![self.args.chain_spec.entry_point_address_v0_6],
+                    supported_entry_points.into_iter().collect(),
                     shutdown,
                 )
             },
