@@ -287,10 +287,9 @@ impl UserOperationTrait for UserOperation {
         // To handle the 63/64ths rule also need to add a buffer of 1/63rd of that total*
         ENTRY_POINT_INNER_GAS_OVERHEAD
             + self.paymaster_post_op_gas_limit
-            + (64
-                * (self.call_gas_limit
-                    + self.paymaster_post_op_gas_limit
-                    + ENTRY_POINT_INNER_GAS_OVERHEAD)
+            + ((self.call_gas_limit
+                + self.paymaster_post_op_gas_limit
+                + ENTRY_POINT_INNER_GAS_OVERHEAD)
                 / 63)
     }
 
