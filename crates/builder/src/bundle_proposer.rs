@@ -597,6 +597,7 @@ where
         mut balances_by_paymaster: HashMap<Address, U256>,
     ) -> ProposalContext<<Self as BundleProposer>::UO> {
         if max_bundle_fee == U256::ZERO {
+            warn!("Max bundle fee is zero, skipping bundle");
             return ProposalContext::<<Self as BundleProposer>::UO>::new();
         }
         let buffered_max_bundle_fee = max_bundle_fee * U256::from(90) / U256::from(100);
@@ -678,7 +679,7 @@ where
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
-                    SkipReason::GasLimit,
+                    SkipReason::TargetGasLimit,
                 ));
                 continue;
             }
@@ -692,7 +693,7 @@ where
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
-                    SkipReason::GasLimit,
+                    SkipReason::MaxGasLimit,
                 ));
                 continue;
             }
@@ -1344,7 +1345,7 @@ where
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.op.uo.hash(),
-                    SkipReason::GasLimit,
+                    SkipReason::SimulationGasLimit,
                 ));
                 continue;
             }

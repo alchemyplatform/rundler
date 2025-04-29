@@ -173,11 +173,7 @@ impl LocalBuilderServerRunner {
     }
 
     async fn run(mut self, shutdown: GracefulShutdown) {
-        let Ok(mut new_heads) = self
-            .pool
-            .subscribe_new_heads(self.entry_points.clone())
-            .await
-        else {
+        let Ok(mut new_heads) = self.pool.subscribe_new_heads(vec![]).await else {
             tracing::error!("Failed to subscribe to new blocks");
             panic!("failed to subscribe to new blocks");
         };
