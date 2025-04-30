@@ -248,7 +248,9 @@ impl BuilderArgs {
         }
 
         let sender_args = self.sender_args(&chain_spec, &rpc_url)?;
-        let signing_scheme = self.signer_args.signing_scheme(num_builders as usize)?;
+        let signing_scheme = self
+            .signer_args
+            .signing_scheme(Some(num_builders as usize))?;
 
         let da_gas_tracking_enabled =
             super::lint_da_gas_tracking(common.da_gas_tracking_enabled, &chain_spec);

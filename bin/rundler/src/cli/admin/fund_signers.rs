@@ -25,7 +25,7 @@ use crate::cli::signer::SignerArgs;
 pub(super) struct FundSignersArgs {
     /// The number of signers to fund
     #[arg(short, long)]
-    count: u64,
+    count: Option<usize>,
 
     /// Signer arguments
     #[command(flatten)]
@@ -42,7 +42,7 @@ pub(super) async fn fund_signers(
     providers: impl Providers + 'static,
     task_spawner: impl TaskSpawnerExt + 'static,
 ) -> anyhow::Result<()> {
-    let signing_scheme = args.signer_args.signing_scheme(args.count as usize)?;
+    let signing_scheme = args.signer_args.signing_scheme(args.count)?;
     if !signing_scheme.supports_funding() {
         anyhow::bail!("Signing scheme does not support funding");
     }

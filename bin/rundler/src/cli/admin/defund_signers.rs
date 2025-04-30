@@ -20,7 +20,7 @@ use alloy_primitives::{Address, PrimitiveSignature, U256};
 use anyhow::{bail, Context};
 use clap::Args;
 use rundler_provider::{DAGasOracle, EvmProvider, Providers, TransactionRequest};
-use rundler_signer::{utils, SignerLease, SigningScheme};
+use rundler_signer::{utils, SignerLease};
 use rundler_task::TaskSpawnerExt;
 use rundler_types::chain::ChainSpec;
 
@@ -30,7 +30,7 @@ use crate::cli::signer::SignerArgs;
 pub(super) struct DefundSignersArgs {
     /// The number of signers to defund
     #[arg(short, long)]
-    count: u64,
+    count: Option<usize>,
 
     /// Signer arguments
     #[command(flatten)]
@@ -65,18 +65,7 @@ pub(super) async fn defund_signers(
         args.signer_args.fund_below = Some(fund_to);
     }
 
-    let signing_scheme = args.signer_args.signing_scheme(args.count as usize)?;
-    if !signing_scheme.supports_funding() {
-        anyhow::bail!("Signing scheme does not support defunding");
-    }
-    if let SigningScheme::KmsFunding {
-        subkeys_by_key_id, ..
-    } = &signing_scheme
-    {
-        if subkeys_by_key_id.len() > 1 {
-            anyhow::bail!("Only one key ID with mnemonic is supported for funding");
-        }
-    }
+    let signing_scheme = args.signer_args.signing_scheme(args.count)?;
 
     let signer_manager = rundler_signer::new_signer_manager(
         &signing_scheme,

@@ -158,16 +158,16 @@ fn parse_aws_kms_key_groups(s: &str) -> Result<Vec<String>, String> {
 }
 
 impl SignerArgs {
-    pub fn signing_scheme(&self, num_signers: usize) -> anyhow::Result<SigningScheme> {
+    pub fn signing_scheme(&self, num_signers: Option<usize>) -> anyhow::Result<SigningScheme> {
         if self.enable_kms_funding {
             return self.funding_signer_scheme(num_signers);
         }
 
         if !self.private_keys.is_empty() {
-            if num_signers > self.private_keys.len() {
+            if num_signers.is_some_and(|num_signers| num_signers > self.private_keys.len()) {
                 bail!(
                         "Found {} private keys, but need {} keys for the number of builders. You may need to disable one of the entry points.",
-                        self.private_keys.len(), num_signers
+                        self.private_keys.len(), num_signers.unwrap()
                     );
             }
 
@@ -179,22 +179,22 @@ impl SignerArgs {
         if let Some(mnemonic) = &self.mnemonic {
             return Ok(SigningScheme::Mnemonic {
                 mnemonic: mnemonic.clone(),
-                num_keys: num_signers,
+                num_keys: num_signers.unwrap_or(1),
             });
         }
 
         if !self.aws_kms_key_ids.is_empty() {
-            if self.aws_kms_key_ids.len() < num_signers {
+            if num_signers.is_some_and(|num_signers| num_signers > self.aws_kms_key_ids.len()) {
                 bail!(
                         "Not enough AWS KMS key IDs for the number of builders. Need {} keys, found {}. You may need to disable one of the entry points.",
-                        num_signers, self.aws_kms_key_ids.len()
+                        num_signers.unwrap(), self.aws_kms_key_ids.len()
                     );
             }
 
             if self.enable_kms_locking {
                 return Ok(SigningScheme::AwsKmsLocking {
                     key_ids: self.aws_kms_key_ids.clone(),
-                    to_lock: num_signers,
+                    to_lock: num_signers.unwrap_or(self.aws_kms_key_ids.len()),
                     settings: KmsLockingSettings {
                         redis_uri: self.redis_uri.clone(),
                         ttl_millis: self.redis_lock_ttl_millis,
@@ -210,7 +210,7 @@ impl SignerArgs {
         bail!("No signing scheme provided (unfunded). Provide either signer.private_keys, signer.mnemonic, or signer.aws_kms_key_ids");
     }
 
-    fn funding_signer_scheme(&self, num_signers: usize) -> anyhow::Result<SigningScheme> {
+    fn funding_signer_scheme(&self, num_signers: Option<usize>) -> anyhow::Result<SigningScheme> {
         if self.aws_kms_key_ids.is_empty() {
             bail!("AWS KMS key IDs are not set and KMS funding is enabled. Please set signer.aws_kms_key_ids");
         };
@@ -228,8 +228,8 @@ impl SignerArgs {
                 bail!("Number of AWS KMS key groups ({}) does not match number of AWS KMS key IDs ({}).", self.aws_kms_key_groups.len(), self.aws_kms_key_ids.len());
             }
             for group in self.aws_kms_key_groups.iter() {
-                if group.len() < num_signers {
-                    bail!("Number of AWS KMS key IDs in group is less than the number of builders. Need {} keys, found {}", num_signers, group.len());
+                if num_signers.is_some_and(|num_signers| num_signers > group.len()) {
+                    bail!("Number of AWS KMS key IDs in group is less than the number of builders. Need {} keys, found {}", num_signers.unwrap(), group.len());
                 }
             }
 
@@ -246,11 +246,11 @@ impl SignerArgs {
                 })
                 .collect()
         } else if !self.private_keys.is_empty() {
-            if num_signers > self.private_keys.len() {
+            if num_signers.is_some_and(|num_signers| num_signers > self.private_keys.len()) {
                 bail!(
                     "Number of private keys ({}) is less than the number of builders ({}).",
                     self.private_keys.len(),
-                    num_signers
+                    num_signers.unwrap()
                 );
             }
             let keys = SigningScheme::PrivateKeys {
@@ -264,7 +264,7 @@ impl SignerArgs {
         } else if self.mnemonic.is_some() {
             let keys = SigningScheme::Mnemonic {
                 mnemonic: self.mnemonic.clone().unwrap(),
-                num_keys: num_signers,
+                num_keys: num_signers.unwrap_or(1),
             };
 
             self.aws_kms_key_ids

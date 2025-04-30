@@ -22,7 +22,7 @@ use crate::cli::signer::SignerArgs;
 pub(super) struct ListSignersArgs {
     /// The number of signers to list
     #[arg(short, long)]
-    count: u64,
+    count: Option<usize>,
 
     /// Signer arguments
     #[command(flatten)]
@@ -35,7 +35,7 @@ pub(super) async fn list_signers(
     providers: impl Providers + 'static,
     task_spawner: impl TaskSpawnerExt + 'static,
 ) -> anyhow::Result<()> {
-    let signing_scheme = args.signer_args.signing_scheme(args.count as usize)?;
+    let signing_scheme = args.signer_args.signing_scheme(args.count)?;
 
     let signer_manager = rundler_signer::new_signer_manager(
         &signing_scheme,
