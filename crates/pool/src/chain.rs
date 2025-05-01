@@ -14,7 +14,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use alloy_network_primitives::TransactionResponse;
@@ -22,7 +22,7 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_sol_types::SolEvent;
 use anyhow::{bail, ensure, Context};
 use futures::future;
-use metrics::{Counter, Gauge};
+use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_contracts::{
@@ -243,6 +243,15 @@ impl<P: EvmProvider> Chain<P> {
             )
             .await;
             block_hash = hash;
+
+            let now_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::from_millis(0))
+                .as_millis();
+            let block_timestamp_ms = (block.header.timestamp * 1000) as u128;
+            self.metrics
+                .block_discovery_delay_ms
+                .record((now_ms.saturating_sub(block_timestamp_ms)) as f64);
 
             for i in 0..=self.settings.max_sync_retries {
                 if i > 0 {
@@ -864,6 +873,8 @@ struct ChainMetrics {
     sync_retries: Counter,
     #[metric(describe = "the count of sync abanded.")]
     sync_abandoned: Counter,
+    #[metric(describe = "the delay in milliseconds between block discovery and its timestamp")]
+    block_discovery_delay_ms: Histogram,
 }
 
 #[cfg(test)]
