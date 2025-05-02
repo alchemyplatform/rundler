@@ -155,6 +155,9 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// This does NOT include any shared gas costs for a bundle (i.e. intrinsic gas)
     fn static_pre_verification_gas(&self, chain_spec: &ChainSpec) -> u128;
 
+    /// Returns the calldata floor gas limit
+    fn calldata_floor_gas_limit(&self) -> u128;
+
     /// Abi encode size of the user operation
     fn abi_encoded_size(&self) -> usize;
 
@@ -217,9 +220,12 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// This is needed to set the gas limit for the bundle transaction.
     ///
+    /// NOTE: This does not use UO supplied PVG's, but instead recalculates the bundle overhead based on
+    /// the bundle size. EIP-7623 calldata increase is not included.
+    ///
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
-    fn gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
-        self.pre_verification_gas_limit(chain_spec, bundle_size)
+    fn bundle_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+        self.pre_verification_bundle_gas_limit(chain_spec, bundle_size)
             + self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
             + self.call_gas_limit()
@@ -231,8 +237,15 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     ///
     /// This is needed to limit the size of the bundle transaction to adhere to the block gas limit.
     ///
+    /// NOTE: This does not use UO supplied PVG's, but instead recalculates the bundle overhead based on
+    /// the bundle size. EIP-7623 calldata increase is not included.
+    ///
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
-    fn computation_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
+    fn bundle_computation_gas_limit(
+        &self,
+        chain_spec: &ChainSpec,
+        bundle_size: Option<usize>,
+    ) -> u128 {
         self.pre_verification_execution_gas_limit(chain_spec, bundle_size)
             + self.total_verification_gas_limit()
             + self.required_pre_execution_buffer()
@@ -282,7 +295,7 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
     /// On an L2 this is the total gas limit for the bundle transaction ~including~ any potential DA costs
     ///
     /// `bundle_size` is the size of the bundle if applying shared gas to the gas limit, otherwise `None`.
-    fn pre_verification_gas_limit(
+    fn pre_verification_bundle_gas_limit(
         &self,
         chain_spec: &ChainSpec,
         bundle_size: Option<usize>,
@@ -291,35 +304,39 @@ pub trait UserOperation: Debug + Clone + Send + Sync + 'static {
             + self.pre_verification_da_gas_limit(chain_spec, bundle_size)
     }
 
+    /// Returns the effective verification gas limit efficiency reject threshold
+    ///
+    /// Accounts for the v0.6 complexities of verification gas limit calculation
+    fn effective_verification_gas_limit_efficiency_reject_threshold(
+        &self,
+        verification_gas_limit_efficiency_reject_threshold: f64,
+    ) -> f64;
+
     /// Returns the required pre-verification gas for the given user operation
     ///
     /// `bundle_size` is the size of the bundle
     /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
+    ///
+    /// `verification_efficiency_accept_threshold` is the threshold for the verification efficiency
+    /// If set - the PVG will be increased to account for the calldata floor gas, else calldata floor gas is ignored
     fn required_pre_verification_gas(
         &self,
         chain_spec: &ChainSpec,
         bundle_size: usize,
         da_gas: u128,
+        verification_gas_limit_efficiency_reject_threshold: Option<f64>,
     ) -> u128 {
-        self.static_pre_verification_gas(chain_spec)
-            .saturating_add(bundle_per_uo_shared_gas(chain_spec, bundle_size))
-            .saturating_add(da_gas)
-            .saturating_add(self.authorization_gas_limit())
-            .saturating_add(self.aggregator_gas_limit(chain_spec, Some(bundle_size)))
-    }
-
-    /// Returns true if the user operation has enough pre-verification gas to be included in a bundle
-    ///
-    /// `bundle_size` is the size of the bundle
-    /// `da_gas` is the DA gas cost for the user operation, calculated elsewhere
-    fn has_required_pre_verification_gas(
-        &self,
-        chain_spec: &ChainSpec,
-        bundle_size: usize,
-        da_gas: u128,
-    ) -> bool {
-        self.pre_verification_gas()
-            > self.required_pre_verification_gas(chain_spec, bundle_size, da_gas)
+        if let Some(thresh) = verification_gas_limit_efficiency_reject_threshold {
+            increase_required_pvg_with_calldata_floor_gas(
+                self,
+                self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)),
+                da_gas,
+                self.calldata_floor_gas_limit(),
+                thresh,
+            )
+        } else {
+            self.pre_verification_execution_gas_limit(chain_spec, Some(bundle_size)) + da_gas
+        }
     }
 
     /// Returns the total verification gas limit
@@ -376,6 +393,29 @@ pub fn bundle_per_uo_shared_gas(chain_spec: &ChainSpec, bundle_size: usize) -> u
     } else {
         bundle_shared_gas(chain_spec).div_ceil(bundle_size as u128)
     }
+}
+
+/// Handle EIP-7623 calldata floor gas increase
+pub fn increase_required_pvg_with_calldata_floor_gas<UO: UserOperation>(
+    op_with_limits: &UO,
+    max_required_pvg_without_da: u128,
+    da_gas: u128,
+    required_calldata_floor_gas_limit: u128,
+    verification_gas_limit_efficiency_reject_threshold: f64,
+) -> u128 {
+    let lowest_gas_usage = (max_required_pvg_without_da as f64
+        + op_with_limits.execution_gas_limit() as f64 * 0.1
+        + op_with_limits.total_verification_gas_limit() as f64
+            * op_with_limits.effective_verification_gas_limit_efficiency_reject_threshold(
+                verification_gas_limit_efficiency_reject_threshold,
+            )) as u128;
+    let required_pvg_without_da = if lowest_gas_usage < required_calldata_floor_gas_limit {
+        max_required_pvg_without_da + (required_calldata_floor_gas_limit - lowest_gas_usage)
+    } else {
+        max_required_pvg_without_da
+    };
+
+    required_pvg_without_da + da_gas
 }
 
 fn optional_bundle_per_uo_shared_gas(chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
@@ -585,6 +625,13 @@ impl UserOperation for UserOperationVariant {
         }
     }
 
+    fn calldata_floor_gas_limit(&self) -> u128 {
+        match self {
+            UserOperationVariant::V0_6(op) => op.calldata_floor_gas_limit(),
+            UserOperationVariant::V0_7(op) => op.calldata_floor_gas_limit(),
+        }
+    }
+
     fn max_fee_per_gas(&self) -> u128 {
         match self {
             UserOperationVariant::V0_6(op) => op.max_fee_per_gas(),
@@ -676,6 +723,22 @@ impl UserOperation for UserOperationVariant {
         match self {
             UserOperationVariant::V0_6(op) => op.authorization_tuple(),
             UserOperationVariant::V0_7(op) => op.authorization_tuple(),
+        }
+    }
+
+    fn effective_verification_gas_limit_efficiency_reject_threshold(
+        &self,
+        verification_gas_limit_efficiency_reject_threshold: f64,
+    ) -> f64 {
+        match self {
+            UserOperationVariant::V0_6(op) => op
+                .effective_verification_gas_limit_efficiency_reject_threshold(
+                    verification_gas_limit_efficiency_reject_threshold,
+                ),
+            UserOperationVariant::V0_7(op) => op
+                .effective_verification_gas_limit_efficiency_reject_threshold(
+                    verification_gas_limit_efficiency_reject_threshold,
+                ),
         }
     }
 }
@@ -773,27 +836,35 @@ impl<UO: UserOperation + Into<UserOperationVariant>> UserOpsPerAggregator<UO> {
     }
 }
 
-pub(crate) fn op_calldata_gas_cost<UO: SolValue>(
+pub(crate) fn calc_calldata_gas_costs<UO: SolValue>(
     uo: &UO,
-    zero_byte_cost: u128,
-    non_zero_byte_cost: u128,
-    per_word_cost: u128,
-) -> u128 {
-    let encoded_op = uo.abi_encode();
-    let length_in_words: u128 = (encoded_op.len() as u128 + 31) >> 5; // ceil(encoded_op.len() / 32)
-    let call_data_cost = encoded_op
-        .iter()
-        .map(|&x| {
-            if x == 0 {
-                zero_byte_cost
-            } else {
-                non_zero_byte_cost
-            }
-        })
-        .reduce(|a, b| a + b)
-        .unwrap_or_default();
+    chain_spec: &ChainSpec,
+) -> (u128, u128) {
+    let data = uo.abi_encode();
+    let total_bytes = data.len();
+    let non_zero_bytes = data.iter().filter(|&&x| x != 0).count();
+    (
+        op_calldata_gas_cost(total_bytes, non_zero_bytes, chain_spec),
+        op_calldata_floor_gas_cost(total_bytes, non_zero_bytes, chain_spec),
+    )
+}
 
-    call_data_cost + per_word_cost * length_in_words
+fn op_calldata_gas_cost(total_bytes: usize, non_zero_bytes: usize, chain_spec: &ChainSpec) -> u128 {
+    let length_in_words: u128 = (total_bytes as u128 + 31) >> 5; // ceil(encoded_op.len() / 32)
+    let zero_bytes = total_bytes - non_zero_bytes;
+    let call_data_cost = chain_spec.calldata_zero_byte_gas() * zero_bytes as u128
+        + chain_spec.calldata_non_zero_byte_gas() * non_zero_bytes as u128;
+    call_data_cost + chain_spec.per_user_op_word_gas() * length_in_words
+}
+
+fn op_calldata_floor_gas_cost(
+    total_bytes: usize,
+    non_zero_bytes: usize,
+    chain_spec: &ChainSpec,
+) -> u128 {
+    let zero_bytes = total_bytes - non_zero_bytes;
+    chain_spec.calldata_floor_zero_byte_gas() * zero_bytes as u128
+        + chain_spec.calldata_floor_non_zero_byte_gas() * non_zero_bytes as u128
 }
 
 /// Calculates the size a byte array padded to the next largest multiple of 32

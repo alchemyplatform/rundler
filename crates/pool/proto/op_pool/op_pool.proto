@@ -674,13 +674,13 @@ message OperationDropTooSoon {
 }
 
 message PreOpGasLimitEfficiencyTooLow {
-  float required = 1;
-  float actual = 2;
+  double required = 1;
+  double actual = 2;
 }
 
 message ExecutionGasLimitEfficiencyTooLow {
-  float required = 1;
-  float actual = 2;
+  double required = 1;
+  double actual = 2;
 }
 
 message TooManyExpectedStorageSlots {

@@ -108,6 +108,10 @@ pub struct Settings {
     /// Percentage of the preVerificationGas that a user operation must have to be accepted into the mempool.
     /// Only applied if the chain has dynamic preVerificationGas, else enforced to 100%
     pub pre_verification_gas_accept_percent: u32,
+    /// Reject user operations with gas limit efficiency below this threshold.
+    /// Gas limit efficiency is defined as the ratio of the gas limit to the gas used.
+    /// This applies to all the verification gas limits
+    pub verification_gas_limit_efficiency_reject_threshold: f64,
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -121,6 +125,7 @@ impl Default for Settings {
             priority_fee_mode: PriorityFeeMode::BaseFeePercent(0),
             base_fee_accept_percent: 50,
             pre_verification_gas_accept_percent: 100,
+            verification_gas_limit_efficiency_reject_threshold: 0.5,
         }
     }
 }
@@ -254,10 +259,15 @@ where
 
         // Compute the worst case total gas limit by assuming the UO is in its own bundle.
         // This is conservative and potentially may invalidate some very large UOs that would otherwise be valid.
-        let gas_limit = op.computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op.bundle_computation_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > max_bundle_execution_gas {
             violations.push(PrecheckViolation::TotalGasLimitTooHigh(
                 gas_limit,
+                max_bundle_execution_gas,
+            ))
+        } else if op.calldata_floor_gas_limit() > max_bundle_execution_gas {
+            violations.push(PrecheckViolation::TotalGasLimitTooHigh(
+                op.calldata_floor_gas_limit(),
                 max_bundle_execution_gas,
             ))
         }
@@ -463,6 +473,8 @@ where
             &op,
             block_hash,
             base_fee,
+            self.settings
+                .verification_gas_limit_efficiency_reject_threshold,
         )
         .await
     }
@@ -554,6 +566,7 @@ mod tests {
             priority_fee_mode: PriorityFeeMode::BaseFeePercent(100),
             base_fee_accept_percent: 100,
             pre_verification_gas_accept_percent: 100,
+            verification_gas_limit_efficiency_reject_threshold: 0.5,
         };
 
         let (cs, provider, entry_point, fee_estimator) = create_base_config();
@@ -590,7 +603,7 @@ mod tests {
             &UserOperationPermissions::default(),
         );
 
-        let total_gas_limit = op.gas_limit(&cs, Some(1));
+        let total_gas_limit = op.bundle_gas_limit(&cs, Some(1));
 
         assert_eq!(
             res,

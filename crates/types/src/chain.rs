@@ -66,6 +66,10 @@ pub struct ChainSpec {
     pub calldata_zero_byte_gas: u64,
     /// Gas cost for a non-zero byte in calldata
     pub calldata_non_zero_byte_gas: u64,
+    /// Gas cost for a zero byte in calldata for the floor operation
+    pub calldata_floor_zero_byte_gas: u64,
+    /// Gas cost for a non-zero byte in calldata for the floor operation
+    pub calldata_floor_non_zero_byte_gas: u64,
 
     /*
      * Gas estimation
@@ -166,6 +170,8 @@ impl Default for ChainSpec {
             per_user_op_word_gas: 4,
             calldata_zero_byte_gas: 4,
             calldata_non_zero_byte_gas: 16,
+            calldata_floor_zero_byte_gas: 0,
+            calldata_floor_non_zero_byte_gas: 0,
             eip1559_enabled: true,
             da_pre_verification_gas: false,
             da_gas_oracle_type: DAGasOracleType::default(),
@@ -231,6 +237,16 @@ impl ChainSpec {
     /// Get the calldata non zero byte gas
     pub fn calldata_non_zero_byte_gas(&self) -> u128 {
         self.calldata_non_zero_byte_gas as u128
+    }
+
+    /// Get the calldata floor zero byte gas
+    pub fn calldata_floor_zero_byte_gas(&self) -> u128 {
+        self.calldata_floor_zero_byte_gas as u128
+    }
+
+    /// Get the calldata floor non zero byte gas
+    pub fn calldata_floor_non_zero_byte_gas(&self) -> u128 {
+        self.calldata_floor_non_zero_byte_gas as u128
     }
 
     /// Get the per user operation deploy overhead gas

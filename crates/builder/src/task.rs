@@ -87,6 +87,8 @@ pub struct Args {
     pub provider_client_timeout_seconds: u64,
     /// Maximum number of expected storage slots in a bundle
     pub max_expected_storage_slots: usize,
+    /// Rejects user operations with a verification gas limit efficiency below this threshold.
+    pub verification_gas_limit_efficiency_reject_threshold: f64,
 }
 
 /// Builder settings
@@ -409,6 +411,9 @@ where
             sender_eoa,
             da_gas_tracking_enabled: self.args.da_gas_tracking_enabled,
             max_expected_storage_slots: self.args.max_expected_storage_slots,
+            verification_gas_limit_efficiency_reject_threshold: self
+                .args
+                .verification_gas_limit_efficiency_reject_threshold,
             submission_proxy: submission_proxy.cloned(),
         };
 

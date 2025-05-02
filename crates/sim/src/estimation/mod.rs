@@ -104,6 +104,8 @@ pub struct Settings {
     /// gas price.
     /// Clients can use state overrides to set the balance of the fee-payer to at least this value.
     pub verification_estimation_gas_fee: u128,
+    /// The threshold for the verification gas limit efficiency reject
+    pub verification_gas_limit_efficiency_reject_threshold: f64,
 }
 
 impl Settings {

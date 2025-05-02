@@ -96,10 +96,10 @@ pub enum MempoolError {
     OperationDropTooSoon(u64, u64, u64),
     /// Pre-op gas limit efficiency too low
     #[error("Pre-op gas limit efficiency too low. Required: {0}, Actual: {1}")]
-    PreOpGasLimitEfficiencyTooLow(f32, f32),
+    PreOpGasLimitEfficiencyTooLow(f64, f64),
     /// Execution gas limit efficiency too low
     #[error("Execution gas limit efficiency too low. Required: {0}, Actual: {1}")]
-    ExecutionGasLimitEfficiencyTooLow(f32, f32),
+    ExecutionGasLimitEfficiencyTooLow(f64, f64),
     /// Too many expected storage slots
     #[error("Too many expected storage slots. Maximum: {0}, Actual: {1}")]
     TooManyExpectedStorageSlots(usize, usize),

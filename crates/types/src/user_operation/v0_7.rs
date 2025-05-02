@@ -99,6 +99,8 @@ pub struct UserOperation {
     packed: PackedUserOperation,
     /// The gas cost of the calldata
     calldata_gas_cost: u128,
+    /// The EIP-7623 floor gas limit of the calldata
+    calldata_floor_gas_limit: u128,
 
     /*
      * Signature aggregator fields
@@ -107,8 +109,10 @@ pub struct UserOperation {
     aggregator: Option<Address>,
     /// The full original signature, after the `signature` field is modified post-aggregation
     original_signature: Bytes,
-    /// The original calldata costs
+    /// The original calldata cost
     original_calldata_cost: u128,
+    /// The original calldata floor limit
+    original_calldata_floor_limit: u128,
     /// The costs associated with the aggregator
     aggregator_costs: AggregatorCosts,
 }
@@ -277,6 +281,10 @@ impl UserOperationTrait for UserOperation {
             })
     }
 
+    fn calldata_floor_gas_limit(&self) -> u128 {
+        self.calldata_floor_gas_limit
+    }
+
     fn required_pre_execution_buffer(&self) -> u128 {
         // See EntryPoint::innerHandleOp
         //
@@ -311,17 +319,14 @@ impl UserOperationTrait for UserOperation {
         self.aggregator_costs = aggregator_costs;
         self.original_signature = self.signature;
         self.original_calldata_cost = self.calldata_gas_cost;
+        self.original_calldata_floor_limit = self.calldata_floor_gas_limit;
         self.signature = new_signature;
 
         // re-pack, hash stays the same as only signature changed
         self.packed = pack_user_operation(self.clone());
         // recalculate calldata gas cost
-        self.calldata_gas_cost = super::op_calldata_gas_cost(
-            &self.packed,
-            chain_spec.calldata_zero_byte_gas(),
-            chain_spec.calldata_non_zero_byte_gas(),
-            chain_spec.per_user_op_word_gas(),
-        );
+        (self.calldata_gas_cost, self.calldata_floor_gas_limit) =
+            super::calc_calldata_gas_costs(&self.packed, chain_spec);
 
         self
     }
@@ -334,6 +339,7 @@ impl UserOperationTrait for UserOperation {
         self.signature = self.original_signature.clone();
         self.packed = pack_user_operation(self.clone());
         self.calldata_gas_cost = self.original_calldata_cost;
+        self.calldata_floor_gas_limit = self.original_calldata_floor_limit;
         self
     }
 
@@ -355,6 +361,13 @@ impl UserOperationTrait for UserOperation {
 
     fn authorization_tuple(&self) -> Option<&Eip7702Auth> {
         self.authorization_tuple.as_ref()
+    }
+
+    fn effective_verification_gas_limit_efficiency_reject_threshold(
+        &self,
+        verification_gas_limit_efficiency_reject_threshold: f64,
+    ) -> f64 {
+        verification_gas_limit_efficiency_reject_threshold
     }
 }
 
@@ -974,9 +987,11 @@ impl<'a> UserOperationBuilder<'a> {
             hash: B256::ZERO,
             packed: PackedUserOperation::default(),
             calldata_gas_cost: 0,
+            calldata_floor_gas_limit: 0,
             aggregator: self.aggregator,
             original_signature: Bytes::new(),
             original_calldata_cost: 0,
+            original_calldata_floor_limit: 0,
             aggregator_costs: AggregatorCosts::default(),
         };
 
@@ -988,17 +1003,15 @@ impl<'a> UserOperationBuilder<'a> {
             self.chain_spec.entry_point_address_v0_7,
             self.chain_spec.id,
         );
-        let calldata_gas_cost = super::op_calldata_gas_cost(
-            &packed,
-            self.chain_spec.calldata_zero_byte_gas(),
-            self.chain_spec.calldata_non_zero_byte_gas(),
-            self.chain_spec.per_user_op_word_gas(),
-        );
+
+        let (calldata_gas_cost, calldata_floor_gas_limit) =
+            super::calc_calldata_gas_costs(&packed, self.chain_spec);
 
         UserOperation {
             hash,
             packed,
             calldata_gas_cost,
+            calldata_floor_gas_limit,
             ..uo
         }
     }

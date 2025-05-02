@@ -5,3 +5,5 @@ id = 84532
 
 min_max_priority_fee_per_gas = 100000
 block_gas_limit = 60000000
+calldata_floor_zero_byte_gas = 10
+calldata_floor_non_zero_byte_gas = 40

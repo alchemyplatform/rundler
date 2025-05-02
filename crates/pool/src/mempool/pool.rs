@@ -48,6 +48,7 @@ pub(crate) struct PoolInnerConfig {
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
     support_7702: bool,
+    verification_gas_limit_efficiency_reject_threshold: f64,
 }
 
 impl From<PoolConfig> for PoolInnerConfig {
@@ -62,6 +63,8 @@ impl From<PoolConfig> for PoolInnerConfig {
             da_gas_tracking_enabled: config.da_gas_tracking_enabled,
             max_time_in_pool: config.max_time_in_pool,
             support_7702: config.support_7702,
+            verification_gas_limit_efficiency_reject_threshold: config
+                .verification_gas_limit_efficiency_reject_threshold,
         }
     }
 }
@@ -313,6 +316,10 @@ where
                     &self.config.chain_spec,
                     bundle_size,
                     required_da_gas,
+                    Some(
+                        self.config
+                            .verification_gas_limit_efficiency_reject_threshold,
+                    ),
                 );
                 if let Some(pct) = op.po.perms.underpriced_bundle_pct {
                     required_pvg = math::percent_ceil(required_pvg, pct);
@@ -1632,6 +1639,7 @@ mod tests {
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
             support_7702: false,
+            verification_gas_limit_efficiency_reject_threshold: 0.5,
         }
     }
 

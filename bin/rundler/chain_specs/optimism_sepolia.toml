@@ -2,3 +2,5 @@ base = "optimism"
 
 name = "Optimism Sepolia"
 id = 11155420
+calldata_floor_zero_byte_gas = 10
+calldata_floor_non_zero_byte_gas = 40

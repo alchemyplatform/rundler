@@ -81,6 +81,8 @@ pub struct UserOperation {
 
     /// Cached calldata gas cost
     calldata_gas_cost: u128,
+    /// Cached EIP-7623 calldata floor gas limit
+    calldata_floor_gas_limit: u128,
 
     /// eip 7702 - list of authorities.
     authorization_tuple: Option<Eip7702Auth>,
@@ -90,6 +92,8 @@ pub struct UserOperation {
     original_signature: Bytes,
     /// The original calldata cost
     original_calldata_cost: u128,
+    /// The original calldata floor limit
+    original_calldata_floor_limit: u128,
     /// The costs associated with the aggregator
     aggregator_costs: AggregatorCosts,
     /// Cached hash of the user operation
@@ -324,6 +328,10 @@ impl UserOperationTrait for UserOperation {
             })
     }
 
+    fn calldata_floor_gas_limit(&self) -> u128 {
+        self.calldata_floor_gas_limit
+    }
+
     fn aggregator_gas_limit(&self, chain_spec: &ChainSpec, bundle_size: Option<usize>) -> u128 {
         if self.aggregator.is_none() {
             return 0;
@@ -341,16 +349,13 @@ impl UserOperationTrait for UserOperation {
         self.aggregator = Some(aggregator);
         self.aggregator_costs = aggregator_costs;
         self.original_calldata_cost = self.calldata_gas_cost;
+        self.original_calldata_floor_limit = self.calldata_floor_gas_limit;
         self.original_signature = self.signature;
         self.signature = new_signature;
 
         let cuo = ContractUserOperation::from(self.clone());
-        self.calldata_gas_cost = super::op_calldata_gas_cost(
-            &cuo,
-            chain_spec.calldata_zero_byte_gas(),
-            chain_spec.calldata_non_zero_byte_gas(),
-            chain_spec.per_user_op_word_gas(),
-        );
+        (self.calldata_gas_cost, self.calldata_floor_gas_limit) =
+            super::calc_calldata_gas_costs(&cuo, chain_spec);
 
         self
     }
@@ -362,6 +367,7 @@ impl UserOperationTrait for UserOperation {
     fn with_original_signature(mut self) -> Self {
         self.signature = self.original_signature.clone();
         self.calldata_gas_cost = self.original_calldata_cost;
+        self.calldata_floor_gas_limit = self.original_calldata_floor_limit;
         self
     }
 
@@ -383,6 +389,19 @@ impl UserOperationTrait for UserOperation {
 
     fn authorization_tuple(&self) -> Option<&Eip7702Auth> {
         self.authorization_tuple.as_ref()
+    }
+
+    fn effective_verification_gas_limit_efficiency_reject_threshold(
+        &self,
+        verification_gas_limit_efficiency_reject_threshold: f64,
+    ) -> f64 {
+        if self.paymaster().is_some() {
+            // 1/2 when using a paymaster to account for a lopsided verification gas limit
+            // i.e. when the account has a much higher verification gas limit than the paymaster
+            verification_gas_limit_efficiency_reject_threshold / 2.0
+        } else {
+            verification_gas_limit_efficiency_reject_threshold
+        }
     }
 }
 
@@ -882,7 +901,9 @@ impl<'a> UserOperationBuilder<'a> {
             aggregator: self.aggregator,
             authorization_tuple: self.authorization_tuple,
             calldata_gas_cost: 0,
+            calldata_floor_gas_limit: 0,
             original_calldata_cost: 0,
+            original_calldata_floor_limit: 0,
             original_signature: Bytes::default(),
             aggregator_costs: AggregatorCosts::default(),
             hash: B256::ZERO,
@@ -894,12 +915,8 @@ impl<'a> UserOperationBuilder<'a> {
             .contract_uo
             .unwrap_or_else(|| ContractUserOperation::from(uo.clone()));
 
-        uo.calldata_gas_cost = super::op_calldata_gas_cost(
-            &cuo,
-            self.chain_spec.calldata_zero_byte_gas(),
-            self.chain_spec.calldata_non_zero_byte_gas(),
-            self.chain_spec.per_user_op_word_gas(),
-        );
+        (uo.calldata_gas_cost, uo.calldata_floor_gas_limit) =
+            super::calc_calldata_gas_costs(&cuo, self.chain_spec);
 
         let packed = UserOperationPackedForHash::from(uo.clone());
         let encoded = UserOperationHashEncoded {
