@@ -55,7 +55,7 @@ pub(crate) async fn funding_task<P: EvmProvider>(
     provider: P,
     statuses: Arc<RwLock<HashMap<Address, SignerStatus>>>,
     notify: Arc<Notify>,
-) {
+) -> anyhow::Result<()> {
     let funding_signer_address = settings.signer.address();
     let wallet = EthereumWallet::new(settings.signer.clone());
     let metrics = FunderMetrics::new_with_labels(&[(
@@ -64,6 +64,18 @@ pub(crate) async fn funding_task<P: EvmProvider>(
     )]);
 
     let _ = get_update_funder_balance(&provider, &metrics, funding_signer_address).await;
+
+    // before calling, ensure that multicall3 is deployed
+    let code = provider
+        .get_code(settings.multicall3_address, None)
+        .await
+        .context("failed to get multicall3 code")?;
+    if code.is_empty() {
+        anyhow::bail!(
+            "multicall3 is not deployed at {}",
+            settings.multicall3_address
+        );
+    }
 
     loop {
         tokio::select! {
@@ -339,7 +351,7 @@ mod tests {
     use alloy_consensus::Transaction;
     use alloy_eips::eip2718::Decodable2718;
     use alloy_network::AnyTxEnvelope;
-    use alloy_primitives::{address, B256};
+    use alloy_primitives::{address, bytes, B256};
     use alloy_sol_types::SolInterface;
     use mockall::Sequence;
     use rundler_contracts::multicall3::Multicall3::{Call3Value, Multicall3Calls};
@@ -348,6 +360,8 @@ mod tests {
     };
 
     use super::*;
+
+    const MOCK_MULTICALL3_CODE: Bytes = bytes!("FFFF");
 
     #[tokio::test]
     async fn test_funding_one() {
@@ -359,6 +373,7 @@ mod tests {
             vec![(Address::ZERO, U256::from(0))],
             vec![(Address::ZERO, U256::from(2000))],
         );
+        set_provider_multicall3_code(&mut provider, MOCK_MULTICALL3_CODE);
 
         let signer = MockTxSigner::default();
         let wallet = EthereumWallet::new(signer.clone());
@@ -415,6 +430,7 @@ mod tests {
                 (address2, U256::from(2000)),
             ],
         );
+        set_provider_multicall3_code(&mut provider, MOCK_MULTICALL3_CODE);
 
         let signer = MockTxSigner::default();
         let wallet = EthereumWallet::new(signer.clone());
@@ -479,6 +495,7 @@ mod tests {
                 (address2, U256::from(2000)),
             ],
         );
+        set_provider_multicall3_code(&mut provider, MOCK_MULTICALL3_CODE);
 
         let signer = MockTxSigner::default();
         let wallet = EthereumWallet::new(signer.clone());
@@ -519,6 +536,27 @@ mod tests {
                 (address2, SignerStatus::Available),
             ],
         );
+    }
+
+    #[tokio::test]
+    async fn test_funding_no_multicall3() {
+        let mut provider = MockEvmProvider::new();
+        set_provider_nonce_and_fees(&mut provider);
+        provider
+            .expect_get_balance()
+            .returning(move |_, _| Ok(U256::from(1000000)));
+        set_provider_multicall3_code(&mut provider, Bytes::new()); // empty multicall3 code
+
+        let signer = MockTxSigner::default();
+        let settings = funding_settings(U256::from(1000), U256::from(2000), signer);
+
+        let statuses = HashMap::from([(Address::ZERO, SignerStatus::NeedsFunding)]);
+        let statuses = Arc::new(RwLock::new(statuses));
+        let notify = Arc::new(Notify::new());
+
+        // this should error because multicall3 is not deployed
+        let result = funding_task(settings, provider, statuses, notify).await;
+        assert!(result.is_err());
     }
 
     fn check_statuses(
@@ -624,17 +662,26 @@ mod tests {
             .once()
             .in_sequence(&mut seq)
             .returning(move |_| Ok(balances_before.clone()));
-        provider
-            .expect_get_balances()
-            .once()
-            .in_sequence(&mut seq)
-            .returning(move |_| Ok(balances_after.clone()));
+
+        if !balances_after.is_empty() {
+            provider
+                .expect_get_balances()
+                .once()
+                .in_sequence(&mut seq)
+                .returning(move |_| Ok(balances_after.clone()));
+        }
     }
 
     fn set_provider_nonce_and_fees(provider: &mut MockEvmProvider) {
         provider.expect_get_transaction_count().returning(|_| Ok(1));
         provider.expect_get_max_priority_fee().returning(|| Ok(1));
         provider.expect_get_pending_base_fee().returning(|| Ok(1));
+    }
+
+    fn set_provider_multicall3_code(provider: &mut MockEvmProvider, code: Bytes) {
+        provider
+            .expect_get_code()
+            .returning(move |_, _| Ok(code.clone()));
     }
 
     fn transaction_receipt() -> TransactionReceipt {
