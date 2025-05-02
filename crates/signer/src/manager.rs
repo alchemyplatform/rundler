@@ -276,14 +276,24 @@ impl FundingSignerManager {
         let funding_notify = Arc::new(Notify::new());
 
         if let Some(funder_settings) = &funder_settings {
+            let funder_settings = funder_settings.clone();
+            let signer_statuses = signer_statuses.clone();
+            let funding_notify = funding_notify.clone();
+
             task_spawner.spawn_critical(
                 "funding task",
-                Box::pin(funding::funding_task(
-                    funder_settings.clone(),
-                    provider,
-                    signer_statuses.clone(),
-                    funding_notify.clone(),
-                )),
+                Box::pin(async move {
+                    let ret = funding::funding_task(
+                        funder_settings,
+                        provider,
+                        signer_statuses,
+                        funding_notify,
+                    )
+                    .await;
+                    if let Err(e) = ret {
+                        tracing::error!("funding task failed: {e}");
+                    }
+                }),
             );
         }
 
