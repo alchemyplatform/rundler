@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashSet, sync::Arc, time::Instant};
+use std::{collections::HashSet, sync::Arc};
 
 use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
 use anyhow::Context;
@@ -32,7 +32,7 @@ use rundler_types::{
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
 };
-use rundler_utils::emit::WithEntryPoint;
+use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard};
 use tokio::sync::broadcast;
 use tonic::async_trait;
 use tracing::{info, instrument};
@@ -239,6 +239,7 @@ where
 {
     #[instrument(skip_all)]
     async fn on_chain_update(&self, update: &ChainUpdate) {
+        let _timer = CustomTimerGuard::new(self.metrics.update_process_time_ms.clone());
         let deduped_ops = update.deduped_ops();
         let mined_ops = deduped_ops
             .mined_ops
@@ -429,7 +430,6 @@ where
             None
         };
 
-        let start = Instant::now();
         {
             let mut state = self.state.write();
             state
@@ -474,14 +474,6 @@ where
                 base_fee,
             );
         }
-        let maintenance_time = start.elapsed();
-        tracing::debug!(
-            "Pool maintenance took {:?} µs",
-            maintenance_time.as_micros()
-        );
-        self.ep_specific_metrics
-            .maintenance_time
-            .record(maintenance_time.as_micros() as f64);
     }
 
     fn entry_point_version(&self) -> EntryPointVersion {
@@ -963,8 +955,6 @@ struct UoPoolMetricsEPSpecific {
     removed_operations: Counter,
     #[metric(describe = "the count of removed entities.")]
     removed_entities: Counter,
-    #[metric(describe = "time to run pool maintenance in µs.")]
-    maintenance_time: Histogram,
 }
 
 #[derive(Metrics)]
@@ -976,6 +966,8 @@ struct UoPoolMetrics {
     current_max_priority_fee_gwei: Gauge,
     #[metric(describe = "the base fee of current block.")]
     current_base_fee: Gauge,
+    #[metric(describe = "the time in milliseconds it takes to process a chain update.")]
+    update_process_time_ms: Histogram,
 }
 
 #[cfg(test)]
