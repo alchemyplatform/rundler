@@ -14,7 +14,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use alloy_network_primitives::TransactionResponse;
@@ -258,9 +258,15 @@ impl<P: EvmProvider> Chain<P> {
                     self.metrics.sync_retries.increment(1);
                 }
 
+                let start = Instant::now();
                 let update = self.sync_to_block(block.clone()).await;
                 match update {
-                    Ok(update) => return update,
+                    Ok(update) => {
+                        self.metrics
+                            .block_sync_time_ms
+                            .record(start.elapsed().as_millis() as f64);
+                        return update;
+                    }
                     Err(error) => {
                         warn!("Failed to update chain at block {block_hash:?}: {error:?}");
                     }
@@ -875,6 +881,8 @@ struct ChainMetrics {
     sync_abandoned: Counter,
     #[metric(describe = "the delay in milliseconds between block discovery and its timestamp")]
     block_discovery_delay_ms: Histogram,
+    #[metric(describe = "the time in milliseconds it takes to sync to a block")]
+    block_sync_time_ms: Histogram,
 }
 
 #[cfg(test)]
