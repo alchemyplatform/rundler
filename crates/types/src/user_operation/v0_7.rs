@@ -900,6 +900,15 @@ impl<'a> UserOperationBuilder<'a> {
         self
     }
 
+    /// Clears the paymaster and associated fields
+    pub fn clear_paymaster(mut self) -> Self {
+        self.paymaster = None;
+        self.paymaster_verification_gas_limit = 0;
+        self.paymaster_post_op_gas_limit = 0;
+        self.paymaster_data = Bytes::new();
+        self
+    }
+
     /// Sets the pre-verification gas
     pub fn pre_verification_gas(mut self, pre_verification_gas: u128) -> Self {
         self.required.pre_verification_gas = pre_verification_gas;
