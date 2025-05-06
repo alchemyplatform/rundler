@@ -6,3 +6,5 @@ id = 11155111
 flashbots_relay_url = "https://relay-sepolia.flashbots.net"
 
 min_max_priority_fee_per_gas = 100000000
+calldata_floor_zero_byte_gas = 10
+calldata_floor_non_zero_byte_gas = 40

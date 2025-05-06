@@ -43,7 +43,7 @@ use rundler_types::{
     BundleExpectedStorage, Entity, EntityInfo, EntityInfos, EntityType, EntityUpdate,
     EntityUpdateType, EntryPointVersion, ExpectedStorage, GasFees, Timestamp, UserOperation,
     UserOperationVariant, UserOpsPerAggregator, ValidTimeRange, ValidationRevert,
-    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER, USER_OP_OFFSET_WORD_SIZE,
+    BUNDLE_BYTE_OVERHEAD, TIME_RANGE_BUFFER,
 };
 use rundler_utils::{emit::WithEntryPoint, guard_timer::CustomTimerGuard, math};
 use tokio::sync::broadcast;
@@ -156,6 +156,7 @@ pub(crate) struct Settings {
     pub(crate) sender_eoa: Address,
     pub(crate) da_gas_tracking_enabled: bool,
     pub(crate) max_expected_storage_slots: usize,
+    pub(crate) verification_gas_limit_efficiency_reject_threshold: f64,
     pub(crate) submission_proxy: Option<Arc<dyn SubmissionProxy>>,
 }
 
@@ -418,7 +419,7 @@ where
             // Skip PVG check if no da pre-verification gas as this is checked on entry to the mempool.
             return Some(PoolOperationWithSponsoredDAGas {
                 op,
-                sponsored_da_gas: None,
+                sponsored_da_gas: 0,
             });
         }
 
@@ -480,6 +481,10 @@ where
             &self.settings.chain_spec,
             bundle_size,
             required_da_gas,
+            Some(
+                self.settings
+                    .verification_gas_limit_efficiency_reject_threshold,
+            ),
         );
 
         if let Some(pct) = op.perms.underpriced_bundle_pct {
@@ -504,11 +509,11 @@ where
         }
 
         // Check total gas cost and time for bundler sponsorship
-        let mut sponsored_da_gas = None;
+        let mut sponsored_da_gas = 0;
         if let Some(bundler_sponsorship) = &op.perms.bundler_sponsorship {
             let gas_limit = op
                 .uo
-                .gas_limit(&self.settings.chain_spec, Some(bundle_size))
+                .bundle_gas_limit(&self.settings.chain_spec, Some(bundle_size))
                 + required_pvg; // PVG is added as part of the gas limit as this is part of the cost of sponsorship
 
             let total_gas_cost = U256::from(gas_limit) * U256::from(gas_price);
@@ -524,9 +529,7 @@ where
                 return None;
             }
 
-            if self.settings.chain_spec.include_da_gas_in_gas_limit {
-                sponsored_da_gas = Some(required_da_gas)
-            }
+            sponsored_da_gas = required_da_gas;
         }
 
         Some(PoolOperationWithSponsoredDAGas {
@@ -600,7 +603,9 @@ where
             warn!("Max bundle fee is zero, skipping bundle");
             return ProposalContext::<<Self as BundleProposer>::UO>::new();
         }
-        let buffered_max_bundle_fee = max_bundle_fee * U256::from(90) / U256::from(100);
+        let buffered_max_bundle_fee = max_bundle_fee
+            * U256::from(100 - BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT * 2) // slight over-buffer to account for miscalculations
+            / U256::from(100);
 
         let all_sender_addresses: HashSet<Address> = ops_with_simulations
             .iter()
@@ -608,12 +613,7 @@ where
             .collect();
         let mut context = ProposalContext::<<Self as BundleProposer>::UO>::new();
         let mut paymasters_to_reject = Vec::<EntityInfo>::new();
-
-        let mut execution_gas_spent = rundler_types::bundle_shared_gas(&self.settings.chain_spec);
-        // shared gas is included in the `gas_limit()` calls for this total
-        // this is conservative, we could try to optimize to amortize the shared gas
-        let mut total_gas_spent = 0_u128;
-        let mut constructed_bundle_size = BUNDLE_BYTE_OVERHEAD;
+        let mut passed_target = false;
 
         for (po, simulation) in ops_with_simulations {
             // first process any possible rejections
@@ -675,7 +675,7 @@ where
             }
 
             // if the bundle is at or past target, skip op and continue to finish processing any rejections
-            if execution_gas_spent >= self.settings.target_bundle_gas {
+            if passed_target {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
@@ -684,12 +684,23 @@ where
                 continue;
             }
 
-            // if this would put the bundle over its max execution gas, skip
-            let op_computation_gas_limit =
-                op.computation_gas_limit(&self.settings.chain_spec, None);
-            if execution_gas_spent.saturating_add(op_computation_gas_limit)
-                > self.settings.max_bundle_gas
-            {
+            // Add op to candidate context
+            let mut context_with_op = context.clone();
+            context_with_op
+                .groups_by_aggregator
+                .entry(op.aggregator().unwrap_or(Address::ZERO))
+                .or_default()
+                .ops_with_simulations
+                .push(OpWithSimulation {
+                    op: op.clone().into(),
+                    simulation: simulation.clone(),
+                    sponsored_da_gas: po.sponsored_da_gas,
+                });
+
+            // Limit by max bundle computation gas (excluding DA gas)
+            let bundle_computation_gas_limit =
+                context_with_op.get_bundle_computation_gas_limit(&self.settings.chain_spec);
+            if bundle_computation_gas_limit > self.settings.max_bundle_gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
                     op.hash(),
@@ -698,10 +709,9 @@ where
                 continue;
             }
 
-            // if this would put the bundle over its max fee, skip
-            let op_total_gas_limit = op.gas_limit(&self.settings.chain_spec, None);
-            let total_gas_cost = U256::from(total_gas_spent.saturating_add(op_total_gas_limit))
-                * U256::from(gas_price);
+            // Limit by max bundle fee
+            let total_gas_cost =
+                context_with_op.get_bundle_cost(&self.settings.chain_spec, gas_price);
             if total_gas_cost > buffered_max_bundle_fee {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -712,10 +722,10 @@ where
             }
 
             // Limit by transaction size
-            let op_size_bytes: usize = op.abi_encoded_size();
-            let op_size_with_offset_word = op_size_bytes.saturating_add(USER_OP_OFFSET_WORD_SIZE);
-            if op_size_with_offset_word.saturating_add(constructed_bundle_size)
-                >= self.settings.chain_spec.max_transaction_size_bytes
+            let bundle_transaction_size =
+                context_with_op.get_bundle_transaction_size(&self.settings.chain_spec);
+            if bundle_transaction_size
+                >= self.settings.chain_spec.max_transaction_size_bytes as u128
             {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -778,15 +788,15 @@ where
                 }
             }
 
-            // Update the running totals
-            execution_gas_spent = execution_gas_spent.saturating_add(op_computation_gas_limit);
-            total_gas_spent = total_gas_spent.saturating_add(op_total_gas_limit);
-            constructed_bundle_size =
-                constructed_bundle_size.saturating_add(op_size_with_offset_word);
+            // check if we've passed the computation target
+            if bundle_computation_gas_limit >= self.settings.target_bundle_gas {
+                passed_target = true;
+            }
 
+            // add the op to the context
             context
                 .groups_by_aggregator
-                .entry(op.aggregator())
+                .entry(op.aggregator().unwrap_or(Address::ZERO))
                 .or_default()
                 .ops_with_simulations
                 .push(OpWithSimulation {
@@ -920,12 +930,7 @@ where
         &self,
         context: &mut ProposalContext<<Self as BundleProposer>::UO>,
     ) {
-        let aggregators: Vec<_> = context
-            .groups_by_aggregator
-            .keys()
-            .flatten()
-            .copied()
-            .collect();
+        let aggregators: Vec<_> = context.groups_by_aggregator.keys().copied().collect();
         self.compute_aggregator_signatures(context, &aggregators)
             .await;
     }
@@ -936,9 +941,13 @@ where
         aggregators: impl IntoIterator<Item = &'a Address>,
     ) {
         let signature_futures = aggregators.into_iter().filter_map(|&aggregator| {
+            if aggregator.is_zero() {
+                return None;
+            }
+
             context
                 .groups_by_aggregator
-                .get(&Some(aggregator))
+                .get(&aggregator)
                 .map(|group| self.aggregate_signatures(aggregator, group))
         });
         let signatures = future::join_all(signature_futures).await;
@@ -1340,7 +1349,7 @@ where
             let gas = op
                 .op
                 .uo
-                .computation_gas_limit(&self.settings.chain_spec, None);
+                .bundle_computation_gas_limit(&self.settings.chain_spec, None);
             if gas_left < gas {
                 self.emit(BuilderEvent::skipped_op(
                     self.builder_tag.clone(),
@@ -1400,30 +1409,30 @@ where
 #[derive(Debug)]
 struct PoolOperationWithSponsoredDAGas {
     op: PoolOperation,
-    sponsored_da_gas: Option<u128>,
+    sponsored_da_gas: u128,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OpWithSimulation<UO> {
     op: UO,
     simulation: SimulationResult,
-    sponsored_da_gas: Option<u128>,
+    sponsored_da_gas: u128,
 }
 
 /// A struct used internally to represent the current state of a proposed bundle
 /// as it goes through iterations. Contains similar data to the
 /// `Vec<UserOpsPerAggregator>` that will eventually be passed to the entry
 /// point, but contains extra context needed for the computation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ProposalContext<UO> {
-    groups_by_aggregator: LinkedHashMap<Option<Address>, AggregatorGroup<UO>>,
+    groups_by_aggregator: LinkedHashMap<Address, AggregatorGroup<UO>>,
     rejected_ops: Vec<(UO, EntityInfos)>,
     // This is a BTreeMap so that the conversion to a Vec<EntityUpdate> is deterministic, mainly for tests
     entity_updates: BTreeMap<Address, EntityUpdate>,
     bundle_expected_storage: BundleExpectedStorage,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AggregatorGroup<UO> {
     ops_with_simulations: Vec<OpWithSimulation<UO>>,
     signature: Bytes,
@@ -1441,7 +1450,7 @@ impl<UO> Default for AggregatorGroup<UO> {
 impl<UO: UserOperation> ProposalContext<UO> {
     fn new() -> Self {
         Self {
-            groups_by_aggregator: LinkedHashMap::<Option<Address>, AggregatorGroup<UO>>::new(),
+            groups_by_aggregator: LinkedHashMap::<Address, AggregatorGroup<UO>>::new(),
             rejected_ops: Vec::<(UO, EntityInfos)>::new(),
             entity_updates: BTreeMap::new(),
             bundle_expected_storage: BundleExpectedStorage::default(),
@@ -1458,7 +1467,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         result: SignatureAggregatorResult<Bytes>,
     ) {
         match result {
-            Ok(sig) => self.groups_by_aggregator[&Some(aggregator)].signature = sig,
+            Ok(sig) => self.groups_by_aggregator[&aggregator].signature = sig,
             Err(error) => {
                 error!("Failed to compute aggregator signature, rejecting aggregator {aggregator:?}: {error}");
                 self.reject_aggregator(aggregator);
@@ -1493,7 +1502,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
     #[must_use = "rejected op but did not update aggregator signatures"]
     fn reject_index(&mut self, i: usize, paymaster_amendment: bool) -> Option<Address> {
         let mut remaining_i = i;
-        let mut found_aggregator: Option<Option<Address>> = None;
+        let mut found_aggregator: Option<Address> = None;
         for (&aggregator, group) in &mut self.groups_by_aggregator {
             if remaining_i < group.ops_with_simulations.len() {
                 let rejected = group.ops_with_simulations.remove(remaining_i);
@@ -1516,7 +1525,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
             self.groups_by_aggregator.remove(&found_aggregator);
             None
         } else {
-            found_aggregator
+            Some(found_aggregator)
         }
     }
 
@@ -1571,7 +1580,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
         filter: impl Fn(&UO) -> bool,
     ) -> Vec<Address> {
         let mut changed_aggregators: Vec<Address> = vec![];
-        let mut aggregators_to_remove: Vec<Option<Address>> = vec![];
+        let mut aggregators_to_remove: Vec<Address> = vec![];
         let mut new_groups = LinkedHashMap::new();
         let old_groups = mem::take(&mut self.groups_by_aggregator);
 
@@ -1593,7 +1602,7 @@ impl<UO: UserOperation> ProposalContext<UO> {
                 } else {
                     new_groups.insert(aggregator, new_group);
 
-                    if let Some(aggregator) = aggregator {
+                    if aggregator.is_zero() {
                         changed_aggregators.push(aggregator);
                     }
                 }
@@ -1631,27 +1640,83 @@ impl<UO: UserOperation> ProposalContext<UO> {
                     .iter()
                     .map(|op| op.op.clone())
                     .collect(),
-                aggregator: aggregator.unwrap_or_default(),
+                aggregator,
                 signature: group.signature.clone(),
             })
             .collect()
     }
 
+    fn get_bundle_transaction_size(&self, chain_spec: &ChainSpec) -> u128 {
+        self.bundle_overhead_bytes(chain_spec)
+            + self
+                .iter_ops_with_simulations()
+                .map(|sim_op| sim_op.op.abi_encoded_size() as u128)
+                .sum::<u128>()
+    }
+
+    // Get the computation gas limit in the bundle
+    fn get_bundle_computation_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
+        self.get_bundle_gas_limit_inner(chain_spec, false)
+    }
+
+    // Get the total gas in the bundle
+    fn get_bundle_cost(&self, chain_spec: &ChainSpec, gas_price: u128) -> U256 {
+        U256::from(self.get_bundle_gas_limit_inner(chain_spec, true)) * U256::from(gas_price)
+    }
+
+    // Get the bundle gas limit
     fn get_bundle_gas_limit(&self, chain_spec: &ChainSpec) -> u128 {
-        // Bundle overhead
+        self.get_bundle_gas_limit_inner(chain_spec, chain_spec.include_da_gas_in_gas_limit)
+    }
+
+    fn bundle_overhead_bytes(&self, chain_spec: &ChainSpec) -> u128 {
+        let mut bundle_overhead_bytes = BUNDLE_BYTE_OVERHEAD as u128;
+
+        if self.groups_by_aggregator.len() == 1
+            && self.groups_by_aggregator.keys().next().unwrap().is_zero()
+        {
+            // handleOps case
+            bundle_overhead_bytes += 32
+                * self
+                    .groups_by_aggregator
+                    .values()
+                    .next()
+                    .unwrap()
+                    .ops_with_simulations
+                    .len() as u128;
+        } else {
+            // handleAggregatedOps case
+            for (agg, group) in &self.groups_by_aggregator {
+                // Size of `UserOpsPerAggregator` (without op data and signature) is 96 bytes + 32 bytes per op
+                bundle_overhead_bytes += 96 + 32 * group.ops_with_simulations.len() as u128;
+
+                if agg.is_zero() {
+                    continue;
+                }
+                let Some(agg) = chain_spec.get_signature_aggregator(agg) else {
+                    // this should be checked prior to calling this function
+                    panic!("BUG: aggregator {agg:?} not found in chain spec");
+                };
+                bundle_overhead_bytes += agg.costs().sig_fixed_length
+                    + agg.costs().sig_variable_length * group.ops_with_simulations.len() as u128;
+            }
+        }
+
+        bundle_overhead_bytes
+    }
+
+    fn get_bundle_gas_limit_inner(&self, chain_spec: &ChainSpec, include_da_gas: bool) -> u128 {
         let mut gas_limit = rundler_types::bundle_shared_gas(chain_spec);
 
         // Per aggregator fixed gas
-        for agg in self.groups_by_aggregator.keys().flatten() {
+        for agg in self.groups_by_aggregator.keys() {
             if agg.is_zero() {
                 continue;
             }
-
             let Some(agg) = chain_spec.get_signature_aggregator(agg) else {
                 // this should be checked prior to calling this function
                 panic!("BUG: aggregator {agg:?} not found in chain spec");
             };
-
             gas_limit += agg.costs().execution_fixed_gas;
 
             // NOTE: this assumes that the DA cost for the aggregated signature is covered by the gas limits
@@ -1662,9 +1727,24 @@ impl<UO: UserOperation> ProposalContext<UO> {
         gas_limit += self
             .iter_ops_with_simulations()
             .map(|sim_op| {
-                sim_op.op.gas_limit(chain_spec, None) + sim_op.sponsored_da_gas.unwrap_or(0)
+                if include_da_gas {
+                    sim_op.op.bundle_gas_limit(chain_spec, None) + sim_op.sponsored_da_gas
+                } else {
+                    sim_op.op.bundle_computation_gas_limit(chain_spec, None)
+                }
             })
             .sum::<u128>();
+
+        let calldata_floor_gas_limit = self.bundle_overhead_bytes(chain_spec)
+            * chain_spec.calldata_floor_non_zero_byte_gas()
+            + self
+                .iter_ops_with_simulations()
+                .map(|sim_op| sim_op.op.calldata_floor_gas_limit())
+                .sum::<u128>();
+
+        if calldata_floor_gas_limit > gas_limit {
+            return calldata_floor_gas_limit;
+        }
 
         gas_limit
     }
@@ -1929,7 +2009,7 @@ mod tests {
         let cs = ChainSpec::default();
 
         let expected_gas: u64 = math::increase_by_percent(
-            op.gas_limit(&cs, Some(1)),
+            op.bundle_gas_limit(&cs, Some(1)),
             BUNDLE_TRANSACTION_GAS_OVERHEAD_PERCENT,
         )
         .try_into()
@@ -2751,8 +2831,8 @@ mod tests {
         .await;
 
         let cs = ChainSpec::default();
-        let expected_gas_limit: u64 = (op1.gas_limit(&cs, None)
-            + op2.gas_limit(&cs, None)
+        let expected_gas_limit: u64 = (op1.bundle_gas_limit(&cs, None)
+            + op2.bundle_gas_limit(&cs, None)
             + rundler_types::bundle_shared_gas(&cs))
         .try_into()
         .unwrap();
@@ -2815,8 +2895,8 @@ mod tests {
         .await;
 
         let cs = ChainSpec::default();
-        let expected_gas_limit: u64 = (op1.gas_limit(&cs, None)
-            + op2.gas_limit(&cs, None)
+        let expected_gas_limit: u64 = (op1.bundle_gas_limit(&cs, None)
+            + op2.bundle_gas_limit(&cs, None)
             + rundler_types::bundle_shared_gas(&cs))
         .try_into()
         .unwrap();
@@ -2838,12 +2918,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_bundle_gas_limit_da_gas() {
-        let cs = ChainSpec::default();
+        let cs = ChainSpec {
+            include_da_gas_in_gas_limit: false,
+            ..Default::default()
+        };
         let op1 = op_with_gas(100_000, 100_000, 1_000_000, false);
         let op2 = op_with_gas(100_000, 100_000, 200_000, false);
         let mut groups_by_aggregator = LinkedHashMap::new();
         groups_by_aggregator.insert(
-            None,
+            Address::ZERO,
             AggregatorGroup {
                 ops_with_simulations: vec![
                     OpWithSimulation {
@@ -2852,7 +2935,7 @@ mod tests {
                             requires_post_op: false,
                             ..Default::default()
                         },
-                        sponsored_da_gas: Some(100_000),
+                        sponsored_da_gas: 100_000,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -2860,7 +2943,7 @@ mod tests {
                             requires_post_op: false,
                             ..Default::default()
                         },
-                        sponsored_da_gas: None,
+                        sponsored_da_gas: 0,
                     },
                 ],
                 signature: Default::default(),
@@ -2873,12 +2956,15 @@ mod tests {
             bundle_expected_storage: BundleExpectedStorage::default(),
         };
 
-        let expected_gas_limit = op1.gas_limit(&cs, None)
-            + op2.gas_limit(&cs, None)
-            + rundler_types::bundle_shared_gas(&cs)
-            + 100_000; // sponsored DA gas
-
+        // DA gas is not included in the gas limit
+        let expected_gas_limit = op1.bundle_gas_limit(&cs, None)
+            + op2.bundle_gas_limit(&cs, None)
+            + rundler_types::bundle_shared_gas(&cs);
         assert_eq!(context.get_bundle_gas_limit(&cs), expected_gas_limit);
+
+        // DA gas is included in the gas cost (gas price is 1)
+        let expected_gas_cost = U256::from(expected_gas_limit) + U256::from(100_000);
+        assert_eq!(context.get_bundle_cost(&cs, 1), expected_gas_cost);
     }
 
     #[tokio::test]
@@ -2888,7 +2974,7 @@ mod tests {
         let op2 = op_with_gas(100_000, 100_000, 200_000, false);
         let mut groups_by_aggregator = LinkedHashMap::new();
         groups_by_aggregator.insert(
-            None,
+            Address::ZERO,
             AggregatorGroup {
                 ops_with_simulations: vec![
                     OpWithSimulation {
@@ -2897,7 +2983,7 @@ mod tests {
                             requires_post_op: true, // uses postOp
                             ..Default::default()
                         },
-                        sponsored_da_gas: None,
+                        sponsored_da_gas: 0,
                     },
                     OpWithSimulation {
                         op: op2.clone(),
@@ -2905,7 +2991,7 @@ mod tests {
                             requires_post_op: false,
                             ..Default::default()
                         },
-                        sponsored_da_gas: None,
+                        sponsored_da_gas: 0,
                     },
                 ],
                 signature: Default::default(),
@@ -2919,8 +3005,8 @@ mod tests {
         };
         let gas_limit = context.get_bundle_gas_limit(&cs);
 
-        let expected_gas_limit = op1.gas_limit(&cs, None)
-            + op2.gas_limit(&cs, None)
+        let expected_gas_limit = op1.bundle_gas_limit(&cs, None)
+            + op2.bundle_gas_limit(&cs, None)
             + rundler_types::bundle_shared_gas(&cs);
 
         assert_eq!(gas_limit, expected_gas_limit);
@@ -3510,7 +3596,8 @@ mod tests {
             ..Default::default()
         };
         let mock_op0 = op_with_sender_and_fees(address(1), 10000, 0, DEFAULT_PVG);
-        let required_pvg = mock_op0.required_pre_verification_gas(&cs, 1, DEFAULT_DA_PVG);
+        let required_pvg =
+            mock_op0.required_pre_verification_gas(&cs, 1, DEFAULT_DA_PVG, Some(0.5));
 
         let op0 = op_with_sender_and_fees(address(1), 10000, 0, math::percent(required_pvg, 75)); // accept
         let op1 =
@@ -3691,7 +3778,9 @@ mod tests {
 
         let cs = ChainSpec::default();
         let total_gas_cost = U256::from(
-            op1.gas_limit(&cs, None) + op2.gas_limit(&cs, None) + op3.gas_limit(&cs, None),
+            op1.bundle_gas_limit(&cs, None)
+                + op2.bundle_gas_limit(&cs, None)
+                + op3.bundle_gas_limit(&cs, None),
         ) * U256::from(gas_price);
 
         // set max bundle fee to 1 gwei less than the total gas cost, op3 will be skipped
@@ -3973,6 +4062,7 @@ mod tests {
                 sender_eoa,
                 da_gas_tracking_enabled,
                 max_expected_storage_slots: MAX_EXPECTED_STORAGE_SLOTS,
+                verification_gas_limit_efficiency_reject_threshold: 0.5,
                 submission_proxy,
             },
             event_sender,

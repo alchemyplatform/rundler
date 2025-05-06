@@ -164,7 +164,7 @@ where
         block_hash: B256,
     ) -> MempoolResult<()> {
         // Check call gas limit efficiency only if needed
-        if self.config.gas_limit_efficiency_reject_threshold > 0.0 {
+        if self.config.execution_gas_limit_efficiency_reject_threshold > 0.0 {
             // Node clients set base_fee to 0 during eth_call.
             // Geth: https://github.com/ethereum/go-ethereum/blob/a5fe7353cff959d6fcfcdd9593de19056edb9bdb/internal/ethapi/api.go#L1202
             // Reth: https://github.com/paradigmxyz/reth/blob/4d3b35dbd24c3a5c6b1a4f7bd86b1451e8efafcc/crates/rpc/rpc-eth-api/src/helpers/call.rs#L1098
@@ -215,11 +215,12 @@ where
                     let execution_gas_used = total_gas_used - execution_res.pre_op_gas;
 
                     let execution_gas_efficiency =
-                        execution_gas_used as f32 / execution_gas_limit as f32;
-                    if execution_gas_efficiency < self.config.gas_limit_efficiency_reject_threshold
+                        execution_gas_used as f64 / execution_gas_limit as f64;
+                    if execution_gas_efficiency
+                        < self.config.execution_gas_limit_efficiency_reject_threshold
                     {
                         return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
-                            self.config.gas_limit_efficiency_reject_threshold,
+                            self.config.execution_gas_limit_efficiency_reject_threshold,
                             execution_gas_efficiency,
                         ));
                     }
@@ -620,10 +621,15 @@ where
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
         // Check pre op gas limit efficiency
-        let pre_op_gas_efficiency = sim_result.pre_op_gas as f32 / op.pre_op_gas_limit() as f32;
-        if pre_op_gas_efficiency < self.config.gas_limit_efficiency_reject_threshold {
+        let pre_op_gas_efficiency = sim_result.pre_op_gas as f64 / op.pre_op_gas_limit() as f64;
+        let effective_verification_gas_limit_efficiency_reject_threshold = op
+            .effective_verification_gas_limit_efficiency_reject_threshold(
+                self.config
+                    .verification_gas_limit_efficiency_reject_threshold,
+            );
+        if pre_op_gas_efficiency < effective_verification_gas_limit_efficiency_reject_threshold {
             return Err(MempoolError::PreOpGasLimitEfficiencyTooLow(
-                self.config.gas_limit_efficiency_reject_threshold,
+                effective_verification_gas_limit_efficiency_reject_threshold,
                 pre_op_gas_efficiency,
             ));
         }
@@ -1843,7 +1849,7 @@ mod tests {
     #[tokio::test]
     async fn test_pre_op_gas_limit_reject() {
         let mut config = default_config();
-        config.gas_limit_efficiency_reject_threshold = 0.25;
+        config.verification_gas_limit_efficiency_reject_threshold = 0.25;
 
         let op = create_op_from_op_v0_6(UserOperationRequiredFields {
             call_gas_limit: 10_000,
@@ -1873,7 +1879,7 @@ mod tests {
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
             .await;
-        let actual_eff = 100_000_f32 / 550_000_f32;
+        let actual_eff = 100_000_f64 / 550_000_f64;
 
         match ret.err().unwrap() {
             MempoolError::PreOpGasLimitEfficiencyTooLow(eff, actual) => {
@@ -1887,7 +1893,7 @@ mod tests {
     #[tokio::test]
     async fn test_call_gas_limit_reject() {
         let mut config = default_config();
-        config.gas_limit_efficiency_reject_threshold = 0.25;
+        config.execution_gas_limit_efficiency_reject_threshold = 0.25;
 
         let op = create_op_from_op_v0_6(UserOperationRequiredFields {
             call_gas_limit: 50_000,
@@ -1915,7 +1921,7 @@ mod tests {
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
             .await;
-        let actual_eff = 10_000_f32 / 50_000_f32;
+        let actual_eff = 10_000_f64 / 50_000_f64;
 
         match ret.err().unwrap() {
             MempoolError::ExecutionGasLimitEfficiencyTooLow(eff, actual) => {
@@ -1929,7 +1935,7 @@ mod tests {
     #[tokio::test]
     async fn test_gas_price_zero_fail_open() {
         let mut config = default_config();
-        config.gas_limit_efficiency_reject_threshold = 0.25;
+        config.execution_gas_limit_efficiency_reject_threshold = 0.25;
 
         let op = create_op_from_op_v0_6(UserOperationRequiredFields {
             call_gas_limit: 50_000,
@@ -2291,7 +2297,8 @@ mod tests {
             paymaster_cache_length: 100,
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
-            gas_limit_efficiency_reject_threshold: 0.0,
+            execution_gas_limit_efficiency_reject_threshold: 0.0,
+            verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
             support_7702: false,

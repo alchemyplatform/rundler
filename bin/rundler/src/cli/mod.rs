@@ -375,6 +375,22 @@ pub struct CommonArgs {
     pre_verification_gas_accept_percent: u32,
 
     #[arg(
+        long = "execution_gas_limit_efficiency_reject_threshold",
+        name = "execution_gas_limit_efficiency_reject_threshold",
+        env = "EXECUTION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",
+        default_value = "0.0"
+    )]
+    pub execution_gas_limit_efficiency_reject_threshold: f64,
+
+    #[arg(
+        long = "verification_gas_limit_efficiency_reject_threshold",
+        name = "verification_gas_limit_efficiency_reject_threshold",
+        env = "VERIFICATION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",
+        default_value = "0.0"
+    )]
+    pub verification_gas_limit_efficiency_reject_threshold: f64,
+
+    #[arg(
         long = "mempool_config_path",
         name = "mempool_config_path",
         env = "MEMPOOL_CONFIG_PATH",
@@ -527,6 +543,8 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             max_paymaster_post_op_gas: max_bundle_execution_gas,
             max_bundle_execution_gas,
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
+            verification_gas_limit_efficiency_reject_threshold: value
+                .verification_gas_limit_efficiency_reject_threshold,
         })
     }
 }
@@ -547,6 +565,8 @@ impl TryFromWithSpec<&CommonArgs> for PrecheckSettings {
             )?,
             base_fee_accept_percent: value.base_fee_accept_percent,
             pre_verification_gas_accept_percent: value.pre_verification_gas_accept_percent,
+            verification_gas_limit_efficiency_reject_threshold: value
+                .verification_gas_limit_efficiency_reject_threshold,
         })
     }
 }

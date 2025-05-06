@@ -30,6 +30,7 @@ use tracing::instrument;
 /// Networks that require Data Availability (DA) pre_verification_gas are those that charge extra calldata fees
 /// that can scale based on DA gas prices.
 ///
+/// Returns (estimated pvg, estimated da gas)
 #[instrument(skip_all)]
 pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<UO = UO>>(
     chain_spec: &ChainSpec,
@@ -38,7 +39,7 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<U
     random_op: &UO,
     block: BlockHashOrNumber,
     gas_price: u128,
-) -> anyhow::Result<u128> {
+) -> anyhow::Result<(u128, u128)> {
     // TODO(bundle): assuming a bundle size of 1
     let bundle_size = 1;
 
@@ -51,7 +52,10 @@ pub async fn estimate_pre_verification_gas<UO: UserOperation, E: DAGasProvider<U
         0
     };
 
-    Ok(full_op.required_pre_verification_gas(chain_spec, bundle_size, da_gas))
+    Ok((
+        full_op.required_pre_verification_gas(chain_spec, bundle_size, da_gas, None),
+        da_gas,
+    ))
 }
 
 /// Calculate the required pre_verification_gas for the given user operation and the provided base fee.
@@ -64,6 +68,7 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
     op: &UO,
     block_hash: B256,
     base_fee: u128,
+    verification_efficiency_accept_threshold: f64,
 ) -> anyhow::Result<(u128, DAGasData)> {
     // TODO(bundle): assuming a bundle size of 1
     let bundle_size = 1;
@@ -83,7 +88,12 @@ pub async fn calc_required_pre_verification_gas<UO: UserOperation, E: DAGasProvi
     };
 
     Ok((
-        op.required_pre_verification_gas(chain_spec, bundle_size, da_gas),
+        op.required_pre_verification_gas(
+            chain_spec,
+            bundle_size,
+            da_gas,
+            Some(verification_efficiency_accept_threshold),
+        ),
         uo_data,
     ))
 }

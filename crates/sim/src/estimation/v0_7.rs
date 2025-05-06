@@ -95,7 +95,8 @@ where
             .await
             .map_err(anyhow::Error::from)?;
 
-        let pre_verification_gas = self.estimate_pre_verification_gas(&op, block_hash).await?;
+        let (pre_verification_gas, da_gas) =
+            self.estimate_pre_verification_gas(&op, block_hash).await?;
 
         let mut full_op = op
             .clone()
@@ -148,13 +149,32 @@ where
             .build();
 
         // require that this can fit in a bundle of size 1
-        let gas_limit = op_with_gas.computation_gas_limit(&self.chain_spec, Some(1));
+        let gas_limit = op_with_gas.bundle_computation_gas_limit(&self.chain_spec, Some(1));
         if gas_limit > self.settings.max_bundle_execution_gas {
             return Err(GasEstimationError::GasTotalTooLarge(
                 gas_limit,
                 self.settings.max_bundle_execution_gas,
             ));
+        } else if op_with_gas.calldata_floor_gas_limit() > self.settings.max_bundle_execution_gas {
+            return Err(GasEstimationError::GasTotalTooLarge(
+                op_with_gas.calldata_floor_gas_limit(),
+                self.settings.max_bundle_execution_gas,
+            ));
         }
+
+        // if pvg was originally provided, use it, otherwise calculate it using the gas limits from above
+        let pre_verification_gas = if op.pre_verification_gas.is_some_and(|pvg| pvg != 0) {
+            pre_verification_gas
+        } else {
+            rundler_types::increase_required_pvg_with_calldata_floor_gas(
+                &op_with_gas,
+                pre_verification_gas,
+                da_gas,
+                op.max_fill(&self.chain_spec).calldata_floor_gas_limit(),
+                self.settings
+                    .verification_gas_limit_efficiency_reject_threshold,
+            )
+        };
 
         Ok(GasEstimate {
             pre_verification_gas,
@@ -376,10 +396,10 @@ where
         &self,
         optional_op: &UserOperationOptionalGas,
         block_hash: B256,
-    ) -> Result<u128, GasEstimationError> {
+    ) -> Result<(u128, u128), GasEstimationError> {
         if let Some(pvg) = optional_op.pre_verification_gas {
             if pvg != 0 {
-                return Ok(pvg);
+                return Ok((pvg, 0));
             }
         }
 
@@ -631,6 +651,7 @@ mod tests {
             max_paymaster_verification_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
             verification_estimation_gas_fee: 1_000_000_000_000,
+            verification_gas_limit_efficiency_reject_threshold: 0.5,
         };
         let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);
         (estimator, settings)

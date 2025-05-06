@@ -23,3 +23,7 @@ The tasks communicate with each other via message passing mechanisms. The `Pool`
 Both the `Builder` and the `Pool` tasks can be configured to run a gRPC server capable of receiving and responding to messages from the network. Thus, Rundler can be configured to run in a distributed mode where its tasks run in separate processes.
 
 The `Builder` and `RPC` modules can be configured to communicate to other tasks via in-memory message passing (if running in the same process) or via gRPC (if running in separate processes).
+
+## Other Notable Topics
+
+[EIP-7623 Handling](./eip7623.md)

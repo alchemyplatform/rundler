@@ -287,6 +287,8 @@ impl BuilderArgs {
             da_gas_tracking_enabled,
             provider_client_timeout_seconds,
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            verification_gas_limit_efficiency_reject_threshold: common
+                .verification_gas_limit_efficiency_reject_threshold,
             chain_spec,
         })
     }

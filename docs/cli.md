@@ -60,6 +60,12 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *PRIORITY_FEE_MODE_VALUE*
 - `--base_fee_accept_percent`: Percentage of the current network fees a user operation must have in order to be accepted into the mempool. (default: `100`).
   - env: *BASE_FEE_ACCEPT_PERCENT*
+- `--pre_verification_gas_accept_percent`: Percentage of the required PVG that a user operation must have in order to be accepted into the mempool. Only applies if there is dynamic PVG, else the full amount is required. (default: `50`)
+  - env: *PRE_VERIFICATION_GAS_ACCEPT_PERCENT*
+- `--execution_gas_limit_efficiency_reject_threshold`: The ratio of execution gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
+  - env: *EXECUTION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
+- `--verification_gas_limit_efficiency_reject_threshold`: The ratio of verification gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
+  - env: *VERIFICATION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
   - (*Only required if using other AWS features*)
@@ -184,8 +190,6 @@ List of command line options for configuring the Pool.
   - env: *POOL_REPUTATION_TRACKING_ENABLED*
 - `--pool.drop_min_num_blocks`: The minimum number of blocks that a UO must stay in the mempool before it can be requested to be dropped by the user (default: `10`)
   - env: *POOL_DROP_MIN_NUM_BLOCKS*
-- `--pool.gas_limit_efficiency_reject_threshold`: The ratio of gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
-  - env: *POOL_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 - `--pool.max_time_in_pool_secs`: The maximum amount of time a UO is allowed to be in the mempool, in seconds. (default: `None`)
   - env: *POOL_MAX_TIME_IN_POOL_SECS*
 
