@@ -433,6 +433,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
 
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO {
         UserOperationBuilder::from_uo(op, &self.chain_spec)
+            .clear_paymaster()
             .call_gas_limit(0)
             .max_fee_per_gas(0)
             .build()

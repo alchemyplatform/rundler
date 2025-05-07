@@ -884,6 +884,12 @@ impl<'a> UserOperationBuilder<'a> {
         self
     }
 
+    /// Clears the paymaster and data
+    pub fn clear_paymaster(mut self) -> Self {
+        self.required.paymaster_and_data = Bytes::new();
+        self
+    }
+
     /// Build the user operation
     pub fn build(self) -> UserOperation {
         let mut uo = UserOperation {
