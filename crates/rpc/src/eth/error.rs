@@ -311,17 +311,11 @@ impl From<MempoolError> for EthRpcError {
             MempoolError::UnknownEntryPoint(a) => {
                 Self::EntryPointValidationRejected(format!("unknown entry point: {}", a))
             }
-            MempoolError::OperationDropTooSoon(_, _, _) => Self::InvalidParams(value.to_string()),
-            MempoolError::PreOpGasLimitEfficiencyTooLow(_, _) => {
-                Self::InvalidParams(value.to_string())
-            }
-            MempoolError::ExecutionGasLimitEfficiencyTooLow(_, _) => {
-                Self::InvalidParams(value.to_string())
-            }
-            MempoolError::TooManyExpectedStorageSlots(_, _) => {
-                Self::InvalidParams(value.to_string())
-            }
-            MempoolError::EIPNotSupported(_) => Self::InvalidParams(value.to_string()),
+            MempoolError::OperationDropTooSoon(_, _, _)
+            | MempoolError::VerificationGasLimitEfficiencyTooLow(_, _)
+            | MempoolError::ExecutionGasLimitEfficiencyTooLow(_, _)
+            | MempoolError::TooManyExpectedStorageSlots(_, _)
+            | MempoolError::EIPNotSupported(_) => Self::InvalidParams(value.to_string()),
         }
     }
 }
