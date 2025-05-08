@@ -621,17 +621,31 @@ where
             .check_associated_storage(&sim_result.associated_addresses, &op)?;
 
         // Check pre op gas limit efficiency
-        let pre_op_gas_efficiency = sim_result.pre_op_gas as f64 / op.pre_op_gas_limit() as f64;
-        let effective_verification_gas_limit_efficiency_reject_threshold = op
-            .effective_verification_gas_limit_efficiency_reject_threshold(
-                self.config
-                    .verification_gas_limit_efficiency_reject_threshold,
-            );
-        if pre_op_gas_efficiency < effective_verification_gas_limit_efficiency_reject_threshold {
-            return Err(MempoolError::PreOpGasLimitEfficiencyTooLow(
-                effective_verification_gas_limit_efficiency_reject_threshold,
-                pre_op_gas_efficiency,
-            ));
+        if self
+            .config
+            .verification_gas_limit_efficiency_reject_threshold
+            > 0.0
+        {
+            let verification_gas_used = sim_result
+                .pre_op_gas
+                .saturating_sub(op.pre_verification_gas());
+
+            let verification_gas_efficiency =
+                verification_gas_used as f64 / op.total_verification_gas_limit() as f64;
+
+            let effective_verification_gas_limit_efficiency_reject_threshold = op
+                .effective_verification_gas_limit_efficiency_reject_threshold(
+                    self.config
+                        .verification_gas_limit_efficiency_reject_threshold,
+                );
+            if verification_gas_efficiency
+                < effective_verification_gas_limit_efficiency_reject_threshold
+            {
+                return Err(MempoolError::VerificationGasLimitEfficiencyTooLow(
+                    effective_verification_gas_limit_efficiency_reject_threshold,
+                    verification_gas_efficiency,
+                ));
+            }
         }
 
         let filter_id = self.mempool_config.match_filter(&op);
@@ -1847,13 +1861,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pre_op_gas_limit_reject() {
+    async fn test_verification_gas_limit_reject() {
         let mut config = default_config();
         config.verification_gas_limit_efficiency_reject_threshold = 0.25;
 
         let op = create_op_from_op_v0_6(UserOperationRequiredFields {
             call_gas_limit: 10_000,
-            verification_gas_limit: 500_000, // used 100K of 550K
+            verification_gas_limit: 500_000,
             pre_verification_gas: 50_000,
             max_fee_per_gas: 1,
             max_priority_fee_per_gas: 1,
@@ -1863,7 +1877,7 @@ mod tests {
         let mut ep = MockEntryPointV0_6::new();
         ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
             Ok(Ok(ExecutionResult {
-                pre_op_gas: 100_000,
+                pre_op_gas: 100_000, // used 50K of 500K verification gas (used 50K PVG)
                 paid: uint!(110_000_U256),
                 target_success: true,
                 ..Default::default()
@@ -1879,14 +1893,14 @@ mod tests {
         let ret = pool
             .add_operation(OperationOrigin::Local, op.op, default_perms())
             .await;
-        let actual_eff = 100_000_f64 / 550_000_f64;
+        let actual_eff = 50_000_f64 / 500_000_f64;
 
         match ret.err().unwrap() {
-            MempoolError::PreOpGasLimitEfficiencyTooLow(eff, actual) => {
+            MempoolError::VerificationGasLimitEfficiencyTooLow(eff, actual) => {
                 assert_eq!(eff, 0.25);
                 assert_eq!(actual, actual_eff);
             }
-            _ => panic!("Expected PreOpGasLimitEfficiencyTooLow error"),
+            _ => panic!("Expected VerificationGasLimitEfficiencyTooLow error"),
         }
     }
 

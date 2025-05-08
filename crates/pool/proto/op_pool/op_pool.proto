@@ -615,7 +615,7 @@ message MempoolError {
     AssociatedStorageIsAlternateSender associated_storage_is_alternate_sender = 14;
     PaymasterBalanceTooLow paymaster_balance_too_low = 15;
     OperationDropTooSoon operation_drop_too_soon = 16;
-    PreOpGasLimitEfficiencyTooLow pre_op_gas_limit_efficiency_too_low = 17;
+    VerificationGasLimitEfficiencyTooLow verification_gas_limit_efficiency_too_low = 17;
     ExecutionGasLimitEfficiencyTooLow execution_gas_limit_efficiency_too_low = 18;
     TooManyExpectedStorageSlots too_many_expected_storage_slots = 19;
     UseUnsupportedEIP use_unsupported_eip = 20;
@@ -673,7 +673,7 @@ message OperationDropTooSoon {
   uint64 must_wait = 3;
 }
 
-message PreOpGasLimitEfficiencyTooLow {
+message VerificationGasLimitEfficiencyTooLow {
   double required = 1;
   double actual = 2;
 }

@@ -94,9 +94,9 @@ pub enum MempoolError {
     /// The operation drop attempt too soon after being added to the pool
     #[error("Operation drop attempt too soon after being added to the pool. Added at {0}, attempted to drop at {1}, must wait {2} blocks.")]
     OperationDropTooSoon(u64, u64, u64),
-    /// Pre-op gas limit efficiency too low
-    #[error("Pre-op gas limit efficiency too low. Required: {0}, Actual: {1}")]
-    PreOpGasLimitEfficiencyTooLow(f64, f64),
+    /// Verification gas limit efficiency too low
+    #[error("Verification gas limit efficiency too low. Required: {0}, Actual: {1}")]
+    VerificationGasLimitEfficiencyTooLow(f64, f64),
     /// Execution gas limit efficiency too low
     #[error("Execution gas limit efficiency too low. Required: {0}, Actual: {1}")]
     ExecutionGasLimitEfficiencyTooLow(f64, f64),
