@@ -33,14 +33,14 @@ use super::protos::{
     MaxOperationsReachedError, MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError,
     MultipleRolesViolation, NotStaked, OperationAlreadyKnownError, OperationDropTooSoon,
     OperationRevert, OutOfGas, OverMaxCost, PanicRevert, PaymasterBalanceTooLow,
-    PaymasterDepositTooLow, PaymasterIsNotContract, PreOpGasLimitEfficiencyTooLow,
-    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
-    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
-    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
-    TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
-    UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
-    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
-    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
+    PaymasterDepositTooLow, PaymasterIsNotContract, PreVerificationGasTooLow,
+    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
+    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
+    SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
+    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
+    UnknownRevert, UnstakedPaymasterContext, UseUnsupportedEip, UsedForbiddenOpcode,
+    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
+    VerificationGasLimitBufferTooLow, VerificationGasLimitEfficiencyTooLow,
     VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
@@ -126,8 +126,8 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             Some(mempool_error::Error::OperationDropTooSoon(e)) => {
                 MempoolError::OperationDropTooSoon(e.added_at, e.attempted_at, e.must_wait)
             }
-            Some(mempool_error::Error::PreOpGasLimitEfficiencyTooLow(e)) => {
-                MempoolError::PreOpGasLimitEfficiencyTooLow(e.required, e.actual)
+            Some(mempool_error::Error::VerificationGasLimitEfficiencyTooLow(e)) => {
+                MempoolError::VerificationGasLimitEfficiencyTooLow(e.required, e.actual)
             }
             Some(mempool_error::Error::ExecutionGasLimitEfficiencyTooLow(e)) => {
                 MempoolError::ExecutionGasLimitEfficiencyTooLow(e.required, e.actual)
@@ -241,11 +241,13 @@ impl From<MempoolError> for ProtoMempoolError {
                     )),
                 }
             }
-            MempoolError::PreOpGasLimitEfficiencyTooLow(required, actual) => ProtoMempoolError {
-                error: Some(mempool_error::Error::PreOpGasLimitEfficiencyTooLow(
-                    PreOpGasLimitEfficiencyTooLow { required, actual },
-                )),
-            },
+            MempoolError::VerificationGasLimitEfficiencyTooLow(required, actual) => {
+                ProtoMempoolError {
+                    error: Some(mempool_error::Error::VerificationGasLimitEfficiencyTooLow(
+                        VerificationGasLimitEfficiencyTooLow { required, actual },
+                    )),
+                }
+            }
             MempoolError::ExecutionGasLimitEfficiencyTooLow(required, actual) => {
                 ProtoMempoolError {
                     error: Some(mempool_error::Error::ExecutionGasLimitEfficiencyTooLow(
