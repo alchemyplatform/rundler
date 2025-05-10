@@ -16,9 +16,11 @@ use std::{error, fs, io::ErrorKind, process::Command};
 use serde_json::Value;
 
 macro_rules! write_deployed_bytecode {
-    ($contract_name:ident) => {
+    ($version:literal, $contract_name:ident) => {
         let json_file = fs::File::open(concat!(
-            "contracts/out/v0_7/",
+            "contracts/out/",
+            $version,
+            "/",
             stringify!($contract_name),
             ".sol/",
             stringify!($contract_name),
@@ -34,7 +36,9 @@ macro_rules! write_deployed_bytecode {
             .unwrap();
         fs::write(
             concat!(
-                "contracts/out/v0_7/",
+                "contracts/out/",
+                $version,
+                "/",
                 stringify!($contract_name),
                 ".sol/",
                 stringify!($contract_name),
@@ -65,6 +69,8 @@ fn generate_v0_6_bindings() -> Result<(), Box<dyn error::Error>> {
         "generate ABIs",
     )?;
 
+    write_deployed_bytecode!("v0_6", VerificationGasEstimationHelper);
+
     Ok(())
 }
 
@@ -77,8 +83,9 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
         "generate ABIs",
     )?;
 
-    write_deployed_bytecode!(CallGasEstimationProxy);
-    write_deployed_bytecode!(EntryPointSimulations);
+    write_deployed_bytecode!("v0_7", CallGasEstimationProxy);
+    write_deployed_bytecode!("v0_7", EntryPointSimulations);
+    write_deployed_bytecode!("v0_7", VerificationGasEstimationHelper);
 
     Ok(())
 }

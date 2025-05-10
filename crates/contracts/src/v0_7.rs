@@ -224,15 +224,43 @@ sol!(
 
         error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
 
-        error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+        error EstimateGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
 
-        error EstimateCallGasRevertAtMax(bytes revertData);
+        error EstimateGasRevertAtMax(bytes revertData);
 
         error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
 
         function estimateCallGas(EstimateCallGasArgs calldata args) external;
 
         function testCallGas(PackedUserOperation calldata userOp, uint256 callGasLimit) external;
+    }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    contract VerificationGasEstimationHelper {
+        struct EstimateGasArgs {
+            address entryPointSimulations;
+            PackedUserOperation userOp;
+            uint256 minGas;
+            uint256 maxGas;
+            uint256 rounding;
+            bool isContinuation;
+            uint256 constantFee;
+        }
+
+        struct EstimateGasResult {
+            uint256 gasEstimate;
+            uint256 numRounds;
+        }
+
+        error EstimateGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+
+        error EstimateGasRevertAtMax(bytes revertData);
+
+        function estimateVerificationGas(EstimateGasArgs calldata args) external returns (EstimateGasResult memory);
+
+        function estimatePaymasterVerificationGas(EstimateGasArgs calldata args) external returns (EstimateGasResult memory);
     }
 );
 
@@ -272,3 +300,20 @@ static __CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: [u8; 3558] = {
 
 pub static CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE: Bytes =
     Bytes::from_static(&__CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE);
+
+// VerificationGasEstimationHelper deployed bytecode
+static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+    "../contracts/out/v0_7/VerificationGasEstimationHelper.sol/VerificationGasEstimationHelper_deployedBytecode.txt"
+);
+
+static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 4019] = {
+    match const_hex::const_decode_to_array(
+        __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE_HEX,
+    ) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode verification gas estimation helper hex"),
+    }
+};
+
+pub static VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE);

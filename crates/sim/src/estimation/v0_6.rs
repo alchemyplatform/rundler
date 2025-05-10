@@ -11,21 +11,29 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, ops::Add};
+use std::{cmp, ops::Add, time::Instant};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_sol_types::SolInterface;
+use alloy_sol_types::{SolCall, SolInterface, SolValue};
+use anyhow::Context;
 use rand::Rng;
-use rundler_contracts::v0_6::{
-    CallGasEstimationProxy::{
-        self, estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls,
-        EstimateCallGasArgs,
+use rundler_contracts::{
+    v0_6::{
+        CallGasEstimationProxy::{
+            self, estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls,
+            EstimateCallGasArgs,
+        },
+        VerificationGasEstimationHelper::{
+            estimateVerificationGasCall, EstimateGasArgs as ContractEstimateGasArgs,
+        },
+        ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
+        VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE,
     },
-    ENTRY_POINT_V0_6_DEPLOYED_BYTECODE,
+    v0_7::VerificationGasEstimationHelper::EstimateGasResult,
 };
 use rundler_provider::{
     AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, SimulationProvider,
-    StateOverride,
+    StateOverride, TransactionBuilder, TransactionRequest,
 };
 use rundler_types::{
     self,
@@ -42,7 +50,7 @@ use super::{
     Metrics, Settings, VerificationGasEstimator,
 };
 use crate::{
-    estimation::estimate_verification_gas::GetOpWithLimitArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
+    estimation::estimate_verification_gas::EstimateGasArgs, gas, precheck::MIN_CALL_GAS_LIMIT,
     simulation, GasEstimator as GasEstimatorTrait, VerificationGasEstimatorImpl,
 };
 
@@ -120,10 +128,7 @@ where
 
         // Not try_join! because then the output is nondeterministic if both
         // verification and call estimation fail.
-        let timer = std::time::Instant::now();
         let (verification_gas_limit, call_gas_limit) = join!(verification_future, call_future);
-        tracing::debug!("gas estimation took {}ms", timer.elapsed().as_millis());
-
         let verification_gas_limit = verification_gas_limit?;
         let call_gas_limit = call_gas_limit?;
 
@@ -175,7 +180,7 @@ impl<P, E, F>
     GasEstimator<
         P,
         E,
-        VerificationGasEstimatorImpl<P, E>,
+        VerificationGasEstimatorImpl<UserOperation>,
         CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV06>,
         F,
     >
@@ -199,12 +204,8 @@ where
             panic!("Invalid gas estimator settings: {}", err);
         }
 
-        let verification_gas_estimator = VerificationGasEstimatorImpl::new(
-            chain_spec.clone(),
-            provider.clone(),
-            entry_point.clone(),
-            settings,
-        );
+        let verification_gas_estimator =
+            VerificationGasEstimatorImpl::new(chain_spec.clone(), settings);
         let call_gas_estimator = CallGasEstimatorImpl::new(
             entry_point.clone(),
             settings,
@@ -275,27 +276,18 @@ where
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
+        let now = Instant::now();
 
-        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
-            let GetOpWithLimitArgs { gas, fee } = args;
-
-            UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .verification_gas_limit(gas)
-                .max_fee_per_gas(fee)
-                .max_priority_fee_per_gas(fee)
-                .call_gas_limit(0)
-                .build()
+        let estimate_gas = |op: UserOperation, args: EstimateGasArgs| async move {
+            let call = estimateVerificationGasCall {
+                args: self.construct_verification_args(op, &args),
+            };
+            self.call_gas_verification_contract(call, args).await
         };
 
         let verification_gas_limit: u128 = self
             .verification_gas_estimator
-            .estimate_verification_gas(
-                full_op,
-                block_hash,
-                state_override,
-                self.settings.max_verification_gas,
-                get_op_with_limit,
-            )
+            .estimate_verification_gas(full_op, block_hash, state_override, estimate_gas)
             .await?;
 
         // Add a buffer to the verification gas limit. Add 10% or 2000 gas, whichever is larger
@@ -308,6 +300,12 @@ where
             verification_gas_limit + simulation::v0_6::REQUIRED_VERIFICATION_GAS_LIMIT_BUFFER,
         )
         .min(self.settings.max_verification_gas);
+
+        tracing::debug!(
+            "verification_gas_limit: {} took {:?}ms",
+            verification_gas_limit,
+            now.elapsed().as_millis()
+        );
 
         Ok(verification_gas_limit)
     }
@@ -394,6 +392,60 @@ where
 
         Ok(call_gas_limit)
     }
+
+    fn construct_verification_args(
+        &self,
+        user_op: UserOperation,
+        args: &EstimateGasArgs,
+    ) -> ContractEstimateGasArgs {
+        ContractEstimateGasArgs {
+            entryPoint: *self.entry_point.address(),
+            userOp: user_op.into(),
+            minGas: U256::from(args.min_gas),
+            maxGas: U256::from(args.max_gas),
+            rounding: U256::from(args.rounding),
+            isContinuation: args.is_continuation,
+            constantFee: U256::from(args.constant_fee),
+        }
+    }
+
+    async fn call_gas_verification_contract<C: SolCall>(
+        &self,
+        call: C,
+        mut args: EstimateGasArgs,
+    ) -> Result<Result<EstimateGasResult, Bytes>, GasEstimationError> {
+        let helper_addr = Address::random();
+        args.state_overrides.insert(
+            helper_addr,
+            AccountOverride {
+                code: Some(VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE.clone()),
+                ..Default::default()
+            },
+        );
+
+        let call = TransactionRequest::default()
+            .with_call(&call)
+            .with_gas_limit(self.settings.max_call_gas.try_into().unwrap())
+            .with_to(helper_addr);
+
+        let ret = self
+            .provider
+            .call(&call, Some(args.block_hash.into()), &args.state_overrides)
+            .await;
+
+        match ret {
+            Ok(ret) => Ok(Ok(EstimateGasResult::abi_decode(&ret, false)
+                .context("Failed to decode verification gas estimation result")?)),
+            Err(e) => {
+                if let Some(e) = e.as_revert_data() {
+                    tracing::info!("validation revert data: {:?}", e);
+                    Ok(Err(e))
+                } else {
+                    Err(e.into())
+                }
+            }
+        }
+    }
 }
 
 /// Implementation of functions that specialize the call gas estimator to the
@@ -454,6 +506,8 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
                 sender: op.sender,
                 minGas: U256::from(min_gas),
                 maxGas: U256::from(max_gas),
+                // TODO: would like to move to a % based model stopping as it works better for
+                // larger gas limits.
                 rounding: U256::from(rounding),
                 isContinuation: is_continuation,
             },
@@ -508,8 +562,7 @@ mod tests {
         GasFees, UserOperation as UserOperationTrait, ValidationRevert,
     };
     use CallGasEstimationProxy::{
-        EstimateCallGasContinuation, EstimateCallGasResult, EstimateCallGasRevertAtMax,
-        TestCallGasResult,
+        EstimateCallGasResult, EstimateGasContinuation, EstimateGasRevertAtMax, TestCallGasResult,
     };
 
     use super::*;
@@ -533,8 +586,7 @@ mod tests {
     const BUNDLE_SIZE: u32 = 1;
 
     // Alises for complex types (which also satisfy Clippy)
-    type VerificationGasEstimatorWithMocks =
-        VerificationGasEstimatorImpl<Arc<MockEvmProvider>, Arc<MockEntryPointV0_6>>;
+    type VerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<UserOperation>;
     type CallGasEstimatorWithMocks =
         CallGasEstimatorImpl<Arc<MockEntryPointV0_6>, CallGasEstimatorSpecializationV06>;
     type GasEstimatorWithMocks = GasEstimator<
@@ -1186,7 +1238,7 @@ mod tests {
             .expect_simulate_handle_op()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
-                    target_result: EstimateCallGasRevertAtMax {
+                    target_result: EstimateGasRevertAtMax {
                         revertData: Bytes::new(),
                     }
                     .abi_encode()
@@ -1223,7 +1275,7 @@ mod tests {
             .expect_simulate_handle_op()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
-                    target_result: EstimateCallGasContinuation {
+                    target_result: EstimateGasContinuation {
                         minGas: U256::from(100),
                         maxGas: U256::from(100000),
                         numRounds: U256::from(10),
