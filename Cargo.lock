@@ -4866,7 +4866,7 @@ checksum = "48fd7bd8a6377e15ad9d42a8ec25371b94ddc67abe7c8b9127bec79bebaaae18"
 
 [[package]]
 name = "rundler"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -4921,7 +4921,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-bindings-fastlz"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bindgen",
  "cc",
@@ -4929,7 +4929,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-bls"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -4939,7 +4939,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-builder"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-consensus",
  "alloy-network",
@@ -4978,7 +4978,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-contracts"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-contract",
  "alloy-primitives",
@@ -4990,7 +4990,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-pbh"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -5002,7 +5002,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-pool"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5042,7 +5042,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-provider"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-consensus",
  "alloy-contract",
@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-rpc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-consensus",
  "alloy-contract",
@@ -5118,7 +5118,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-signer"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-consensus",
  "alloy-eips",
@@ -5149,7 +5149,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-sim"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -5175,7 +5175,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-task"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-primitives",
  "anyhow",
@@ -5194,7 +5194,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-types"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-eips",
  "alloy-primitives",
@@ -5219,7 +5219,7 @@ dependencies = [
 
 [[package]]
 name = "rundler-utils"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy-primitives",
  "alloy-rpc-types-eth",
