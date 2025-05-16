@@ -356,7 +356,13 @@ async fn init_balances<P: EvmProvider>(
     manager: &Arc<dyn SignerManager>,
     provider: &P,
 ) -> Result<()> {
-    let balances = provider.get_balances(manager.addresses()).await?;
+    let balances = match provider.get_balances(manager.addresses()).await {
+        Ok(balances) => balances,
+        Err(e) => {
+            tracing::warn!("Error initializing balances for signer manager: {e}");
+            return Ok(());
+        }
+    };
     manager.update_balances(balances);
     Ok(())
 }
