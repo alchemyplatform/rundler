@@ -144,6 +144,32 @@ sol! {
 
         function aggregateSignatures(UserOperation[] calldata userOps) external view returns (bytes memory aggregatedSignature);
     }
+
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    contract VerificationGasEstimationHelper {
+        struct EstimateGasArgs {
+            address entryPoint;
+            UserOperation userOp;
+            uint256 minGas;
+            uint256 maxGas;
+            uint256 rounding;
+            bool isContinuation;
+            uint256 constantFee;
+        }
+
+        struct EstimateGasResult {
+            uint256 gasEstimate;
+            uint256 numRounds;
+        }
+
+        error EstimateGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+
+        error EstimateGasRevertAtMax(bytes revertData);
+
+        function estimateVerificationGas(EstimateGasArgs calldata args) external returns (EstimateGasResult memory);
+    }
 }
 
 sol! {
@@ -172,3 +198,20 @@ static __ENTRY_POINT_V0_6_DEPLOYED_BYTECODE: [u8; 23689] = {
 };
 pub static ENTRY_POINT_V0_6_DEPLOYED_BYTECODE: Bytes =
     Bytes::from_static(&__ENTRY_POINT_V0_6_DEPLOYED_BYTECODE);
+
+// VerificationGasEstimationHelper deployed bytecode
+static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE_HEX: &[u8] = include_bytes!(
+    "../contracts/out/v0_6/VerificationGasEstimationHelper.sol/VerificationGasEstimationHelper_deployedBytecode.txt"
+);
+
+static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE: [u8; 3398] = {
+    match const_hex::const_decode_to_array(
+        __VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE_HEX,
+    ) {
+        Ok(a) => a,
+        Err(_) => panic!("Failed to decode verification gas estimation helper hex"),
+    }
+};
+
+pub static VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE: Bytes =
+    Bytes::from_static(&__VERIFICATION_GAS_ESTIMATION_HELPER_V0_6_DEPLOYED_BYTECODE);

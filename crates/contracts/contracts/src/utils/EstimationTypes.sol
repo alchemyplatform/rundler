@@ -3,9 +3,13 @@ pragma solidity ^0.8.13;
 
 error EstimateCallGasResult(uint256 gasEstimate, uint256 numRounds);
 
-error EstimateCallGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+error EstimateGasContinuation(
+    uint256 minGas,
+    uint256 maxGas,
+    uint256 numRounds
+);
 
-error EstimateCallGasRevertAtMax(bytes revertData);
+error EstimateGasRevertAtMax(bytes revertData);
 
 error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
 

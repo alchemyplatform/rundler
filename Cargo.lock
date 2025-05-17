@@ -5048,6 +5048,7 @@ dependencies = [
  "alloy-contract",
  "alloy-eips",
  "alloy-json-rpc",
+ "alloy-network",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rlp",
