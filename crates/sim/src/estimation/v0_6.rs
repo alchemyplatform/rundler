@@ -154,7 +154,7 @@ where
         } else {
             rundler_types::increase_required_pvg_with_calldata_floor_gas(
                 &op_with_gas,
-                pre_verification_gas,
+                pre_verification_gas - da_gas,
                 da_gas,
                 op.max_fill(&self.chain_spec).calldata_floor_gas_limit(),
                 self.settings
