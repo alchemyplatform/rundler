@@ -125,6 +125,8 @@ where
             violations.push(SimulationViolation::InvalidPaymasterSignature);
         }
 
+        let account_is_staked = context::is_staked(validation_result.sender_info, &self.settings);
+
         if !violations.is_empty() {
             Err(SimulationError {
                 violation_error: ViolationError::Violations(violations),
@@ -137,6 +139,7 @@ where
                 valid_time_range,
                 requires_post_op,
                 entity_infos,
+                account_is_staked,
                 ..Default::default()
             })
         }
