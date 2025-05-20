@@ -238,8 +238,9 @@ List of command line options for configuring the Builder.
 - `--signer.aws_kms_key_ids`: AWS KMS key IDs to use for signing transactions, separated by `,`. 
   - env: *SIGNER_AWS_KMS_KEY_IDS*
   - To enable signer locking see `SIGNER_ENABLE_KMS_LOCKING`.
-- `--signer.aws_kms_key_groups`: AWS KMS key ids grouped to keys in `aws_kms_key_ids`. Groups are separated by `:` and entries are separated by `,`. These are never locked, but are used if the associated key id is locked.
-  - env: *SIGNER_AWS_KMS_KEY_GROUPS*
+- `--signer.aws_kms_grouped_keys`: AWS KMS key ids grouped to keys in `aws_kms_key_ids`. See `aws_kms_grouped_keys_group_size`. Separated by `,`.
+  - env: *SIGNER_AWS_KMS_GROUPED_KEYS*
+- `--signer.aws_kms_grouped_keys_group_size`: AWS KMS grouped key group size. Must divide `aws_kms_grouped_keys` into equal sized groups with the number of groups being greater than or equal to the number of `aws_kms_key_ids`.
 - `--signer.enable_kms_funding`:
   - env: *SIGNER_ENABLE_KMS_FUNDING*
 - `--signer.enable_kms_locking`:
