@@ -47,19 +47,21 @@ pub struct SignerArgs {
     )]
     pub aws_kms_key_ids: Vec<String>,
 
-    /// AWS KMS key groups to use for signing transactions
-    ///
-    /// Each group is separated by a semicolon. Group entries are separated by commas.
-    ///
-    /// Groups are associated 1:1 with entries in `signer.aws_kms_key_ids`
     #[arg(
-        long = "signer.aws_kms_key_groups",
-        name = "signer.aws_kms_key_groups",
-        env = "SIGNER_AWS_KMS_KEY_GROUPS",
-        value_parser = parse_aws_kms_key_groups,
-        value_delimiter = ':'
+        long = "signer.aws_kms_grouped_keys",
+        name = "signer.aws_kms_grouped_keys",
+        env = "SIGNER_AWS_KMS_GROUPED_KEYS",
+        value_delimiter = ','
     )]
-    pub aws_kms_key_groups: Vec<Vec<String>>,
+    pub aws_kms_grouped_keys: Vec<String>,
+
+    #[arg(
+        long = "signer.aws_kms_grouped_keys_group_size",
+        name = "signer.aws_kms_grouped_keys_group_size",
+        env = "SIGNER_AWS_KMS_GROUPED_KEYS_GROUP_SIZE",
+        default_value = "0"
+    )]
+    pub aws_kms_grouped_keys_group_size: usize,
 
     /// Whether to enable KMS funding
     #[arg(
@@ -152,11 +154,6 @@ pub struct SignerArgs {
     pub funding_txn_base_fee_multiplier: f64,
 }
 
-fn parse_aws_kms_key_groups(s: &str) -> Result<Vec<String>, String> {
-    let groups = s.split(',').map(|s| s.to_string()).collect();
-    Ok(groups)
-}
-
 impl SignerArgs {
     pub fn signing_scheme(&self, num_signers: Option<usize>) -> anyhow::Result<SigningScheme> {
         if self.enable_kms_funding {
@@ -223,11 +220,30 @@ impl SignerArgs {
             None
         };
 
-        let subkeys_by_key_id = if !self.aws_kms_key_groups.is_empty() {
-            if self.aws_kms_key_groups.len() != self.aws_kms_key_ids.len() {
-                bail!("Number of AWS KMS key groups ({}) does not match number of AWS KMS key IDs ({}).", self.aws_kms_key_groups.len(), self.aws_kms_key_ids.len());
+        let subkeys_by_key_id = if !self.aws_kms_grouped_keys.is_empty() {
+            if self.aws_kms_grouped_keys_group_size == 0 {
+                bail!("AWS KMS grouped key group size is not set. Please set signer.aws_kms_grouped_keys_group_size");
             }
-            for group in self.aws_kms_key_groups.iter() {
+
+            if self.aws_kms_grouped_keys.len() % self.aws_kms_grouped_keys_group_size != 0 {
+                bail!(
+                    "Number of AWS KMS grouped keys ({}) is not divisible by the group size ({}).",
+                    self.aws_kms_grouped_keys.len(),
+                    self.aws_kms_grouped_keys_group_size
+                );
+            }
+
+            let aws_kms_key_groups = self
+                .aws_kms_grouped_keys
+                .chunks_exact(self.aws_kms_grouped_keys_group_size)
+                .map(|group| group.to_vec())
+                .collect::<Vec<_>>();
+
+            if aws_kms_key_groups.len() < self.aws_kms_key_ids.len() {
+                bail!("Number of AWS KMS key groups ({}) is less than the number of AWS KMS key IDs ({}).", aws_kms_key_groups.len(), self.aws_kms_key_ids.len());
+            }
+
+            for group in aws_kms_key_groups.iter() {
                 if num_signers.is_some_and(|num_signers| num_signers > group.len()) {
                     bail!("Number of AWS KMS key IDs in group is less than the number of builders. Need {} keys, found {}", num_signers.unwrap(), group.len());
                 }
@@ -235,7 +251,7 @@ impl SignerArgs {
 
             self.aws_kms_key_ids
                 .iter()
-                .zip(self.aws_kms_key_groups.iter())
+                .zip(aws_kms_key_groups.iter())
                 .map(|(key_id, group)| {
                     (
                         key_id.to_string(),
