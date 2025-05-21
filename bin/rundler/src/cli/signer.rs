@@ -55,14 +55,6 @@ pub struct SignerArgs {
     )]
     pub aws_kms_grouped_keys: Vec<String>,
 
-    #[arg(
-        long = "signer.aws_kms_grouped_keys_group_size",
-        name = "signer.aws_kms_grouped_keys_group_size",
-        env = "SIGNER_AWS_KMS_GROUPED_KEYS_GROUP_SIZE",
-        default_value = "0"
-    )]
-    pub aws_kms_grouped_keys_group_size: usize,
-
     /// Whether to enable KMS funding
     #[arg(
         long = "signer.enable_kms_funding",
@@ -221,27 +213,21 @@ impl SignerArgs {
         };
 
         let subkeys_by_key_id = if !self.aws_kms_grouped_keys.is_empty() {
-            if self.aws_kms_grouped_keys_group_size == 0 {
-                bail!("AWS KMS grouped key group size is not set. Please set signer.aws_kms_grouped_keys_group_size");
+            let num_signers =
+                num_signers.context("Num signers must be set when using AWS KMS grouped keys")?;
+            if num_signers == 0 {
+                bail!("Number of signers must be greater than 0");
             }
 
-            if self.aws_kms_grouped_keys.len() / self.aws_kms_grouped_keys_group_size
-                < self.aws_kms_key_ids.len()
-            {
-                bail!("Number of AWS KMS key groups ({} / {}) is less than the number of AWS KMS key IDs ({}).", self.aws_kms_grouped_keys.len(), self.aws_kms_grouped_keys_group_size, self.aws_kms_key_ids.len());
+            if self.aws_kms_grouped_keys.len() / num_signers < self.aws_kms_key_ids.len() {
+                bail!("Number of AWS KMS key groups ({} / {}) is less than the number of AWS KMS key IDs ({}).", self.aws_kms_grouped_keys.len(), num_signers, self.aws_kms_key_ids.len());
             }
 
             let aws_kms_key_groups = self
                 .aws_kms_grouped_keys
-                .chunks_exact(self.aws_kms_grouped_keys_group_size)
+                .chunks_exact(num_signers)
                 .map(|group| group.to_vec())
                 .collect::<Vec<_>>();
-
-            for group in aws_kms_key_groups.iter() {
-                if num_signers.is_some_and(|num_signers| num_signers > group.len()) {
-                    bail!("Number of AWS KMS key IDs in group is less than the number of builders. Need {} keys, found {}", num_signers.unwrap(), group.len());
-                }
-            }
 
             self.aws_kms_key_ids
                 .iter()
