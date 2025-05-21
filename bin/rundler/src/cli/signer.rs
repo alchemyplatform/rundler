@@ -225,12 +225,10 @@ impl SignerArgs {
                 bail!("AWS KMS grouped key group size is not set. Please set signer.aws_kms_grouped_keys_group_size");
             }
 
-            if self.aws_kms_grouped_keys.len() % self.aws_kms_grouped_keys_group_size != 0 {
-                bail!(
-                    "Number of AWS KMS grouped keys ({}) is not divisible by the group size ({}).",
-                    self.aws_kms_grouped_keys.len(),
-                    self.aws_kms_grouped_keys_group_size
-                );
+            if self.aws_kms_grouped_keys.len() / self.aws_kms_grouped_keys_group_size
+                < self.aws_kms_key_ids.len()
+            {
+                bail!("Number of AWS KMS key groups ({} / {}) is less than the number of AWS KMS key IDs ({}).", self.aws_kms_grouped_keys.len(), self.aws_kms_grouped_keys_group_size, self.aws_kms_key_ids.len());
             }
 
             let aws_kms_key_groups = self
@@ -238,10 +236,6 @@ impl SignerArgs {
                 .chunks_exact(self.aws_kms_grouped_keys_group_size)
                 .map(|group| group.to_vec())
                 .collect::<Vec<_>>();
-
-            if aws_kms_key_groups.len() < self.aws_kms_key_ids.len() {
-                bail!("Number of AWS KMS key groups ({}) is less than the number of AWS KMS key IDs ({}).", aws_kms_key_groups.len(), self.aws_kms_key_ids.len());
-            }
 
             for group in aws_kms_key_groups.iter() {
                 if num_signers.is_some_and(|num_signers| num_signers > group.len()) {
