@@ -1984,7 +1984,7 @@ mod tests {
                 .is_err());
         }
         {
-            config.support_7702 = true;
+            config.chain_spec.eip7702_enabled = true;
             let pool = create_pool_with_config(config.clone(), vec![op.clone()]);
             assert!(pool
                 .add_operation(OperationOrigin::Local, op.clone().op, default_perms())
@@ -1992,7 +1992,7 @@ mod tests {
                 .is_err());
         }
         {
-            config.support_7702 = true;
+            config.chain_spec.eip7702_enabled = true;
             let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
             let signer: PrivateKeySigner = PrivateKeySigner::from_str(private_key).unwrap();
             let authorization = alloy_eips::eip7702::Authorization {
@@ -2315,7 +2315,6 @@ mod tests {
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
-            support_7702: false,
         }
     }
 

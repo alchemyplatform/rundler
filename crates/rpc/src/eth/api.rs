@@ -80,6 +80,13 @@ where
                 ));
         }
 
+        if op.authorization_tuple().is_some() && !self.chain_spec.supports_eip7702(entry_point) {
+            return Err(EthRpcError::InvalidParams(format!(
+                "EIP-7702 is not supported on entry point {:?}",
+                entry_point
+            )));
+        }
+
         self.router.check_and_get_route(&entry_point, &op)?;
 
         self.pool
@@ -101,6 +108,13 @@ where
             return Err(EthRpcError::InvalidParams(format!(
                 "User operation in bundle size {} exceeds max transaction size {}",
                 bundle_size, self.chain_spec.max_transaction_size_bytes
+            )));
+        }
+
+        if op.eip7702_auth_address().is_some() && !self.chain_spec.supports_eip7702(entry_point) {
+            return Err(EthRpcError::InvalidParams(format!(
+                "EIP-7702 is not supported on entry point {:?}",
+                entry_point
             )));
         }
 

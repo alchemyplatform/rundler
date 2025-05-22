@@ -47,7 +47,6 @@ pub(crate) struct PoolInnerConfig {
     throttled_entity_live_blocks: u64,
     da_gas_tracking_enabled: bool,
     max_time_in_pool: Option<Duration>,
-    support_7702: bool,
     verification_gas_limit_efficiency_reject_threshold: f64,
 }
 
@@ -62,7 +61,6 @@ impl From<PoolConfig> for PoolInnerConfig {
             throttled_entity_live_blocks: config.throttled_entity_live_blocks,
             da_gas_tracking_enabled: config.da_gas_tracking_enabled,
             max_time_in_pool: config.max_time_in_pool,
-            support_7702: config.support_7702,
             verification_gas_limit_efficiency_reject_threshold: config
                 .verification_gas_limit_efficiency_reject_threshold,
         }
@@ -450,13 +448,15 @@ where
 
     pub(crate) fn check_eip7702(&self, uo: &UserOperationVariant) -> MempoolResult<()> {
         if let Some(auth) = uo.authorization_tuple() {
-            if self.config.support_7702 {
+            if self
+                .config
+                .chain_spec
+                .supports_eip7702(self.config.entry_point)
+            {
                 auth.validate(uo.sender())?;
                 Ok(())
             } else {
-                Err(MempoolError::EIPNotSupported(
-                    "EIP 7702 is not supported".to_string(),
-                ))
+                Err(MempoolError::EIPNotSupported("EIP-7702".to_string()))
             }
         } else {
             Ok(())
@@ -1638,7 +1638,6 @@ mod tests {
             throttled_entity_live_blocks: 10,
             da_gas_tracking_enabled: false,
             max_time_in_pool: None,
-            support_7702: false,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
         }
     }
