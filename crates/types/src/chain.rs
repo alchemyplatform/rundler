@@ -86,10 +86,16 @@ pub struct ChainSpec {
     pub include_da_gas_in_gas_limit: bool,
 
     /*
-     * Fee estimation
+     * EIPS
      */
     /// true if eip1559 is enabled, and thus priority fees are used
     pub eip1559_enabled: bool,
+    /// true if eip7702 is enabled, and thus the 7702 priority fee mechanism is used
+    pub eip7702_enabled: bool,
+
+    /*
+     * Fee estimation
+     */
     /// Type of oracle for estimating priority fees
     pub priority_fee_oracle_type: PriorityFeeOracleType,
     /// Minimum max priority fee per gas for the network
@@ -173,6 +179,7 @@ impl Default for ChainSpec {
             calldata_floor_zero_byte_gas: 0,
             calldata_floor_non_zero_byte_gas: 0,
             eip1559_enabled: true,
+            eip7702_enabled: false,
             da_pre_verification_gas: false,
             da_gas_oracle_type: DAGasOracleType::default(),
             da_gas_oracle_contract_address: Address::ZERO,
@@ -291,6 +298,11 @@ impl ChainSpec {
     /// Get all known proxy addresses
     pub fn known_proxy_addresses(&self) -> impl Iterator<Item = &Address> {
         self.submission_proxies.contracts.keys()
+    }
+
+    /// Check if the chain supports EIP-7702
+    pub fn supports_eip7702(&self, entry_point: Address) -> bool {
+        self.eip7702_enabled || entry_point == self.entry_point_address_v0_7
     }
 }
 

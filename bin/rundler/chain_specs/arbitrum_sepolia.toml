@@ -2,3 +2,4 @@ base = "arbitrum"
 
 name = "Arbitrum Sepolia"
 id = 421614
+eip7702_enabled = true
