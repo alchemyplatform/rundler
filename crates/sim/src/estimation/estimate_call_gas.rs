@@ -162,7 +162,7 @@ where
                         .ok()
                         .context("gasEstimate return overflow")?);
                 }
-                CallGasEstimationProxyErrors::EstimateCallGasRevertAtMax(revert) => {
+                CallGasEstimationProxyErrors::EstimateGasRevertAtMax(revert) => {
                     let error = if let Ok(revert) = Revert::abi_decode(&revert.revertData, false) {
                         GasEstimationError::RevertInCallWithMessage(revert.reason)
                     } else {
@@ -170,7 +170,7 @@ where
                     };
                     return Err(error);
                 }
-                CallGasEstimationProxyErrors::EstimateCallGasContinuation(continuation) => {
+                CallGasEstimationProxyErrors::EstimateGasContinuation(continuation) => {
                     let ret_min_gas = continuation
                         .minGas
                         .try_into()

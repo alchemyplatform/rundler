@@ -4,7 +4,7 @@ pragma solidity ^0.8.13;
 import "openzeppelin-contracts-versions/v5_0/contracts/proxy/Proxy.sol";
 import "openzeppelin-contracts-versions/v5_0/contracts/utils/math/Math.sol";
 
-import "../utils/CallGasEstimationProxyTypes.sol";
+import "../utils/EstimationTypes.sol";
 
 /**
  * Contract used in `eth_call`'s "overrides" parameter in order to estimate the
@@ -37,7 +37,13 @@ import "../utils/CallGasEstimationProxyTypes.sol";
 contract CallGasEstimationProxy is Proxy {
     using Math for uint256;
 
-    function _implementation() internal pure virtual override returns (address) {
+    function _implementation()
+        internal
+        pure
+        virtual
+        override
+        returns (address)
+    {
         return IMPLEMENTATION_ADDRESS_MARKER;
     }
 
@@ -80,50 +86,78 @@ contract CallGasEstimationProxy is Proxy {
         uint256 scaledGuess = 0;
         if (!args.isContinuation) {
             // Make one call at full gas to make sure success is even possible.
-            (bool success, uint256 gasUsed, bytes memory revertData) =
-                innerCall(args.sender, args.callData, args.maxGas);
+            (
+                bool success,
+                uint256 gasUsed,
+                bytes memory revertData
+            ) = _innerCall(args.sender, args.callData, args.maxGas);
             if (!success) {
-                revert EstimateCallGasRevertAtMax(revertData);
+                revert EstimateGasRevertAtMax(revertData);
             }
             scaledGuess = (gasUsed * 2) / args.rounding;
         } else {
-            scaledGuess = chooseGuess(scaledMaxFailureGas, scaledMinSuccessGas, scaledGasUsedInSuccess);
+            scaledGuess = _chooseGuess(
+                scaledMaxFailureGas,
+                scaledMinSuccessGas,
+                scaledGasUsedInSuccess
+            );
         }
         uint256 numRounds = 0;
         while (scaledMaxFailureGas + 1 < scaledMinSuccessGas) {
             numRounds++;
             uint256 guess = scaledGuess * args.rounding;
-            if (!isEnoughGasForGuess(guess)) {
+            if (!_isEnoughGasForGuess(guess)) {
                 uint256 nextMin = scaledMaxFailureGas * args.rounding;
                 uint256 nextMax = scaledMinSuccessGas * args.rounding;
-                revert EstimateCallGasContinuation(nextMin, nextMax, numRounds);
+                revert EstimateGasContinuation(nextMin, nextMax, numRounds);
             }
-            (bool success, uint256 gasUsed,) = innerCall(args.sender, args.callData, guess);
+            (bool success, uint256 gasUsed, ) = _innerCall(
+                args.sender,
+                args.callData,
+                guess
+            );
             if (success) {
-                scaledGasUsedInSuccess = scaledGasUsedInSuccess.min(gasUsed.ceilDiv(args.rounding));
+                scaledGasUsedInSuccess = scaledGasUsedInSuccess.min(
+                    gasUsed.ceilDiv(args.rounding)
+                );
                 scaledMinSuccessGas = scaledGuess;
             } else {
                 scaledMaxFailureGas = scaledGuess;
             }
 
-            scaledGuess = chooseGuess(scaledMaxFailureGas, scaledMinSuccessGas, scaledGasUsedInSuccess);
+            scaledGuess = _chooseGuess(
+                scaledMaxFailureGas,
+                scaledMinSuccessGas,
+                scaledGasUsedInSuccess
+            );
         }
-        revert EstimateCallGasResult(args.maxGas.min(scaledMinSuccessGas * args.rounding), numRounds);
+        revert EstimateCallGasResult(
+            args.maxGas.min(scaledMinSuccessGas * args.rounding),
+            numRounds
+        );
     }
 
     /**
      * A helper function for testing execution at a given gas limit.
      */
-    function testCallGas(address sender, bytes calldata callData, uint256 callGasLimit) external {
-        (bool success, uint256 gasUsed, bytes memory revertData) = innerCall(sender, callData, callGasLimit);
+    function testCallGas(
+        address sender,
+        bytes calldata callData,
+        uint256 callGasLimit
+    ) external {
+        (bool success, uint256 gasUsed, bytes memory revertData) = _innerCall(
+            sender,
+            callData,
+            callGasLimit
+        );
         revert TestCallGasResult(success, gasUsed, revertData);
     }
 
-    function chooseGuess(uint256 highestFailureGas, uint256 lowestSuccessGas, uint256 lowestGasUsedInSuccess)
-        private
-        pure
-        returns (uint256)
-    {
+    function _chooseGuess(
+        uint256 highestFailureGas,
+        uint256 lowestSuccessGas,
+        uint256 lowestGasUsedInSuccess
+    ) private pure returns (uint256) {
         uint256 average = (highestFailureGas + lowestSuccessGas) / 2;
         if (lowestGasUsedInSuccess <= highestFailureGas) {
             // Handle pathological cases where the contract requires a lot of
@@ -135,7 +169,7 @@ contract CallGasEstimationProxy is Proxy {
         }
     }
 
-    function isEnoughGasForGuess(uint256 guess) private view returns (bool) {
+    function _isEnoughGasForGuess(uint256 guess) private view returns (bool) {
         // Because of the 1/64 rule and the fact that we need two levels of
         // calls, we need
         //
@@ -148,23 +182,31 @@ contract CallGasEstimationProxy is Proxy {
 
     error _InnerCallResult(bool success, uint256 gasUsed, bytes revertData);
 
-    function innerCall(address sender, bytes calldata callData, uint256 gas)
-        private
-        returns (bool success, uint256 gasUsed, bytes memory revertData)
-    {
-        try this._innerCall(sender, callData, gas) {
-            // Should never happen. _innerCall should always revert.
+    function _innerCall(
+        address sender,
+        bytes calldata callData,
+        uint256 gas
+    ) private returns (bool success, uint256 gasUsed, bytes memory revertData) {
+        try this.innerCall(sender, callData, gas) {
+            // Should never happen. innerCall should always revert.
             revert();
         } catch (bytes memory innerCallRevertData) {
             require(bytes4(innerCallRevertData) == _InnerCallResult.selector);
             assembly {
                 innerCallRevertData := add(innerCallRevertData, 0x04)
             }
-            (success, gasUsed, revertData) = abi.decode(innerCallRevertData, (bool, uint256, bytes));
+            (success, gasUsed, revertData) = abi.decode(
+                innerCallRevertData,
+                (bool, uint256, bytes)
+            );
         }
     }
 
-    function _innerCall(address sender, bytes calldata callData, uint256 gas) external {
+    function innerCall(
+        address sender,
+        bytes calldata callData,
+        uint256 gas
+    ) external {
         uint256 preGas = gasleft();
         (bool success, bytes memory data) = sender.call{gas: gas}(callData);
         uint256 gasUsed = preGas - gasleft();
