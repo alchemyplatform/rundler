@@ -661,7 +661,6 @@ message SenderAddressUsedAsAlternateEntity {
 
 message DiscardedOnInsertError {}
 
-
 message Invalid7702AuthSignature {
   string reason = 1;
 }
