@@ -11,11 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
+use std::{future::Future, pin::Pin};
+
 use alloy_primitives::{Address, Bytes};
+use alloy_sol_types::{Revert, SolError, SolInterface};
+use anyhow::{anyhow, Context};
 use metrics::Histogram;
 use metrics_derive::Metrics;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
+use rundler_contracts::common::EstimationTypes::EstimationTypesErrors;
 use rundler_provider::{ProviderError, StateOverride};
 use rundler_types::{GasEstimate, ValidationRevert};
 
@@ -106,6 +111,12 @@ pub struct Settings {
     pub verification_estimation_gas_fee: u128,
     /// The threshold for the verification gas limit efficiency reject
     pub verification_gas_limit_efficiency_reject_threshold: f64,
+    /// The allowed error percentage for the verification gas estimation
+    pub verification_gas_allowed_error_pct: u128,
+    /// The allowed error percentage for the call gas estimation
+    pub call_gas_allowed_error_pct: u128,
+    /// The maximum number of rounds to run for gas estimation
+    pub max_gas_estimation_rounds: u32,
 }
 
 impl Settings {
@@ -134,4 +145,89 @@ struct Metrics {
     cgl_estimate_ms: Histogram,
     #[metric(describe = "the distribution of pvgl estimate time.")]
     pvgl_estimate_ms: Histogram,
+}
+
+async fn run_binary_search<F>(
+    round_fn: F,
+    max_gas: u128,
+    max_rounds: u32,
+) -> Result<(u128, u32), GasEstimationError>
+where
+    F: Fn(
+        u128, // min gas
+        u128, // max gas
+        bool, // is continuation
+    ) -> Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>,
+{
+    let mut min_gas = 0;
+    let mut max_gas = max_gas;
+    let mut num_rounds = 0_u32;
+    let mut is_continuation = false;
+
+    for _ in 0..max_rounds {
+        let revert_data = round_fn(min_gas, max_gas, is_continuation).await?;
+
+        let decoded = EstimationTypesErrors::abi_decode(&revert_data, false)
+            .context("should decode revert data")?;
+        match decoded {
+            EstimationTypesErrors::EstimateGasResult(result) => {
+                let ret_num_rounds: u32 = result
+                    .numRounds
+                    .try_into()
+                    .context("num rounds return overflow")?;
+
+                num_rounds += ret_num_rounds;
+                return Ok((
+                    result
+                        .gas
+                        .try_into()
+                        .map_err(|_| GasEstimationError::GasUsedTooLarge)?,
+                    num_rounds,
+                ));
+            }
+            EstimationTypesErrors::EstimateGasRevertAtMax(revert) => {
+                let error = if let Ok(revert) = Revert::abi_decode(&revert.revertData, false) {
+                    GasEstimationError::RevertInCallWithMessage(revert.reason)
+                } else {
+                    GasEstimationError::RevertInCallWithBytes(revert.revertData)
+                };
+                return Err(error);
+            }
+            EstimationTypesErrors::EstimateGasContinuation(continuation) => {
+                let ret_min_gas = continuation
+                    .minGas
+                    .try_into()
+                    .context("min gas return overflow")?;
+                let ret_max_gas = continuation
+                    .maxGas
+                    .try_into()
+                    .context("max gas return overflow")?;
+                let ret_num_rounds: u32 = continuation
+                    .numRounds
+                    .try_into()
+                    .context("num rounds return overflow")?;
+
+                if is_continuation && ret_min_gas <= min_gas && ret_max_gas >= max_gas {
+                    // This should never happen, but if it does, bail so we
+                    // don't end up in an infinite loop!
+                    Err(anyhow!(
+                        "estimateCallGas should make progress each time it is called"
+                    ))?;
+                }
+                is_continuation = true;
+                min_gas = min_gas.max(ret_min_gas);
+                max_gas = max_gas.min(ret_max_gas);
+                num_rounds += ret_num_rounds;
+            }
+            EstimationTypesErrors::TestCallGasResult(_) => {
+                Err(anyhow!(
+                    "estimateCallGas revert should be a Result or a Continuation"
+                ))?;
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "gas estimation failed to converge after {max_rounds} rounds"
+    ))?
 }

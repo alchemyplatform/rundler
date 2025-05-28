@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 pragma solidity ^0.8.12;
 
-import "account-abstraction/v0_7/interfaces/IStakeManager.sol";
+import "@account-abstraction/interfaces/IStakeManager.sol";
 
 contract GetBalances {
     error GetBalancesResult(uint256[] balances);
@@ -10,7 +10,10 @@ contract GetBalances {
         revert GetBalancesResult(getBalancesHelper(stakeManager, addresses));
     }
 
-    function getBalancesHelper(address stakeManager, address[] memory addresses) public view returns (uint256[] memory) {
+    function getBalancesHelper(
+        address stakeManager,
+        address[] memory addresses
+    ) public view returns (uint256[] memory) {
         uint256[] memory balances = new uint256[](addresses.length);
         IStakeManager istakeManager = IStakeManager(stakeManager);
 
