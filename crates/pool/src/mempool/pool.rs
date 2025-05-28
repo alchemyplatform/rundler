@@ -453,7 +453,8 @@ where
                 .chain_spec
                 .supports_eip7702(self.config.entry_point)
             {
-                auth.validate(uo.sender())?;
+                auth.validate(uo.sender())
+                    .map_err(|err| MempoolError::Invalid7702AuthSignature(err.to_string()))?;
                 Ok(())
             } else {
                 Err(MempoolError::EIPNotSupported("EIP-7702".to_string()))

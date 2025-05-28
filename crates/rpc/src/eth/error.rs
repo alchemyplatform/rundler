@@ -315,6 +315,7 @@ impl From<MempoolError> for EthRpcError {
             | MempoolError::VerificationGasLimitEfficiencyTooLow(_, _)
             | MempoolError::ExecutionGasLimitEfficiencyTooLow(_, _)
             | MempoolError::TooManyExpectedStorageSlots(_, _)
+            | MempoolError::Invalid7702AuthSignature(_)
             | MempoolError::EIPNotSupported(_) => Self::InvalidParams(value.to_string()),
         }
     }

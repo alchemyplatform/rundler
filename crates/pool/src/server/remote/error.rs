@@ -28,20 +28,20 @@ use super::protos::{
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
     DiscardedOnInsertError, Entity, EntityThrottledError, EntityType, EntryPointRevert,
     ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode, FactoryCalledCreate2Twice,
-    FactoryIsNotContract, FactoryMustBeEmpty, InvalidAccountSignature, InvalidPaymasterSignature,
-    InvalidSignature, InvalidStorageAccess, InvalidTimeRange, MaxFeePerGasTooLow,
-    MaxOperationsReachedError, MaxPriorityFeePerGasTooLow, MempoolError as ProtoMempoolError,
-    MultipleRolesViolation, NotStaked, OperationAlreadyKnownError, OperationDropTooSoon,
-    OperationRevert, OutOfGas, OverMaxCost, PanicRevert, PaymasterBalanceTooLow,
-    PaymasterDepositTooLow, PaymasterIsNotContract, PreVerificationGasTooLow,
-    PrecheckViolationError as ProtoPrecheckViolationError, ReplacementUnderpricedError,
-    SenderAddressUsedAsAlternateEntity, SenderFundsTooLow, SenderIsNotContractAndNoInitCode,
-    SimulationViolationError as ProtoSimulationViolationError, TooManyExpectedStorageSlots,
-    TotalGasLimitTooHigh, UnintendedRevert, UnintendedRevertWithMessage, UnknownEntryPointError,
-    UnknownRevert, UnstakedPaymasterContext, UseUnsupportedEip, UsedForbiddenOpcode,
-    UsedForbiddenPrecompile, ValidationRevert as ProtoValidationRevert,
-    VerificationGasLimitBufferTooLow, VerificationGasLimitEfficiencyTooLow,
-    VerificationGasLimitTooHigh, WrongNumberOfPhases,
+    FactoryIsNotContract, FactoryMustBeEmpty, Invalid7702AuthSignature, InvalidAccountSignature,
+    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, InvalidTimeRange,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
+    OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
+    PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
+    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
+    ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
+    SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
+    TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
+    UnintendedRevertWithMessage, UnknownEntryPointError, UnknownRevert, UnstakedPaymasterContext,
+    UseUnsupportedEip, UsedForbiddenOpcode, UsedForbiddenPrecompile,
+    ValidationRevert as ProtoValidationRevert, VerificationGasLimitBufferTooLow,
+    VerificationGasLimitEfficiencyTooLow, VerificationGasLimitTooHigh, WrongNumberOfPhases,
 };
 
 impl TryFrom<ProtoMempoolError> for PoolError {
@@ -140,6 +140,9 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             }
             Some(mempool_error::Error::UseUnsupportedEip(e)) => {
                 MempoolError::EIPNotSupported(e.eip_name)
+            }
+            Some(mempool_error::Error::Invalid7702AuthSignature(e)) => {
+                MempoolError::Invalid7702AuthSignature(e.reason)
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -269,6 +272,11 @@ impl From<MempoolError> for ProtoMempoolError {
                 error: Some(mempool_error::Error::UseUnsupportedEip(UseUnsupportedEip {
                     eip_name: msg,
                 })),
+            },
+            MempoolError::Invalid7702AuthSignature(msg) => ProtoMempoolError {
+                error: Some(mempool_error::Error::Invalid7702AuthSignature(
+                    Invalid7702AuthSignature { reason: msg },
+                )),
             },
         }
     }

@@ -620,6 +620,7 @@ message MempoolError {
     TooManyExpectedStorageSlots too_many_expected_storage_slots = 19;
     UseUnsupportedEIP use_unsupported_eip = 20;
     AggregatorError aggregator = 21;
+    Invalid7702AuthSignature invalid_7702_auth_signature = 22;
   }
 }
 
@@ -660,6 +661,10 @@ message SenderAddressUsedAsAlternateEntity {
 
 message DiscardedOnInsertError {}
 
+
+message Invalid7702AuthSignature {
+  string reason = 1;
+}
 
 message AggregatorError {
   string reason = 1;
