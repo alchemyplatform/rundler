@@ -75,6 +75,9 @@ pub enum MempoolError {
     /// Operation was discarded on inserting due to size limit
     #[error("Operation was discarded on inserting")]
     DiscardedOnInsert,
+    /// Operation 7702 Authorization tuple was signed with the wrong address
+    #[error("Invalid 7702 Auth signature: {0}")]
+    Invalid7702AuthSignature(String),
     /// Paymaster balance too low
     /// Spec rule: EREP-010
     #[error("Paymaster balance too low. Required balance: {0}. Current balance {1}")]
