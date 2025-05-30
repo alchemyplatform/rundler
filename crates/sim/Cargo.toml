@@ -31,7 +31,9 @@ tokio = { workspace = true, features = ["macros"] }
 tracing.workspace = true
 
 [dev-dependencies]
+alloy-json-rpc.workspace = true
 alloy-primitives = { workspace = true, features = ["rand"] }
+alloy-transport.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-types = { workspace = true, features = ["test-utils"] }

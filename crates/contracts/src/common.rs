@@ -11,8 +11,18 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-pub mod common;
-pub mod multicall3;
-pub mod utils;
-pub mod v0_6;
-pub mod v0_7;
+use alloy_sol_macro::sol;
+
+sol!(
+    #[allow(missing_docs)]
+    #[derive(Default, Debug, PartialEq, Eq)]
+    library EstimationTypes {
+        error EstimateGasResult(uint256 gas, uint256 numRounds);
+
+        error EstimateGasContinuation(uint256 minGas, uint256 maxGas, uint256 numRounds);
+
+        error EstimateGasRevertAtMax(bytes revertData);
+
+        error TestCallGasResult(bool success, uint256 gasUsed, bytes revertData);
+    }
+);

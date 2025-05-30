@@ -48,6 +48,7 @@ use std::marker::PhantomData;
 
 pub use alloy_consensus::{ReceiptWithBloom, Transaction as TransactionTrait};
 pub use alloy_json_rpc::{RpcParam, RpcReturn};
+pub use alloy_network::TransactionBuilder;
 pub use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
     BlockHashOrNumber, BlockId, BlockNumberOrTag, FeeHistory, Filter, FilterBlockOption,

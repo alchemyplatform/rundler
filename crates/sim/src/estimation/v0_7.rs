@@ -11,17 +11,22 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{cmp, ops::Add};
+use std::{cmp, ops::Add, time::Instant};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
-use alloy_sol_types::SolInterface;
+use alloy_sol_types::{SolCall, SolInterface};
 use rand::Rng;
 use rundler_contracts::v0_7::{
     CallGasEstimationProxy::{
         estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls, EstimateCallGasArgs,
     },
+    VerificationGasEstimationHelper::{
+        estimatePaymasterVerificationGasCall, estimateVerificationGasCall,
+        EstimateGasArgs as ContractEstimateGasArgs,
+    },
     CALL_GAS_ESTIMATION_PROXY_V0_7_DEPLOYED_BYTECODE,
     ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE,
+    VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE,
 };
 use rundler_provider::{
     AccountOverride, DAGasProvider, EntryPoint, EvmProvider, FeeEstimator, SimulationProvider,
@@ -36,30 +41,35 @@ use rundler_utils::{guard_timer::CustomTimerGuard, math};
 use tokio::join;
 use tracing::instrument;
 
-use super::{estimate_verification_gas::GetOpWithLimitArgs, GasEstimationError, Metrics, Settings};
+use super::{
+    estimate_verification_gas::{EstimateGasArgs, VerificationGasEstimatorSpecialization},
+    GasEstimationError, Metrics, Settings,
+};
 use crate::{
     gas, CallGasEstimator, CallGasEstimatorImpl, CallGasEstimatorSpecialization,
     VerificationGasEstimator, VerificationGasEstimatorImpl, MIN_CALL_GAS_LIMIT,
 };
 
 /// Gas estimator for entry point v0.7
-pub struct GasEstimator<P, E, VGE, CGE, F> {
+pub struct GasEstimator<P, E, VGE, PVGE, CGE, F> {
     chain_spec: ChainSpec,
     provider: P,
     entry_point: E,
     settings: Settings,
     fee_estimator: F,
     verification_gas_estimator: VGE,
+    paymaster_verification_gas_estimator: PVGE,
     call_gas_estimator: CGE,
     metrics: Metrics,
 }
 
 #[async_trait::async_trait]
-impl<P, E, VGE, CGE, F> super::GasEstimator for GasEstimator<P, E, VGE, CGE, F>
+impl<P, E, VGE, PVGE, CGE, F> super::GasEstimator for GasEstimator<P, E, VGE, PVGE, CGE, F>
 where
     P: EvmProvider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + DAGasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
+    PVGE: VerificationGasEstimator<UO = UserOperation>,
     CGE: CallGasEstimator<UO = UserOperation>,
     F: FeeEstimator,
 {
@@ -95,9 +105,6 @@ where
             .await
             .map_err(anyhow::Error::from)?;
 
-        let (pre_verification_gas, da_gas) =
-            self.estimate_pre_verification_gas(&op, block_hash).await?;
-
         let mut full_op = op
             .clone()
             .into_user_operation_builder(
@@ -106,7 +113,7 @@ where
                 settings.max_verification_gas,
                 settings.max_paymaster_verification_gas,
             )
-            .pre_verification_gas(pre_verification_gas)
+            .pre_verification_gas(0)
             .build();
         if let Some(agg) = agg {
             full_op = full_op.transform_for_aggregator(
@@ -116,6 +123,8 @@ where
                 agg.dummy_uo_signature().clone(),
             );
         }
+
+        let pre_verification_gas_future = self.estimate_pre_verification_gas(&op, block_hash);
 
         let verification_gas_future =
             self.estimate_verification_gas(&op, &full_op, block_hash, state_override.clone());
@@ -130,15 +139,22 @@ where
             self.estimate_call_gas(&op, full_op.clone(), block_hash, state_override);
 
         // Not try_join! because then the output is nondeterministic if multiple calls fail.
-        let (verification_gas_limit, paymaster_verification_gas_limit, call_gas_limit) = join!(
+        let (
+            pvg_result,
+            verification_gas_limit_result,
+            paymaster_verification_gas_limit_result,
+            call_gas_limit_result,
+        ) = join!(
+            pre_verification_gas_future,
             verification_gas_future,
             paymaster_verification_gas_future,
             call_gas_future
         );
 
-        let verification_gas_limit = verification_gas_limit?;
-        let paymaster_verification_gas_limit = paymaster_verification_gas_limit?;
-        let call_gas_limit = call_gas_limit?;
+        let (pre_verification_gas, da_gas) = pvg_result?;
+        let verification_gas_limit = verification_gas_limit_result?;
+        let paymaster_verification_gas_limit = paymaster_verification_gas_limit_result?;
+        let call_gas_limit = call_gas_limit_result?;
 
         // check the total gas limit
         let op_with_gas = UserOperationBuilder::from_uo(full_op, &self.chain_spec)
@@ -191,7 +207,8 @@ impl<P, E, F>
     GasEstimator<
         P,
         E,
-        VerificationGasEstimatorImpl<P, E>,
+        VerificationGasEstimatorImpl<VerificationGasEstimatorSpecializationV07, P>,
+        VerificationGasEstimatorImpl<PaymasterVerificationGasEstimatorSpecializationV07, P>,
         CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV07>,
         F,
     >
@@ -217,10 +234,22 @@ where
 
         let verification_gas_estimator = VerificationGasEstimatorImpl::new(
             chain_spec.clone(),
-            provider.clone(),
-            entry_point.clone(),
             settings,
+            provider.clone(),
+            VerificationGasEstimatorSpecializationV07 {
+                entry_point: *entry_point.address(),
+            },
         );
+
+        let paymaster_verification_gas_estimator = VerificationGasEstimatorImpl::new(
+            chain_spec.clone(),
+            settings,
+            provider.clone(),
+            PaymasterVerificationGasEstimatorSpecializationV07 {
+                entry_point: *entry_point.address(),
+            },
+        );
+
         let call_gas_estimator = CallGasEstimatorImpl::new(
             entry_point.clone(),
             settings,
@@ -235,17 +264,19 @@ where
             settings,
             fee_estimator,
             verification_gas_estimator,
+            paymaster_verification_gas_estimator,
             call_gas_estimator,
             metrics: Metrics::default(),
         }
     }
 }
 
-impl<P, E, VGE, CGE, F> GasEstimator<P, E, VGE, CGE, F>
+impl<P, E, VGE, PVGE, CGE, F> GasEstimator<P, E, VGE, PVGE, CGE, F>
 where
     P: EvmProvider,
     E: EntryPoint + SimulationProvider<UO = UserOperation> + DAGasProvider<UO = UserOperation>,
     VGE: VerificationGasEstimator<UO = UserOperation>,
+    PVGE: VerificationGasEstimator<UO = UserOperation>,
     CGE: CallGasEstimator<UO = UserOperation>,
     F: FeeEstimator,
 {
@@ -307,27 +338,11 @@ where
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.vgl_estimate_ms.clone());
-
-        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
-            let GetOpWithLimitArgs { gas, fee } = args;
-            // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
-            UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .max_fee_per_gas(fee)
-                .max_priority_fee_per_gas(fee)
-                .verification_gas_limit(gas)
-                .call_gas_limit(0)
-                .build()
-        };
+        let now = Instant::now();
 
         let verification_gas_limit = self
             .verification_gas_estimator
-            .estimate_verification_gas(
-                full_op,
-                block_hash,
-                state_override,
-                self.settings.max_verification_gas,
-                get_op_with_limit,
-            )
+            .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
 
         let verification_gas_limit = math::increase_by_percent(
@@ -335,6 +350,12 @@ where
             super::VERIFICATION_GAS_BUFFER_PERCENT,
         )
         .min(self.settings.max_verification_gas);
+
+        tracing::debug!(
+            "verification_gas_limit: {} took {:?}ms",
+            verification_gas_limit,
+            now.elapsed().as_millis()
+        );
 
         Ok(verification_gas_limit)
     }
@@ -359,27 +380,11 @@ where
         }
 
         let _timer = CustomTimerGuard::new(self.metrics.pvgl_estimate_ms.clone());
-
-        let get_op_with_limit = |op: UserOperation, args: GetOpWithLimitArgs| {
-            let GetOpWithLimitArgs { gas, fee } = args;
-            // set call gas to 0 to avoid simulating the call, keep paymasterPostOpGasLimit as is because it is often checked during verification
-            UserOperationBuilder::from_uo(op, &self.chain_spec)
-                .max_fee_per_gas(fee)
-                .max_priority_fee_per_gas(fee)
-                .paymaster_verification_gas_limit(gas)
-                .call_gas_limit(0)
-                .build()
-        };
+        let now = Instant::now();
 
         let paymaster_verification_gas_limit = self
-            .verification_gas_estimator
-            .estimate_verification_gas(
-                full_op,
-                block_hash,
-                state_override,
-                self.settings.max_paymaster_verification_gas,
-                get_op_with_limit,
-            )
+            .paymaster_verification_gas_estimator
+            .estimate_verification_gas(full_op, block_hash, state_override)
             .await?;
 
         let paymaster_verification_gas_limit = math::increase_by_percent(
@@ -387,6 +392,12 @@ where
             super::VERIFICATION_GAS_BUFFER_PERCENT,
         )
         .min(self.settings.max_verification_gas);
+
+        tracing::debug!(
+            "paymaster_verification_gas_limit: {} took {:?}ms",
+            paymaster_verification_gas_limit,
+            now.elapsed().as_millis()
+        );
 
         Ok(paymaster_verification_gas_limit)
     }
@@ -471,7 +482,7 @@ where
 
 /// Implementation of functions that specialize the call gas estimator to the
 /// v0.7 entry point.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallGasEstimatorSpecializationV07 {
     chain_spec: ChainSpec,
 }
@@ -519,7 +530,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
         callless_op: Self::UO,
         min_gas: u128,
         max_gas: u128,
-        rounding: u128,
+        allowed_error_pct: u128,
         is_continuation: bool,
     ) -> Bytes {
         let call = CallGasEstimationProxyCalls::estimateCallGas(estimateCallGasCall {
@@ -527,7 +538,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
                 userOp: callless_op.pack(),
                 minGas: U256::from(min_gas),
                 maxGas: U256::from(max_gas),
-                rounding: U256::from(rounding),
+                allowedErrorPct: U256::from(allowed_error_pct),
                 isContinuation: is_continuation,
             },
         });
@@ -561,14 +572,95 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
     vec.into()
 }
 
+fn construct_verification_args(
+    entry_point: Address,
+    op: UserOperation,
+    args: &EstimateGasArgs,
+) -> ContractEstimateGasArgs {
+    ContractEstimateGasArgs {
+        entryPointSimulations: entry_point,
+        userOp: op.pack(),
+        minGas: U256::from(args.min_gas),
+        maxGas: U256::from(args.max_gas),
+        allowedErrorPct: U256::from(args.allowed_error_pct),
+        isContinuation: args.is_continuation,
+        constantFee: U256::from(args.constant_fee),
+    }
+}
+
+fn add_proxy_to_overrides(
+    entry_point: Address,
+    to_override: Address,
+    state_override: &mut StateOverride,
+) {
+    state_override.insert(
+        to_override,
+        AccountOverride {
+            code: Some(VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE.clone()),
+            ..Default::default()
+        },
+    );
+    state_override.insert(
+        entry_point,
+        AccountOverride {
+            code: Some(ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE.clone()),
+            ..Default::default()
+        },
+    );
+}
+
+/// Specialization for verification gas estimation
+#[derive(Clone)]
+pub struct VerificationGasEstimatorSpecializationV07 {
+    entry_point: Address,
+}
+
+impl VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpecializationV07 {
+    type UO = UserOperation;
+
+    fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
+        add_proxy_to_overrides(self.entry_point, to_override, state_override);
+    }
+
+    fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
+        estimateVerificationGasCall {
+            args: construct_verification_args(self.entry_point, op, args),
+        }
+        .abi_encode()
+        .into()
+    }
+}
+
+/// Specialization for paymaster verification gas estimation
+#[derive(Clone)]
+pub struct PaymasterVerificationGasEstimatorSpecializationV07 {
+    entry_point: Address,
+}
+
+impl VerificationGasEstimatorSpecialization for PaymasterVerificationGasEstimatorSpecializationV07 {
+    type UO = UserOperation;
+
+    fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
+        add_proxy_to_overrides(self.entry_point, to_override, state_override);
+    }
+
+    fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
+        estimatePaymasterVerificationGasCall {
+            args: construct_verification_args(self.entry_point, op, args),
+        }
+        .abi_encode()
+        .into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
     use alloy_primitives::{hex, U256};
     use alloy_sol_types::{Revert, SolCall, SolError};
-    use rundler_contracts::v0_7::{
-        CallGasEstimationProxy::TestCallGasResult, IEntryPointSimulations,
+    use rundler_contracts::{
+        common::EstimationTypes::TestCallGasResult, v0_7::IEntryPointSimulations,
     };
     use rundler_provider::{
         EvmCall, ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
@@ -581,14 +673,22 @@ mod tests {
     };
 
     // Alises for complex types (which also satisfy Clippy)
-    type VerificationGasEstimatorWithMocks =
-        VerificationGasEstimatorImpl<Arc<MockEvmProvider>, Arc<MockEntryPointV0_7>>;
+    type VerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<
+        VerificationGasEstimatorSpecializationV07,
+        Arc<MockEvmProvider>,
+    >;
+    type PaymasterVerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<
+        PaymasterVerificationGasEstimatorSpecializationV07,
+        Arc<MockEvmProvider>,
+    >;
+
     type CallGasEstimatorWithMocks =
         CallGasEstimatorImpl<Arc<MockEntryPointV0_7>, CallGasEstimatorSpecializationV07>;
     type GasEstimatorWithMocks = GasEstimator<
         Arc<MockEvmProvider>,
         Arc<MockEntryPointV0_7>,
         VerificationGasEstimatorWithMocks,
+        PaymasterVerificationGasEstimatorWithMocks,
         CallGasEstimatorWithMocks,
         MockFeeEstimator,
     >;
@@ -653,6 +753,9 @@ mod tests {
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
             verification_estimation_gas_fee: 1_000_000_000_000,
             verification_gas_limit_efficiency_reject_threshold: 0.5,
+            verification_gas_allowed_error_pct: 15,
+            call_gas_allowed_error_pct: 15,
+            max_gas_estimation_rounds: 3,
         };
         let estimator = create_custom_estimator(ChainSpec::default(), provider, entry, settings);
         (estimator, settings)

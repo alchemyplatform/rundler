@@ -1,11 +1,23 @@
+// This file is part of Rundler.
+//
+// Rundler is free software: you can redistribute it and/or modify it under the
+// terms of the GNU Lesser General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later version.
+//
+// Rundler is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+// without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+// See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with Rundler.
+// If not, see https://www.gnu.org/licenses/.
+
+use std::{future::Future, pin::Pin};
+
 use alloy_primitives::{Address, Bytes, B256};
-use alloy_sol_types::{Revert, SolError, SolInterface};
-use anyhow::{anyhow, Context};
+use alloy_sol_types::{Revert, SolError};
+use anyhow::Context;
 use async_trait::async_trait;
-use rundler_contracts::{
-    v0_6::CallGasEstimationProxy::TestCallGasResult,
-    v0_7::CallGasEstimationProxy::CallGasEstimationProxyErrors,
-};
+use rundler_contracts::common::EstimationTypes;
 use rundler_provider::{EntryPoint, SimulationProvider, StateOverride};
 use rundler_types::UserOperation;
 use rundler_utils::authorization_utils;
@@ -13,11 +25,6 @@ use tracing::instrument;
 
 use super::Settings;
 use crate::GasEstimationError;
-/// Gas estimates will be rounded up to the next multiple of this. Increasing
-/// this value reduces the number of rounds of `eth_call` needed in binary
-/// search, e.g. a value of 1024 means ten fewer `eth_call`s needed for each of
-/// verification gas and call gas.
-const GAS_ROUNDING: u64 = 4096;
 
 /// Must match the constant in `CallGasEstimationProxyTypes.sol`.
 #[allow(dead_code)]
@@ -51,7 +58,7 @@ pub trait CallGasEstimator: Send + Sync {
 
 /// Implementation of a call gas estimator which performs a binary search with
 /// the `target` and `targetData` arguments to `simulateHandleOp`
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallGasEstimatorImpl<E, S> {
     entry_point: E,
     settings: Settings,
@@ -79,7 +86,7 @@ pub trait CallGasEstimatorSpecialization: Send + Sync {
         callless_op: Self::UO,
         min_gas: u128,
         max_gas: u128,
-        rounding: u128,
+        allowed_error_pct: u128,
         is_continuation: bool,
     ) -> Bytes;
 
@@ -88,13 +95,12 @@ pub trait CallGasEstimatorSpecialization: Send + Sync {
 }
 
 #[async_trait]
-impl<UO, E, S> CallGasEstimator for CallGasEstimatorImpl<E, S>
+impl<E, S> CallGasEstimator for CallGasEstimatorImpl<E, S>
 where
-    UO: UserOperation,
-    E: EntryPoint + SimulationProvider<UO = UO>,
-    S: CallGasEstimatorSpecialization<UO = UO>,
+    E: EntryPoint + SimulationProvider<UO = S::UO> + Clone + 'static,
+    S: CallGasEstimatorSpecialization + Clone + 'static,
 {
-    type UO = UO;
+    type UO = S::UO;
 
     #[instrument(skip_all)]
     async fn estimate_call_gas(
@@ -103,7 +109,6 @@ where
         block_hash: B256,
         mut state_override: StateOverride,
     ) -> Result<u128, GasEstimationError> {
-        let timer = std::time::Instant::now();
         self.specialization
             .add_proxy_to_overrides(*self.entry_point.address(), &mut state_override);
 
@@ -117,92 +122,33 @@ where
                 eip7702_auth_address,
             );
         }
-        let mut min_gas = 0;
-        let mut max_gas = self.settings.max_bundle_execution_gas;
-        let mut is_continuation = false;
-        let mut num_rounds = 0_u32;
-        loop {
-            let target_call_data = self.specialization.get_estimate_call_gas_calldata(
+
+        let round_fn = |min_gas: u128, max_gas: u128, is_continuation: bool| {
+            Box::pin(self.clone().run_binary_search_round(
                 callless_op.clone(),
+                block_hash,
+                state_override.clone(),
                 min_gas,
                 max_gas,
-                GAS_ROUNDING.into(),
                 is_continuation,
-            );
-            let target_revert_data = self
-                .entry_point
-                .simulate_handle_op(
-                    callless_op.clone(),
-                    *self.entry_point.address(),
-                    target_call_data,
-                    block_hash.into(),
-                    state_override.clone(),
-                )
-                .await?
-                .map_err(GasEstimationError::RevertInValidation)?
-                .target_result;
+            ))
+                as Pin<Box<dyn Future<Output = Result<Bytes, GasEstimationError>> + Send>>
+        };
 
-            let decoded = CallGasEstimationProxyErrors::abi_decode(&target_revert_data, false)
-                .context("should decode revert data")?;
-            match decoded {
-                CallGasEstimationProxyErrors::EstimateCallGasResult(result) => {
-                    let ret_num_rounds: u32 = result
-                        .numRounds
-                        .try_into()
-                        .context("num rounds return overflow")?;
+        let timer = std::time::Instant::now();
+        let (estimate, num_rounds) = super::run_binary_search(
+            round_fn,
+            self.settings.max_bundle_execution_gas,
+            self.settings.max_gas_estimation_rounds,
+        )
+        .await?;
+        tracing::info!(
+            "call gas estimation took {} ms with {} rounds",
+            timer.elapsed().as_millis(),
+            num_rounds
+        );
 
-                    num_rounds += ret_num_rounds;
-                    tracing::debug!(
-                        "binary search for call gas took {num_rounds} rounds, {}ms",
-                        timer.elapsed().as_millis()
-                    );
-                    return Ok(result
-                        .gasEstimate
-                        .try_into()
-                        .ok()
-                        .context("gasEstimate return overflow")?);
-                }
-                CallGasEstimationProxyErrors::EstimateCallGasRevertAtMax(revert) => {
-                    let error = if let Ok(revert) = Revert::abi_decode(&revert.revertData, false) {
-                        GasEstimationError::RevertInCallWithMessage(revert.reason)
-                    } else {
-                        GasEstimationError::RevertInCallWithBytes(revert.revertData)
-                    };
-                    return Err(error);
-                }
-                CallGasEstimationProxyErrors::EstimateCallGasContinuation(continuation) => {
-                    let ret_min_gas = continuation
-                        .minGas
-                        .try_into()
-                        .context("min gas return overflow")?;
-                    let ret_max_gas = continuation
-                        .maxGas
-                        .try_into()
-                        .context("max gas return overflow")?;
-                    let ret_num_rounds: u32 = continuation
-                        .numRounds
-                        .try_into()
-                        .context("num rounds return overflow")?;
-
-                    if is_continuation && ret_min_gas <= min_gas && ret_max_gas >= max_gas {
-                        // This should never happen, but if it does, bail so we
-                        // don't end up in an infinite loop!
-                        Err(anyhow!(
-                            "estimateCallGas should make progress each time it is called"
-                        ))?;
-                    }
-                    is_continuation = true;
-                    min_gas = min_gas.max(ret_min_gas);
-                    max_gas = max_gas.min(ret_max_gas);
-                    num_rounds += ret_num_rounds;
-                }
-                CallGasEstimationProxyErrors::TestCallGasResult(_) => {
-                    Err(anyhow!(
-                        "estimateCallGas revert should be a Result or a Continuation"
-                    ))?;
-                }
-            }
-        }
+        Ok(estimate)
     }
 
     #[instrument(skip_all)]
@@ -234,7 +180,7 @@ where
             .map_err(GasEstimationError::RevertInValidation)?
             .target_result;
 
-        let result = TestCallGasResult::abi_decode(&target_revert_data, false)
+        let result = EstimationTypes::TestCallGasResult::abi_decode(&target_revert_data, false)
             .context("should decode revert data as TestCallGasResult")?;
         if result.success {
             Ok(())
@@ -249,11 +195,10 @@ where
     }
 }
 
-impl<UO, E, S> CallGasEstimatorImpl<E, S>
+impl<E, S> CallGasEstimatorImpl<E, S>
 where
-    UO: UserOperation,
-    E: EntryPoint + SimulationProvider<UO = UO>,
-    S: CallGasEstimatorSpecialization<UO = UO>,
+    E: EntryPoint + SimulationProvider<UO = S::UO>,
+    S: CallGasEstimatorSpecialization,
 {
     /// Creates a new call gas estimator
     pub fn new(entry_point: E, settings: Settings, specialization: S) -> Self {
@@ -262,5 +207,35 @@ where
             settings,
             specialization,
         }
+    }
+
+    async fn run_binary_search_round(
+        self,
+        op: S::UO,
+        block_hash: B256,
+        state_overrides: StateOverride,
+        min_gas: u128,
+        max_gas: u128,
+        is_continuation: bool,
+    ) -> Result<Bytes, GasEstimationError> {
+        let target_call_data = self.specialization.get_estimate_call_gas_calldata(
+            op.clone(),
+            min_gas,
+            max_gas,
+            self.settings.call_gas_allowed_error_pct,
+            is_continuation,
+        );
+        Ok(self
+            .entry_point
+            .simulate_handle_op(
+                op,
+                *self.entry_point.address(),
+                target_call_data,
+                block_hash.into(),
+                state_overrides,
+            )
+            .await?
+            .map_err(GasEstimationError::RevertInValidation)?
+            .target_result)
     }
 }
