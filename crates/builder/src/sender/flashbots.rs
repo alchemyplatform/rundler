@@ -26,6 +26,7 @@ use reqwest::{
 use rundler_provider::TransactionRequest;
 use rundler_signer::SignerLease;
 use rundler_types::GasFees;
+use secrecy::{ExposeSecret, SecretString};
 use serde::{de, Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -83,7 +84,7 @@ impl TransactionSender for FlashbotsTransactionSender {
 
 impl FlashbotsTransactionSender {
     pub(crate) fn new(
-        flashbots_auth_key: String,
+        flashbots_auth_key: SecretString,
         builders: Vec<String>,
         relay_url: String,
     ) -> Result<Self> {
@@ -200,10 +201,13 @@ struct FlashbotsClient {
 }
 
 impl FlashbotsClient {
-    fn new(auth_key: String, builders: Vec<String>, relay_url: String) -> Self {
+    fn new(auth_key: SecretString, builders: Vec<String>, relay_url: String) -> Self {
         Self {
             http_client: Client::new(),
-            signer: auth_key.parse().expect("should parse auth key"),
+            signer: auth_key
+                .expose_secret()
+                .parse()
+                .expect("should parse auth key"),
             builders,
             relay_url,
         }

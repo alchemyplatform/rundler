@@ -20,6 +20,7 @@ use jsonrpsee::{
 use rundler_provider::{EvmProvider, TransactionRequest};
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tonic::async_trait;
@@ -80,7 +81,7 @@ impl<P> PolygonBloxrouteTransactionSender<P>
 where
     P: EvmProvider,
 {
-    pub(crate) fn new(provider: P, auth_header: &str) -> Result<Self> {
+    pub(crate) fn new(provider: P, auth_header: &SecretString) -> Result<Self> {
         Ok(Self {
             provider,
             client: PolygonBloxrouteClient::new(auth_header)?,
@@ -93,9 +94,12 @@ struct PolygonBloxrouteClient {
 }
 
 impl PolygonBloxrouteClient {
-    fn new(auth_header: &str) -> anyhow::Result<Self> {
+    fn new(auth_header: &SecretString) -> anyhow::Result<Self> {
         let mut headers = HeaderMap::new();
-        headers.insert("Authorization", HeaderValue::from_str(auth_header)?);
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(auth_header.expose_secret())?,
+        );
         let client = HttpClientBuilder::default()
             .set_headers(headers)
             .build("https://api.blxrbdn.com:443")?;

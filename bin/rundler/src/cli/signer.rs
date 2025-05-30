@@ -17,6 +17,7 @@ use alloy_primitives::U256;
 use anyhow::{bail, Context};
 use clap::Args;
 use rundler_signer::{FundingSettings, KmsLockingSettings, SigningScheme};
+use secrecy::SecretString;
 
 #[derive(Args, Debug)]
 #[command(next_help_heading = "SIGNER")]
@@ -26,17 +27,19 @@ pub struct SignerArgs {
         long = "signer.private_keys",
         name = "signer.private_keys",
         env = "SIGNER_PRIVATE_KEYS",
-        value_delimiter = ','
+        value_delimiter = ',',
+        value_parser = super::parse_secret
     )]
-    pub private_keys: Vec<String>,
+    pub private_keys: Vec<SecretString>,
 
     /// Mnemonic to use for signing transactions
     #[arg(
         long = "signer.mnemonic",
         name = "signer.mnemonic",
-        env = "SIGNER_MNEMONIC"
+        env = "SIGNER_MNEMONIC",
+        value_parser = super::parse_secret
     )]
-    pub mnemonic: Option<String>,
+    pub mnemonic: Option<SecretString>,
 
     /// AWS KMS key IDs to use for signing transactions
     #[arg(

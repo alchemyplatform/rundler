@@ -28,6 +28,7 @@ rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-task.workspace = true
 rundler-types.workspace = true
+secrecy.workspace = true
 strum.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
