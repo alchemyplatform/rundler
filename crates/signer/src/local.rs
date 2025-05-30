@@ -17,17 +17,19 @@ use alloy_signer_local::{
     coins_bip39::English, LocalSignerError, MnemonicBuilder, PrivateKeySigner,
 };
 use anyhow::Context;
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::{Error, Result};
 
 pub(crate) fn construct_local_wallet_from_private_keys(
-    private_keys: &[String],
+    private_keys: &[SecretString],
     chain_id: u64,
 ) -> Result<EthereumWallet> {
     let mut wallet = EthereumWallet::default();
 
     for private_key in private_keys {
         let signer = private_key
+            .expose_secret()
             .parse::<PrivateKeySigner>()
             .context("failed to parse private key signer")?
             .with_chain_id(Some(chain_id));
@@ -38,12 +40,12 @@ pub(crate) fn construct_local_wallet_from_private_keys(
 }
 
 pub(crate) fn construct_local_wallet_from_mnemonic(
-    mnemonic: String,
+    mnemonic: SecretString,
     chain_id: u64,
     count: usize,
 ) -> Result<EthereumWallet> {
     let mut wallet = EthereumWallet::default();
-    let builder = MnemonicBuilder::<English>::default().phrase(mnemonic);
+    let builder = MnemonicBuilder::<English>::default().phrase(mnemonic.expose_secret());
 
     for i in 0..count {
         let signer = builder

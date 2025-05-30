@@ -25,6 +25,7 @@ pub(crate) use raw::RawTransactionSender;
 use rundler_provider::{EvmProvider, ProviderError, TransactionRequest};
 use rundler_signer::SignerLease;
 use rundler_types::{ExpectedStorage, GasFees};
+use secrecy::SecretString;
 
 #[derive(Debug)]
 pub(crate) struct CancelTxInfo {
@@ -132,7 +133,7 @@ pub struct RawSenderArgs {
 #[derive(Debug, Clone)]
 pub struct BloxrouteSenderArgs {
     /// The auth header to use
-    pub header: String,
+    pub header: SecretString,
 }
 
 /// Flashbots sender arguments
@@ -143,7 +144,7 @@ pub struct FlashbotsSenderArgs {
     /// Flashbots relay URL
     pub relay_url: String,
     /// Auth Key
-    pub auth_key: String,
+    pub auth_key: SecretString,
 }
 
 impl TransactionSenderArgs {

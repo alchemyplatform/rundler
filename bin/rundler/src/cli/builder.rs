@@ -35,6 +35,7 @@ use rundler_types::{
     EntryPointVersion,
 };
 use rundler_utils::emit::{self, WithEntryPoint, EVENT_CHANNEL_CAPACITY};
+use secrecy::SecretString;
 use serde::Deserialize;
 use tokio::sync::broadcast;
 
@@ -133,9 +134,9 @@ pub struct BuilderArgs {
         long = "builder.flashbots_relay_auth_key",
         name = "builder.flashbots_relay_auth_key",
         env = "BUILDER_FLASHBOTS_RELAY_AUTH_KEY",
-        value_delimiter = ','
+        value_parser = super::parse_secret
     )]
-    flashbots_relay_auth_key: Option<String>,
+    flashbots_relay_auth_key: Option<SecretString>,
 
     /// Auth header to use for Bloxroute polygon_private_tx sender
     ///
@@ -143,9 +144,10 @@ pub struct BuilderArgs {
     #[arg(
         long = "builder.bloxroute_auth_header",
         name = "builder.bloxroute_auth_header",
-        env = "BUILDER_BLOXROUTE_AUTH_HEADER"
+        env = "BUILDER_BLOXROUTE_AUTH_HEADER",
+        value_parser = super::parse_secret
     )]
-    bloxroute_auth_header: Option<String>,
+    bloxroute_auth_header: Option<SecretString>,
 
     /// After submitting a bundle transaction, the maximum number of blocks to
     /// wait for that transaction to mine before we try resending with higher

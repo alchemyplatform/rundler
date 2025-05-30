@@ -55,6 +55,7 @@ use rundler_types::{
     v0_7::UserOperation as UserOperationV0_7,
     PriorityFeeMode,
 };
+use secrecy::SecretString;
 
 /// Main entry point for the CLI
 ///
@@ -489,6 +490,11 @@ pub struct CommonArgs {
         value_parser = ValueParser::new(parse_key_val)
     )]
     pub aggregator_options: Vec<(String, String)>,
+}
+
+/// Converts a &str into a SecretString
+pub(crate) fn parse_secret(s: &str) -> Result<SecretString, String> {
+    Ok(s.into())
 }
 
 fn parse_key_val(s: &str) -> Result<(String, String), anyhow::Error> {
