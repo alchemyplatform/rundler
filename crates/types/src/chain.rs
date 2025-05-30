@@ -66,10 +66,6 @@ pub struct ChainSpec {
     pub calldata_zero_byte_gas: u64,
     /// Gas cost for a non-zero byte in calldata
     pub calldata_non_zero_byte_gas: u64,
-    /// Gas cost for a zero byte in calldata for the floor operation
-    pub calldata_floor_zero_byte_gas: u64,
-    /// Gas cost for a non-zero byte in calldata for the floor operation
-    pub calldata_floor_non_zero_byte_gas: u64,
 
     /*
      * Gas estimation
@@ -92,6 +88,12 @@ pub struct ChainSpec {
     pub eip1559_enabled: bool,
     /// true if eip7702 is enabled, and thus the 7702 priority fee mechanism is used
     pub eip7702_enabled: bool,
+    /// true if eip7623 is enabled, and thus the 7623 calldata floor mechanism is used
+    pub eip7623_enabled: bool,
+    /// Gas cost for a zero byte in calldata for the floor operation
+    pub eip7623_calldata_floor_zero_byte_gas: u64,
+    /// Gas cost for a non-zero byte in calldata for the floor operation
+    pub eip7623_calldata_floor_non_zero_byte_gas: u64,
 
     /*
      * Fee estimation
@@ -176,10 +178,11 @@ impl Default for ChainSpec {
             per_user_op_word_gas: 4,
             calldata_zero_byte_gas: 4,
             calldata_non_zero_byte_gas: 16,
-            calldata_floor_zero_byte_gas: 0,
-            calldata_floor_non_zero_byte_gas: 0,
             eip1559_enabled: true,
             eip7702_enabled: false,
+            eip7623_enabled: false,
+            eip7623_calldata_floor_zero_byte_gas: 10,
+            eip7623_calldata_floor_non_zero_byte_gas: 40,
             da_pre_verification_gas: false,
             da_gas_oracle_type: DAGasOracleType::default(),
             da_gas_oracle_contract_address: Address::ZERO,
@@ -248,12 +251,20 @@ impl ChainSpec {
 
     /// Get the calldata floor zero byte gas
     pub fn calldata_floor_zero_byte_gas(&self) -> u128 {
-        self.calldata_floor_zero_byte_gas as u128
+        if self.eip7623_enabled {
+            self.eip7623_calldata_floor_zero_byte_gas as u128
+        } else {
+            0
+        }
     }
 
     /// Get the calldata floor non zero byte gas
     pub fn calldata_floor_non_zero_byte_gas(&self) -> u128 {
-        self.calldata_floor_non_zero_byte_gas as u128
+        if self.eip7623_enabled {
+            self.eip7623_calldata_floor_non_zero_byte_gas as u128
+        } else {
+            0
+        }
     }
 
     /// Get the per user operation deploy overhead gas
