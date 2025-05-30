@@ -150,6 +150,7 @@ Rundler specific methods that are not specified by the ERC-4337 spec. This names
 | [`rundler_maxPriorityFeePerGas`](#rundler_maxpriorityfeepergas) | ✅ |
 | [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation) | ✅ |
 | [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation) | ✅ |
+| [`rundler_getUserOperationStatus`](#rundler_getuseroperationstatus) | ✅ |
 
 #### `rundler_maxPriorityFeePerGas`
 
@@ -259,6 +260,38 @@ NOTE: The returned user operation receipt is slightly different than the receipt
 }
 ```
 
+#### `rundler_getUserOperationStatus`
+
+Gets the status of a user operation by hash. Intended for use cases where the user wants a single RPC call to retrieve the status of a user operation, as well as its receipt if that user operation is mined.
+
+Possible statuses:
+- "unknown": the user operation is not mined or pending in the mempool. `receipt` is `null`.
+- "pending": the user operation is pending in the mempool and has not been mined. `receipt` is `null`.
+- "mined": the user operation is mined, the `receipt` field will be populated with the user operation receipt.
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_getUserOperationStatus",
+  "params": [
+    "0x...", // user operation hash
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    status: "unknown" | "pending" | "mined"
+    receipt: null | {
+      ... // User operation receipt if "mined"
+    }
+  }
+}
+```
 
 ### `admin_` Namespace
 

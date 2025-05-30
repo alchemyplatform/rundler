@@ -292,3 +292,20 @@ pub(crate) struct RpcMinedUserOperation {
     pub(crate) user_operation: RpcUserOperation,
     pub(crate) receipt: RpcUserOperationReceipt,
 }
+
+/// User operation status value
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum UserOperationStatusEnum {
+    Unknown,
+    Pending,
+    Mined,
+}
+
+/// User operation status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RpcUserOperationStatus {
+    pub(crate) status: UserOperationStatusEnum,
+    pub(crate) receipt: Option<RpcUserOperationReceipt>,
+}
