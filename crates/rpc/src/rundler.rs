@@ -14,7 +14,7 @@
 use alloy_primitives::{Address, B256, U128};
 use anyhow::Context;
 use async_trait::async_trait;
-use futures_util::future;
+use futures_util::{future, TryFutureExt};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
@@ -26,7 +26,9 @@ use tracing::instrument;
 
 use crate::{
     eth::{EntryPointRouter, EthResult, EthRpcError},
-    types::{RpcMinedUserOperation, RpcUserOperation},
+    types::{
+        RpcMinedUserOperation, RpcUserOperation, RpcUserOperationStatus, UserOperationStatusEnum,
+    },
     utils,
 };
 
@@ -59,6 +61,10 @@ pub trait RundlerApi {
         tx_hash: B256,
         entry_point: Address,
     ) -> RpcResult<Option<RpcMinedUserOperation>>;
+
+    /// Gets the status of a user operation by user operation hash
+    #[method(name = "getUserOperationStatus")]
+    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -108,6 +114,15 @@ where
         utils::safe_call_rpc_handler(
             "rundler_getMinedUserOperation",
             RundlerApi::get_mined_user_operation(self, uo_hash, tx_hash, entry_point),
+        )
+        .await
+    }
+
+    #[instrument(skip_all, fields(rpc_method = "rundler_getUserOperationStatus"))]
+    async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus> {
+        utils::safe_call_rpc_handler(
+            "rundler_getUserOperationStatus",
+            RundlerApi::get_user_operation_status(self, uo_hash),
         )
         .await
     }
@@ -223,5 +238,39 @@ where
             }
             _ => Ok(None),
         }
+    }
+
+    async fn get_user_operation_status(&self, uo_hash: B256) -> EthResult<RpcUserOperationStatus> {
+        let receipt_futs = self
+            .entry_point_router
+            .entry_points()
+            .map(|ep| self.entry_point_router.get_receipt(ep, uo_hash));
+
+        let pending_fut = self
+            .pool_server
+            .get_op_by_hash(uo_hash)
+            .map_err(EthRpcError::from);
+
+        let (receipts, pending) =
+            future::try_join(future::try_join_all(receipt_futs), pending_fut).await?;
+
+        if let Some(receipt) = receipts.into_iter().find(|r| r.is_some()) {
+            return Ok(RpcUserOperationStatus {
+                status: UserOperationStatusEnum::Mined,
+                receipt,
+            });
+        }
+
+        if pending.is_some() {
+            return Ok(RpcUserOperationStatus {
+                status: UserOperationStatusEnum::Pending,
+                receipt: None,
+            });
+        }
+
+        Ok(RpcUserOperationStatus {
+            status: UserOperationStatusEnum::Unknown,
+            receipt: None,
+        })
     }
 }
