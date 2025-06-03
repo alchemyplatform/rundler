@@ -38,16 +38,18 @@ pub use alloy::{
     new_alloy_da_gas_oracle, new_alloy_evm_provider, new_alloy_provider,
 };
 mod fees;
-pub use alloy_provider::network::{AnyHeader, AnyNetwork, AnyReceiptEnvelope, AnyTxEnvelope};
+pub use alloy_network::{
+    AnyHeader, AnyNetwork, AnyReceiptEnvelope, AnyRpcBlock, AnyRpcHeader, AnyRpcTransaction,
+    AnyTxEnvelope, ReceiptResponse,
+};
 pub use alloy_serde::WithOtherFields;
-use alloy_transport::{BoxTransport, Transport};
 pub use fees::new_fee_estimator;
 mod traits;
 // re-export alloy RPC types
 use std::marker::PhantomData;
 
 pub use alloy_consensus::{ReceiptWithBloom, Transaction as TransactionTrait};
-pub use alloy_json_rpc::{RpcParam, RpcReturn};
+pub use alloy_json_rpc::{RpcRecv, RpcSend};
 pub use alloy_network::TransactionBuilder;
 pub use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
@@ -72,23 +74,14 @@ pub use traits::*;
 /// Transaction request type for all networks.
 pub type TransactionRequest = alloy_rpc_types_eth::TransactionRequest;
 /// Transaction receipt type for all networks.
-pub type TransactionReceipt = alloy_rpc_types_eth::TransactionReceipt<AnyReceiptEnvelope<Log>>;
+pub type TransactionReceipt = alloy_rpc_types_any::AnyTransactionReceipt;
 /// Transaction type for all networks.
-pub type Transaction = alloy_rpc_types_eth::Transaction<AnyTxEnvelope>;
+pub type Transaction = AnyRpcTransaction;
 /// Block type for all networks.
-pub type Block = alloy_rpc_types_eth::Block<
-    WithOtherFields<Transaction>,
-    alloy_rpc_types_eth::Header<AnyHeader>,
->;
+pub type Block = AnyRpcBlock;
 /// Alloy provider type for all networks.
-pub trait AlloyProvider<T: Transport + Clone = BoxTransport>:
-    alloy_provider::Provider<T, AnyNetwork> + Clone
-{
-}
-impl<T: Transport + Clone, AP: alloy_provider::Provider<T, AnyNetwork> + Clone> AlloyProvider<T>
-    for AP
-{
-}
+pub trait AlloyProvider: alloy_provider::Provider<AnyNetwork> + Clone {}
+impl<AP: alloy_provider::Provider<AnyNetwork> + Clone> AlloyProvider for AP {}
 
 /// A trait that provides access to various providers.
 pub trait Providers: Send + Sync + Clone {

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use alloy_consensus::SignableTransaction;
 use alloy_network::{EthereumWallet, TxSigner};
-use alloy_primitives::{Address, PrimitiveSignature};
+use alloy_primitives::{Address, Signature};
 use alloy_signer_aws::AwsSigner;
 use anyhow::Context;
 use aws_config::BehaviorVersion;
@@ -59,15 +59,15 @@ pub(crate) struct LockingKmsSigner {
 }
 
 #[async_trait::async_trait]
-impl TxSigner<PrimitiveSignature> for LockingKmsSigner {
+impl TxSigner<Signature> for LockingKmsSigner {
     fn address(&self) -> Address {
         TxSigner::address(&self.inner)
     }
 
     async fn sign_transaction(
         &self,
-        tx: &mut dyn SignableTransaction<PrimitiveSignature>,
-    ) -> alloy_signer::Result<PrimitiveSignature> {
+        tx: &mut dyn SignableTransaction<Signature>,
+    ) -> alloy_signer::Result<Signature> {
         self.inner.sign_transaction(tx).await
     }
 }

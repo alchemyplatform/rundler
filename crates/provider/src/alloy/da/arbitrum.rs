@@ -14,7 +14,6 @@
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use alloy_sol_types::sol;
-use alloy_transport::Transport;
 use rundler_types::da::{DAGasBlockData, DAGasData};
 use tracing::instrument;
 use NodeInterface::NodeInterfaceInstance;
@@ -41,14 +40,13 @@ sol! {
     }
 }
 
-pub(super) struct ArbitrumNitroDAGasOracle<AP, T> {
-    node_interface: NodeInterfaceInstance<T, AP, AnyNetwork>,
+pub(super) struct ArbitrumNitroDAGasOracle<AP> {
+    node_interface: NodeInterfaceInstance<AP, AnyNetwork>,
 }
 
-impl<AP, T> ArbitrumNitroDAGasOracle<AP, T>
+impl<AP> ArbitrumNitroDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
         Self {
@@ -58,10 +56,9 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasOracle for ArbitrumNitroDAGasOracle<AP, T>
+impl<AP> DAGasOracle for ArbitrumNitroDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn estimate_da_gas(

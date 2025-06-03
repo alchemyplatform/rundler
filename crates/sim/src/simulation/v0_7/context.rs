@@ -271,7 +271,7 @@ impl<T> ValidationContextProvider<T> {
             ExitType::Return => {
                 let b = Bytes::from_hex(top.exit_data.clone())
                     .context("faled to parse exit data as hex")?;
-                if let Ok(res) = ValidationResult::abi_decode(&b, false) {
+                if let Ok(res) = ValidationResult::abi_decode(&b) {
                     Ok(Ok(res.try_into().map_err(anyhow::Error::msg)?))
                 } else {
                     bail!("Failed to decode validation output {}", top.exit_data);

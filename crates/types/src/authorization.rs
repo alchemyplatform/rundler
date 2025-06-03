@@ -38,7 +38,7 @@ pub struct Eip7702Auth {
 impl From<Eip7702Auth> for alloy_eips::eip7702::SignedAuthorization {
     fn from(value: Eip7702Auth) -> Self {
         let authorization = alloy_eips::eip7702::Authorization {
-            chain_id: value.chain_id,
+            chain_id: U256::from(value.chain_id),
             address: value.address,
             nonce: value.nonce,
         };

@@ -42,7 +42,7 @@ impl SubmissionProxy for PbhSubmissionProxy {
         revert_data: &Bytes,
         ops: &[UserOpsPerAggregator<UserOperationVariant>],
     ) -> Vec<B256> {
-        let Ok(decoded) = PBHEntryPointErrors::abi_decode(revert_data, false) else {
+        let Ok(decoded) = PBHEntryPointErrors::abi_decode(revert_data) else {
             tracing::warn!("unknown revert data for PBH submission proxy: {revert_data:?}");
             return vec![];
         };

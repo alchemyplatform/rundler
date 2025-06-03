@@ -13,7 +13,6 @@
 
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
-use alloy_transport::Transport;
 use anyhow::Context;
 use rundler_types::da::{DAGasBlockData, DAGasData, NitroDAGasBlockData, NitroDAGasData};
 use rundler_utils::cache::LruMap;
@@ -30,17 +29,16 @@ use crate::{
 ///
 /// The goal of this oracle is to only need to make maximum
 /// 1 network call per block + 1 network call per distinct data
-pub(crate) struct CachedNitroDAGasOracle<AP, T> {
-    node_interface: NodeInterfaceInstance<T, AP, AnyNetwork>,
+pub(crate) struct CachedNitroDAGasOracle<AP> {
+    node_interface: NodeInterfaceInstance<AP, AnyNetwork>,
     // Use a tokio::Mutex here to ensure only one network call per block, other threads can async wait for the result
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, NitroDAGasBlockData>>,
     metrics: DAMetrics,
 }
 
-impl<AP, T> CachedNitroDAGasOracle<AP, T>
+impl<AP> CachedNitroDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
         Self {
@@ -54,10 +52,9 @@ where
 const CACHE_UNITS_SCALAR: u128 = 1_000_000;
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasOracle for CachedNitroDAGasOracle<AP, T>
+impl<AP> DAGasOracle for CachedNitroDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn estimate_da_gas(
@@ -103,10 +100,9 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasOracleSync for CachedNitroDAGasOracle<AP, T>
+impl<AP> DAGasOracleSync for CachedNitroDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
@@ -154,10 +150,9 @@ where
     }
 }
 
-impl<AP, T> CachedNitroDAGasOracle<AP, T>
+impl<AP> CachedNitroDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     async fn get_block_data(
         &self,

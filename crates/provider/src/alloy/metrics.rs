@@ -39,7 +39,7 @@ where
     }
 }
 
-pub struct AlloyMetricMiddleware<S> {
+pub(crate) struct AlloyMetricMiddleware<S> {
     service: S,
 }
 
@@ -48,7 +48,7 @@ where
     S: Service<RequestPacket, Response = ResponsePacket, Error = TransportError> + Sync,
 {
     /// carete an alloy provider metric layer.
-    pub fn new(service: S) -> Self {
+    pub(crate) fn new(service: S) -> Self {
         Self { service }
     }
 }

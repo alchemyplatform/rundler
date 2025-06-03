@@ -1996,7 +1996,7 @@ mod tests {
             let private_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
             let signer: PrivateKeySigner = PrivateKeySigner::from_str(private_key).unwrap();
             let authorization = alloy_eips::eip7702::Authorization {
-                chain_id: 11011,
+                chain_id: U256::from(11011),
                 address: Address::from_str("0x1234123412341234123412341234123412341234").unwrap(),
                 nonce: 1,
             };
@@ -2015,7 +2015,7 @@ mod tests {
                 },
                 Eip7702Auth {
                     address: signed_authorization.address,
-                    chain_id: signed_authorization.chain_id,
+                    chain_id: signed_authorization.chain_id.try_into().unwrap(),
                     nonce: signed_authorization.nonce,
                     y_parity: signed_authorization.y_parity(),
                     r: signed_authorization.r(),

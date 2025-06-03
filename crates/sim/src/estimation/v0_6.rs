@@ -15,7 +15,6 @@ use std::{cmp, ops::Add, time::Instant};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolInterface};
-use rand::Rng;
 use rundler_contracts::v0_6::{
     CallGasEstimationProxy::{
         estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls, EstimateCallGasArgs,
@@ -409,7 +408,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV06 {
         // Use a random address for the moved entry point so that users can't
         // intentionally get bad estimates by interacting with the hardcoded
         // address.
-        let moved_entry_point_address: Address = rand::thread_rng().gen();
+        let moved_entry_point_address = Address::random();
         state_override.insert(
             moved_entry_point_address,
             AccountOverride {
@@ -735,7 +734,7 @@ mod tests {
         let uo = user_op.max_fill(&ChainSpec::default());
 
         let cuo_bytes = ContractUserOperation::from(uo).abi_encode();
-        let length_in_words = (cuo_bytes.len() + 31) / 32;
+        let length_in_words = cuo_bytes.len().div_ceil(32);
         let mut call_data_cost = 0;
         for b in cuo_bytes.iter() {
             if *b != 0 {
@@ -811,7 +810,7 @@ mod tests {
         let uo = user_op.max_fill(&ChainSpec::default());
 
         let cuo_bytes = ContractUserOperation::from(uo).abi_encode();
-        let length_in_words = (cuo_bytes.len() + 31) / 32;
+        let length_in_words = cuo_bytes.len().div_ceil(32);
         let mut call_data_cost = 0;
         for b in cuo_bytes.iter() {
             if *b != 0 {
@@ -883,7 +882,7 @@ mod tests {
         let uo = user_op.max_fill(&ChainSpec::default());
 
         let cuo_bytes = ContractUserOperation::from(uo).abi_encode();
-        let length_in_words = (cuo_bytes.len() + 31) / 32;
+        let length_in_words = cuo_bytes.len().div_ceil(32);
         let mut call_data_cost = 0;
         for b in cuo_bytes.iter() {
             if *b != 0 {

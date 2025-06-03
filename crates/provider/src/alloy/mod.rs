@@ -15,13 +15,10 @@ use std::time::Duration;
 
 use alloy_provider::{network::AnyNetwork, Provider as AlloyProvider, ProviderBuilder};
 use alloy_rpc_client::ClientBuilder;
-use alloy_transport::layers::RetryBackoffService;
-use alloy_transport_http::Http;
 use anyhow::Context;
 use evm::AlloyEvmProvider;
-use metrics::{AlloyMetricLayer, AlloyMetricMiddleware};
-use provider_timeout::{ProviderTimeout, ProviderTimeoutLayer};
-use reqwest::Client;
+use metrics::AlloyMetricLayer;
+use provider_timeout::ProviderTimeoutLayer;
 use url::Url;
 
 use crate::EvmProvider;
@@ -46,12 +43,7 @@ pub fn new_alloy_evm_provider(
 pub fn new_alloy_provider(
     rpc_url: &str,
     provider_client_timeout_seconds: u64,
-) -> anyhow::Result<
-    impl AlloyProvider<
-            RetryBackoffService<AlloyMetricMiddleware<ProviderTimeout<Http<Client>>>>,
-            AnyNetwork,
-        > + Clone,
-> {
+) -> anyhow::Result<impl AlloyProvider<AnyNetwork> + Clone> {
     let url = Url::parse(rpc_url).context("invalid rpc url")?;
     let metric_layer = AlloyMetricLayer::default();
     // TODO: make this configurable: use a large number for CUPS for now
@@ -66,7 +58,7 @@ pub fn new_alloy_provider(
         .http(url);
     let provider = ProviderBuilder::new()
         .network::<AnyNetwork>()
-        .on_client(client);
+        .connect_client(client);
     Ok(provider)
 }
 

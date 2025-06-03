@@ -80,7 +80,7 @@ where
             sim_context::entity_type_from_simulation_phase(tracer_out.phases.len() - 1).unwrap();
         let revert_data_bytes = hex::decode(revert_data).context("should decode revert data")?;
 
-        if let Ok(failed_op) = FailedOp::abi_decode(&revert_data_bytes, false) {
+        if let Ok(failed_op) = FailedOp::abi_decode(&revert_data_bytes) {
             let entity_addr = match last_entity_type {
                 EntityType::Factory => factory_address,
                 EntityType::Paymaster => paymaster_address,

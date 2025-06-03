@@ -42,7 +42,7 @@ where
 
 /// Applies a timeout to requests.
 #[derive(Debug)]
-pub struct ProviderTimeout<S> {
+pub(crate) struct ProviderTimeout<S> {
     service: S,
     timeout: Duration,
 }
@@ -54,7 +54,7 @@ where
     S: Service<RequestPacket, Response = ResponsePacket, Error = TransportError> + Sync,
 {
     /// Creates a new [`Timeout`]
-    pub const fn new(service: S, timeout: Duration) -> Self {
+    pub(crate) const fn new(service: S, timeout: Duration) -> Self {
         ProviderTimeout { service, timeout }
     }
 }
@@ -96,7 +96,7 @@ where
 
 #[pin_project]
 #[derive(Debug)]
-pub struct ResponseFuture<T> {
+pub(crate) struct ResponseFuture<T> {
     #[pin]
     response: T,
     #[pin]

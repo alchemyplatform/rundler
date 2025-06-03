@@ -64,7 +64,7 @@ fn filter_receipt_logs_matching_user_op(
     reference_log: &Log,
     tx_receipt: &TransactionReceipt,
 ) -> anyhow::Result<Vec<Log>> {
-    let logs = tx_receipt.inner.logs();
+    let logs = tx_receipt.inner.inner.logs();
 
     let is_ref_user_op = |log: &Log| {
         log.topics().len() >= 2
@@ -106,7 +106,10 @@ fn filter_receipt_logs_matching_user_op(
 mod tests {
 
     use alloy_primitives::{address, utils::keccak256, Address, Log as PrimitiveLog, LogData};
-    use rundler_provider::{AnyReceiptEnvelope, ReceiptWithBloom, TransactionReceipt};
+    use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
+    use rundler_provider::{
+        AnyReceiptEnvelope, ReceiptWithBloom, TransactionReceipt, WithOtherFields,
+    };
 
     use super::*;
 
@@ -134,7 +137,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[1..=2]);
+        assert_eq!(result, receipt.inner.inner.logs()[1..=2]);
     }
 
     #[test]
@@ -159,7 +162,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[3..=5]);
+        assert_eq!(result, receipt.inner.inner.logs()[3..=5]);
     }
 
     #[test]
@@ -184,7 +187,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[4..=6]);
+        assert_eq!(result, receipt.inner.inner.logs()[4..=6]);
     }
 
     #[test]
@@ -214,7 +217,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[5..=7]);
+        assert_eq!(result, receipt.inner.inner.logs()[5..=7]);
     }
 
     #[test]
@@ -244,7 +247,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[3..=4]);
+        assert_eq!(result, receipt.inner.inner.logs()[3..=4]);
     }
 
     #[test]
@@ -289,7 +292,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[1..=3]);
+        assert_eq!(result, receipt.inner.inner.logs()[1..=3]);
     }
 
     fn given_log(topic_0: &str, topic_1: &str) -> Log {
@@ -325,7 +328,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[1..=1]);
+        assert_eq!(result, receipt.inner.inner.logs()[1..=1]);
     }
 
     #[test]
@@ -346,7 +349,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[1..=2]);
+        assert_eq!(result, receipt.inner.inner.logs()[1..=2]);
     }
 
     #[test]
@@ -370,7 +373,7 @@ mod tests {
 
         assert!(result.is_ok(), "{}", result.unwrap_err());
         let result = result.unwrap();
-        assert_eq!(result, receipt.inner.logs()[4..=5]);
+        assert_eq!(result, receipt.inner.inner.logs()[4..=5]);
     }
 
     #[test]
@@ -414,7 +417,7 @@ mod tests {
             ..Default::default()
         };
 
-        TransactionReceipt {
+        WithOtherFields::new(AlloyTransactionReceipt {
             inner: AnyReceiptEnvelope {
                 inner: ReceiptWithBloom {
                     receipt,
@@ -433,7 +436,6 @@ mod tests {
             from: Address::ZERO,
             to: None,
             contract_address: None,
-            authorization_list: None,
-        }
+        })
     }
 }

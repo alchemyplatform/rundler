@@ -11,20 +11,16 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::marker::PhantomData;
-
-use alloy_json_rpc::{RpcParam, RpcReturn};
 use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
 use alloy_provider::{ext::DebugApi, network::TransactionBuilder};
 use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
-    BlockId, BlockNumberOrTag, BlockTransactionsKind, FeeHistory, Filter, Log,
+    BlockId, BlockNumberOrTag, FeeHistory, Filter, Log,
 };
 use alloy_rpc_types_trace::geth::{
     GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace,
 };
 use alloy_serde::WithOtherFields;
-use alloy_transport::Transport;
 use anyhow::Context;
 use rundler_contracts::utils::{
     GetBalances::{self, GetBalancesInstance},
@@ -37,54 +33,38 @@ use serde_json::json;
 use tracing::instrument;
 
 use crate::{
-    AlloyProvider, Block, EvmCall, EvmProvider, ProviderResult, Transaction, TransactionReceipt,
-    TransactionRequest,
+    AlloyProvider, Block, EvmCall, EvmProvider, ProviderResult, RpcRecv, RpcSend, Transaction,
+    TransactionReceipt, TransactionRequest,
 };
 
 /// Evm Provider implementation using [alloy-provider](https://github.com/alloy-rs/alloy-rs)
-pub struct AlloyEvmProvider<AP, T> {
+#[derive(Clone)]
+pub struct AlloyEvmProvider<AP> {
     inner: AP,
-    _marker: PhantomData<T>,
 }
 
-impl<AP, T> AlloyEvmProvider<AP, T> {
+impl<AP> AlloyEvmProvider<AP> {
     /// Create a new `AlloyEvmProvider`
     pub fn new(inner: AP) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
+        Self { inner }
     }
 }
 
-impl<AP, T> Clone for AlloyEvmProvider<AP, T>
-where
-    AP: Clone,
-{
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<AP, T> From<AP> for AlloyEvmProvider<AP, T> {
+impl<AP> From<AP> for AlloyEvmProvider<AP> {
     fn from(inner: AP) -> Self {
         Self::new(inner)
     }
 }
 
 #[async_trait::async_trait]
-impl<AP, T> EvmProvider for AlloyEvmProvider<AP, T>
+impl<AP> EvmProvider for AlloyEvmProvider<AP>
 where
-    T: Transport + Clone,
-    AP: AlloyProvider<T>,
+    AP: AlloyProvider,
 {
     async fn request<P, R>(&self, method: &'static str, params: P) -> ProviderResult<R>
     where
-        P: RpcParam + 'static,
-        R: RpcReturn,
+        P: RpcSend + 'static,
+        R: RpcRecv,
     {
         Ok(self.inner.raw_request(method.into(), params).await?)
     }
@@ -105,16 +85,18 @@ where
     #[instrument(skip_all)]
     async fn call(
         &self,
-        tx: &TransactionRequest,
+        tx: TransactionRequest,
         block: Option<BlockId>,
-        state_overrides: &StateOverride,
+        state_overrides: Option<StateOverride>,
     ) -> ProviderResult<Bytes> {
         let tx = WithOtherFields::new(tx.clone());
-        let mut call = self.inner.call(&tx);
+        let mut call = self.inner.call(tx);
         if let Some(block) = block {
             call = call.block(block);
         }
-        call = call.overrides(state_overrides);
+        if let Some(state_overrides) = state_overrides {
+            call = call.overrides(state_overrides);
+        }
 
         Ok(call.await?)
     }
@@ -149,20 +131,12 @@ where
 
     #[instrument(skip_all)]
     async fn get_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>> {
-        Ok(self
-            .inner
-            .get_block(block_id, BlockTransactionsKind::Hashes)
-            .await?
-            .map(|b| b.inner))
+        Ok(self.inner.get_block(block_id).await?)
     }
 
     #[instrument(skip(self))]
     async fn get_full_block(&self, block_id: BlockId) -> ProviderResult<Option<Block>> {
-        Ok(self
-            .inner
-            .get_block(block_id, BlockTransactionsKind::Full)
-            .await?
-            .map(|b| b.inner))
+        Ok(self.inner.get_block(block_id).full().await?)
     }
 
     #[instrument(skip_all)]
@@ -177,11 +151,7 @@ where
 
     #[instrument(skip_all)]
     async fn get_transaction_by_hash(&self, tx: TxHash) -> ProviderResult<Option<Transaction>> {
-        Ok(self
-            .inner
-            .get_transaction_by_hash(tx)
-            .await?
-            .map(|t| t.inner))
+        Ok(self.inner.get_transaction_by_hash(tx).await?)
     }
 
     #[instrument(skip_all)]
@@ -189,11 +159,7 @@ where
         &self,
         tx: TxHash,
     ) -> ProviderResult<Option<TransactionReceipt>> {
-        Ok(self
-            .inner
-            .get_transaction_receipt(tx)
-            .await?
-            .map(|t| t.inner))
+        Ok(self.inner.get_transaction_receipt(tx).await?)
     }
 
     #[instrument(skip_all)]
@@ -257,10 +223,11 @@ where
         trace_options: GethDebugTracingCallOptions,
     ) -> ProviderResult<GethTrace> {
         let call = if let Some(block_id) = block_id {
-            self.inner.debug_trace_call(tx, block_id, trace_options)
+            self.inner
+                .debug_trace_call(tx.into(), block_id, trace_options)
         } else {
             self.inner
-                .debug_trace_call(tx, BlockNumberOrTag::Latest.into(), trace_options)
+                .debug_trace_call(tx.into(), BlockNumberOrTag::Latest.into(), trace_options)
         };
 
         Ok(call.await?)
@@ -288,8 +255,7 @@ where
             .getGas(to, value, data)
             .state(state_override)
             .call()
-            .await?
-            ._0;
+            .await?;
 
         Ok(ret)
     }
@@ -317,11 +283,7 @@ where
             .to(address)
             .with_input(slot_data);
 
-        let result_bytes = self
-            .inner
-            .call(&WithOtherFields::new(tx))
-            .overrides(&overrides)
-            .await?;
+        let result_bytes = self.inner.call(tx.into()).overrides(overrides).await?;
 
         if result_bytes.len() != expected_ret_size {
             return Err(anyhow::anyhow!(
@@ -362,7 +324,7 @@ where
         }
 
         let ret = call.call().await?;
-        Ok(ret.hash)
+        Ok(ret)
     }
 
     #[instrument(skip(self))]
@@ -383,18 +345,18 @@ where
             .call()
             .await?;
 
-        if ret.balances.len() != addresses.len() {
+        if ret.len() != addresses.len() {
             return Err(anyhow::anyhow!(
                 "expected {} balances, got {}",
                 addresses.len(),
-                ret.balances.len()
+                ret.len()
             )
             .into());
         }
 
         Ok(addresses
             .into_iter()
-            .zip(ret.balances.into_iter())
+            .zip(ret.into_iter())
             .collect::<Vec<_>>())
     }
 }
