@@ -392,6 +392,33 @@ pub struct CommonArgs {
     pub verification_gas_limit_efficiency_reject_threshold: f64,
 
     #[arg(
+        long = "verification_gas_allowed_error_pct",
+        name = "verification_gas_allowed_error_pct",
+        env = "VERIFICATION_GAS_ALLOWED_ERROR_PCT",
+        default_value = "15",
+        global = true
+    )]
+    pub verification_gas_allowed_error_pct: u128,
+
+    #[arg(
+        long = "call_gas_allowed_error_pct",
+        name = "call_gas_allowed_error_pct",
+        env = "CALL_GAS_ALLOWED_ERROR_PCT",
+        default_value = "15",
+        global = true
+    )]
+    pub call_gas_allowed_error_pct: u128,
+
+    #[arg(
+        long = "max_gas_estimation_rounds",
+        name = "max_gas_estimation_rounds",
+        env = "MAX_GAS_ESTIMATION_ROUNDS",
+        default_value = "3",
+        global = true
+    )]
+    pub max_gas_estimation_rounds: u32,
+
+    #[arg(
         long = "mempool_config_path",
         name = "mempool_config_path",
         env = "MEMPOOL_CONFIG_PATH",
@@ -551,6 +578,9 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
             verification_gas_limit_efficiency_reject_threshold: value
                 .verification_gas_limit_efficiency_reject_threshold,
+            verification_gas_allowed_error_pct: value.verification_gas_allowed_error_pct,
+            call_gas_allowed_error_pct: value.call_gas_allowed_error_pct,
+            max_gas_estimation_rounds: value.max_gas_estimation_rounds,
         })
     }
 }

@@ -5050,6 +5050,7 @@ dependencies = [
  "alloy-contract",
  "alloy-eips",
  "alloy-json-rpc",
+ "alloy-network",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rlp",
@@ -5154,8 +5155,10 @@ dependencies = [
 name = "rundler-sim"
 version = "0.8.0"
 dependencies = [
+ "alloy-json-rpc",
  "alloy-primitives",
  "alloy-sol-types",
+ "alloy-transport",
  "anyhow",
  "arrayvec",
  "async-trait",

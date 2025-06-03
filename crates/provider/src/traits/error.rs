@@ -12,6 +12,8 @@
 // If not, see https://www.gnu.org/licenses/.
 
 use alloy_contract::Error as ContractError;
+use alloy_primitives::Bytes;
+use alloy_sol_types::SolInterface;
 use alloy_transport::TransportError;
 
 /// Error enumeration for the Provider trait
@@ -37,6 +39,30 @@ impl From<TransportError> for ProviderError {
 impl From<ContractError> for ProviderError {
     fn from(err: ContractError) -> Self {
         ProviderError::ContractError(err)
+    }
+}
+
+impl ProviderError {
+    /// Attempt to extract revert data from a provider error
+    pub fn as_revert_data(&self) -> Option<Bytes> {
+        match self {
+            ProviderError::RPC(TransportError::ErrorResp(e)) => e.as_revert_data(),
+            ProviderError::ContractError(ContractError::TransportError(
+                TransportError::ErrorResp(e),
+            )) => e.as_revert_data(),
+            _ => None,
+        }
+    }
+
+    /// Attempt to decode a contract error from a provider error
+    pub fn as_decoded_error<E: SolInterface>(&self) -> Option<E> {
+        match self {
+            ProviderError::RPC(TransportError::ErrorResp(e)) => e.as_decoded_error(false),
+            ProviderError::ContractError(ContractError::TransportError(
+                TransportError::ErrorResp(e),
+            )) => e.as_decoded_error(false),
+            _ => None,
+        }
     }
 }
 

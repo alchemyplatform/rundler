@@ -66,6 +66,12 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *EXECUTION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 - `--verification_gas_limit_efficiency_reject_threshold`: The ratio of verification gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
   - env: *VERIFICATION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
+- `--verification_gas_allowed_error_pct`: The allowed error percentage during verification gas estimation. (default: 15)
+  - env: *VERIFICATION_GAS_ALLOWED_ERROR_PCT*
+- `--call_gas_allowed_error_pct`: The allowed error percentage during call gas estimation. (default: 15)
+  - env: *CALL_GAS_ALLOWED_ERROR_PCT*
+- `--max_gas_estimation_rounds`: The maximum amount of remote RPC calls to make during gas estimation while attempting to converge to the error percentage. (default: 3)
+  - env: *MAX_GAS_ESTIMATION_ROUNDS*
 - `--aws_region`: AWS region. (default: `us-east-1`).
   - env: *AWS_REGION*
   - (*Only required if using other AWS features*)

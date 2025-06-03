@@ -1,2 +1,8 @@
 /cache
 /out
+/common/out
+/common/cache
+/v0_6/out
+/v0_6/cache
+/v0_7/out
+/v0_7/cache
