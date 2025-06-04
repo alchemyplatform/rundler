@@ -20,9 +20,7 @@ use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
     BlockId,
 };
-use alloy_sol_types::{
-    ContractError as SolContractError, SolCall, SolError, SolInterface, SolValue,
-};
+use alloy_sol_types::{ContractError as SolContractError, SolError, SolInterface, SolValue};
 use alloy_transport::TransportError;
 use anyhow::Context;
 use rundler_contracts::v0_7::{
@@ -51,7 +49,7 @@ use tracing::instrument;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
-    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
+    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
     TransactionRequest,
 };
@@ -507,29 +505,6 @@ where
         }
     }
 
-    fn get_simulate_handle_op_call(
-        &self,
-        op: Self::UO,
-        mut state_override: StateOverride,
-    ) -> EvmCall {
-        add_simulations_override(&mut state_override, *self.i_entry_point.address());
-
-        let data = IEntryPointSimulations::simulateHandleOpCall {
-            op: op.pack(),
-            target: Address::ZERO,
-            targetCallData: Bytes::new(),
-        }
-        .abi_encode()
-        .into();
-
-        EvmCall {
-            to: *self.i_entry_point.address(),
-            data,
-            value: U256::ZERO,
-            state_override,
-        }
-    }
-
     #[instrument(skip_all)]
     async fn simulate_handle_op(
         &self,
@@ -537,36 +512,43 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        mut state_override: StateOverride,
+        state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-        let da_gas: u64 = op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
+        simulate_handle_op_inner(
+            &self.chain_spec,
+            self.max_simulate_handle_ops_gas,
+            &self.i_entry_point,
+            op,
+            target,
+            target_call_data,
+            block_id,
+            state_override,
+            false,
+        )
+        .await
+    }
 
-        add_simulations_override(&mut state_override, *self.i_entry_point.address());
-
-        add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
-
-        let ep_simulations = IEntryPointSimulations::new(
-            *self.i_entry_point.address(),
-            self.i_entry_point.provider(),
-        );
-        let res = ep_simulations
-            .simulateHandleOp(op.pack(), target, target_call_data)
-            .block(block_id)
-            .gas(self.max_simulate_handle_ops_gas.saturating_add(da_gas))
-            .state(state_override)
-            .call()
-            .await;
-
-        match res {
-            Ok(output) => Ok(Ok(output.try_into()?)),
-            Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
-                Ok(Err(decode_validation_revert_payload(resp)))
-            }
-            Err(error) => Err(error.into()),
-        }
+    #[instrument(skip_all)]
+    async fn simulate_handle_op_estimate_gas(
+        &self,
+        op: Self::UO,
+        target: Address,
+        target_call_data: Bytes,
+        block_id: BlockId,
+        state_override: StateOverride,
+    ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
+        simulate_handle_op_inner(
+            &self.chain_spec,
+            self.max_simulate_handle_ops_gas,
+            &self.i_entry_point,
+            op,
+            target,
+            target_call_data,
+            block_id,
+            state_override,
+            true,
+        )
+        .await
     }
 
     fn decode_simulate_handle_ops_revert(
@@ -736,6 +718,57 @@ pub fn decode_ops_from_calldata(
                 .collect()
         }
         _ => vec![],
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn simulate_handle_op_inner<AP: AlloyProvider>(
+    chain_spec: &ChainSpec,
+    max_simulate_handle_ops_gas: u64,
+    entry_point: &IEntryPointInstance<AP, AnyNetwork>,
+    op: UserOperation,
+    target: Address,
+    target_call_data: Bytes,
+    block_id: BlockId,
+    mut state_override: StateOverride,
+    skip_post_op: bool,
+) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
+    let da_gas: u64 = op
+        .pre_verification_da_gas_limit(chain_spec, Some(1))
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    add_simulations_override(&mut state_override, *entry_point.address());
+
+    add_authorization_tuple(op.sender(), op.authorization_tuple(), &mut state_override);
+
+    let ep_simulations =
+        IEntryPointSimulations::new(*entry_point.address(), entry_point.provider());
+
+    let res = if skip_post_op {
+        ep_simulations
+            .simulateHandleOpNoPostOp(op.pack(), target, target_call_data)
+            .block(block_id)
+            .gas(max_simulate_handle_ops_gas.saturating_add(da_gas))
+            .state(state_override)
+            .call()
+            .await
+    } else {
+        ep_simulations
+            .simulateHandleOp(op.pack(), target, target_call_data)
+            .block(block_id)
+            .gas(max_simulate_handle_ops_gas.saturating_add(da_gas))
+            .state(state_override)
+            .call()
+            .await
+    };
+
+    match res {
+        Ok(output) => Ok(Ok(output.try_into()?)),
+        Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
+            Ok(Err(decode_validation_revert_payload(resp)))
+        }
+        Err(error) => Err(error.into()),
     }
 }
 

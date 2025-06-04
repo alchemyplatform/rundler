@@ -19,9 +19,7 @@ use rundler_types::{
     ValidationRevert,
 };
 
-use crate::{
-    BlockHashOrNumber, BlockId, EvmCall, ProviderResult, StateOverride, TransactionRequest,
-};
+use crate::{BlockHashOrNumber, BlockId, ProviderResult, StateOverride, TransactionRequest};
 
 /// Output of a successful signature aggregator simulation call
 #[derive(Clone, Debug, Default)]
@@ -218,12 +216,18 @@ pub trait SimulationProvider: Send + Sync {
         block_id: Option<BlockId>,
     ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
 
-    /// Get call data and state overrides needed to call `simulateHandleOp`
-    fn get_simulate_handle_op_call(&self, op: Self::UO, state_override: StateOverride) -> EvmCall;
-
-    /// Call the entry point contract's `simulateHandleOp` function
-    /// with a spoofed state
+    /// Call the entry point contract's `simulateHandleOp` function.
     async fn simulate_handle_op(
+        &self,
+        op: Self::UO,
+        target: Address,
+        target_call_data: Bytes,
+        block_id: BlockId,
+        state_override: StateOverride,
+    ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
+
+    /// Simulate handle op function for gas estimation
+    async fn simulate_handle_op_estimate_gas(
         &self,
         op: Self::UO,
         target: Address,

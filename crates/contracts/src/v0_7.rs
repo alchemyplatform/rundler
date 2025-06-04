@@ -208,6 +208,16 @@ sol!(
         returns (
             ExecutionResult memory
         );
+
+        function simulateHandleOpNoPostOp(
+            PackedUserOperation calldata op,
+            address target,
+            bytes calldata targetCallData
+        )
+        external
+        returns (
+            ExecutionResult memory
+        );
     }
 
     #[allow(missing_docs)]
@@ -259,7 +269,7 @@ static __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = include_byt
     "../contracts/out/v0_7/EntryPointSimulations.sol/EntryPointSimulations_deployedBytecode.txt"
 );
 
-static __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: [u8; 16893] = {
+static __ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE: [u8; 17253] = {
     match const_hex::const_decode_to_array(__ENTRY_POINT_SIMULATIONS_V0_7_DEPLOYED_BYTECODE_HEX) {
         Ok(a) => a,
         Err(_) => panic!("Failed to decode entry point simulations hex"),
