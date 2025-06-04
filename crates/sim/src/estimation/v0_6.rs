@@ -526,17 +526,17 @@ mod tests {
     use std::sync::Arc;
 
     use alloy_primitives::{hex, uint};
-    use alloy_sol_types::{Revert, SolCall, SolError, SolValue};
+    use alloy_sol_types::{Revert, SolError, SolValue};
     use rundler_contracts::{
         common::EstimationTypes::*,
         v0_6::{
             GetBalances::{GetBalancesErrors, GetBalancesResult},
-            IEntryPoint, UserOperation as ContractUserOperation,
+            UserOperation as ContractUserOperation,
         },
     };
     use rundler_provider::{
-        EvmCall, ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider,
-        MockFeeEstimator, ProviderError,
+        ExecutionResult, GasUsedResult, MockEntryPointV0_6, MockEvmProvider, MockFeeEstimator,
+        ProviderError,
     };
     use rundler_types::{
         da::DAGasOracleType,
@@ -582,24 +582,6 @@ mod tests {
 
         // Fill in concrete implementations of call data and
         // `simulation_should_revert`
-        entry
-            .expect_get_simulate_handle_op_call()
-            .returning(|op, state_override| {
-                let data = IEntryPoint::simulateHandleOpCall {
-                    op: op.into(),
-                    target: Address::ZERO,
-                    targetCallData: Bytes::new(),
-                }
-                .abi_encode()
-                .into();
-
-                EvmCall {
-                    to: Address::ZERO,
-                    data,
-                    value: U256::ZERO,
-                    state_override,
-                }
-            });
         entry.expect_simulation_should_revert().return_const(true);
 
         entry.expect_address().return_const(Address::ZERO);
@@ -1005,7 +987,7 @@ mod tests {
 
         let gas_estimate = 100_000;
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateGasResult {
@@ -1043,7 +1025,7 @@ mod tests {
         // return an invalid response for the ExecutionResult
         // for a successful gas estimation
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateGasRevertAtMax {
@@ -1080,7 +1062,7 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateGasContinuation {
@@ -1096,7 +1078,7 @@ mod tests {
             })
             .times(1);
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(|_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateGasResult {
@@ -1135,7 +1117,7 @@ mod tests {
         let gas_usage = 10_000;
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_op, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: EstimateGasResult {
@@ -1281,7 +1263,7 @@ mod tests {
             .returning(|| Ok((B256::ZERO, 0)));
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
@@ -1335,7 +1317,7 @@ mod tests {
         };
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
@@ -1377,7 +1359,7 @@ mod tests {
             .returning(|| Ok((B256::ZERO, 0)));
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {

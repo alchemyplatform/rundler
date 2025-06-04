@@ -167,12 +167,15 @@ mockall::mock! {
             user_op: v0_6::UserOperation,
             block_id: Option<BlockId>
         ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
-        fn get_simulate_handle_op_call(
+        async fn simulate_handle_op(
             &self,
             op: v0_6::UserOperation,
+            target: Address,
+            target_call_data: Bytes,
+            block_id: BlockId,
             state_override: StateOverride,
-        ) -> crate::EvmCall;
-        async fn simulate_handle_op(
+        ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
+        async fn simulate_handle_op_estimate_gas(
             &self,
             op: v0_6::UserOperation,
             target: Address,
@@ -268,12 +271,15 @@ mockall::mock! {
             user_op: v0_7::UserOperation,
             block_id: Option<BlockId>
         ) -> ProviderResult<Result<ValidationOutput, ValidationRevert>>;
-        fn get_simulate_handle_op_call(
+        async fn simulate_handle_op(
             &self,
             op: v0_7::UserOperation,
+            target: Address,
+            target_call_data: Bytes,
+            block_id: BlockId,
             state_override: StateOverride,
-        ) -> crate::EvmCall;
-        async fn simulate_handle_op(
+        ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
+        async fn simulate_handle_op_estimate_gas(
             &self,
             op: v0_7::UserOperation,
             target: Address,

@@ -9,5 +9,4 @@ import "@account-abstraction/interfaces/IPaymaster.sol";
 import "@account-abstraction/interfaces/IAggregator.sol";
 import "@account-abstraction/interfaces/IStakeManager.sol";
 import "@account-abstraction/interfaces/PackedUserOperation.sol";
-import "@account-abstraction/core/EntryPointSimulations.sol";
 import "@account-abstraction/core/SenderCreator.sol";

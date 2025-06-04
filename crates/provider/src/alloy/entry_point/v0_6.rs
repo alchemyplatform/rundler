@@ -16,7 +16,7 @@ use alloy_eips::eip7702::SignedAuthorization;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::network::{AnyNetwork, TransactionBuilder7702};
 use alloy_rpc_types_eth::{state::StateOverride, BlockId};
-use alloy_sol_types::{ContractError as SolContractError, SolCall, SolError, SolInterface};
+use alloy_sol_types::{ContractError as SolContractError, SolError, SolInterface};
 use alloy_transport::TransportError;
 use anyhow::Context;
 use rundler_contracts::v0_6::{
@@ -24,8 +24,8 @@ use rundler_contracts::v0_6::{
     GetBalances::{self, GetBalancesResult},
     IAggregator,
     IEntryPoint::{
-        self, ExecutionResult as ExecutionResultV0_6, FailedOp, IEntryPointCalls,
-        IEntryPointErrors, IEntryPointInstance,
+        ExecutionResult as ExecutionResultV0_6, FailedOp, IEntryPointCalls, IEntryPointErrors,
+        IEntryPointInstance,
     },
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
 };
@@ -41,7 +41,7 @@ use tracing::instrument;
 
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
-    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait, EvmCall,
+    DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
     ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
     TransactionRequest,
 };
@@ -448,23 +448,6 @@ where
         }
     }
 
-    fn get_simulate_handle_op_call(&self, op: Self::UO, state_override: StateOverride) -> EvmCall {
-        let data = IEntryPoint::simulateHandleOpCall {
-            op: op.into(),
-            target: Address::ZERO,
-            targetCallData: Bytes::new(),
-        }
-        .abi_encode()
-        .into();
-
-        EvmCall {
-            to: *self.i_entry_point.address(),
-            data,
-            value: U256::ZERO,
-            state_override,
-        }
-    }
-
     #[instrument(skip_all)]
     async fn simulate_handle_op(
         &self,
@@ -506,6 +489,19 @@ where
             }
             _ => Err(contract_error.into()),
         }
+    }
+
+    #[instrument(skip_all)]
+    async fn simulate_handle_op_estimate_gas(
+        &self,
+        op: Self::UO,
+        target: Address,
+        target_call_data: Bytes,
+        block_id: BlockId,
+        state_override: StateOverride,
+    ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
+        self.simulate_handle_op(op, target, target_call_data, block_id, state_override)
+            .await
     }
 
     fn decode_simulate_handle_ops_revert(

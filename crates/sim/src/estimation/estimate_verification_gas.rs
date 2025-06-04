@@ -116,7 +116,7 @@ where
             self.settings.max_gas_estimation_rounds,
         )
         .await?;
-        tracing::info!(
+        tracing::debug!(
             "verification gas estimation took {} ms with {} rounds",
             timer.elapsed().as_millis(),
             num_rounds

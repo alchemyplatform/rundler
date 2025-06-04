@@ -142,7 +142,7 @@ where
             self.settings.max_gas_estimation_rounds,
         )
         .await?;
-        tracing::info!(
+        tracing::debug!(
             "call gas estimation took {} ms with {} rounds",
             timer.elapsed().as_millis(),
             num_rounds
@@ -169,7 +169,7 @@ where
 
         let target_revert_data = self
             .entry_point
-            .simulate_handle_op(
+            .simulate_handle_op_estimate_gas(
                 callless_op,
                 *self.entry_point.address(),
                 target_call_data,
@@ -227,7 +227,7 @@ where
         );
         Ok(self
             .entry_point
-            .simulate_handle_op(
+            .simulate_handle_op_estimate_gas(
                 op,
                 *self.entry_point.address(),
                 target_call_data,

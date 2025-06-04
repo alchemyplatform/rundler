@@ -81,6 +81,7 @@ fn generate_v0_7_bindings() -> Result<(), Box<dyn error::Error>> {
     write_deployed_bytecode!("v0_7", CallGasEstimationProxy);
     write_deployed_bytecode!("v0_7", EntryPointSimulations);
     write_deployed_bytecode!("v0_7", VerificationGasEstimationHelper);
+    write_deployed_bytecode!("v0_7", EntryPointSimulations);
 
     Ok(())
 }

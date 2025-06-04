@@ -517,8 +517,10 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
     }
 
     fn get_op_with_no_call_gas(&self, op: Self::UO) -> Self::UO {
+        // Don't clear the paymaster as verification may check that the paymaster is
+        // some expected address. The modified entry point simulations will skip running
+        // postOp, so the paymaster will not be called beyond its validation function.
         UserOperationBuilder::from_uo(op, &self.chain_spec)
-            .clear_paymaster()
             .call_gas_limit(0)
             .max_fee_per_gas(0)
             .build()
@@ -657,12 +659,10 @@ mod tests {
     use std::sync::Arc;
 
     use alloy_primitives::{hex, U256};
-    use alloy_sol_types::{Revert, SolCall, SolError};
-    use rundler_contracts::{
-        common::EstimationTypes::TestCallGasResult, v0_7::IEntryPointSimulations,
-    };
+    use alloy_sol_types::{Revert, SolError};
+    use rundler_contracts::common::EstimationTypes::TestCallGasResult;
     use rundler_provider::{
-        EvmCall, ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
+        ExecutionResult, MockEntryPointV0_7, MockEvmProvider, MockFeeEstimator,
     };
     use rundler_types::v0_7::UserOperationOptionalGas;
 
@@ -698,24 +698,6 @@ mod tests {
 
         // Fill in concrete implementations of call data and
         // `simulation_should_revert`
-        entry
-            .expect_get_simulate_handle_op_call()
-            .returning(|op, state_override| {
-                let data = IEntryPointSimulations::simulateHandleOpCall {
-                    op: op.pack(),
-                    target: Address::ZERO,
-                    targetCallData: Bytes::new(),
-                }
-                .abi_encode()
-                .into();
-
-                EvmCall {
-                    to: Address::ZERO,
-                    data,
-                    value: U256::ZERO,
-                    state_override,
-                }
-            });
         entry.expect_simulation_should_revert().return_const(true);
 
         entry.expect_address().return_const(Address::ZERO);
@@ -876,7 +858,7 @@ mod tests {
             .returning(|| Ok((B256::ZERO, 0)));
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
@@ -937,7 +919,7 @@ mod tests {
         };
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
@@ -975,7 +957,7 @@ mod tests {
         let (mut entry, mut provider) = create_base_config();
 
         entry
-            .expect_simulate_handle_op()
+            .expect_simulate_handle_op_estimate_gas()
             .returning(move |_a, _b, _c, _d, _e| {
                 Ok(Ok(ExecutionResult {
                     target_result: TestCallGasResult {
