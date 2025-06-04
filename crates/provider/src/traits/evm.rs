@@ -20,8 +20,8 @@ use rundler_types::ExpectedStorage;
 
 use crate::{
     Block, BlockId, BlockNumberOrTag, FeeHistory, Filter, GasUsedResult,
-    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log, ProviderResult, RpcParam,
-    RpcReturn, StateOverride, Transaction, TransactionReceipt, TransactionRequest,
+    GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, Log, ProviderResult, RpcRecv,
+    RpcSend, StateOverride, Transaction, TransactionReceipt, TransactionRequest,
 };
 
 /// An EVM call, a subset of a transaction that is not meant to be executed onchain, but
@@ -55,8 +55,8 @@ pub trait EvmProvider: Send + Sync {
     /// Make an arbitrary JSON RPC request to the provider
     async fn request<P, R>(&self, method: &'static str, params: P) -> ProviderResult<R>
     where
-        P: RpcParam + 'static,
-        R: RpcReturn;
+        P: RpcSend + 'static,
+        R: RpcRecv;
 
     /// Get fee history given a number of blocks and reward percentiles
     async fn fee_history(
@@ -69,9 +69,9 @@ pub trait EvmProvider: Send + Sync {
     /// Simulate a transaction via an eth_call
     async fn call(
         &self,
-        tx: &TransactionRequest,
+        tx: TransactionRequest,
         block: Option<BlockId>,
-        state_overrides: &StateOverride,
+        state_overrides: Option<StateOverride>,
     ) -> ProviderResult<Bytes>;
 
     /// Send a raw transaction

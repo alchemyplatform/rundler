@@ -610,9 +610,9 @@ impl<P: EvmProvider> Chain<P> {
             }));
 
         for tx in block.transactions.txns() {
-            if self.to_track.read().contains(&tx.from) {
+            if self.to_track.read().contains(&tx.from()) {
                 let nonce = tx.nonce();
-                let update = updates.get_mut(&tx.from).unwrap();
+                let update = updates.get_mut(&tx.from()).unwrap();
                 if nonce >= update.nonce.unwrap_or(0) {
                     update.nonce = Some(nonce);
                 }
@@ -889,9 +889,10 @@ struct ChainMetrics {
 mod tests {
     use std::ops::DerefMut;
 
-    use alloy_consensus::{SignableTransaction, TypedTransaction};
+    use alloy_consensus::{transaction::Recovered, SignableTransaction, TypedTransaction};
     use alloy_network_primitives::BlockTransactions;
-    use alloy_primitives::{address, Log as PrimitiveLog, LogData, PrimitiveSignature};
+    use alloy_primitives::{address, Log as PrimitiveLog, LogData, Signature};
+    use alloy_rpc_types_eth::{Block as AlloyBlock, Transaction as AlloyTransaction};
     use alloy_serde::WithOtherFields;
     use parking_lot::RwLock;
     use rundler_provider::{
@@ -1009,14 +1010,7 @@ mod tests {
                 B256::ZERO
             };
 
-            let txns = block
-                .transactions
-                .iter()
-                .cloned()
-                .map(WithOtherFields::new)
-                .collect();
-
-            Some(Block {
+            Some(Block::new(WithOtherFields::new(AlloyBlock {
                 header: BlockHeader {
                     hash,
                     inner: AnyHeader {
@@ -1026,9 +1020,9 @@ mod tests {
                     },
                     ..Default::default()
                 },
-                transactions: BlockTransactions::Full(txns),
+                transactions: BlockTransactions::Full(block.transactions.clone()),
                 ..Default::default()
-            })
+            })))
         }
 
         fn get_logs_by_block_hash(&self, filter: &Filter, block_hash: B256) -> Vec<Log> {
@@ -1989,14 +1983,14 @@ mod tests {
             panic!("expected eip1559 transaction");
         };
 
-        let signed = txn.into_signed(PrimitiveSignature::test_signature());
-        Transaction {
-            inner: AnyTxEnvelope::Ethereum(signed.into()),
-            from,
+        let signed = txn.into_signed(Signature::test_signature());
+        WithOtherFields::new(AlloyTransaction {
+            inner: Recovered::new_unchecked(AnyTxEnvelope::Ethereum(signed.into()), from),
             block_hash: None,
             block_number: None,
             transaction_index: None,
             effective_gas_price: None,
-        }
+        })
+        .into()
     }
 }

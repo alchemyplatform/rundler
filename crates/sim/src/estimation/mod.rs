@@ -167,8 +167,8 @@ where
     for _ in 0..max_rounds {
         let revert_data = round_fn(min_gas, max_gas, is_continuation).await?;
 
-        let decoded = EstimationTypesErrors::abi_decode(&revert_data, false)
-            .context("should decode revert data")?;
+        let decoded =
+            EstimationTypesErrors::abi_decode(&revert_data).context("should decode revert data")?;
         match decoded {
             EstimationTypesErrors::EstimateGasResult(result) => {
                 let ret_num_rounds: u32 = result
@@ -186,7 +186,7 @@ where
                 ));
             }
             EstimationTypesErrors::EstimateGasRevertAtMax(revert) => {
-                let error = if let Ok(revert) = Revert::abi_decode(&revert.revertData, false) {
+                let error = if let Ok(revert) = Revert::abi_decode(&revert.revertData) {
                     GasEstimationError::RevertInCallWithMessage(revert.reason)
                 } else {
                     GasEstimationError::RevertInCallWithBytes(revert.revertData)

@@ -134,7 +134,7 @@ pub async fn run() -> anyhow::Result<()> {
             tracing::info!("Received ctrl-c, shutting down");
         },
         e = &mut task_manager => {
-            tracing::error!("Task manager panicked, shutting down: {e}");
+            tracing::error!("Task manager panicked, shutting down: {e:?}");
         },
     }
 

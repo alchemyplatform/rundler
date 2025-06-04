@@ -130,9 +130,7 @@ impl From<FailedOpV0_7> for ValidationRevert {
 
 impl From<FailedOpWithRevertV0_7> for ValidationRevert {
     fn from(value: FailedOpWithRevertV0_7) -> Self {
-        let inner_message = Revert::abi_decode(&value.inner, false)
-            .ok()
-            .map(|err| err.reason);
+        let inner_message = Revert::abi_decode(&value.inner).ok().map(|err| err.reason);
         ValidationRevert::Operation {
             entry_point_reason: value.reason,
             inner_revert_data: value.inner,
@@ -161,10 +159,10 @@ pub struct ValidationOutput {
 impl ValidationOutput {
     /// Decode a v0.6 validation result from bytes.
     pub fn decode_v0_6(bytes: impl AsRef<[u8]>) -> Result<Self, &'static str> {
-        if let Ok(result) = ValidationResultV0_6::abi_decode(bytes.as_ref(), false) {
+        if let Ok(result) = ValidationResultV0_6::abi_decode(bytes.as_ref()) {
             return ValidationOutput::try_from(result);
         }
-        if let Ok(result) = ValidationResultWithAggregationV0_6::abi_decode(bytes.as_ref(), false) {
+        if let Ok(result) = ValidationResultWithAggregationV0_6::abi_decode(bytes.as_ref()) {
             return ValidationOutput::try_from(result);
         }
         Err("Invalid validation result")

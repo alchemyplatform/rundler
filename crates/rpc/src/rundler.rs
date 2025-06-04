@@ -230,7 +230,7 @@ where
             (Some(uo), Some(mut receipt)) => {
                 // clear out the outer transaction logs from the receipt to avoid sending
                 // extra data in the response. OOF - this type is a mess.
-                receipt.receipt.inner.inner.receipt.logs.clear();
+                receipt.receipt.inner.inner.inner.receipt.logs.clear();
                 Ok(Some(RpcMinedUserOperation {
                     user_operation: uo.user_operation,
                     receipt,

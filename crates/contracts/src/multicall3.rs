@@ -72,5 +72,5 @@ pub fn create_call_value_only(target: Address, value: U256) -> Multicall3::Call3
 }
 
 pub fn decode_result<T: SolCall>(data: &[u8]) -> Result<T::Return, alloy_contract::Error> {
-    T::abi_decode_returns(data, false).map_err(Into::into)
+    T::abi_decode_returns(data).map_err(Into::into)
 }

@@ -16,7 +16,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::{EthereumWallet, TransactionBuilder, TxSigner};
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256};
+use alloy_primitives::{Address, Bytes, Signature, U256};
 use anyhow::{bail, Context};
 use metrics::{Counter, Gauge};
 use metrics_derive::Metrics;
@@ -46,7 +46,7 @@ pub(crate) struct FunderSettings {
     pub priority_fee_multiplier: f64,
     pub base_fee_multiplier: f64,
 
-    pub signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
+    pub signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
     pub da_gas_oracle: Arc<dyn DAGasOracle>,
 }
 
@@ -308,7 +308,7 @@ async fn estimate_da_gas<P: EvmProvider>(
         bail!("failed to build EIP-1559 typed txn")
     };
     let mut data = vec![];
-    TxEnvelope::from(tx.into_signed(PrimitiveSignature::test_signature())).encode_2718(&mut data);
+    TxEnvelope::from(tx.into_signed(Signature::test_signature())).encode_2718(&mut data);
     let extra_data_len = data.len() / 4; // overestimate
 
     let block = provider
@@ -352,11 +352,13 @@ mod tests {
     use alloy_eips::eip2718::Decodable2718;
     use alloy_network::AnyTxEnvelope;
     use alloy_primitives::{address, bytes, B256};
+    use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_sol_types::SolInterface;
     use mockall::Sequence;
     use rundler_contracts::multicall3::Multicall3::{Call3Value, Multicall3Calls};
     use rundler_provider::{
-        AnyReceiptEnvelope, MockEvmProvider, ReceiptWithBloom, TransactionReceipt, ZeroDAGasOracle,
+        AnyReceiptEnvelope, MockEvmProvider, ReceiptWithBloom, TransactionReceipt, WithOtherFields,
+        ZeroDAGasOracle,
     };
 
     use super::*;
@@ -575,7 +577,7 @@ mod tests {
             return false;
         }
         let tx_data = tx_envelope.input();
-        let calls = Multicall3Calls::abi_decode(tx_data, true).unwrap();
+        let calls = Multicall3Calls::abi_decode(tx_data).unwrap();
         let Multicall3Calls::aggregate3Value(calls) = calls else {
             return false;
         };
@@ -601,22 +603,22 @@ mod tests {
     struct MockTxSigner {}
 
     #[async_trait::async_trait]
-    impl TxSigner<PrimitiveSignature> for MockTxSigner {
+    impl TxSigner<Signature> for MockTxSigner {
         fn address(&self) -> Address {
             Address::ZERO
         }
         async fn sign_transaction(
             &self,
-            _tx: &mut dyn alloy_consensus::SignableTransaction<PrimitiveSignature>,
-        ) -> alloy_signer::Result<PrimitiveSignature> {
-            Ok(PrimitiveSignature::test_signature())
+            _tx: &mut dyn alloy_consensus::SignableTransaction<Signature>,
+        ) -> alloy_signer::Result<Signature> {
+            Ok(Signature::test_signature())
         }
     }
 
     fn funding_settings(
         fund_below: U256,
         fund_to: U256,
-        singer: impl TxSigner<PrimitiveSignature> + Send + Sync + 'static,
+        singer: impl TxSigner<Signature> + Send + Sync + 'static,
     ) -> FunderSettings {
         FunderSettings {
             fund_below_balance: fund_below,
@@ -685,7 +687,7 @@ mod tests {
     }
 
     fn transaction_receipt() -> TransactionReceipt {
-        TransactionReceipt {
+        WithOtherFields::new(AlloyTransactionReceipt {
             inner: AnyReceiptEnvelope {
                 inner: ReceiptWithBloom::default(),
                 r#type: 0,
@@ -701,7 +703,6 @@ mod tests {
             from: Address::ZERO,
             to: None,
             contract_address: None,
-            authorization_list: None,
-        }
+        })
     }
 }

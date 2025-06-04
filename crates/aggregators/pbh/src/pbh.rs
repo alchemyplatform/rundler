@@ -127,7 +127,7 @@ where
 
             let proof_start = uo.signature().len() - PBH_PROOF_LENGTH;
             agg_proofs.push(
-                PBHPayload::abi_decode(&uo.signature()[proof_start..], true).map_err(|e| {
+                PBHPayload::abi_decode(&uo.signature()[proof_start..]).map_err(|e| {
                     SignatureAggregatorError::InvalidUserOperation(format!(
                         "Malformed PBH proof: {}",
                         e

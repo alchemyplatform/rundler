@@ -19,7 +19,7 @@ use metrics::{Gauge, Histogram};
 use metrics_derive::Metrics;
 #[cfg(test)]
 use mockall::automock;
-use rundler_provider::{EvmProvider, TransactionRequest};
+use rundler_provider::{EvmProvider, ReceiptResponse, TransactionRequest};
 use rundler_signer::SignerLease;
 use rundler_types::{pool::AddressUpdate, ExpectedStorage, GasFees};
 use tokio::time::Instant;
@@ -122,7 +122,7 @@ pub(crate) enum TrackerUpdate {
         block_number: u64,
         attempt_number: u64,
         gas_limit: Option<u64>,
-        gas_used: Option<u128>,
+        gas_used: Option<u64>,
         gas_price: Option<u128>,
         is_success: bool,
     },
@@ -266,7 +266,7 @@ where
             Some(r) => Ok(Some(MinedTxInfo {
                 block_number: r.block_number.unwrap_or(0),
                 gas_limit,
-                gas_used: Some(r.gas_used),
+                gas_used: Some(r.inner.gas_used()),
                 gas_price: Some(r.effective_gas_price),
                 is_success: r.inner.status(),
             })),
@@ -282,7 +282,7 @@ where
 struct MinedTxInfo {
     block_number: u64,
     gas_limit: Option<u64>,
-    gas_used: Option<u128>,
+    gas_used: Option<u64>,
     gas_price: Option<u128>,
     is_success: bool,
 }
@@ -628,12 +628,15 @@ struct TransactionTrackerMetrics {
 mod tests {
     use std::sync::Arc;
 
-    use alloy_consensus::{Signed, TxEip1559, TxEnvelope::Eip1559};
+    use alloy_consensus::{transaction::Recovered, Signed, TxEip1559};
     use alloy_network::TxSigner;
-    use alloy_primitives::{Address, PrimitiveSignature, U256};
+    use alloy_primitives::{Address, Signature, U256};
+    use alloy_rpc_types_eth::{
+        Transaction as AlloyTransaction, TransactionReceipt as AlloyTransactionReceipt,
+    };
     use rundler_provider::{
         AnyReceiptEnvelope, AnyTxEnvelope, MockEvmProvider, ReceiptWithBloom, Transaction,
-        TransactionReceipt,
+        WithOtherFields,
     };
 
     use super::*;
@@ -642,15 +645,15 @@ mod tests {
     struct MockTxSigner {}
 
     #[async_trait::async_trait]
-    impl TxSigner<PrimitiveSignature> for MockTxSigner {
+    impl TxSigner<Signature> for MockTxSigner {
         fn address(&self) -> Address {
             Address::ZERO
         }
         async fn sign_transaction(
             &self,
-            _tx: &mut dyn alloy_consensus::SignableTransaction<PrimitiveSignature>,
-        ) -> alloy_signer::Result<PrimitiveSignature> {
-            Ok(PrimitiveSignature::test_signature())
+            _tx: &mut dyn alloy_consensus::SignableTransaction<Signature>,
+        ) -> alloy_signer::Result<Signature> {
+            Ok(Signature::test_signature())
         }
     }
 
@@ -887,21 +890,17 @@ mod tests {
             gas_limit: 0,
             ..Default::default()
         };
-        let inner = Eip1559(Signed::new_unchecked(
-            txn,
-            PrimitiveSignature::test_signature(),
-            hash,
-        ));
+        let inner = Signed::new_unchecked(txn, Signature::test_signature(), hash).into();
         let inner = AnyTxEnvelope::Ethereum(inner);
 
-        Transaction {
-            inner,
+        WithOtherFields::new(AlloyTransaction {
+            inner: Recovered::new_unchecked(inner, Address::ZERO),
             block_hash: None,
             block_number: None,
             transaction_index: None,
             effective_gas_price: None,
-            from: Address::default(),
-        }
+        })
+        .into()
     }
     #[tokio::test]
     async fn test_process_update_mined() {
@@ -920,7 +919,7 @@ mod tests {
         provider
             .expect_get_transaction_receipt()
             .returning(|_: B256| {
-                Ok(Some(TransactionReceipt {
+                Ok(Some(WithOtherFields::new(AlloyTransactionReceipt {
                     inner: AnyReceiptEnvelope {
                         inner: ReceiptWithBloom::default(),
                         r#type: 0,
@@ -936,8 +935,7 @@ mod tests {
                     from: Address::ZERO,
                     to: None,
                     contract_address: None,
-                    authorization_list: None,
-                }))
+                })))
             });
 
         let mut tracker = create_tracker(sender, provider, signer).await;

@@ -22,7 +22,7 @@ use alloy_eips::eip2718::Encodable2718;
 use alloy_network::{
     AnyNetwork, AnyTxEnvelope, EthereumWallet, NetworkWallet, TransactionBuilder, TxSigner,
 };
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256};
+use alloy_primitives::{Address, Bytes, Signature, U256};
 use metrics::Gauge;
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
@@ -70,7 +70,7 @@ pub trait SignerManager: Send + Sync {
 /// A leased signer
 #[derive(Clone)]
 pub struct SignerLease {
-    signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
+    signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
     chain_id: u64,
 }
 
@@ -83,7 +83,7 @@ impl Debug for SignerLease {
 impl SignerLease {
     /// Create a new signer lease
     pub fn new(
-        signer: Arc<dyn TxSigner<PrimitiveSignature> + Send + Sync + 'static>,
+        signer: Arc<dyn TxSigner<Signature> + Send + Sync + 'static>,
         chain_id: u64,
     ) -> Self {
         Self { signer, chain_id }
@@ -524,15 +524,15 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl TxSigner<PrimitiveSignature> for MockTxSigner {
+    impl TxSigner<Signature> for MockTxSigner {
         fn address(&self) -> Address {
             self.address
         }
         async fn sign_transaction(
             &self,
-            _tx: &mut dyn alloy_consensus::SignableTransaction<PrimitiveSignature>,
-        ) -> alloy_signer::Result<PrimitiveSignature> {
-            Ok(PrimitiveSignature::test_signature())
+            _tx: &mut dyn alloy_consensus::SignableTransaction<Signature>,
+        ) -> alloy_signer::Result<Signature> {
+            Ok(Signature::test_signature())
         }
     }
 }

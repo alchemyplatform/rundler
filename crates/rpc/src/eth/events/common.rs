@@ -256,7 +256,7 @@ where
         uo_hash: B256,
         tx_receipt: &'a TransactionReceipt,
     ) -> Option<&'a Log> {
-        tx_receipt.inner.logs().iter().find(|l| {
+        tx_receipt.inner.inner.logs().iter().find(|l| {
             l.topics().len() >= 2
                 && l.topics()[0] == E::UserOperationEvent::SIGNATURE_HASH
                 && l.topics()[1] == uo_hash

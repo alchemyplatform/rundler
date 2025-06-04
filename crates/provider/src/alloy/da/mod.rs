@@ -14,7 +14,6 @@
 use std::sync::Arc;
 
 use alloy_primitives::Bytes;
-use alloy_transport::Transport;
 use rundler_types::{chain::ChainSpec, da::DAGasOracleType};
 
 use crate::{AlloyProvider, DAGasOracle, DAGasOracleSync, ZeroDAGasOracle};
@@ -27,7 +26,7 @@ mod local;
 use local::{CachedNitroDAGasOracle, LocalBedrockDAGasOracle};
 
 /// Create a DA gas oracle for the given chain spec
-pub fn new_alloy_da_gas_oracle<'a, AP, T>(
+pub fn new_alloy_da_gas_oracle<'a, AP>(
     chain_spec: &ChainSpec,
     provider: AP,
 ) -> (
@@ -35,8 +34,7 @@ pub fn new_alloy_da_gas_oracle<'a, AP, T>(
     Option<Arc<dyn DAGasOracleSync + 'a>>,
 )
 where
-    AP: AlloyProvider<T> + 'a,
-    T: Transport + Clone,
+    AP: AlloyProvider + 'a,
 {
     match chain_spec.da_gas_oracle_type {
         DAGasOracleType::ArbitrumNitro => {
@@ -314,25 +312,19 @@ mod tests {
     }
 
     fn opt_provider() -> impl AlloyProvider {
-        ProviderBuilder::new()
-            .network::<AnyNetwork>()
-            .on_http(
-                format!("https://opt-sepolia.g.alchemy.com/v2/{}", get_api_key())
-                    .parse()
-                    .unwrap(),
-            )
-            .boxed()
+        ProviderBuilder::new().network::<AnyNetwork>().connect_http(
+            format!("https://opt-sepolia.g.alchemy.com/v2/{}", get_api_key())
+                .parse()
+                .unwrap(),
+        )
     }
 
     fn arb_provider() -> impl AlloyProvider {
-        ProviderBuilder::new()
-            .network::<AnyNetwork>()
-            .on_http(
-                format!("https://arb-mainnet.g.alchemy.com/v2/{}", get_api_key())
-                    .parse()
-                    .unwrap(),
-            )
-            .boxed()
+        ProviderBuilder::new().network::<AnyNetwork>().connect_http(
+            format!("https://arb-mainnet.g.alchemy.com/v2/{}", get_api_key())
+                .parse()
+                .unwrap(),
+        )
     }
 
     fn test_uo_data_1() -> Bytes {

@@ -180,12 +180,12 @@ where
             .map_err(GasEstimationError::RevertInValidation)?
             .target_result;
 
-        let result = EstimationTypes::TestCallGasResult::abi_decode(&target_revert_data, false)
+        let result = EstimationTypes::TestCallGasResult::abi_decode(&target_revert_data)
             .context("should decode revert data as TestCallGasResult")?;
         if result.success {
             Ok(())
         } else {
-            let error = if let Ok(revert) = Revert::abi_decode(&result.revertData, false) {
+            let error = if let Ok(revert) = Revert::abi_decode(&result.revertData) {
                 GasEstimationError::RevertInCallWithMessage(revert.reason)
             } else {
                 GasEstimationError::RevertInCallWithBytes(result.revertData)

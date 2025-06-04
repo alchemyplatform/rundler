@@ -19,7 +19,6 @@ futures-util.workspace = true
 metrics.workspace = true
 metrics-derive.workspace = true
 mockall = { workspace = true, optional = true }
-rand.workspace = true
 rundler-contracts.workspace = true
 rundler-provider.workspace = true
 rundler-types.workspace = true

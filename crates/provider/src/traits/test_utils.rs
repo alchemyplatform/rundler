@@ -11,7 +11,6 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_json_rpc::{RpcParam, RpcReturn};
 use alloy_primitives::{Address, Bytes, TxHash, B256, U256};
 use alloy_rpc_types_eth::{
     state::StateOverride, BlockId, BlockNumberOrTag, FeeHistory, Filter, Log,
@@ -31,7 +30,7 @@ use super::error::ProviderResult;
 use crate::{
     AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
-    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut,
+    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut, RpcRecv, RpcSend,
     SignatureAggregator, SimulationProvider, Transaction, TransactionReceipt, TransactionRequest,
 };
 
@@ -42,8 +41,8 @@ mockall::mock! {
     impl EvmProviderTrait for EvmProvider {
         async fn request<P, R>(&self, method: &'static str, params: P) -> ProviderResult<R>
         where
-            P: RpcParam + 'static,
-            R: RpcReturn;
+            P: RpcSend + 'static,
+            R: RpcRecv;
 
         async fn fee_history(
             &self,
@@ -54,9 +53,9 @@ mockall::mock! {
 
         async fn call(
             &self,
-            tx: &TransactionRequest,
+            tx: TransactionRequest,
             block: Option<BlockId>,
-            state_overrides: &StateOverride,
+            state_overrides: Option<StateOverride>,
         ) -> ProviderResult<Bytes>;
 
         async fn send_raw_transaction(&self, tx: Bytes) -> ProviderResult<TxHash>;

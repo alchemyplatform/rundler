@@ -15,7 +15,6 @@ use std::{cmp, ops::Add, time::Instant};
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolInterface};
-use rand::Rng;
 use rundler_contracts::v0_7::{
     CallGasEstimationProxy::{
         estimateCallGasCall, testCallGasCall, CallGasEstimationProxyCalls, EstimateCallGasArgs,
@@ -496,7 +495,7 @@ impl CallGasEstimatorSpecialization for CallGasEstimatorSpecializationV07 {
         // Use a random address for the moved entry point so that users can't
         // intentionally get bad estimates by interacting with the hardcoded
         // address.
-        let moved_entry_point_address: Address = rand::thread_rng().gen();
+        let moved_entry_point_address = Address::random();
 
         state_override.insert(
             moved_entry_point_address,

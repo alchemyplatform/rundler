@@ -175,7 +175,7 @@ where
 
         let ret = self
             .provider
-            .call(&call, Some(block_hash.into()), &state_overrides)
+            .call(call, Some(block_hash.into()), Some(state_overrides))
             .await;
 
         match ret {

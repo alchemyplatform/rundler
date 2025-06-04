@@ -44,6 +44,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 alloy-network.workspace = true
+alloy-rpc-types-eth.workspace = true
 mockall.workspace = true
 rundler-provider = { workspace = true, features = ["test-utils"] }
 rundler-sim = { workspace = true, features = ["test-utils"] }

@@ -13,7 +13,6 @@
 
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
-use alloy_transport::Transport;
 use anyhow::Context;
 use reth_tasks::pool::BlockingTaskPool;
 use rundler_contracts::multicall3::{self, Multicall3::Multicall3Instance};
@@ -44,18 +43,17 @@ const MIN_TRANSACTION_SIZE: i128 = 100_000_000;
 ///
 /// Details: https://github.com/ethereum-optimism/specs/blob/main/specs/protocol/fjord/exec-engine.md#fjord-l1-cost-fee-changes-fastlz-estimator
 #[derive(Debug)]
-pub(crate) struct LocalBedrockDAGasOracle<AP, T> {
-    oracle: GasPriceOracleInstance<T, AP, AnyNetwork>,
-    multicaller: Multicall3Instance<T, AP, AnyNetwork>,
+pub(crate) struct LocalBedrockDAGasOracle<AP> {
+    oracle: GasPriceOracleInstance<AP, AnyNetwork>,
+    multicaller: Multicall3Instance<AP, AnyNetwork>,
     block_data_cache: TokioMutex<LruMap<BlockHashOrNumber, BedrockDAGasBlockData>>,
     blocking_task_pool: BlockingTaskPool,
     metrics: DAMetrics,
 }
 
-impl<AP, T> LocalBedrockDAGasOracle<AP, T>
+impl<AP> LocalBedrockDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     pub(crate) fn new(oracle_address: Address, provider: AP, chain_spec: &ChainSpec) -> Self {
         let oracle = GasPriceOracleInstance::new(oracle_address, provider.clone());
@@ -72,10 +70,9 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasOracle for LocalBedrockDAGasOracle<AP, T>
+impl<AP> DAGasOracle for LocalBedrockDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn estimate_da_gas(
@@ -94,10 +91,9 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasOracleSync for LocalBedrockDAGasOracle<AP, T>
+impl<AP> DAGasOracleSync for LocalBedrockDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn da_block_data(&self, block: BlockHashOrNumber) -> ProviderResult<DAGasBlockData> {
@@ -150,10 +146,9 @@ where
     }
 }
 
-impl<AP, T> LocalBedrockDAGasOracle<AP, T>
+impl<AP> LocalBedrockDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn is_fjord(&self) -> bool {
@@ -161,7 +156,6 @@ where
             .isFjord()
             .call()
             .await
-            .map(|r| r.isFjord)
             .map_err(|e| error!("failed to check if fjord: {:?}", e))
             .unwrap_or(true) // Fail-open. Assume fjord if we can't check, so this can be used downstream in asserts w/o panic on RPC errors.
     }
@@ -199,31 +193,24 @@ where
             .block(block.into())
             .await?;
 
-        if result.returnData.len() != 4 {
+        if result.len() != 4 {
             Err(anyhow::anyhow!(
                 "multicall returned unexpected number of results"
             ))?;
-        } else if result.returnData.iter().any(|r| !r.success) {
+        } else if result.iter().any(|r| !r.success) {
             Err(anyhow::anyhow!("multicall returned some failed results"))?;
         }
 
         let base_fee_scalar =
-            multicall3::decode_result::<baseFeeScalarCall>(&result.returnData[0].returnData)?._0
-                as u64;
-        let l1_base_fee =
-            multicall3::decode_result::<l1BaseFeeCall>(&result.returnData[1].returnData)?
-                ._0
-                .try_into()
-                .context("l1_base_fee too large for u64")?;
-        let blob_base_fee_scalar = multicall3::decode_result::<blobBaseFeeScalarCall>(
-            &result.returnData[2].returnData,
-        )?
-        ._0 as u64;
-        let blob_base_fee =
-            multicall3::decode_result::<blobBaseFeeCall>(&result.returnData[3].returnData)?
-                ._0
-                .try_into()
-                .context("blob_base_fee too large for u64")?;
+            multicall3::decode_result::<baseFeeScalarCall>(&result[0].returnData)? as u64;
+        let l1_base_fee = multicall3::decode_result::<l1BaseFeeCall>(&result[1].returnData)?
+            .try_into()
+            .context("l1_base_fee too large for u64")?;
+        let blob_base_fee_scalar =
+            multicall3::decode_result::<blobBaseFeeScalarCall>(&result[2].returnData)? as u64;
+        let blob_base_fee = multicall3::decode_result::<blobBaseFeeCall>(&result[3].returnData)?
+            .try_into()
+            .context("blob_base_fee too large for u64")?;
 
         self.metrics.l1_base_fee.set(l1_base_fee as f64);
         self.metrics.blob_base_fee.set(blob_base_fee as f64);

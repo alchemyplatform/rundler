@@ -14,7 +14,6 @@
 use alloy_primitives::{Address, Bytes};
 use alloy_provider::network::AnyNetwork;
 use alloy_sol_types::sol;
-use alloy_transport::Transport;
 use anyhow::Context;
 use rundler_types::da::{DAGasBlockData, DAGasData};
 use tracing::instrument;
@@ -38,14 +37,13 @@ sol! {
     }
 }
 
-pub(super) struct OptimismBedrockDAGasOracle<AP, T> {
-    oracle: GasPriceOracleInstance<T, AP, AnyNetwork>,
+pub(super) struct OptimismBedrockDAGasOracle<AP> {
+    oracle: GasPriceOracleInstance<AP, AnyNetwork>,
 }
 
-impl<AP, T> OptimismBedrockDAGasOracle<AP, T>
+impl<AP> OptimismBedrockDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     pub(crate) fn new(oracle_address: Address, provider: AP) -> Self {
         let oracle = GasPriceOracleInstance::new(oracle_address, provider);
@@ -54,10 +52,9 @@ where
 }
 
 #[async_trait::async_trait]
-impl<AP, T> DAGasOracle for OptimismBedrockDAGasOracle<AP, T>
+impl<AP> DAGasOracle for OptimismBedrockDAGasOracle<AP>
 where
-    AP: AlloyProvider<T>,
-    T: Transport + Clone,
+    AP: AlloyProvider,
 {
     #[instrument(skip_all)]
     async fn estimate_da_gas(
@@ -84,7 +81,6 @@ where
             .block(block.into())
             .call()
             .await?
-            ._0
             .try_into()
             .context("failed to convert DA fee to u128")?;
 

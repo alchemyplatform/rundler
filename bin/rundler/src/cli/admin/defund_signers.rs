@@ -16,7 +16,7 @@ use std::time::Duration;
 use alloy_consensus::{SignableTransaction, TxEnvelope, TypedTransaction};
 use alloy_eips::eip2718::Encodable2718;
 use alloy_network::TransactionBuilder;
-use alloy_primitives::{Address, PrimitiveSignature, U256};
+use alloy_primitives::{Address, Signature, U256};
 use anyhow::{bail, Context};
 use clap::Args;
 use rundler_provider::{DAGasOracle, EvmProvider, Providers, TransactionRequest};
@@ -176,8 +176,7 @@ async fn defund_signer(
             bail!("failed to build EIP-1559 typed txn")
         };
         let mut data = vec![];
-        TxEnvelope::from(tx.into_signed(PrimitiveSignature::test_signature()))
-            .encode_2718(&mut data);
+        TxEnvelope::from(tx.into_signed(Signature::test_signature())).encode_2718(&mut data);
         let extra_data_len = data.len() / 4; // overestimate
 
         let block = provider
