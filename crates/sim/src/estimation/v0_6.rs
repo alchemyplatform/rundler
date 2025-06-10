@@ -179,7 +179,7 @@ impl<P, E, F>
     GasEstimator<
         P,
         E,
-        VerificationGasEstimatorImpl<VerificationGasEstimatorSpecializationV06, P>,
+        VerificationGasEstimatorImpl<VerificationGasEstimatorSpecializationV06<E>, P>,
         CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV06>,
         F,
     >
@@ -208,7 +208,7 @@ where
             settings,
             provider.clone(),
             VerificationGasEstimatorSpecializationV06 {
-                entry_point: *entry_point.address(),
+                entry_point: entry_point.clone(),
             },
         );
         let call_gas_estimator = CallGasEstimatorImpl::new(
@@ -487,11 +487,14 @@ fn estimation_proxy_bytecode_with_target(target: Address) -> Bytes {
 }
 
 #[derive(Clone)]
-pub struct VerificationGasEstimatorSpecializationV06 {
-    entry_point: Address,
+pub struct VerificationGasEstimatorSpecializationV06<EP> {
+    entry_point: EP,
 }
 
-impl VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpecializationV06 {
+impl<EP> VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpecializationV06<EP>
+where
+    EP: EntryPoint + SimulationProvider,
+{
     type UO = UserOperation;
 
     fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
@@ -507,7 +510,7 @@ impl VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpeciali
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
         estimateVerificationGasCall {
             args: ContractEstimateGasArgs {
-                entryPoint: self.entry_point,
+                entryPoint: *self.entry_point.address(),
                 userOp: op.into(),
                 minGas: U256::from(args.min_gas),
                 maxGas: U256::from(args.max_gas),
@@ -518,6 +521,17 @@ impl VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpeciali
         }
         .abi_encode()
         .into()
+    }
+
+    fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError {
+        match EP::decode_simulate_handle_ops_revert(revert_data) {
+            Ok(Ok(res)) => GasEstimationError::Other(anyhow::anyhow!(
+                "unexpected result from simulate_handle_ops: {:?}",
+                res
+            )),
+            Ok(Err(e)) => GasEstimationError::RevertInValidation(e),
+            Err(e) => GasEstimationError::ProviderError(e),
+        }
     }
 }
 
@@ -563,7 +577,7 @@ mod tests {
 
     // Alises for complex types (which also satisfy Clippy)
     type VerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<
-        VerificationGasEstimatorSpecializationV06,
+        VerificationGasEstimatorSpecializationV06<Arc<MockEntryPointV0_6>>,
         Arc<MockEvmProvider>,
     >;
     type CallGasEstimatorWithMocks =

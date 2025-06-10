@@ -21,7 +21,7 @@ use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use super::Settings;
-use crate::GasEstimationError;
+use crate::{estimation::BinarySearchResult, GasEstimationError};
 
 /// Estimates a verification gas limit for a user operation. Can be used to
 /// estimate both verification gas and, in the v0.7 case, paymaster verification
@@ -52,6 +52,8 @@ pub trait VerificationGasEstimatorSpecialization: Send + Sync {
     fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride);
 
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes;
+
+    fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError;
 }
 
 #[derive(Debug, Clone)]
@@ -110,22 +112,29 @@ where
         };
 
         let timer = std::time::Instant::now();
-        let (estimate, num_rounds) = super::run_binary_search(
+        let result = super::run_binary_search(
             round_fn,
             self.settings.max_verification_gas,
             self.settings.max_gas_estimation_rounds,
         )
         .await?;
-        tracing::debug!(
-            "verification gas estimation took {} ms with {} rounds",
-            timer.elapsed().as_millis(),
-            num_rounds
-        );
 
-        if op.paymaster().is_none() {
-            Ok(estimate + self.chain_spec.deposit_transfer_overhead())
-        } else {
-            Ok(estimate)
+        match result {
+            BinarySearchResult::Success(estimate, num_rounds) => {
+                tracing::debug!(
+                    "verification gas estimation took {} ms with {} rounds",
+                    timer.elapsed().as_millis(),
+                    num_rounds
+                );
+                if op.paymaster().is_none() {
+                    Ok(estimate + self.chain_spec.deposit_transfer_overhead())
+                } else {
+                    Ok(estimate)
+                }
+            }
+            BinarySearchResult::Revert(revert_data) => {
+                Err(self.specialization.decode_revert(&revert_data))
+            }
         }
     }
 }
