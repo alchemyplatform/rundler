@@ -98,6 +98,9 @@ pub(crate) trait Mempool: Send + Sync {
     /// Looks up a user operation by hash, returns None if not found
     fn get_user_operation_by_hash(&self, hash: B256) -> Option<Arc<PoolOperation>>;
 
+    /// Looks up a user operation by id, returns None if not found
+    fn get_op_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>>;
+
     /// Debug methods
     /// Clears the mempool of UOs or reputation of all addresses
     fn clear_state(&self, clear_mempool: bool, clear_paymaster: bool, clear_reputation: bool);

@@ -151,6 +151,7 @@ Rundler specific methods that are not specified by the ERC-4337 spec. This names
 | [`rundler_dropLocalUserOperation`](#rundler_droplocaluseroperation) | ✅ |
 | [`rundler_getMinedUserOperation`](#rundler_getmineduseroperation) | ✅ |
 | [`rundler_getUserOperationStatus`](#rundler_getuseroperationstatus) | ✅ |
+| [`rundler_getPendingUserOperationBySenderNonce`](#rundler_getpendinguseroperationbysendernonce) | ✅ |
 
 #### `rundler_maxPriorityFeePerGas`
 
@@ -290,6 +291,30 @@ Possible statuses:
       ... // User operation receipt if "mined"
     }
   }
+}
+```
+
+#### `rundler_getPendingUserOperationBySenderNonce`
+
+Gets a pending user operation for the given sender & nonce. If a user operation is not pending for that sender & nonce pair, it will return null.
+
+```
+# Request
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "rundler_getPendingUserOperationBySenderNonce",
+  "params": [
+    "0x...", // sender address
+    "0x...", // nonce
+  ]
+}
+
+# Response
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": null | UserOperation
 }
 ```
 

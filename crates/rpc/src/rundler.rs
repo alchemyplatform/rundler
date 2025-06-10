@@ -11,7 +11,7 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, B256, U128};
+use alloy_primitives::{Address, B256, U128, U256};
 use anyhow::Context;
 use async_trait::async_trait;
 use futures_util::{future, TryFutureExt};
@@ -20,7 +20,7 @@ use rundler_provider::{EvmProvider, FeeEstimator};
 use rundler_types::{
     chain::{ChainSpec, IntoWithSpec},
     pool::Pool,
-    UserOperation, UserOperationVariant,
+    UserOperation, UserOperationId, UserOperationVariant,
 };
 use tracing::instrument;
 
@@ -65,6 +65,14 @@ pub trait RundlerApi {
     /// Gets the status of a user operation by user operation hash
     #[method(name = "getUserOperationStatus")]
     async fn get_user_operation_status(&self, uo_hash: B256) -> RpcResult<RpcUserOperationStatus>;
+
+    /// Gets the required fees for a sender nonce
+    #[method(name = "getPendingUserOperationBySenderNonce")]
+    async fn get_pending_user_operation_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> RpcResult<Option<RpcUserOperation>>;
 }
 
 pub(crate) struct RundlerApi<P, F, E> {
@@ -123,6 +131,22 @@ where
         utils::safe_call_rpc_handler(
             "rundler_getUserOperationStatus",
             RundlerApi::get_user_operation_status(self, uo_hash),
+        )
+        .await
+    }
+
+    #[instrument(
+        skip_all,
+        fields(rpc_method = "rundler_getPendingUserOperationForSenderNonce")
+    )]
+    async fn get_pending_user_operation_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> RpcResult<Option<RpcUserOperation>> {
+        utils::safe_call_rpc_handler(
+            "rundler_getPendingUserOperationBySenderNonce",
+            RundlerApi::get_pending_user_operation_by_sender_nonce(self, sender, nonce),
         )
         .await
     }
@@ -272,5 +296,19 @@ where
             status: UserOperationStatusEnum::Unknown,
             receipt: None,
         })
+    }
+
+    async fn get_pending_user_operation_by_sender_nonce(
+        &self,
+        sender: Address,
+        nonce: U256,
+    ) -> EthResult<Option<RpcUserOperation>> {
+        let uo = self
+            .pool_server
+            .get_op_by_id(UserOperationId { sender, nonce })
+            .await
+            .map_err(EthRpcError::from)?;
+
+        Ok(uo.map(|uo| uo.uo.into()))
     }
 }
