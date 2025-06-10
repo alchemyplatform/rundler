@@ -14,7 +14,7 @@
 use std::{future::Future, pin::Pin};
 
 use alloy_primitives::{Address, Bytes};
-use alloy_sol_types::{Revert, SolError, SolInterface};
+use alloy_sol_types::SolInterface;
 use anyhow::{anyhow, Context};
 use metrics::Histogram;
 use metrics_derive::Metrics;
@@ -147,11 +147,16 @@ struct Metrics {
     pvgl_estimate_ms: Histogram,
 }
 
+enum BinarySearchResult {
+    Success(u128, u32),
+    Revert(Bytes),
+}
+
 async fn run_binary_search<F>(
     round_fn: F,
     max_gas: u128,
     max_rounds: u32,
-) -> Result<(u128, u32), GasEstimationError>
+) -> Result<BinarySearchResult, GasEstimationError>
 where
     F: Fn(
         u128, // min gas
@@ -177,7 +182,7 @@ where
                     .context("num rounds return overflow")?;
 
                 num_rounds += ret_num_rounds;
-                return Ok((
+                return Ok(BinarySearchResult::Success(
                     result
                         .gas
                         .try_into()
@@ -186,12 +191,7 @@ where
                 ));
             }
             EstimationTypesErrors::EstimateGasRevertAtMax(revert) => {
-                let error = if let Ok(revert) = Revert::abi_decode(&revert.revertData) {
-                    GasEstimationError::RevertInCallWithMessage(revert.reason)
-                } else {
-                    GasEstimationError::RevertInCallWithBytes(revert.revertData)
-                };
-                return Err(error);
+                return Ok(BinarySearchResult::Revert(revert.revertData));
             }
             EstimationTypesErrors::EstimateGasContinuation(continuation) => {
                 let ret_min_gas = continuation

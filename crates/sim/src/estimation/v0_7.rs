@@ -206,8 +206,8 @@ impl<P, E, F>
     GasEstimator<
         P,
         E,
-        VerificationGasEstimatorImpl<VerificationGasEstimatorSpecializationV07, P>,
-        VerificationGasEstimatorImpl<PaymasterVerificationGasEstimatorSpecializationV07, P>,
+        VerificationGasEstimatorImpl<VerificationGasEstimatorSpecializationV07<E>, P>,
+        VerificationGasEstimatorImpl<PaymasterVerificationGasEstimatorSpecializationV07<E>, P>,
         CallGasEstimatorImpl<E, CallGasEstimatorSpecializationV07>,
         F,
     >
@@ -236,7 +236,7 @@ where
             settings,
             provider.clone(),
             VerificationGasEstimatorSpecializationV07 {
-                entry_point: *entry_point.address(),
+                entry_point: entry_point.clone(),
             },
         );
 
@@ -245,7 +245,7 @@ where
             settings,
             provider.clone(),
             PaymasterVerificationGasEstimatorSpecializationV07 {
-                entry_point: *entry_point.address(),
+                entry_point: entry_point.clone(),
             },
         );
 
@@ -610,47 +610,73 @@ fn add_proxy_to_overrides(
     );
 }
 
-/// Specialization for verification gas estimation
-#[derive(Clone)]
-pub struct VerificationGasEstimatorSpecializationV07 {
-    entry_point: Address,
+fn decode_validation_revert<EP: SimulationProvider>(revert_data: &Bytes) -> GasEstimationError {
+    match EP::decode_simulate_handle_ops_revert(revert_data) {
+        Ok(Ok(res)) => GasEstimationError::Other(anyhow::anyhow!(
+            "unexpected result from simulate_handle_ops: {:?}",
+            res
+        )),
+        Ok(Err(e)) => GasEstimationError::RevertInValidation(e),
+        Err(e) => GasEstimationError::ProviderError(e),
+    }
 }
 
-impl VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpecializationV07 {
+/// Specialization for verification gas estimation
+#[derive(Clone)]
+pub struct VerificationGasEstimatorSpecializationV07<EP> {
+    entry_point: EP,
+}
+
+impl<EP> VerificationGasEstimatorSpecialization for VerificationGasEstimatorSpecializationV07<EP>
+where
+    EP: EntryPoint + SimulationProvider,
+{
     type UO = UserOperation;
 
     fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
-        add_proxy_to_overrides(self.entry_point, to_override, state_override);
+        add_proxy_to_overrides(*self.entry_point.address(), to_override, state_override);
     }
 
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
         estimateVerificationGasCall {
-            args: construct_verification_args(self.entry_point, op, args),
+            args: construct_verification_args(*self.entry_point.address(), op, args),
         }
         .abi_encode()
         .into()
+    }
+
+    fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError {
+        decode_validation_revert::<EP>(revert_data)
     }
 }
 
 /// Specialization for paymaster verification gas estimation
 #[derive(Clone)]
-pub struct PaymasterVerificationGasEstimatorSpecializationV07 {
-    entry_point: Address,
+pub struct PaymasterVerificationGasEstimatorSpecializationV07<EP> {
+    entry_point: EP,
 }
 
-impl VerificationGasEstimatorSpecialization for PaymasterVerificationGasEstimatorSpecializationV07 {
+impl<EP> VerificationGasEstimatorSpecialization
+    for PaymasterVerificationGasEstimatorSpecializationV07<EP>
+where
+    EP: EntryPoint + SimulationProvider,
+{
     type UO = UserOperation;
 
     fn add_proxy_to_overrides(&self, to_override: Address, state_override: &mut StateOverride) {
-        add_proxy_to_overrides(self.entry_point, to_override, state_override);
+        add_proxy_to_overrides(*self.entry_point.address(), to_override, state_override);
     }
 
     fn get_call(&self, op: Self::UO, args: &EstimateGasArgs) -> Bytes {
         estimatePaymasterVerificationGasCall {
-            args: construct_verification_args(self.entry_point, op, args),
+            args: construct_verification_args(*self.entry_point.address(), op, args),
         }
         .abi_encode()
         .into()
+    }
+
+    fn decode_revert(&self, revert_data: &Bytes) -> GasEstimationError {
+        decode_validation_revert::<EP>(revert_data)
     }
 }
 
@@ -673,11 +699,11 @@ mod tests {
 
     // Alises for complex types (which also satisfy Clippy)
     type VerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<
-        VerificationGasEstimatorSpecializationV07,
+        VerificationGasEstimatorSpecializationV07<Arc<MockEntryPointV0_7>>,
         Arc<MockEvmProvider>,
     >;
     type PaymasterVerificationGasEstimatorWithMocks = VerificationGasEstimatorImpl<
-        PaymasterVerificationGasEstimatorSpecializationV07,
+        PaymasterVerificationGasEstimatorSpecializationV07<Arc<MockEntryPointV0_7>>,
         Arc<MockEvmProvider>,
     >;
 

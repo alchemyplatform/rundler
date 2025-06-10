@@ -24,7 +24,7 @@ use rundler_utils::authorization_utils;
 use tracing::instrument;
 
 use super::Settings;
-use crate::GasEstimationError;
+use crate::{estimation::BinarySearchResult, GasEstimationError};
 
 /// Must match the constant in `CallGasEstimationProxyTypes.sol`.
 #[allow(dead_code)]
@@ -136,19 +136,30 @@ where
         };
 
         let timer = std::time::Instant::now();
-        let (estimate, num_rounds) = super::run_binary_search(
+        let result = super::run_binary_search(
             round_fn,
             self.settings.max_bundle_execution_gas,
             self.settings.max_gas_estimation_rounds,
         )
         .await?;
-        tracing::debug!(
-            "call gas estimation took {} ms with {} rounds",
-            timer.elapsed().as_millis(),
-            num_rounds
-        );
 
-        Ok(estimate)
+        match result {
+            BinarySearchResult::Success(estimate, num_rounds) => {
+                tracing::debug!(
+                    "call gas estimation took {} ms with {} rounds",
+                    timer.elapsed().as_millis(),
+                    num_rounds
+                );
+                Ok(estimate)
+            }
+            BinarySearchResult::Revert(revert_data) => {
+                if let Ok(revert) = Revert::abi_decode(&revert_data) {
+                    Err(GasEstimationError::RevertInCallWithMessage(revert.reason))
+                } else {
+                    Err(GasEstimationError::RevertInCallWithBytes(revert_data))
+                }
+            }
+        }
     }
 
     #[instrument(skip_all)]
