@@ -410,6 +410,15 @@ pub struct CommonArgs {
     pub call_gas_allowed_error_pct: u128,
 
     #[arg(
+        long = "max_gas_estimation_gas",
+        name = "max_gas_estimation_gas",
+        env = "MAX_GAS_ESTIMATION_GAS",
+        default_value = "550000000",
+        global = true
+    )]
+    pub max_gas_estimation_gas: u64,
+
+    #[arg(
         long = "max_gas_estimation_rounds",
         name = "max_gas_estimation_rounds",
         env = "MAX_GAS_ESTIMATION_ROUNDS",
@@ -555,7 +564,7 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             > max_bundle_execution_gas.saturating_sub(SIMULATION_GAS_OVERHEAD) as u64
         {
             anyhow::bail!(
-                "max_verification_gas ({}) must be less than max_simulate_handle_ops_gas ({}) by at least {}",
+                "max_verification_gas ({}) must be less than max_bundle_execution_gas ({}) by at least {}",
                 value.max_verification_gas,
                 max_bundle_execution_gas,
                 SIMULATION_GAS_OVERHEAD
@@ -822,6 +831,7 @@ pub fn construct_providers(
             chain_spec.clone(),
             args.max_verification_gas,
             max_bundle_execution_gas,
+            args.max_gas_estimation_gas,
             max_bundle_execution_gas,
             provider.clone(),
             da_gas_oracle.clone(),
@@ -835,6 +845,7 @@ pub fn construct_providers(
             chain_spec.clone(),
             args.max_verification_gas,
             max_bundle_execution_gas,
+            args.max_gas_estimation_gas,
             max_bundle_execution_gas,
             provider.clone(),
             da_gas_oracle.clone(),
