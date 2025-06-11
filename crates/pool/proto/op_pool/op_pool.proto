@@ -249,6 +249,9 @@ service OpPool {
   // Get a UserOperation by its hash
   rpc GetOpByHash (GetOpByHashRequest) returns (GetOpByHashResponse);
 
+  // Get a UserOperation by its id
+  rpc GetOpById (GetOpByIdRequest) returns (GetOpByIdResponse);
+
   // Removes UserOperations from the mempool
   rpc RemoveOps(RemoveOpsRequest) returns (RemoveOpsResponse);
 
@@ -378,6 +381,20 @@ message GetOpByHashResponse {
   }
 }
 message GetOpByHashSuccess {
+  MempoolOp op = 1;
+}
+
+message GetOpByIdRequest {
+  bytes sender = 1;
+  bytes nonce = 2;
+}
+message GetOpByIdResponse {
+  oneof result {
+    GetOpByIdSuccess success = 1;
+    MempoolError failure = 2;
+  }
+}
+message GetOpByIdSuccess {
   MempoolOp op = 1;
 }
 

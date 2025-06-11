@@ -45,14 +45,14 @@ use super::protos::{
     self, add_op_response, admin_set_tracking_response, debug_clear_state_response,
     debug_dump_mempool_response, debug_dump_paymaster_balances_response,
     debug_dump_reputation_response, debug_set_reputation_response, get_op_by_hash_response,
-    get_ops_by_hashes_response, get_ops_response, get_ops_summaries_response,
-    get_reputation_status_response, get_stake_status_response, op_pool_client::OpPoolClient,
-    remove_op_by_id_response, remove_ops_response, update_entities_response, AddOpRequest,
-    AdminSetTrackingRequest, DebugClearStateRequest, DebugDumpMempoolRequest,
-    DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest, DebugSetReputationRequest,
-    GetOpsRequest, GetReputationStatusRequest, GetStakeStatusRequest, RemoveOpsRequest,
-    ReputationStatus as ProtoReputationStatus, SubscribeNewHeadsRequest, SubscribeNewHeadsResponse,
-    TryUoFromProto, UpdateEntitiesRequest,
+    get_op_by_id_response, get_ops_by_hashes_response, get_ops_response,
+    get_ops_summaries_response, get_reputation_status_response, get_stake_status_response,
+    op_pool_client::OpPoolClient, remove_op_by_id_response, remove_ops_response,
+    update_entities_response, AddOpRequest, AdminSetTrackingRequest, DebugClearStateRequest,
+    DebugDumpMempoolRequest, DebugDumpPaymasterBalancesRequest, DebugDumpReputationRequest,
+    DebugSetReputationRequest, GetOpByIdRequest, GetOpsRequest, GetReputationStatusRequest,
+    GetStakeStatusRequest, RemoveOpsRequest, ReputationStatus as ProtoReputationStatus,
+    SubscribeNewHeadsRequest, SubscribeNewHeadsResponse, TryUoFromProto, UpdateEntitiesRequest,
 };
 
 /// Remote pool client
@@ -313,6 +313,40 @@ impl Pool for RemotePoolClient {
                 })
                 .transpose()?),
             Some(get_op_by_hash_response::Result::Failure(e)) => match e.error {
+                Some(_) => Err(e.try_into()?),
+                None => Err(PoolError::Other(anyhow::anyhow!(
+                    "should have received error from op pool"
+                )))?,
+            },
+            None => Err(PoolError::Other(anyhow::anyhow!(
+                "should have received result from op pool"
+            )))?,
+        }
+    }
+
+    async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>> {
+        let res = self
+            .op_pool_client
+            .clone()
+            .get_op_by_id(GetOpByIdRequest {
+                sender: id.sender.to_proto_bytes(),
+                nonce: id.nonce.to_proto_bytes(),
+            })
+            .await
+            .map_err(anyhow::Error::from)?
+            .into_inner()
+            .result;
+
+        match res {
+            Some(get_op_by_id_response::Result::Success(s)) => Ok(s
+                .op
+                .map(|proto_uo| {
+                    PoolOperation::try_uo_from_proto(proto_uo, &self.chain_spec)
+                        .context("should convert proto uo to pool operation")
+                        .map_err(PoolError::from)
+                })
+                .transpose()?),
+            Some(get_op_by_id_response::Result::Failure(e)) => match e.error {
                 Some(_) => Err(e.try_into()?),
                 None => Err(PoolError::Other(anyhow::anyhow!(
                     "should have received error from op pool"

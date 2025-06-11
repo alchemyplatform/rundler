@@ -80,6 +80,9 @@ pub trait Pool: Send + Sync {
     /// Returns None if the operation is not found
     async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
 
+    /// Get an operation from the pool by id
+    async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
+
     /// Remove operations from the pool by hash
     async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
 
@@ -196,6 +199,7 @@ mockall::mock! {
             hashes: Vec<B256>,
         ) -> PoolResult<Vec<PoolOperation>>;
         async fn get_op_by_hash(&self, hash: B256) -> PoolResult<Option<PoolOperation>>;
+        async fn get_op_by_id(&self, id: UserOperationId) -> PoolResult<Option<PoolOperation>>;
         async fn remove_ops(&self, entry_point: Address, ops: Vec<B256>) -> PoolResult<()>;
         async fn remove_op_by_id(
             &self,

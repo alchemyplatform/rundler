@@ -778,6 +778,10 @@ where
         self.ep_specific_metrics.removed_operations.increment(count);
     }
 
+    fn get_op_by_id(&self, id: &UserOperationId) -> Option<Arc<PoolOperation>> {
+        self.state.read().pool.get_operation_by_id(id)
+    }
+
     fn remove_op_by_id(&self, id: &UserOperationId) -> MempoolResult<Option<B256>> {
         // Check for the operation in the pool and its age
         let po = {
