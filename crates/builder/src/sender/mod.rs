@@ -257,6 +257,10 @@ fn parse_known_call_execution_failed(message: &str, code: i64) -> Option<TxSende
     if lowercase_message.contains("insufficient funds") {
         return Some(TxSenderError::InsufficientFunds);
     }
+    // Aribtrum sequencer
+    if lowercase_message.contains("condition not met") {
+        return Some(TxSenderError::ConditionNotMet);
+    }
     // Check error codes before checking the message
     // The error code is -32003 or -32005 when condition is not met: https://eips.ethereum.org/EIPS/eip-7796
     if code == -32003 || code == -32005 {
