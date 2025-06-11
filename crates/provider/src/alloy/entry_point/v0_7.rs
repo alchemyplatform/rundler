@@ -13,7 +13,6 @@
 
 use alloy_contract::Error as ContractError;
 use alloy_eips::eip7702::SignedAuthorization;
-use alloy_json_rpc::ErrorPayload;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::network::{AnyNetwork, TransactionBuilder7702};
 use alloy_rpc_types_eth::{
@@ -61,6 +60,7 @@ pub struct EntryPointProvider<AP, D> {
     da_gas_oracle: D,
     max_verification_gas: u64,
     max_simulate_handle_ops_gas: u64,
+    max_gas_estimation_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
 }
@@ -74,6 +74,7 @@ where
         chain_spec: ChainSpec,
         max_verification_gas: u64,
         max_simulate_handle_ops_gas: u64,
+        max_gas_estimation_gas: u64,
         max_aggregation_gas: u64,
         provider: AP,
         da_gas_oracle: D,
@@ -86,6 +87,7 @@ where
             da_gas_oracle,
             max_verification_gas,
             max_simulate_handle_ops_gas,
+            max_gas_estimation_gas,
             max_aggregation_gas,
             chain_spec,
         }
@@ -500,7 +502,13 @@ where
                     .context("failed to decode validation result")?;
                 Ok(Ok(out.try_into().map_err(anyhow::Error::msg)?))
             }
-            Err(TransportError::ErrorResp(resp)) => Ok(Err(decode_validation_revert_payload(resp))),
+            Err(TransportError::ErrorResp(resp)) => {
+                if let Some(revert) = resp.as_revert_data() {
+                    Ok(Err(decode_validation_revert(&revert)))
+                } else {
+                    Err(TransportError::ErrorResp(resp).into())
+                }
+            }
             Err(error) => Err(error.into()),
         }
     }
@@ -539,7 +547,7 @@ where
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
         simulate_handle_op_inner(
             &self.chain_spec,
-            self.max_simulate_handle_ops_gas,
+            self.max_gas_estimation_gas,
             &self.i_entry_point,
             op,
             target,
@@ -643,13 +651,6 @@ fn get_handle_ops_call<AP: AlloyProvider>(
     txn_request
 }
 
-fn decode_validation_revert_payload(err: ErrorPayload) -> ValidationRevert {
-    match err.as_revert_data() {
-        Some(err_bytes) => decode_validation_revert(&err_bytes),
-        None => ValidationRevert::Unknown(Bytes::default()),
-    }
-}
-
 /// Decodes raw validation revert bytes from a v0.7 entry point
 pub fn decode_validation_revert(err_bytes: &Bytes) -> ValidationRevert {
     if let Ok(rev) = SolContractError::<IEntryPointErrors>::abi_decode(err_bytes) {
@@ -724,7 +725,7 @@ pub fn decode_ops_from_calldata(
 #[allow(clippy::too_many_arguments)]
 async fn simulate_handle_op_inner<AP: AlloyProvider>(
     chain_spec: &ChainSpec,
-    max_simulate_handle_ops_gas: u64,
+    execution_gas_limit: u64,
     entry_point: &IEntryPointInstance<AP, AnyNetwork>,
     op: UserOperation,
     target: Address,
@@ -749,7 +750,7 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
         ep_simulations
             .simulateHandleOpNoPostOp(op.pack(), target, target_call_data)
             .block(block_id)
-            .gas(max_simulate_handle_ops_gas.saturating_add(da_gas))
+            .gas(execution_gas_limit.saturating_add(da_gas))
             .state(state_override)
             .call()
             .await
@@ -757,16 +758,22 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
         ep_simulations
             .simulateHandleOp(op.pack(), target, target_call_data)
             .block(block_id)
-            .gas(max_simulate_handle_ops_gas.saturating_add(da_gas))
+            .gas(execution_gas_limit.saturating_add(da_gas))
             .state(state_override)
             .call()
             .await
     };
 
+    tracing::info!("simulate_handle_op_inner: {:?}", res);
+
     match res {
         Ok(output) => Ok(Ok(output.try_into()?)),
         Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
-            Ok(Err(decode_validation_revert_payload(resp)))
+            if let Some(revert) = resp.as_revert_data() {
+                Ok(Err(decode_validation_revert(&revert)))
+            } else {
+                Err(TransportError::ErrorResp(resp).into())
+            }
         }
         Err(error) => Err(error.into()),
     }

@@ -53,6 +53,7 @@ pub struct EntryPointProvider<AP, D> {
     da_gas_oracle: D,
     max_verification_gas: u64,
     max_simulate_handle_op_gas: u64,
+    max_gas_estimation_gas: u64,
     max_aggregation_gas: u64,
     chain_spec: ChainSpec,
 }
@@ -67,6 +68,7 @@ where
         chain_spec: ChainSpec,
         max_verification_gas: u64,
         max_simulate_handle_op_gas: u64,
+        max_gas_estimation_gas: u64,
         max_aggregation_gas: u64,
         provider: AP,
         da_gas_oracle: D,
@@ -79,6 +81,7 @@ where
             da_gas_oracle,
             max_verification_gas,
             max_simulate_handle_op_gas,
+            max_gas_estimation_gas,
             max_aggregation_gas,
             chain_spec,
         }
@@ -455,40 +458,19 @@ where
         target: Address,
         target_call_data: Bytes,
         block_id: BlockId,
-        mut state_override: StateOverride,
+        state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-        let da_gas: u64 = op
-            .pre_verification_da_gas_limit(&self.chain_spec, Some(1))
-            .try_into()
-            .unwrap_or(u64::MAX);
-
-        if let Some(authorization) = op.authorization_tuple() {
-            authorization_utils::apply_7702_overrides(
-                &mut state_override,
-                op.sender(),
-                authorization.address,
-            );
-        }
-
-        let contract_error = self
-            .i_entry_point
-            .simulateHandleOp(op.into(), target, target_call_data)
-            .block(block_id)
-            .gas(self.max_simulate_handle_op_gas.saturating_add(da_gas))
-            .state(state_override)
-            .call()
-            .await
-            .err()
-            .context("simulateHandleOp succeeded, but should always revert")?;
-        match contract_error {
-            ContractError::TransportError(TransportError::ErrorResp(resp)) => {
-                match resp.as_revert_data() {
-                    Some(err_bytes) => Ok(Self::decode_simulate_handle_ops_revert(&err_bytes)?),
-                    None => Ok(Err(ValidationRevert::Unknown(Bytes::default()))),
-                }
-            }
-            _ => Err(contract_error.into()),
-        }
+        simulate_handle_op_inner::<Self, AP>(
+            &self.chain_spec,
+            self.max_simulate_handle_op_gas,
+            &self.i_entry_point,
+            op,
+            target,
+            target_call_data,
+            block_id,
+            state_override,
+        )
+        .await
     }
 
     #[instrument(skip_all)]
@@ -500,8 +482,17 @@ where
         block_id: BlockId,
         state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
-        self.simulate_handle_op(op, target, target_call_data, block_id, state_override)
-            .await
+        simulate_handle_op_inner::<Self, AP>(
+            &self.chain_spec,
+            self.max_gas_estimation_gas,
+            &self.i_entry_point,
+            op,
+            target,
+            target_call_data,
+            block_id,
+            state_override,
+        )
+        .await
     }
 
     fn decode_simulate_handle_ops_revert(
@@ -657,6 +648,50 @@ pub fn decode_ops_from_calldata(
                 .collect()
         }
         _ => vec![],
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn simulate_handle_op_inner<S: SimulationProvider, AP: AlloyProvider>(
+    chain_spec: &ChainSpec,
+    execution_gas_limit: u64,
+    entry_point: &IEntryPointInstance<AP, AnyNetwork>,
+    op: UserOperation,
+    target: Address,
+    target_call_data: Bytes,
+    block_id: BlockId,
+    mut state_override: StateOverride,
+) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
+    let da_gas: u64 = op
+        .pre_verification_da_gas_limit(chain_spec, Some(1))
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    if let Some(authorization) = op.authorization_tuple() {
+        authorization_utils::apply_7702_overrides(
+            &mut state_override,
+            op.sender(),
+            authorization.address,
+        );
+    }
+
+    let contract_error = entry_point
+        .simulateHandleOp(op.into(), target, target_call_data)
+        .block(block_id)
+        .gas(execution_gas_limit.saturating_add(da_gas))
+        .state(state_override)
+        .call()
+        .await
+        .err()
+        .context("simulateHandleOp succeeded, but should always revert")?;
+    match contract_error {
+        ContractError::TransportError(TransportError::ErrorResp(resp)) => {
+            match resp.as_revert_data() {
+                Some(err_bytes) => Ok(S::decode_simulate_handle_ops_revert(&err_bytes)?),
+                None => Err(TransportError::ErrorResp(resp).into()),
+            }
+        }
+        _ => Err(contract_error.into()),
     }
 }
 
