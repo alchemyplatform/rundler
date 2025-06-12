@@ -764,8 +764,6 @@ async fn simulate_handle_op_inner<AP: AlloyProvider>(
             .await
     };
 
-    tracing::info!("simulate_handle_op_inner: {:?}", res);
-
     match res {
         Ok(output) => Ok(Ok(output.try_into()?)),
         Err(ContractError::TransportError(TransportError::ErrorResp(resp))) => {
