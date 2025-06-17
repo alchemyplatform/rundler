@@ -172,9 +172,10 @@ async fn funding_task_inner<P: EvmProvider>(
 
     let mut gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
     let mut gas_fee = U256::from(gas_limit) * U256::from(max_fee_per_gas);
+    let mut da_gas = 0u64;
 
     if settings.chain_spec.da_pre_verification_gas {
-        let da_gas = estimate_da_gas(
+        da_gas = estimate_da_gas(
             &provider,
             &settings.da_gas_oracle,
             settings.multicall3_address,
@@ -210,6 +211,11 @@ async fn funding_task_inner<P: EvmProvider>(
             );
         }
         gas_limit = GAS_BASE + GAS_PER_CALL * to_fund.len() as u64;
+        if settings.chain_spec.da_pre_verification_gas
+            && settings.chain_spec.include_da_gas_in_gas_limit
+        {
+            gas_limit += da_gas;
+        }
     }
 
     let num_calls = to_fund.len() as u64;
