@@ -22,7 +22,7 @@ The primary aggregator trait is `SignatureAggregator`. Each supported aggregator
 The `SignatureAggregator::costs(...) -> AggregatorCosts` function requires special care during implementation. Its return value consists of:
 
 * `execution_fixed_gas`: The fixed gas cost of the onchain aggregator's `validateSignatures` function. It *may* be amortized across all of the UOs in a bundle.  
-* `execution_variable_gas`: The per UO added gas cost of the the onchain aggregator's `validateSignatures` function. Each UO using the aggregator will always be charged for this.
+* `execution_variable_gas`: The per UO added gas cost of the onchain aggregator's `validateSignatures` function. Each UO using the aggregator will always be charged for this.
 * `sig_fixed_length`: The fixed length of an aggregator's signature. The calldata & DA cost for this signature *may* be amortized across all of the UOs in a bundle.
 * `sig_variable_length`: The per UO added signature length. The calldata & DA cost for this will always be charged to the UO.
 

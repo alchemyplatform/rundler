@@ -81,7 +81,7 @@ pub struct BuilderArgs {
     )]
     max_bundle_size: u64,
 
-    /// Choice of what sender type to to use for transaction submission.
+    /// Choice of what sender type to use for transaction submission.
     /// Defaults to the value of `raw`. Other options include `flashbots`,
     /// `conditional` and `bloxroute`
     #[arg(
