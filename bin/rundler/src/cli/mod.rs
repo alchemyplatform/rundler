@@ -584,6 +584,7 @@ impl TryFromWithSpec<&CommonArgs> for EstimationSettings {
             max_paymaster_verification_gas: value.max_verification_gas as u128,
             max_paymaster_post_op_gas: max_bundle_execution_gas,
             max_bundle_execution_gas,
+            max_gas_estimation_gas: value.max_gas_estimation_gas,
             verification_estimation_gas_fee: value.verification_estimation_gas_fee,
             verification_gas_limit_efficiency_reject_threshold: value
                 .verification_gas_limit_efficiency_reject_threshold,

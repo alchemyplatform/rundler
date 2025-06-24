@@ -179,7 +179,7 @@ where
 
         let call = TransactionRequest::default()
             .with_input(call)
-            .with_gas_limit(self.settings.max_bundle_execution_gas.try_into().unwrap())
+            .with_gas_limit(self.settings.max_gas_estimation_gas)
             .with_to(helper_addr);
 
         let ret = self

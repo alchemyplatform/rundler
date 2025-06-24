@@ -65,7 +65,7 @@ The builder supports multiple sender implementations to support bundle transacti
 
 - **Flashbots**: Submit bundles via the [Flashbots Protect](https://docs.flashbots.net/) RPC endpoint, only supported on Ethereum Mainnet.
 
-- **Bloxroute**: Submit bundles via Bloxroute's [Polygon Private Transaction](https://docs.bloxroute.com/apis/frontrunning-protection/polygon_private_tx) endpoint. Only supported on polygon.
+- **Bloxroute**: Submit bundles via Bloxroute's Polygon Private Transaction endpoint. Only supported on polygon.
 
 ## N-Senders
 

@@ -197,9 +197,18 @@ contract VerificationGasEstimationHelper {
     {
         assembly {
             let ptr := add(paymasterAndData, 0x20)
-            paymaster := mload(ptr)
-            validationGasLimit := mload(add(ptr, 20)) // 20 bytes for address
-            postOpGasLimit := mload(add(ptr, 36)) // 20 + 16 bytes
+
+            // Load first 32 bytes and extract address (first 20 bytes)
+            let firstWord := mload(ptr)
+            paymaster := shr(96, firstWord) // Shift right 96 bits (12 bytes) to get address
+
+            // Load from offset 20 and extract first uint128 (bytes 20-35)
+            let secondWord := mload(add(ptr, 20))
+            validationGasLimit := shr(128, secondWord) // Shift right 128 bits to get upper 16 bytes
+
+            // Load from offset 36 and extract second uint128 (bytes 36-51)
+            let thirdWord := mload(add(ptr, 36))
+            postOpGasLimit := shr(128, thirdWord) // Shift right 128 bits to get upper 16 bytes
         }
         return (
             address(paymaster),

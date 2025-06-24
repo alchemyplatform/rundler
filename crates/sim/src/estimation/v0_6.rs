@@ -654,6 +654,7 @@ mod tests {
         let settings = Settings {
             max_verification_gas: TEST_MAX_GAS_LIMITS,
             max_bundle_execution_gas: TEST_MAX_GAS_LIMITS,
+            max_gas_estimation_gas: TEST_MAX_GAS_LIMITS.try_into().unwrap(),
             max_paymaster_verification_gas: TEST_MAX_GAS_LIMITS,
             max_paymaster_post_op_gas: TEST_MAX_GAS_LIMITS,
             verification_estimation_gas_fee: 1_000_000_000_000,
@@ -758,6 +759,7 @@ mod tests {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_bundle_execution_gas: 10000000000,
+            max_gas_estimation_gas: 10000000000,
             max_paymaster_verification_gas: 10000000000,
             max_paymaster_post_op_gas: 10000000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
@@ -838,6 +840,7 @@ mod tests {
         let settings = Settings {
             max_verification_gas: 10000000000,
             max_bundle_execution_gas: 10000000000,
+            max_gas_estimation_gas: 10000000000,
             max_paymaster_verification_gas: 10000000000,
             max_paymaster_post_op_gas: 10000000000,
             verification_estimation_gas_fee: 1_000_000_000_000,
@@ -1210,6 +1213,7 @@ mod tests {
         let settings = Settings {
             max_verification_gas: 10,
             max_bundle_execution_gas: 10,
+            max_gas_estimation_gas: 10,
             max_paymaster_post_op_gas: 10,
             max_paymaster_verification_gas: 10,
             verification_estimation_gas_fee: 1_000_000_000_000,

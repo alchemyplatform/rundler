@@ -70,6 +70,8 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *VERIFICATION_GAS_ALLOWED_ERROR_PCT*
 - `--call_gas_allowed_error_pct`: The allowed error percentage during call gas estimation. (default: 15)
   - env: *CALL_GAS_ALLOWED_ERROR_PCT*
+- `--max_gas_estimation_gas`: The gas limit to use during the call to the gas estimation binary search helper functions. (default: 550M)
+  - env: *MAX_GAS_ESTIMATION_GAS*
 - `--max_gas_estimation_rounds`: The maximum amount of remote RPC calls to make during gas estimation while attempting to converge to the error percentage. (default: 3)
   - env: *MAX_GAS_ESTIMATION_ROUNDS*
 - `--aws_region`: AWS region. (default: `us-east-1`).
