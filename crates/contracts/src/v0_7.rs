@@ -299,7 +299,7 @@ static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE_HEX: &[u8] = 
     "../contracts/out/v0_7/VerificationGasEstimationHelper.sol/VerificationGasEstimationHelper_deployedBytecode.txt"
 );
 
-static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 5285] = {
+static __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE: [u8; 5261] = {
     match const_hex::const_decode_to_array(
         __VERIFICATION_GAS_ESTIMATION_HELPER_V0_7_DEPLOYED_BYTECODE_HEX,
     ) {

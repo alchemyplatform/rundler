@@ -103,6 +103,8 @@ pub struct Settings {
     pub max_paymaster_post_op_gas: u128,
     /// The maximum amount of execution gas in a bundle
     pub max_bundle_execution_gas: u128,
+    /// The maximum amount of gas that can be used during a round of binary search for gas estimation
+    pub max_gas_estimation_gas: u64,
     /// The gas fee to use during verification gas estimation, required to be held by the fee-payer
     /// during estimation. If using a paymaster, the fee-payer must have 3x this value.
     /// As the gas limit is varied during estimation, the fee is held constant by varying the
