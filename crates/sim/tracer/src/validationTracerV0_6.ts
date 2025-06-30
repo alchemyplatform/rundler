@@ -28,6 +28,7 @@ interface Output {
 }
 
 interface Phase {
+  contractAddress: string;
   forbiddenOpcodesUsed: string[];
   forbiddenPrecompilesUsed: string[];
   storageAccesses: Record<string, AccessInfo>;
@@ -141,6 +142,7 @@ type StringSet = Record<string, boolean | undefined>;
 
   function newInternalPhase(): InternalPhase {
     return {
+      contractAddress: "",
       forbiddenOpcodesUsed: {},
       forbiddenPrecompilesUsed: {},
       storageAccesses: {},
@@ -172,6 +174,7 @@ type StringSet = Record<string, boolean | undefined>;
     );
 
     const phase: Phase = {
+      contractAddress: currentPhase.contractAddress,
       forbiddenOpcodesUsed,
       forbiddenPrecompilesUsed,
       storageAccesses: currentPhase.storageAccesses,
@@ -204,8 +207,8 @@ type StringSet = Record<string, boolean | undefined>;
     return newValue;
   }
 
-  function getContractCombinedKey(log: LogStep, key: string): string {
-    return [toHex(log.contract.getAddress()), key].join(":");
+  function getContractCombinedKey(key: string): string {
+    return [currentPhase.contractAddress, key].join(":");
   }
 
   function countSlot(list: { [key: string]: number | undefined }, key: any) {
@@ -253,6 +256,12 @@ type StringSet = Record<string, boolean | undefined>;
       if (!entryPointAddress) {
         entryPointAddress = toHex(log.contract.getAddress());
       }
+      // capture the first contract address in the phase called after the entry point
+      // for associating opcode usage
+      const currentContractAddress = toHex(log.contract.getAddress());
+      if (currentContractAddress !== entryPointAddress && currentPhase.contractAddress === "") {
+        currentPhase.contractAddress = currentContractAddress;
+      }
 
       const opcode = log.op.toString();
 
@@ -288,13 +297,13 @@ type StringSet = Record<string, boolean | undefined>;
         // require that a call opcode comes next.
         if (last?.opcode === "GAS" && !CALL_OPCODES[opcode]) {
           currentPhase.forbiddenOpcodesUsed[
-            getContractCombinedKey(log, "GAS")
+            getContractCombinedKey("GAS")
           ] = true;
         }
 
         if (FORBIDDEN_OPCODES[opcode]) {
           currentPhase.forbiddenOpcodesUsed[
-            getContractCombinedKey(log, opcode)
+            getContractCombinedKey(opcode)
           ] = true;
         }
       }
@@ -314,7 +323,7 @@ type StringSet = Record<string, boolean | undefined>;
           factoryCreate2Count++;
         } else {
           currentPhase.forbiddenOpcodesUsed[
-            getContractCombinedKey(log, opcode)
+            getContractCombinedKey(opcode)
           ] = true;
         }
       } else if (opcode === "KECCAK256") {
@@ -399,7 +408,7 @@ type StringSet = Record<string, boolean | undefined>;
           };
         } else if (!PRECOMPILE_WHITELIST[addressHex]) {
           currentPhase.forbiddenPrecompilesUsed[
-            getContractCombinedKey(log, addressHex)
+            getContractCombinedKey(addressHex)
           ] = true;
         }
       }
