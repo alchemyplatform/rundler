@@ -19,14 +19,16 @@ use alloy_rpc_types_eth::{
     state::{AccountOverride, StateOverride},
     BlockId,
 };
-use alloy_sol_types::{ContractError as SolContractError, SolInterface};
+use alloy_sol_types::{
+    ContractError as SolContractError, Revert, SolError, SolEvent, SolInterface,
+};
 use alloy_transport::TransportError;
 use anyhow::Context;
 use rundler_contracts::v0_6::{
     DepositInfo as DepositInfoV0_6, GetEntryPointBalances, IAggregator,
     IEntryPoint::{
         ExecutionResult as ExecutionResultV0_6, FailedOp, IEntryPointCalls, IEntryPointErrors,
-        IEntryPointInstance,
+        IEntryPointInstance, UserOperationRevertReason,
     },
     UserOperation as ContractUserOperation, UserOpsPerAggregator as UserOpsPerAggregatorV0_6,
 };
@@ -43,8 +45,8 @@ use tracing::instrument;
 use crate::{
     AggregatorOut, AggregatorSimOut, AlloyProvider, BlockHashOrNumber, BundleHandler, DAGasOracle,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider as EntryPointProviderTrait,
-    ExecutionResult, HandleOpsOut, ProviderResult, SignatureAggregator, SimulationProvider,
-    TransactionRequest,
+    ExecutionResult, HandleOpRevert, HandleOpsOut, ProviderResult, SignatureAggregator,
+    SimulationProvider, TransactionRequest,
 };
 
 /// Entry point provider for v0.6
@@ -261,7 +263,7 @@ where
             &self.i_entry_point,
             ops_per_aggregator,
             sender_eoa,
-            gas_limit,
+            Some(gas_limit),
             gas_fees,
             proxy,
             self.chain_spec.id,
@@ -290,7 +292,7 @@ where
             &self.i_entry_point,
             ops_per_aggregator,
             sender_eoa,
-            gas_limit,
+            Some(gas_limit),
             gas_fees,
             proxy,
             self.chain_spec.id,
@@ -503,6 +505,80 @@ where
         .await
     }
 
+    #[instrument(skip_all)]
+    async fn simulate_handle_op_revert_check(
+        &self,
+        op: Self::UO,
+        block_id: BlockId,
+    ) -> ProviderResult<Result<u128, HandleOpRevert>> {
+        // TODO: handle aggregators. Signatures & proxies are going to be a bit tricky.
+
+        let tx = get_handle_ops_call(
+            &self.i_entry_point,
+            vec![UserOpsPerAggregator {
+                user_ops: vec![op],
+                aggregator: Address::ZERO,
+                signature: Bytes::new(),
+            }],
+            Address::random(),
+            None,
+            GasFees::default(),
+            None,
+            self.chain_spec.id,
+        );
+
+        let sim_result = super::simulate_transaction(
+            self.i_entry_point.provider(),
+            &self.chain_spec,
+            tx,
+            block_id,
+        )
+        .await?;
+
+        if !sim_result.success {
+            let revert = Self::decode_simulate_handle_ops_revert(&sim_result.data)?;
+            let Err(revert) = revert else {
+                return Err(anyhow::anyhow!("unexpected execution result in revert").into());
+            };
+
+            match revert {
+                ValidationRevert::EntryPoint(e) => {
+                    if e.contains("AA50") {
+                        return Ok(Err(HandleOpRevert::PostOpRevert {
+                            reason: Some(e),
+                            data: Bytes::new(),
+                        }));
+                    } else {
+                        return Ok(Err(HandleOpRevert::ValidationRevert(
+                            ValidationRevert::EntryPoint(e),
+                        )));
+                    }
+                }
+                _ => return Ok(Err(HandleOpRevert::ValidationRevert(revert))),
+            }
+        }
+
+        for log in &sim_result.logs {
+            if log.topics().is_empty() || log.address != *self.i_entry_point.address() {
+                continue;
+            }
+
+            if log.topics()[0] == UserOperationRevertReason::SIGNATURE_HASH {
+                let revert_reason = UserOperationRevertReason::decode_log(log)
+                    .map(|l| l.data)
+                    .context("failed to decode user operation revert reason")?;
+                return Ok(Err(HandleOpRevert::ExecutionRevert {
+                    reason: Revert::abi_decode(&revert_reason.revertReason)
+                        .ok()
+                        .map(|r| r.reason),
+                    data: revert_reason.revertReason,
+                }));
+            }
+        }
+
+        Ok(Ok(sim_result.gas_used))
+    }
+
     fn decode_simulate_handle_ops_revert(
         payload: &Bytes,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>> {
@@ -553,7 +629,7 @@ fn get_handle_ops_call<AP: AlloyProvider>(
     entry_point: &IEntryPointInstance<AP, AnyNetwork>,
     ops_per_aggregator: Vec<UserOpsPerAggregator<UserOperation>>,
     sender_eoa: Address,
-    gas_limit: u64,
+    gas_limit: Option<u64>,
     gas_fees: GasFees,
     proxy: Option<Address>,
     chain_id: u64,
@@ -594,10 +670,12 @@ fn get_handle_ops_call<AP: AlloyProvider>(
 
     txn_request = txn_request
         .from(sender_eoa)
-        .gas_limit(gas_limit)
         .max_fee_per_gas(gas_fees.max_fee_per_gas)
         .max_priority_fee_per_gas(gas_fees.max_priority_fee_per_gas);
 
+    if let Some(gas_limit) = gas_limit {
+        txn_request = txn_request.gas_limit(gas_limit);
+    }
     if !eip7702_auth_list.is_empty() {
         txn_request = txn_request.with_authorization_list(eip7702_auth_list);
     }

@@ -13,22 +13,21 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use alloy_primitives::{utils::format_units, Address, Bytes, B256, U256};
+use alloy_primitives::{utils::format_units, Address, B256};
 use anyhow::Context;
-use futures::TryFutureExt;
 use itertools::Itertools;
 use metrics::{Counter, Gauge, Histogram};
 use metrics_derive::Metrics;
 use parking_lot::RwLock;
 use rundler_provider::{
-    DAGasOracleSync, EvmProvider, FeeEstimator, ProvidersWithEntryPointT, SimulationProvider,
-    StateOverride,
+    DAGasOracleSync, EvmProvider, FeeEstimator, HandleOpRevert, ProvidersWithEntryPointT,
+    SimulationProvider,
 };
 use rundler_sim::{MempoolConfig, Prechecker, Simulator};
 use rundler_types::{
     pool::{
-        MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation, ReputationStatus,
-        StakeStatus,
+        InnerRevert, MempoolError, PaymasterMetadata, PoolOperation, PreconfInfo, Reputation,
+        ReputationStatus, SimulationViolation, StakeStatus,
     },
     Entity, EntityUpdate, EntityUpdateType, EntryPointVersion, GasFees, UserOperation,
     UserOperationId, UserOperationPermissions, UserOperationVariant,
@@ -158,77 +157,36 @@ where
         self.ep_specific_metrics.removed_entities.increment(1);
     }
 
-    async fn check_execution_gas_limit_efficiency(
-        &self,
-        op: UserOperationVariant,
-        block_hash: B256,
-    ) -> MempoolResult<()> {
-        // Check call gas limit efficiency only if needed
-        if self.config.execution_gas_limit_efficiency_reject_threshold > 0.0 {
-            // Node clients set base_fee to 0 during eth_call.
-            // Geth: https://github.com/ethereum/go-ethereum/blob/a5fe7353cff959d6fcfcdd9593de19056edb9bdb/internal/ethapi/api.go#L1202
-            // Reth: https://github.com/paradigmxyz/reth/blob/4d3b35dbd24c3a5c6b1a4f7bd86b1451e8efafcc/crates/rpc/rpc-eth-api/src/helpers/call.rs#L1098
-            // Arb-geth: https://github.com/OffchainLabs/go-ethereum/blob/54adef6e3fbea263e770c578047fd38842b8e17f/internal/ethapi/api.go#L1126
-            let gas_price = op.gas_price(0);
-
-            if gas_price == 0 {
-                // Can't calculate efficiency without gas price, fail open.
-                return Ok(());
-            }
-
-            let execution_gas_limit = match &op {
-                // For v0.6 only use the call gas limit as post op gas limit is always set to VGL*2
-                // whether or not the UO is using a post op. Can cause the efficiency check to fail.
-                UserOperationVariant::V0_6(op) => op.call_gas_limit(),
-                UserOperationVariant::V0_7(op) => op.execution_gas_limit(),
-            };
-            if execution_gas_limit == 0 {
-                return Ok(()); // No call gas limit, not useful, but not a failure here.
-            }
-
-            let sim_result = self
-                .ep_providers
-                .entry_point()
-                .simulate_handle_op(
-                    op.into(),
-                    Address::ZERO,
-                    Bytes::new(),
-                    block_hash.into(),
-                    StateOverride::default(),
-                )
-                .await;
-            match sim_result {
-                Err(e) => {
-                    tracing::error!("Failed to simulate handle op for gas limit efficiency check, failing open: {:?}", e);
-                }
-                Ok(Err(e)) => {
-                    tracing::debug!(
-                        "Validation error during gas limit efficiency check, failing open: {:?}",
-                        e
-                    );
-                }
-                Ok(Ok(execution_res)) => {
-                    let total_gas_used: u128 = (execution_res.paid / U256::from(gas_price))
-                        .try_into()
-                        .context("total gas used should fit in u128")?;
-
-                    let execution_gas_used = total_gas_used - execution_res.pre_op_gas;
-
-                    let execution_gas_efficiency =
-                        execution_gas_used as f64 / execution_gas_limit as f64;
-                    if execution_gas_efficiency
-                        < self.config.execution_gas_limit_efficiency_reject_threshold
-                    {
-                        return Err(MempoolError::ExecutionGasLimitEfficiencyTooLow(
-                            self.config.execution_gas_limit_efficiency_reject_threshold,
-                            execution_gas_efficiency,
-                        ));
-                    }
-                }
-            }
+    async fn check_revert(&self, op: UserOperationVariant, block_hash: B256) -> MempoolResult<()> {
+        if !self.config.revert_check_enabled {
+            return Ok(());
+        } else if !self.config.chain_spec.supports_revert_check() {
+            tracing::warn!("revert check enabled but not supported for chain");
+            return Ok(());
+        } else if op.aggregator().is_some() {
+            tracing::warn!("revert check not supported for aggregators");
+            return Ok(());
         }
 
-        Ok(())
+        let sim_result = self
+            .ep_providers
+            .entry_point()
+            .simulate_handle_op_revert_check(op.into(), block_hash.into())
+            .await
+            .context("Failed to simulate handle op with revert check")?;
+
+        match sim_result {
+            Ok(_) => Ok(()),
+            Err(HandleOpRevert::ExecutionRevert { data, reason }) => {
+                Err(MempoolError::ExecutionRevert(InnerRevert { data, reason }))
+            }
+            Err(HandleOpRevert::PostOpRevert { data, reason }) => {
+                Err(MempoolError::PostOpRevert(InnerRevert { data, reason }))
+            }
+            Err(HandleOpRevert::ValidationRevert(r)) => Err(MempoolError::SimulationViolation(
+                SimulationViolation::ValidationRevert(r),
+            )),
+        }
     }
 
     fn update_preconfirmed_uos(
@@ -623,15 +581,18 @@ where
             .await?;
 
         // Only let ops with successful simulations through
-        // Run simulation and call gas limit efficiency check in parallel
-        let sim_fut = self
-            .pool_providers
-            .simulator()
-            .simulate_validation(versioned_op, perms.trusted, block_hash, None)
-            .map_err(Into::into);
-        let execution_gas_check_future =
-            self.check_execution_gas_limit_efficiency(op.clone(), block_hash);
-        let (sim_result, _) = tokio::try_join!(sim_fut, execution_gas_check_future)?;
+        // Run simulation and revert check in parallel
+        let sim_fut = self.pool_providers.simulator().simulate_validation(
+            versioned_op,
+            perms.trusted,
+            block_hash,
+            None,
+        );
+        let revert_check_future = self.check_revert(op.clone(), block_hash);
+        let (sim_result, revert_check_result) = tokio::join!(sim_fut, revert_check_future);
+        // Handle errors in this order
+        let sim_result = sim_result?;
+        let _ = revert_check_result?;
 
         // Check if op has more than the maximum allowed expected storage slots
         let expected_slots = sim_result.expected_storage.num_slots();
@@ -1038,7 +999,9 @@ struct UoPoolMetrics {
 mod tests {
     use std::{collections::HashMap, str::FromStr, vec};
 
-    use alloy_primitives::{address, bytes, uint, Address, Bytes, Log as PrimitiveLog, LogData};
+    use alloy_primitives::{
+        address, bytes, uint, Address, Bytes, Log as PrimitiveLog, LogData, U256,
+    };
     use alloy_rpc_types_eth::TransactionReceipt as AlloyTransactionReceipt;
     use alloy_serde::WithOtherFields;
     use alloy_signer::SignerSync;
@@ -2043,20 +2006,10 @@ mod tests {
             ..Default::default()
         });
 
-        let mut ep = MockEntryPointV0_6::new();
-        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
-            Ok(Ok(ExecutionResult {
-                pre_op_gas: 100_000, // used 50K of 500K verification gas (used 50K PVG)
-                paid: uint!(110_000_U256),
-                target_success: true,
-                ..Default::default()
-            }))
-        });
-
         let pool = create_pool_with_entry_point_config(
             config,
             vec![op.clone()],
-            ep,
+            MockEntryPointV0_6::new(),
             MempoolConfig::default(),
         );
         let ret = pool
@@ -2074,51 +2027,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_call_gas_limit_reject() {
-        let mut config = default_config();
-        config.execution_gas_limit_efficiency_reject_threshold = 0.25;
-
-        let op = create_op_from_op_v0_6(UserOperationRequiredFields {
-            call_gas_limit: 50_000,
-            max_fee_per_gas: 1,
-            max_priority_fee_per_gas: 1,
-            ..Default::default()
-        });
-
-        let mut ep = MockEntryPointV0_6::new();
-        ep.expect_simulate_handle_op().returning(|_, _, _, _, _| {
-            Ok(Ok(ExecutionResult {
-                pre_op_gas: 50_000,
-                paid: uint!(60_000_U256), // call gas used is 10K
-                target_success: true,
-                ..Default::default()
-            }))
-        });
-
-        let pool = create_pool_with_entry_point_config(
-            config,
-            vec![op.clone()],
-            ep,
-            MempoolConfig::default(),
-        );
-        let ret = pool
-            .add_operation(OperationOrigin::Local, op.op, default_perms())
-            .await;
-        let actual_eff = 10_000_f64 / 50_000_f64;
-
-        match ret.err().unwrap() {
-            MempoolError::ExecutionGasLimitEfficiencyTooLow(eff, actual) => {
-                assert_eq!(eff, 0.25);
-                assert_eq!(actual, actual_eff);
-            }
-            _ => panic!("Expected ExecutionGasLimitEfficiencyTooLow error"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_gas_price_zero_fail_open() {
-        let mut config = default_config();
-        config.execution_gas_limit_efficiency_reject_threshold = 0.25;
+        let config = default_config();
 
         let op = create_op_from_op_v0_6(UserOperationRequiredFields {
             call_gas_limit: 50_000,
@@ -2464,6 +2374,7 @@ mod tests {
 
     fn default_config() -> PoolConfig {
         PoolConfig {
+            // disable revert check by default
             chain_spec: ChainSpec::default(),
             entry_point: Address::random(),
             entry_point_version: EntryPointVersion::V0_6,
@@ -2482,10 +2393,10 @@ mod tests {
             paymaster_cache_length: 100,
             reputation_tracking_enabled: true,
             drop_min_num_blocks: 10,
-            execution_gas_limit_efficiency_reject_threshold: 0.0,
             verification_gas_limit_efficiency_reject_threshold: 0.0,
             max_time_in_pool: None,
             max_expected_storage_slots: usize::MAX,
+            revert_check_enabled: false,
         }
     }
 

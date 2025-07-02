@@ -30,8 +30,9 @@ use super::error::ProviderResult;
 use crate::{
     AggregatorOut, Block, BlockHashOrNumber, BundleHandler, DAGasOracle, DAGasOracleSync,
     DAGasProvider, DepositInfo, EntryPoint, EntryPointProvider, EvmCall,
-    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpsOut, RpcRecv, RpcSend,
-    SignatureAggregator, SimulationProvider, Transaction, TransactionReceipt, TransactionRequest,
+    EvmProvider as EvmProviderTrait, ExecutionResult, FeeEstimator, HandleOpRevert, HandleOpsOut,
+    RpcRecv, RpcSend, SignatureAggregator, SimulationProvider, Transaction, TransactionReceipt,
+    TransactionRequest,
 };
 
 mockall::mock! {
@@ -185,6 +186,11 @@ mockall::mock! {
             block_id: BlockId,
             state_override: StateOverride,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
+        async fn simulate_handle_op_revert_check(
+            &self,
+            op: v0_6::UserOperation,
+            block_id: BlockId,
+        ) -> ProviderResult<Result<u128, HandleOpRevert>>;
         fn decode_simulate_handle_ops_revert(
             revert_data: &Bytes,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
@@ -289,6 +295,11 @@ mockall::mock! {
             block_id: BlockId,
             state_override: StateOverride,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
+        async fn simulate_handle_op_revert_check(
+            &self,
+            op: v0_7::UserOperation,
+            block_id: BlockId,
+        ) -> ProviderResult<Result<u128, HandleOpRevert>>;
         fn decode_simulate_handle_ops_revert(
             revert_data: &Bytes,
         ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
