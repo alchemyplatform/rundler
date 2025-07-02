@@ -16,7 +16,8 @@ use anyhow::{bail, Context};
 use rundler_task::grpc::protos::{from_bytes, ToProtoBytes};
 use rundler_types::{
     pool::{
-        MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation, SimulationViolation,
+        InnerRevert, MempoolError, NeedsStakeInformation, PoolError, PrecheckViolation,
+        SimulationViolation,
     },
     Opcode, StorageSlot, Timestamp, ValidationRevert, ViolationOpCode,
 };
@@ -27,14 +28,15 @@ use super::protos::{
     AggregatorMismatch, AssociatedStorageDuringDeploy, AssociatedStorageIsAlternateSender,
     CallGasLimitTooLow, CallHadValue, CalledBannedEntryPointMethod, CodeHashChanged, DidNotRevert,
     DiscardedOnInsertError, Eip7702Disabled, Entity, EntityThrottledError, EntityType,
-    EntryPointRevert, ExecutionGasLimitEfficiencyTooLow, ExistingSenderWithInitCode,
-    FactoryCalledCreate2Twice, FactoryIsNotContract, FactoryMustBeEmpty, Invalid7702AuthSignature,
-    InvalidAccountSignature, InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess,
-    InvalidTimeRange, MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
+    EntryPointRevert, ExecutionGasLimitEfficiencyTooLow, ExecutionRevert,
+    ExistingSenderWithInitCode, FactoryCalledCreate2Twice, FactoryIsNotContract,
+    FactoryMustBeEmpty, Invalid7702AuthSignature, InvalidAccountSignature,
+    InvalidPaymasterSignature, InvalidSignature, InvalidStorageAccess, InvalidTimeRange,
+    MaxFeePerGasTooLow, MaxOperationsReachedError, MaxPriorityFeePerGasTooLow,
     MempoolError as ProtoMempoolError, MultipleRolesViolation, NotStaked,
     OperationAlreadyKnownError, OperationDropTooSoon, OperationRevert, OutOfGas, OverMaxCost,
     PanicRevert, PaymasterBalanceTooLow, PaymasterDepositTooLow, PaymasterIsNotContract,
-    PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
+    PostOpRevert, PreVerificationGasTooLow, PrecheckViolationError as ProtoPrecheckViolationError,
     ReplacementUnderpricedError, SenderAddressUsedAsAlternateEntity, SenderFundsTooLow,
     SenderIsNotContractAndNoInitCode, SimulationViolationError as ProtoSimulationViolationError,
     TooManyExpectedStorageSlots, TotalGasLimitTooHigh, UnintendedRevert,
@@ -143,6 +145,26 @@ impl TryFrom<ProtoMempoolError> for MempoolError {
             }
             Some(mempool_error::Error::Invalid7702AuthSignature(e)) => {
                 MempoolError::Invalid7702AuthSignature(e.reason)
+            }
+            Some(mempool_error::Error::ExecutionRevert(e)) => {
+                MempoolError::ExecutionRevert(InnerRevert {
+                    data: e.data.into(),
+                    reason: if e.reason.is_empty() {
+                        None
+                    } else {
+                        Some(e.reason)
+                    },
+                })
+            }
+            Some(mempool_error::Error::PostOpRevert(e)) => {
+                MempoolError::PostOpRevert(InnerRevert {
+                    data: e.data.into(),
+                    reason: if e.reason.is_empty() {
+                        None
+                    } else {
+                        Some(e.reason)
+                    },
+                })
             }
             None => bail!("unknown proto mempool error"),
         })
@@ -277,6 +299,18 @@ impl From<MempoolError> for ProtoMempoolError {
                 error: Some(mempool_error::Error::Invalid7702AuthSignature(
                     Invalid7702AuthSignature { reason: msg },
                 )),
+            },
+            MempoolError::ExecutionRevert(r) => ProtoMempoolError {
+                error: Some(mempool_error::Error::ExecutionRevert(ExecutionRevert {
+                    data: r.data.to_proto_bytes(),
+                    reason: r.reason.unwrap_or_default(),
+                })),
+            },
+            MempoolError::PostOpRevert(r) => ProtoMempoolError {
+                error: Some(mempool_error::Error::PostOpRevert(PostOpRevert {
+                    data: r.data.to_proto_bytes(),
+                    reason: r.reason.unwrap_or_default(),
+                })),
             },
         }
     }

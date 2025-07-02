@@ -174,6 +174,14 @@ pub struct PoolArgs {
         env = "POOL_MAX_TIME_IN_POOL_SECS"
     )]
     pub max_time_in_pool_secs: Option<u64>,
+
+    #[arg(
+        long = "pool.disable_revert_check",
+        name = "pool.disable_revert_check",
+        env = "POOL_DISABLE_REVERT_CHECK",
+        default_value = "false"
+    )]
+    pub disable_revert_check: bool,
 }
 
 impl PoolArgs {
@@ -223,12 +231,11 @@ impl PoolArgs {
             reputation_tracking_enabled: self.reputation_tracking_enabled,
             drop_min_num_blocks: self.drop_min_num_blocks,
             da_gas_tracking_enabled,
-            execution_gas_limit_efficiency_reject_threshold: common
-                .execution_gas_limit_efficiency_reject_threshold,
             verification_gas_limit_efficiency_reject_threshold: common
                 .verification_gas_limit_efficiency_reject_threshold,
             max_time_in_pool: self.max_time_in_pool_secs.map(Duration::from_secs),
             max_expected_storage_slots: common.max_expected_storage_slots.unwrap_or(usize::MAX),
+            revert_check_enabled: !self.disable_revert_check,
         };
 
         let mut pool_configs = vec![];

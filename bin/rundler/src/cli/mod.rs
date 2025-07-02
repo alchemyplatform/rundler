@@ -377,14 +377,6 @@ pub struct CommonArgs {
     pre_verification_gas_accept_percent: u32,
 
     #[arg(
-        long = "execution_gas_limit_efficiency_reject_threshold",
-        name = "execution_gas_limit_efficiency_reject_threshold",
-        env = "EXECUTION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",
-        default_value = "0.0"
-    )]
-    pub execution_gas_limit_efficiency_reject_threshold: f64,
-
-    #[arg(
         long = "verification_gas_limit_efficiency_reject_threshold",
         name = "verification_gas_limit_efficiency_reject_threshold",
         env = "VERIFICATION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD",

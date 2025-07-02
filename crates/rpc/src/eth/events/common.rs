@@ -335,6 +335,11 @@ where
         tx_hash: B256,
         user_op_hash: B256,
     ) -> anyhow::Result<Option<E::UO>> {
+        if !self.chain_spec.rpc_debug_trace_transaction_enabled {
+            tracing::warn!("Debug trace transaction is not enabled, skipping trace");
+            return Ok(None);
+        }
+
         // initial call wasn't to an entrypoint, so we need to trace the transaction to find the user operation
         let trace_options = GethDebugTracingOptions {
             tracer: Some(GethDebugTracerType::BuiltInTracer(

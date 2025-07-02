@@ -62,8 +62,6 @@ See [chain spec](./architecture/chain_spec.md) for a detailed description of cha
   - env: *BASE_FEE_ACCEPT_PERCENT*
 - `--pre_verification_gas_accept_percent`: Percentage of the required PVG that a user operation must have in order to be accepted into the mempool. Only applies if there is dynamic PVG, else the full amount is required. (default: `50`)
   - env: *PRE_VERIFICATION_GAS_ACCEPT_PERCENT*
-- `--execution_gas_limit_efficiency_reject_threshold`: The ratio of execution gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
-  - env: *EXECUTION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 - `--verification_gas_limit_efficiency_reject_threshold`: The ratio of verification gas used to gas limit under which to reject UOs upon entry to the mempool (default: `0.0` disabled)
   - env: *VERIFICATION_GAS_LIMIT_EFFICIENCY_REJECT_THRESHOLD*
 - `--verification_gas_allowed_error_pct`: The allowed error percentage during verification gas estimation. (default: 15)
@@ -206,6 +204,8 @@ List of command line options for configuring the Pool.
   - env: *POOL_DROP_MIN_NUM_BLOCKS*
 - `--pool.max_time_in_pool_secs`: The maximum amount of time a UO is allowed to be in the mempool, in seconds. (default: `None`)
   - env: *POOL_MAX_TIME_IN_POOL_SECS*
+- `--pool.disable_revert_check`: Disable the pool's revert check. (default: `false`)
+  - env: *POOL_DISABLE_REVERT_CHECK*
 
 ## Builder Options
 

@@ -852,6 +852,10 @@ where
 
     async fn process_revert(&self, tx_hash: B256) -> anyhow::Result<()> {
         warn!("Bundle transaction {tx_hash:?} reverted onchain");
+        if !self.chain_spec.rpc_debug_trace_transaction_enabled {
+            warn!("Debug trace transaction is not enabled, skipping trace");
+            return Ok(());
+        }
 
         let trace_options = GethDebugTracingOptions::new_tracer(
             GethDebugTracerType::BuiltInTracer(GethDebugBuiltInTracerType::CallTracer),

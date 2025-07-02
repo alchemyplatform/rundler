@@ -87,6 +87,27 @@ pub struct ExecutionResult {
     pub target_result: Bytes,
 }
 
+/// Error type for handle op simulation
+#[derive(Clone, Debug)]
+pub enum HandleOpRevert {
+    /// The operation validation reverted
+    ValidationRevert(ValidationRevert),
+    /// The operation execution reverted
+    ExecutionRevert {
+        /// The revert data
+        data: Bytes,
+        /// String reason for the revert, if available
+        reason: Option<String>,
+    },
+    /// The post-operation reverted
+    PostOpRevert {
+        /// The revert data
+        data: Bytes,
+        /// String reason for the revert, if available
+        reason: Option<String>,
+    },
+}
+
 /// Trait for interacting with an entry point contract.
 #[async_trait::async_trait]
 #[auto_impl::auto_impl(&, &mut, Rc, Arc, Box)]
@@ -235,6 +256,14 @@ pub trait SimulationProvider: Send + Sync {
         block_id: BlockId,
         state_override: StateOverride,
     ) -> ProviderResult<Result<ExecutionResult, ValidationRevert>>;
+
+    /// Simulate a full user operation (with signature validation) and check for reverts.
+    /// Returns a result with the gas used if the operation succeeded, or the revert data if it failed.
+    async fn simulate_handle_op_revert_check(
+        &self,
+        op: Self::UO,
+        block_id: BlockId,
+    ) -> ProviderResult<Result<u128, HandleOpRevert>>;
 
     /// Decode the revert data from a call to `simulateHandleOps`
     fn decode_simulate_handle_ops_revert(

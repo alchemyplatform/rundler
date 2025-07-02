@@ -11,7 +11,9 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use alloy_primitives::{Address, U256};
+use std::fmt::Display;
+
+use alloy_primitives::{Address, Bytes, U256};
 
 use crate::{
     validation_results::ValidationRevert, Entity, EntityType, StorageSlot, Timestamp,
@@ -38,6 +40,25 @@ impl From<MempoolError> for PoolError {
             MempoolError::Other(e) => Self::Other(e),
             _ => Self::MempoolError(error),
         }
+    }
+}
+
+/// Inner revert data
+#[derive(Debug, Clone)]
+pub struct InnerRevert {
+    /// Revert data
+    pub data: Bytes,
+    /// Revert reason
+    pub reason: Option<String>,
+}
+
+impl Display for InnerRevert {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            self.reason.as_ref().unwrap_or(&self.data.to_string())
+        )
     }
 }
 
@@ -109,6 +130,12 @@ pub enum MempoolError {
     /// Use unsupported EIP
     #[error("{0} is not supported")]
     EIPNotSupported(String),
+    /// Execution reverted
+    #[error("Execution reverted: {0}")]
+    ExecutionRevert(InnerRevert),
+    /// Post op reverted
+    #[error("Post op reverted: {0}")]
+    PostOpRevert(InnerRevert),
 }
 
 /// Precheck violation enumeration
