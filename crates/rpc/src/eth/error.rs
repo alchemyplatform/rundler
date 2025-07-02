@@ -136,7 +136,11 @@ pub enum EthRpcError {
     #[error("{0}")]
     ExecutionReverted(String),
     #[error("execution reverted")]
-    ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData),
+    ExecutionRevertedWithData(ExecutionRevertedWithDataData),
+    #[error("post op reverted: {0}")]
+    PostOpReverted(String),
+    #[error("post op reverted")]
+    PostOpRevertedWithData(ExecutionRevertedWithDataData),
     #[error("operation rejected by mempool: {0}")]
     OperationRejected(String),
 }
@@ -264,8 +268,8 @@ pub struct UnsupportedAggregatorData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExecutionRevertedWithBytesData {
-    pub revert_data: Bytes,
+pub struct ExecutionRevertedWithDataData {
+    pub data: Bytes,
 }
 
 impl From<PoolError> for EthRpcError {
@@ -317,6 +321,20 @@ impl From<MempoolError> for EthRpcError {
             | MempoolError::TooManyExpectedStorageSlots(_, _)
             | MempoolError::Invalid7702AuthSignature(_)
             | MempoolError::EIPNotSupported(_) => Self::InvalidParams(value.to_string()),
+            MempoolError::ExecutionRevert(r) => {
+                if let Some(reason) = r.reason {
+                    Self::ExecutionReverted(reason)
+                } else {
+                    Self::ExecutionRevertedWithData(ExecutionRevertedWithDataData { data: r.data })
+                }
+            }
+            MempoolError::PostOpRevert(r) => {
+                if let Some(reason) = r.reason {
+                    Self::PostOpReverted(reason)
+                } else {
+                    Self::PostOpRevertedWithData(ExecutionRevertedWithDataData { data: r.data })
+                }
+            }
         }
     }
 }
@@ -425,8 +443,13 @@ impl From<EthRpcError> for ErrorObjectOwned {
             | EthRpcError::AggregatorError(_)
             | EthRpcError::AggregatorMismatch(_, _) => rpc_err(SIGNATURE_CHECK_FAILED_CODE, msg),
             EthRpcError::PrecheckFailed(_) => rpc_err(CALL_EXECUTION_FAILED_CODE, msg),
-            EthRpcError::ExecutionReverted(_) => rpc_err(EXECUTION_REVERTED, msg),
-            EthRpcError::ExecutionRevertedWithBytes(data) => {
+            EthRpcError::ExecutionReverted(_) | EthRpcError::PostOpReverted(_) => {
+                rpc_err(EXECUTION_REVERTED, msg)
+            }
+            EthRpcError::ExecutionRevertedWithData(data) => {
+                rpc_err_with_data(EXECUTION_REVERTED, msg, data)
+            }
+            EthRpcError::PostOpRevertedWithData(data) => {
                 rpc_err_with_data(EXECUTION_REVERTED, msg, data)
             }
             EthRpcError::ValidationRevert(data) => {
@@ -508,7 +531,7 @@ impl From<GasEstimationError> for EthRpcError {
                 Self::ExecutionReverted(message)
             }
             GasEstimationError::RevertInCallWithBytes(b) => {
-                Self::ExecutionRevertedWithBytes(ExecutionRevertedWithBytesData { revert_data: b })
+                Self::ExecutionRevertedWithData(ExecutionRevertedWithDataData { data: b })
             }
             error @ GasEstimationError::GasUsedTooLarge => {
                 Self::EntryPointValidationRejected(error.to_string())

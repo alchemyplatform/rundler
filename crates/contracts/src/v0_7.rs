@@ -132,6 +132,8 @@ sol!(
 
         error FailedOpWithRevert(uint256 opIndex, string reason, bytes inner);
 
+        error PostOpReverted(bytes returnData);
+
         error SignatureValidationFailed(address aggregator);
 
         function handleOps(
