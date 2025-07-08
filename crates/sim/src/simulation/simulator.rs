@@ -654,7 +654,7 @@ fn override_infos_staked(eis: &mut EntityInfos, allow_unstaked_addresses: &HashS
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{ops::Sub, sync::Arc, time::Duration};
 
     use alloy_primitives::{address, b256, bytes, uint, Bytes};
     use context::ContractInfo;
@@ -663,7 +663,7 @@ mod tests {
         aggregator::AggregatorCosts,
         chain::ChainSpec,
         v0_6::{UserOperation, UserOperationBuilder, UserOperationRequiredFields},
-        AggregatorInfo, Opcode, StakeInfo, UserOperation as _,
+        AggregatorInfo, Opcode, StakeInfo, Timestamp, UserOperation as _,
     };
 
     use self::context::{Phase, TracerOutput};
@@ -816,7 +816,9 @@ mod tests {
                     pre_op_gas: 3000,
                     account_sig_failed: true,
                     paymaster_sig_failed: true,
-                    ..Default::default()
+                    valid_after: 0.into(),
+                    valid_until: u64::MAX.into(),
+                    paymaster_context: Bytes::default(),
                 },
                 sender_info: StakeInfo::default(),
                 factory_info: StakeInfo::default(),
@@ -1246,6 +1248,32 @@ mod tests {
             vec![SimulationViolation::AggregatorMismatch(
                 Address::ZERO,
                 bad_agg
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_time_range() {
+        let (provider, mut ep, mut context_provider) = create_base_config();
+        ep.expect_address()
+            .return_const(address!("5ff137d4b0fdcd49dca30c7cf57e578a026d2789"));
+        context_provider
+            .expect_get_specific_violations()
+            .returning(|_| Ok(vec![]));
+
+        let mut context = get_test_context();
+        context.entry_point_out.return_info.valid_after = 0.into();
+        context.entry_point_out.return_info.valid_until =
+            Timestamp::now().sub(Duration::from_secs(10)); // invalid time range
+
+        let simulator = create_simulator(provider, ep, context_provider);
+        let res = simulator.gather_context_violations(&mut context);
+
+        assert_eq!(
+            res.unwrap(),
+            vec![SimulationViolation::InvalidTimeRange(
+                context.entry_point_out.return_info.valid_until,
+                context.entry_point_out.return_info.valid_after,
             )]
         );
     }

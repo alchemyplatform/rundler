@@ -15,7 +15,7 @@ use std::marker::PhantomData;
 
 use alloy_primitives::{Address, B256};
 use rundler_provider::{EntryPoint, SimulationProvider};
-use rundler_types::{pool::SimulationViolation, UserOperation, ValidTimeRange};
+use rundler_types::{pool::SimulationViolation, UserOperation, ValidTimeRange, TIME_RANGE_BUFFER};
 
 use super::Settings;
 use crate::{simulation::context, SimulationError, SimulationResult, Simulator, ViolationError};
@@ -125,7 +125,12 @@ where
             violations.push(SimulationViolation::InvalidPaymasterSignature);
         }
 
-        let account_is_staked = context::is_staked(validation_result.sender_info, &self.settings);
+        if !valid_time_range.is_valid_now(TIME_RANGE_BUFFER) {
+            violations.push(SimulationViolation::InvalidTimeRange(
+                valid_time_range.valid_until,
+                valid_time_range.valid_after,
+            ));
+        }
 
         if !violations.is_empty() {
             Err(SimulationError {
@@ -139,7 +144,10 @@ where
                 valid_time_range,
                 requires_post_op,
                 entity_infos,
-                account_is_staked,
+                account_is_staked: context::is_staked(
+                    validation_result.sender_info,
+                    &self.settings,
+                ),
                 ..Default::default()
             })
         }

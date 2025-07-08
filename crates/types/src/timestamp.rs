@@ -186,6 +186,12 @@ impl ValidTimeRange {
         }
     }
 
+    /// Returns true if the time range is valid, considering the given buffer.
+    pub fn is_valid_now(&self, until_buffer: Duration) -> bool {
+        let now = Timestamp::now();
+        self.valid_after <= now && self.valid_until > now.add(until_buffer)
+    }
+
     /// Create a new valid time range that is valid from genesis to the given timestamp
     pub fn from_genesis(valid_until: Timestamp) -> Self {
         Self {
@@ -314,6 +320,16 @@ mod test {
         let intersect = range1.intersect(range2);
         assert_eq!(intersect.valid_after, Timestamp::new(150));
         assert_eq!(intersect.valid_until, Timestamp::new(200));
+    }
+
+    #[test]
+    fn test_is_valid_now() {
+        let range = ValidTimeRange::new(
+            Timestamp::now(),
+            Timestamp::now() + Duration::from_secs(100),
+        );
+        assert!(range.is_valid_now(Duration::from_secs(10)));
+        assert!(!range.is_valid_now(Duration::from_secs(100)));
     }
 
     fn get_timestamp_out_of_bounds_for_datetime() -> Timestamp {
