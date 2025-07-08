@@ -259,7 +259,7 @@ impl ValidationReturnInfo {
     /// helper function to check if the returned time range is valid
     pub fn is_valid_time_range(&self) -> bool {
         let now = Timestamp::now();
-        self.valid_after <= now || self.valid_until > now.add(TIME_RANGE_BUFFER)
+        self.valid_after <= now && self.valid_until > now.add(TIME_RANGE_BUFFER)
     }
 }
 
