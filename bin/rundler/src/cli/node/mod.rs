@@ -116,7 +116,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
         })),
     );
 
-    let pool_builder = LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY);
+    let pool_builder = LocalPoolBuilder::new(BLOCK_CHANNEL_CAPACITY);
     let pool_handle = pool_builder.get_handle();
 
     let signer_manager = rundler_signer::new_signer_manager(
