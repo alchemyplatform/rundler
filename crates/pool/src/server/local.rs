@@ -41,15 +41,15 @@ use crate::{
 /// Local pool server builder
 #[derive(Debug)]
 pub struct LocalPoolBuilder {
-    req_sender: mpsc::Sender<ServerRequest>,
-    req_receiver: mpsc::Receiver<ServerRequest>,
+    req_sender: mpsc::UnboundedSender<ServerRequest>,
+    req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
     block_sender: broadcast::Sender<NewHead>,
 }
 
 impl LocalPoolBuilder {
     /// Create a new local pool server builder
-    pub fn new(request_capacity: usize, block_capacity: usize) -> Self {
-        let (req_sender, req_receiver) = mpsc::channel(request_capacity);
+    pub fn new(block_capacity: usize) -> Self {
+        let (req_sender, req_receiver) = mpsc::unbounded_channel();
         let (block_sender, _) = broadcast::channel(block_capacity);
         Self {
             req_sender,
@@ -89,11 +89,11 @@ impl LocalPoolBuilder {
 /// Used to make requests to the local pool server
 #[derive(Debug, Clone)]
 pub struct LocalPoolHandle {
-    req_sender: mpsc::Sender<ServerRequest>,
+    req_sender: mpsc::UnboundedSender<ServerRequest>,
 }
 
 struct LocalPoolServerRunner {
-    req_receiver: mpsc::Receiver<ServerRequest>,
+    req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
     block_sender: broadcast::Sender<NewHead>,
     mempools: HashMap<Address, Arc<dyn Mempool>>,
     chain_subscriber: ChainSubscriber,
@@ -108,7 +108,6 @@ impl LocalPoolHandle {
                 request,
                 response: send,
             })
-            .await
             .map_err(|_| {
                 error!("LocalPoolServer sender closed");
                 PoolError::UnexpectedResponse
@@ -414,7 +413,7 @@ impl HealthCheck for LocalPoolHandle {
 
 impl LocalPoolServerRunner {
     fn new(
-        req_receiver: mpsc::Receiver<ServerRequest>,
+        req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
         block_sender: broadcast::Sender<NewHead>,
         mempools: HashMap<Address, Arc<dyn Mempool>>,
         chain_subscriber: ChainSubscriber,
@@ -1081,7 +1080,7 @@ mod tests {
     }
 
     fn setup(pools: HashMap<Address, Arc<dyn Mempool>>) -> State {
-        let builder = LocalPoolBuilder::new(10, 10);
+        let builder = LocalPoolBuilder::new(10);
         let handle = builder.get_handle();
         let (tx, _) = broadcast::channel(10);
         let tx = Arc::new(tx);

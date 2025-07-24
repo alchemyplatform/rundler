@@ -30,7 +30,6 @@ use tokio::sync::broadcast;
 use super::CommonArgs;
 use crate::cli::json::get_json_config;
 
-const REQUEST_CHANNEL_CAPACITY: usize = 1024;
 const BLOCK_CHANNEL_CAPACITY: usize = 1024;
 
 /// CLI options for the OP Pool
@@ -300,7 +299,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     PoolTask::new(
         task_args,
         event_sender,
-        LocalPoolBuilder::new(REQUEST_CHANNEL_CAPACITY, BLOCK_CHANNEL_CAPACITY),
+        LocalPoolBuilder::new(BLOCK_CHANNEL_CAPACITY),
         providers,
     )
     .spawn(task_spawner)
