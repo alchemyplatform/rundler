@@ -175,10 +175,19 @@ impl HealthCheck for LocalBuilderHandle {
     }
 
     async fn status(&self) -> ServerStatus {
-        if self.get_supported_entry_points().await.is_ok() {
-            ServerStatus::Serving
-        } else {
-            ServerStatus::NotServing
+        match tokio::time::timeout(Duration::from_secs(1), self.get_supported_entry_points()).await
+        {
+            Ok(Ok(_)) => ServerStatus::Serving,
+            Ok(Err(e)) => {
+                tracing::error!(
+                    "Healthcheck: failed to get supported entry points in builder: {e:?}"
+                );
+                ServerStatus::NotServing
+            }
+            _ => {
+                tracing::error!("Healthcheck: timed out getting supported entry points in builder");
+                ServerStatus::NotServing
+            }
         }
     }
 }
