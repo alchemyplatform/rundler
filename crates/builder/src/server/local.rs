@@ -11,12 +11,17 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use alloy_primitives::{Address, B256};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures_util::StreamExt;
+use metrics::Histogram;
+use metrics_derive::Metrics;
 use rundler_signer::SignerManager;
 use rundler_task::{
     server::{HealthCheck, ServerStatus},
@@ -36,6 +41,13 @@ pub struct LocalBuilderBuilder {
     req_receiver: mpsc::Receiver<ServerRequest>,
     signer_manager: Arc<dyn SignerManager>,
     pool: Arc<dyn Pool>,
+}
+
+#[derive(Metrics, Clone)]
+#[metrics(scope = "builder_internal")]
+struct LocalBuilderMetrics {
+    #[metric(describe = "the duration in milliseconds of send call")]
+    send_duration: Histogram,
 }
 
 impl LocalBuilderBuilder {
@@ -58,6 +70,7 @@ impl LocalBuilderBuilder {
     pub fn get_handle(&self) -> LocalBuilderHandle {
         LocalBuilderHandle {
             req_sender: self.req_sender.clone(),
+            metric: LocalBuilderMetrics::default(),
         }
     }
 
@@ -83,6 +96,7 @@ impl LocalBuilderBuilder {
 #[derive(Debug, Clone)]
 pub struct LocalBuilderHandle {
     req_sender: mpsc::Sender<ServerRequest>,
+    metric: LocalBuilderMetrics,
 }
 
 struct LocalBuilderServerRunner {
@@ -96,6 +110,11 @@ struct LocalBuilderServerRunner {
 impl LocalBuilderHandle {
     async fn send(&self, request: ServerRequestKind) -> BuilderResult<ServerResponse> {
         let (response_sender, response_receiver) = oneshot::channel();
+        let begin_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_millis(0))
+            .as_millis();
+
         let request = ServerRequest {
             request,
             response: response_sender,
@@ -104,9 +123,18 @@ impl LocalBuilderHandle {
             .send(request)
             .await
             .map_err(|_| anyhow::anyhow!("LocalBuilderServer closed"))?;
-        response_receiver
+        let response = response_receiver
             .await
-            .map_err(|_| anyhow::anyhow!("LocalBuilderServer closed"))?
+            .map_err(|_| anyhow::anyhow!("LocalBuilderServer closed"))?;
+
+        let end_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_millis(0))
+            .as_millis();
+        self.metric
+            .send_duration
+            .record((end_ms.saturating_sub(begin_ms)) as f64);
+        response
     }
 }
 
