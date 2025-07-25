@@ -37,8 +37,8 @@ use crate::bundle_sender::{BundleSenderAction, SendBundleRequest, SendBundleResu
 
 /// Local builder server builder
 pub struct LocalBuilderBuilder {
-    req_sender: mpsc::Sender<ServerRequest>,
-    req_receiver: mpsc::Receiver<ServerRequest>,
+    req_sender: mpsc::UnboundedSender<ServerRequest>,
+    req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
     signer_manager: Arc<dyn SignerManager>,
     pool: Arc<dyn Pool>,
 }
@@ -52,12 +52,8 @@ struct LocalBuilderMetrics {
 
 impl LocalBuilderBuilder {
     /// Create a new local builder server builder
-    pub fn new(
-        request_capcity: usize,
-        signer_manager: Arc<dyn SignerManager>,
-        pool: Arc<dyn Pool>,
-    ) -> Self {
-        let (req_sender, req_receiver) = mpsc::channel(request_capcity);
+    pub fn new(signer_manager: Arc<dyn SignerManager>, pool: Arc<dyn Pool>) -> Self {
+        let (req_sender, req_receiver) = mpsc::unbounded_channel();
         Self {
             req_sender,
             req_receiver,
@@ -95,12 +91,12 @@ impl LocalBuilderBuilder {
 /// Local builder server handle, used to send requests to the server
 #[derive(Debug, Clone)]
 pub struct LocalBuilderHandle {
-    req_sender: mpsc::Sender<ServerRequest>,
+    req_sender: mpsc::UnboundedSender<ServerRequest>,
     metric: LocalBuilderMetrics,
 }
 
 struct LocalBuilderServerRunner {
-    req_receiver: mpsc::Receiver<ServerRequest>,
+    req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
     bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
     entry_points: Vec<Address>,
     signer_manager: Arc<dyn SignerManager>,
@@ -121,7 +117,6 @@ impl LocalBuilderHandle {
         };
         self.req_sender
             .send(request)
-            .await
             .map_err(|_| anyhow::anyhow!("LocalBuilderServer closed"))?;
         let response = response_receiver
             .await
@@ -194,7 +189,7 @@ impl HealthCheck for LocalBuilderHandle {
 
 impl LocalBuilderServerRunner {
     fn new(
-        req_receiver: mpsc::Receiver<ServerRequest>,
+        req_receiver: mpsc::UnboundedReceiver<ServerRequest>,
         bundle_sender_actions: Vec<mpsc::Sender<BundleSenderAction>>,
         entry_points: Vec<Address>,
         signer_manager: Arc<dyn SignerManager>,

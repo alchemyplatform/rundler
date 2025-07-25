@@ -34,7 +34,6 @@ use crate::cli::{
 };
 mod events;
 
-const REQUEST_CHANNEL_CAPACITY: usize = 1024;
 const BLOCK_CHANNEL_CAPACITY: usize = 1024;
 
 #[derive(Debug, Args)]
@@ -129,11 +128,8 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    let builder_builder = LocalBuilderBuilder::new(
-        REQUEST_CHANNEL_CAPACITY,
-        signer_manager.clone(),
-        Arc::new(pool_handle.clone()),
-    );
+    let builder_builder =
+        LocalBuilderBuilder::new(signer_manager.clone(), Arc::new(pool_handle.clone()));
     let builder_handle = builder_builder.get_handle();
 
     PoolTask::new(

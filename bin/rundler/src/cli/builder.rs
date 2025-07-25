@@ -45,8 +45,6 @@ use super::{
     CommonArgs,
 };
 
-const REQUEST_CHANNEL_CAPACITY: usize = 1024;
-
 /// CLI options for the builder
 #[derive(Args, Debug)]
 #[command(next_help_heading = "BUILDER")]
@@ -489,11 +487,7 @@ pub async fn spawn_tasks<T: TaskSpawnerExt + 'static>(
     )
     .await?;
 
-    let builder_builder = LocalBuilderBuilder::new(
-        REQUEST_CHANNEL_CAPACITY,
-        signer_manager.clone(),
-        Arc::new(pool.clone()),
-    );
+    let builder_builder = LocalBuilderBuilder::new(signer_manager.clone(), Arc::new(pool.clone()));
 
     BuilderTask::new(
         task_args,
