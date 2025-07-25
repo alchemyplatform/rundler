@@ -11,13 +11,21 @@
 // You should have received a copy of the GNU General Public License along with Rundler.
 // If not, see https://www.gnu.org/licenses/.
 
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use alloy_primitives::{Address, B256};
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::future::{self, BoxFuture};
 use futures_util::Stream;
+use metrics::Histogram;
+use metrics_derive::Metrics;
 use rundler_task::{
     server::{HealthCheck, ServerStatus},
     GracefulShutdown, TaskSpawner,
@@ -37,6 +45,13 @@ use crate::{
     chain::ChainSubscriber,
     mempool::{Mempool, OperationOrigin},
 };
+
+#[derive(Metrics, Clone)]
+#[metrics(scope = "op_pool_internal")]
+struct LocalPoolMetrics {
+    #[metric(describe = "the duration in milliseconds of send call")]
+    send_duration: Histogram,
+}
 
 /// Local pool server builder
 #[derive(Debug)]
@@ -62,6 +77,7 @@ impl LocalPoolBuilder {
     pub fn get_handle(&self) -> LocalPoolHandle {
         LocalPoolHandle {
             req_sender: self.req_sender.clone(),
+            metric: LocalPoolMetrics::default(),
         }
     }
 
@@ -90,6 +106,7 @@ impl LocalPoolBuilder {
 #[derive(Debug, Clone)]
 pub struct LocalPoolHandle {
     req_sender: mpsc::UnboundedSender<ServerRequest>,
+    metric: LocalPoolMetrics,
 }
 
 struct LocalPoolServerRunner {
@@ -103,6 +120,11 @@ struct LocalPoolServerRunner {
 impl LocalPoolHandle {
     async fn send(&self, request: ServerRequestKind) -> PoolResult<ServerResponse> {
         let (send, recv) = oneshot::channel();
+        let begin_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_millis(0))
+            .as_millis();
+
         self.req_sender
             .send(ServerRequest {
                 request,
@@ -112,10 +134,19 @@ impl LocalPoolHandle {
                 error!("LocalPoolServer sender closed");
                 PoolError::UnexpectedResponse
             })?;
-        recv.await.map_err(|_| {
+        let response = recv.await.map_err(|_| {
             error!("LocalPoolServer receiver closed");
             PoolError::UnexpectedResponse
-        })?
+        })?;
+        let end_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or(Duration::from_millis(0))
+            .as_millis();
+        self.metric
+            .send_duration
+            .record((end_ms.saturating_sub(begin_ms)) as f64);
+
+        response
     }
 }
 
