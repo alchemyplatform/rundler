@@ -4,7 +4,7 @@
 [![tg_badge]][tg_link]
 
 [gh_ci_badge]: https://github.com/alchemyplatform/rundler/workflows/ci/badge.svg
-[gh_ci_link]: https://github.com/alchemyplatform/rundler/actions/workflows/ci.yml
+[gh_ci_link]: https://github.com/alchemyplatform/rundler/actions/workflows/ci.yaml
 [tg_badge]: https://img.shields.io/endpoint?color=neon&logo=telegram&label=chat&url=https://mogyo.ro/quart-apis/tgmembercount?chat_id=rundler
 [tg_link]: https://t.me/rundler
 
