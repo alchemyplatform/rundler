@@ -9,6 +9,9 @@ LABEL org.opencontainers.image.licenses="GNU Lesser General Public License v3.0"
 # Filled by docker buildx
 ARG TARGETARCH
 
+RUN apt-get -y update; apt-get -y install ca-certificates
+RUN update-ca-certificates
+
 COPY ./dist/bin/$TARGETARCH/rundler /usr/local/bin/rundler
 
 EXPOSE 3000 8080
